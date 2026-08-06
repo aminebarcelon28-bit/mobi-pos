@@ -35,9 +35,16 @@ const PinPromptModal = React.lazy(() => import('./components/modals/PinPromptMod
 const LoyaltyCardModal = React.lazy(() => import('./components/modals/LoyaltyCardModal').then(m => ({ default: m.LoyaltyCardModal })));
 const UpdateModal = React.lazy(() => import('./components/modals/UpdateModal').then(m => ({ default: m.UpdateModal })));
 
+import { usePosStore } from './store/usePosStore';
+
 export const App: React.FC = () => {
   useKeyboardHotkeys();
   const { scannerActive } = useBarcodeScanner();
+  const initDatabase = usePosStore((state) => state.initDatabase);
+
+  React.useEffect(() => {
+    initDatabase();
+  }, [initDatabase]);
 
   return (
     <ErrorBoundary fallbackTitle="Erreur Système POS Interceptée">

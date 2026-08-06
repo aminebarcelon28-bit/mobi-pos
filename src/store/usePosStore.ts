@@ -32,12 +32,20 @@ import {
   createLedgerEntry,
 } from '../utils/loyaltyEngine';
 import { calculateStockAlerts } from '../utils/alertEngine';
+import { productRepository } from '../db/repositories/productRepository';
+import { customerRepository } from '../db/repositories/customerRepository';
+import { transactionRepository } from '../db/repositories/transactionRepository';
+import { repairRepository } from '../db/repositories/repairRepository';
+import { settingsRepository } from '../db/repositories/settingsRepository';
+import { backupRepository } from '../db/repositories/backupRepository';
+import { db } from '../db/database';
 
 // ──────────────────────────────────────────────
 // State Interface
 // ──────────────────────────────────────────────
 
 interface PosState {
+  isDbInitialized: boolean;
   themeMode: 'dark' | 'light';
   pricingTier: PricingTier;
   products: Product[];
@@ -131,12 +139,14 @@ interface PosState {
   deleteCustomer: (id: string) => void;
   setCurrentCustomer: (customer: Customer | null) => void;
   issueStoreCredit: (customerId: string, amount: number) => void;
-  redeemLoyaltyPoints: (customerId: string, points: number) => { success: boolean; creditAdded?: number; reason?: string };
+  redeemLoyaltyPoints: (customerId: string, points: number) => Promise<{ success: boolean; creditAdded?: number; reason?: string }>;
   adjustCustomerPoints: (customerId: string, points: number, description: string) => void;
 
-  // ── Database Backup ──
+  // ── Database & Backup ──
+  initDatabase: () => Promise<void>;
+  seedDemoData: () => Promise<void>;
   exportDatabase: () => void;
-  importDatabase: (jsonString: string) => { success: boolean; reason?: string };
+  importDatabase: (jsonString: string) => Promise<{ success: boolean; reason?: string }>;
 
   // ── Payment ──
   setCashTendered: (amount: number) => void;
@@ -177,30 +187,8 @@ interface PosState {
 }
 
 // ──────────────────────────────────────────────
-// Persistence Loaders
+// Initializers
 // ──────────────────────────────────────────────
-
-function loadPersisted<T>(key: string, fallback: T): T {
-  try {
-    const saved = localStorage.getItem(key);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (Array.isArray(fallback)) {
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed as T;
-      } else {
-        return parsed as T;
-      }
-    }
-  } catch (e) {
-    console.error(`Failed to load ${key}`, e);
-  }
-  return fallback;
-}
-
-
-function persistSync(key: string, data: unknown) {
-  localStorage.setItem(key, JSON.stringify(data));
-}
 
 const initialTheme = (localStorage.getItem('mobi_pos_theme') as 'dark' | 'light') || 'dark';
 
@@ -217,31 +205,32 @@ if (typeof document !== 'undefined') {
 // ──────────────────────────────────────────────
 
 export const usePosStore = create<PosState>((set, get) => ({
+  isDbInitialized: false,
   themeMode: initialTheme,
   pricingTier: 'Retail',
-  products: loadPersisted('mobi_pos_products', INITIAL_PRODUCTS),
+  products: [],
   sortOption: 'name_asc',
   cart: [],
   selectedCategory: 'Tous les produits',
   searchQuery: '',
-  customers: loadPersisted('mobi_pos_customers', INITIAL_CUSTOMERS),
+  customers: [],
   currentCustomer: null,
   heldSales: [],
-  transactions: loadPersisted('mobi_pos_transactions', [] as SaleTransaction[]),
+  transactions: [],
   securityAuditLog: [
     {
       id: 'log-1',
       timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
       user: 'Yacine (Admin)',
       action: 'Initialisation Système POS',
-      details: 'Caisse démarrée avec succès',
+      details: 'Moteur de base de données IndexedDB activé',
       requiresPin: false,
     },
   ],
   shiftFloat: 20000,
-  cashDrops: loadPersisted('mobi_pos_cashdrops', [] as CashDropEntry[]),
-  payouts: loadPersisted('mobi_pos_payouts', [] as CashDropEntry[]),
-  receiptSettings: loadPersisted('mobi_pos_receipt_settings', {
+  cashDrops: [],
+  payouts: [],
+  receiptSettings: {
     storeName: 'ACCESSOIRES MOBI',
     storeSubheader: 'Vente Accessoires & Téléphonie',
     logoUrl: '',
@@ -262,7 +251,7 @@ export const usePosStore = create<PosState>((set, get) => ({
       reportPrinterName: 'Imprimante Système Windows / PDF A4',
       autoRoutingEnabled: true,
     },
-  }),
+  },
   licenseDetails: {
     machineFingerprint: 'CPU-HWID-9F82A-DZ-2026',
     status: 'Active',
@@ -270,21 +259,13 @@ export const usePosStore = create<PosState>((set, get) => ({
     maxTerminals: 5,
     activatedAt: '01/08/2026',
   },
-  purchaseOrders: loadPersisted('mobi_pos_purchaseorders', [] as PurchaseOrder[]),
+  purchaseOrders: [],
   activeDraftPO: null,
   storeCreditApplied: 0,
-  repairOrders: loadPersisted('mobi_pos_repairs', [] as RepairOrder[]),
-  bundles: loadPersisted('mobi_pos_bundles', [
-    {
-      id: 'bndl-1',
-      bundleTitle: 'Pack Protection Intégral iPhone 15 Pro Max',
-      barcode: '990000112233',
-      bundlePrice: 4800,
-      childSkus: ['APC-15PM-CL', 'ZAGG-15PM-TG'],
-    },
-  ] as ProductBundle[]),
-  tradeIns: loadPersisted('mobi_pos_tradeins', [] as TradeInItem[]),
-  imeiRecords: loadPersisted('mobi_pos_imei', [] as IMEIRecord[]),
+  repairOrders: [],
+  bundles: [],
+  tradeIns: [],
+  imeiRecords: [],
   activeModal: null,
   pendingPinAction: null,
   editingProduct: null,
@@ -455,27 +436,30 @@ export const usePosStore = create<PosState>((set, get) => ({
 
   setEditingProduct: (product) => set({ editingProduct: product, activeModal: 'product_editor' }),
 
-  saveProduct: (input) => {
+  saveProduct: async (input) => {
     const { products } = get();
     let updatedProducts: Product[];
+    let targetProduct: Product;
+
     if (input.id) {
-      updatedProducts = products.map((p) => (p.id === input.id ? (input as Product) : p));
+      targetProduct = input as Product;
+      updatedProducts = products.map((p) => (p.id === input.id ? targetProduct : p));
     } else {
-      const newProduct: Product = {
+      targetProduct = {
         ...(input as Omit<Product, 'id'>),
         id: `prod-${Date.now()}`,
       };
-      updatedProducts = [newProduct, ...products];
+      updatedProducts = [targetProduct, ...products];
     }
-    persistSync('mobi_pos_products', updatedProducts);
+    await productRepository.save(targetProduct);
     set({ products: updatedProducts, activeModal: null, editingProduct: null });
   },
 
-  deleteProduct: (id) => {
+  deleteProduct: async (id) => {
     const { products, cart } = get();
     const updatedProducts = products.filter((p) => p.id !== id);
     const updatedCart = cart.filter((item) => item.product.id !== id);
-    persistSync('mobi_pos_products', updatedProducts);
+    await productRepository.delete(id);
     set({ products: updatedProducts, cart: updatedCart });
   },
 
@@ -483,21 +467,24 @@ export const usePosStore = create<PosState>((set, get) => ({
   // Customers
   // ══════════════════════════════════════════
 
-  addCustomer: (input) => {
+  addCustomer: async (input) => {
     const { customers } = get();
     const newCustomer: Customer = {
       ...(input as Omit<Customer, 'id'>),
       id: input.id || `cust-${Date.now()}`,
     };
     const updated = [newCustomer, ...customers];
-    persistSync('mobi_pos_customers', updated);
+    await customerRepository.save(newCustomer);
     set({ customers: updated });
   },
 
-  updateCustomer: (id, updates) => {
+  updateCustomer: async (id, updates) => {
     const { customers, currentCustomer } = get();
     const updated = customers.map((c) => (c.id === id ? { ...c, ...updates } : c));
-    persistSync('mobi_pos_customers', updated);
+    const target = updated.find((c) => c.id === id);
+    if (target) {
+      await customerRepository.save(target);
+    }
     const newState: Partial<PosState> = { customers: updated };
     if (currentCustomer?.id === id) {
       newState.currentCustomer = { ...currentCustomer, ...updates };
@@ -506,10 +493,10 @@ export const usePosStore = create<PosState>((set, get) => ({
     set(newState as PosState);
   },
 
-  deleteCustomer: (id) => {
+  deleteCustomer: async (id) => {
     const { customers, currentCustomer } = get();
     const updated = customers.filter((c) => c.id !== id);
-    persistSync('mobi_pos_customers', updated);
+    await customerRepository.delete(id);
     const newState: Partial<PosState> = { customers: updated };
     if (currentCustomer?.id === id) {
       newState.currentCustomer = null;
@@ -526,12 +513,15 @@ export const usePosStore = create<PosState>((set, get) => ({
     }
   },
 
-  issueStoreCredit: (customerId, amount) => {
+  issueStoreCredit: async (customerId, amount) => {
     const { customers, currentCustomer } = get();
     const updated = customers.map((c) =>
       c.id === customerId ? { ...c, storeCredit: c.storeCredit + amount } : c
     );
-    persistSync('mobi_pos_customers', updated);
+    const target = updated.find((c) => c.id === customerId);
+    if (target) {
+      await customerRepository.save(target);
+    }
     const newState: Partial<PosState> = { customers: updated };
     if (currentCustomer?.id === customerId) {
       newState.currentCustomer = { ...currentCustomer, storeCredit: currentCustomer.storeCredit + amount };
@@ -539,7 +529,7 @@ export const usePosStore = create<PosState>((set, get) => ({
     set(newState as PosState);
   },
 
-  redeemLoyaltyPoints: (customerId, points) => {
+  redeemLoyaltyPoints: async (customerId, points) => {
     const { customers, currentCustomer } = get();
     const customer = customers.find((c) => c.id === customerId);
     if (!customer || customer.loyaltyPoints < points || points <= 0) {
@@ -567,7 +557,7 @@ export const usePosStore = create<PosState>((set, get) => ({
     };
 
     const updatedCustomers = customers.map((c) => (c.id === customerId ? updatedCustomer : c));
-    persistSync('mobi_pos_customers', updatedCustomers);
+    await customerRepository.save(updatedCustomer);
 
     let updatedCurrentCustomer = currentCustomer;
     if (currentCustomer?.id === customerId) {
@@ -578,7 +568,7 @@ export const usePosStore = create<PosState>((set, get) => ({
     return { success: true, creditAdded: creditAmount };
   },
 
-  adjustCustomerPoints: (customerId, points, description) => {
+  adjustCustomerPoints: async (customerId, points, description) => {
     const { customers, currentCustomer } = get();
     const customer = customers.find((c) => c.id === customerId);
     if (!customer || points === 0) return;
@@ -600,7 +590,7 @@ export const usePosStore = create<PosState>((set, get) => ({
     };
 
     const updatedCustomers = customers.map((c) => (c.id === customerId ? updatedCustomer : c));
-    persistSync('mobi_pos_customers', updatedCustomers);
+    await customerRepository.save(updatedCustomer);
 
     let updatedCurrentCustomer = currentCustomer;
     if (currentCustomer?.id === customerId) {
@@ -611,60 +601,106 @@ export const usePosStore = create<PosState>((set, get) => ({
   },
 
   // ══════════════════════════════════════════
-  // Database Backup & Restore
+  // Database Engine & Backup Operations
   // ══════════════════════════════════════════
 
-  exportDatabase: () => {
-    const { products, customers, transactions, repairOrders, bundles, tradeIns, imeiRecords, receiptSettings } = get();
-    const data = {
-      exportedAt: new Date().toISOString(),
-      version: '1.0.0',
-      products,
-      customers,
-      transactions,
-      repairOrders,
-      bundles,
-      tradeIns,
-      imeiRecords,
-      receiptSettings,
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `MOBI_POS_BACKUP_${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  initDatabase: async () => {
+    try {
+      // 1. Fetch records from IndexedDB tables
+      let products = await productRepository.getAll();
+      let customers = await customerRepository.getAll();
+      let transactions = await transactionRepository.getAll();
+      let repairOrders = await repairRepository.getAll();
+      let purchaseOrders = await db.purchaseOrders.toArray();
+      let tradeIns = await db.tradeIns.toArray();
+      let imeiRecords = await db.imeiRecords.toArray();
+      let cashDrops = await db.cashDrops.toArray();
+      let payouts = await db.payouts.toArray();
+      let bundles = await db.bundles.toArray();
+
+      // 2. Migration loader: Check if legacy localStorage data exists to preserve previous work
+      const legacyProducts = localStorage.getItem('mobi_pos_products');
+      const legacyCustomers = localStorage.getItem('mobi_pos_customers');
+      const legacyTxns = localStorage.getItem('mobi_pos_transactions');
+
+      if (products.length === 0 && legacyProducts) {
+        try {
+          const parsed = JSON.parse(legacyProducts);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            products = parsed;
+            await productRepository.bulkSave(products);
+          }
+        } catch {}
+      }
+
+      if (customers.length === 0 && legacyCustomers) {
+        try {
+          const parsed = JSON.parse(legacyCustomers);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            customers = parsed;
+            await customerRepository.bulkSave(customers);
+          }
+        } catch {}
+      }
+
+      if (transactions.length === 0 && legacyTxns) {
+        try {
+          const parsed = JSON.parse(legacyTxns);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            transactions = parsed;
+            await transactionRepository.bulkSave(transactions);
+          }
+        } catch {}
+      }
+
+      // 3. Update store state with database records
+      set({
+        products,
+        customers,
+        transactions,
+        repairOrders,
+        purchaseOrders,
+        tradeIns,
+        imeiRecords,
+        cashDrops,
+        payouts,
+        bundles,
+        isDbInitialized: true,
+      });
+    } catch (e) {
+      console.error('Failed to initialize IndexedDB:', e);
+      set({ isDbInitialized: true });
+    }
   },
 
-  importDatabase: (jsonString) => {
-    try {
-      const data = JSON.parse(jsonString);
-      if (!data.products || !Array.isArray(data.products)) {
-        return { success: false, reason: 'Format JSON invalide' };
-      }
-      if (data.products) persistSync('mobi_pos_products', data.products);
-      if (data.customers) persistSync('mobi_pos_customers', data.customers);
-      if (data.transactions) persistSync('mobi_pos_transactions', data.transactions);
-      if (data.repairOrders) persistSync('mobi_pos_repairs', data.repairOrders);
-      if (data.bundles) persistSync('mobi_pos_bundles', data.bundles);
-      if (data.tradeIns) persistSync('mobi_pos_tradeins', data.tradeIns);
-      if (data.imeiRecords) persistSync('mobi_pos_imei', data.imeiRecords);
+  seedDemoData: async () => {
+    await backupRepository.seedDemoData(INITIAL_PRODUCTS, INITIAL_CUSTOMERS);
+    const products = await productRepository.getAll();
+    const customers = await customerRepository.getAll();
+    set({ products, customers });
+  },
 
-      set({
-        products: data.products || get().products,
-        customers: data.customers || get().customers,
-        transactions: data.transactions || get().transactions,
-        repairOrders: data.repairOrders || get().repairOrders,
-        bundles: data.bundles || get().bundles,
-        tradeIns: data.tradeIns || get().tradeIns,
-        imeiRecords: data.imeiRecords || get().imeiRecords,
-        receiptSettings: data.receiptSettings || get().receiptSettings,
-      });
-      return { success: true };
-    } catch {
-      return { success: false, reason: 'Fichier JSON corrompu ou illisible' };
+  exportDatabase: async () => {
+    try {
+      const jsonString = await backupRepository.exportJSON();
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `MOBI_POS_INDEXEDDB_BACKUP_${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Export failed:', e);
     }
+  },
+
+  importDatabase: async (jsonString: string) => {
+    const res = await backupRepository.importJSON(jsonString);
+    if (res.success) {
+      await get().initDatabase();
+    }
+    return res;
   },
 
   // ══════════════════════════════════════════
@@ -791,7 +827,7 @@ export const usePosStore = create<PosState>((set, get) => ({
       updatedCustomers = customers.map((c) =>
         c.id === currentCustomer.id ? updatedCustomer! : c
       );
-      persistSync('mobi_pos_customers', updatedCustomers);
+      customerRepository.save(updatedCustomer!);
     }
 
     const transaction: SaleTransaction = {
@@ -822,8 +858,8 @@ export const usePosStore = create<PosState>((set, get) => ({
 
     const newTransactions = [transaction, ...transactions];
 
-    persistSync('mobi_pos_products', updatedProducts);
-    persistSync('mobi_pos_transactions', newTransactions);
+    productRepository.bulkSave(updatedProducts);
+    transactionRepository.save(transaction);
 
     set({
       products: updatedProducts,
@@ -857,8 +893,8 @@ export const usePosStore = create<PosState>((set, get) => ({
   // Receipts & Settings
   // ══════════════════════════════════════════
 
-  setReceiptSettings: (settings) => {
-    persistSync('mobi_pos_receipt_settings', settings);
+  setReceiptSettings: async (settings) => {
+    await settingsRepository.set('mobi_pos_receipt_settings', settings);
     set({ receiptSettings: settings });
   },
 
@@ -928,7 +964,7 @@ export const usePosStore = create<PosState>((set, get) => ({
     set({ activeDraftPO: draftPO, activeModal: 'purchase_order' });
   },
 
-  approvePurchaseOrder: (poId) => {
+  approvePurchaseOrder: async (poId) => {
     const { activeDraftPO, purchaseOrders, products } = get();
     if (!activeDraftPO || activeDraftPO.id !== poId) return;
 
@@ -943,8 +979,8 @@ export const usePosStore = create<PosState>((set, get) => ({
     });
 
     const updatedPOs = [approvedPO, ...purchaseOrders];
-    persistSync('mobi_pos_products', updatedProducts);
-    persistSync('mobi_pos_purchaseorders', updatedPOs);
+    await productRepository.bulkSave(updatedProducts);
+    await db.purchaseOrders.bulkPut(updatedPOs);
 
     set({
       products: updatedProducts,
@@ -958,7 +994,7 @@ export const usePosStore = create<PosState>((set, get) => ({
   // Repair Orders
   // ══════════════════════════════════════════
 
-  createRepairOrder: (orderInput) => {
+  createRepairOrder: async (orderInput) => {
     const { repairOrders } = get();
     const totalCost = orderInput.laborCost + orderInput.partsCost;
     const newOrder: RepairOrder = {
@@ -969,20 +1005,23 @@ export const usePosStore = create<PosState>((set, get) => ({
       createdAt: new Date().toLocaleDateString('fr-DZ', { hour: '2-digit', minute: '2-digit' } as Intl.DateTimeFormatOptions),
     };
     const updated = [newOrder, ...repairOrders];
-    persistSync('mobi_pos_repairs', updated);
+    await repairRepository.save(newOrder);
     set({ repairOrders: updated });
   },
 
-  updateRepairOrderStatus: (orderId, newStatus) => {
+  updateRepairOrderStatus: async (orderId, newStatus) => {
     const { repairOrders } = get();
     const updated = repairOrders.map((r) =>
       r.id === orderId ? { ...r, status: newStatus, updatedAt: new Date().toLocaleDateString('fr-DZ', { hour: '2-digit', minute: '2-digit' } as Intl.DateTimeFormatOptions) } : r
     );
-    persistSync('mobi_pos_repairs', updated);
+    const target = updated.find((r) => r.id === orderId);
+    if (target) {
+      await repairRepository.save(target);
+    }
     set({ repairOrders: updated });
   },
 
-  updateRepairOrder: (orderId, updates) => {
+  updateRepairOrder: async (orderId, updates) => {
     const { repairOrders } = get();
     const updated = repairOrders.map((r) =>
       r.id === orderId
@@ -994,7 +1033,10 @@ export const usePosStore = create<PosState>((set, get) => ({
           }
         : r
     );
-    persistSync('mobi_pos_repairs', updated);
+    const target = updated.find((r) => r.id === orderId);
+    if (target) {
+      await repairRepository.save(target);
+    }
     set({ repairOrders: updated });
   },
 
@@ -1002,7 +1044,7 @@ export const usePosStore = create<PosState>((set, get) => ({
   // Trade-In
   // ══════════════════════════════════════════
 
-  processTradeIn: (tradeInput) => {
+  processTradeIn: async (tradeInput) => {
     const { tradeIns, products, customers, currentCustomer } = get();
 
     const resalePrice = Math.round(tradeInput.buybackValue * (1 + tradeInput.resaleMarginPercent / 100));
@@ -1039,8 +1081,8 @@ export const usePosStore = create<PosState>((set, get) => ({
     const updatedProducts = [convertedProduct, ...products];
     const updatedTradeIns = [newTradeIn, ...tradeIns];
 
-    persistSync('mobi_pos_products', updatedProducts);
-    persistSync('mobi_pos_tradeins', updatedTradeIns);
+    await productRepository.save(convertedProduct);
+    await db.tradeIns.put(newTradeIn);
 
     // Issue store credit if requested
     let updatedCustomers = customers;
@@ -1050,7 +1092,7 @@ export const usePosStore = create<PosState>((set, get) => ({
         c.id === currentCustomer.id ? { ...c, storeCredit: c.storeCredit + tradeInput.buybackValue } : c
       );
       updatedCurrentCustomer = { ...currentCustomer, storeCredit: currentCustomer.storeCredit + tradeInput.buybackValue };
-      persistSync('mobi_pos_customers', updatedCustomers);
+      await customerRepository.save(updatedCurrentCustomer);
     }
 
     set({
@@ -1066,21 +1108,21 @@ export const usePosStore = create<PosState>((set, get) => ({
   // Bundles
   // ══════════════════════════════════════════
 
-  createBundle: (bundleInput) => {
+  createBundle: async (bundleInput) => {
     const { bundles } = get();
     const newBundle: ProductBundle = {
       ...bundleInput,
       id: `bndl-${Date.now()}`,
     };
     const updated = [newBundle, ...bundles];
-    persistSync('mobi_pos_bundles', updated);
+    await db.bundles.put(newBundle);
     set({ bundles: updated });
   },
 
-  deleteBundle: (bundleId) => {
+  deleteBundle: async (bundleId) => {
     const { bundles } = get();
     const updated = bundles.filter((b) => b.id !== bundleId);
-    persistSync('mobi_pos_bundles', updated);
+    await db.bundles.delete(bundleId);
     set({ bundles: updated });
   },
 
@@ -1138,7 +1180,7 @@ export const usePosStore = create<PosState>((set, get) => ({
   // Cash Drops
   // ══════════════════════════════════════════
 
-  addCashDrop: (entry) => {
+  addCashDrop: async (entry) => {
     const { cashDrops } = get();
     const newDrop: CashDropEntry = {
       ...entry,
@@ -1146,7 +1188,7 @@ export const usePosStore = create<PosState>((set, get) => ({
       timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
     };
     const updated = [newDrop, ...cashDrops];
-    persistSync('mobi_pos_cashdrops', updated);
+    await db.cashDrops.put(newDrop);
     set({ cashDrops: updated });
   },
 

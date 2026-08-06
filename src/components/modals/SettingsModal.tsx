@@ -411,10 +411,10 @@ export const SettingsModal: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const content = event.target?.result as string;
       if (content) {
-        const res = importDatabase(content);
+        const res = await importDatabase(content);
         if (res.success) {
           showToast('Base de données restaurée avec succès !', 'success');
           closeModal();
