@@ -1,0 +1,143 @@
+@import "tailwindcss";
+
+:root {
+  --pos-bg: #f8fafc;
+  --pos-panel: #ffffff;
+  --pos-card: #ffffff;
+  --pos-hover: #f1f5f9;
+  --pos-border: #e2e8f0;
+  --pos-text: #0f172a;
+  --pos-muted: #64748b;
+  --pos-input-bg: #f8fafc;
+}
+
+html.dark {
+  --pos-bg: #0b0f19;
+  --pos-panel: #121824;
+  --pos-card: #1a2234;
+  --pos-hover: #243046;
+  --pos-border: #2a364f;
+  --pos-text: #e2e8f0;
+  --pos-muted: #8e9bb0;
+  --pos-input-bg: #0b0f19;
+}
+
+@layer base {
+  body {
+    background-color: var(--pos-bg);
+    color: var(--pos-text);
+    font-family: Inter, system-ui, sans-serif;
+    user-select: none;
+    overflow: hidden;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+}
+
+/* Custom Theme Token Classes */
+.bg-pos-bg { background-color: var(--pos-bg); }
+.bg-pos-panel { background-color: var(--pos-panel); }
+.bg-pos-card { background-color: var(--pos-card); }
+.bg-pos-hover:hover { background-color: var(--pos-hover); }
+
+.border-pos-border { border-color: var(--pos-border); }
+.text-pos-muted { color: var(--pos-muted); }
+.text-pos-text { color: var(--pos-text); }
+
+/* Custom Scrollbar for POS */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--pos-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--pos-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #10b981;
+}
+
+.glow-btn {
+  transition: all 0.15s ease-in-out;
+}
+.glow-btn:active {
+  transform: scale(0.97);
+}
+
+.hotkey-badge {
+  font-size: 10px;
+  font-family: monospace;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: rgba(0, 0, 0, 0.15);
+  color: var(--pos-muted);
+  border: 1px solid var(--pos-border);
+  display: inline-block;
+}
+
+html.dark .hotkey-badge {
+  background-color: rgba(0, 0, 0, 0.4);
+  color: #cbd5e1;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+@media print {
+  /* Reset page background & overflow for clean printing */
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* 1. HIDE ALL UI ELEMENTS ACROSS THE ENTIRE APP BY DEFAULT */
+  body * {
+    visibility: hidden !important;
+  }
+
+  /* 2. UNHIDE ONLY THE TARGET PRINTABLE CONTAINER AND ITS DESCENDANTS */
+  .printable-area,
+  .printable-area *,
+  .print\:w-full,
+  .print\:w-full *,
+  [data-printable="true"],
+  [data-printable="true"] * {
+    visibility: visible !important;
+  }
+
+  /* 3. PIN THE PRINTABLE CONTAINER AT TOP-LEFT OF PRINT PAGE WITH MAXIMUM Z-INDEX */
+  .printable-area,
+  .print\:w-full,
+  [data-printable="true"] {
+    position: fixed !important;
+    left: 50% !important;
+    top: 0 !important;
+    transform: translateX(-50%) !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 10px !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    z-index: 999999 !important;
+  }
+
+  /* 4. FORCE HIGH-CONTRAST BLACK TEXT AND BORDERS ON ALL PRINTED ELEMENTS */
+  .printable-area *,
+  .print\:w-full *,
+  [data-printable="true"] * {
+    color: #000000 !important;
+    border-color: #333333 !important;
+  }
+
+  canvas {
+    display: block !important;
+    max-width: 100% !important;
+    height: auto !important;
+  }
+}
