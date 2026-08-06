@@ -33,14 +33,16 @@ jobs:
         run: npm ci
 
       - name: Prepare Signing Environment
-        shell: bash
+        env:
+          RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RAW_PASS: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          KEY_CLEAN=$(echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" | tr -d '\r')
-          PASS_CLEAN=$(echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" | tr -d '\r\n')
-          echo "TAURI_SIGNING_PRIVATE_KEY<<EOF" >> $GITHUB_ENV
-          echo "$KEY_CLEAN" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$PASS_CLEAN" >> $GITHUB_ENV
+          node -e "
+            const fs = require('fs');
+            const key = (process.env.RAW_KEY || '').replace(/\r/g, '').trim();
+            const pass = (process.env.RAW_PASS || '').replace(/[\r\n]/g, '').trim();
+            fs.appendFileSync(process.env.GITHUB_ENV, \`TAURI_SIGNING_PRIVATE_KEY<<EOF\n\${key}\nEOF\nTAURI_SIGNING_PRIVATE_KEY_PASSWORD=\${pass}\n\`);
+          "
 
       - name: Build and Publish Tauri Release
         uses: tauri-apps/tauri-action@v0
