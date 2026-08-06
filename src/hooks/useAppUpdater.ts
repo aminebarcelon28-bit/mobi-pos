@@ -34,7 +34,6 @@ export function useAppUpdater() {
         setIsUpdateAvailable(false);
       }
     } catch (err: any) {
-      // In web browser or unconfigured environment, fail silently or set error
       console.warn('Tauri Updater check skipped or failed:', err);
     }
   }, []);
