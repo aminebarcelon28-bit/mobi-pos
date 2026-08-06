@@ -36,8 +36,10 @@ jobs:
         shell: bash
         run: |
           KEY_CLEAN=$(echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" | tr -d '\r')
-          PASS_CLEAN=$(echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" | tr -d '\r\n ')
-          echo "TAURI_SIGNING_PRIVATE_KEY=$KEY_CLEAN" >> $GITHUB_ENV
+          PASS_CLEAN=$(echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" | tr -d '\r\n')
+          echo "TAURI_SIGNING_PRIVATE_KEY<<EOF" >> $GITHUB_ENV
+          echo "$KEY_CLEAN" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
           echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$PASS_CLEAN" >> $GITHUB_ENV
 
       - name: Build and Publish Tauri Release
