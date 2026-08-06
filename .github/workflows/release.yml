@@ -32,20 +32,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Prepare Signing Environment
-        shell: bash
-        env:
-          RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          RAW_PASS: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          node -e "const fs=require('fs'); const k=(process.env.RAW_KEY||'').replace(/\r/g,'').trim(); const p=(process.env.RAW_PASS||'').replace(/[\r\n]/g,'').trim(); fs.appendFileSync(process.env.GITHUB_ENV, 'TAURI_SIGNING_PRIVATE_KEY<<EOF\n' + k + '\nEOF\nTAURI_SIGNING_PRIVATE_KEY_PASSWORD=' + p + '\n');"
-
       - name: Build and Publish Tauri Release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ env.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'MobiPOS ${{ github.ref_name }}'
