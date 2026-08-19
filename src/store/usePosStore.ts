@@ -34,11 +34,11 @@ import {
 import { calculateStockAlerts } from '../utils/alertEngine';
 import { productRepository } from '../db/repositories/productRepository';
 import { customerRepository } from '../db/repositories/customerRepository';
-import { transactionRepository } from '../db/repositories/transactionRepository';
 import { repairRepository } from '../db/repositories/repairRepository';
 import { settingsRepository } from '../db/repositories/settingsRepository';
 import { backupRepository } from '../db/repositories/backupRepository';
-import { db } from '../db/database';
+import { sqliteAdapter } from '../db/sqliteAdapter';
+import { soundEngine } from '../utils/audioFeedback';
 
 // ──────────────────────────────────────────────
 // State Interface
@@ -237,7 +237,6 @@ export const usePosStore = create<PosState>((set, get) => ({
     address: 'Boulevard Mohamed V, Alger Centre',
     phone: '021 65 43 21 / 0550 00 11 22',
     email: 'contact@mobi-accessories.dz',
-    taxId: 'RC: 16/00-0123456B22 • NIF: 002216012345678',
     customHeaderMsg: 'Bienvenue chez MOBI ACCESSORIES',
     customFooterMsg: 'Les articles achetés ne sont ni repris ni échangés sans ticket de caisse. Garantie 12 mois SAV.',
     showBarcode: true,
@@ -319,6 +318,7 @@ export const usePosStore = create<PosState>((set, get) => ({
 
     // Block zero-stock or exceeding stock unless overridden by PIN
     if (currentQtyInCart + 1 > product.stock && !overridePin) {
+      soundEngine.playError();
       logSecurityAction('Tentative Vente Dépassement Stock', `Produit: ${product.title} (Demandé: ${currentQtyInCart + 1}, Stock: ${product.stock})`, 'Caissier', true);
       return { success: false, reason: 'STOCK_EMPTY' };
     }
@@ -343,6 +343,7 @@ export const usePosStore = create<PosState>((set, get) => ({
         ],
       });
     }
+    soundEngine.playScan();
     return { success: true };
   },
 
@@ -606,41 +607,52 @@ export const usePosStore = create<PosState>((set, get) => ({
 
   initDatabase: async () => {
     try {
-      // 1. Fetch records from IndexedDB tables
-      let products = await productRepository.getAll();
-      let customers = await customerRepository.getAll();
-      let transactions = await transactionRepository.getAll();
-      let repairOrders = await repairRepository.getAll();
-      let purchaseOrders = await db.purchaseOrders.toArray();
-      let tradeIns = await db.tradeIns.toArray();
-      let imeiRecords = await db.imeiRecords.toArray();
-      let cashDrops = await db.cashDrops.toArray();
-      let payouts = await db.payouts.toArray();
-      let bundles = await db.bundles.toArray();
+      // 1. Fetch records from SQLite Engine
+      let products = await sqliteAdapter.getAllProducts();
+      let customers = await sqliteAdapter.getAllCustomers();
+      let transactions = await sqliteAdapter.getAllTransactions();
+      let repairOrders = await sqliteAdapter.getAllRepairOrders();
+      let purchaseOrders = await sqliteAdapter.getAllPurchaseOrders();
+      let tradeIns = await sqliteAdapter.getAllTradeIns();
+      let imeiRecords = await sqliteAdapter.getAllIMEIRecords();
+      let cashDrops = await sqliteAdapter.getCashDrops(false);
+      let payouts = await sqliteAdapter.getCashDrops(true);
+      let bundles = await sqliteAdapter.getAllBundles();
 
-      // 2. Migration loader: Check if legacy localStorage data exists to preserve previous work
+      // 2. Migration loader: Check if legacy localStorage or mock data needed on initial startup
       const legacyProducts = localStorage.getItem('mobi_pos_products');
       const legacyCustomers = localStorage.getItem('mobi_pos_customers');
       const legacyTxns = localStorage.getItem('mobi_pos_transactions');
 
-      if (products.length === 0 && legacyProducts) {
-        try {
-          const parsed = JSON.parse(legacyProducts);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            products = parsed;
-            await productRepository.bulkSave(products);
-          }
-        } catch {}
+      if (products.length === 0) {
+        if (legacyProducts) {
+          try {
+            const parsed = JSON.parse(legacyProducts);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              products = parsed;
+              await sqliteAdapter.bulkSaveProducts(products);
+            }
+          } catch {}
+        } else {
+          // Auto-seed initial demo catalogue on fresh installation
+          products = INITIAL_PRODUCTS;
+          await sqliteAdapter.bulkSaveProducts(products);
+        }
       }
 
-      if (customers.length === 0 && legacyCustomers) {
-        try {
-          const parsed = JSON.parse(legacyCustomers);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            customers = parsed;
-            await customerRepository.bulkSave(customers);
-          }
-        } catch {}
+      if (customers.length === 0) {
+        if (legacyCustomers) {
+          try {
+            const parsed = JSON.parse(legacyCustomers);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              customers = parsed;
+              await sqliteAdapter.bulkSaveCustomers(customers);
+            }
+          } catch {}
+        } else {
+          customers = INITIAL_CUSTOMERS;
+          await sqliteAdapter.bulkSaveCustomers(customers);
+        }
       }
 
       if (transactions.length === 0 && legacyTxns) {
@@ -648,7 +660,9 @@ export const usePosStore = create<PosState>((set, get) => ({
           const parsed = JSON.parse(legacyTxns);
           if (Array.isArray(parsed) && parsed.length > 0) {
             transactions = parsed;
-            await transactionRepository.bulkSave(transactions);
+            for (const t of transactions) {
+              await sqliteAdapter.processSaleTransactionAtomic(t, [], undefined);
+            }
           }
         } catch {}
       }
@@ -668,7 +682,7 @@ export const usePosStore = create<PosState>((set, get) => ({
         isDbInitialized: true,
       });
     } catch (e) {
-      console.error('Failed to initialize IndexedDB:', e);
+      console.error('Failed to initialize SQLite Database:', e);
       set({ isDbInitialized: true });
     }
   },
@@ -725,7 +739,6 @@ export const usePosStore = create<PosState>((set, get) => ({
       return acc + itemPrice * item.quantity - item.discount;
     }, 0);
 
-    const tax = 0;
     const actualStoreCreditApplied = tenders 
       ? tenders.filter(t => t.method === 'Avoir Client').reduce((acc, t) => acc + t.amount, 0)
       : storeCreditApplied;
@@ -836,7 +849,6 @@ export const usePosStore = create<PosState>((set, get) => ({
       customer: updatedCustomer,
       items: [...cart],
       subtotal: grossSubtotal,
-      tax,
       discountTotal: cart.reduce((acc, item) => acc + item.discount, 0),
       total,
       costTotal,
@@ -858,8 +870,15 @@ export const usePosStore = create<PosState>((set, get) => ({
 
     const newTransactions = [transaction, ...transactions];
 
-    productRepository.bulkSave(updatedProducts);
-    transactionRepository.save(transaction);
+    sqliteAdapter.processSaleTransactionAtomic(
+      transaction,
+      updatedProducts,
+      updatedCustomer || undefined,
+      undefined
+    );
+
+    soundEngine.playSuccess();
+    soundEngine.playCashDrawer();
 
     set({
       products: updatedProducts,
@@ -980,7 +999,7 @@ export const usePosStore = create<PosState>((set, get) => ({
 
     const updatedPOs = [approvedPO, ...purchaseOrders];
     await productRepository.bulkSave(updatedProducts);
-    await db.purchaseOrders.bulkPut(updatedPOs);
+    await sqliteAdapter.savePurchaseOrder(approvedPO);
 
     set({
       products: updatedProducts,
@@ -1082,7 +1101,7 @@ export const usePosStore = create<PosState>((set, get) => ({
     const updatedTradeIns = [newTradeIn, ...tradeIns];
 
     await productRepository.save(convertedProduct);
-    await db.tradeIns.put(newTradeIn);
+    await sqliteAdapter.saveTradeIn(newTradeIn);
 
     // Issue store credit if requested
     let updatedCustomers = customers;
@@ -1115,14 +1134,14 @@ export const usePosStore = create<PosState>((set, get) => ({
       id: `bndl-${Date.now()}`,
     };
     const updated = [newBundle, ...bundles];
-    await db.bundles.put(newBundle);
+    await sqliteAdapter.saveBundle(newBundle);
     set({ bundles: updated });
   },
 
   deleteBundle: async (bundleId) => {
     const { bundles } = get();
     const updated = bundles.filter((b) => b.id !== bundleId);
-    await db.bundles.delete(bundleId);
+    await sqliteAdapter.deleteBundle(bundleId);
     set({ bundles: updated });
   },
 
@@ -1188,7 +1207,7 @@ export const usePosStore = create<PosState>((set, get) => ({
       timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
     };
     const updated = [newDrop, ...cashDrops];
-    await db.cashDrops.put(newDrop);
+    await sqliteAdapter.saveCashDrop(newDrop, false);
     set({ cashDrops: updated });
   },
 

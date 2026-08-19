@@ -15,6 +15,8 @@ import {
   Battery,
   Volume2,
   Zap,
+  MessageSquare,
+  Check,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
@@ -131,6 +133,33 @@ export const RepairWorkOrderModal: React.FC = () => {
         setDeviceModel(found.registeredDevice);
       }
     }
+  };
+
+  const handleSendWhatsAppNotification = (order: RepairOrder) => {
+    let cleanPhone = order.customerPhone.replace(/[^0-9]/g, '');
+    if (cleanPhone.startsWith('0')) {
+      cleanPhone = '213' + cleanPhone.slice(1);
+    } else if (!cleanPhone.startsWith('213')) {
+      cleanPhone = '213' + cleanPhone;
+    }
+    const remaining = Math.max(0, order.totalCost - (order.depositAmount || 0));
+    const msg = `Bonjour ${order.customerName},\n\nVotre appareil *${order.deviceModel}* (Ticket N° *${order.ticketNumber}*) est réparé et prêt à être récupéré chez *MOBI ACCESSORIES* !\n\n💰 Montant restant à régler : *${remaining.toLocaleString('fr-DZ')} DA*\n📍 Boulevard Mohamed V, Alger Centre\n\nMerci de votre confiance !`;
+    const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
+    window.open(url, '_blank');
+  };
+
+  const handleSetAllChecklistOk = (target: 'pre' | 'post') => {
+    const allOk: ConditionChecklist = {
+      screenOk: true,
+      faceIdOk: true,
+      cameraOk: true,
+      chargingOk: true,
+      bodyOk: true,
+      batteryOk: true,
+      audioOk: true,
+    };
+    if (target === 'pre') setChecklist(allOk);
+    else setPostChecklist(allOk);
   };
 
   const handleSaveOrder = (e: React.FormEvent) => {
@@ -421,15 +450,24 @@ export const RepairWorkOrderModal: React.FC = () => {
               <div className="grid grid-cols-2 gap-4">
                 {/* Pre Checklist */}
                 <div className="bg-pos-bg p-3.5 rounded-xl border border-pos-border space-y-2.5">
-                  <span className="text-[11px] font-extrabold text-pos-text uppercase tracking-wider block flex items-center gap-1.5">
-                    <ShieldAlert className="w-3.5 h-3.5 text-amber-400" /> Checklist à la Réception (Avant)
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-extrabold text-pos-text uppercase tracking-wider block flex items-center gap-1.5">
+                      <ShieldAlert className="w-3.5 h-3.5 text-amber-400" /> Checklist à la Réception
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleSetAllChecklistOk('pre')}
+                      className="text-[10px] bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 px-2 py-0.5 rounded font-bold transition border border-emerald-500/30 cursor-pointer flex items-center gap-1"
+                    >
+                      <Check className="w-3 h-3" /> Tout Conforme
+                    </button>
+                  </div>
                   
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <button
                       type="button"
                       onClick={() => setChecklist({ ...checklist, screenOk: !checklist.screenOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition ${
+                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer ${
                         checklist.screenOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -439,7 +477,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setChecklist({ ...checklist, faceIdOk: !checklist.faceIdOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition ${
+                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer ${
                         checklist.faceIdOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -449,7 +487,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setChecklist({ ...checklist, cameraOk: !checklist.cameraOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition ${
+                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer ${
                         checklist.cameraOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -459,7 +497,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setChecklist({ ...checklist, chargingOk: !checklist.chargingOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition ${
+                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer ${
                         checklist.chargingOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -469,7 +507,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setChecklist({ ...checklist, batteryOk: !checklist.batteryOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition ${
+                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer ${
                         checklist.batteryOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -479,7 +517,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setChecklist({ ...checklist, audioOk: !checklist.audioOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition ${
+                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer ${
                         checklist.audioOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -490,9 +528,18 @@ export const RepairWorkOrderModal: React.FC = () => {
 
                 {/* Post Checklist */}
                 <div className="bg-pos-bg p-3.5 rounded-xl border border-pos-border space-y-2.5">
-                  <span className="text-[11px] font-extrabold text-pos-text uppercase tracking-wider block flex items-center gap-1.5">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Checklist après Contrôle Qualité (Après)
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-extrabold text-pos-text uppercase tracking-wider block flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Contrôle Qualité (Après)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleSetAllChecklistOk('post')}
+                      className="text-[10px] bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 px-2 py-0.5 rounded font-bold transition border border-emerald-500/30 cursor-pointer flex items-center gap-1"
+                    >
+                      <Check className="w-3 h-3" /> Tout Conforme
+                    </button>
+                  </div>
 
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <button
@@ -730,15 +777,24 @@ export const RepairWorkOrderModal: React.FC = () => {
                       </div>
 
                       <div className="flex items-center gap-2">
+                        {order.status === 'Prêt / Terminé' && (
+                          <button
+                            onClick={() => handleSendWhatsAppNotification(order)}
+                            className="px-3.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/50 flex items-center gap-1.5 transition text-xs font-black cursor-pointer shadow-sm shadow-emerald-500/10"
+                            title="Envoyer un message WhatsApp pré-rempli au client"
+                          >
+                            <MessageSquare className="w-3.5 h-3.5 text-emerald-400" /> WhatsApp
+                          </button>
+                        )}
                         <button
                           onClick={() => handleEditClick(order)}
-                          className="px-3.5 py-1.5 rounded-xl bg-pos-bg hover:bg-pos-hover text-pos-text border border-pos-border flex items-center gap-1.5 transition text-xs font-semibold"
+                          className="px-3.5 py-1.5 rounded-xl bg-pos-bg hover:bg-pos-hover text-pos-text border border-pos-border flex items-center gap-1.5 transition text-xs font-semibold cursor-pointer"
                         >
                           <Edit className="w-3.5 h-3.5 text-emerald-400" /> Éditer
                         </button>
                         <button
                           onClick={() => handlePrintTicket(order)}
-                          className="px-3.5 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5 transition text-xs font-bold"
+                          className="px-3.5 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5 transition text-xs font-bold cursor-pointer"
                         >
                           <Printer className="w-3.5 h-3.5" /> Fiche Reçu
                         </button>

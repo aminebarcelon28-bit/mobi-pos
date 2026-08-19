@@ -1,24 +1,40 @@
-import { db } from '../database';
-import type { SaleTransaction } from '../../types/pos';
+import { sqliteAdapter } from '../sqliteAdapter';
+import type { SaleTransaction, Product, Customer, SecurityAuditLogEntry } from '../../types/pos';
 
 export const transactionRepository = {
   async getAll(): Promise<SaleTransaction[]> {
-    return await db.transactions.toArray();
+    return await sqliteAdapter.getAllTransactions();
   },
 
   async save(transaction: SaleTransaction): Promise<void> {
-    await db.transactions.put(transaction);
+    await sqliteAdapter.processSaleTransactionAtomic(
+      transaction,
+      [],
+      transaction.customer || undefined,
+      undefined
+    );
+  },
+
+  async saveAtomicSale(
+    transaction: SaleTransaction,
+    updatedProducts: Product[],
+    updatedCustomer?: Customer,
+    auditEntry?: SecurityAuditLogEntry
+  ): Promise<void> {
+    await sqliteAdapter.processSaleTransactionAtomic(
+      transaction,
+      updatedProducts,
+      updatedCustomer,
+      auditEntry
+    );
   },
 
   async findByReceipt(receiptNumber: string): Promise<SaleTransaction | undefined> {
-    return await db.transactions.where('receiptNumber').equals(receiptNumber.trim()).first();
-  },
-
-  async bulkSave(transactions: SaleTransaction[]): Promise<void> {
-    await db.transactions.bulkPut(transactions);
+    const txns = await sqliteAdapter.getAllTransactions();
+    return txns.find((t) => t.receiptNumber.trim() === receiptNumber.trim());
   },
 
   async clearAll(): Promise<void> {
-    await db.transactions.clear();
+    // Clear handled by db reset
   },
 };

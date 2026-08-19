@@ -181,7 +181,6 @@ export interface SaleTransaction {
   customer: Customer | null;
   items: CartItem[];
   subtotal: number;
-  tax: number;
   discountTotal: number;
   total: number;
   costTotal: number;
@@ -316,7 +315,6 @@ export interface ReceiptSettings {
   customFooterMsg: string;
   showBarcode: boolean;
   autoPrintEnabled?: boolean;
-  taxId?: string;
   printerRouting?: PrinterRoutingConfig;
   loyaltyConfig?: LoyaltyProgramConfig;
 }

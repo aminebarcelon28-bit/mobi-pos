@@ -447,7 +447,7 @@ export const ReportsModal: React.FC = () => {
 
         {/* Footer */}
         <div className="p-3 border-t border-pos-border bg-pos-card flex justify-between items-center text-xs text-pos-muted shrink-0">
-          <span>Rapports Financiers - Tax-Free Gross Totals</span>
+          <span>Rapports Financiers & Performance Commerciale</span>
           <button onClick={() => { setPinVerified(false); setPinInput(''); closeModal(); }} className="px-4 py-1.5 rounded-xl bg-pos-hover text-pos-text font-semibold">
             Fermer
           </button>

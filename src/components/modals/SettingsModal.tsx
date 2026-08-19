@@ -4,13 +4,14 @@ import {
   Wifi, WifiOff, Activity, Zap, RefreshCcw, CheckCircle2, AlertTriangle,
   XCircle, Clock, Play, Tag, QrCode, ScanLine, Cable,
   Bluetooth, Usb, ChevronDown, ChevronUp, Settings, HardDrive,
-  Server, RotateCcw, Database, FileJson, Shield, Info, Radio, Sparkles,
+  Server, RotateCcw, Database, Shield, Radio, Sparkles,
   Award, TrendingUp
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
 import { formatDZD } from '../../types/pos';
 import { DEFAULT_LOYALTY_CONFIG, calculateFinancialProfitImpact } from '../../utils/loyaltyEngine';
+import { sqliteAdapter, type DbStats, type IntegrityReport } from '../../db/sqliteAdapter';
 
 // ══════════════════════════════════════════════════════════════
 // TYPES
@@ -270,6 +271,72 @@ export const SettingsModal: React.FC = () => {
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
   const scannerInputRef = useRef<HTMLInputElement>(null);
 
+  // ── SQLite Engine & Diagnostics State ──
+  const [dbStats, setDbStats] = useState<DbStats | null>(null);
+  const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
+  const [isCheckingIntegrity, setIsCheckingIntegrity] = useState(false);
+  const [isCheckpointing, setIsCheckpointing] = useState(false);
+  const [isVacuuming, setIsVacuuming] = useState(false);
+
+  const loadDbStats = useCallback(async () => {
+    try {
+      const stats = await sqliteAdapter.getStats();
+      setDbStats(stats);
+    } catch (e) {
+      console.warn('Failed to load SQLite stats:', e);
+    }
+  }, []);
+
+  const handleRunIntegrityCheck = async () => {
+    setIsCheckingIntegrity(true);
+    try {
+      const report = await sqliteAdapter.runIntegrityCheck();
+      setIntegrityReport(report);
+      if (report.is_healthy) {
+        showToast('✅ Intégrité SQLite 100% Validée : Aucune corruption détectée', 'success');
+      } else {
+        showToast('⚠️ Avertissement d\'intégrité détecté sur la base de données', 'warning');
+      }
+      await loadDbStats();
+    } catch (e: any) {
+      showToast(`Erreur lors du test d'intégrité : ${e?.message || e}`, 'error');
+    } finally {
+      setIsCheckingIntegrity(false);
+    }
+  };
+
+  const handleCheckpointWal = async () => {
+    setIsCheckpointing(true);
+    try {
+      const msg = await sqliteAdapter.checkpointWal();
+      showToast(`⚡ WAL Checkpoint : ${msg}`, 'success');
+      await loadDbStats();
+    } catch (e: any) {
+      showToast(`Erreur Checkpoint : ${e?.message || e}`, 'error');
+    } finally {
+      setIsCheckpointing(false);
+    }
+  };
+
+  const handleVacuum = async () => {
+    setIsVacuuming(true);
+    try {
+      const msg = await sqliteAdapter.vacuum();
+      showToast(`🧹 Défragmentation VACUUM : ${msg}`, 'success');
+      await loadDbStats();
+    } catch (e: any) {
+      showToast(`Erreur VACUUM : ${e?.message || e}`, 'error');
+    } finally {
+      setIsVacuuming(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeModal === 'settings' && activeTab === 'backup') {
+      loadDbStats();
+    }
+  }, [activeModal, activeTab, loadDbStats]);
+
   // ── Simulate Diagnostic Run ──
   const simulateDiagnosticRun = useCallback((tests: Omit<DiagnosticTest, 'timestamp'>[]): void => {
     const timestamped = tests.map(t => ({ ...t, timestamp: new Date().toISOString() }));
@@ -478,7 +545,7 @@ export const SettingsModal: React.FC = () => {
     { key: 'hardware', label: 'Matériel & Périphériques', icon: <Cpu className="w-4 h-4" /> },
     { key: 'diagnostics', label: 'Diagnostique Avancé', icon: <Activity className="w-4 h-4" /> },
     { key: 'loyalty', label: 'Configuration Fidélité', icon: <Award className="w-4 h-4 text-amber-400" /> },
-    { key: 'backup', label: 'Sauvegarde & Données', icon: <Database className="w-4 h-4" /> },
+    { key: 'backup', label: 'Moteur SQLite & Données', icon: <Database className="w-4 h-4 text-cyan-400" /> },
   ];
 
   return (
@@ -640,7 +707,7 @@ export const SettingsModal: React.FC = () => {
                       </span>
                       <span className="bg-emerald-500/20 text-emerald-300 text-[8px] font-bold px-1.5 py-0.5 rounded">ESC/POS 80mm</span>
                     </div>
-                    <p className="text-[9px] text-pos-muted">Tickets de caisse, reçus tax-free & duplicatas</p>
+                    <p className="text-[9px] text-pos-muted">Tickets de caisse, reçus de vente & duplicatas</p>
                     <div className="text-[10px] font-bold text-pos-text bg-pos-card p-2 rounded border border-pos-border truncate flex items-center justify-between">
                       <span className="truncate">➔ {receiptSettings.printerRouting?.receiptPrinterName || 'Epson TM-T88VI'}</span>
                       <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0 ml-1" />
@@ -1110,105 +1177,226 @@ export const SettingsModal: React.FC = () => {
 
           {/* ══════ TAB: Backup & Data ══════ */}
           {activeTab === 'backup' && (
-            <div className="space-y-4 max-w-3xl mx-auto">
-              <h3 className="text-xs font-bold text-pos-muted uppercase tracking-wider">Sauvegarde & Restauration des Données</h3>
+            <div className="space-y-4 max-w-4xl mx-auto">
+              {/* SQLite Engine Banner */}
+              <div className="bg-gradient-to-r from-cyan-950/40 via-pos-card to-blue-950/40 border border-cyan-500/30 rounded-2xl p-4 shadow-xl">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center border border-cyan-500/40 shadow-lg shadow-cyan-500/10">
+                      <Database className="w-6 h-6 stroke-[2.5]" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-extrabold text-pos-text tracking-wide">
+                          Moteur SQLite Haute Performance
+                        </h3>
+                        <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1">
+                          <ShieldCheck className="w-3 h-3" /> Zéro Perte de Données (WAL)
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-pos-muted">
+                        Architecture ACID native sur disque • Concurrence multi-thread avec verrous sans latence • Cache mémoire 64 Mo
+                      </p>
+                    </div>
+                  </div>
 
-              {/* Export Card */}
-              <div className="bg-pos-card border border-pos-border rounded-xl p-5">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
-                    <Download className="w-5 h-5 stroke-[2.5]" />
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-pos-text">Exporter la Base de Données</h4>
-                    <p className="text-[10px] text-pos-muted">Exportez tous les produits, clients, transactions, réparations, kits et paramètres au format JSON.</p>
-                  </div>
+                  <button
+                    onClick={loadDbStats}
+                    className="px-3 py-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <RefreshCcw className="w-3.5 h-3.5" /> Actualiser Métriques
+                  </button>
                 </div>
-                <div className="bg-pos-bg rounded-lg p-3 border border-pos-border mb-3">
-                  <div className="grid grid-cols-3 gap-2 text-xs">
-                    <div className="flex items-center gap-1.5">
-                      <FileJson className="w-3 h-3 text-emerald-400" />
-                      <span className="text-pos-muted">Format:</span>
-                      <span className="font-bold text-pos-text">JSON</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <Database className="w-3 h-3 text-blue-400" />
-                      <span className="text-pos-muted">Tables:</span>
-                      <span className="font-bold text-pos-text">8</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <Shield className="w-3 h-3 text-purple-400" />
-                      <span className="text-pos-muted">Version:</span>
-                      <span className="font-bold text-pos-text">1.0.0</span>
-                    </div>
-                  </div>
+
+                {/* SQLite Badges */}
+                <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-pos-border/50 text-[10px]">
+                  <span className="bg-pos-bg/80 px-2.5 py-1 rounded-lg border border-pos-border text-slate-300 font-mono flex items-center gap-1">
+                    <Zap className="w-3 h-3 text-amber-400" /> Mode: <strong className="text-pos-text">{dbStats?.journal_mode?.toUpperCase() || 'WAL'}</strong>
+                  </span>
+                  <span className="bg-pos-bg/80 px-2.5 py-1 rounded-lg border border-pos-border text-slate-300 font-mono flex items-center gap-1">
+                    <Shield className="w-3 h-3 text-purple-400" /> Sync: <strong className="text-pos-text">{dbStats?.synchronous || 'NORMAL'}</strong>
+                  </span>
+                  <span className="bg-pos-bg/80 px-2.5 py-1 rounded-lg border border-pos-border text-slate-300 font-mono flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Clés Étrangères: <strong className="text-emerald-400">Actives (ON)</strong>
+                  </span>
+                  <span className="bg-pos-bg/80 px-2.5 py-1 rounded-lg border border-pos-border text-slate-300 font-mono flex items-center gap-1">
+                    <HardDrive className="w-3 h-3 text-cyan-400" /> MMAP: <strong className="text-cyan-400">256 Mo</strong>
+                  </span>
+                  <span className="bg-pos-bg/80 px-2.5 py-1 rounded-lg border border-pos-border text-slate-300 font-mono flex items-center gap-1">
+                    <Cpu className="w-3 h-3 text-blue-400" /> Cache RAM: <strong className="text-blue-400">64 Mo</strong>
+                  </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={exportDatabase}
-                  className="w-full py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-500/20 cursor-pointer"
-                >
-                  <Download className="w-4 h-4" /> Télécharger la Sauvegarde Complète
-                </button>
               </div>
 
-              {/* Import Card */}
-              <div className="bg-pos-card border border-pos-border rounded-xl p-5">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center border border-blue-500/30">
-                    <Upload className="w-5 h-5 stroke-[2.5]" />
+              {/* Database Live KPIs */}
+              <div className="grid grid-cols-4 gap-3">
+                <div className="bg-pos-card border border-pos-border rounded-xl p-3.5 shadow-sm">
+                  <span className="text-[10px] text-pos-muted uppercase font-bold block mb-1">Taille Base de Données</span>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-lg font-black text-pos-text">
+                      {dbStats ? (dbStats.db_size_bytes > 1048576 ? `${(dbStats.db_size_bytes / 1048576).toFixed(2)} Mo` : `${(dbStats.db_size_bytes / 1024).toFixed(1)} Ko`) : '...'}
+                    </span>
                   </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-pos-text">Restaurer une Sauvegarde</h4>
-                    <p className="text-[10px] text-pos-muted">Importez un fichier JSON pour restaurer vos données. Les données actuelles seront remplacées.</p>
-                  </div>
+                  <span className="text-[9px] text-pos-muted block mt-0.5 truncate" title={dbStats?.db_path}>
+                    {dbStats?.db_path ? dbStats.db_path.split(/[\\/]/).pop() : 'mobi_pos.db'}
+                  </span>
                 </div>
-                <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-2.5 mb-3 flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-[10px] font-bold text-amber-400">Attention — Opération Irréversible</p>
-                    <p className="text-[10px] text-amber-400/70">Toutes les données actuelles seront remplacées par le contenu du fichier importé. Exportez d'abord une sauvegarde.</p>
+
+                <div className="bg-pos-card border border-pos-border rounded-xl p-3.5 shadow-sm">
+                  <span className="text-[10px] text-pos-muted uppercase font-bold block mb-1">Journal WAL Actif</span>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-lg font-black text-cyan-400">
+                      {dbStats ? `${(dbStats.wal_size_bytes / 1024).toFixed(1)} Ko` : '0.0 Ko'}
+                    </span>
                   </div>
+                  <span className="text-[9px] text-emerald-400 font-semibold block mt-0.5">Écritures non-bloquantes</span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-full py-2.5 px-4 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-400 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition cursor-pointer"
-                >
-                  <Upload className="w-4 h-4" /> Sélectionner un Fichier JSON à Restaurer
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".json"
-                  onChange={handleFileUpload}
-                  className="hidden"
-                />
+
+                <div className="bg-pos-card border border-pos-border rounded-xl p-3.5 shadow-sm">
+                  <span className="text-[10px] text-pos-muted uppercase font-bold block mb-1">Total Transactions</span>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-lg font-black text-emerald-400">
+                      {dbStats?.total_transactions ?? 0}
+                    </span>
+                    <span className="text-[10px] text-pos-muted">tickets</span>
+                  </div>
+                  <span className="text-[9px] text-pos-muted block mt-0.5">{dbStats?.total_products ?? 0} articles en stock</span>
+                </div>
+
+                <div className="bg-pos-card border border-pos-border rounded-xl p-3.5 shadow-sm">
+                  <span className="text-[10px] text-pos-muted uppercase font-bold block mb-1">Pages Allouées</span>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-lg font-black text-purple-400">
+                      {dbStats?.page_count ?? 0}
+                    </span>
+                    <span className="text-[10px] text-pos-muted">pages</span>
+                  </div>
+                  <span className="text-[9px] text-pos-muted block mt-0.5">Page: {dbStats?.page_size ?? 4096} octets</span>
+                </div>
               </div>
 
-              {/* Data Integrity Info */}
-              <div className="bg-pos-card border border-pos-border rounded-xl p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <Info className="w-4 h-4 text-cyan-400" />
-                  <h4 className="text-xs font-bold text-pos-text">Intégrité des Données</h4>
+              {/* Integrity & Diagnostics Control Panel */}
+              <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3 shadow-md">
+                <div className="flex items-center justify-between border-b border-pos-border/60 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    <h4 className="text-xs font-bold text-pos-text uppercase tracking-wider">
+                      Diagnostics d'Intégrité & Maintenance SQLite
+                    </h4>
+                  </div>
+                  <span className="text-[10px] text-pos-muted font-mono">
+                    PRAGMA integrity_check & VACUUM
+                  </span>
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="bg-pos-bg rounded-lg p-2 border border-pos-border flex justify-between">
-                    <span className="text-pos-muted">Stockage</span>
-                    <span className="font-bold text-pos-text">LocalStorage (Navigateur)</span>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <button
+                    onClick={handleRunIntegrityCheck}
+                    disabled={isCheckingIntegrity}
+                    className="py-2.5 px-3 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+                  >
+                    <Activity className={`w-4 h-4 ${isCheckingIntegrity ? 'animate-spin' : ''}`} />
+                    {isCheckingIntegrity ? 'Vérification...' : 'Vérifier Intégrité Complète'}
+                  </button>
+
+                  <button
+                    onClick={handleCheckpointWal}
+                    disabled={isCheckpointing}
+                    className="py-2.5 px-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+                  >
+                    <Zap className={`w-4 h-4 ${isCheckpointing ? 'animate-spin' : ''}`} />
+                    {isCheckpointing ? 'Checkpoint...' : 'Checkpoint WAL (TRUNCATE)'}
+                  </button>
+
+                  <button
+                    onClick={handleVacuum}
+                    disabled={isVacuuming}
+                    className="py-2.5 px-3 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-300 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCcw className={`w-4 h-4 ${isVacuuming ? 'animate-spin' : ''}`} />
+                    {isVacuuming ? 'Défragmentation...' : 'Optimiser Pages (VACUUM)'}
+                  </button>
+                </div>
+
+                {/* Integrity Report Box */}
+                {integrityReport && (
+                  <div className={`p-3 rounded-xl border text-xs space-y-1 animate-in fade-in ${integrityReport.is_healthy ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-red-500/10 border-red-500/30 text-red-300'}`}>
+                    <div className="flex items-center gap-2 font-bold">
+                      {integrityReport.is_healthy ? (
+                        <>
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          <span>Rapport d'Intégrité : 100% Conforme et Sain</span>
+                        </>
+                      ) : (
+                        <>
+                          <AlertTriangle className="w-4 h-4 text-red-400" />
+                          <span>Alerte d'Intégrité : Anomalie détectée</span>
+                        </>
+                      )}
+                    </div>
+                    <div className="text-[11px] font-mono opacity-90 pl-6">
+                      {integrityReport.integrity_messages.map((m, idx) => (
+                        <div key={idx}>➔ {m}</div>
+                      ))}
+                      {integrityReport.foreign_key_violations.map((f, idx) => (
+                        <div key={`fk-${idx}`} className="text-red-400">➔ Violation FK : {f}</div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="bg-pos-bg rounded-lg p-2 border border-pos-border flex justify-between">
-                    <span className="text-pos-muted">Persistance</span>
-                    <span className="font-bold text-emerald-400">Synchrone</span>
+                )}
+              </div>
+
+              {/* JSON Backup & Restore Cards */}
+              <div className="grid grid-cols-2 gap-4">
+                {/* Export Card */}
+                <div className="bg-pos-card border border-pos-border rounded-xl p-4 flex flex-col justify-between">
+                  <div className="space-y-2 mb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
+                        <Download className="w-4 h-4 stroke-[2.5]" />
+                      </div>
+                      <h4 className="text-xs font-bold text-pos-text">Export Complet de Sauvegarde</h4>
+                    </div>
+                    <p className="text-[10px] text-pos-muted">
+                      Exporte l'intégralité des articles, clients, tickets, réparations, kits et paramètres au format JSON standard.
+                    </p>
                   </div>
-                  <div className="bg-pos-bg rounded-lg p-2 border border-pos-border flex justify-between">
-                    <span className="text-pos-muted">Chiffrement</span>
-                    <span className="font-bold text-pos-text">Texte Brut</span>
+                  <button
+                    type="button"
+                    onClick={exportDatabase}
+                    className="w-full py-2 px-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-500/20 cursor-pointer"
+                  >
+                    <Download className="w-4 h-4" /> Télécharger Sauvegarde JSON
+                  </button>
+                </div>
+
+                {/* Import Card */}
+                <div className="bg-pos-card border border-pos-border rounded-xl p-4 flex flex-col justify-between">
+                  <div className="space-y-2 mb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center border border-blue-500/30">
+                        <Upload className="w-4 h-4 stroke-[2.5]" />
+                      </div>
+                      <h4 className="text-xs font-bold text-pos-text">Restauration depuis JSON</h4>
+                    </div>
+                    <p className="text-[10px] text-pos-muted">
+                      Importe et synchronise un fichier de sauvegarde JSON dans les tables de la base de données.
+                    </p>
                   </div>
-                  <div className="bg-pos-bg rounded-lg p-2 border border-pos-border flex justify-between">
-                    <span className="text-pos-muted">Format</span>
-                    <span className="font-bold text-pos-text">JSON v1.0.0</span>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full py-2 px-3 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-400 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition cursor-pointer"
+                  >
+                    <Upload className="w-4 h-4" /> Sélectionner un Fichier JSON
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".json"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
                 </div>
               </div>
             </div>

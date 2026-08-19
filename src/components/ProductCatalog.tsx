@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { Search, Plus, Edit2, Zap, AlertTriangle, Package, AlertCircle } from 'lucide-react';
+import { Search, Plus, Edit2, Zap, AlertTriangle, Package, AlertCircle, Truck } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
-import type { CategoryType, SortOption, Product } from '../types/pos';
+import type { CategoryType, SortOption, Product, BrandName } from '../types/pos';
 import { PinDialog } from './ui/PinDialog';
 
 const CATEGORIES: CategoryType[] = [
@@ -13,6 +13,14 @@ const CATEGORIES: CategoryType[] = [
   'Chargeurs',
   'Câbles',
   'Protège-Écran',
+];
+
+const BRANDS: Array<{ label: string; value: 'Tous' | BrandName }> = [
+  { label: 'Toutes Marques', value: 'Tous' },
+  { label: 'Apple', value: 'Apple' },
+  { label: 'Samsung', value: 'Samsung' },
+  { label: 'Xiaomi', value: 'Autre' },
+  { label: 'Google', value: 'Google' },
 ];
 
 const SORT_OPTIONS: { label: string; value: SortOption }[] = [
@@ -27,12 +35,14 @@ const ProductCard = React.memo(({
   product, 
   pricingTier, 
   onAddToCart, 
-  onEdit 
+  onEdit,
+  onOrderStock,
 }: { 
   product: Product; 
   pricingTier: string; 
   onAddToCart: (p: Product) => void;
   onEdit: (p: Product) => void;
+  onOrderStock: (p: Product) => void;
 }) => {
   const [imgError, setImgError] = useState(false);
 
@@ -66,7 +76,7 @@ const ProductCard = React.memo(({
 
         {/* MagSafe Badge */}
         {product.isMagSafe && (
-          <span className="absolute top-2 left-2 bg-slate-900/90 text-emerald-400 p-1 rounded-md border border-emerald-500/30 shadow">
+          <span className="absolute top-2 left-2 bg-slate-900/90 text-emerald-400 p-1 rounded-md border border-emerald-500/30 shadow" title="Compatible MagSafe">
             <Zap className="w-3 h-3 fill-emerald-400" />
           </span>
         )}
@@ -81,20 +91,34 @@ const ProductCard = React.memo(({
               : 'bg-slate-900/90 text-pos-muted border-pos-border'
           }`}
         >
-          {isOutOfStock ? 'Rupture (PIN)' : `Stock: ${product.stock}`}
+          {isOutOfStock ? 'Rupture' : `Stock: ${product.stock}`}
         </span>
 
-        {/* Hover Quick Edit Button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onEdit(product);
-          }}
-          className="absolute bottom-2 right-2 p-1.5 bg-black/90 hover:bg-emerald-500 text-white rounded-lg opacity-0 group-hover:opacity-100 transition duration-200 border border-white/20 shadow-md"
-          title="Modifier Produit"
-        >
-          <Edit2 className="w-3.5 h-3.5" />
-        </button>
+        {/* Quick Actions on Image Hover */}
+        <div className="absolute bottom-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition duration-200">
+          {(isLowStock || isOutOfStock) && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onOrderStock(product);
+              }}
+              className="p-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg border border-white/20 shadow-md"
+              title="Créer commande de réapprovisionnement (PO)"
+            >
+              <Truck className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit(product);
+            }}
+            className="p-1.5 bg-black/90 hover:bg-emerald-500 text-white rounded-lg border border-white/20 shadow-md"
+            title="Modifier Produit"
+          >
+            <Edit2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Details */}
@@ -157,11 +181,14 @@ export const ProductCatalog: React.FC = () => {
     addToCart,
     setEditingProduct,
     pricingTier,
+    openModal,
   } = usePosStore();
 
   const [pinDialogState, setPinDialogState] = useState<{isOpen: boolean, product: Product | null}>({ isOpen: false, product: null });
   const [feedback, setFeedback] = useState<{message: string, type: 'success'|'error'} | null>(null);
   const [stockAlertOnly, setStockAlertOnly] = useState(false);
+  const [selectedBrand, setSelectedBrand] = useState<'Tous' | BrandName>('Tous');
+  const [magsafeOnly, setMagsafeOnly] = useState(false);
 
   // Category counts map
   const categoryCounts = useMemo(() => {
@@ -178,7 +205,10 @@ export const ProductCatalog: React.FC = () => {
     const filtered = products.filter((product) => {
       const matchesCategory = selectedCategory === 'Tous les produits' || product.category === selectedCategory;
       const matchesStockAlert = !stockAlertOnly || product.stock <= (product.reorderPoint || 10);
-      if (!matchesCategory || !matchesStockAlert) return false;
+      const matchesBrand = selectedBrand === 'Tous' || product.brand === selectedBrand;
+      const matchesMagsafe = !magsafeOnly || product.isMagSafe === true;
+
+      if (!matchesCategory || !matchesStockAlert || !matchesBrand || !matchesMagsafe) return false;
       if (!q) return true;
       return (
         product.title.toLowerCase().includes(q) ||
@@ -197,7 +227,7 @@ export const ProductCatalog: React.FC = () => {
       if (sortOption === 'brand_asc') return a.brand.localeCompare(b.brand);
       return 0;
     });
-  }, [products, selectedCategory, searchQuery, sortOption, stockAlertOnly]);
+  }, [products, selectedCategory, searchQuery, sortOption, stockAlertOnly, selectedBrand, magsafeOnly]);
 
   const showFeedback = (message: string, type: 'success' | 'error') => {
     setFeedback({ message, type });
@@ -215,11 +245,16 @@ export const ProductCatalog: React.FC = () => {
     }
   }, [addToCart]);
 
+  const handleOrderStock = useCallback((product: Product) => {
+    openModal('vendor_procurement');
+    showFeedback(`Gestionnaire d'approvisionnement ouvert pour ${product.title}`, 'success');
+  }, [openModal]);
+
   const handlePinSuccess = () => {
     if (pinDialogState.product) {
       addToCart(pinDialogState.product, true);
       setPinDialogState({ isOpen: false, product: null });
-      showFeedback("Produit ajouté (Forcé)", 'success');
+      showFeedback("Produit ajouté (Vente forcée autorisée)", 'success');
     }
   };
 
@@ -235,56 +270,92 @@ export const ProductCatalog: React.FC = () => {
       )}
 
       {/* Category Pills & Sorting Toolbar */}
-      <div className="p-3 border-b border-pos-border bg-pos-panel flex flex-wrap items-center justify-between gap-2 z-10 relative shrink-0">
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-[70vw] scrollbar-none">
-          {CATEGORIES.map((cat) => {
-            const count = categoryCounts[cat] || 0;
-            return (
-              <button
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer ${
-                  selectedCategory === cat
-                    ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
-                    : 'bg-pos-card text-pos-muted hover:text-pos-text border border-pos-border hover:border-emerald-500/40'
-                }`}
-              >
-                <span>{cat}</span>
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
-                  selectedCategory === cat ? 'bg-slate-950/20 text-slate-950' : 'bg-pos-bg text-pos-muted'
-                }`}>
-                  {count}
-                </span>
-              </button>
-            );
-          })}
+      <div className="p-3 border-b border-pos-border bg-pos-panel flex flex-col gap-2 z-10 relative shrink-0">
+        {/* Categories row */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-[75vw] scrollbar-none">
+            {CATEGORIES.map((cat) => {
+              const count = categoryCounts[cat] || 0;
+              return (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer ${
+                    selectedCategory === cat
+                      ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
+                      : 'bg-pos-card text-pos-muted hover:text-pos-text border border-pos-border hover:border-emerald-500/40'
+                  }`}
+                >
+                  <span>{cat}</span>
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
+                    selectedCategory === cat ? 'bg-slate-950/20 text-slate-950' : 'bg-pos-bg text-pos-muted'
+                  }`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Sorting Dropdown */}
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-[11px] font-bold text-pos-muted uppercase">Trier:</span>
+            <select
+              value={sortOption}
+              onChange={(e) => setSortOption(e.target.value as SortOption)}
+              className="bg-pos-card border border-pos-border rounded-lg px-2.5 py-1 text-xs text-pos-text font-bold focus:border-emerald-500 focus:outline-none cursor-pointer"
+            >
+              {SORT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
-        {/* Sorting Dropdown & Alert Toggle */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setStockAlertOnly(!stockAlertOnly)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 border ${
-              stockAlertOnly
-                ? 'bg-rose-500 text-white border-rose-400 shadow-md'
-                : 'bg-pos-card text-pos-muted border-pos-border hover:text-pos-text'
-            }`}
-          >
-            <AlertCircle className="w-3.5 h-3.5" /> Alertes Stock
-          </button>
-
-          <span className="text-[11px] font-bold text-pos-muted uppercase">Trier:</span>
-          <select
-            value={sortOption}
-            onChange={(e) => setSortOption(e.target.value as SortOption)}
-            className="bg-pos-card border border-pos-border rounded-lg px-2.5 py-1 text-xs text-pos-text font-bold focus:border-emerald-500 focus:outline-none cursor-pointer"
-          >
-            {SORT_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
+        {/* Secondary Filter Chips Row: Brands & MagSafe & Alerts */}
+        <div className="flex items-center justify-between pt-1 border-t border-pos-border/40 text-xs">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+            <span className="text-[10px] font-bold text-pos-muted uppercase mr-1">Marque:</span>
+            {BRANDS.map((b) => (
+              <button
+                key={b.label}
+                onClick={() => setSelectedBrand(b.value)}
+                className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                  selectedBrand === b.value
+                    ? 'bg-cyan-500/20 border border-cyan-500 text-cyan-300'
+                    : 'bg-pos-bg border border-pos-border text-pos-muted hover:text-pos-text'
+                }`}
+              >
+                {b.label}
+              </button>
             ))}
-          </select>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setMagsafeOnly(!magsafeOnly)}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 border cursor-pointer ${
+                magsafeOnly
+                  ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
+                  : 'bg-pos-card text-pos-muted border-pos-border hover:text-pos-text'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5" /> MagSafe
+            </button>
+
+            <button
+              onClick={() => setStockAlertOnly(!stockAlertOnly)}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 border cursor-pointer ${
+                stockAlertOnly
+                  ? 'bg-rose-500 text-white border-rose-400 shadow-md'
+                  : 'bg-pos-card text-pos-muted border-pos-border hover:text-pos-text'
+              }`}
+            >
+              <AlertCircle className="w-3.5 h-3.5" /> Alertes Stock ({products.filter(p => p.stock <= (p.reorderPoint || 10)).length})
+            </button>
+          </div>
         </div>
       </div>
 
@@ -294,7 +365,7 @@ export const ProductCatalog: React.FC = () => {
           <div className="h-full flex flex-col items-center justify-center text-pos-muted space-y-2 py-12">
             <Search className="w-10 h-10 opacity-40 text-emerald-400" />
             <p className="text-sm font-extrabold text-pos-text">Aucun accessoire trouvé</p>
-            <p className="text-xs">Essayez un autre mot-clé ou désactivez le filtre d'alerte stock.</p>
+            <p className="text-xs">Essayez un autre mot-clé ou modifiez vos filtres de sélection.</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3.5">
@@ -305,6 +376,7 @@ export const ProductCatalog: React.FC = () => {
                 pricingTier={pricingTier}
                 onAddToCart={handleAddToCart}
                 onEdit={setEditingProduct}
+                onOrderStock={handleOrderStock}
               />
             ))}
           </div>
@@ -321,4 +393,3 @@ export const ProductCatalog: React.FC = () => {
     </div>
   );
 };
-

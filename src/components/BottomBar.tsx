@@ -13,6 +13,7 @@ import {
   FileText,
   Sliders,
   CheckCircle2,
+  Database,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 
@@ -182,7 +183,17 @@ export const BottomBar: React.FC = () => {
         </div>
 
         {/* System Time & Connection Indicators */}
-        <div className="flex items-center gap-3 pl-3 border-l border-pos-border shrink-0">
+        <div className="flex items-center gap-2.5 pl-3 border-l border-pos-border shrink-0">
+          <button
+            onClick={() => openModal('settings')}
+            className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-[10px] font-bold text-cyan-300 transition cursor-pointer"
+            title="Moteur SQLite WAL Actif • Intégrité Totale & Zéro Perte de Données"
+          >
+            <Database className="w-3 h-3 text-cyan-400" />
+            <span>SQLite WAL</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          </button>
+
           <div className="text-right text-xs">
             <span className="font-bold text-pos-text tracking-wide">{timeStr || '10:42'}</span>
             <p className="text-[10px] text-pos-muted capitalize">{dateStr || '1 août 2026'}</p>

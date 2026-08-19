@@ -1,32 +1,36 @@
-import { db } from '../database';
+import { sqliteAdapter } from '../sqliteAdapter';
 import type { Product } from '../../types/pos';
 
 export const productRepository = {
   async getAll(): Promise<Product[]> {
-    return await db.products.toArray();
+    return await sqliteAdapter.getAllProducts();
   },
 
   async findByBarcodeOrSku(query: string): Promise<Product | undefined> {
-    const trimmed = query.trim();
+    const trimmed = query.trim().toLowerCase();
     if (!trimmed) return undefined;
-    const byBarcode = await db.products.where('barcode').equals(trimmed).first();
-    if (byBarcode) return byBarcode;
-    return await db.products.where('sku').equalsIgnoreCase(trimmed).first();
+    const products = await sqliteAdapter.getAllProducts();
+    return products.find(
+      (p) => p.barcode.toLowerCase() === trimmed || p.sku.toLowerCase() === trimmed
+    );
   },
 
   async save(product: Product): Promise<void> {
-    await db.products.put(product);
+    await sqliteAdapter.saveProduct(product);
   },
 
   async bulkSave(products: Product[]): Promise<void> {
-    await db.products.bulkPut(products);
+    await sqliteAdapter.bulkSaveProducts(products);
   },
 
   async delete(id: string): Promise<void> {
-    await db.products.delete(id);
+    await sqliteAdapter.deleteProduct(id);
   },
 
   async clearAll(): Promise<void> {
-    await db.products.clear();
+    const prods = await sqliteAdapter.getAllProducts();
+    for (const p of prods) {
+      await sqliteAdapter.deleteProduct(p.id);
+    }
   },
 };

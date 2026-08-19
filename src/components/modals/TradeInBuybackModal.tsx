@@ -90,6 +90,8 @@ export const TradeInBuybackModal: React.FC = () => {
     }
   };
 
+  const finalBuybackValue = creditToWallet ? Math.round(buybackValue * 1.1) : buybackValue;
+
   const handleSubmitTradeIn = (e: React.FormEvent) => {
     e.preventDefault();
     if (buybackValue <= 0) return;
@@ -100,12 +102,12 @@ export const TradeInBuybackModal: React.FC = () => {
       imei,
       brand,
       conditionGrade: grade,
-      buybackValue,
+      buybackValue: finalBuybackValue,
       resaleMarginPercent,
       creditToWallet
     });
     
-    showSuccess(`Reprise de ${deviceModel} enregistrée ! Produit injecté dans le catalogue d'occasion.`);
+    showSuccess(`Reprise de ${deviceModel} enregistrée ! Produit injecté dans le catalogue d'occasion (Avoir +10% appliqué).`);
     resetForm();
   };
 
@@ -368,9 +370,16 @@ export const TradeInBuybackModal: React.FC = () => {
                       onChange={(e) => setCreditToWallet(e.target.checked)}
                       className="w-4 h-4 text-emerald-500 rounded border-pos-border bg-pos-card cursor-pointer"
                     />
-                    <Wallet className="w-4 h-4 text-cyan-400" /> Verser le montant en Avoir (Wallet Client)
+                    <Wallet className="w-4 h-4 text-cyan-400" />
+                    <span>Verser en Avoir Client (+10% Bonus Fidélité Offert)</span>
                   </label>
-                  <span className="text-[10px] text-pos-muted">Permet d'utiliser ce montant sur un prochain achat immédiat</span>
+                  {creditToWallet && buybackValue > 0 ? (
+                    <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
+                      Montant Avoir Crédité : {formatDZD(finalBuybackValue)} (+{formatDZD(finalBuybackValue - buybackValue)})
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-pos-muted">Bonus de +10% offert si versé sur le compte client</span>
+                  )}
                 </div>
               </div>
 

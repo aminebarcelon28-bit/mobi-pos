@@ -1,6 +1,6 @@
 /**
  * Suite de Tests Automatisés — Logique Métier & Financière Enterprise
- * Vérifie les formules Tax-Free, tarifs Wholesale, seuils de réapprovisionnement algorithmiques,
+ * Vérifie les totaux nets, tarifs Wholesale, seuils de réapprovisionnement algorithmiques,
  * facturation réparation, kitting, reprises, IMEI, et crédit client.
  */
 
@@ -17,14 +17,13 @@ export const runBusinessLogicTests = (): { success: boolean; results: string[] }
     }
   };
 
-  // ═══ Test 1: Moteur Tax-Free ═══
+  // ═══ Test 1: Calcul du Total Net ═══
   const testSubtotal = 10000;
-  const expectedTax = 0;
   const expectedTotal = testSubtotal;
   assert(
-    expectedTax === 0 && expectedTotal === 10000,
-    'Moteur Tax-Free (Sous-total = Total = 10 000 DA, Taxe = 0 DA)',
-    `Expected Tax 0 and Total 10000, got Tax ${expectedTax} and Total ${expectedTotal}`
+    expectedTotal === 10000,
+    'Calcul du Total Net (Sous-total = Total = 10 000 DA)',
+    `Expected Total 10000, got Total ${expectedTotal}`
   );
 
   // ═══ Test 2: Calcul Rendu Monnaie Espèces ═══

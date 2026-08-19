@@ -49,7 +49,7 @@ export const ReceiptModal: React.FC = () => {
               <Check className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-pos-text">Paiement Enregistré (Tax-Free)</h2>
+              <h2 className="text-sm font-bold text-pos-text">Paiement Enregistré avec Succès</h2>
               <span className="text-[9px] text-emerald-400 font-bold flex items-center gap-1 mt-0.5">
                 <Sparkles className="w-3 h-3" /> Routé vers: {targetPrinter.printerName}
               </span>
@@ -126,7 +126,7 @@ export const ReceiptModal: React.FC = () => {
               })}
             </div>
 
-            {/* Totals (Tax-Free Engine with Discounts) */}
+            {/* Totals Breakdown */}
             <div className="py-3 space-y-1 text-[11px]">
               {/* Show Subtotal and Discount Breakdown if discount exists */}
               {lastTransaction.discountTotal > 0 && (

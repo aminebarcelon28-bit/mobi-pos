@@ -1,28 +1,34 @@
-import { db } from '../database';
+import { sqliteAdapter } from '../sqliteAdapter';
 import type { Customer } from '../../types/pos';
 
 export const customerRepository = {
   async getAll(): Promise<Customer[]> {
-    return await db.customers.toArray();
+    return await sqliteAdapter.getAllCustomers();
   },
 
   async findByPhone(phone: string): Promise<Customer | undefined> {
-    return await db.customers.where('phone').equals(phone.trim()).first();
+    const trimmed = phone.trim();
+    if (!trimmed) return undefined;
+    const customers = await sqliteAdapter.getAllCustomers();
+    return customers.find((c) => c.phone.trim() === trimmed);
   },
 
   async save(customer: Customer): Promise<void> {
-    await db.customers.put(customer);
+    await sqliteAdapter.saveCustomer(customer);
   },
 
   async bulkSave(customers: Customer[]): Promise<void> {
-    await db.customers.bulkPut(customers);
+    await sqliteAdapter.bulkSaveCustomers(customers);
   },
 
   async delete(id: string): Promise<void> {
-    await db.customers.delete(id);
+    await sqliteAdapter.deleteCustomer(id);
   },
 
   async clearAll(): Promise<void> {
-    await db.customers.clear();
+    const customers = await sqliteAdapter.getAllCustomers();
+    for (const c of customers) {
+      await sqliteAdapter.deleteCustomer(c.id);
+    }
   },
 };

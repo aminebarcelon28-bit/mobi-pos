@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Search,
   UserCheck,
@@ -23,6 +23,7 @@ import { calculateStockAlerts } from '../utils/alertEngine';
 import { ThemeToggle } from './ThemeToggle';
 import { PinDialog } from './ui/PinDialog';
 import { useToast } from './ui/Toast';
+import { soundEngine } from '../utils/audioFeedback';
 
 export const Header: React.FC = () => {
   const {
@@ -35,10 +36,79 @@ export const Header: React.FC = () => {
     setEditingProduct,
     logSecurityAction,
     products,
+    addToCart,
   } = usePosStore();
   
   const [isPinOpen, setIsPinOpen] = useState(false);
   const { showToast } = useToast();
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Global Barcode Scanner Hardware Listener
+  useEffect(() => {
+    let buffer = '';
+    let lastKeyTime = Date.now();
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Hotkey F2 to focus search input
+      if (e.key === 'F2') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+
+      // Ignore keys inside standard inputs to allow normal typing
+      const activeTag = document.activeElement?.tagName.toLowerCase();
+      if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+        return;
+      }
+
+      const currentTime = Date.now();
+      if (currentTime - lastKeyTime > 150) {
+        buffer = '';
+      }
+      lastKeyTime = currentTime;
+
+      if (e.key === 'Enter') {
+        if (buffer.length >= 3) {
+          const scannedCode = buffer.trim();
+          buffer = '';
+
+          // 1. Check if matches a Product Barcode or SKU
+          const foundProduct = products.find(
+            p => p.barcode === scannedCode || p.sku.toLowerCase() === scannedCode.toLowerCase()
+          );
+
+          if (foundProduct) {
+            addToCart(foundProduct);
+            showToast(`📦 Scanné : ${foundProduct.title}`, 'success');
+            return;
+          }
+
+          // 2. Check if matches a Customer PVC Card or Phone Number
+          const foundCustomer = customers.find(
+            c => (c.id && `LOY-${c.id}` === scannedCode) || c.phone === scannedCode || c.name.toLowerCase() === scannedCode.toLowerCase()
+          );
+
+          if (foundCustomer) {
+            setCurrentCustomer(foundCustomer);
+            soundEngine.playSuccess();
+            showToast(`👤 Client identifié : ${foundCustomer.name}`, 'success');
+            return;
+          }
+
+          // 3. Fallback: put into search query
+          setSearchQuery(scannedCode);
+        }
+        buffer = '';
+      } else if (e.key.length === 1) {
+        buffer += e.key;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [products, customers, addToCart, setCurrentCustomer, setSearchQuery, showToast]);
 
   const { stockAlerts, criticalCount } = useMemo(() => {
     const alerts = calculateStockAlerts(products);
@@ -51,6 +121,7 @@ export const Header: React.FC = () => {
   };
 
   const handlePinSuccess = () => {
+    soundEngine.playCashDrawer();
     logSecurityAction('Ouverture Manuelle Tiroir ("No Sale")', 'Tiroir-caisse ouvert sans vente par Administrateur', 'Yacine (Admin)', true);
     showToast(
       'Ouverture manuelle du tiroir-caisse autorisée (Signal RJ11 envoyé). Action enregistrée dans le journal de sécurité.',
@@ -81,10 +152,11 @@ export const Header: React.FC = () => {
         <div className="flex-1 max-w-lg relative">
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-pos-muted" />
           <input
+            ref={searchInputRef}
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Scanner code-barres ou rechercher Réf/SKU..."
+            placeholder="Scanner code-barres ou rechercher Réf/SKU (F2)..."
             className="w-full bg-pos-bg border border-pos-border rounded-lg pl-10 pr-12 py-2 text-sm text-pos-text placeholder-pos-muted focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
           />
           <span className="absolute right-3 top-1/2 -translate-y-1/2 hotkey-badge">F2</span>
@@ -95,7 +167,7 @@ export const Header: React.FC = () => {
           {/* Repair Work Orders Trigger */}
           <button
             onClick={() => openModal('repair_work_order')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition"
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
             title="Gestion des Réparations & Tickets SAV"
           >
             <Wrench className="w-4 h-4 text-emerald-400" />
@@ -104,7 +176,7 @@ export const Header: React.FC = () => {
           {/* Trade-In Buyback Trigger */}
           <button
             onClick={() => openModal('trade_in_buyback')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition"
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
             title="Reprise & Rachat Smartphones d'Occasion"
           >
             <RefreshCw className="w-4 h-4 text-cyan-400" />
@@ -113,7 +185,7 @@ export const Header: React.FC = () => {
           {/* Kitting Bundle Trigger */}
           <button
             onClick={() => openModal('kitting_bundle')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition"
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
             title="Packs Protection & Bundles"
           >
             <Package className="w-4 h-4 text-amber-400" />
@@ -122,7 +194,7 @@ export const Header: React.FC = () => {
           {/* Notification Bell for Stock Alerts */}
           <button
             onClick={() => openModal('vendor_procurement')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition relative"
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition relative cursor-pointer"
             title={`Alertes Réapprovisionnement (${stockAlerts.length} articles en alerte)`}
           >
             <Bell className="w-4 h-4 text-emerald-400" />
@@ -139,7 +211,7 @@ export const Header: React.FC = () => {
 
           <button
             onClick={() => setEditingProduct(null)}
-            className="px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-500/20 transition"
+            className="px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-500/20 transition cursor-pointer"
             title="Ajouter un Nouveau Produit avec Photo"
           >
             <PlusCircle className="w-4 h-4" /> <span className="hidden lg:inline">+ Produit</span>
@@ -147,7 +219,7 @@ export const Header: React.FC = () => {
 
           <button
             onClick={() => openModal('label_printer')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition"
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
             title="Imprimer Étiquettes Code-Barres"
           >
             <Barcode className="w-4 h-4 text-emerald-500" />
@@ -155,7 +227,7 @@ export const Header: React.FC = () => {
 
           <button
             onClick={() => openModal('invoice_ingestion')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition"
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
             title="Ingestion Automatique Facture Fournisseur"
           >
             <FileText className="w-4 h-4 text-emerald-500" />
@@ -163,7 +235,7 @@ export const Header: React.FC = () => {
 
           <button
             onClick={handleNoSaleDrawerOpen}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition"
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
             title="Ouverture Tiroir-Caisse Sécurisée ('No Sale' - PIN Requis)"
           >
             <Unlock className="w-4 h-4 text-amber-500" />
@@ -171,7 +243,7 @@ export const Header: React.FC = () => {
 
           <button
             onClick={() => openModal('security_audit')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition"
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
             title="Journal d'Audit de Sécurité RBAC"
           >
             <ShieldAlert className="w-4 h-4 text-amber-500" />
@@ -179,7 +251,7 @@ export const Header: React.FC = () => {
 
           <button
             onClick={() => openModal('reports')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition"
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
             title="Rapports Financiers & Analytics (F10)"
           >
             <BarChart3 className="w-4 h-4 text-cyan-400" />
@@ -187,7 +259,7 @@ export const Header: React.FC = () => {
 
           <button
             onClick={() => openModal('receipt_template')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition"
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
             title="Personnaliser le Modèle de Ticket"
           >
             <Sliders className="w-4 h-4 text-pos-muted" />
@@ -226,7 +298,7 @@ export const Header: React.FC = () => {
               </div>
               <button 
                 onClick={() => openModal('customers')}
-                className="p-1 hover:bg-pos-hover rounded text-pos-muted hover:text-pos-text transition"
+                className="p-1 hover:bg-pos-hover rounded text-pos-muted hover:text-pos-text transition cursor-pointer"
                 title="Options Client"
               >
                 <MoreVertical className="w-4 h-4" />
@@ -235,8 +307,8 @@ export const Header: React.FC = () => {
           </div>
         ) : (
           <button
-            onClick={() => setCurrentCustomer(customers[0])}
-            className="flex items-center gap-2 bg-pos-card hover:bg-pos-hover border border-pos-border px-3.5 py-2 rounded-lg text-xs font-medium text-pos-muted hover:text-pos-text transition"
+            onClick={() => openModal('customers')}
+            className="flex items-center gap-2 bg-pos-card hover:bg-pos-hover border border-pos-border px-3.5 py-2 rounded-lg text-xs font-medium text-pos-muted hover:text-pos-text transition cursor-pointer"
           >
             <UserCheck className="w-4 h-4 text-emerald-500" /> Profil Client
           </button>
