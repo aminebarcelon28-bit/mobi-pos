@@ -5,6 +5,7 @@ import { ProductCatalog } from './components/ProductCatalog';
 import { BottomBar } from './components/BottomBar';
 import { ToastProvider } from './components/ui/Toast';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { SilentReceiptPrinter } from './components/SilentReceiptPrinter';
 import { useKeyboardHotkeys } from './hooks/useKeyboardHotkeys';
 import { useBarcodeScanner } from './hooks/useBarcodeScanner';
 
@@ -64,6 +65,9 @@ export const App: React.FC = () => {
 
           {/* Bottom Bar with Hotkeys & Status */}
           <BottomBar />
+
+          {/* Hidden Silent Thermal Receipt Printer (Direct window.print) */}
+          <SilentReceiptPrinter />
 
           {/* Dialog Modals with Isolated Error Boundaries */}
           <Suspense fallback={null}>

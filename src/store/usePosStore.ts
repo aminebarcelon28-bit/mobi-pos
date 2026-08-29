@@ -889,7 +889,7 @@ export const usePosStore = create<PosState>((set, get) => ({
       cart: [],
       cashTendered: 0,
       storeCreditApplied: 0,
-      activeModal: 'receipt',
+      activeModal: null,
       hardwareStatus: { ...get().hardwareStatus, cashDrawerOpen: true },
     });
 

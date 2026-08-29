@@ -23,10 +23,9 @@ export const useKeyboardHotkeys = () => {
         }
 
         case 'F3':
-          if (e.shiftKey) {
+          const currentCart = usePosStore.getState().cart;
+          if (currentCart.length > 0) {
             openModal('payment');
-          } else {
-            quickCashPayment();
           }
           break;
 
