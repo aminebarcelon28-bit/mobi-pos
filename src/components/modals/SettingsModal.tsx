@@ -12,6 +12,7 @@ import { useToast } from '../ui/Toast';
 import { formatDZD } from '../../types/pos';
 import { DEFAULT_LOYALTY_CONFIG, calculateFinancialProfitImpact } from '../../utils/loyaltyEngine';
 import { sqliteAdapter, type DbStats, type IntegrityReport } from '../../db/sqliteAdapter';
+import { useAppUpdater } from '../../hooks/useAppUpdater';
 
 // ══════════════════════════════════════════════════════════════
 // TYPES
@@ -21,7 +22,7 @@ type DeviceCategory = 'receipt_printer' | 'label_printer' | 'barcode_scanner' | 
 type ConnectionType = 'USB' | 'Bluetooth' | 'Wi-Fi' | 'Serial' | 'HID' | 'Network' | 'HDMI';
 type DeviceStatus = 'connected' | 'ready' | 'active' | 'testing' | 'error' | 'offline' | 'warning';
 type DiagnosticResult = 'pass' | 'fail' | 'warning' | 'pending' | 'running';
-type SettingsTab = 'hardware' | 'diagnostics' | 'loyalty' | 'backup';
+type SettingsTab = 'hardware' | 'diagnostics' | 'loyalty' | 'backup' | 'updates';
 
 interface PeripheralDevice {
   id: string;
@@ -259,6 +260,7 @@ export const SettingsModal: React.FC = () => {
   const { activeModal, closeModal, exportDatabase, importDatabase, receiptSettings, setReceiptSettings } = usePosStore();
   const { showToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const updater = useAppUpdater();
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('hardware');
   const [devices, setDevices] = useState<PeripheralDevice[]>(INITIAL_DEVICE_REGISTRY);
@@ -546,6 +548,7 @@ export const SettingsModal: React.FC = () => {
     { key: 'diagnostics', label: 'Diagnostique Avancé', icon: <Activity className="w-4 h-4" /> },
     { key: 'loyalty', label: 'Configuration Fidélité', icon: <Award className="w-4 h-4 text-amber-400" /> },
     { key: 'backup', label: 'Moteur SQLite & Données', icon: <Database className="w-4 h-4 text-cyan-400" /> },
+    { key: 'updates', label: 'Mises à Jour & Version', icon: <Sparkles className="w-4 h-4 text-purple-400" /> },
   ];
 
   return (
@@ -1397,6 +1400,139 @@ export const SettingsModal: React.FC = () => {
                     onChange={handleFileUpload}
                     className="hidden"
                   />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {/* TAB 5: MISES À JOUR & VERSION */}
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {activeTab === 'updates' && (
+            <div className="space-y-6 max-w-4xl mx-auto py-2">
+              {/* Executive Version Header Card */}
+              <div className="bg-gradient-to-br from-purple-950/40 via-pos-card to-slate-900 border border-purple-500/30 rounded-2xl p-5 shadow-xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
+                  <Sparkles className="w-32 h-32 text-purple-400" />
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white shadow-lg shadow-purple-500/25">
+                      <Sparkles className="w-6 h-6 stroke-[2.5]" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-black text-pos-text tracking-wide">MobiPOS Pro</h3>
+                        <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 border border-purple-500/40 text-purple-300 font-mono font-black text-xs">
+                          v1.4.0
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">
+                          Canal Stable
+                        </span>
+                      </div>
+                      <p className="text-xs text-pos-muted mt-0.5">
+                        Système de Caisse & Gestion de Stock • Architecture Hybride Tauri 2.0 & SQLite WAL
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Check Updates Button */}
+                  <button
+                    onClick={() => updater.checkForUpdates(true)}
+                    disabled={updater.isChecking || updater.downloading}
+                    className="py-2.5 px-4 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-black flex items-center justify-center gap-2 transition shadow-lg shadow-purple-600/30 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCcw className={`w-4 h-4 ${updater.isChecking ? 'animate-spin' : ''}`} />
+                    {updater.isChecking ? 'Vérification en cours...' : 'Vérifier Mises à Jour'}
+                  </button>
+                </div>
+
+                {/* Status Indicator Banner */}
+                <div className="mt-4 pt-4 border-t border-pos-border/60 flex items-center gap-3">
+                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                  <p className="text-xs font-semibold text-pos-text">
+                    {updater.checkStatusMessage ||
+                      (updater.isUpdateAvailable
+                        ? `🚀 Version ${updater.updateInfo?.version} disponible au téléchargement !`
+                        : '✅ Votre système est synchronisé avec la version de production la plus récente (v1.4.0).')}
+                  </p>
+                </div>
+              </div>
+
+              {/* Update Action Panel (If Update Available) */}
+              {updater.isUpdateAvailable && updater.updateInfo && (
+                <div className="bg-pos-card border-2 border-purple-500/60 rounded-2xl p-5 space-y-4 animate-in fade-in zoom-in-95">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center border border-purple-500/40">
+                        <Download className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-black text-pos-text">Mise à Jour v{updater.updateInfo.version} Prête</h4>
+                        <p className="text-[11px] text-pos-muted">Date de publication : {updater.updateInfo.date || 'Récemment'}</p>
+                      </div>
+                    </div>
+
+                    {!updater.readyToRelaunch ? (
+                      <button
+                        onClick={updater.downloadAndInstall}
+                        disabled={updater.downloading}
+                        className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer disabled:opacity-50"
+                      >
+                        <Download className={`w-4 h-4 ${updater.downloading ? 'animate-bounce' : ''}`} />
+                        {updater.downloading ? `Téléchargement (${updater.progress}%)...` : 'Télécharger & Installer'}
+                      </button>
+                    ) : (
+                      <button
+                        onClick={updater.relaunchApp}
+                        className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                        Redémarrer l'App
+                      </button>
+                    )}
+                  </div>
+
+                  {updater.downloading && (
+                    <div className="w-full bg-pos-panel h-2.5 rounded-full overflow-hidden border border-pos-border">
+                      <div
+                        className="bg-gradient-to-r from-purple-500 to-emerald-400 h-full transition-all duration-300 rounded-full"
+                        style={{ width: `${updater.progress}%` }}
+                      />
+                    </div>
+                  )}
+
+                  {updater.updateInfo.body && (
+                    <div className="p-3 bg-pos-bg/80 border border-pos-border rounded-xl text-xs text-pos-muted whitespace-pre-wrap font-sans">
+                      {updater.updateInfo.body}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Technical Information & Pipeline Breakdown */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* How OTA Updates Work */}
+                <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-2.5">
+                  <div className="flex items-center gap-2 text-pos-text font-bold text-xs">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    <span>Sécurité & Signatures Cryptographiques</span>
+                  </div>
+                  <p className="text-[11px] text-pos-muted leading-relaxed">
+                    Chaque mise à jour déployée sur GitHub est vérifiée et validée par une signature cryptographique Minisign (clé publique intégrée). Aucune mise à jour corrompue ne peut être appliquée.
+                  </p>
+                </div>
+
+                {/* Pipeline Compilation Notice */}
+                <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-2.5">
+                  <div className="flex items-center gap-2 text-pos-text font-bold text-xs">
+                    <Clock className="w-4 h-4 text-cyan-400" />
+                    <span>Cycle de Publication GitHub Actions</span>
+                  </div>
+                  <p className="text-[11px] text-pos-muted leading-relaxed">
+                    Lorsqu'une nouvelle version est publiée, le serveur GitHub CI/CD compile et génère automatiquement le paquet exécutable Windows et le fichier <code className="font-mono text-cyan-300">latest.json</code> (délai de 3 à 5 minutes).
+                  </p>
                 </div>
               </div>
             </div>

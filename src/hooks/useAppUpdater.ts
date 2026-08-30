@@ -14,10 +14,15 @@ export function useAppUpdater() {
   const [readyToRelaunch, setReadyToRelaunch] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingUpdateObj, setPendingUpdateObj] = useState<any>(null);
+  const [isChecking, setIsChecking] = useState<boolean>(false);
+  const [checkStatusMessage, setCheckStatusMessage] = useState<string | null>(null);
 
-  const checkForUpdates = useCallback(async () => {
+  const checkForUpdates = useCallback(async (_isManual: boolean = false) => {
     try {
+      setIsChecking(true);
       setError(null);
+      setCheckStatusMessage(null);
+
       // Dynamic import to support web fallback gracefully
       const { check } = await import('@tauri-apps/plugin-updater');
       const update = await check();
@@ -30,11 +35,18 @@ export function useAppUpdater() {
           body: update.body || 'Nouvelle version de MobiPOS disponible avec des améliorations et des correctifs.',
           date: update.date,
         });
+        setCheckStatusMessage(`Mise à jour v${update.version} disponible !`);
       } else {
         setIsUpdateAvailable(false);
+        setCheckStatusMessage('Vous utilisez déjà la version la plus récente de MobiPOS.');
       }
     } catch (err: any) {
       console.warn('Tauri Updater check skipped or failed:', err);
+      const msg = err?.message || 'Impossible de joindre le serveur de mise à jour GitHub.';
+      setError(msg);
+      setCheckStatusMessage(`Vérification échouée: ${msg}`);
+    } finally {
+      setIsChecking(false);
     }
   }, []);
 
@@ -91,6 +103,8 @@ export function useAppUpdater() {
     progress,
     readyToRelaunch,
     error,
+    isChecking,
+    checkStatusMessage,
     checkForUpdates,
     downloadAndInstall,
     relaunchApp,
