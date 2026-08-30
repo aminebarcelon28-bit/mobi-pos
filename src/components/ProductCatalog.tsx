@@ -31,6 +31,27 @@ const SORT_OPTIONS: { label: string; value: SortOption }[] = [
   { label: 'Par Marque', value: 'brand_asc' },
 ];
 
+interface QuickActionTile {
+  id: string;
+  title: string;
+  category: CategoryType;
+  price: number;
+  costPrice: number;
+  icon: string;
+  color: string;
+}
+
+const DEFAULT_QUICK_TILES: QuickActionTile[] = [
+  { id: 'qt-hydrogel', title: 'Pose Film Hydrogel', category: 'Protège-Écran', price: 1000, costPrice: 200, icon: '🛡️', color: 'from-blue-500/20 to-cyan-500/20 text-cyan-300 border-cyan-500/40' },
+  { id: 'qt-charger20w', title: 'Chargeur 20W Fast', category: 'Chargeurs', price: 1800, costPrice: 900, icon: '⚡', color: 'from-amber-500/20 to-yellow-500/20 text-amber-300 border-amber-500/40' },
+  { id: 'qt-cablec', title: 'Câble Type-C Braided', category: 'Câbles', price: 600, costPrice: 250, icon: '🔌', color: 'from-emerald-500/20 to-teal-500/20 text-emerald-300 border-emerald-500/40' },
+  { id: 'qt-cablelightning', title: 'Câble Type-C vers Lightning', category: 'Câbles', price: 800, costPrice: 350, icon: '⚡', color: 'from-purple-500/20 to-indigo-500/20 text-purple-300 border-purple-500/40' },
+  { id: 'qt-flash', title: 'Flash & Formatage', category: 'Tous les produits', price: 1500, costPrice: 0, icon: '🔄', color: 'from-rose-500/20 to-pink-500/20 text-rose-300 border-rose-500/40' },
+  { id: 'qt-deblocage', title: 'Déblocage FRP / Google', category: 'Tous les produits', price: 2500, costPrice: 0, icon: '🔓', color: 'from-orange-500/20 to-red-500/20 text-orange-300 border-orange-500/40' },
+  { id: 'qt-clean', title: 'Nettoyage Connecteur', category: 'Tous les produits', price: 500, costPrice: 0, icon: '🧹', color: 'from-teal-500/20 to-cyan-500/20 text-teal-300 border-teal-500/40' },
+  { id: 'qt-earphones', title: 'Écouteurs Filaire', category: 'Tous les produits', price: 600, costPrice: 250, icon: '🎧', color: 'from-violet-500/20 to-purple-500/20 text-violet-300 border-violet-500/40' },
+];
+
 const ProductCard = React.memo(({ 
   product, 
   pricingTier, 
@@ -189,6 +210,7 @@ export const ProductCatalog: React.FC = () => {
   const [stockAlertOnly, setStockAlertOnly] = useState(false);
   const [selectedBrand, setSelectedBrand] = useState<'Tous' | BrandName>('Tous');
   const [magsafeOnly, setMagsafeOnly] = useState(false);
+  const [showQuickTiles, setShowQuickTiles] = useState(true);
 
   // Category counts map
   const categoryCounts = useMemo(() => {
@@ -244,6 +266,37 @@ export const ProductCatalog: React.FC = () => {
       }
     }
   }, [addToCart]);
+
+  const handleQuickTileClick = (tile: QuickActionTile) => {
+    const existing = products.find(
+      (p) => p.title.toLowerCase() === tile.title.toLowerCase() || p.id === tile.id
+    );
+    if (existing) {
+      handleAddToCart(existing);
+      showFeedback(`+1 ${tile.title} ajouté au panier`, 'success');
+    } else {
+      const adHocProduct: Product = {
+        id: tile.id,
+        title: tile.title,
+        price: tile.price,
+        wholesalePrice: Math.round(tile.price * 0.8),
+        costPrice: tile.costPrice,
+        category: tile.category,
+        brand: 'Autre',
+        stock: 999,
+        sku: tile.id.toUpperCase(),
+        barcode: '',
+        compatibleModel: 'Tous modèles',
+        imageUrl: '',
+        reorderPoint: 0,
+        vendorName: 'Fournisseur Local',
+        leadTimeDays: 1,
+        dailySalesVelocity: 5,
+      };
+      addToCart(adHocProduct, true);
+      showFeedback(`+1 ${tile.title} (${formatDZD(tile.price)}) ajouté`, 'success');
+    }
+  };
 
   const handleOrderStock = useCallback((product: Product) => {
     openModal('vendor_procurement');
@@ -335,10 +388,22 @@ export const ProductCatalog: React.FC = () => {
 
           <div className="flex items-center gap-2 shrink-0">
             <button
+              onClick={() => setShowQuickTiles(!showQuickTiles)}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 border cursor-pointer ${
+                showQuickTiles
+                  ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
+                  : 'bg-pos-card text-pos-muted border-pos-border hover:text-pos-text'
+              }`}
+              title="Afficher/masquer les touches rapides 1-clic"
+            >
+              <Zap className="w-3.5 h-3.5 fill-amber-400 text-amber-400" /> Touches Rapides
+            </button>
+
+            <button
               onClick={() => setMagsafeOnly(!magsafeOnly)}
               className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 border cursor-pointer ${
                 magsafeOnly
-                  ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
+                  ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 shadow-sm'
                   : 'bg-pos-card text-pos-muted border-pos-border hover:text-pos-text'
               }`}
             >
@@ -358,6 +423,48 @@ export const ProductCatalog: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* ═══ Quick-Action Favorites Tile Matrix ("Touches Rapides 1-Clic") ═══ */}
+      {showQuickTiles && (
+        <div className="px-3 py-2.5 bg-pos-panel/60 border-b border-pos-border shrink-0 animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+              <span className="text-[10px] font-black uppercase tracking-wider text-pos-text">
+                Touches Rapides 1-Clic (Services & Best-Sellers Sans Code-Barre)
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowQuickTiles(false)}
+              className="text-[10px] text-pos-muted hover:text-pos-text transition cursor-pointer"
+            >
+              Masquer ✕
+            </button>
+          </div>
+
+          <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+            {DEFAULT_QUICK_TILES.map((tile) => (
+              <button
+                key={tile.id}
+                type="button"
+                onClick={() => handleQuickTileClick(tile)}
+                className={`p-2 rounded-xl bg-gradient-to-br ${tile.color} border hover:scale-[1.03] active:scale-95 transition-all text-left flex flex-col justify-between shadow-sm cursor-pointer min-h-[58px] group`}
+              >
+                <div className="flex items-center justify-between w-full">
+                  <span className="text-sm">{tile.icon}</span>
+                  <span className="text-[9px] font-mono font-black px-1 rounded bg-slate-950/40 text-pos-text">
+                    {formatDZD(tile.price)}
+                  </span>
+                </div>
+                <span className="text-[10px] font-black leading-tight text-pos-text line-clamp-1 group-hover:text-white mt-1">
+                  {tile.title}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Product Grid */}
       <div className="flex-1 overflow-y-auto p-4">

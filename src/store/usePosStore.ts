@@ -22,8 +22,11 @@ import type {
   TradeInItem,
   IMEIRecord,
   PaymentTender,
+  PaymentMethodType,
   LoyaltyLedgerEntry,
   ProcessRefundPayload,
+  CustomerDebtEntry,
+  StoreExpense,
 } from '../types/pos';
 import { INITIAL_PRODUCTS, INITIAL_CUSTOMERS } from '../data/mockData';
 import {
@@ -62,6 +65,7 @@ interface PosState {
   shiftFloat: number;
   cashDrops: CashDropEntry[];
   payouts: CashDropEntry[];
+  addCashDrop: (entry: Omit<CashDropEntry, 'id' | 'timestamp'>) => Promise<void>;
   receiptSettings: ReceiptSettings;
   licenseDetails: LicenseDetails;
   purchaseOrders: PurchaseOrder[];
@@ -191,8 +195,19 @@ interface PosState {
   deleteBundle: (bundleId: string) => void;
   addBundleToCart: (bundleId: string) => { success: boolean; reason?: string };
 
-  // ── Cash Drops ──
-  addCashDrop: (entry: Omit<CashDropEntry, 'id' | 'timestamp'>) => void;
+  // ── Customer Debts (Kredy) ──
+  customerDebts: CustomerDebtEntry[];
+  recordCustomerDebtPayment: (
+    customerId: string,
+    amount: number,
+    method: PaymentMethodType,
+    notes?: string
+  ) => Promise<{ success: boolean; debtEntry?: CustomerDebtEntry }>;
+
+  // ── Store Expenses (EBITDA) ──
+  storeExpenses: StoreExpense[];
+  addStoreExpense: (expense: Omit<StoreExpense, 'id' | 'createdAt'>) => Promise<void>;
+  deleteStoreExpense: (id: string) => Promise<void>;
 
   // ── IMEI ──
   validateIMEI: (imei: string) => { valid: boolean; reason?: string };
@@ -228,6 +243,8 @@ export const usePosStore = create<PosState>((set, get) => ({
   searchQuery: '',
   customers: [],
   currentCustomer: null,
+  customerDebts: [],
+  storeExpenses: [],
   heldSales: [],
   transactions: [],
   securityAuditLog: [
@@ -688,6 +705,8 @@ export const usePosStore = create<PosState>((set, get) => ({
       let cashDrops = await sqliteAdapter.getCashDrops(false);
       let payouts = await sqliteAdapter.getCashDrops(true);
       let bundles = await sqliteAdapter.getAllBundles();
+      let customerDebts = await sqliteAdapter.getAllCustomerDebts();
+      let storeExpenses = await sqliteAdapter.getAllStoreExpenses();
 
       // 2. Migration loader: Check if legacy localStorage or mock data needed on initial startup
       const legacyProducts = localStorage.getItem('mobi_pos_products');
@@ -749,6 +768,8 @@ export const usePosStore = create<PosState>((set, get) => ({
         cashDrops,
         payouts,
         bundles,
+        customerDebts,
+        storeExpenses,
         isDbInitialized: true,
       });
     } catch (e) {
@@ -825,16 +846,25 @@ export const usePosStore = create<PosState>((set, get) => ({
 
     const total = Math.max(0, grossSubtotal - actualStoreCreditApplied);
 
-    // Validate cash is sufficient
-    const totalTendered = tenders 
-      ? tenders.filter(t => t.method !== 'Avoir Client').reduce((acc, t) => acc + t.amount, 0)
+    const creditTender = tenders?.find((t) => t.method === 'Crédit Client');
+    const creditDebtAmount = creditTender ? creditTender.amount : 0;
+
+    if (creditDebtAmount > 0 && !currentCustomer) {
+      return { success: false, reason: 'CUSTOMER_REQUIRED_FOR_CREDIT' };
+    }
+
+    // Validate cash is sufficient (excluding credit and store credit)
+    const directTendered = tenders
+      ? tenders.filter((t) => t.method !== 'Avoir Client' && t.method !== 'Crédit Client').reduce((acc, t) => acc + t.amount, 0)
       : cashTendered;
 
-    if (totalTendered < total) {
+    const remainingToPay = Math.max(0, total - creditDebtAmount);
+
+    if (directTendered < remainingToPay) {
       return { success: false, reason: 'INSUFFICIENT_CASH' };
     }
 
-    const changeDue = Math.max(0, totalTendered - total);
+    const changeDue = Math.max(0, directTendered - remainingToPay);
     const costTotal = cart.reduce((acc, item) => acc + (item.product.costPrice || item.product.price * 0.4) * item.quantity, 0);
     
     // Exact Net Profit = Net Revenue (Total After All Discounts & Credit) minus Total Cost of Goods Sold (COGS)
@@ -856,7 +886,10 @@ export const usePosStore = create<PosState>((set, get) => ({
       logSecurityAction('Conflit de Sync Stock Négatif (CRDT)', 'Vente enregistrée avec stock final à 0 un.', 'Système Local', false);
     }
 
-    // Update customer credit, loyalty points, tier & ledger history
+    const { customerDebts } = get();
+    let newCustomerDebts = customerDebts;
+
+    // Update customer credit, loyalty points, tier, debt & ledger history
     let updatedCustomer = currentCustomer;
     let updatedCustomers = customers;
     if (currentCustomer) {
@@ -874,6 +907,7 @@ export const usePosStore = create<PosState>((set, get) => ({
 
       const newCredit = Math.max(0, currentCustomer.storeCredit - actualStoreCreditApplied) + earnedCreditBonus;
       const newPoints = currentCustomer.loyaltyPoints + earnedPoints;
+      const newDebt = (currentCustomer.currentDebt || 0) + creditDebtAmount;
 
       const txnId = `TXN-${Math.floor(100000 + Math.random() * 900000)}`;
       const receiptNo = `REC-${Date.now().toString().slice(-6)}`;
@@ -908,6 +942,7 @@ export const usePosStore = create<PosState>((set, get) => ({
         loyaltyTier: newTier.name,
         loyaltyPoints: newPoints,
         storeCredit: newCredit,
+        currentDebt: newDebt,
         ledger: [...newEntries, ...existingLedger],
       };
 
@@ -915,6 +950,24 @@ export const usePosStore = create<PosState>((set, get) => ({
         c.id === currentCustomer.id ? updatedCustomer! : c
       );
       customerRepository.save(updatedCustomer!);
+
+      if (creditDebtAmount > 0) {
+        const debtEntry: CustomerDebtEntry = {
+          id: `DEBT-${Date.now()}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
+          customerId: currentCustomer.id,
+          customerName: currentCustomer.name,
+          type: 'DEBT_ACQUIRED',
+          amount: creditDebtAmount,
+          balanceAfter: newDebt,
+          receiptNumber: receiptNo,
+          paymentMethod: 'Crédit Client',
+          notes: `Vente à crédit - Ticket N° ${receiptNo}`,
+          createdAt: new Date().toISOString(),
+          recordedBy: 'Caisse 1 (Yacine)',
+        };
+        sqliteAdapter.saveCustomerDebt(debtEntry);
+        newCustomerDebts = [debtEntry, ...customerDebts];
+      }
     }
 
     const transaction: SaleTransaction = {
@@ -940,6 +993,8 @@ export const usePosStore = create<PosState>((set, get) => ({
         hour: '2-digit',
         minute: '2-digit',
       }),
+      debtAdded: creditDebtAmount > 0 ? creditDebtAmount : undefined,
+      debtRemainingTotal: updatedCustomer?.currentDebt,
     };
 
     const newTransactions = [transaction, ...transactions];
@@ -959,11 +1014,12 @@ export const usePosStore = create<PosState>((set, get) => ({
       transactions: newTransactions,
       customers: updatedCustomers,
       currentCustomer: updatedCustomer,
-      lastTransaction: transaction,
+      customerDebts: newCustomerDebts,
       cart: [],
       cashTendered: 0,
       storeCreditApplied: 0,
-      activeModal: null,
+      activeModal: 'receipt',
+      lastTransaction: transaction,
       hardwareStatus: { ...get().hardwareStatus, cashDrawerOpen: true },
     });
 
@@ -1648,7 +1704,7 @@ export const usePosStore = create<PosState>((set, get) => ({
   // Cash Drops
   // ══════════════════════════════════════════
 
-  addCashDrop: async (entry) => {
+  addCashDrop: async (entry: Omit<CashDropEntry, 'id' | 'timestamp'>) => {
     const { cashDrops } = get();
     const newDrop: CashDropEntry = {
       ...entry,
@@ -1690,5 +1746,78 @@ export const usePosStore = create<PosState>((set, get) => ({
     );
 
     return { product, po, transaction };
+  },
+
+  // ══════════════════════════════════════════
+  // Customer Debts (Kredy)
+  // ══════════════════════════════════════════
+
+  recordCustomerDebtPayment: async (customerId, amount, method, notes) => {
+    const { customers, customerDebts, currentCustomer } = get();
+    const customer = customers.find((c) => c.id === customerId);
+    if (!customer || amount <= 0) return { success: false };
+
+    const currentDebt = customer.currentDebt || 0;
+    const newDebt = Math.max(0, currentDebt - amount);
+
+    const receiptNo = `VERS-${Date.now().toString().slice(-6)}`;
+    const debtEntry: CustomerDebtEntry = {
+      id: `DEBT-${Date.now()}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
+      customerId: customer.id,
+      customerName: customer.name,
+      type: 'PAYMENT_SETTLED',
+      amount,
+      balanceAfter: newDebt,
+      receiptNumber: receiptNo,
+      paymentMethod: method,
+      notes: notes || `Versement règlement de dette (${method})`,
+      createdAt: new Date().toISOString(),
+      recordedBy: 'Caisse 1 (Yacine)',
+    };
+
+    const updatedCustomer: Customer = {
+      ...customer,
+      currentDebt: newDebt,
+    };
+
+    const updatedCustomers = customers.map((c) => (c.id === customerId ? updatedCustomer : c));
+    const updatedDebts = [debtEntry, ...customerDebts];
+
+    await customerRepository.save(updatedCustomer);
+    await sqliteAdapter.saveCustomerDebt(debtEntry);
+
+    soundEngine.playSuccess();
+    soundEngine.playCashDrawer();
+
+    set({
+      customers: updatedCustomers,
+      currentCustomer: currentCustomer?.id === customerId ? updatedCustomer : currentCustomer,
+      customerDebts: updatedDebts,
+    });
+
+    return { success: true, debtEntry };
+  },
+
+  // ══════════════════════════════════════════
+  // Store Expenses (EBITDA)
+  // ══════════════════════════════════════════
+
+  addStoreExpense: async (expenseInput) => {
+    const { storeExpenses } = get();
+    const newExpense: StoreExpense = {
+      ...expenseInput,
+      id: `EXP-${Date.now()}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
+      createdAt: new Date().toISOString(),
+    };
+    const updated = [newExpense, ...storeExpenses];
+    await sqliteAdapter.saveStoreExpense(newExpense);
+    set({ storeExpenses: updated });
+  },
+
+  deleteStoreExpense: async (id) => {
+    const { storeExpenses } = get();
+    const updated = storeExpenses.filter((e) => e.id !== id);
+    await sqliteAdapter.deleteStoreExpense(id);
+    set({ storeExpenses: updated });
   },
 }));

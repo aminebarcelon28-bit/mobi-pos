@@ -5,7 +5,17 @@ import { formatDZD } from '../../types/pos';
 import { useToast } from '../../components/ui/Toast';
 
 export const ShiftZReportModal: React.FC = () => {
-  const { activeModal, closeModal, shiftFloat, transactions, cashDrops, payouts, addCashDrop } = usePosStore();
+  const {
+    activeModal,
+    closeModal,
+    shiftFloat,
+    transactions,
+    cashDrops,
+    payouts,
+    addCashDrop,
+    customerDebts,
+    storeExpenses,
+  } = usePosStore();
   const [actualCountedCash, setActualCountedCash] = useState<number>(0);
   const [isBlindRevealed, setIsBlindRevealed] = useState<boolean>(false);
   const [cashDropInput, setCashDropInput] = useState<number>(0);
@@ -29,9 +39,18 @@ export const ShiftZReportModal: React.FC = () => {
   const totalCashRefunds = transactions
     .filter((t) => t.isRefund && t.paymentMethod === 'Espèces')
     .reduce((acc, t) => acc + t.total, 0);
+
+  const todayDebtSettlements = (customerDebts || [])
+    .filter((d) => d.type === 'PAYMENT_SETTLED' && d.paymentMethod === 'Espèces')
+    .reduce((acc, d) => acc + d.amount, 0);
+
+  const todayCashExpenses = (storeExpenses || [])
+    .filter((e) => e.paymentMethod === 'Espèces')
+    .reduce((acc, e) => acc + e.amount, 0);
+
   const totalDrops = cashDrops.reduce((acc, d) => acc + d.amount, 0);
   const totalPayouts = payouts.reduce((acc, p) => acc + p.amount, 0);
-  const expectedCash = shiftFloat + totalCashSales - totalCashRefunds - totalDrops - totalPayouts;
+  const expectedCash = shiftFloat + totalCashSales + todayDebtSettlements - totalCashRefunds - totalDrops - totalPayouts - todayCashExpenses;
   const variance = actualCountedCash - expectedCash;
 
   const handlePrintZReport = () => {
@@ -43,7 +62,7 @@ export const ShiftZReportModal: React.FC = () => {
       addCashDrop({
         amount: cashDropInput,
         reason: cashDropReason,
-        user: 'Yacine'
+        user: 'Yacine',
       });
       showToast(`Dépôt coffre-fort de ${formatDZD(cashDropInput)} enregistré.`, 'success');
       setCashDropInput(0);
@@ -69,7 +88,7 @@ export const ShiftZReportModal: React.FC = () => {
         {/* Scrollable Body */}
         <div data-printable="true" className="printable-area p-5 overflow-y-auto space-y-5 flex-1">
           {/* Shift Cash Summary Cards */}
-          <div className={`grid ${totalCashRefunds > 0 ? 'grid-cols-5' : 'grid-cols-4'} gap-2.5`}>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
               <span className="text-[10px] text-pos-muted uppercase font-bold">Fond Initial</span>
               <p className="text-sm font-bold text-pos-text mt-0.5">{formatDZD(shiftFloat)}</p>
@@ -79,6 +98,20 @@ export const ShiftZReportModal: React.FC = () => {
               <span className="text-[10px] text-pos-muted uppercase font-bold">Ventes Espèces</span>
               <p className="text-sm font-bold text-emerald-400 mt-0.5">{formatDZD(totalCashSales)}</p>
             </div>
+
+            {todayDebtSettlements > 0 && (
+              <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                <span className="text-[10px] text-pos-muted uppercase font-bold">Règlements Dettes</span>
+                <p className="text-sm font-bold text-emerald-400 mt-0.5">+{formatDZD(todayDebtSettlements)}</p>
+              </div>
+            )}
+
+            {todayCashExpenses > 0 && (
+              <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                <span className="text-[10px] text-pos-muted uppercase font-bold">Dépenses Espèces</span>
+                <p className="text-sm font-bold text-red-400 mt-0.5">−{formatDZD(todayCashExpenses)}</p>
+              </div>
+            )}
 
             {totalCashRefunds > 0 && (
               <div className="bg-pos-card border border-pos-border p-3 rounded-xl">

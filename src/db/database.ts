@@ -10,6 +10,8 @@ import type {
   SecurityAuditLogEntry,
   CashDropEntry,
   ProductBundle,
+  CustomerDebtEntry,
+  StoreExpense,
 } from '../types/pos';
 
 export interface AppSettingItem {
@@ -29,13 +31,15 @@ export class MobiPosDatabase extends Dexie {
   cashDrops!: Table<CashDropEntry, string>;
   payouts!: Table<CashDropEntry, string>;
   bundles!: Table<ProductBundle, string>;
+  customerDebts!: Table<CustomerDebtEntry, string>;
+  storeExpenses!: Table<StoreExpense, string>;
   appSettings!: Table<AppSettingItem, string>;
 
   constructor() {
     super('MobiPosDB');
 
     // Schema v1 with secondary indexes for fast lookups
-    this.version(1).stores({
+    this.version(2).stores({
       products: 'id, sku, barcode, category, brand, title',
       customers: 'id, phone, name, loyaltyCardCode, barcode',
       transactions: 'id, receiptNumber, createdAt',
@@ -47,6 +51,8 @@ export class MobiPosDatabase extends Dexie {
       cashDrops: 'id, timestamp',
       payouts: 'id, timestamp',
       bundles: 'id, barcode',
+      customerDebts: 'id, customerId, createdAt',
+      storeExpenses: 'id, category, createdAt',
       appSettings: 'key',
     });
   }

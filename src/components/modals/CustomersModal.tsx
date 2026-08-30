@@ -2,12 +2,13 @@ import React, { useState, useMemo } from 'react';
 import {
   X, User, Star, Phone, Mail, Check, Plus, Edit2, Trash2, Search,
   CheckCircle2, TrendingUp, ShoppingBag, CreditCard, Award,
-  UserPlus, History, Crown
+  UserPlus, History, Crown, FileText, MessageSquare, DollarSign,
+  ArrowDownLeft, ArrowUpRight, Copy, ExternalLink
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
-import type { Customer, PricingTier, SaleTransaction } from '../../types/pos';
-import { calculateNextTierProgress } from '../../utils/loyaltyEngine';
+import type { Customer, PricingTier, SaleTransaction, PaymentMethodType } from '../../types/pos';
+import { calculateNextTierProgress, calculateCustomerTier } from '../../utils/loyaltyEngine';
 
 type SortField = 'name' | 'loyaltyPoints' | 'storeCredit' | 'totalSpent';
 type SortDir = 'asc' | 'desc';
@@ -17,9 +18,11 @@ type TierFilter = 'Tous' | PricingTier;
 export const CustomersModal: React.FC = () => {
   const {
     activeModal, closeModal, openModal, customers, currentCustomer, setCurrentCustomer,
-    addCustomer, updateCustomer, deleteCustomer, issueStoreCredit, transactions
+    addCustomer, updateCustomer, deleteCustomer, transactions,
+    customerDebts, recordCustomerDebtPayment
   } = usePosStore();
 
+  const [mainTab, setMainTab] = useState<'directory' | 'debts'>('directory');
   const [searchQuery, setSearchQuery] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('list');
@@ -28,7 +31,14 @@ export const CustomersModal: React.FC = () => {
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [profileCustomer, setProfileCustomer] = useState<Customer | null>(null);
-  const [creditAmount, setCreditAmount] = useState('');
+
+  // Debt Payment & WhatsApp State
+  const [debtPaymentCustomer, setDebtPaymentCustomer] = useState<Customer | null>(null);
+  const [debtPaymentAmount, setDebtPaymentAmount] = useState<string>('');
+  const [debtPaymentMethod, setDebtPaymentMethod] = useState<PaymentMethodType>('Espèces');
+  const [debtPaymentNotes, setDebtPaymentNotes] = useState<string>('');
+  const [whatsappDebtCustomer, setWhatsappDebtCustomer] = useState<Customer | null>(null);
+  const [whatsappCopied, setWhatsappCopied] = useState(false);
 
   // Form State
   const [name, setName] = useState('');
@@ -80,8 +90,6 @@ export const CustomersModal: React.FC = () => {
     return results;
   }, [customers, searchQuery, tierFilter, sortField, sortDir, getCustomerMetrics]);
 
-  if (activeModal !== 'customers') return null;
-
   const showSuccess = (msg: string) => {
     setSuccessMsg(msg);
     setTimeout(() => setSuccessMsg(''), 3000);
@@ -90,8 +98,50 @@ export const CustomersModal: React.FC = () => {
   // Aggregate KPI metrics
   const totalCreditOutstanding = (customers || []).reduce((acc, c) => acc + (c.storeCredit || 0), 0);
   const totalLoyaltyPoints = (customers || []).reduce((acc, c) => acc + (c.loyaltyPoints || 0), 0);
+  const totalDebtOutstanding = (customers || []).reduce((acc, c) => acc + (c.currentDebt || 0), 0);
+  const indebtedCount = (customers || []).filter(c => (c.currentDebt || 0) > 0).length;
   const wholesaleCount = (customers || []).filter(c => c.pricingTier === 'Wholesale').length;
   const vipCount = (customers || []).filter(c => c.pricingTier === 'VIP').length;
+
+  // Filtered Indebted Customers
+  const indebtedCustomers = useMemo(() => {
+    const lowerQ = searchQuery.toLowerCase();
+    return (customers || []).filter(c =>
+      (c.currentDebt || 0) > 0 &&
+      ((c.name || '').toLowerCase().includes(lowerQ) ||
+       (c.phone || '').toLowerCase().includes(lowerQ) ||
+       (c.registeredDevice || '').toLowerCase().includes(lowerQ))
+    );
+  }, [customers, searchQuery]);
+
+  const handleRecordDebtPayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!debtPaymentCustomer) return;
+    const amount = parseFloat(debtPaymentAmount);
+    if (isNaN(amount) || amount <= 0) {
+      alert('Veuillez saisir un montant valide.');
+      return;
+    }
+    const res = await recordCustomerDebtPayment(
+      debtPaymentCustomer.id,
+      amount,
+      debtPaymentMethod,
+      debtPaymentNotes
+    );
+    if (res.success) {
+      showSuccess(`Versement de ${formatDZD(amount)} enregistré avec succès !`);
+      setDebtPaymentCustomer(null);
+      setDebtPaymentAmount('');
+      setDebtPaymentNotes('');
+    }
+  };
+
+  const getWhatsAppDebtMessage = (c: Customer) => {
+    const storeName = usePosStore.getState().receiptSettings.storeName || 'MOBI ACCESSORIES';
+    const storePhone = usePosStore.getState().receiptSettings.phone || '';
+    const debtAmount = c.currentDebt || 0;
+    return `Salam ${c.name} !\n\nRappel amical de votre boutique *${storeName}* :\n\n📌 *Solde Dette Actuelle :* ${formatDZD(debtAmount)}\n\nVous pouvez passer en boutique ou régler par BaridiMob. Merci pour votre fidélité !\n\n📞 Contact : ${storePhone}`;
+  };
 
   const resetForm = () => {
     setEditingId(null);
@@ -136,11 +186,6 @@ export const CustomersModal: React.FC = () => {
     }
   };
 
-  const handleCreditAdjust = (id: string, amount: number) => {
-    issueStoreCredit(id, amount);
-    showSuccess(`Avoir client ajusté de ${formatDZD(amount)}`);
-  };
-
   const openProfile = (c: Customer) => {
     setProfileCustomer(c);
     setViewMode('profile');
@@ -172,6 +217,8 @@ export const CustomersModal: React.FC = () => {
       setSortDir('desc');
     }
   };
+
+  if (activeModal !== 'customers') return null;
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
@@ -264,6 +311,38 @@ export const CustomersModal: React.FC = () => {
           </div>
         </div>
 
+        {/* ═══ Sub-Tab Navigation ═══ */}
+        <div className="flex border-b border-pos-border px-4 bg-pos-card shrink-0 gap-2">
+          <button
+            onClick={() => setMainTab('directory')}
+            className={`py-2.5 px-4 text-xs font-black border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+              mainTab === 'directory'
+                ? 'border-blue-500 text-blue-400 bg-blue-500/10 rounded-t-lg'
+                : 'border-transparent text-pos-muted hover:text-pos-text'
+            }`}
+          >
+            <User className="w-4 h-4" />
+            Répertoire & Profils Clients ({(customers || []).length})
+          </button>
+
+          <button
+            onClick={() => setMainTab('debts')}
+            className={`py-2.5 px-4 text-xs font-black border-b-2 transition-all flex items-center gap-2 cursor-pointer ${
+              mainTab === 'debts'
+                ? 'border-amber-500 text-amber-400 bg-amber-500/10 rounded-t-lg'
+                : 'border-transparent text-pos-muted hover:text-pos-text'
+            }`}
+          >
+            <FileText className="w-4 h-4" />
+            Carnet de Dettes & Règlements (Kredy)
+            {totalDebtOutstanding > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-mono text-[10px] border border-amber-500/30">
+                {formatDZD(totalDebtOutstanding)}
+              </span>
+            )}
+          </button>
+        </div>
+
         {/* ═══ Content Body ═══ */}
         <div className="flex-1 overflow-y-auto p-4 relative flex flex-col gap-4">
           {successMsg && (
@@ -272,8 +351,8 @@ export const CustomersModal: React.FC = () => {
             </div>
           )}
 
-          {/* ═══ Customer Form View ═══ */}
-          {viewMode === 'form' && (
+          {/* ═══ Directory Tab Views ═══ */}
+          {mainTab === 'directory' && viewMode === 'form' && (
             <div className="bg-pos-card border border-pos-border rounded-xl p-6 max-w-2xl mx-auto w-full shadow-lg">
               <div className="flex justify-between items-center mb-5">
                 <div className="flex items-center gap-2.5">
@@ -345,7 +424,7 @@ export const CustomersModal: React.FC = () => {
           )}
 
           {/* ═══ Customer Profile Detail View ═══ */}
-          {viewMode === 'profile' && profileCustomer && (() => {
+          {mainTab === 'directory' && viewMode === 'profile' && profileCustomer && (() => {
             const metrics = getCustomerMetrics(profileCustomer.id);
             return (
               <div className="max-w-3xl mx-auto w-full space-y-4">
@@ -429,62 +508,44 @@ export const CustomersModal: React.FC = () => {
                     <span className="text-[9px] text-pos-muted uppercase font-bold block">Points</span>
                     <span className="text-sm font-black text-amber-400">{(profileCustomer.loyaltyPoints || 0).toLocaleString('fr-DZ')}</span>
                   </div>
-                  <div className="bg-pos-card border border-pos-border p-3 rounded-xl text-center">
-                    <CreditCard className="w-5 h-5 text-cyan-400 mx-auto mb-1" />
-                    <span className="text-[9px] text-pos-muted uppercase font-bold block">Avoir</span>
-                    <span className="text-sm font-black text-cyan-400">{formatDZD(profileCustomer.storeCredit || 0)}</span>
+                  <div className={`bg-pos-card border p-3 rounded-xl text-center ${
+                    (profileCustomer.currentDebt || 0) > 0 ? 'border-amber-500/50 bg-amber-500/5' : 'border-pos-border'
+                  }`}>
+                    <FileText className={`w-5 h-5 mx-auto mb-1 ${
+                      (profileCustomer.currentDebt || 0) > 0 ? 'text-amber-400' : 'text-cyan-400'
+                    }`} />
+                    <span className="text-[9px] text-pos-muted uppercase font-bold block">
+                      {(profileCustomer.currentDebt || 0) > 0 ? 'Dette En Cours' : 'Avoir'}
+                    </span>
+                    <span className={`text-sm font-black ${
+                      (profileCustomer.currentDebt || 0) > 0 ? 'text-amber-400 font-mono' : 'text-cyan-400'
+                    }`}>
+                      {(profileCustomer.currentDebt || 0) > 0
+                        ? formatDZD(profileCustomer.currentDebt || 0)
+                        : formatDZD(profileCustomer.storeCredit || 0)}
+                    </span>
                   </div>
                 </div>
 
-                {/* Credit Adjustment & Loyalty Section */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-pos-card border border-pos-border rounded-xl p-4">
-                    <h4 className="text-xs font-bold text-pos-text mb-3 flex items-center gap-1.5"><CreditCard className="w-4 h-4 text-emerald-400" /> Ajuster l'Avoir Client</h4>
-                    <div className="flex gap-2">
-                      <input
-                        type="number"
-                        value={creditAmount}
-                        onChange={e => setCreditAmount(e.target.value)}
-                        placeholder="Montant en DA"
-                        className="flex-1 bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
-                      />
-                      <button
-                        onClick={() => { const amt = parseFloat(creditAmount); if (amt && amt > 0) { handleCreditAdjust(profileCustomer.id, amt); setCreditAmount(''); } }}
-                        className="px-3 py-2 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-bold hover:bg-emerald-500/30 transition cursor-pointer"
-                      >+ Créditer</button>
-                      <button
-                        onClick={() => { const amt = parseFloat(creditAmount); if (amt && amt > 0) { handleCreditAdjust(profileCustomer.id, -amt); setCreditAmount(''); } }}
-                        className="px-3 py-2 rounded-lg bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-bold hover:bg-red-500/30 transition cursor-pointer"
-                      >− Débiter</button>
-                    </div>
-                    <div className="flex gap-1.5 mt-2">
-                      {[500, 1000, 2000, 5000].map(v => (
-                        <button key={v} onClick={() => setCreditAmount(String(v))} className="px-2 py-1 rounded-md bg-pos-bg border border-pos-border text-[10px] font-bold text-pos-muted hover:text-pos-text hover:border-emerald-400/50 transition cursor-pointer">
-                          {v} DA
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Upgraded Loyalty Tier Card */}
+                {/* Loyalty Tier Progress */}
+                <div className="bg-pos-card border border-pos-border rounded-xl p-4">
                   {(() => {
-                    const progress = calculateNextTierProgress(profileCustomer.totalSpent || 0);
-                    const currentTier = progress.currentTier;
+                    const currentSpent = profileCustomer.totalSpent || 0;
+                    const currentTier = calculateCustomerTier(currentSpent);
+                    const progress = calculateNextTierProgress(currentSpent);
                     const nextTier = progress.nextTier;
+
                     return (
-                      <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <h4 className="text-xs font-bold text-pos-text flex items-center gap-1.5">
-                            <Award className="w-4 h-4 text-amber-400" /> Programme Fidélité
-                          </h4>
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold flex items-center gap-1 border ${currentTier.bgColor} ${currentTier.badgeColor} ${currentTier.borderColor}`}>
-                            <span>{currentTier.icon}</span> {currentTier.name} ({currentTier.pointsMultiplier}x)
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-bold text-pos-text flex items-center gap-1.5">
+                            <Award className="w-4 h-4 text-amber-400" /> Programme de Fidélité
                           </span>
+                          <span className="text-xs font-extrabold text-amber-400">{currentTier.name} ({currentTier.icon})</span>
                         </div>
 
-                        {/* Progress Bar to Next Tier */}
                         {nextTier ? (
-                          <div className="space-y-1">
+                          <div className="space-y-1.5">
                             <div className="flex justify-between text-[10px] font-semibold">
                               <span className="text-pos-muted">Niveau Suivant: <strong className="text-pos-text">{nextTier.name}</strong> ({nextTier.icon})</span>
                               <span className="text-amber-400 font-bold">{progress.progressPercent}%</span>
@@ -501,17 +562,6 @@ export const CustomersModal: React.FC = () => {
                             👑 Statut Maximal Atteint - Multiplicateur {currentTier.pointsMultiplier}x
                           </div>
                         )}
-
-                        <div className="pt-2 border-t border-pos-border/60 grid grid-cols-2 gap-2 text-xs">
-                          <div>
-                            <span className="text-[10px] text-pos-muted block">Solde Points</span>
-                            <span className="font-extrabold text-amber-400 text-sm">{(profileCustomer.loyaltyPoints || 0).toLocaleString('fr-DZ')} PTS</span>
-                          </div>
-                          <div>
-                            <span className="text-[10px] text-pos-muted block">Valeur en Avoir</span>
-                            <span className="font-extrabold text-emerald-400 text-sm">{formatDZD((profileCustomer.loyaltyPoints || 0) * 10)}</span>
-                          </div>
-                        </div>
                       </div>
                     );
                   })()}
@@ -521,7 +571,7 @@ export const CustomersModal: React.FC = () => {
                 <div className="bg-pos-card border border-pos-border rounded-xl p-4">
                   <h4 className="text-xs font-bold text-pos-text mb-3 flex items-center gap-1.5">
                     <History className="w-4 h-4 text-cyan-400" /> Historique d'Achats Récents
-                    <span className="ml-auto text-[10px] text-pos-muted font-normal">{metrics.totalOrders} transactions</span>
+                    <span className="ml-auto text-[10px] text-pos-muted font-normal">{metrics.transactions.length} transactions</span>
                   </h4>
                   {metrics.transactions.length === 0 ? (
                     <p className="text-xs text-pos-muted text-center py-4">Aucune transaction enregistrée pour ce client.</p>
@@ -547,7 +597,7 @@ export const CustomersModal: React.FC = () => {
           })()}
 
           {/* ═══ Customer List View ═══ */}
-          {viewMode === 'list' && (
+          {mainTab === 'directory' && viewMode === 'list' && (
             <>
               {/* Toolbar */}
               <div className="flex justify-between items-center">
@@ -592,6 +642,7 @@ export const CustomersModal: React.FC = () => {
                 {filteredCustomers.map(customer => {
                   const metrics = getCustomerMetrics(customer.id);
                   const isSelected = currentCustomer?.id === customer.id;
+                  const hasDebt = (customer.currentDebt || 0) > 0;
 
                   return (
                     <div key={customer.id}
@@ -619,6 +670,11 @@ export const CustomersModal: React.FC = () => {
                             <div className="flex items-center gap-2">
                               <h3 className="text-sm font-bold text-pos-text">{customer.name}</h3>
                               {tierBadge(customer.pricingTier)}
+                              {hasDebt && (
+                                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[9px] font-black animate-pulse">
+                                  Dette: {formatDZD(customer.currentDebt || 0)}
+                                </span>
+                              )}
                             </div>
                             <div className="flex flex-wrap items-center gap-2 text-[10px] text-pos-muted mt-0.5">
                               <span className="flex items-center gap-0.5"><Phone className="w-3 h-3" /> {customer.phone}</span>
@@ -647,8 +703,12 @@ export const CustomersModal: React.FC = () => {
                           </span>
                         </div>
                         <div className="flex flex-col items-center">
-                          <span className="text-[8px] text-pos-muted uppercase font-bold">Avoir</span>
-                          <span className="font-bold text-emerald-400 text-[11px]">{formatDZD(customer.storeCredit || 0)}</span>
+                          <span className="text-[8px] text-pos-muted uppercase font-bold">
+                            {hasDebt ? 'Dette' : 'Avoir'}
+                          </span>
+                          <span className={`font-bold text-[11px] ${hasDebt ? 'text-amber-400' : 'text-emerald-400'}`}>
+                            {hasDebt ? formatDZD(customer.currentDebt || 0) : formatDZD(customer.storeCredit || 0)}
+                          </span>
                         </div>
                         <div className="flex flex-col items-center">
                           <span className="text-[8px] text-pos-muted uppercase font-bold">Achats</span>
@@ -714,11 +774,396 @@ export const CustomersModal: React.FC = () => {
               </div>
             </>
           )}
+
+          {/* ═══ CARNET DE DETTES & RÈGLEMENTS (KREDY) ═══ */}
+          {mainTab === 'debts' && (
+            <div className="space-y-5 animate-in fade-in">
+              {/* Executive Debt Summary Banner */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-gradient-to-br from-amber-950/60 to-orange-950/60 border-2 border-amber-500/60 rounded-2xl p-4 shadow-xl">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-[11px] uppercase tracking-wider text-amber-300 font-bold block">
+                        Total Créances Clients (En Cours)
+                      </span>
+                      <span className="text-2xl font-black text-amber-400 font-mono tracking-tight block mt-0.5">
+                        {formatDZD(totalDebtOutstanding)}
+                      </span>
+                    </div>
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300">
+                      <FileText className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-amber-200/70 mt-2">
+                    Somme totale des dettes non encore recouvrées
+                  </p>
+                </div>
+
+                <div className="bg-pos-card border border-pos-border rounded-2xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-[11px] uppercase tracking-wider text-pos-muted font-bold block">
+                        Clients Débiteurs
+                      </span>
+                      <span className="text-2xl font-black text-pos-text block mt-0.5">
+                        {indebtedCount} client{indebtedCount > 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <div className="w-10 h-10 rounded-xl bg-red-500/20 border border-red-500/40 flex items-center justify-center text-red-400">
+                      <User className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-pos-muted mt-2">
+                    Sur un total de {(customers || []).length} clients enregistrés
+                  </p>
+                </div>
+
+                <div className="bg-pos-card border border-pos-border rounded-2xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-[11px] uppercase tracking-wider text-pos-muted font-bold block">
+                        Total Versements Reçus
+                      </span>
+                      <span className="text-2xl font-black text-emerald-400 font-mono tracking-tight block mt-0.5">
+                        {formatDZD((customerDebts || []).filter(d => d.type === 'PAYMENT_SETTLED').reduce((a, b) => a + b.amount, 0))}
+                      </span>
+                    </div>
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                      <ArrowDownLeft className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-pos-muted mt-2">
+                    Règlements cumulés enregistrés en caisse
+                  </p>
+                </div>
+              </div>
+
+              {/* Indebted Customers Section */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-pos-text flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+                    Liste des Clients avec Solde Débiteur ({indebtedCustomers.length})
+                  </h3>
+                  <span className="text-[11px] text-pos-muted">
+                    Cliquez sur "Encaisser un Versement" ou "WhatsApp" pour relancer
+                  </span>
+                </div>
+
+                {indebtedCustomers.length === 0 ? (
+                  <div className="bg-pos-card border border-pos-border rounded-2xl p-8 text-center space-y-2">
+                    <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto" />
+                    <h4 className="text-sm font-bold text-pos-text">Aucune dette en cours !</h4>
+                    <p className="text-xs text-pos-muted max-w-sm mx-auto">
+                      Toutes les créances clients sont soldées ou aucun client ne correspond à votre filtre de recherche.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3">
+                    {indebtedCustomers.map(customer => {
+                      const debt = customer.currentDebt || 0;
+                      return (
+                        <div
+                          key={customer.id}
+                          className="bg-pos-card border-2 border-amber-500/40 hover:border-amber-500 rounded-2xl p-4 flex flex-col justify-between gap-3 shadow-md transition-all"
+                        >
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h4 className="text-sm font-black text-pos-text">{customer.name}</h4>
+                                {tierBadge(customer.pricingTier)}
+                              </div>
+                              <p className="text-xs text-pos-muted flex items-center gap-1 mt-0.5">
+                                <Phone className="w-3 h-3 text-emerald-400" /> {customer.phone}
+                              </p>
+                              {customer.registeredDevice && (
+                                <p className="text-[10px] text-pos-muted mt-0.5 truncate max-w-[200px]">
+                                  📱 {customer.registeredDevice}
+                                </p>
+                              )}
+                            </div>
+                            <div className="text-right">
+                              <span className="text-[10px] text-amber-300 font-bold block uppercase tracking-wider">
+                                Dette à Recouvrer
+                              </span>
+                              <span className="text-lg font-black text-amber-400 font-mono">
+                                {formatDZD(debt)}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 pt-2 border-t border-pos-border/60">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDebtPaymentCustomer(customer);
+                                setDebtPaymentAmount(debt.toString());
+                                setDebtPaymentMethod('Espèces');
+                                setDebtPaymentNotes('');
+                              }}
+                              className="flex-1 px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center justify-center gap-1.5 transition shadow-md shadow-emerald-500/20 cursor-pointer"
+                            >
+                              <DollarSign className="w-4 h-4" /> Encaisser Versement
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setWhatsappDebtCustomer(customer);
+                                setWhatsappCopied(false);
+                              }}
+                              className="px-3 py-2 rounded-xl bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                              title="Envoyer relevé WhatsApp au client"
+                            >
+                              <MessageSquare className="w-4 h-4" /> WhatsApp
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Debt Transactions Ledger */}
+              <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-pos-text flex items-center gap-1.5">
+                    <History className="w-4 h-4 text-cyan-400" />
+                    Grand Livre des Dettes & Règlements ({(customerDebts || []).length} écritures)
+                  </h3>
+                </div>
+
+                {(customerDebts || []).length === 0 ? (
+                  <p className="text-xs text-pos-muted text-center py-6">
+                    Aucun mouvement de dette ou règlement enregistré pour le moment.
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto max-h-60 overflow-y-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-pos-border text-[10px] text-pos-muted uppercase font-bold">
+                          <th className="py-2 px-3">Date</th>
+                          <th className="py-2 px-3">Client</th>
+                          <th className="py-2 px-3">Type Écriture</th>
+                          <th className="py-2 px-3">Mode</th>
+                          <th className="py-2 px-3 text-right">Montant</th>
+                          <th className="py-2 px-3 text-right">Solde Après</th>
+                          <th className="py-2 px-3">Réf / Note</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-pos-border/40 font-mono">
+                        {(customerDebts || []).slice(0, 30).map((d) => {
+                          const isPayment = d.type === 'PAYMENT_SETTLED';
+                          return (
+                            <tr key={d.id} className="hover:bg-pos-bg/50 transition">
+                              <td className="py-2 px-3 text-pos-muted text-[11px] font-sans">
+                                {new Date(d.createdAt).toLocaleDateString('fr-DZ', {
+                                  day: '2-digit',
+                                  month: '2-digit',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </td>
+                              <td className="py-2 px-3 font-bold font-sans text-pos-text">
+                                {d.customerName}
+                              </td>
+                              <td className="py-2 px-3">
+                                {isPayment ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">
+                                    <ArrowDownLeft className="w-3 h-3" /> Règlement
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold">
+                                    <ArrowUpRight className="w-3 h-3" /> Vente Crédit
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2 px-3 text-pos-muted font-sans text-[11px]">
+                                {d.paymentMethod || 'Espèces'}
+                              </td>
+                              <td className={`py-2 px-3 text-right font-black ${
+                                isPayment ? 'text-emerald-400' : 'text-amber-400'
+                              }`}>
+                                {isPayment ? '-' : '+'}{formatDZD(d.amount)}
+                              </td>
+                              <td className="py-2 px-3 text-right text-pos-muted font-bold">
+                                {formatDZD(d.balanceAfter)}
+                              </td>
+                              <td className="py-2 px-3 text-pos-muted font-sans text-[11px] truncate max-w-[150px]">
+                                {d.receiptNumber ? `N° ${d.receiptNumber}` : d.notes || '—'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* ═══ Debt Settlement Payment Modal Dialog ═══ */}
+        {debtPaymentCustomer && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl animate-in zoom-in-95">
+              <div className="flex items-center justify-between border-b border-pos-border pb-3">
+                <div className="flex items-center gap-2 text-emerald-400">
+                  <DollarSign className="w-5 h-5" />
+                  <h3 className="text-sm font-black text-pos-text">Règlement de Dette Client</h3>
+                </div>
+                <button
+                  onClick={() => setDebtPaymentCustomer(null)}
+                  className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Customer Header */}
+              <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex justify-between items-center">
+                <div>
+                  <p className="text-xs font-black text-pos-text">{debtPaymentCustomer.name}</p>
+                  <p className="text-[10px] text-pos-muted">Tél : {debtPaymentCustomer.phone}</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-[9px] uppercase tracking-wider text-amber-300 font-bold block">
+                    Dette Actuelle
+                  </span>
+                  <span className="text-base font-black text-amber-400 font-mono">
+                    {formatDZD(debtPaymentCustomer.currentDebt || 0)}
+                  </span>
+                </div>
+              </div>
+
+              <form onSubmit={handleRecordDebtPayment} className="space-y-4">
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                    Montant du Versement (DA) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    max={debtPaymentCustomer.currentDebt || undefined}
+                    value={debtPaymentAmount}
+                    onChange={(e) => setDebtPaymentAmount(e.target.value)}
+                    className="w-full bg-pos-bg border-2 border-pos-border focus:border-emerald-400 rounded-xl px-4 py-2.5 text-xl font-black font-mono text-pos-text focus:outline-none"
+                    placeholder="5000"
+                    autoFocus
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                    Mode de Règlement
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['Espèces', 'BaridiMob', 'Chèque'] as PaymentMethodType[]).map((method) => (
+                      <button
+                        key={method}
+                        type="button"
+                        onClick={() => setDebtPaymentMethod(method)}
+                        className={`py-2 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                          debtPaymentMethod === method
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-500 font-black'
+                            : 'bg-pos-card border-pos-border text-pos-muted hover:text-pos-text'
+                        }`}
+                      >
+                        {method}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                    Note / Remarque (Facultatif)
+                  </label>
+                  <input
+                    type="text"
+                    value={debtPaymentNotes}
+                    onChange={(e) => setDebtPaymentNotes(e.target.value)}
+                    placeholder="Ex: Versement partiel reçu au comptoir"
+                    className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-3 border-t border-pos-border">
+                  <button
+                    type="button"
+                    onClick={() => setDebtPaymentCustomer(null)}
+                    className="px-4 py-2 bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl text-xs font-bold"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <CheckCircle2 className="w-4 h-4" /> Valider le Versement
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ═══ WhatsApp Debt Generator Dialog ═══ */}
+        {whatsappDebtCustomer && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl animate-in zoom-in-95">
+              <div className="flex items-center justify-between border-b border-pos-border pb-3">
+                <div className="flex items-center gap-2 text-emerald-400">
+                  <MessageSquare className="w-5 h-5" />
+                  <h3 className="text-sm font-black text-pos-text">Rappel WhatsApp — {whatsappDebtCustomer.name}</h3>
+                </div>
+                <button
+                  onClick={() => setWhatsappDebtCustomer(null)}
+                  className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] uppercase font-bold text-pos-muted block">
+                  Aperçu du message WhatsApp généré :
+                </label>
+                <div className="bg-pos-bg border border-pos-border rounded-xl p-3.5 text-xs text-pos-text whitespace-pre-line font-sans select-text">
+                  {getWhatsAppDebtMessage(whatsappDebtCustomer)}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-pos-border">
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(getWhatsAppDebtMessage(whatsappDebtCustomer));
+                    setWhatsappCopied(true);
+                    setTimeout(() => setWhatsappCopied(false), 2500);
+                  }}
+                  className="px-4 py-2 bg-pos-hover hover:bg-pos-border text-pos-text rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition"
+                >
+                  <Copy className="w-4 h-4" /> {whatsappCopied ? 'Copié !' : 'Copier le Texte'}
+                </button>
+                <a
+                  href={`https://wa.me/213${whatsappDebtCustomer.phone.replace(/\D/g, '').replace(/^0/, '')}?text=${encodeURIComponent(getWhatsAppDebtMessage(whatsappDebtCustomer))}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <ExternalLink className="w-4 h-4" /> Ouvrir WhatsApp
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ═══ Footer ═══ */}
         <div className="p-3 border-t border-pos-border bg-pos-card flex justify-between items-center text-xs text-pos-muted shrink-0">
-          <span>CRM Clientèle • {(customers || []).length} profils • {formatDZD(totalCreditOutstanding)} avoirs en circulation</span>
+          <span>CRM Clientèle • {(customers || []).length} profils • {formatDZD(totalCreditOutstanding)} avoirs • {formatDZD(totalDebtOutstanding)} dettes actives</span>
           <button onClick={closeModal} className="px-4 py-1.5 rounded-xl bg-pos-hover text-pos-text font-semibold cursor-pointer">
             Fermer
           </button>

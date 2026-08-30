@@ -257,15 +257,17 @@ export const PaymentModal: React.FC = () => {
                 <Banknote className="w-4 h-4 text-emerald-400" />
                 Montant Reçu du Client (DA) :
               </label>
-              <div className="flex items-center gap-1">
-                {(['Espèces', 'BaridiMob', 'Chèque'] as PaymentMethodType[]).map((method) => (
+              <div className="flex items-center gap-1 flex-wrap">
+                {(['Espèces', 'BaridiMob', 'Chèque', 'Crédit Client'] as PaymentMethodType[]).map((method) => (
                   <button
                     key={method}
                     type="button"
                     onClick={() => setSelectedMethod(method)}
-                    className={`px-2 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
                       selectedMethod === method
-                        ? 'bg-emerald-500 text-slate-950'
+                        ? method === 'Crédit Client'
+                          ? 'bg-amber-500 text-slate-950 font-black'
+                          : 'bg-emerald-500 text-slate-950 font-black'
                         : 'bg-pos-bg text-pos-muted hover:text-pos-text border border-pos-border'
                     }`}
                   >
@@ -274,6 +276,28 @@ export const PaymentModal: React.FC = () => {
                 ))}
               </div>
             </div>
+
+            {/* Credit Sale Info Banner */}
+            {selectedMethod === 'Crédit Client' && (
+              <div className="p-3 rounded-xl border text-xs animate-in fade-in bg-amber-500/10 border-amber-500/30 text-amber-300">
+                {currentCustomer ? (
+                  <div className="space-y-1">
+                    <p className="font-bold flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5" /> Vente à Crédit / Acompte pour {currentCustomer.name}
+                    </p>
+                    <div className="flex justify-between text-[11px] opacity-90 pt-1 border-t border-amber-500/20">
+                      <span>Dette Actuelle : <b>{formatDZD(currentCustomer.currentDebt || 0)}</b></span>
+                      <span>Nouveau Solde Dette : <b>{formatDZD((currentCustomer.currentDebt || 0) + (parseFloat(tenderAmount) || resteAPayer))}</b></span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="font-bold text-red-400 flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    Client non sélectionné ! Veuillez identifier un client dans la caisse avant d'autoriser un crédit.
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="relative">
               <input
@@ -365,6 +389,26 @@ export const PaymentModal: React.FC = () => {
                 className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-lg transition cursor-pointer"
               >
                 Appliquer Avoir ({formatDZD(Math.min(resteAPayer, availableAvoir))})
+              </button>
+            </div>
+          )}
+
+          {/* Customer Debt Quick Action (Kredy) */}
+          {currentCustomer && resteAPayer > 0 && (
+            <div className="bg-amber-950/30 border border-amber-500/40 p-3 rounded-xl flex items-center justify-between text-xs animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-amber-400" />
+                <div>
+                  <p className="font-bold text-amber-300">Vente Partielle / À Crédit ({currentCustomer.name})</p>
+                  <p className="text-[10px] text-amber-200/80">Ajouter le montant manquant ({formatDZD(resteAPayer)}) en dette client</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleAddTender('Crédit Client', resteAPayer)}
+                className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-lg transition cursor-pointer"
+              >
+                + Mettre en Crédit
               </button>
             </div>
           )}

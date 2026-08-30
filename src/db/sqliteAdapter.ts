@@ -10,6 +10,8 @@ import type {
   SecurityAuditLogEntry,
   CashDropEntry,
   ProductBundle,
+  CustomerDebtEntry,
+  StoreExpense,
 } from '../types/pos';
 import { db as dexieDb } from './database';
 
@@ -683,6 +685,69 @@ export const sqliteAdapter = {
     } catch (e: any) {
       return { success: false, reason: e?.message || 'Erreur lors de l\'importation' };
     }
+  },
+
+  // ── CUSTOMER DEBTS (KREDY) ──
+  async saveCustomerDebt(debt: CustomerDebtEntry): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        await invoke('sqlite_save_customer_debt', { debt });
+      } catch (e) {
+        console.warn('Native SQLite save customer debt failed, saving to Dexie:', e);
+      }
+    }
+    await dexieDb.customerDebts.put(debt);
+  },
+
+  async getAllCustomerDebts(): Promise<CustomerDebtEntry[]> {
+    if (isTauriEnv()) {
+      try {
+        const nativeDebts = await invoke<CustomerDebtEntry[]>('sqlite_get_all_customer_debts');
+        if (Array.isArray(nativeDebts) && nativeDebts.length > 0) {
+          return nativeDebts;
+        }
+      } catch (e) {
+        console.warn('Native SQLite get customer debts failed, loading from Dexie:', e);
+      }
+    }
+    return await dexieDb.customerDebts.toArray();
+  },
+
+  // ── STORE EXPENSES (EBITDA) ──
+  async saveStoreExpense(expense: StoreExpense): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        await invoke('sqlite_save_store_expense', { expense });
+      } catch (e) {
+        console.warn('Native SQLite save store expense failed, saving to Dexie:', e);
+      }
+    }
+    await dexieDb.storeExpenses.put(expense);
+  },
+
+  async getAllStoreExpenses(): Promise<StoreExpense[]> {
+    if (isTauriEnv()) {
+      try {
+        const nativeExpenses = await invoke<StoreExpense[]>('sqlite_get_all_store_expenses');
+        if (Array.isArray(nativeExpenses) && nativeExpenses.length > 0) {
+          return nativeExpenses;
+        }
+      } catch (e) {
+        console.warn('Native SQLite get store expenses failed, loading from Dexie:', e);
+      }
+    }
+    return await dexieDb.storeExpenses.toArray();
+  },
+
+  async deleteStoreExpense(id: string): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        await invoke('sqlite_delete_store_expense', { id });
+      } catch (e) {
+        console.warn('Native SQLite delete store expense failed:', e);
+      }
+    }
+    await dexieDb.storeExpenses.delete(id);
   },
 
   async clearAllData(): Promise<void> {

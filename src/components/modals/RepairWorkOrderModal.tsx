@@ -77,8 +77,6 @@ export const RepairWorkOrderModal: React.FC = () => {
   const [checklist, setChecklist] = useState<ConditionChecklist>(initialChecklist);
   const [postChecklist, setPostChecklist] = useState<ConditionChecklist>(initialChecklist);
 
-  if (activeModal !== 'repair_work_order') return null;
-
   // KPI Computations
   const totalOrders = repairOrders.length;
   const diagnosticCount = repairOrders.filter(r => r.status === 'Diagnostic').length;
@@ -232,6 +230,8 @@ export const RepairWorkOrderModal: React.FC = () => {
 
   const totalCost = laborCost + partsCost;
   const remainingBalance = Math.max(0, totalCost - depositAmount);
+
+  if (activeModal !== 'repair_work_order') return null;
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">

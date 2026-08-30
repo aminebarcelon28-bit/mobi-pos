@@ -18,10 +18,13 @@ import {
   FileSpreadsheet,
   Calendar,
   Layers,
+  DollarSign,
+  Plus,
+  Trash2,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
-import type { SaleTransaction } from '../../types/pos';
+import type { SaleTransaction, ExpenseCategory, PaymentMethodType } from '../../types/pos';
 import { SalesAnalyticsCharts } from '../reports/SalesAnalyticsCharts';
 import { useToast } from '../ui/Toast';
 import { generateProfessionalExcelXml } from '../../utils/excelExporter';
@@ -37,13 +40,26 @@ export const ReportsModal: React.FC = () => {
     reprintReceipt,
     voidTransaction,
     setSelectedTransactionForRefund,
+    storeExpenses,
+    addStoreExpense,
+    deleteStoreExpense,
   } = usePosStore();
 
   const { showToast } = useToast();
 
   const [pinVerified, setPinVerified] = useState(false);
   const [pinInput, setPinInput] = useState('');
-  const [activeTab, setActiveTab] = useState<'analytics' | 'history' | 'export'>('history');
+  const [activeTab, setActiveTab] = useState<'analytics' | 'history' | 'expenses' | 'export'>('history');
+
+  // Expense State
+  const [showNewExpenseModal, setShowNewExpenseModal] = useState(false);
+  const [expenseCategory, setExpenseCategory] = useState<ExpenseCategory>('Loyer');
+  const [expenseTitle, setExpenseTitle] = useState('');
+  const [expenseAmount, setExpenseAmount] = useState('');
+  const [expensePaymentMethod, setExpensePaymentMethod] = useState<PaymentMethodType>('Espèces');
+  const [expensePaidTo, setExpensePaidTo] = useState('');
+  const [expenseNotes, setExpenseNotes] = useState('');
+  const [expenseCategoryFilter, setExpenseCategoryFilter] = useState<string>('Tous');
 
   // Transaction Inspector State
   const [inspectingTransaction, setInspectingTransaction] = useState<SaleTransaction | null>(null);
@@ -110,6 +126,61 @@ export const ReportsModal: React.FC = () => {
   const totalNetProfit = totalRevenue - totalCost;
   const netProfitMargin = totalRevenue > 0 ? ((totalNetProfit / totalRevenue) * 100).toFixed(1) : '0';
   const averageBasket = validSales.length > 0 ? totalGrossRevenue / validSales.length : 0;
+
+  // Operating Expenses & True Net Profit (EBITDA)
+  const dateFilteredExpenses = useMemo(() => {
+    const list = storeExpenses || [];
+    if (dateRangeFilter === 'all') return list;
+    const now = new Date();
+
+    return list.filter((e) => {
+      const eDate = new Date(e.createdAt);
+      if (isNaN(eDate.getTime())) return true;
+
+      if (dateRangeFilter === 'today') {
+        return eDate.toDateString() === now.toDateString();
+      }
+      if (dateRangeFilter === '7days') {
+        const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        return eDate >= sevenDaysAgo;
+      }
+      if (dateRangeFilter === '30days') {
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        return eDate >= thirtyDaysAgo;
+      }
+      return true;
+    });
+  }, [storeExpenses, dateRangeFilter]);
+
+  const totalOperatingExpenses = dateFilteredExpenses.reduce((acc, e) => acc + (e.amount || 0), 0);
+  const trueEbitdaNetProfit = totalNetProfit - totalOperatingExpenses;
+  const ebitdaMargin = totalRevenue > 0 ? ((trueEbitdaNetProfit / totalRevenue) * 100).toFixed(1) : '0';
+
+  const handleAddExpenseSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amount = parseFloat(expenseAmount);
+    if (isNaN(amount) || amount <= 0 || !expenseTitle.trim()) {
+      showToast('Veuillez saisir un titre et un montant valide.', 'warning');
+      return;
+    }
+
+    await addStoreExpense({
+      category: expenseCategory,
+      title: expenseTitle.trim(),
+      amount,
+      paymentMethod: expensePaymentMethod,
+      paidTo: expensePaidTo.trim() || undefined,
+      notes: expenseNotes.trim() || undefined,
+      recordedBy: 'Yacine (Admin)',
+    });
+
+    showToast('Charge d\'exploitation enregistrée avec succès !', 'success');
+    setShowNewExpenseModal(false);
+    setExpenseTitle('');
+    setExpenseAmount('');
+    setExpensePaidTo('');
+    setExpenseNotes('');
+  };
 
   // Filtered Transactions for History List
   const filteredTransactions = dateFilteredTransactions.filter((t) => {
@@ -369,6 +440,18 @@ export const ReportsModal: React.FC = () => {
                 >
                   <BarChart3 className="w-3.5 h-3.5" />
                   Vue Graphique & Performance
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('expenses')}
+                  className={`py-3 px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
+                    activeTab === 'expenses'
+                      ? 'border-amber-500 text-amber-400'
+                      : 'border-transparent text-pos-muted hover:text-pos-text'
+                  }`}
+                >
+                  <DollarSign className="w-3.5 h-3.5 text-amber-400" />
+                  Dépenses & Résultat Net (EBITDA)
                 </button>
 
                 <button
@@ -633,6 +716,152 @@ export const ReportsModal: React.FC = () => {
                         )}
                       </tbody>
                     </table>
+                  </div>
+                </div>
+              )}
+
+              {/* ═══════════════════════════════════════════════════ */}
+              {/* TAB: STORE OPERATING EXPENSES & TRUE EBITDA PROFIT */}
+              {/* ═══════════════════════════════════════════════════ */}
+              {activeTab === 'expenses' && (
+                <div className="space-y-5 animate-in fade-in">
+                  {/* Executive EBITDA Summary Cards */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="bg-pos-card border border-pos-border p-3.5 rounded-xl">
+                      <span className="text-[9px] text-pos-muted uppercase font-bold block">CA Net Réalisé</span>
+                      <p className="text-lg font-black text-pos-text font-mono mt-1">{formatDZD(totalRevenue)}</p>
+                      <span className="text-[9.5px] text-pos-muted">Après remises & retours</span>
+                    </div>
+
+                    <div className="bg-pos-card border border-pos-border p-3.5 rounded-xl">
+                      <span className="text-[9px] text-pos-muted uppercase font-bold block">Marge Commerciale Brute</span>
+                      <p className="text-lg font-black text-cyan-400 font-mono mt-1">{formatDZD(totalNetProfit)}</p>
+                      <span className="text-[9.5px] text-pos-muted">CA Net − Coût Marchandises</span>
+                    </div>
+
+                    <div className="bg-gradient-to-br from-red-950/40 to-amber-950/40 border border-red-500/40 p-3.5 rounded-xl">
+                      <span className="text-[9px] text-red-300 uppercase font-bold block">Total Dépenses d'Exploitation</span>
+                      <p className="text-lg font-black text-red-400 font-mono mt-1">−{formatDZD(totalOperatingExpenses)}</p>
+                      <span className="text-[9.5px] text-red-200/70">{dateFilteredExpenses.length} charge{dateFilteredExpenses.length > 1 ? 's' : ''} enregistrée{dateFilteredExpenses.length > 1 ? 's' : ''}</span>
+                    </div>
+
+                    <div className="bg-gradient-to-br from-emerald-950/60 to-teal-950/60 border-2 border-emerald-500 p-3.5 rounded-xl shadow-lg shadow-emerald-950/50">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <span className="text-[9px] text-emerald-300 uppercase font-extrabold block">Bénéfice Net Réel (EBITDA)</span>
+                          <p className="text-xl font-black text-emerald-400 font-mono mt-0.5">{formatDZD(trueEbitdaNetProfit)}</p>
+                        </div>
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono text-[10px] font-black border border-emerald-500/30">
+                          {ebitdaMargin}%
+                        </span>
+                      </div>
+                      <span className="text-[9.5px] text-emerald-200/80 mt-1 block">Gain net réel en poche de la boutique</span>
+                    </div>
+                  </div>
+
+                  {/* Actions & Filters Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 bg-pos-card border border-pos-border p-3 rounded-xl">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] font-bold uppercase text-pos-muted mr-1">Catégorie :</span>
+                      {['Tous', 'Loyer', 'Salaires / Avances', 'Électricité / Eau', 'Repas / Pause', 'Emballages / Sachets', 'Transport / Livraison', 'Internet / Téléphonie', 'Maintenance / Travaux', 'Autre Charge'].map((cat) => (
+                        <button
+                          key={cat}
+                          type="button"
+                          onClick={() => setExpenseCategoryFilter(cat)}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                            expenseCategoryFilter === cat
+                              ? 'bg-amber-500 text-slate-950 font-black shadow-sm'
+                              : 'bg-pos-bg text-pos-muted hover:text-pos-text border border-pos-border'
+                          }`}
+                        >
+                          {cat}
+                        </button>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowNewExpenseModal(true)}
+                      className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-black flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" /> Enregistrer une Dépense
+                    </button>
+                  </div>
+
+                  {/* Expenses List Table */}
+                  <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-pos-text flex items-center justify-between">
+                      <span>Détail des Frais & Dépenses ({dateFilteredExpenses.length})</span>
+                      <span className="text-amber-400 font-mono">Total : {formatDZD(totalOperatingExpenses)}</span>
+                    </h3>
+
+                    {dateFilteredExpenses.length === 0 ? (
+                      <div className="text-center py-8 space-y-1.5">
+                        <DollarSign className="w-10 h-10 text-pos-muted/40 mx-auto" />
+                        <p className="text-xs font-bold text-pos-muted">Aucune charge d'exploitation enregistrée sur cette période.</p>
+                        <p className="text-[11px] text-pos-muted/60">Cliquez sur "+ Enregistrer une Dépense" pour saisir un loyer, repas, emballage, etc.</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto max-h-72 overflow-y-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="border-b border-pos-border text-[10px] text-pos-muted uppercase font-bold">
+                              <th className="py-2.5 px-3">Date</th>
+                              <th className="py-2.5 px-3">Catégorie</th>
+                              <th className="py-2.5 px-3">Motif / Titre</th>
+                              <th className="py-2.5 px-3">Bénéficiaire</th>
+                              <th className="py-2.5 px-3">Mode</th>
+                              <th className="py-2.5 px-3">Enregistré Par</th>
+                              <th className="py-2.5 px-3 text-right">Montant</th>
+                              <th className="py-2.5 px-3 text-center">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-pos-border/40 font-mono">
+                            {dateFilteredExpenses
+                              .filter((e) => expenseCategoryFilter === 'Tous' || e.category === expenseCategoryFilter)
+                              .map((exp) => (
+                                <tr key={exp.id} className="hover:bg-pos-bg/50 transition">
+                                  <td className="py-2.5 px-3 text-pos-muted text-[11px] font-sans">
+                                    {new Date(exp.createdAt).toLocaleDateString('fr-DZ', {
+                                      day: '2-digit',
+                                      month: '2-digit',
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </td>
+                                  <td className="py-2.5 px-3 font-sans">
+                                    <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[10px] font-bold">
+                                      {exp.category}
+                                    </span>
+                                  </td>
+                                  <td className="py-2.5 px-3 font-bold font-sans text-pos-text">{exp.title}</td>
+                                  <td className="py-2.5 px-3 text-pos-muted font-sans">{exp.paidTo || '—'}</td>
+                                  <td className="py-2.5 px-3 text-pos-muted font-sans text-[11px]">{exp.paymentMethod}</td>
+                                  <td className="py-2.5 px-3 text-pos-muted font-sans text-[11px]">{exp.recordedBy}</td>
+                                  <td className="py-2.5 px-3 text-right font-black text-red-400 font-mono">
+                                    −{formatDZD(exp.amount)}
+                                  </td>
+                                  <td className="py-2.5 px-3 text-center" onClick={(e) => e.stopPropagation()}>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (window.confirm(`Supprimer cette dépense "${exp.title}" (${formatDZD(exp.amount)}) ?`)) {
+                                          deleteStoreExpense(exp.id);
+                                          showToast('Dépense supprimée', 'info');
+                                        }
+                                      }}
+                                      className="p-1 hover:bg-red-500/20 text-pos-muted hover:text-red-400 rounded transition cursor-pointer"
+                                      title="Supprimer la dépense"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1018,6 +1247,146 @@ export const ReportsModal: React.FC = () => {
                 </div>
               </div>
 
+            </div>
+          </div>
+        )}
+
+        {/* ═══ New Expense Modal Dialog ═══ */}
+        {showNewExpenseModal && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl animate-in zoom-in-95">
+              <div className="flex items-center justify-between border-b border-pos-border pb-3">
+                <div className="flex items-center gap-2 text-amber-400">
+                  <DollarSign className="w-5 h-5" />
+                  <h3 className="text-sm font-black text-pos-text">Enregistrer une Charge d'Exploitation</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowNewExpenseModal(false)}
+                  className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddExpenseSubmit} className="space-y-3.5">
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                    Catégorie de Dépense *
+                  </label>
+                  <select
+                    value={expenseCategory}
+                    onChange={(e) => setExpenseCategory(e.target.value as ExpenseCategory)}
+                    className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:outline-none focus:border-amber-400"
+                  >
+                    {[
+                      'Loyer',
+                      'Électricité / Eau',
+                      'Salaires / Avances',
+                      'Repas / Pause',
+                      'Emballages / Sachets',
+                      'Transport / Livraison',
+                      'Internet / Téléphonie',
+                      'Maintenance / Travaux',
+                      'Autre Charge',
+                    ].map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                    Motif / Description de la Charge *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={expenseTitle}
+                    onChange={(e) => setExpenseTitle(e.target.value)}
+                    placeholder="Ex: Facture Sonelgaz 2ème Trimestre"
+                    className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                      Montant (DA) *
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      value={expenseAmount}
+                      onChange={(e) => setExpenseAmount(e.target.value)}
+                      placeholder="4500"
+                      className="w-full bg-pos-bg border-2 border-pos-border focus:border-amber-400 rounded-xl px-3 py-2 text-base font-black font-mono text-pos-text focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                      Mode de Paiement
+                    </label>
+                    <select
+                      value={expensePaymentMethod}
+                      onChange={(e) => setExpensePaymentMethod(e.target.value as PaymentMethodType)}
+                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:outline-none"
+                    >
+                      {['Espèces', 'BaridiMob', 'Chèque', 'Autre'].map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                    Payé à / Bénéficiaire (Facultatif)
+                  </label>
+                  <input
+                    type="text"
+                    value={expensePaidTo}
+                    onChange={(e) => setExpensePaidTo(e.target.value)}
+                    placeholder="Ex: Propriétaire local, Sonelgaz, etc."
+                    className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                    Remarque (Facultatif)
+                  </label>
+                  <input
+                    type="text"
+                    value={expenseNotes}
+                    onChange={(e) => setExpenseNotes(e.target.value)}
+                    placeholder="Ex: Reçu N° 4589"
+                    className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-3 border-t border-pos-border">
+                  <button
+                    type="button"
+                    onClick={() => setShowNewExpenseModal(false)}
+                    className="px-4 py-2 bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl text-xs font-bold"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <CheckCircle2 className="w-4 h-4" /> Enregistrer la Charge
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

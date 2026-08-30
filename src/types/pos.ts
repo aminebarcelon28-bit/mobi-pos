@@ -160,6 +160,54 @@ export interface Customer {
   avatarUrl?: string;
   loyaltyCardCode?: string;
   barcode?: string;
+  currentDebt?: number;
+  debtLimit?: number;
+}
+
+export interface CustomerDebtEntry {
+  id: string;
+  customerId: string;
+  customerName: string;
+  type: 'DEBT_ACQUIRED' | 'PAYMENT_SETTLED';
+  amount: number;
+  balanceAfter: number;
+  receiptNumber?: string;
+  paymentMethod?: PaymentMethodType;
+  notes?: string;
+  createdAt: string;
+  recordedBy?: string;
+}
+
+export type ExpenseCategory =
+  | 'Loyer'
+  | 'Électricité / Eau'
+  | 'Salaires / Avances'
+  | 'Repas / Pause'
+  | 'Emballages / Sachets'
+  | 'Transport / Livraison'
+  | 'Internet / Téléphonie'
+  | 'Maintenance / Travaux'
+  | 'Autre Charge';
+
+export interface StoreExpense {
+  id: string;
+  category: ExpenseCategory;
+  title: string;
+  amount: number;
+  paymentMethod: PaymentMethodType;
+  paidTo?: string;
+  notes?: string;
+  createdAt: string;
+  recordedBy: string;
+}
+
+export interface QuickTileItem {
+  id: string;
+  title: string;
+  price: number;
+  costPrice?: number;
+  icon?: string;
+  color?: string;
 }
 
 export interface HeldSale {
@@ -170,7 +218,7 @@ export interface HeldSale {
   note?: string;
 }
 
-export type PaymentMethodType = 'Espèces' | 'Avoir Client' | 'BaridiMob' | 'Chèque';
+export type PaymentMethodType = 'Espèces' | 'Avoir Client' | 'BaridiMob' | 'Chèque' | 'Crédit Client' | 'Autre';
 
 export type TransactionStatus = 'COMPLETED' | 'VOIDED' | 'REFUNDED' | 'PARTIALLY_REFUNDED';
 
@@ -227,6 +275,8 @@ export interface SaleTransaction {
   refundReason?: string;
   refundMethod?: PaymentMethodType;
   refundedItems?: RefundItem[];
+  debtAdded?: number;
+  debtRemainingTotal?: number;
 }
 
 export interface StockAlert {
