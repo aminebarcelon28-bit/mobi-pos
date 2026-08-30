@@ -55,7 +55,9 @@ export const BottomBar: React.FC = () => {
     <footer className="bg-pos-panel border-t border-pos-border px-3 py-2 select-none relative">
       {/* Floating Shortcut Hint Bar */}
       <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-slate-950/90 border border-emerald-500/50 backdrop-blur-md px-4 py-1 rounded-full shadow-2xl flex items-center gap-3 text-[11px] font-medium text-slate-200 z-30">
-        <span>Attente: <span className="hotkey-badge text-emerald-300">F4</span></span>
+        <span>Attente: <span className="hotkey-badge text-emerald-300">F7</span></span>
+        <span className="text-pos-border">|</span>
+        <span>Reprendre: <span className="hotkey-badge text-emerald-300">F4</span></span>
         <span className="text-pos-border">|</span>
         <span>Recherche: <span className="hotkey-badge text-emerald-300">F2</span></span>
         <span className="text-pos-border">|</span>
@@ -114,7 +116,7 @@ export const BottomBar: React.FC = () => {
           >
             <PauseCircle className="w-3.5 h-3.5 text-teal-500" />
             <span>Mettre en Attente</span>
-            <span className="hotkey-badge">F4</span>
+            <span className="hotkey-badge">F7</span>
           </button>
 
           <button

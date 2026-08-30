@@ -96,6 +96,48 @@ pub fn sqlite_get_all_transactions(db: State<'_, Arc<DatabaseManager>>) -> Resul
     db.get_all_transactions().map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn sqlite_void_transaction_atomic(
+    db: State<'_, Arc<DatabaseManager>>,
+    transaction_id: String,
+    voided_transaction: Value,
+    restored_products: Vec<Value>,
+    updated_customer: Option<Value>,
+    restored_imeis: Vec<String>,
+    audit_entry: Option<Value>,
+) -> Result<(), String> {
+    db.void_transaction_atomic(
+        &transaction_id,
+        &voided_transaction,
+        &restored_products,
+        updated_customer.as_ref(),
+        &restored_imeis,
+        audit_entry.as_ref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_process_refund_atomic(
+    db: State<'_, Arc<DatabaseManager>>,
+    refund_transaction: Value,
+    updated_original_transaction: Option<Value>,
+    restocked_products: Vec<Value>,
+    updated_customer: Option<Value>,
+    restored_imeis: Vec<String>,
+    audit_entry: Option<Value>,
+) -> Result<(), String> {
+    db.process_refund_atomic(
+        &refund_transaction,
+        updated_original_transaction.as_ref(),
+        &restocked_products,
+        updated_customer.as_ref(),
+        &restored_imeis,
+        audit_entry.as_ref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
 // ── REPAIRS ──
 
 #[tauri::command]

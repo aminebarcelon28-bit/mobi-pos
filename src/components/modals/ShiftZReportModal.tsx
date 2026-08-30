@@ -14,11 +14,24 @@ export const ShiftZReportModal: React.FC = () => {
 
   if (activeModal !== 'shift_zreport') return null;
 
-  // Financial Shift Auditing
-  const totalCashSales = transactions.reduce((acc, t) => acc + t.total, 0);
+  // Financial Shift Auditing (Strict zero-variance accounting)
+  const validCashSales = transactions.filter(
+    (t) => t.status !== 'VOIDED' && !t.isRefund && t.paymentMethod === 'Espèces'
+  );
+  const totalCashSales = validCashSales.reduce(
+    (acc, t) =>
+      acc +
+      (t.tenders
+        ? t.tenders.filter((td) => td.method === 'Espèces').reduce((sum, td) => sum + td.amount, 0)
+        : t.total),
+    0
+  );
+  const totalCashRefunds = transactions
+    .filter((t) => t.isRefund && t.paymentMethod === 'Espèces')
+    .reduce((acc, t) => acc + t.total, 0);
   const totalDrops = cashDrops.reduce((acc, d) => acc + d.amount, 0);
   const totalPayouts = payouts.reduce((acc, p) => acc + p.amount, 0);
-  const expectedCash = shiftFloat + totalCashSales - totalDrops - totalPayouts;
+  const expectedCash = shiftFloat + totalCashSales - totalCashRefunds - totalDrops - totalPayouts;
   const variance = actualCountedCash - expectedCash;
 
   const handlePrintZReport = () => {
@@ -56,9 +69,9 @@ export const ShiftZReportModal: React.FC = () => {
         {/* Scrollable Body */}
         <div data-printable="true" className="printable-area p-5 overflow-y-auto space-y-5 flex-1">
           {/* Shift Cash Summary Cards */}
-          <div className="grid grid-cols-4 gap-3">
+          <div className={`grid ${totalCashRefunds > 0 ? 'grid-cols-5' : 'grid-cols-4'} gap-2.5`}>
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
-              <span className="text-[10px] text-pos-muted uppercase font-bold">Fond de Caisse Initial</span>
+              <span className="text-[10px] text-pos-muted uppercase font-bold">Fond Initial</span>
               <p className="text-sm font-bold text-pos-text mt-0.5">{formatDZD(shiftFloat)}</p>
             </div>
 
@@ -67,13 +80,20 @@ export const ShiftZReportModal: React.FC = () => {
               <p className="text-sm font-bold text-emerald-400 mt-0.5">{formatDZD(totalCashSales)}</p>
             </div>
 
+            {totalCashRefunds > 0 && (
+              <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                <span className="text-[10px] text-pos-muted uppercase font-bold">Remboursements</span>
+                <p className="text-sm font-bold text-purple-400 mt-0.5">-{formatDZD(totalCashRefunds)}</p>
+              </div>
+            )}
+
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
-              <span className="text-[10px] text-pos-muted uppercase font-bold">Dépôts Coffre (Drops)</span>
+              <span className="text-[10px] text-pos-muted uppercase font-bold">Dépôts Coffre</span>
               <p className="text-sm font-bold text-amber-400 mt-0.5">-{formatDZD(totalDrops)}</p>
             </div>
 
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
-              <span className="text-[10px] text-pos-muted uppercase font-bold">Décaissements Payouts</span>
+              <span className="text-[10px] text-pos-muted uppercase font-bold">Décaissements</span>
               <p className="text-sm font-bold text-red-400 mt-0.5">-{formatDZD(totalPayouts)}</p>
             </div>
           </div>

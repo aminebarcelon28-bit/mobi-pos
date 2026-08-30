@@ -30,11 +30,7 @@ export const useKeyboardHotkeys = () => {
           break;
 
         case 'F4':
-          if (e.shiftKey) {
-            holdSale();
-          } else {
-            openModal('hold');
-          }
+          openModal('hold');
           break;
 
         case 'F5':
@@ -43,6 +39,10 @@ export const useKeyboardHotkeys = () => {
 
         case 'F6':
           openModal('discount');
+          break;
+
+        case 'F7':
+          holdSale();
           break;
 
         case 'F9':

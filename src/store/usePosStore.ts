@@ -23,6 +23,7 @@ import type {
   IMEIRecord,
   PaymentTender,
   LoyaltyLedgerEntry,
+  ProcessRefundPayload,
 } from '../types/pos';
 import { INITIAL_PRODUCTS, INITIAL_CUSTOMERS } from '../data/mockData';
 import {
@@ -96,9 +97,11 @@ interface PosState {
     | 'customer_display'
     | 'pin_prompt'
     | 'loyalty_card'
+    | 'refund'
     | null;
   pendingPinAction: (() => void) | null;
   editingProduct: Product | null;
+  selectedTransactionForRefund: SaleTransaction | null;
   paymentMethod: 'Espèces';
   cashTendered: number;
   lastTransaction: SaleTransaction | null;
@@ -113,6 +116,7 @@ interface PosState {
   openModal: (modal: PosState['activeModal']) => void;
   closeModal: () => void;
   setPendingPinAction: (action: (() => void) | null) => void;
+  setSelectedTransactionForRefund: (t: SaleTransaction | null) => void;
 
   // ── Cart ──
   addToCart: (product: Product, overridePin?: boolean) => { success: boolean; reason?: string };
@@ -130,7 +134,7 @@ interface PosState {
 
   // ── Products ──
   setEditingProduct: (product: Product | null) => void;
-  saveProduct: (productInput: ProductInput) => void;
+  saveProduct: (productInput: ProductInput) => Promise<{ success: boolean; reason?: string }>;
   deleteProduct: (id: string) => void;
 
   // ── Customers ──
@@ -148,10 +152,12 @@ interface PosState {
   exportDatabase: () => void;
   importDatabase: (jsonString: string) => Promise<{ success: boolean; reason?: string }>;
 
-  // ── Payment ──
+  // ── Payment & Refunds / Voids ──
   setCashTendered: (amount: number) => void;
   processPayment: (tenders?: PaymentTender[]) => { success: boolean; reason?: string };
   quickCashPayment: () => { success: boolean; reason?: string };
+  voidTransaction: (transactionId: string, reason: string, cashierName?: string) => Promise<{ success: boolean; reason?: string }>;
+  processRefund: (payload: ProcessRefundPayload) => Promise<{ success: boolean; refundTransaction?: SaleTransaction; reason?: string }>;
 
   // ── Receipts & Settings ──
   setReceiptSettings: (settings: ReceiptSettings) => void;
@@ -162,7 +168,14 @@ interface PosState {
   verifyManagerPin: (pin: string) => boolean;
 
   // ── Purchase Orders ──
-  createDraftPOForVendor: (vendorName: string) => void;
+  createDraftPOForVendor: (
+    vendorName: string,
+    customItems?: Array<{ productId: string; qty: number; unitCost?: number }>
+  ) => void;
+  directRestockVendor: (
+    vendorName: string,
+    items: Array<{ productId: string; qty: number }>
+  ) => Promise<{ success: boolean; count: number }>;
   approvePurchaseOrder: (poId: string) => void;
 
   // ── Repair Orders ──
@@ -268,6 +281,7 @@ export const usePosStore = create<PosState>((set, get) => ({
   activeModal: null,
   pendingPinAction: null,
   editingProduct: null,
+  selectedTransactionForRefund: null,
   paymentMethod: 'Espèces',
   cashTendered: 0,
   lastTransaction: null,
@@ -303,8 +317,9 @@ export const usePosStore = create<PosState>((set, get) => ({
     }
     set({ activeModal: modal });
   },
-  closeModal: () => set({ activeModal: null, editingProduct: null }),
+  closeModal: () => set({ activeModal: null, editingProduct: null, selectedTransactionForRefund: null }),
   setPendingPinAction: (action) => set({ pendingPinAction: action }),
+  setSelectedTransactionForRefund: (t) => set({ selectedTransactionForRefund: t }),
 
   // ══════════════════════════════════════════
   // Cart
@@ -438,22 +453,77 @@ export const usePosStore = create<PosState>((set, get) => ({
   setEditingProduct: (product) => set({ editingProduct: product, activeModal: 'product_editor' }),
 
   saveProduct: async (input) => {
-    const { products } = get();
+    const { products, logSecurityAction } = get();
+
+    // 1. Mandatory Title Validation
+    if (!input.title || !input.title.trim()) {
+      return { success: false, reason: 'La désignation du produit est obligatoire.' };
+    }
+
+    // 2. Barcode Duplicate Validation
+    const cleanBarcode = input.barcode ? input.barcode.trim() : '';
+    if (cleanBarcode) {
+      const duplicateBarcode = products.find(
+        (p) => p.barcode.trim() === cleanBarcode && (input.id ? p.id !== input.id : true)
+      );
+      if (duplicateBarcode) {
+        return {
+          success: false,
+          reason: `Ce code-barres (${cleanBarcode}) est déjà attribué au produit "${duplicateBarcode.title}".`,
+        };
+      }
+    }
+
+    // 3. SKU Duplicate Validation
+    const cleanSku = input.sku ? input.sku.trim().toLowerCase() : '';
+    if (cleanSku) {
+      const duplicateSku = products.find(
+        (p) => p.sku.trim().toLowerCase() === cleanSku && (input.id ? p.id !== input.id : true)
+      );
+      if (duplicateSku) {
+        return {
+          success: false,
+          reason: `La référence SKU (${input.sku}) est déjà utilisée par le produit "${duplicateSku.title}".`,
+        };
+      }
+    }
+
     let updatedProducts: Product[];
     let targetProduct: Product;
 
     if (input.id) {
       targetProduct = input as Product;
       updatedProducts = products.map((p) => (p.id === input.id ? targetProduct : p));
+      logSecurityAction(
+        'Modification Produit Catalogue',
+        `Mise à jour fiche: ${targetProduct.title} (SKU: ${targetProduct.sku}, Stock: ${targetProduct.stock})`,
+        'Yacine (Admin)',
+        false
+      );
     } else {
       targetProduct = {
         ...(input as Omit<Product, 'id'>),
-        id: `prod-${Date.now()}`,
+        id: `prod-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       };
       updatedProducts = [targetProduct, ...products];
+      logSecurityAction(
+        'Création Produit Catalogue',
+        `Nouveau produit: ${targetProduct.title} (Code-barres: ${targetProduct.barcode}, Stock: ${targetProduct.stock})`,
+        'Yacine (Admin)',
+        false
+      );
     }
-    await productRepository.save(targetProduct);
-    set({ products: updatedProducts, activeModal: null, editingProduct: null });
+
+    try {
+      await productRepository.save(targetProduct);
+      soundEngine.playSuccess();
+      set({ products: updatedProducts, activeModal: null, editingProduct: null });
+      return { success: true };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erreur lors de la sauvegarde en base de données';
+      console.error('Save product failed:', err);
+      return { success: false, reason: msg };
+    }
   },
 
   deleteProduct: async (id) => {
@@ -908,6 +978,322 @@ export const usePosStore = create<PosState>((set, get) => ({
     return processPayment([{ method: 'Espèces', amount: grossSubtotal }]);
   },
 
+  voidTransaction: async (transactionId, reason, cashierName) => {
+    const { transactions, products, customers, logSecurityAction } = get();
+    const txn = transactions.find((t) => t.id === transactionId);
+    if (!txn) {
+      return { success: false, reason: 'TRANSACTION_NOT_FOUND' };
+    }
+    if (txn.status === 'VOIDED') {
+      return { success: false, reason: 'ALREADY_VOIDED' };
+    }
+
+    // 1. Restore Product inventory (+qty for sold items)
+    const updatedProducts = products.map((p) => {
+      const soldItem = txn.items.find((item) => item.product.id === p.id);
+      if (soldItem) {
+        return { ...p, stock: p.stock + soldItem.quantity };
+      }
+      return p;
+    });
+
+    // 2. Gather Serialized IMEIs to release
+    const restoredImeis = txn.items
+      .filter((item) => item.imeiNumber && item.imeiNumber.trim() !== '')
+      .map((item) => item.imeiNumber!.trim());
+
+    // 3. Customer loyalty & store credit rollback
+    let updatedCustomer: Customer | undefined = undefined;
+    let updatedCustomers = customers;
+    if (txn.customer) {
+      const cust = customers.find((c) => c.id === txn.customer!.id) || txn.customer;
+      const currentTotalSpent = cust.totalSpent || 0;
+      const newTotalSpent = Math.max(0, currentTotalSpent - txn.total);
+      const newTier = calculateCustomerTier(newTotalSpent);
+
+      // Deduct loyalty points that were earned on this sale
+      const earnedPoints = calculateEarnedPoints(txn.total, newTier.pointsMultiplier);
+      const newPoints = Math.max(0, cust.loyaltyPoints - earnedPoints);
+
+      // If customer paid using Store Credit, restore it
+      const storeCreditPaid = txn.tenders
+        ? txn.tenders.filter((t) => t.method === 'Avoir Client').reduce((acc, t) => acc + t.amount, 0)
+        : txn.paymentMethod === 'Avoir Client' ? txn.total : 0;
+      const newCredit = (cust.storeCredit || 0) + storeCreditPaid;
+
+      const ledgerEntry = createLedgerEntry(
+        cust.id,
+        'adjustment',
+        -earnedPoints,
+        newPoints,
+        `Annulation Ticket #${txn.receiptNumber} (${reason}) - Points & Crédit restaurés`,
+        txn.id
+      );
+
+      const existingLedger = cust.ledger || [];
+      updatedCustomer = {
+        ...cust,
+        totalSpent: newTotalSpent,
+        loyaltyTier: newTier.name,
+        loyaltyPoints: newPoints,
+        storeCredit: newCredit,
+        ledger: [ledgerEntry, ...existingLedger],
+      };
+
+      updatedCustomers = customers.map((c) => (c.id === updatedCustomer!.id ? updatedCustomer! : c));
+    }
+
+    // 4. Mark transaction as VOIDED
+    const voidedTxn: SaleTransaction = {
+      ...txn,
+      status: 'VOIDED',
+      voidReason: reason,
+      voidedAt: new Date().toLocaleDateString('fr-DZ', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+      voidedBy: cashierName || 'Manager',
+    };
+
+    const updatedTransactions = transactions.map((t) => (t.id === transactionId ? voidedTxn : t));
+
+    // 5. Create Security Audit Entry
+    const auditEntry: SecurityAuditLogEntry = {
+      id: `AUDIT-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      user: cashierName || 'Manager',
+      action: 'Annulation Vente (Erreur de Caisse)',
+      details: `Ticket #${txn.receiptNumber} (${txn.total} DA) annulé. Motif: ${reason}`,
+      requiresPin: true,
+    };
+
+    // 6. Execute atomic backend rollback
+    await sqliteAdapter.voidTransactionAtomic(
+      transactionId,
+      voidedTxn,
+      updatedProducts,
+      updatedCustomer,
+      restoredImeis,
+      auditEntry
+    );
+
+    logSecurityAction(
+      'Annulation Vente (Erreur)',
+      `Ticket #${txn.receiptNumber} (${txn.total} DA) annulé. Motif: ${reason}`,
+      cashierName || 'Manager',
+      true
+    );
+
+    soundEngine.playSuccess();
+
+    set({
+      products: updatedProducts,
+      transactions: updatedTransactions,
+      customers: updatedCustomers,
+      currentCustomer: updatedCustomer || get().currentCustomer,
+      lastTransaction: voidedTxn,
+    });
+
+    return { success: true };
+  },
+
+  processRefund: async (payload) => {
+    const { originalTransaction, refundItems, refundMethod, refundReason, cashierName } = payload;
+    const { transactions, products, customers, logSecurityAction } = get();
+
+    if (refundItems.length === 0) {
+      return { success: false, reason: 'NO_ITEMS_SELECTED' };
+    }
+
+    const refundTotal = refundItems.reduce((acc, i) => acc + i.totalRefundAmount, 0);
+    const costRefundTotal = refundItems.reduce((acc, ri) => {
+      const prod = products.find((p) => p.id === ri.productId);
+      return acc + (prod?.costPrice || ri.unitPrice * 0.4) * ri.quantity;
+    }, 0);
+
+    // 1. Restock products where restock === true
+    const updatedProducts = products.map((p) => {
+      const rItem = refundItems.find((item) => item.productId === p.id && item.restock);
+      if (rItem) {
+        return { ...p, stock: p.stock + rItem.quantity };
+      }
+      return p;
+    });
+
+    // 2. Restored IMEIs
+    const restoredImeis = refundItems
+      .filter((i) => i.restock && i.imeiNumber && i.imeiNumber.trim() !== '')
+      .map((i) => i.imeiNumber!.trim());
+
+    // 3. Customer updates: If refundMethod is 'Avoir Client', issue store credit
+    let updatedCustomer: Customer | undefined = undefined;
+    let updatedCustomers = customers;
+
+    if (originalTransaction.customer) {
+      const cust = customers.find((c) => c.id === originalTransaction.customer!.id) || originalTransaction.customer;
+      const currentTotalSpent = cust.totalSpent || 0;
+      const newTotalSpent = Math.max(0, currentTotalSpent - refundTotal);
+      const newTier = calculateCustomerTier(newTotalSpent);
+
+      // Points deduction proportional to refunded amount
+      const pointsToDeduct = calculateEarnedPoints(refundTotal, newTier.pointsMultiplier);
+      const newPoints = Math.max(0, cust.loyaltyPoints - pointsToDeduct);
+
+      // Add Store Credit if refunded via 'Avoir Client'
+      const creditToAdd = refundMethod === 'Avoir Client' ? refundTotal : 0;
+      const newCredit = (cust.storeCredit || 0) + creditToAdd;
+
+      const ledgerEntries: LoyaltyLedgerEntry[] = [];
+      if (creditToAdd > 0) {
+        ledgerEntries.push(
+          createLedgerEntry(
+            cust.id,
+            'conversion',
+            0,
+            newPoints,
+            `Émission Avoir Client (${refundTotal} DA) suite au retour Ticket #${originalTransaction.receiptNumber}`,
+            originalTransaction.id
+          )
+        );
+      }
+      if (pointsToDeduct > 0) {
+        ledgerEntries.push(
+          createLedgerEntry(
+            cust.id,
+            'adjustment',
+            -pointsToDeduct,
+            newPoints,
+            `Déduction points fidélité (${pointsToDeduct} pts) suite au remboursement Ticket #${originalTransaction.receiptNumber}`,
+            originalTransaction.id
+          )
+        );
+      }
+
+      const existingLedger = cust.ledger || [];
+      updatedCustomer = {
+        ...cust,
+        totalSpent: newTotalSpent,
+        loyaltyTier: newTier.name,
+        loyaltyPoints: newPoints,
+        storeCredit: newCredit,
+        ledger: [...ledgerEntries, ...existingLedger],
+      };
+
+      updatedCustomers = customers.map((c) => (c.id === updatedCustomer!.id ? updatedCustomer! : c));
+    }
+
+    // 4. Create Refund Transaction
+    const refundReceiptNumber = `AVOIR-${Date.now().toString().slice(-6)}`;
+    const refundTxnId = `REF-${Math.floor(100000 + Math.random() * 900000)}`;
+
+    const refundTransaction: SaleTransaction = {
+      id: refundTxnId,
+      receiptNumber: refundReceiptNumber,
+      status: 'COMPLETED',
+      isRefund: true,
+      originalReceiptNumber: originalTransaction.receiptNumber,
+      originalTransactionId: originalTransaction.id,
+      refundReason,
+      refundMethod,
+      refundedItems: refundItems,
+      customer: updatedCustomer || originalTransaction.customer,
+      items: refundItems.map((ri) => {
+        const origProd = products.find((p) => p.id === ri.productId) || {
+          id: ri.productId,
+          title: ri.title,
+          sku: ri.sku,
+          price: ri.unitPrice,
+        } as Product;
+        return {
+          product: origProd,
+          quantity: ri.quantity,
+          discount: 0,
+          appliedPrice: ri.unitPrice,
+          imeiNumber: ri.imeiNumber,
+        };
+      }),
+      subtotal: refundTotal,
+      discountTotal: 0,
+      total: refundTotal,
+      costTotal: costRefundTotal,
+      profit: 0,
+      profitMargin: 0,
+      pricingTier: originalTransaction.pricingTier,
+      paymentMethod: refundMethod,
+      cashTendered: refundMethod === 'Espèces' ? refundTotal : 0,
+      changeDue: 0,
+      createdAt: new Date().toLocaleDateString('fr-DZ', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    };
+
+    // 5. Update Original Transaction status
+    const totalOrigItems = originalTransaction.items.reduce((acc, i) => acc + i.quantity, 0);
+    const totalRefundedItems = refundItems.reduce((acc, i) => acc + i.quantity, 0);
+    const isFullyRefunded = totalRefundedItems >= totalOrigItems;
+
+    const updatedOriginalTransaction: SaleTransaction = {
+      ...originalTransaction,
+      status: isFullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
+    };
+
+    const updatedTransactions = [
+      refundTransaction,
+      ...transactions.map((t) => (t.id === originalTransaction.id ? updatedOriginalTransaction : t)),
+    ];
+
+    // 6. Create Audit Log
+    const auditEntry: SecurityAuditLogEntry = {
+      id: `AUDIT-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      user: cashierName || 'Manager',
+      action: 'Remboursement / Avoir Émis',
+      details: `Avoir #${refundReceiptNumber} (${refundTotal} DA en ${refundMethod}) pour Ticket #${originalTransaction.receiptNumber}. Motif: ${refundReason}`,
+      requiresPin: true,
+    };
+
+    // 7. Atomic SQLite Execution
+    await sqliteAdapter.processRefundAtomic(
+      refundTransaction,
+      updatedOriginalTransaction,
+      updatedProducts,
+      updatedCustomer,
+      restoredImeis,
+      auditEntry
+    );
+
+    logSecurityAction(
+      'Remboursement / Avoir Émis',
+      `Avoir #${refundReceiptNumber} (${refundTotal} DA en ${refundMethod}) pour Ticket #${originalTransaction.receiptNumber}. Motif: ${refundReason}`,
+      cashierName || 'Manager',
+      true
+    );
+
+    soundEngine.playSuccess();
+    if (refundMethod === 'Espèces') {
+      soundEngine.playCashDrawer();
+    }
+
+    set({
+      products: updatedProducts,
+      transactions: updatedTransactions,
+      customers: updatedCustomers,
+      currentCustomer: updatedCustomer || get().currentCustomer,
+      lastTransaction: refundTransaction,
+      activeModal: 'receipt', // Automatically show the Avoir / Refund thermal receipt!
+      hardwareStatus: refundMethod === 'Espèces' ? { ...get().hardwareStatus, cashDrawerOpen: true } : get().hardwareStatus,
+    });
+
+    return { success: true, refundTransaction };
+  },
+
   // ══════════════════════════════════════════
   // Receipts & Settings
   // ══════════════════════════════════════════
@@ -949,24 +1335,45 @@ export const usePosStore = create<PosState>((set, get) => ({
   // Purchase Orders
   // ══════════════════════════════════════════
 
-  createDraftPOForVendor: (vendorName) => {
+  createDraftPOForVendor: (vendorName, customItems) => {
     const { products } = get();
-    const alerts = calculateStockAlerts(products).filter((a) => a.vendorName === vendorName);
 
-    const lineItems: POLineItem[] = alerts.map((a) => {
-      const p = products.find((prod) => prod.id === a.productId)!;
-      const suggestedQty = Math.max(10, (p.reorderPoint || 20) * 2 - p.stock);
-      const unitCost = p.costPrice || p.price * 0.4;
-      return {
-        productId: p.id,
-        title: p.title,
-        sku: p.sku,
-        currentStock: p.stock,
-        suggestedQty,
-        unitCost,
-        totalCost: suggestedQty * unitCost,
-      };
-    });
+    let lineItems: POLineItem[];
+
+    if (customItems && customItems.length > 0) {
+      lineItems = customItems.map((ci) => {
+        const p = products.find((prod) => prod.id === ci.productId);
+        const unitCost = ci.unitCost !== undefined ? ci.unitCost : (p ? p.costPrice : 1500);
+        return {
+          productId: ci.productId,
+          title: p ? p.title : 'Produit',
+          sku: p ? p.sku : 'SKU-N/A',
+          currentStock: p ? p.stock : 0,
+          suggestedQty: ci.qty,
+          unitCost,
+          totalCost: ci.qty * unitCost,
+        };
+      });
+    } else {
+      const alerts = calculateStockAlerts(products).filter(
+        (a) => (a.vendorName || 'Fournisseur Général') === vendorName
+      );
+
+      lineItems = alerts.map((a) => {
+        const p = products.find((prod) => prod.id === a.productId)!;
+        const suggestedQty = Math.max(1, (p.reorderPoint || 10) * 2 - p.stock);
+        const unitCost = p.costPrice || p.price * 0.4;
+        return {
+          productId: p.id,
+          title: p.title,
+          sku: p.sku,
+          currentStock: p.stock,
+          suggestedQty,
+          unitCost,
+          totalCost: suggestedQty * unitCost,
+        };
+      });
+    }
 
     const totalAmount = lineItems.reduce((acc, item) => acc + item.totalCost, 0);
 
@@ -981,6 +1388,39 @@ export const usePosStore = create<PosState>((set, get) => ({
     };
 
     set({ activeDraftPO: draftPO, activeModal: 'purchase_order' });
+  },
+
+  directRestockVendor: async (vendorName, items) => {
+    const { products, logSecurityAction } = get();
+    if (!items || items.length === 0) return { success: false, count: 0 };
+
+    const itemsMap = new Map(items.map((i) => [i.productId, i.qty]));
+    let restockedUnits = 0;
+
+    const updatedProducts = products.map((p) => {
+      if (itemsMap.has(p.id)) {
+        const addedQty = itemsMap.get(p.id) || 0;
+        restockedUnits += addedQty;
+        return { ...p, stock: p.stock + addedQty };
+      }
+      return p;
+    });
+
+    try {
+      await productRepository.bulkSave(updatedProducts);
+      soundEngine.playSuccess();
+      logSecurityAction(
+        'Réception Directe Fournisseur (JIT Restock)',
+        `Entrée en stock rapide pour ${vendorName} : ${items.length} références (+${restockedUnits} unités)`,
+        'Yacine (Admin)',
+        false
+      );
+      set({ products: updatedProducts });
+      return { success: true, count: restockedUnits };
+    } catch (e) {
+      console.error('Direct restock failed:', e);
+      return { success: false, count: 0 };
+    }
   },
 
   approvePurchaseOrder: async (poId) => {

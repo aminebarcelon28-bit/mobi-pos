@@ -35,6 +35,7 @@ const CustomerDisplayModal = React.lazy(() => import('./components/modals/Custom
 const PinPromptModal = React.lazy(() => import('./components/modals/PinPromptModal').then(m => ({ default: m.PinPromptModal })));
 const LoyaltyCardModal = React.lazy(() => import('./components/modals/LoyaltyCardModal').then(m => ({ default: m.LoyaltyCardModal })));
 const UpdateModal = React.lazy(() => import('./components/modals/UpdateModal').then(m => ({ default: m.UpdateModal })));
+const RefundModal = React.lazy(() => import('./components/modals/RefundModal').then(m => ({ default: m.RefundModal })));
 
 import { usePosStore } from './store/usePosStore';
 
@@ -98,6 +99,7 @@ export const App: React.FC = () => {
               <PinPromptModal />
               <LoyaltyCardModal />
               <UpdateModal />
+              <RefundModal />
             </ErrorBoundary>
           </Suspense>
         </div>

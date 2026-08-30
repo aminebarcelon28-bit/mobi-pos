@@ -8,19 +8,18 @@ export const HotkeyGuideModal: React.FC = () => {
   if (activeModal !== 'hotkey_guide') return null;
 
   const hotkeys = [
-    { key: 'F1', label: 'Recherche' },
-    { key: 'F2', label: 'Vider le panier' },
-    { key: 'F3', label: 'Mettre en attente' },
-    { key: 'F4', label: 'Clients' },
-    { key: 'F5', label: 'Espèces 1000 DA' },
-    { key: 'F6', label: 'Espèces 2000 DA' },
-    { key: 'F7', label: 'Espèces 5000 DA' },
-    { key: 'F8', label: 'Espèces 10000 DA' },
-    { key: 'F9', label: 'Paiement partiel' },
-    { key: 'F10', label: 'Encaisser' },
-    { key: 'F11', label: 'Options' },
-    { key: 'F12', label: 'Raccourcis' },
-    { key: 'Esc', label: 'Fermer' },
+    { key: 'F1', label: 'Nouveau Panier' },
+    { key: 'F2', label: 'Recherche Produit' },
+    { key: 'F3', label: 'Encaisser / Paiement' },
+    { key: 'F4', label: 'Reprendre Ventes en Attente' },
+    { key: 'F5', label: 'Fichier Clients' },
+    { key: 'F6', label: 'Appliquer Remise' },
+    { key: 'F7', label: 'Mettre la Vente en Attente' },
+    { key: 'F9', label: 'Dernier Reçu / Ticket' },
+    { key: 'F10', label: 'Rapports & Ventes' },
+    { key: 'F11', label: 'Gestion de Stock' },
+    { key: 'F12', label: 'Paramètres Caisse' },
+    { key: 'Esc', label: 'Fermer / Annuler' },
   ];
 
   return (

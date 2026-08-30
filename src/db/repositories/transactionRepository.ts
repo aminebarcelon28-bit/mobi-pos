@@ -34,6 +34,42 @@ export const transactionRepository = {
     return txns.find((t) => t.receiptNumber.trim() === receiptNumber.trim());
   },
 
+  async voidTransaction(
+    transactionId: string,
+    voidedTransaction: SaleTransaction,
+    restoredProducts: Product[],
+    updatedCustomer?: Customer,
+    restoredImeis: string[] = [],
+    auditEntry?: SecurityAuditLogEntry
+  ): Promise<void> {
+    await sqliteAdapter.voidTransactionAtomic(
+      transactionId,
+      voidedTransaction,
+      restoredProducts,
+      updatedCustomer,
+      restoredImeis,
+      auditEntry
+    );
+  },
+
+  async processRefund(
+    refundTransaction: SaleTransaction,
+    updatedOriginalTransaction?: SaleTransaction,
+    restockedProducts: Product[] = [],
+    updatedCustomer?: Customer,
+    restoredImeis: string[] = [],
+    auditEntry?: SecurityAuditLogEntry
+  ): Promise<void> {
+    await sqliteAdapter.processRefundAtomic(
+      refundTransaction,
+      updatedOriginalTransaction,
+      restockedProducts,
+      updatedCustomer,
+      restoredImeis,
+      auditEntry
+    );
+  },
+
   async clearAll(): Promise<void> {
     // Clear handled by db reset
   },

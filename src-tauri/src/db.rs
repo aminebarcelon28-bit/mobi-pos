@@ -742,6 +742,226 @@ impl DatabaseManager {
         Ok(results)
     }
 
+    pub fn void_transaction_atomic(
+        &self,
+        transaction_id: &str,
+        voided_transaction: &Value,
+        restored_products: &[Value],
+        updated_customer: Option<&Value>,
+        restored_imeis: &[String],
+        audit_entry: Option<&Value>,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+
+        // 1. Update the transaction row with voided JSON payload (preserves audit trail)
+        let json_payload = serde_json::to_string(voided_transaction).unwrap_or_default();
+        tx.execute(
+            "UPDATE transactions SET json_payload = ?1 WHERE id = ?2",
+            params![json_payload, transaction_id],
+        )?;
+
+        // 2. Restore Product stock
+        {
+            let mut prod_stmt = tx.prepare(
+                "INSERT OR REPLACE INTO products (
+                    id, sku, barcode, title, brand, compatible_model, category,
+                    price, wholesale_price, cost_price, stock, image_url,
+                    is_serialized, imei_number, vendor_name, lead_time_days,
+                    daily_sales_velocity, reorder_point, json_payload, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+            )?;
+
+            let now = chrono_now_string();
+            for p in restored_products {
+                let id = p["id"].as_str().unwrap_or_default();
+                let sku = p["sku"].as_str().unwrap_or_default();
+                let barcode = p["barcode"].as_str().unwrap_or_default();
+                let title = p["title"].as_str().unwrap_or_default();
+                let brand = p["brand"].as_str().unwrap_or_default();
+                let compatible_model = p["compatibleModel"].as_str();
+                let category = p["category"].as_str().unwrap_or_default();
+                let price = p["price"].as_f64().unwrap_or(0.0);
+                let wholesale_price = p["wholesalePrice"].as_f64().unwrap_or(0.0);
+                let cost_price = p["costPrice"].as_f64().unwrap_or(0.0);
+                let stock = p["stock"].as_i64().unwrap_or(0);
+                let image_url = p["imageUrl"].as_str();
+                let is_serialized = if p["isSerialized"].as_bool().unwrap_or(false) { 1 } else { 0 };
+                let imei_number = p["imeiNumber"].as_str();
+                let vendor_name = p["vendorName"].as_str();
+                let lead_time_days = p["leadTimeDays"].as_i64().unwrap_or(0);
+                let daily_sales_velocity = p["dailySalesVelocity"].as_f64().unwrap_or(0.0);
+                let reorder_point = p["reorderPoint"].as_i64().unwrap_or(0);
+                let json_payload = serde_json::to_string(p).unwrap_or_default();
+
+                prod_stmt.execute(params![
+                    id, sku, barcode, title, brand, compatible_model, category,
+                    price, wholesale_price, cost_price, stock, image_url,
+                    is_serialized, imei_number, vendor_name, lead_time_days,
+                    daily_sales_velocity, reorder_point, json_payload, now
+                ])?;
+            }
+        }
+
+        // 3. Release restored IMEIs
+        for imei in restored_imeis {
+            tx.execute(
+                "UPDATE imei_records SET sale_transaction_id = NULL, sold_at = NULL WHERE imei = ?1",
+                params![imei],
+            )?;
+        }
+
+        // 4. Update Customer & Loyalty Ledger if customer changed
+        if let Some(cust) = updated_customer {
+            save_customer_internal(&tx, cust)?;
+        }
+
+        // 5. Insert Audit Log
+        if let Some(audit) = audit_entry {
+            let id = audit["id"].as_str().unwrap_or_default();
+            let timestamp = audit["timestamp"].as_str().unwrap_or_default();
+            let user = audit["user"].as_str().unwrap_or("System");
+            let action = audit["action"].as_str().unwrap_or_default();
+            let details = audit["details"].as_str().unwrap_or_default();
+            let requires_pin = if audit["requiresPin"].as_bool().unwrap_or(false) { 1 } else { 0 };
+
+            tx.execute(
+                "INSERT OR REPLACE INTO security_audit_logs (id, timestamp, user, action, details, requires_pin) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, timestamp, user, action, details, requires_pin],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn process_refund_atomic(
+        &self,
+        refund_transaction: &Value,
+        updated_original_transaction: Option<&Value>,
+        restocked_products: &[Value],
+        updated_customer: Option<&Value>,
+        restored_imeis: &[String],
+        audit_entry: Option<&Value>,
+    ) -> Result<()> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+
+        // 1. Insert Refund Transaction Record
+        let txn_id = refund_transaction["id"].as_str().unwrap_or_default();
+        let receipt_number = refund_transaction["receiptNumber"].as_str().unwrap_or_default();
+        let customer_id = refund_transaction["customer"]["id"].as_str();
+        let subtotal = refund_transaction["subtotal"].as_f64().unwrap_or(0.0);
+        let tax = refund_transaction["tax"].as_f64().unwrap_or(0.0);
+        let discount_total = refund_transaction["discountTotal"].as_f64().unwrap_or(0.0);
+        let total = refund_transaction["total"].as_f64().unwrap_or(0.0);
+        let cost_total = refund_transaction["costTotal"].as_f64().unwrap_or(0.0);
+        let profit = refund_transaction["profit"].as_f64().unwrap_or(0.0);
+        let profit_margin = refund_transaction["profitMargin"].as_f64().unwrap_or(0.0);
+        let pricing_tier = refund_transaction["pricingTier"].as_str().unwrap_or("Retail");
+        let payment_method = refund_transaction["paymentMethod"].as_str().unwrap_or("Espèces");
+        let cash_tendered = refund_transaction["cashTendered"].as_f64().unwrap_or(0.0);
+        let change_due = refund_transaction["changeDue"].as_f64().unwrap_or(0.0);
+        let created_at = refund_transaction["createdAt"].as_str().unwrap_or_default();
+        let json_payload = serde_json::to_string(refund_transaction).unwrap_or_default();
+
+        tx.execute(
+            "INSERT OR REPLACE INTO transactions (
+                id, receipt_number, customer_id, subtotal, tax, discount_total,
+                total, cost_total, profit, profit_margin, pricing_tier,
+                payment_method, cash_tendered, change_due, created_at, json_payload
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            params![
+                txn_id, receipt_number, customer_id, subtotal, tax, discount_total,
+                total, cost_total, profit, profit_margin, pricing_tier,
+                payment_method, cash_tendered, change_due, created_at, json_payload
+            ],
+        )?;
+
+        // 2. Update Original Transaction if provided
+        if let Some(orig) = updated_original_transaction {
+            let orig_id = orig["id"].as_str().unwrap_or_default();
+            let orig_json = serde_json::to_string(orig).unwrap_or_default();
+            tx.execute(
+                "UPDATE transactions SET json_payload = ?1 WHERE id = ?2",
+                params![orig_json, orig_id],
+            )?;
+        }
+
+        // 3. Update Restocked Products
+        {
+            let mut prod_stmt = tx.prepare(
+                "INSERT OR REPLACE INTO products (
+                    id, sku, barcode, title, brand, compatible_model, category,
+                    price, wholesale_price, cost_price, stock, image_url,
+                    is_serialized, imei_number, vendor_name, lead_time_days,
+                    daily_sales_velocity, reorder_point, json_payload, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+            )?;
+
+            let now = chrono_now_string();
+            for p in restocked_products {
+                let id = p["id"].as_str().unwrap_or_default();
+                let sku = p["sku"].as_str().unwrap_or_default();
+                let barcode = p["barcode"].as_str().unwrap_or_default();
+                let title = p["title"].as_str().unwrap_or_default();
+                let brand = p["brand"].as_str().unwrap_or_default();
+                let compatible_model = p["compatibleModel"].as_str();
+                let category = p["category"].as_str().unwrap_or_default();
+                let price = p["price"].as_f64().unwrap_or(0.0);
+                let wholesale_price = p["wholesalePrice"].as_f64().unwrap_or(0.0);
+                let cost_price = p["costPrice"].as_f64().unwrap_or(0.0);
+                let stock = p["stock"].as_i64().unwrap_or(0);
+                let image_url = p["imageUrl"].as_str();
+                let is_serialized = if p["isSerialized"].as_bool().unwrap_or(false) { 1 } else { 0 };
+                let imei_number = p["imeiNumber"].as_str();
+                let vendor_name = p["vendorName"].as_str();
+                let lead_time_days = p["leadTimeDays"].as_i64().unwrap_or(0);
+                let daily_sales_velocity = p["dailySalesVelocity"].as_f64().unwrap_or(0.0);
+                let reorder_point = p["reorderPoint"].as_i64().unwrap_or(0);
+                let json_payload = serde_json::to_string(p).unwrap_or_default();
+
+                prod_stmt.execute(params![
+                    id, sku, barcode, title, brand, compatible_model, category,
+                    price, wholesale_price, cost_price, stock, image_url,
+                    is_serialized, imei_number, vendor_name, lead_time_days,
+                    daily_sales_velocity, reorder_point, json_payload, now
+                ])?;
+            }
+        }
+
+        // 4. Release restored IMEIs
+        for imei in restored_imeis {
+            tx.execute(
+                "UPDATE imei_records SET sale_transaction_id = NULL, sold_at = NULL WHERE imei = ?1",
+                params![imei],
+            )?;
+        }
+
+        // 5. Update Customer & Loyalty Ledger
+        if let Some(cust) = updated_customer {
+            save_customer_internal(&tx, cust)?;
+        }
+
+        // 6. Insert Audit Log
+        if let Some(audit) = audit_entry {
+            let id = audit["id"].as_str().unwrap_or_default();
+            let timestamp = audit["timestamp"].as_str().unwrap_or_default();
+            let user = audit["user"].as_str().unwrap_or("System");
+            let action = audit["action"].as_str().unwrap_or_default();
+            let details = audit["details"].as_str().unwrap_or_default();
+            let requires_pin = if audit["requiresPin"].as_bool().unwrap_or(false) { 1 } else { 0 };
+
+            tx.execute(
+                "INSERT OR REPLACE INTO security_audit_logs (id, timestamp, user, action, details, requires_pin) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id, timestamp, user, action, details, requires_pin],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
     // ── REPAIR ORDERS ──
 
     pub fn save_repair_order(&self, repair: &Value) -> Result<()> {

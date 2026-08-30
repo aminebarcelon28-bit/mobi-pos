@@ -17,6 +17,7 @@ import {
   Wrench,
   RefreshCw,
   Package,
+  RotateCcw,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { calculateStockAlerts } from '../utils/alertEngine';
@@ -247,6 +248,14 @@ export const Header: React.FC = () => {
             title="Journal d'Audit de Sécurité RBAC"
           >
             <ShieldAlert className="w-4 h-4 text-amber-500" />
+          </button>
+
+          <button
+            onClick={() => openModal('refund')}
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-purple-400 hover:text-purple-300 transition cursor-pointer"
+            title="Retours Marchandise & Remboursements (Avoirs)"
+          >
+            <RotateCcw className="w-4 h-4 text-purple-400" />
           </button>
 
           <button

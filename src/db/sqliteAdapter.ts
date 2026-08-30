@@ -259,6 +259,85 @@ export const sqliteAdapter = {
     return await dexieDb.transactions.toArray();
   },
 
+  async voidTransactionAtomic(
+    transactionId: string,
+    voidedTransaction: SaleTransaction,
+    restoredProducts: Product[],
+    updatedCustomer?: Customer,
+    restoredImeis: string[] = [],
+    auditEntry?: SecurityAuditLogEntry
+  ): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        await invoke('sqlite_void_transaction_atomic', {
+          transactionId,
+          voidedTransaction,
+          restoredProducts,
+          updatedCustomer: updatedCustomer || null,
+          restoredImeis,
+          auditEntry: auditEntry || null,
+        });
+      } catch (e) {
+        console.error('SQLite void transaction error:', e);
+      }
+    }
+
+    // Mirror to Dexie
+    await dexieDb.transaction('rw', [dexieDb.transactions, dexieDb.products, dexieDb.customers, dexieDb.securityAuditLogs], async () => {
+      await dexieDb.transactions.put(voidedTransaction);
+      if (restoredProducts.length > 0) {
+        await dexieDb.products.bulkPut(restoredProducts);
+      }
+      if (updatedCustomer) {
+        await dexieDb.customers.put(updatedCustomer);
+      }
+      if (auditEntry) {
+        await dexieDb.securityAuditLogs.put(auditEntry);
+      }
+    });
+  },
+
+  async processRefundAtomic(
+    refundTransaction: SaleTransaction,
+    updatedOriginalTransaction?: SaleTransaction,
+    restockedProducts: Product[] = [],
+    updatedCustomer?: Customer,
+    restoredImeis: string[] = [],
+    auditEntry?: SecurityAuditLogEntry
+  ): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        await invoke('sqlite_process_refund_atomic', {
+          refundTransaction,
+          updatedOriginalTransaction: updatedOriginalTransaction || null,
+          restockedProducts,
+          updatedCustomer: updatedCustomer || null,
+          restoredImeis,
+          auditEntry: auditEntry || null,
+        });
+      } catch (e) {
+        console.error('SQLite process refund error:', e);
+      }
+    }
+
+    // Mirror to Dexie
+    await dexieDb.transaction('rw', [dexieDb.transactions, dexieDb.products, dexieDb.customers, dexieDb.securityAuditLogs], async () => {
+      await dexieDb.transactions.put(refundTransaction);
+      if (updatedOriginalTransaction) {
+        await dexieDb.transactions.put(updatedOriginalTransaction);
+      }
+      if (restockedProducts.length > 0) {
+        await dexieDb.products.bulkPut(restockedProducts);
+      }
+      if (updatedCustomer) {
+        await dexieDb.customers.put(updatedCustomer);
+      }
+      if (auditEntry) {
+        await dexieDb.securityAuditLogs.put(auditEntry);
+      }
+    });
+  },
+
   // ── REPAIRS ──
 
   async saveRepairOrder(repair: RepairOrder): Promise<void> {

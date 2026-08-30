@@ -37,6 +37,8 @@ fn main() {
             commands::sqlite_get_all_customers,
             commands::sqlite_delete_customer,
             commands::sqlite_process_sale_transaction_atomic,
+            commands::sqlite_void_transaction_atomic,
+            commands::sqlite_process_refund_atomic,
             commands::sqlite_get_all_transactions,
             commands::sqlite_save_repair_order,
             commands::sqlite_get_all_repair_orders,

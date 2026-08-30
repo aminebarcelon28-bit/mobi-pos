@@ -45,11 +45,21 @@ export const ReceiptModal: React.FC = () => {
         {/* Header */}
         <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+            <div
+              className={`w-7 h-7 rounded-full flex items-center justify-center ${
+                lastTransaction.isRefund
+                  ? 'bg-purple-500/20 text-purple-400'
+                  : 'bg-emerald-500/20 text-emerald-400'
+              }`}
+            >
               <Check className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-pos-text">Paiement Enregistré avec Succès</h2>
+              <h2 className="text-sm font-bold text-pos-text">
+                {lastTransaction.isRefund
+                  ? "Avoir / Remboursement Émis avec Succès"
+                  : "Paiement Enregistré avec Succès"}
+              </h2>
               <span className="text-[9px] text-emerald-400 font-bold flex items-center gap-1 mt-0.5">
                 <Sparkles className="w-3 h-3" /> Routé vers: {targetPrinter.printerName}
               </span>
@@ -80,20 +90,48 @@ export const ReceiptModal: React.FC = () => {
               <h1 className="font-extrabold text-sm tracking-wider uppercase">{receiptSettings.storeName}</h1>
               <p className="text-[10px] text-gray-600">{receiptSettings.address}</p>
               <p className="text-[10px] text-gray-600">Tél: {receiptSettings.phone}</p>
-              <p className="text-[9px] text-gray-500 mt-1">N° Ticket: {lastTransaction.receiptNumber}</p>
-              <p className="text-[9px] text-gray-500">{lastTransaction.createdAt}</p>
+              
+              {lastTransaction.isRefund ? (
+                <div className="mt-2 py-1 px-2 bg-gray-100 border border-gray-300 rounded text-center">
+                  <p className="font-extrabold text-[11px] uppercase tracking-wider text-black">
+                    *** BON D'AVOIR / REMBOURSEMENT ***
+                  </p>
+                  <p className="text-[9px] font-bold text-gray-700">N° Avoir: {lastTransaction.receiptNumber}</p>
+                  {lastTransaction.originalReceiptNumber && (
+                    <p className="text-[8px] text-gray-600">Sur Ticket Vente: #{lastTransaction.originalReceiptNumber}</p>
+                  )}
+                  {lastTransaction.refundReason && (
+                    <p className="text-[8px] italic text-gray-600 mt-0.5">Motif: {lastTransaction.refundReason}</p>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <p className="text-[9px] text-gray-500 mt-1">N° Ticket: {lastTransaction.receiptNumber}</p>
+                </>
+              )}
+              <p className="text-[9px] text-gray-500 mt-0.5">{lastTransaction.createdAt}</p>
             </div>
 
             {/* Customer Info */}
             {lastTransaction.customer && (
               <div className="py-2 border-b border-dashed border-gray-400 text-[10px]">
                 <p><span className="font-bold">Client:</span> {lastTransaction.customer.name}</p>
-                <p><span className="font-bold">Appareil:</span> {lastTransaction.customer.registeredDevice}</p>
+                {lastTransaction.customer.registeredDevice && (
+                  <p><span className="font-bold">Appareil:</span> {lastTransaction.customer.registeredDevice}</p>
+                )}
+                {lastTransaction.isRefund && lastTransaction.paymentMethod === 'Avoir Client' && (
+                  <p className="font-bold text-purple-800 mt-0.5">
+                    Solde Avoir Client Total: {formatDZD(lastTransaction.customer.storeCredit)}
+                  </p>
+                )}
               </div>
             )}
 
             {/* Items Table */}
             <div className="py-3 space-y-2 border-b border-dashed border-gray-400">
+              <p className="text-[9px] font-bold uppercase text-gray-600">
+                {lastTransaction.isRefund ? "Articles Retournés :" : "Articles Achetés :"}
+              </p>
               {lastTransaction.items.map((item) => {
                 const unitPrice = item.appliedPrice || item.product.price;
                 const grossLinePrice = unitPrice * item.quantity;
@@ -143,30 +181,40 @@ export const ReceiptModal: React.FC = () => {
               )}
 
               <div className="flex justify-between font-extrabold text-sm pt-1 border-t border-black">
-                <span>TOTAL NET A PAYER:</span>
-                <span>{formatDZD(lastTransaction.total)}</span>
+                <span>{lastTransaction.isRefund ? "TOTAL AVOIR / REMBOURSÉ:" : "TOTAL NET A PAYER:"}</span>
+                <span className={lastTransaction.isRefund ? "text-purple-900" : ""}>
+                  {formatDZD(lastTransaction.total)}
+                </span>
               </div>
 
               <div className="pt-2 text-[10px] border-t border-dashed border-gray-400 space-y-0.5">
                 <div className="flex justify-between">
-                  <span>Mode de Paiement:</span>
+                  <span>{lastTransaction.isRefund ? "Mode de Remboursement:" : "Mode de Paiement:"}</span>
                   <span className="font-bold">{lastTransaction.paymentMethod || 'Espèces (DZD)'}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span>Montant Reçu:</span>
-                  <span>{formatDZD(lastTransaction.cashTendered)}</span>
-                </div>
-                <div className="flex justify-between font-bold">
-                  <span>Rendu Monnaie:</span>
-                  <span>{formatDZD(lastTransaction.changeDue)}</span>
-                </div>
+                {!lastTransaction.isRefund && (
+                  <>
+                    <div className="flex justify-between">
+                      <span>Montant Reçu:</span>
+                      <span>{formatDZD(lastTransaction.cashTendered)}</span>
+                    </div>
+                    <div className="flex justify-between font-bold">
+                      <span>Rendu Monnaie:</span>
+                      <span>{formatDZD(lastTransaction.changeDue)}</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
             {/* Barcode Footer */}
             <div className="text-center pt-3 border-t border-dashed border-gray-400 flex flex-col items-center">
               <canvas ref={barcodeCanvasRef} className="h-10 my-2 mix-blend-multiply max-w-[90%]" />
-              <p className="text-[8px] text-gray-500">{receiptSettings.customFooterMsg}</p>
+              <p className="text-[8px] text-gray-500">
+                {lastTransaction.isRefund
+                  ? "Ce bon d'avoir est valable en magasin sur présentation de ce document."
+                  : receiptSettings.customFooterMsg}
+              </p>
             </div>
           </div>
         </div>

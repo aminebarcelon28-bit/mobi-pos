@@ -50,6 +50,9 @@ export interface Product {
   leadTimeDays: number;
   dailySalesVelocity: number;
   reorderPoint: number;
+  warrantyMonths?: number;
+  shelfLocation?: string;
+  minPrice?: number;
 }
 
 export type ProductInput = Omit<Product, 'id'> & { id?: string };
@@ -169,15 +172,37 @@ export interface HeldSale {
 
 export type PaymentMethodType = 'Espèces' | 'Avoir Client' | 'BaridiMob' | 'Chèque';
 
+export type TransactionStatus = 'COMPLETED' | 'VOIDED' | 'REFUNDED' | 'PARTIALLY_REFUNDED';
+
 export interface PaymentTender {
   method: PaymentMethodType;
   amount: number;
   reference?: string;
 }
 
+export interface RefundItem {
+  productId: string;
+  title: string;
+  sku: string;
+  unitPrice: number;
+  quantity: number;
+  totalRefundAmount: number;
+  restock: boolean;
+  imeiNumber?: string;
+}
+
+export interface ProcessRefundPayload {
+  originalTransaction: SaleTransaction;
+  refundItems: RefundItem[];
+  refundMethod: PaymentMethodType;
+  refundReason: string;
+  cashierName?: string;
+}
+
 export interface SaleTransaction {
   id: string;
   receiptNumber: string;
+  status?: TransactionStatus;
   customer: Customer | null;
   items: CartItem[];
   subtotal: number;
@@ -192,6 +217,16 @@ export interface SaleTransaction {
   cashTendered: number;
   changeDue: number;
   createdAt: string;
+  cashierName?: string;
+  voidReason?: string;
+  voidedAt?: string;
+  voidedBy?: string;
+  isRefund?: boolean;
+  originalReceiptNumber?: string;
+  originalTransactionId?: string;
+  refundReason?: string;
+  refundMethod?: PaymentMethodType;
+  refundedItems?: RefundItem[];
 }
 
 export interface StockAlert {
