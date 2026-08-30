@@ -61,8 +61,6 @@ export const ReportsModal: React.FC = () => {
   const [exportSuccess, setExportSuccess] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
 
-  if (activeModal !== 'reports') return null;
-
   const handleVerifyPin = (e: React.FormEvent) => {
     e.preventDefault();
     if (verifyManagerPin(pinInput)) {
@@ -273,6 +271,8 @@ export const ReportsModal: React.FC = () => {
       setTimeout(() => setCopySuccess(false), 3000);
     });
   };
+
+  if (activeModal !== 'reports') return null;
 
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 select-none">
