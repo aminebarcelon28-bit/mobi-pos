@@ -10,7 +10,7 @@ export const HotkeyGuideModal: React.FC = () => {
   const hotkeys = [
     { key: 'F1', label: 'Nouveau Panier' },
     { key: 'F2', label: 'Recherche Produit' },
-    { key: 'F3', label: 'Encaisser / Paiement' },
+    { key: 'F3', label: 'Encaisser (Espèces)' },
     { key: 'F4', label: 'Reprendre Ventes en Attente' },
     { key: 'F5', label: 'Fichier Clients' },
     { key: 'F6', label: 'Appliquer Remise' },

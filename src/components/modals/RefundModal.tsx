@@ -36,7 +36,7 @@ export const RefundModal: React.FC = () => {
   const [selectedItemIds, setSelectedItemIds] = useState<Record<string, boolean>>({});
   const [refundQuantities, setRefundQuantities] = useState<Record<string, number>>({});
   const [restockMap, setRestockMap] = useState<Record<string, boolean>>({});
-  const [refundMethod, setRefundMethod] = useState<PaymentMethodType>('Avoir Client');
+  const [refundMethod, setRefundMethod] = useState<PaymentMethodType>('Espèces');
   const [refundReason, setRefundReason] = useState('Erreur de choix client / Échange');
   const [customReason, setCustomReason] = useState('');
   const [managerPin, setManagerPin] = useState('');
@@ -435,22 +435,6 @@ export const RefundModal: React.FC = () => {
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
-                          onClick={() => setRefundMethod('Avoir Client')}
-                          className={`p-2.5 rounded-xl border text-left flex items-center gap-2 transition cursor-pointer ${
-                            refundMethod === 'Avoir Client'
-                              ? 'bg-purple-500/20 border-purple-500/50 text-purple-300 shadow-sm'
-                              : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
-                          }`}
-                        >
-                          <Wallet className="w-4 h-4 text-purple-400" />
-                          <div>
-                            <p className="text-xs font-bold">Avoir Client</p>
-                            <p className="text-[9px] text-pos-muted">Crédit magasin (Recommandé)</p>
-                          </div>
-                        </button>
-
-                        <button
-                          type="button"
                           onClick={() => setRefundMethod('Espèces')}
                           className={`p-2.5 rounded-xl border text-left flex items-center gap-2 transition cursor-pointer ${
                             refundMethod === 'Espèces'
@@ -461,39 +445,23 @@ export const RefundModal: React.FC = () => {
                           <Coins className="w-4 h-4 text-emerald-400" />
                           <div>
                             <p className="text-xs font-bold">Espèces (Cash)</p>
-                            <p className="text-[9px] text-pos-muted">Sortie tiroir-caisse</p>
+                            <p className="text-[9px] text-pos-muted">Sortie tiroir-caisse directe</p>
                           </div>
                         </button>
 
                         <button
                           type="button"
-                          onClick={() => setRefundMethod('BaridiMob')}
+                          onClick={() => setRefundMethod('Avoir Client')}
                           className={`p-2.5 rounded-xl border text-left flex items-center gap-2 transition cursor-pointer ${
-                            refundMethod === 'BaridiMob'
-                              ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300 shadow-sm'
+                            refundMethod === 'Avoir Client'
+                              ? 'bg-purple-500/20 border-purple-500/50 text-purple-300 shadow-sm'
                               : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
                           }`}
                         >
-                          <Receipt className="w-4 h-4 text-cyan-400" />
+                          <Wallet className="w-4 h-4 text-purple-400" />
                           <div>
-                            <p className="text-xs font-bold">BaridiMob</p>
-                            <p className="text-[9px] text-pos-muted">Virement électronique</p>
-                          </div>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setRefundMethod('Chèque')}
-                          className={`p-2.5 rounded-xl border text-left flex items-center gap-2 transition cursor-pointer ${
-                            refundMethod === 'Chèque'
-                              ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 shadow-sm'
-                              : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
-                          }`}
-                        >
-                          <Receipt className="w-4 h-4 text-amber-400" />
-                          <div>
-                            <p className="text-xs font-bold">Chèque</p>
-                            <p className="text-[9px] text-pos-muted">Remboursement différé</p>
+                            <p className="text-xs font-bold">Avoir Magasin</p>
+                            <p className="text-[9px] text-pos-muted">Bon d'achat / Échange</p>
                           </div>
                         </button>
                       </div>

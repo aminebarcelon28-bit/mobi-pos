@@ -577,10 +577,8 @@ export const ReportsModal: React.FC = () => {
                           onChange={(e) => setPaymentFilter(e.target.value)}
                           className="bg-pos-bg border border-pos-border text-pos-text text-xs font-bold rounded-xl px-3 py-2 focus:border-emerald-400 focus:outline-none cursor-pointer"
                         >
-                          <option value="Tous">Tous les modes</option>
-                          <option value="Espèces">Espèces</option>
-                          <option value="BaridiMob">BaridiMob</option>
-                          <option value="Chèque">Chèque</option>
+                          <option value="Tous">Tous les règlements</option>
+                          <option value="Espèces">Espèces (Cash)</option>
                           <option value="Avoir Client">Avoir Client</option>
                         </select>
                       </div>
@@ -1336,9 +1334,9 @@ export const ReportsModal: React.FC = () => {
                       onChange={(e) => setExpensePaymentMethod(e.target.value as PaymentMethodType)}
                       className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:outline-none"
                     >
-                      {['Espèces', 'BaridiMob', 'Chèque', 'Autre'].map((m) => (
+                      {['Espèces', 'Autre'].map((m) => (
                         <option key={m} value={m}>
-                          {m}
+                          {m === 'Espèces' ? 'Espèces (Tiroir-Caisse)' : m}
                         </option>
                       ))}
                     </select>

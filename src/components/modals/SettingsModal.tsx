@@ -1425,7 +1425,7 @@ export const SettingsModal: React.FC = () => {
                       <div className="flex items-center gap-2">
                         <h3 className="text-base font-black text-pos-text tracking-wide">MobiPOS Pro</h3>
                         <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 border border-purple-500/40 text-purple-300 font-mono font-black text-xs">
-                          v1.4.1
+                          v1.4.2
                         </span>
                         <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">
                           Canal Stable
@@ -1455,7 +1455,7 @@ export const SettingsModal: React.FC = () => {
                     {updater.checkStatusMessage ||
                       (updater.isUpdateAvailable
                         ? `🚀 Version ${updater.updateInfo?.version} disponible au téléchargement !`
-                        : '✅ Votre système est synchronisé avec la version de production la plus récente (v1.4.1).')}
+                        : '✅ Votre système est synchronisé avec la version de production la plus récente (v1.4.2).')}
                   </p>
                 </div>
               </div>

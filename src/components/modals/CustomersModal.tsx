@@ -140,7 +140,7 @@ export const CustomersModal: React.FC = () => {
     const storeName = usePosStore.getState().receiptSettings.storeName || 'MOBI ACCESSORIES';
     const storePhone = usePosStore.getState().receiptSettings.phone || '';
     const debtAmount = c.currentDebt || 0;
-    return `Salam ${c.name} !\n\nRappel amical de votre boutique *${storeName}* :\n\n📌 *Solde Dette Actuelle :* ${formatDZD(debtAmount)}\n\nVous pouvez passer en boutique ou régler par BaridiMob. Merci pour votre fidélité !\n\n📞 Contact : ${storePhone}`;
+    return `Salam ${c.name} !\n\nRappel amical de votre boutique *${storeName}* :\n\n📌 *Solde Dette Actuelle :* ${formatDZD(debtAmount)}\n\nVous pouvez passer au magasin pour régler votre solde en espèces. Merci pour votre fidélité !\n\n📞 Contact : ${storePhone}`;
   };
 
   const resetForm = () => {
@@ -1059,21 +1059,11 @@ export const CustomersModal: React.FC = () => {
                   <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
                     Mode de Règlement
                   </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(['Espèces', 'BaridiMob', 'Chèque'] as PaymentMethodType[]).map((method) => (
-                      <button
-                        key={method}
-                        type="button"
-                        onClick={() => setDebtPaymentMethod(method)}
-                        className={`py-2 rounded-xl text-xs font-bold border transition cursor-pointer ${
-                          debtPaymentMethod === method
-                            ? 'bg-emerald-500 text-slate-950 border-emerald-500 font-black'
-                            : 'bg-pos-card border-pos-border text-pos-muted hover:text-pos-text'
-                        }`}
-                      >
-                        {method}
-                      </button>
-                    ))}
+                  <div className="p-3 rounded-xl bg-pos-card border border-pos-border flex items-center justify-between text-xs">
+                    <span className="font-bold text-pos-text">Espèces (Tiroir-Caisse)</span>
+                    <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                      Règlement Comptant
+                    </span>
                   </div>
                 </div>
 

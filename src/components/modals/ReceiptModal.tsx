@@ -189,13 +189,13 @@ export const ReceiptModal: React.FC = () => {
 
               <div className="pt-2 text-[10px] border-t border-dashed border-gray-400 space-y-0.5">
                 <div className="flex justify-between">
-                  <span>{lastTransaction.isRefund ? "Mode de Remboursement:" : "Mode de Paiement:"}</span>
-                  <span className="font-bold">{lastTransaction.paymentMethod || 'Espèces (DZD)'}</span>
+                  <span>{lastTransaction.isRefund ? "Mode de Remboursement:" : "Mode de Règlement:"}</span>
+                  <span className="font-bold">{lastTransaction.paymentMethod || 'Espèces (Comptant)'}</span>
                 </div>
                 {!lastTransaction.isRefund && (
                   <>
                     <div className="flex justify-between">
-                      <span>Montant Reçu:</span>
+                      <span>Espèces Reçues:</span>
                       <span>{formatDZD(lastTransaction.cashTendered)}</span>
                     </div>
                     <div className="flex justify-between font-bold">
@@ -207,9 +207,12 @@ export const ReceiptModal: React.FC = () => {
               </div>
             </div>
 
-            {/* Barcode Footer */}
-            <div className="text-center pt-3 border-t border-dashed border-gray-400 flex flex-col items-center">
-              <canvas ref={barcodeCanvasRef} className="h-10 my-2 mix-blend-multiply max-w-[90%]" />
+            {/* Terms & Barcode Footer */}
+            <div className="text-center pt-2 border-t border-dashed border-gray-400 flex flex-col items-center space-y-1">
+              <p className="text-[8px] font-bold uppercase tracking-wider text-gray-700">
+                • Paiement Comptant en Espèces Uniquement •
+              </p>
+              <canvas ref={barcodeCanvasRef} className="h-10 my-1 mix-blend-multiply max-w-[90%]" />
               <p className="text-[8px] text-gray-500">
                 {lastTransaction.isRefund
                   ? "Ce bon d'avoir est valable en magasin sur présentation de ce document."

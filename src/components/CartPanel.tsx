@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Trash2, Plus, Minus, Tag, CreditCard, Percent, Zap, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
+import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
@@ -265,34 +265,6 @@ export const CartPanel: React.FC = () => {
           <span className="text-xl font-black text-emerald-500 tracking-tight">{formatDZD(total)}</span>
         </div>
 
-        {/* Store Credit Payment Fast Action Banner */}
-        {currentCustomer && currentCustomer.storeCredit > 0 && total > 0 && (
-          <div className="bg-emerald-950/40 border border-emerald-500/40 rounded-lg p-2 flex items-center justify-between text-xs shadow-sm">
-            <div className="flex items-center gap-1.5 truncate">
-              <CreditCard className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span className="text-[11px] text-emerald-300 font-bold truncate">
-                Avoir: {formatDZD(currentCustomer.storeCredit)}
-              </span>
-            </div>
-            <button
-              onClick={() => {
-                const creditToApply = Math.min(total, currentCustomer.storeCredit);
-                const remainingCash = Math.max(0, total - creditToApply);
-                const tendersList: Array<{ method: 'Espèces' | 'Avoir Client' | 'BaridiMob' | 'Chèque'; amount: number }> = [
-                  { method: 'Avoir Client', amount: creditToApply }
-                ];
-                if (remainingCash > 0) {
-                  tendersList.push({ method: 'Espèces', amount: remainingCash });
-                }
-                processPayment(tendersList);
-              }}
-              className="px-2 py-1 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-[10px] rounded-md transition shrink-0 cursor-pointer"
-            >
-              ⚡ Payer par Avoir
-            </button>
-          </div>
-        )}
-
         {/* Compact Quick Cash Denominations (1-Click Change Calculator) */}
         {cart.length > 0 && (
           <div className="space-y-1">
@@ -307,7 +279,7 @@ export const CartPanel: React.FC = () => {
                     key={bill}
                     disabled={isUnder}
                     onClick={() => handleQuickCashWithBill(bill)}
-                    className={`py-1 px-1 rounded-lg text-[9.5px] font-extrabold border transition cursor-pointer flex flex-col items-center justify-center ${
+                    className={`py-1.5 px-1 rounded-lg text-[9.5px] font-extrabold border transition cursor-pointer flex flex-col items-center justify-center font-mono ${
                       isUnder
                         ? 'opacity-30 bg-pos-bg border-pos-border text-pos-muted cursor-not-allowed'
                         : 'bg-pos-card hover:bg-emerald-500/20 border-pos-border hover:border-emerald-500/50 text-pos-text hover:text-emerald-300'
@@ -325,38 +297,26 @@ export const CartPanel: React.FC = () => {
           </div>
         )}
 
-        {/* Compact Fast Action Payment Buttons (Side-by-Side) */}
-        <div className="grid grid-cols-2 gap-2 pt-0.5">
-          {/* First Payment: Encaissement Rapide & Rendu (F3) */}
+        {/* Primary Cash Payment Button */}
+        <div className="pt-0.5">
           <button
             onClick={() => openModal('payment')}
             disabled={cart.length === 0}
-            className="glow-btn bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-40 text-white rounded-xl py-2 px-2.5 flex items-center justify-between shadow-md shadow-emerald-600/20 group cursor-pointer transition"
-            title="Encaissement Rapide & Calcul Rendu - F3"
+            className="w-full glow-btn bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-40 text-white rounded-xl py-3 px-3 flex items-center justify-between shadow-md shadow-emerald-600/25 group cursor-pointer transition"
+            title="Encaissement en Espèces & Calcul Rendu de Monnaie - F3"
           >
-            <div className="flex items-center gap-1.5 min-w-0">
-              <Zap className="w-4 h-4 text-emerald-200 shrink-0" />
-              <span className="text-xs font-black tracking-wide truncate">Encaisser</span>
+            <div className="flex items-center gap-2 min-w-0">
+              <Banknote className="w-5 h-5 text-emerald-200 shrink-0" />
+              <span className="text-xs font-black tracking-wide truncate">Encaisser en Espèces</span>
             </div>
-            <span className="hotkey-badge bg-black/50 text-emerald-200 border-white/20 px-1.5 py-0.5 text-[10px] font-bold shrink-0">
-              F3
-            </span>
-          </button>
-
-          {/* Advanced Payment: Multi-Tender Modal */}
-          <button
-            onClick={() => openModal('payment')}
-            disabled={cart.length === 0}
-            className="py-2 px-2.5 bg-pos-card hover:bg-pos-hover border border-pos-border hover:border-emerald-500/40 text-pos-text disabled:opacity-40 rounded-xl text-xs font-bold flex items-center justify-between transition cursor-pointer"
-            title="Paiement Avancé Multi-Moyens (Avoir, BaridiMob, Chèque) - Shift+F3"
-          >
-            <div className="flex items-center gap-1.5 min-w-0">
-              <CreditCard className="w-4 h-4 text-pos-muted shrink-0" />
-              <span className="text-xs font-bold truncate">Avancé</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[9px] text-emerald-200 font-bold uppercase tracking-wider bg-black/30 px-1.5 py-0.5 rounded border border-white/10">
+                Cash Only
+              </span>
+              <span className="hotkey-badge bg-black/50 text-emerald-200 border-white/20 px-2 py-0.5 text-[10px] font-black shrink-0">
+                F3
+              </span>
             </div>
-            <span className="text-[10px] text-pos-muted font-mono bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border shrink-0">
-              ⇧F3
-            </span>
           </button>
         </div>
       </div>

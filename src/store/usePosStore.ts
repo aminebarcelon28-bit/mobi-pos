@@ -268,7 +268,7 @@ export const usePosStore = create<PosState>((set, get) => ({
     phone: '021 65 43 21 / 0550 00 11 22',
     email: 'contact@mobi-accessories.dz',
     customHeaderMsg: 'Bienvenue chez MOBI ACCESSORIES',
-    customFooterMsg: 'Les articles achetés ne sont ni repris ni échangés sans ticket de caisse. Garantie 12 mois SAV.',
+    customFooterMsg: 'Paiement comptant en espèces uniquement. Les articles ne sont ni repris ni échangés sans ticket de caisse. Garantie 12 mois SAV.',
     showBarcode: true,
     autoPrintEnabled: true,
     printerRouting: {
