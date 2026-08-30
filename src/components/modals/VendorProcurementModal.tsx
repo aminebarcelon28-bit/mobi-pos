@@ -31,6 +31,7 @@ import { calculateStockAlerts } from '../../utils/alertEngine';
 import { formatDZD } from '../../types/pos';
 import type { Product, StockAlert } from '../../types/pos';
 import { useToast } from '../ui/Toast';
+import { buildWhatsAppUrl } from '../../utils/phoneUtils';
 
 export const VendorProcurementModal: React.FC = () => {
   const {
@@ -320,9 +321,8 @@ export const VendorProcurementModal: React.FC = () => {
   };
 
   const handleOpenWhatsAppWeb = (vendorName: string, vendorAlerts: StockAlert[], phone: string) => {
-    const cleanPhone = phone.replace(/[^0-9]/g, '');
-    const text = encodeURIComponent(generateWhatsAppMessage(vendorName, vendorAlerts));
-    const url = `https://wa.me/${cleanPhone}?text=${text}`;
+    const text = generateWhatsAppMessage(vendorName, vendorAlerts);
+    const url = buildWhatsAppUrl(phone, text);
     window.open(url, '_blank');
   };
 

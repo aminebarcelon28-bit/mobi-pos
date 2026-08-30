@@ -432,6 +432,12 @@ export const ProductEditorModal: React.FC = () => {
       return;
     }
 
+    if (formData.costPrice && formData.price < formData.costPrice) {
+      if (!window.confirm(`⚠️ Attention : Le prix de vente (${formData.price} DA) est inférieur au prix d'achat coûtant (${formData.costPrice} DA). Confirmez-vous la vente à perte ?`)) {
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     const res = await saveProduct(formData);
     setIsSubmitting(false);

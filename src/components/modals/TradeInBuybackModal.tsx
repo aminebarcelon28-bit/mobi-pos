@@ -13,6 +13,7 @@ import {
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import type { BrandName, ConditionGrade, TradeInItem } from '../../types/pos';
+import { printCoordinator } from '../../utils/printCoordinator';
 
 const DEVICE_PRESETS = [
   { model: 'iPhone 15 Pro Max', brand: 'Apple' as BrandName },
@@ -32,10 +33,11 @@ const CONDITION_GRADES: { grade: ConditionGrade; desc: string; color: string }[]
 ];
 
 export const TradeInBuybackModal: React.FC = () => {
-  const { activeModal, closeModal, processTradeIn, tradeIns, customers } = usePosStore();
+  const { activeModal, closeModal, processTradeIn, tradeIns, customers, receiptSettings } = usePosStore();
 
   const [activeTab, setActiveTab] = useState<'Nouvelle' | 'Historique'>('Nouvelle');
   const [successMsg, setSuccessMsg] = useState('');
+  const [printingTrade, setPrintingTrade] = useState<TradeInItem | null>(null);
 
   // History Search
   const [historySearch, setHistorySearch] = useState('');
@@ -112,8 +114,8 @@ export const TradeInBuybackModal: React.FC = () => {
   };
 
   const handlePrintContract = (trade: TradeInItem) => {
-    console.log(`Impression Attestation de Cession Trade-In: ${trade.imei}`);
-    window.print();
+    setPrintingTrade(trade);
+    printCoordinator.printTradeInVoucher(50);
   };
 
   // Filtered History
@@ -469,6 +471,69 @@ export const TradeInBuybackModal: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* Dedicated A4 Trade-In Cession Contract Print Template */}
+        {printingTrade && (
+          <div className="print-tradein-target hidden print:block bg-white text-black p-8 font-sans text-xs">
+            {/* Header */}
+            <div className="flex justify-between items-start border-b-2 border-black pb-4 mb-6">
+              <div>
+                <h1 className="text-xl font-black uppercase">{receiptSettings.storeName || 'MOBI ACCESSORIES'}</h1>
+                <p className="text-gray-600 text-xs">Département Achat & Reprise d'Occasion</p>
+                <p className="text-gray-600 text-xs">Tél: {receiptSettings.phone}</p>
+              </div>
+              <div className="text-right bg-gray-100 p-3 rounded border border-gray-300">
+                <p className="text-xs font-black uppercase text-black">ATTESTATION OFFICIELLE DE CESSION</p>
+                <p className="text-xs font-bold text-gray-900 mt-1">Réf: {printingTrade.id}</p>
+                <p className="text-[10px] text-gray-600">Date: {printingTrade.createdAt}</p>
+              </div>
+            </div>
+
+            {/* Seller & Device Details */}
+            <div className="grid grid-cols-2 gap-4 bg-gray-50 border border-gray-200 p-4 rounded mb-6">
+              <div>
+                <p className="text-[10px] font-bold text-gray-500 uppercase">Cédant / Propriétaire Vendeur :</p>
+                <p className="font-bold text-sm text-black">{printingTrade.customerName}</p>
+                <p className="text-xs text-gray-700 mt-1">Règlement : {printingTrade.creditToWallet ? 'Crédit Portefeuille (Wallet)' : 'Espèces (Comptant)'}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-gray-500 uppercase">Appareil Vendu & Identifiants :</p>
+                <p className="font-bold text-sm text-black">{printingTrade.deviceModel} ({printingTrade.brand})</p>
+                <p className="text-xs font-mono text-emerald-700 font-bold mt-1">N° IMEI : {printingTrade.imei}</p>
+                <p className="text-[10px] text-gray-600">État : {printingTrade.conditionGrade}</p>
+              </div>
+            </div>
+
+            {/* Financial Value */}
+            <div className="bg-gray-100 border border-gray-300 p-4 rounded mb-6 flex justify-between items-center font-mono">
+              <div>
+                <span className="text-xs font-bold uppercase text-gray-600">Montant Net de Reprise / Achat :</span>
+              </div>
+              <div>
+                <span className="text-xl font-black text-black">{formatDZD(printingTrade.buybackValue)}</span>
+              </div>
+            </div>
+
+            {/* Legal Cession Clauses */}
+            <div className="border border-gray-300 p-3 rounded text-[9px] text-gray-600 space-y-1.5 mb-8">
+              <p>1. Le cédant certifie sur l'honneur être le propriétaire légitime et exclusif de l'appareil désigné ci-dessus.</p>
+              <p>2. L'appareil est cédé libre de tout gage, compte iCloud/Google verrouillé ou déclaration de vol.</p>
+              <p>3. La transaction est ferme et irrévocable dès signature et versement du montant convenu.</p>
+            </div>
+
+            {/* Signatures Area */}
+            <div className="grid grid-cols-2 gap-8 pt-6 border-t border-gray-400 text-center">
+              <div>
+                <p className="text-xs font-bold uppercase text-gray-700">Signature du Cédant (Précédée de "Lu et approuvé") :</p>
+                <div className="h-16 border-b border-gray-300 mt-2" />
+              </div>
+              <div>
+                <p className="text-xs font-bold uppercase text-gray-700">Cachet & Signature MOBI ACCESSORIES :</p>
+                <div className="h-16 border-b border-gray-300 mt-2" />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

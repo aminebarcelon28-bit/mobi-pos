@@ -5,6 +5,7 @@ import { formatDZD } from '../../types/pos';
 import type { CategoryType } from '../../types/pos';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
 import { resolvePrinterForDocument } from '../../utils/printerRoutingEngine';
+import { printCoordinator } from '../../utils/printCoordinator';
 
 type LabelSize = '50x25' | '60x40' | '100x50';
 
@@ -82,7 +83,10 @@ export const LabelPrinterModal: React.FC = () => {
   if (activeModal !== 'label_printer') return null;
 
   const handlePrintLabels = () => {
-    window.print();
+    if (!selectedProduct) return;
+    const safeQty = Math.max(1, Math.min(500, isNaN(labelQuantity) ? 1 : labelQuantity));
+    if (safeQty !== labelQuantity) setLabelQuantity(safeQty);
+    printCoordinator.printLabels(40);
   };
 
   const getLabelDimensions = () => {
@@ -332,7 +336,7 @@ export const LabelPrinterModal: React.FC = () => {
               </span>
 
               {selectedProduct ? (
-                <div data-printable="true" className={`printable-area print:w-full bg-white text-black shadow-2xl rounded flex flex-col justify-between border border-gray-300 font-sans transition-all ${getLabelDimensions()}`}>
+                <div className={`print-label-target bg-white text-black shadow-2xl rounded flex flex-col justify-between border border-gray-300 font-sans transition-all ${getLabelDimensions()}`}>
                   {/* Header */}
                   <div className="flex justify-between items-start">
                     {showStoreName ? (

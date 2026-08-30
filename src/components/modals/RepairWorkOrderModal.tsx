@@ -21,6 +21,8 @@ import {
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import type { ConditionChecklist, RepairOrder } from '../../types/pos';
+import { printCoordinator } from '../../utils/printCoordinator';
+import { buildWhatsAppUrl } from '../../utils/phoneUtils';
 
 const initialChecklist: ConditionChecklist = {
   screenOk: false,
@@ -52,6 +54,7 @@ export const RepairWorkOrderModal: React.FC = () => {
     updateRepairOrder,
     updateRepairOrderStatus,
     customers,
+    receiptSettings,
   } = usePosStore();
 
   const [activeTab, setActiveTab] = useState<'Nouveau' | 'Historique'>('Nouveau');
@@ -76,6 +79,7 @@ export const RepairWorkOrderModal: React.FC = () => {
   const [status, setStatus] = useState<RepairOrder['status']>('Diagnostic');
   const [checklist, setChecklist] = useState<ConditionChecklist>(initialChecklist);
   const [postChecklist, setPostChecklist] = useState<ConditionChecklist>(initialChecklist);
+  const [printingOrder, setPrintingOrder] = useState<RepairOrder | null>(null);
 
   // KPI Computations
   const totalOrders = repairOrders.length;
@@ -134,15 +138,9 @@ export const RepairWorkOrderModal: React.FC = () => {
   };
 
   const handleSendWhatsAppNotification = (order: RepairOrder) => {
-    let cleanPhone = order.customerPhone.replace(/[^0-9]/g, '');
-    if (cleanPhone.startsWith('0')) {
-      cleanPhone = '213' + cleanPhone.slice(1);
-    } else if (!cleanPhone.startsWith('213')) {
-      cleanPhone = '213' + cleanPhone;
-    }
     const remaining = Math.max(0, order.totalCost - (order.depositAmount || 0));
     const msg = `Bonjour ${order.customerName},\n\nVotre appareil *${order.deviceModel}* (Ticket N° *${order.ticketNumber}*) est réparé et prêt à être récupéré chez *MOBI ACCESSORIES* !\n\n💰 Montant restant à régler : *${remaining.toLocaleString('fr-DZ')} DA*\n📍 Boulevard Mohamed V, Alger Centre\n\nMerci de votre confiance !`;
-    const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
+    const url = buildWhatsAppUrl(order.customerPhone, msg);
     window.open(url, '_blank');
   };
 
@@ -162,18 +160,28 @@ export const RepairWorkOrderModal: React.FC = () => {
 
   const handleSaveOrder = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!customerName.trim() || !deviceModel.trim()) {
+      alert('Veuillez renseigner le nom du client et le modèle d\'appareil avant d\'enregistrer.');
+      return;
+    }
+
+    const validLabor = Math.max(0, isNaN(laborCost) ? 0 : laborCost);
+    const validParts = Math.max(0, isNaN(partsCost) ? 0 : partsCost);
+    const validTotal = validLabor + validParts;
+    const validDeposit = Math.max(0, Math.min(validTotal, isNaN(depositAmount) ? 0 : depositAmount));
+
     if (editingId) {
       updateRepairOrder(editingId, {
-        customerName,
-        customerPhone,
-        deviceModel,
-        imei,
+        customerName: customerName.trim(),
+        customerPhone: customerPhone.trim(),
+        deviceModel: deviceModel.trim(),
+        imei: imei.trim().toUpperCase(),
         problemDescription,
         diagnosticNotes,
         status,
-        laborCost,
-        partsCost,
-        depositAmount,
+        laborCost: validLabor,
+        partsCost: validParts,
+        depositAmount: validDeposit,
         estimatedCompletionDate: estimatedDate,
         conditionChecklist: checklist,
         postRepairChecklist: postChecklist,
@@ -181,16 +189,16 @@ export const RepairWorkOrderModal: React.FC = () => {
       showSuccess('Réparation mise à jour avec succès !');
     } else {
       createRepairOrder({
-        customerName,
-        customerPhone,
-        deviceModel,
-        imei,
+        customerName: customerName.trim(),
+        customerPhone: customerPhone.trim(),
+        deviceModel: deviceModel.trim(),
+        imei: imei.trim().toUpperCase(),
         problemDescription,
         diagnosticNotes,
         status,
-        laborCost,
-        partsCost,
-        depositAmount,
+        laborCost: validLabor,
+        partsCost: validParts,
+        depositAmount: validDeposit,
         estimatedCompletionDate: estimatedDate,
         conditionChecklist: checklist,
         postRepairChecklist: postChecklist,
@@ -224,8 +232,8 @@ export const RepairWorkOrderModal: React.FC = () => {
   };
 
   const handlePrintTicket = (order: RepairOrder) => {
-    console.log(`Impression Ticket SAV: ${order.ticketNumber}`);
-    window.print();
+    setPrintingOrder(order);
+    printCoordinator.printRepairWorkOrder(50);
   };
 
   const totalCost = laborCost + partsCost;
@@ -806,6 +814,86 @@ export const RepairWorkOrderModal: React.FC = () => {
             </div>
           )}
         </div>
+
+        {/* Dedicated SAV Repair Ticket Print Template */}
+        {printingOrder && (
+          <div className="print-repair-target hidden print:block bg-white text-black p-6 font-sans text-xs">
+            {/* Header */}
+            <div className="flex justify-between items-start border-b-2 border-black pb-3 mb-4">
+              <div>
+                <h1 className="text-lg font-black uppercase">{receiptSettings.storeName || 'MOBI ACCESSORIES'}</h1>
+                <p className="text-[10px] text-gray-600">Atelier de Réparation Express & SAV</p>
+                <p className="text-[10px] text-gray-600">Tél: {receiptSettings.phone}</p>
+              </div>
+              <div className="text-right bg-gray-100 p-2 rounded border border-gray-300">
+                <p className="text-[10px] font-black uppercase">FICHE D'INTERVENTION SAV</p>
+                <p className="text-sm font-bold text-gray-900">N° {printingOrder.ticketNumber}</p>
+                <p className="text-[9px] text-gray-600">Date: {printingOrder.createdAt}</p>
+              </div>
+            </div>
+
+            {/* Customer & Device Information */}
+            <div className="grid grid-cols-2 gap-3 bg-gray-50 border border-gray-200 p-3 rounded mb-4">
+              <div>
+                <p className="text-[9px] font-bold text-gray-500 uppercase">Client :</p>
+                <p className="font-bold text-sm text-black">{printingOrder.customerName}</p>
+                <p className="text-xs text-gray-700">Tél: {printingOrder.customerPhone || 'Non renseigné'}</p>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold text-gray-500 uppercase">Appareil Déposé :</p>
+                <p className="font-bold text-sm text-black">{printingOrder.deviceModel}</p>
+                <p className="text-[10px] text-gray-600 font-mono">IMEI / Série: {printingOrder.imei || 'N/A'}</p>
+              </div>
+            </div>
+
+            {/* Diagnostic & Problem Description */}
+            <div className="border border-gray-300 p-3 rounded mb-4 space-y-2">
+              <div>
+                <p className="text-[9px] font-bold text-gray-500 uppercase">Symptôme / Problème signalé :</p>
+                <p className="font-semibold text-xs text-gray-900">{printingOrder.problemDescription}</p>
+              </div>
+              {printingOrder.diagnosticNotes && (
+                <div>
+                  <p className="text-[9px] font-bold text-gray-500 uppercase">Diagnostic Technique Atelier :</p>
+                  <p className="text-xs text-gray-700 italic">{printingOrder.diagnosticNotes}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Financial Summary */}
+            <div className="bg-gray-100 border border-gray-300 p-3 rounded mb-6 flex justify-between items-center font-mono">
+              <div>
+                <span className="text-[10px] text-gray-600 block">Total Devis Réparation : {formatDZD(printingOrder.totalCost)}</span>
+                {printingOrder.depositAmount ? (
+                  <span className="text-[10px] text-blue-700 block">Acompte Versé : -{formatDZD(printingOrder.depositAmount)}</span>
+                ) : null}
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] uppercase font-bold text-gray-500 block">Reste à Régler :</span>
+                <span className="text-base font-black text-black">
+                  {formatDZD(Math.max(0, printingOrder.totalCost - (printingOrder.depositAmount || 0)))}
+                </span>
+              </div>
+            </div>
+
+            {/* Terms and Signatures */}
+            <div className="pt-2 border-t border-dashed border-gray-400 text-[8px] text-gray-500 space-y-1">
+              <p>• Le client s'engage à récupérer son appareil dans un délai maximum de 30 jours après notification.</p>
+              <p>• MOBI ACCESSORIES décline toute responsabilité quant aux données non sauvegardées préalablement.</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-6 pt-6 mt-4 border-t border-gray-300 text-center">
+              <div>
+                <p className="text-[10px] font-bold text-gray-700">Signature Client :</p>
+                <div className="h-12 border-b border-gray-300 mt-1" />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-gray-700">Cachet Atelier :</p>
+                <div className="h-12 border-b border-gray-300 mt-1" />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

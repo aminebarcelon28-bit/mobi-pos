@@ -3,9 +3,10 @@ import { X, FileText, CheckCircle2, Printer, Smartphone } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { useToast } from '../ui/Toast';
+import { printCoordinator } from '../../utils/printCoordinator';
 
 export const PurchaseOrderModal: React.FC = () => {
-  const { activeModal, closeModal, activeDraftPO, approvePurchaseOrder } = usePosStore();
+  const { activeModal, closeModal, activeDraftPO, approvePurchaseOrder, receiptSettings } = usePosStore();
   const { showToast } = useToast();
   
   const [imeis, setImeis] = useState<Record<string, string>>({});
@@ -27,8 +28,8 @@ export const PurchaseOrderModal: React.FC = () => {
   };
 
   const handlePrintPO = () => {
-    // Replaced native window.print() with a toast/inline action as requested
-    showToast("Impression du Bon de Commande lancée...", 'info');
+    printCoordinator.printPurchaseOrder(50);
+    showToast(`Impression Bon de Commande ${activeDraftPO.poNumber} routée vers imprimante A4`, 'info');
   };
 
   const handleImeiChange = (productId: string, value: string) => {
@@ -117,7 +118,7 @@ export const PurchaseOrderModal: React.FC = () => {
               disabled={isApproved}
               className="px-4 py-2 rounded-xl bg-pos-hover border border-pos-border text-pos-text font-semibold text-xs flex items-center gap-1.5 hover:bg-pos-border transition-colors disabled:opacity-50"
             >
-              <Printer className="w-4 h-4" /> Imprimer PO
+              <Printer className="w-4 h-4" /> Imprimer Bon de Commande (A4)
             </button>
             <button
               onClick={handleApprove}
@@ -126,6 +127,89 @@ export const PurchaseOrderModal: React.FC = () => {
             >
               <CheckCircle2 className="w-4 h-4" /> {isApproved ? 'Approuvé' : 'Approuver & Incrémenter le Stock'}
             </button>
+          </div>
+        </div>
+
+        {/* Dedicated A4 Purchase Order Print Template */}
+        <div className="print-po-target hidden print:block bg-white text-black p-8 font-sans text-xs">
+          {/* Header */}
+          <div className="flex justify-between items-start border-b-2 border-black pb-4 mb-6">
+            <div>
+              <h1 className="text-xl font-black uppercase tracking-wider">{receiptSettings.storeName || 'MOBI ACCESSORIES'}</h1>
+              <p className="text-gray-600 text-xs">{receiptSettings.address}</p>
+              <p className="text-gray-600 text-xs">Tél: {receiptSettings.phone} • Email: {receiptSettings.email}</p>
+            </div>
+            <div className="text-right">
+              <div className="bg-gray-100 p-3 rounded border border-gray-300">
+                <p className="text-xs font-black uppercase text-black">BON DE COMMANDE FOURNISSEUR</p>
+                <p className="text-sm font-bold text-gray-900 mt-1">N° : {activeDraftPO.poNumber}</p>
+                <p className="text-[10px] text-gray-600">Date: {activeDraftPO.createdAt}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Vendor Details */}
+          <div className="bg-gray-50 border border-gray-200 p-4 rounded mb-6 flex justify-between">
+            <div>
+              <p className="text-[10px] uppercase font-bold text-gray-500">Fournisseur Destinataire :</p>
+              <p className="text-sm font-black text-black">{activeDraftPO.vendorName}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] uppercase font-bold text-gray-500">Conditions de Règlement :</p>
+              <p className="text-xs font-bold text-black">Paiement à Réception / Espèces</p>
+            </div>
+          </div>
+
+          {/* Line Items Table */}
+          <table className="w-full text-left border-collapse mb-6">
+            <thead>
+              <tr className="bg-gray-200 border-y border-black text-[10px] uppercase font-bold">
+                <th className="p-2">#</th>
+                <th className="p-2">Désignation Produit</th>
+                <th className="p-2">SKU</th>
+                <th className="p-2 text-center">Quantité</th>
+                <th className="p-2 text-right">Prix Unitaire (DA)</th>
+                <th className="p-2 text-right">Total HT (DA)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-300">
+              {activeDraftPO.items.map((item, idx) => (
+                <tr key={item.productId}>
+                  <td className="p-2 text-gray-500 font-mono">{idx + 1}</td>
+                  <td className="p-2 font-bold">{item.title}</td>
+                  <td className="p-2 font-mono text-[10px] text-gray-600">{item.sku}</td>
+                  <td className="p-2 text-center font-bold">{item.suggestedQty}</td>
+                  <td className="p-2 text-right font-mono">{formatDZD(item.unitCost)}</td>
+                  <td className="p-2 text-right font-mono font-bold">{formatDZD(item.totalCost)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* Total & Signatures */}
+          <div className="flex justify-between items-start pt-4 border-t border-black">
+            <div className="w-1/2 text-[10px] text-gray-600 space-y-1">
+              <p>• Ce bon de commande engage l'approvisionnement des stocks listés ci-dessus.</p>
+              <p>• Les prix convenus sont fermes et non révisables à la livraison.</p>
+            </div>
+            <div className="w-1/3 bg-gray-100 p-4 rounded border border-gray-300 space-y-2 text-right">
+              <div className="flex justify-between font-black text-sm text-black">
+                <span>TOTAL COMMANDE :</span>
+                <span>{formatDZD(activeDraftPO.totalAmount)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Signatures Area */}
+          <div className="grid grid-cols-2 gap-8 pt-12 mt-6 border-t border-dashed border-gray-400 text-center">
+            <div>
+              <p className="text-xs font-bold uppercase text-gray-700">Cachet & Signature Magasin :</p>
+              <div className="h-16 border-b border-gray-300 mt-2" />
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase text-gray-700">Accusé de Réception Fournisseur :</p>
+              <div className="h-16 border-b border-gray-300 mt-2" />
+            </div>
           </div>
         </div>
       </div>

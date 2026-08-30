@@ -4,6 +4,7 @@ import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
 import { resolvePrinterForDocument } from '../../utils/printerRoutingEngine';
+import { printCoordinator } from '../../utils/printCoordinator';
 
 export const ReceiptModal: React.FC = () => {
   const { activeModal, closeModal, lastTransaction, receiptSettings } = usePosStore();
@@ -20,10 +21,7 @@ export const ReceiptModal: React.FC = () => {
       }
       // Immediate auto-print execution if enabled in settings
       if (receiptSettings.autoPrintEnabled !== false) {
-        const timer = setTimeout(() => {
-          window.print();
-        }, 150);
-        return () => clearTimeout(timer);
+        printCoordinator.printReceipt(150);
       }
     }
   }, [activeModal, lastTransaction, receiptSettings.autoPrintEnabled]);
@@ -31,12 +29,12 @@ export const ReceiptModal: React.FC = () => {
   if (activeModal !== 'receipt' || !lastTransaction) return null;
 
   const handlePrintBrowser = () => {
-    window.print();
+    printCoordinator.printReceipt(20);
   };
 
   const handlePrintThermal = () => {
     console.log(`[SmartRouting] Ticket ${lastTransaction.receiptNumber} routé automatiquement vers: ${targetPrinter.printerName}`);
-    window.print();
+    printCoordinator.printReceipt(20);
   };
 
   return (
@@ -75,7 +73,7 @@ export const ReceiptModal: React.FC = () => {
 
         {/* Thermal Receipt Paper */}
         <div className="p-6 overflow-y-auto max-h-[60vh] bg-slate-950 flex justify-center">
-          <div data-printable="true" className="printable-area print:w-full w-[300px] bg-white text-black p-5 shadow-2xl font-mono text-xs leading-tight rounded-sm">
+          <div className="print-receipt-target w-[80mm] max-w-[80mm] bg-white text-black p-4 shadow-2xl font-mono text-xs leading-tight rounded-sm">
             {/* Store Header with Template Customizer */}
             <div className="text-center pb-4 border-b border-dashed border-gray-400">
               {receiptSettings.logoUrl && (
@@ -141,7 +139,7 @@ export const ReceiptModal: React.FC = () => {
                   <div key={item.product.id} className="flex flex-col">
                     <div className="flex justify-between">
                       <div className="pr-2 flex-1">
-                        <p className="font-bold">{item.product.title}</p>
+                        <p className="font-bold break-words">{item.product.title}</p>
                         <p className="text-[9px] text-gray-600">
                           {item.quantity} x {formatDZD(unitPrice)}
                         </p>

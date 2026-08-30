@@ -22,8 +22,7 @@ export const SilentReceiptPrinter: React.FC = () => {
   return (
     <div className="hidden print:block fixed inset-0 z-[99999] bg-white text-black p-0 m-0">
       <div
-        data-printable="true"
-        className="printable-area print:w-full w-[300px] mx-auto bg-white text-black p-4 font-mono text-xs leading-tight"
+        className="print-receipt-target w-[80mm] max-w-[80mm] mx-auto bg-white text-black p-3 font-mono text-xs leading-tight"
       >
         {/* Store Header */}
         <div className="text-center pb-3 border-b border-dashed border-gray-600">
@@ -64,7 +63,7 @@ export const SilentReceiptPrinter: React.FC = () => {
               <div key={item.product.id} className="flex flex-col">
                 <div className="flex justify-between items-start">
                   <div className="pr-1 flex-1">
-                    <p className="font-bold text-[11px]">{item.product.title}</p>
+                    <p className="font-bold text-[11px] break-words">{item.product.title}</p>
                     <p className="text-[9px] text-gray-700">
                       {item.quantity} x {formatDZD(unitPrice)}
                     </p>

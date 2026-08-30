@@ -51,11 +51,13 @@ export const DiscountModal: React.FC = () => {
   const handleApply = () => {
     let effectivePercent = 0;
     if (discountMode === 'percent') {
-      effectivePercent = percentValue;
+      effectivePercent = isNaN(percentValue) ? 0 : percentValue;
     } else {
-      effectivePercent = cartSubtotal > 0 ? (amountValue / cartSubtotal) * 100 : 0;
+      const validAmount = Math.max(0, isNaN(amountValue) ? 0 : amountValue);
+      effectivePercent = cartSubtotal > 0 ? (validAmount / cartSubtotal) * 100 : 0;
     }
-    applyCartDiscountPercent(effectivePercent);
+    const safePercent = Math.max(0, Math.min(100, effectivePercent));
+    applyCartDiscountPercent(safePercent);
     closeModal();
   };
 

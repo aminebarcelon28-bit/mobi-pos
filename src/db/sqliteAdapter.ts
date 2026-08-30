@@ -596,6 +596,8 @@ export const sqliteAdapter = {
       cashDrops: await dexieDb.cashDrops.toArray(),
       payouts: await dexieDb.payouts.toArray(),
       bundles: await dexieDb.bundles.toArray(),
+      customerDebts: await dexieDb.customerDebts.toArray(),
+      storeExpenses: await dexieDb.storeExpenses.toArray(),
       settings: await dexieDb.appSettings.toArray(),
     };
     return JSON.stringify(data, null, 2);
@@ -629,6 +631,8 @@ export const sqliteAdapter = {
         dexieDb.cashDrops,
         dexieDb.payouts,
         dexieDb.bundles,
+        dexieDb.customerDebts,
+        dexieDb.storeExpenses,
         dexieDb.appSettings,
       ], async () => {
         if (Array.isArray(data.products)) {
@@ -674,6 +678,14 @@ export const sqliteAdapter = {
         if (Array.isArray(data.bundles)) {
           await dexieDb.bundles.clear();
           await dexieDb.bundles.bulkPut(data.bundles);
+        }
+        if (Array.isArray(data.customerDebts)) {
+          await dexieDb.customerDebts.clear();
+          await dexieDb.customerDebts.bulkPut(data.customerDebts);
+        }
+        if (Array.isArray(data.storeExpenses)) {
+          await dexieDb.storeExpenses.clear();
+          await dexieDb.storeExpenses.bulkPut(data.storeExpenses);
         }
         if (Array.isArray(data.settings)) {
           await dexieDb.appSettings.clear();
@@ -770,6 +782,8 @@ export const sqliteAdapter = {
       dexieDb.cashDrops.clear(),
       dexieDb.payouts.clear(),
       dexieDb.bundles.clear(),
+      dexieDb.customerDebts.clear(),
+      dexieDb.storeExpenses.clear(),
     ]);
   },
 };

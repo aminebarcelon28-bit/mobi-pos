@@ -85,41 +85,41 @@ html.dark .hotkey-badge {
 }
 
 @media print {
-  /* Reset page background & overflow for clean printing */
+  /* Reset global viewport for print */
   html, body {
     background: #ffffff !important;
     color: #000000 !important;
     height: auto !important;
+    min-height: 100% !important;
     overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 
-  /* 1. HIDE ALL UI ELEMENTS ACROSS THE ENTIRE APP BY DEFAULT */
+  /* Hide all UI elements, modals, headers, backdrops, and navigation by default */
   body * {
     visibility: hidden !important;
   }
 
-  /* 2. UNHIDE ONLY THE TARGET PRINTABLE CONTAINER AND ITS DESCENDANTS */
-  .printable-area,
-  .printable-area *,
-  .print\:w-full,
-  .print\:w-full *,
-  [data-printable="true"],
-  [data-printable="true"] * {
+  /* Channel 1: Thermal Receipts (80mm / 58mm) */
+  body[data-print-channel="receipt"] .print-receipt-target,
+  body[data-print-channel="receipt"] .print-receipt-target *,
+  body:not([data-print-channel]) .print-receipt-target,
+  body:not([data-print-channel]) .print-receipt-target * {
     visibility: visible !important;
   }
 
-  /* 3. PIN THE PRINTABLE CONTAINER AT TOP-LEFT OF PRINT PAGE WITH MAXIMUM Z-INDEX */
-  .printable-area,
-  .print\:w-full,
-  [data-printable="true"] {
+  body[data-print-channel="receipt"] .print-receipt-target,
+  body:not([data-print-channel]) .print-receipt-target {
     position: fixed !important;
-    left: 50% !important;
+    left: 0 !important;
     top: 0 !important;
-    transform: translateX(-50%) !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    margin: 0 !important;
-    padding: 10px !important;
+    width: 80mm !important;
+    max-width: 80mm !important;
+    margin: 0 auto !important;
+    padding: 2mm 3mm !important;
     background: #ffffff !important;
     color: #000000 !important;
     box-shadow: none !important;
@@ -127,10 +127,117 @@ html.dark .hotkey-badge {
     z-index: 999999 !important;
   }
 
-  /* 4. FORCE HIGH-CONTRAST BLACK TEXT AND BORDERS ON ALL PRINTED ELEMENTS */
-  .printable-area *,
-  .print\:w-full *,
-  [data-printable="true"] * {
+  /* Channel 2: Barcode & Shelf Price Labels */
+  body[data-print-channel="label"] .print-label-target,
+  body[data-print-channel="label"] .print-label-target * {
+    visibility: visible !important;
+  }
+
+  body[data-print-channel="label"] .print-label-target {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    z-index: 999999 !important;
+  }
+
+  /* Channel 3: A4 Purchase Orders & Reception Bons */
+  body[data-print-channel="purchase_order"] .print-po-target,
+  body[data-print-channel="purchase_order"] .print-po-target * {
+    visibility: visible !important;
+  }
+
+  body[data-print-channel="purchase_order"] .print-po-target {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 210mm !important;
+    margin: 0 auto !important;
+    padding: 8mm !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    z-index: 999999 !important;
+  }
+
+  /* Channel 4: Shift Z-Report / Drawer Reconciliation */
+  body[data-print-channel="z_report"] .print-zreport-target,
+  body[data-print-channel="z_report"] .print-zreport-target * {
+    visibility: visible !important;
+  }
+
+  body[data-print-channel="z_report"] .print-zreport-target {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 80mm !important;
+    max-width: 80mm !important;
+    margin: 0 auto !important;
+    padding: 3mm !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    z-index: 999999 !important;
+  }
+
+  /* Channel 5: SAV Repair Work Orders */
+  body[data-print-channel="repair_work_order"] .print-repair-target,
+  body[data-print-channel="repair_work_order"] .print-repair-target * {
+    visibility: visible !important;
+  }
+
+  body[data-print-channel="repair_work_order"] .print-repair-target {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 210mm !important;
+    margin: 0 auto !important;
+    padding: 6mm !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    z-index: 999999 !important;
+  }
+
+  /* Channel 6: Trade-in / Buyback Voucher */
+  body[data-print-channel="trade_in_voucher"] .print-tradein-target,
+  body[data-print-channel="trade_in_voucher"] .print-tradein-target * {
+    visibility: visible !important;
+  }
+
+  body[data-print-channel="trade_in_voucher"] .print-tradein-target {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 210mm !important;
+    margin: 0 auto !important;
+    padding: 8mm !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    z-index: 999999 !important;
+  }
+
+  /* High contrast colors for print typography */
+  .print-receipt-target *,
+  .print-label-target *,
+  .print-po-target *,
+  .print-zreport-target *,
+  .print-repair-target *,
+  .print-tradein-target * {
     color: #000000 !important;
     border-color: #333333 !important;
   }

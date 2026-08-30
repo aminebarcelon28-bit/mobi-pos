@@ -3,6 +3,7 @@ import { X, Printer, ShieldAlert, CheckCircle2, ArrowDownCircle } from 'lucide-r
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { useToast } from '../../components/ui/Toast';
+import { printCoordinator } from '../../utils/printCoordinator';
 
 export const ShiftZReportModal: React.FC = () => {
   const {
@@ -54,19 +55,27 @@ export const ShiftZReportModal: React.FC = () => {
   const variance = actualCountedCash - expectedCash;
 
   const handlePrintZReport = () => {
-    window.print();
+    printCoordinator.printZReport(40);
   };
 
   const handleAddCashDrop = () => {
-    if (cashDropInput > 0) {
-      addCashDrop({
-        amount: cashDropInput,
-        reason: cashDropReason,
-        user: 'Yacine',
-      });
-      showToast(`Dépôt coffre-fort de ${formatDZD(cashDropInput)} enregistré.`, 'success');
-      setCashDropInput(0);
+    const validDrop = Math.max(0, isNaN(cashDropInput) ? 0 : cashDropInput);
+    if (validDrop <= 0) {
+      showToast('Veuillez saisir un montant de transfert supérieur à 0 DA.', 'warning');
+      return;
     }
+    if (expectedCash > 0 && validDrop > expectedCash) {
+      if (!window.confirm(`⚠️ Attention : Le montant du dépôt (${formatDZD(validDrop)}) est supérieur au solde de caisse théorique (${formatDZD(expectedCash)}). Souhaitez-vous confirmer ce transfert ?`)) {
+        return;
+      }
+    }
+    addCashDrop({
+      amount: validDrop,
+      reason: cashDropReason.trim() || 'Dépôt coffre-fort régulier',
+      user: 'Yacine',
+    });
+    showToast(`Dépôt coffre-fort de ${formatDZD(validDrop)} enregistré.`, 'success');
+    setCashDropInput(0);
   };
 
   return (
@@ -86,7 +95,7 @@ export const ShiftZReportModal: React.FC = () => {
         </div>
 
         {/* Scrollable Body */}
-        <div data-printable="true" className="printable-area p-5 overflow-y-auto space-y-5 flex-1">
+        <div className="print-zreport-target p-5 overflow-y-auto space-y-5 flex-1">
           {/* Shift Cash Summary Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl">

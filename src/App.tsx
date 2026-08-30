@@ -43,10 +43,22 @@ export const App: React.FC = () => {
   useKeyboardHotkeys();
   const { scannerActive } = useBarcodeScanner();
   const initDatabase = usePosStore((state) => state.initDatabase);
+  const cart = usePosStore((state) => state.cart);
 
   React.useEffect(() => {
     initDatabase();
   }, [initDatabase]);
+
+  React.useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (cart.length > 0) {
+        e.preventDefault();
+        e.returnValue = 'Un encaissement est en cours. Quitter cette page fermera la session de vente.';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [cart]);
 
   return (
     <ErrorBoundary fallbackTitle="Erreur Système POS Interceptée">

@@ -9,6 +9,7 @@ import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import type { Customer, PricingTier, SaleTransaction, PaymentMethodType } from '../../types/pos';
 import { calculateNextTierProgress, calculateCustomerTier } from '../../utils/loyaltyEngine';
+import { buildWhatsAppUrl } from '../../utils/phoneUtils';
 
 type SortField = 'name' | 'loyaltyPoints' | 'storeCredit' | 'totalSpent';
 type SortDir = 'asc' | 'desc';
@@ -178,6 +179,11 @@ export const CustomersModal: React.FC = () => {
   };
 
   const handleDelete = (id: string) => {
+    const target = customers.find((c) => c.id === id);
+    if (target && (target.currentDebt || 0) > 0) {
+      alert(`⚠️ Impossible de supprimer ce client : une dette active de ${target.currentDebt} DA est en cours sur son compte. Veuillez solder ou transférer la créance avant suppression.`);
+      return;
+    }
     if (window.confirm("Êtes-vous sûr de vouloir supprimer définitivement ce client et son historique ?")) {
       deleteCustomer(id);
       if (profileCustomer?.id === id) setProfileCustomer(null);
@@ -1139,7 +1145,7 @@ export const CustomersModal: React.FC = () => {
                   <Copy className="w-4 h-4" /> {whatsappCopied ? 'Copié !' : 'Copier le Texte'}
                 </button>
                 <a
-                  href={`https://wa.me/213${whatsappDebtCustomer.phone.replace(/\D/g, '').replace(/^0/, '')}?text=${encodeURIComponent(getWhatsAppDebtMessage(whatsappDebtCustomer))}`}
+                  href={buildWhatsAppUrl(whatsappDebtCustomer.phone, getWhatsAppDebtMessage(whatsappDebtCustomer))}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition flex items-center gap-1.5 cursor-pointer"

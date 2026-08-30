@@ -35,16 +35,33 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
   
   const buffer = useRef<string>('');
   const lastKeyTime = useRef<number>(0);
+  const lastScanTimestamp = useRef<number>(0);
+  const lastScanCode = useRef<string>('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const processScan = useCallback((rawCode: string) => {
     const code = rawCode.trim();
     if (!code) return;
 
+    // Debounce rapid duplicate scans within 400ms to prevent double-adding from laser reflections
+    const now = Date.now();
+    if (code === lastScanCode.current && now - lastScanTimestamp.current < 400) {
+      return;
+    }
+    lastScanCode.current = code;
+    lastScanTimestamp.current = now;
+
+    const store = usePosStore.getState();
+    const activeModal = store.activeModal;
+
+    // Guard: Ignore scanner if an unrelated modal is open (e.g. settings, security audit, pin prompt, reports)
+    if (activeModal && activeModal !== 'payment' && activeModal !== 'product_editor' && activeModal !== 'label_printer') {
+      return;
+    }
+
     setScannerActive(true);
     playScannerBeep(true);
     
-    const store = usePosStore.getState();
     const products = store.products || [];
     const bundles = store.bundles || [];
     const customers = store.customers || [];

@@ -579,6 +579,7 @@ export const ReportsModal: React.FC = () => {
                         >
                           <option value="Tous">Tous les règlements</option>
                           <option value="Espèces">Espèces (Cash)</option>
+                          <option value="Crédit Client">Crédit Client (Kredy)</option>
                           <option value="Avoir Client">Avoir Client</option>
                         </select>
                       </div>

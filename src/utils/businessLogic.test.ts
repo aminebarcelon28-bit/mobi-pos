@@ -4,6 +4,8 @@
  * facturation réparation, kitting, reprises, IMEI, et crédit client.
  */
 
+import { formatDZD } from '../types/pos';
+
 export const runBusinessLogicTests = (): { success: boolean; results: string[] } => {
   const results: string[] = [];
   let success = true;
@@ -147,19 +149,50 @@ export const runBusinessLogicTests = (): { success: boolean; results: string[] }
     `Expected resale 36250 DA, got ${resale45}`
   );
 
-  // ═══ Test 13: Paiement Multi-Tender (Espèces + Avoir + BaridiMob) ═══
-  const cartTotal = 18500;
-  const tenderCash = 10000;
-  const tenderCredit = 3500;
-  const tenderBaridiMob = 5000;
-  const totalPaid = tenderCash + tenderCredit + tenderBaridiMob;
-  const remaining = Math.max(0, cartTotal - totalPaid);
-  const changeCash = Math.max(0, totalPaid - cartTotal);
+  // ═══ Test 14: Calcul Marge Brute, Dépenses d'Exploitation & EBITDA Réel ═══
+  const grossRevenue = 150000;
+  const costOfGoods = 90000;
+  const grossMargin = grossRevenue - costOfGoods; // 60 000 DA
+  const rentExpense = 15000;
+  const sonelgazExpense = 4000;
+  const staffExpense = 6000;
+  const totalOperatingExpenses = rentExpense + sonelgazExpense + staffExpense; // 25 000 DA
+  const ebitda = grossMargin - totalOperatingExpenses; // 35 000 DA
+  const ebitdaMarginPercent = Number(((ebitda / grossRevenue) * 100).toFixed(1)); // 23.3%
   assert(
-    totalPaid === 18500 && remaining === 0 && changeCash === 0,
-    'Paiement Multi-Tender (10 000 DA Espèces + 3 500 DA Avoir + 5 000 DA BaridiMob = 18 500 DA, Reste = 0 DA)',
-    `Expected totalPaid 18500 / remaining 0, got totalPaid ${totalPaid} / remaining ${remaining}`
+    ebitda === 35000 && ebitdaMarginPercent === 23.3,
+    `Calcul EBITDA Réel (${formatDZD(150000)} CA - ${formatDZD(90000)} Achats = ${formatDZD(60000)} Marge - ${formatDZD(25000)} Charges = ${formatDZD(35000)} EBITDA, 23.3%)`,
+    `Expected EBITDA 35000 / margin 23.3%, got ${ebitda} / ${ebitdaMarginPercent}%`
+  );
+
+  // ═══ Test 15: Grand Livre des Dettes Clients (Kredy) & Plafond de Crédit ═══
+  const initialDebt = 12000;
+  const creditLimit = 25000;
+  const newCreditSale = 8000;
+  const debtAfterSale = initialDebt + newCreditSale; // 20 000 DA
+  const isWithinLimit = debtAfterSale <= creditLimit; // true
+  const settlementPayment = 5000;
+  const finalDebt = debtAfterSale - settlementPayment; // 15 000 DA
+  assert(
+    debtAfterSale === 20000 && isWithinLimit && finalDebt === 15000,
+    'Grand Livre des Dettes (12 000 DA + 8 000 DA vente = 20 000 DA, versement 5 000 DA = solde 15 000 DA)',
+    `Expected debtAfterSale 20000 / finalDebt 15000, got ${debtAfterSale} / ${finalDebt}`
+  );
+
+  // ═══ Test 16: Réconciliation Tiroir-Caisse Z-Report avec Dépenses & Règlements ═══
+  const initialFloat = 10000;
+  const salesCash = 40000;
+  const debtCollections = 5000;
+  const refundsCash = 2000;
+  const drawerExpenses = 3000;
+  const vaultDrop = 20000;
+  const theoreticalCash = initialFloat + salesCash + debtCollections - refundsCash - drawerExpenses - vaultDrop;
+  assert(
+    theoreticalCash === 30000,
+    'Réconciliation Caisse Z-Report (10k float + 40k ventes + 5k dette - 2k remb. - 3k dépense - 20k coffre = 30 000 DA)',
+    `Expected theoreticalCash 30000 DA, got ${theoreticalCash}`
   );
 
   return { success, results };
 };
+

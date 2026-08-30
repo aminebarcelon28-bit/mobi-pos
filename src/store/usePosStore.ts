@@ -384,6 +384,9 @@ export const usePosStore = create<PosState>((set, get) => ({
     const updated = cart
       .map((item) => {
         if (item.product.id === productId) {
+          if (item.product.isSerialized && delta > 0) {
+            return item; // Serialized items represent 1 device per IMEI; add distinct units individually
+          }
           const newQty = item.quantity + delta;
           if (delta > 0 && newQty > item.product.stock) {
             return item; // Do not exceed available stock
@@ -404,20 +407,31 @@ export const usePosStore = create<PosState>((set, get) => ({
   clearCart: () => set({ cart: [], storeCreditApplied: 0 }),
 
   setCartItemDiscount: (productId, discount) => {
-    const { cart } = get();
+    const { cart, pricingTier } = get();
+    const safeDiscount = Math.max(0, isNaN(discount) ? 0 : discount);
     set({
-      cart: cart.map((item) => (item.product.id === productId ? { ...item, discount } : item)),
+      cart: cart.map((item) => {
+        if (item.product.id !== productId) return item;
+        const itemPrice = item.appliedPrice !== undefined
+          ? item.appliedPrice
+          : pricingTier === 'Wholesale'
+          ? item.product.wholesalePrice || item.product.price * 0.75
+          : item.product.price;
+        const lineGrossTotal = itemPrice * item.quantity;
+        return { ...item, discount: Math.min(lineGrossTotal, safeDiscount) };
+      }),
     });
   },
 
   applyCartDiscountPercent: (percent) => {
     const { cart, pricingTier } = get();
+    const safePercent = Math.max(0, Math.min(100, isNaN(percent) ? 0 : percent));
     set({
       cart: cart.map((item) => {
         const itemPrice =
           pricingTier === 'Wholesale' ? item.product.wholesalePrice || item.product.price * 0.75 : item.product.price;
         const itemTotal = itemPrice * item.quantity;
-        const discountAmount = Math.round((itemTotal * percent) / 100);
+        const discountAmount = Math.round((itemTotal * safePercent) / 100);
         return { ...item, discount: discountAmount, appliedPrice: itemPrice };
       }),
     });
@@ -427,8 +441,9 @@ export const usePosStore = create<PosState>((set, get) => ({
 
   setCartItemIMEI: (productId, imei) => {
     const { cart } = get();
+    const cleanImei = (imei || '').trim().replace(/[^a-zA-Z0-9-]/g, '').toUpperCase();
     set({
-      cart: cart.map((item) => (item.product.id === productId ? { ...item, imeiNumber: imei } : item)),
+      cart: cart.map((item) => (item.product.id === productId ? { ...item, imeiNumber: cleanImei } : item)),
     });
   },
 
@@ -449,15 +464,24 @@ export const usePosStore = create<PosState>((set, get) => ({
   },
 
   retrieveSale: (saleId) => {
-    const { heldSales } = get();
+    const { heldSales, cart, currentCustomer } = get();
     const target = heldSales.find((h) => h.id === saleId);
     if (target) {
+      let updatedHeldSales = heldSales.filter((h) => h.id !== saleId);
+      if (cart.length > 0) {
+        updatedHeldSales.push({
+          id: `hold-${Date.now()}`,
+          customer: currentCustomer,
+          items: [...cart],
+          timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+        });
+      }
       const activeTier = target.customer ? target.customer.pricingTier : 'Retail';
       set({
         cart: target.items,
         currentCustomer: target.customer,
         pricingTier: activeTier,
-        heldSales: heldSales.filter((h) => h.id !== saleId),
+        heldSales: updatedHeldSales,
         activeModal: null,
       });
     }
@@ -582,7 +606,17 @@ export const usePosStore = create<PosState>((set, get) => ({
   },
 
   deleteCustomer: async (id) => {
-    const { customers, currentCustomer } = get();
+    const { customers, currentCustomer, logSecurityAction } = get();
+    const customerToDelete = customers.find((c) => c.id === id);
+    if (customerToDelete && (customerToDelete.currentDebt || 0) > 0) {
+      logSecurityAction(
+        'Suppression Client Bloquée (Dette Active)',
+        `Client: ${customerToDelete.name} possède une dette non soldée de ${customerToDelete.currentDebt} DA. Suppression refusée pour préserver l'intégrité comptable.`,
+        'Système POS',
+        true
+      );
+      return;
+    }
     const updated = customers.filter((c) => c.id !== id);
     await customerRepository.delete(id);
     const newState: Partial<PosState> = { customers: updated };
@@ -774,7 +808,12 @@ export const usePosStore = create<PosState>((set, get) => ({
       });
     } catch (e) {
       console.error('Failed to initialize SQLite Database:', e);
-      set({ isDbInitialized: true });
+      const { products, customers } = get();
+      set({
+        products: products.length > 0 ? products : INITIAL_PRODUCTS,
+        customers: customers.length > 0 ? customers : INITIAL_CUSTOMERS,
+        isDbInitialized: true,
+      });
     }
   },
 
@@ -822,6 +861,17 @@ export const usePosStore = create<PosState>((set, get) => ({
     const missingIMEI = cart.find((item) => item.product.isSerialized && (!item.imeiNumber || item.imeiNumber.trim() === ''));
     if (missingIMEI) {
       return { success: false, reason: `IMEI_REQUIRED:${missingIMEI.product.title}` };
+    }
+
+    // Guard against duplicate IMEI assignment in same sale
+    const serializedItems = cart.filter((item) => item.product.isSerialized && item.imeiNumber);
+    const seenImeis = new Set<string>();
+    for (const item of serializedItems) {
+      const imei = (item.imeiNumber || '').trim().toUpperCase();
+      if (seenImeis.has(imei)) {
+        return { success: false, reason: `DUPLICATE_IMEI:${imei}` };
+      }
+      seenImeis.add(imei);
     }
 
     const grossSubtotal = cart.reduce((acc, item) => {
@@ -1086,6 +1136,30 @@ export const usePosStore = create<PosState>((set, get) => ({
         : txn.paymentMethod === 'Avoir Client' ? txn.total : 0;
       const newCredit = (cust.storeCredit || 0) + storeCreditPaid;
 
+      // If customer bought on credit (Crédit Client), reverse the debt balance
+      const creditDebtAmount = txn.tenders
+        ? txn.tenders.filter((t) => t.method === 'Crédit Client').reduce((acc, t) => acc + t.amount, 0)
+        : txn.paymentMethod === 'Crédit Client' ? txn.total : 0;
+      const newDebt = Math.max(0, (cust.currentDebt || 0) - creditDebtAmount);
+
+      if (creditDebtAmount > 0) {
+        const voidDebtEntry: CustomerDebtEntry = {
+          id: `DEBT-VOID-${Date.now()}`,
+          customerId: cust.id,
+          customerName: cust.name,
+          type: 'PAYMENT_SETTLED',
+          amount: creditDebtAmount,
+          balanceAfter: newDebt,
+          receiptNumber: txn.receiptNumber,
+          paymentMethod: 'Crédit Client',
+          notes: `Annulation Vente à Crédit #${txn.receiptNumber} (${reason}) - Créance annulée`,
+          createdAt: new Date().toISOString(),
+          recordedBy: cashierName || 'Manager',
+        };
+        await sqliteAdapter.saveCustomerDebt(voidDebtEntry);
+        set({ customerDebts: [voidDebtEntry, ...get().customerDebts] });
+      }
+
       const ledgerEntry = createLedgerEntry(
         cust.id,
         'adjustment',
@@ -1098,6 +1172,7 @@ export const usePosStore = create<PosState>((set, get) => ({
       const existingLedger = cust.ledger || [];
       updatedCustomer = {
         ...cust,
+        currentDebt: newDebt,
         totalSpent: newTotalSpent,
         loyaltyTier: newTier.name,
         loyaltyPoints: newPoints,
@@ -1655,10 +1730,13 @@ export const usePosStore = create<PosState>((set, get) => ({
     const bundle = bundles.find((b) => b.id === bundleId);
     if (!bundle) return { success: false, reason: 'BUNDLE_NOT_FOUND' };
 
-    // Validate all child SKUs have stock
+    // Validate all child SKUs have sufficient stock considering items already in cart
     const outOfStock = bundle.childSkus.filter((sku) => {
       const product = products.find((p) => p.sku === sku);
-      return !product || product.stock <= 0;
+      if (!product) return true;
+      const existingInCart = cart.find((item) => item.product.id === product.id);
+      const currentQty = existingInCart ? existingInCart.quantity : 0;
+      return currentQty + 1 > product.stock;
     });
 
     if (outOfStock.length > 0) {
@@ -1753,12 +1831,15 @@ export const usePosStore = create<PosState>((set, get) => ({
   // ══════════════════════════════════════════
 
   recordCustomerDebtPayment: async (customerId, amount, method, notes) => {
-    const { customers, customerDebts, currentCustomer } = get();
+    const { customers, customerDebts, currentCustomer, logSecurityAction } = get();
     const customer = customers.find((c) => c.id === customerId);
-    if (!customer || amount <= 0) return { success: false };
+    const validAmount = Math.max(0, isNaN(amount) ? 0 : amount);
+    if (!customer || validAmount <= 0) return { success: false };
 
     const currentDebt = customer.currentDebt || 0;
-    const newDebt = Math.max(0, currentDebt - amount);
+    const newDebt = Math.max(0, currentDebt - validAmount);
+    const excessCredit = Math.max(0, validAmount - currentDebt);
+    const updatedStoreCredit = (customer.storeCredit || 0) + excessCredit;
 
     const receiptNo = `VERS-${Date.now().toString().slice(-6)}`;
     const debtEntry: CustomerDebtEntry = {
@@ -1766,11 +1847,11 @@ export const usePosStore = create<PosState>((set, get) => ({
       customerId: customer.id,
       customerName: customer.name,
       type: 'PAYMENT_SETTLED',
-      amount,
+      amount: validAmount,
       balanceAfter: newDebt,
       receiptNumber: receiptNo,
       paymentMethod: method,
-      notes: notes || `Versement règlement de dette (${method})`,
+      notes: notes || `Versement règlement de dette (${method})${excessCredit > 0 ? ` (surplus ${excessCredit} DA en avoir)` : ''}`,
       createdAt: new Date().toISOString(),
       recordedBy: 'Caisse 1 (Yacine)',
     };
@@ -1778,6 +1859,7 @@ export const usePosStore = create<PosState>((set, get) => ({
     const updatedCustomer: Customer = {
       ...customer,
       currentDebt: newDebt,
+      storeCredit: updatedStoreCredit,
     };
 
     const updatedCustomers = customers.map((c) => (c.id === customerId ? updatedCustomer : c));
@@ -1785,6 +1867,13 @@ export const usePosStore = create<PosState>((set, get) => ({
 
     await customerRepository.save(updatedCustomer);
     await sqliteAdapter.saveCustomerDebt(debtEntry);
+
+    logSecurityAction(
+      'Règlement Dette Client Enregistré',
+      `Client: ${customer.name} - Versement: ${validAmount} DA (${method}) - Dette restante: ${newDebt} DA`,
+      'Caissier (Yacine)',
+      false
+    );
 
     soundEngine.playSuccess();
     soundEngine.playCashDrawer();
@@ -1803,14 +1892,26 @@ export const usePosStore = create<PosState>((set, get) => ({
   // ══════════════════════════════════════════
 
   addStoreExpense: async (expenseInput) => {
-    const { storeExpenses } = get();
+    const { storeExpenses, logSecurityAction } = get();
+    const validAmount = Math.max(0, isNaN(expenseInput.amount) ? 0 : expenseInput.amount);
+    if (!expenseInput.title || !expenseInput.title.trim() || validAmount <= 0) {
+      return;
+    }
     const newExpense: StoreExpense = {
       ...expenseInput,
+      title: expenseInput.title.trim(),
+      amount: validAmount,
       id: `EXP-${Date.now()}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
       createdAt: new Date().toISOString(),
     };
     const updated = [newExpense, ...storeExpenses];
     await sqliteAdapter.saveStoreExpense(newExpense);
+    logSecurityAction(
+      'Enregistrement Charge d\'Exploitation',
+      `${newExpense.category}: ${newExpense.title} (${validAmount} DA)`,
+      newExpense.recordedBy || 'Admin',
+      false
+    );
     set({ storeExpenses: updated });
   },
 

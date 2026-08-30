@@ -2,23 +2,47 @@ import { useEffect } from 'react';
 import { usePosStore } from '../store/usePosStore';
 
 export const useKeyboardHotkeys = () => {
-  const { openModal, closeModal, activeModal, clearCart, holdSale, processPayment, quickCashPayment } = usePosStore();
+  const { openModal, closeModal, activeModal, clearCart, holdSale } = usePosStore();
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const isInputFocused =
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement;
+
       // Prevent browser default behavior for function keys
       if (e.key.startsWith('F') && e.key.length <= 3) {
         e.preventDefault();
       }
 
+      // Handle Escape to close active modal regardless of focus
+      if (e.key === 'Escape') {
+        if (activeModal) {
+          e.preventDefault();
+          closeModal();
+        }
+        return;
+      }
+
+      // If a modal is open or the user is typing in an input, do not trigger background global POS shortcuts
+      if (activeModal !== null) {
+        return;
+      }
+
       switch (e.key) {
         case 'F1':
-          clearCart();
+          if (!isInputFocused) {
+            clearCart();
+          }
           break;
 
         case 'F2': {
           const searchInput = document.querySelector('input[type="text"]') as HTMLInputElement;
-          if (searchInput) searchInput.focus();
+          if (searchInput) {
+            searchInput.focus();
+            searchInput.select();
+          }
           break;
         }
 
@@ -61,18 +85,6 @@ export const useKeyboardHotkeys = () => {
           openModal('settings');
           break;
 
-        case 'Escape':
-          if (activeModal) closeModal();
-          break;
-
-        case 'Enter':
-          if (activeModal === 'payment') {
-            processPayment();
-          } else if (activeModal === 'receipt') {
-            closeModal();
-          }
-          break;
-
         default:
           break;
       }
@@ -80,5 +92,5 @@ export const useKeyboardHotkeys = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeModal, clearCart, holdSale, openModal, closeModal, processPayment, quickCashPayment]);
+  }, [activeModal, clearCart, holdSale, openModal, closeModal]);
 };

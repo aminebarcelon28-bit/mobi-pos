@@ -35,14 +35,25 @@ export const InvoiceIngestionModal: React.FC = () => {
       const newParsedLines: typeof parsedLines = [];
 
       lines.forEach((line) => {
-        const parts = line.split(',').map((p) => p.trim());
+        const delimiter = line.includes(';') ? ';' : line.includes('\t') ? '\t' : ',';
+        const parts = line.split(delimiter).map((p) => p.trim().replace(/^["']|["']$/g, ''));
         if (parts.length >= 2) {
           const sku = parts[0];
-          const qty = parseInt(parts[1]) || 0;
-          const cost = parts[2] ? parseFloat(parts[2]) : undefined;
-          const imei = parts[3];
+          const rawQty = parts[1].replace(/[^\d-]/g, '');
+          const qty = Math.max(0, parseInt(rawQty, 10) || 0);
 
-          const existing = products.find((p) => p.sku.toLowerCase() === sku.toLowerCase());
+          let cost: number | undefined = undefined;
+          if (parts[2]) {
+            const rawCost = parts[2].replace(/\s/g, '').replace(',', '.').replace(/[^\d.-]/g, '');
+            const parsedCost = parseFloat(rawCost);
+            if (!isNaN(parsedCost) && parsedCost >= 0) {
+              cost = parsedCost;
+            }
+          }
+
+          const imei = parts[3] ? parts[3].trim() : undefined;
+
+          const existing = products.find((p) => p.sku.toLowerCase() === sku.toLowerCase() || p.barcode.toLowerCase() === sku.toLowerCase());
           if (existing && qty > 0) {
             saveProduct({
               ...existing,

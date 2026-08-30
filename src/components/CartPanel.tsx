@@ -4,6 +4,7 @@ import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
 import { soundEngine } from '../utils/audioFeedback';
+import { printCoordinator } from '../utils/printCoordinator';
 
 export const CartPanel: React.FC = () => {
   const {
@@ -65,11 +66,14 @@ export const CartPanel: React.FC = () => {
 
   const handleQuickCashWithBill = (billAmount: number) => {
     if (cart.length === 0) return;
+    const hasMissingIMEI = cart.some((item) => item.product.isSerialized && (!item.imeiNumber || !item.imeiNumber.trim()));
+    if (hasMissingIMEI) {
+      openModal('payment');
+      return;
+    }
     const res = processPayment([{ method: 'Espèces', amount: billAmount }]);
     if (res && res.success) {
-      setTimeout(() => {
-        window.print();
-      }, 50);
+      printCoordinator.printReceipt(50);
     }
   };
 
