@@ -805,8 +805,12 @@ export const usePosStore = create<PosState>((set, get) => ({
 
     const grossSubtotal = cart.reduce((acc, item) => {
       const itemPrice =
-        pricingTier === 'Wholesale' ? item.product.wholesalePrice || item.product.price * 0.75 : item.product.price;
-      return acc + itemPrice * item.quantity - item.discount;
+        item.appliedPrice !== undefined
+          ? item.appliedPrice
+          : pricingTier === 'Wholesale'
+          ? item.product.wholesalePrice || item.product.price * 0.75
+          : item.product.price;
+      return acc + itemPrice * item.quantity - (item.discount || 0);
     }, 0);
 
     const actualStoreCreditApplied = tenders 
@@ -971,8 +975,13 @@ export const usePosStore = create<PosState>((set, get) => ({
     if (cart.length === 0) return { success: false, reason: 'EMPTY_CART' };
 
     const grossSubtotal = cart.reduce((acc, item) => {
-      const itemPrice = pricingTier === 'Wholesale' ? item.product.wholesalePrice || item.product.price * 0.75 : item.product.price;
-      return acc + itemPrice * item.quantity - item.discount;
+      const itemPrice =
+        item.appliedPrice !== undefined
+          ? item.appliedPrice
+          : pricingTier === 'Wholesale'
+          ? item.product.wholesalePrice || item.product.price * 0.75
+          : item.product.price;
+      return acc + itemPrice * item.quantity - (item.discount || 0);
     }, 0);
 
     return processPayment([{ method: 'Espèces', amount: grossSubtotal }]);

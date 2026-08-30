@@ -149,7 +149,7 @@ export function generateProfessionalExcelXml(
   <Style ss:ID="RowCurrency">
    <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
    <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="11" ss:Bold="1" ss:Color="#0F172A"/>
-   <NumberFormat ss:Format="#,##0\ &quot;DA&quot;"/>
+   <NumberFormat ss:Format="#,##0 &quot;DA&quot;"/>
    <Borders>
     <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/>
    </Borders>
@@ -159,7 +159,7 @@ export function generateProfessionalExcelXml(
   <Style ss:ID="RowProfit">
    <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
    <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="11" ss:Bold="1" ss:Color="#059669"/>
-   <NumberFormat ss:Format="#,##0\ &quot;DA&quot;"/>
+   <NumberFormat ss:Format="#,##0 &quot;DA&quot;"/>
    <Borders>
     <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/>
    </Borders>
@@ -188,7 +188,7 @@ export function generateProfessionalExcelXml(
    <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
    <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="11" ss:Bold="1" ss:Color="#0F172A"/>
    <Interior ss:Color="#F8FAFC" ss:Pattern="Solid"/>
-   <NumberFormat ss:Format="#,##0\ &quot;DA&quot;"/>
+   <NumberFormat ss:Format="#,##0 &quot;DA&quot;"/>
    <Borders>
     <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/>
    </Borders>
@@ -199,7 +199,7 @@ export function generateProfessionalExcelXml(
    <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
    <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="11" ss:Bold="1" ss:Color="#059669"/>
    <Interior ss:Color="#F8FAFC" ss:Pattern="Solid"/>
-   <NumberFormat ss:Format="#,##0\ &quot;DA&quot;"/>
+   <NumberFormat ss:Format="#,##0 &quot;DA&quot;"/>
    <Borders>
     <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E2E8F0"/>
    </Borders>
@@ -219,7 +219,7 @@ export function generateProfessionalExcelXml(
    <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
    <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="10" ss:StrikeThrough="1" ss:Color="#991B1B"/>
    <Interior ss:Color="#FEE2E2" ss:Pattern="Solid"/>
-   <NumberFormat ss:Format="#,##0\ &quot;DA&quot;"/>
+   <NumberFormat ss:Format="#,##0 &quot;DA&quot;"/>
    <Borders>
     <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#FCA5A5"/>
    </Borders>
@@ -239,7 +239,7 @@ export function generateProfessionalExcelXml(
    <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
    <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="10" ss:Bold="1" ss:Color="#6B21A8"/>
    <Interior ss:Color="#F3E8FF" ss:Pattern="Solid"/>
-   <NumberFormat ss:Format="#,##0\ &quot;DA&quot;"/>
+   <NumberFormat ss:Format="#,##0 &quot;DA&quot;"/>
    <Borders>
     <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D8B4FE"/>
    </Borders>
@@ -260,7 +260,7 @@ export function generateProfessionalExcelXml(
    <Alignment ss:Horizontal="Right" ss:Vertical="Center"/>
    <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="12" ss:Bold="1" ss:Color="#34D399"/>
    <Interior ss:Color="#064E3B" ss:Pattern="Solid"/>
-   <NumberFormat ss:Format="#,##0\ &quot;DA&quot;"/>
+   <NumberFormat ss:Format="#,##0 &quot;DA&quot;"/>
    <Borders>
     <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#047857"/>
     <Border ss:Position="Bottom" ss:LineStyle="Double" ss:Weight="3" ss:Color="#047857"/>

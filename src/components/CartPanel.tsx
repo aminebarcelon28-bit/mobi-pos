@@ -27,10 +27,11 @@ export const CartPanel: React.FC = () => {
 
   // Calculate gross total based on active pricing tier
   const getItemPrice = (item: typeof cart[0]) => {
+    if (item.appliedPrice !== undefined) return item.appliedPrice;
     return pricingTier === 'Wholesale' ? item.product.wholesalePrice || item.product.price * 0.75 : item.product.price;
   };
 
-  const subtotal = cart.reduce((acc, item) => acc + getItemPrice(item) * item.quantity - item.discount, 0);
+  const subtotal = cart.reduce((acc, item) => acc + getItemPrice(item) * item.quantity - (item.discount || 0), 0);
   const total = subtotal;
 
   const quickBills = [500, 1000, 2000, 5000, 10000];

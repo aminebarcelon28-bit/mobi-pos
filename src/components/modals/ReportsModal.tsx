@@ -77,14 +77,15 @@ export const ReportsModal: React.FC = () => {
     }
   };
 
-  // Date Filtering Helper
-  const filterByDateRange = (list: SaleTransaction[]) => {
+  // Financial KPI Metrics (excludes voided transactions and accounts for refunds)
+  const dateFilteredTransactions = useMemo(() => {
+    const list = transactions || [];
     if (dateRangeFilter === 'all') return list;
     const now = new Date();
 
     return list.filter((t) => {
       const txDate = new Date(t.createdAt);
-      if (isNaN(txDate.getTime())) return true; // Keep if date string format is non-ISO
+      if (isNaN(txDate.getTime())) return true;
 
       if (dateRangeFilter === 'today') {
         return txDate.toDateString() === now.toDateString();
@@ -99,11 +100,7 @@ export const ReportsModal: React.FC = () => {
       }
       return true;
     });
-  };
-
-  // Financial KPI Metrics (excludes voided transactions and accounts for refunds)
-  const safeTransactions = transactions || [];
-  const dateFilteredTransactions = useMemo(() => filterByDateRange(safeTransactions), [safeTransactions, dateRangeFilter]);
+  }, [transactions, dateRangeFilter]);
 
   const validSales = dateFilteredTransactions.filter((t) => t.status !== 'VOIDED' && !t.isRefund);
   const totalGrossRevenue = validSales.reduce((acc, t) => acc + t.total, 0);
@@ -359,7 +356,7 @@ export const ReportsModal: React.FC = () => {
                   }`}
                 >
                   <ShoppingBag className="w-3.5 h-3.5" />
-                  Historique Transactions & Inspection ({safeTransactions.length})
+                  Historique Transactions & Inspection ({transactions.length})
                 </button>
 
                 <button
