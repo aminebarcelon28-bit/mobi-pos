@@ -18,6 +18,8 @@ import {
   RefreshCw,
   Package,
   RotateCcw,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { calculateStockAlerts } from '../utils/alertEngine';
@@ -41,6 +43,15 @@ export const Header: React.FC = () => {
     activeShift,
   } = usePosStore();
   
+  const [isAudioMuted, setIsAudioMuted] = useState<boolean>(() => soundEngine.getProfile().isMuted);
+
+  const handleToggleMute = () => {
+    const muted = soundEngine.toggleMute();
+    setIsAudioMuted(muted);
+    if (!muted) {
+      soundEngine.playScan();
+    }
+  };
   const [isPinOpen, setIsPinOpen] = useState(false);
   const { showToast } = useToast();
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -295,6 +306,19 @@ export const Header: React.FC = () => {
               <span>Ouvrir Caisse</span>
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={handleToggleMute}
+            className={`p-2 rounded-xl border transition cursor-pointer ${
+              isAudioMuted
+                ? 'bg-red-500/10 border-red-500/30 text-red-400'
+                : 'bg-pos-card border-pos-border text-emerald-400 hover:border-emerald-400'
+            }`}
+            title={isAudioMuted ? 'Activer le son (Audio Muet)' : 'Mode Silencieux (Muet)'}
+          >
+            {isAudioMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+          </button>
 
           <ThemeToggle />
         </div>
