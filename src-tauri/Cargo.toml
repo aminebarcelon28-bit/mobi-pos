@@ -1,6 +1,6 @@
 [package]
 name = "mobi-pos"
-version = "1.5.5"
+version = "1.5.6"
 description = "Mobile Phone Accessories Point of Sale System"
 authors = ["Mobi Team"]
 edition = "2021"

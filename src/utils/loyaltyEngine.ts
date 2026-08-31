@@ -283,11 +283,14 @@ export const calculateFinancialProfitImpact = (
  */
 export const createLedgerEntry = (
   customerId: string,
-  type: 'earn' | 'redeem' | 'bonus' | 'conversion' | 'adjustment',
+  type: 'earn' | 'redeem' | 'bonus' | 'conversion' | 'adjustment' | 'expired',
   points: number,
   balanceAfter: number,
   description: string,
-  referenceId?: string
+  referenceId?: string,
+  creditDeltaDzd?: number,
+  expiresAt?: string | null,
+  performedBy?: string
 ): LoyaltyLedgerEntry => {
   return {
     id: `LEDGER-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
@@ -298,6 +301,161 @@ export const createLedgerEntry = (
     balanceAfter,
     description,
     referenceId,
+    creditDeltaDzd,
+    expiresAt,
+    performedBy: performedBy || 'Système Caisse',
+  };
+};
+
+/**
+ * 🛡️ COGS MARGIN FLOOR GUARDRAIL (Anti-Bankruptcy Protection)
+ * Guarantees that store credit redemptions can never force a transaction below wholesale cost.
+ */
+export const calculateMaxAllowedCredit = (
+  grossTotal: number,
+  totalCogs: number,
+  customerAvailableCredit: number,
+  maxRedemptionPercent: number = 50
+): { maxAllowedCredit: number; isCogsConstrained: boolean; profitMarginFloor: number } => {
+  const safeGross = Math.max(0, grossTotal);
+  const safeCogs = Math.max(0, totalCogs);
+  const safeBalance = Math.max(0, customerAvailableCredit);
+
+  // 1. Max standard cap based on percentage (e.g. 50% of basket)
+  const percentCap = Math.floor(safeGross * (maxRedemptionPercent / 100));
+
+  // 2. Max allowable credit before piercing below wholesale COGS
+  const profitMarginFloor = Math.max(0, safeGross - safeCogs);
+
+  // 3. Absolute ceiling is the most restrictive of Balance, Percent Cap, and COGS Floor
+  const maxAllowedCredit = Math.min(safeBalance, percentCap, profitMarginFloor);
+  const isCogsConstrained = maxAllowedCredit === profitMarginFloor && profitMarginFloor < safeBalance;
+
+  return {
+    maxAllowedCredit,
+    isCogsConstrained,
+    profitMarginFloor,
+  };
+};
+
+/**
+ * 🚫 NET-PAID OUT-OF-POCKET ACCRUAL (Anti-Perpetual Inflation)
+ * Awards points strictly on the net cash paid, weighted by category margins and tier multiplier.
+ */
+export const calculateNetPaidEarnedPoints = (
+  cart: CartItem[],
+  netCashPaid: number,
+  grossTotal: number,
+  pointsMultiplier: number = 1.0,
+  config: LoyaltyProgramConfig = DEFAULT_LOYALTY_CONFIG
+): number => {
+  if (netCashPaid <= 0 || grossTotal <= 0) return 0;
+  const baseSpendPerPoint = config?.baseSpendPerPoint || 100;
+
+  // Proportional net-paid ratio across cart
+  const netRatio = Math.min(1.0, netCashPaid / grossTotal);
+
+  let totalPoints = 0;
+  for (const item of cart) {
+    const itemGross = item.appliedPrice * item.quantity - item.discount;
+    if (itemGross <= 0) continue;
+
+    // Allocate proportional net cash to this line item
+    const itemNetPaid = itemGross * netRatio;
+
+    // Margin-weighted category multiplier
+    const catMultiplierObj = (config?.categoryMultipliers || []).find(
+      (cm) => cm.category === item.product.category
+    );
+    const categoryMult = catMultiplierObj ? catMultiplierObj.multiplier : 1.0;
+
+    const baseItemPoints = Math.floor(itemNetPaid / baseSpendPerPoint);
+    const finalItemPoints = Math.floor(baseItemPoints * pointsMultiplier * categoryMult);
+    totalPoints += finalItemPoints;
+  }
+
+  return Math.max(1, totalPoints);
+};
+
+/**
+ * ⏳ FIFO POINT BUCKET DEPLETION ENGINE
+ * Consumes the oldest expiring points first during credit redemptions.
+ */
+export const depleteFifoPointBuckets = (
+  buckets: import('../types/pos').LoyaltyPointBucket[],
+  pointsToRedeem: number
+): {
+  updatedBuckets: import('../types/pos').LoyaltyPointBucket[];
+  consumedPoints: number;
+  remainingPointsToRedeem: number;
+} => {
+  if (!buckets || buckets.length === 0 || pointsToRedeem <= 0) {
+    return { updatedBuckets: buckets || [], consumedPoints: 0, remainingPointsToRedeem: pointsToRedeem };
+  }
+
+  // Sort: Expiring soonest first, unexpiring (null) last
+  const sorted = [...buckets].sort((a, b) => {
+    if (!a.expiresAt && !b.expiresAt) return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    if (!a.expiresAt) return 1;
+    if (!b.expiresAt) return -1;
+    return new Date(a.expiresAt).getTime() - new Date(b.expiresAt).getTime();
+  });
+
+  let needed = pointsToRedeem;
+  let totalConsumed = 0;
+
+  const updated = sorted.map((b) => {
+    if (b.isFullyConsumed || b.remainingPoints <= 0 || needed <= 0) {
+      return b;
+    }
+    const deduct = Math.min(b.remainingPoints, needed);
+    needed -= deduct;
+    totalConsumed += deduct;
+    const remaining = b.remainingPoints - deduct;
+    return {
+      ...b,
+      remainingPoints: remaining,
+      isFullyConsumed: remaining === 0,
+    };
+  });
+
+  return {
+    updatedBuckets: updated,
+    consumedPoints: totalConsumed,
+    remainingPointsToRedeem: needed,
+  };
+};
+
+/**
+ * 📅 CREATE DATED FIFO POINT BUCKET
+ */
+export const createDatedPointBucket = (
+  customerId: string,
+  originTransactionId: string,
+  pointsEarned: number,
+  earnedOnNetSpendDzd: number,
+  tier: import('../types/pos').LoyaltyTierName = 'Bronze',
+  pointRate: number = 10
+): import('../types/pos').LoyaltyPointBucket => {
+  let daysValid: number | null = 180;
+  if (tier === 'Gold') daysValid = 365;
+  if (tier === 'Platinum' || tier === 'VIP Diamond') daysValid = null; // VIP Lifetime Exemption
+
+  const expiresAt = daysValid
+    ? new Date(Date.now() + daysValid * 24 * 3600 * 1000).toISOString()
+    : null;
+
+  return {
+    id: `BUCKET-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+    customerId,
+    originTransactionId,
+    initialPoints: pointsEarned,
+    remainingPoints: pointsEarned,
+    creditValueDzd: pointsEarned * pointRate,
+    earnedOnNetSpendDzd,
+    expiresAt,
+    isFullyConsumed: false,
+    createdAt: new Date().toISOString(),
   };
 };
 
@@ -315,5 +473,6 @@ export const syncCustomerLoyaltyState = (
     loyaltyTier: tierInfo.name,
     totalSpent,
     ledger: customer.ledger || [],
+    pointBuckets: customer.pointBuckets || [],
   };
 };

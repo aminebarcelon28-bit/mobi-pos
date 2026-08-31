@@ -135,15 +135,58 @@ export interface FinancialProfitImpact {
   futureLiabilityDA: number;
 }
 
+export interface LoyaltyPointBucket {
+  id: string;
+  customerId: string;
+  originTransactionId: string;
+  initialPoints: number;
+  remainingPoints: number;
+  creditValueDzd: number;
+  earnedOnNetSpendDzd: number;
+  expiresAt?: string | null; // null = Lifetime (VIP Platinum & Diamond)
+  isFullyConsumed: boolean;
+  createdAt: string;
+}
+
+export interface AdminLoyaltyAuditLog {
+  id: string;
+  adminUser: string;
+  actionType: 'MANUAL_OVERRIDE' | 'RULE_MODIFIED' | 'BULK_EXPIRATION' | 'FRAUD_LOCK';
+  customerId?: string;
+  customerName?: string;
+  previousBalanceDzd: number;
+  newBalanceDzd: number;
+  adjustmentDeltaDzd: number;
+  reason: string;
+  terminalIp?: string;
+  createdAt: string;
+}
+
+export interface DynamicLoyaltyProgramRules {
+  id: string;
+  ruleName: string;
+  earningRateMultiplier: number;
+  pointsToDzdRatio: number;
+  creditExpirationDays: number;
+  minSpendForRewardDzd: number;
+  marginFloorCogsProtection: boolean;
+  isActive: boolean;
+  updatedBy: string;
+  updatedAt: string;
+}
+
 export interface LoyaltyLedgerEntry {
   id: string;
   customerId: string;
   timestamp: string;
-  type: 'earn' | 'redeem' | 'bonus' | 'conversion' | 'adjustment';
+  type: 'earn' | 'redeem' | 'bonus' | 'conversion' | 'adjustment' | 'expired';
   points: number;
   balanceAfter: number;
   description: string;
   referenceId?: string;
+  creditDeltaDzd?: number;
+  expiresAt?: string | null;
+  performedBy?: string;
 }
 
 export interface Customer {
@@ -154,10 +197,13 @@ export interface Customer {
   registeredDevice: string;
   loyaltyPoints: number;
   storeCredit: number;
+  currentCreditBalanceDzd?: number;
+  totalLifetimeSpentDzd?: number;
   pricingTier: PricingTier;
   loyaltyTier?: LoyaltyTierName;
   totalSpent?: number;
   ledger?: LoyaltyLedgerEntry[];
+  pointBuckets?: LoyaltyPointBucket[];
   avatarUrl?: string;
   loyaltyCardCode?: string;
   barcode?: string;
@@ -605,7 +651,7 @@ export interface HardwareStatus {
   customerDisplayConnected: boolean;
 }
 
-export const APP_VERSION = '1.5.5';
+export const APP_VERSION = '1.5.6';
 
 export const formatDZD = (amount: number): string => {
   return new Intl.NumberFormat('fr-DZ', {

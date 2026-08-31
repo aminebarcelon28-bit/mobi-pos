@@ -37,6 +37,9 @@ import { INITIAL_PRODUCTS, INITIAL_CUSTOMERS } from '../data/mockData';
 import {
   calculateCustomerTier,
   calculateEarnedPoints,
+  calculateNetPaidEarnedPoints,
+  depleteFifoPointBuckets,
+  createDatedPointBucket,
   convertPointsToCredit,
   createLedgerEntry,
 } from '../utils/loyaltyEngine';
@@ -1048,35 +1051,70 @@ export const usePosStore = create<PosState>((set, get) => ({
     const { customerDebts } = get();
     let newCustomerDebts = customerDebts;
 
-    // Update customer credit, loyalty points, tier, debt & ledger history
+    // Update customer credit, loyalty points, tier, debt & ledger history with Net-Paid & FIFO rules
     let updatedCustomer = currentCustomer;
     let updatedCustomers = customers;
     if (currentCustomer) {
       const currentTotalSpent = currentCustomer.totalSpent || 0;
       const currentTier = calculateCustomerTier(currentTotalSpent);
-      const earnedPoints = calculateEarnedPoints(total, currentTier.pointsMultiplier);
-      const newTotalSpent = currentTotalSpent + total;
+      
+      // 🚫 Net-Paid Accrual: Earn points strictly on the net cash paid (remainingToPay), not on redeemed credit!
+      const earnedPoints = remainingToPay > 0 
+        ? calculateNetPaidEarnedPoints(cart, remainingToPay, grossSubtotal, currentTier.pointsMultiplier)
+        : 0;
+
+      const newTotalSpent = currentTotalSpent + remainingToPay;
       const newTier = calculateCustomerTier(newTotalSpent);
 
-      // Rule: Every 20,000 DA spent unlocks 1,000 DA Store Credit Bonus
+      // Rule: Every 20,000 DA net spent unlocks 1,000 DA Store Credit Bonus
       const prev20kMilestones = Math.floor(currentTotalSpent / 20000);
       const new20kMilestones = Math.floor(newTotalSpent / 20000);
       const milestoneBonusUnlocked = Math.max(0, new20kMilestones - prev20kMilestones);
       const earnedCreditBonus = milestoneBonusUnlocked * 1000;
 
+      // ⏳ FIFO Point Bucket Depletion for credit redeemed
+      const existingBuckets = currentCustomer.pointBuckets || [];
+      const pointsToRedeem = Math.floor(actualStoreCreditApplied / 10);
+      const { updatedBuckets } = depleteFifoPointBuckets(existingBuckets, pointsToRedeem);
+
+      // 📅 Create new dated FIFO bucket for points earned on this net purchase
+      const finalBuckets = [...updatedBuckets];
+      if (earnedPoints > 0) {
+        finalBuckets.push(createDatedPointBucket(
+          currentCustomer.id,
+          receiptNumber,
+          earnedPoints,
+          remainingToPay,
+          newTier.name
+        ));
+      }
+
       const newCredit = Math.max(0, currentCustomer.storeCredit - actualStoreCreditApplied) + earnedCreditBonus;
-      const newPoints = currentCustomer.loyaltyPoints + earnedPoints;
+      const newPoints = Math.max(0, currentCustomer.loyaltyPoints - pointsToRedeem) + earnedPoints;
       const newDebt = (currentCustomer.currentDebt || 0) + creditDebtAmount;
 
       const newEntries: LoyaltyLedgerEntry[] = [];
+      if (actualStoreCreditApplied > 0) {
+        newEntries.push(createLedgerEntry(
+          currentCustomer.id,
+          'redeem',
+          -pointsToRedeem,
+          newPoints,
+          `Déduction Avoir Client sur Ticket ${receiptNumber} (-${actualStoreCreditApplied} DA)`,
+          transactionId,
+          -actualStoreCreditApplied
+        ));
+      }
+
       if (earnedPoints > 0) {
         newEntries.push(createLedgerEntry(
           currentCustomer.id,
           'earn',
           earnedPoints,
           newPoints,
-          `Achat Ticket ${receiptNumber} (${total} DA - Multiplicateur ${currentTier.name} ${currentTier.pointsMultiplier}x)`,
-          transactionId
+          `Gain sur paiement net de ${remainingToPay} DA (Ticket ${receiptNumber} - ${newTier.name} ${newTier.pointsMultiplier}x)`,
+          transactionId,
+          earnedPoints * 10
         ));
       }
 
@@ -1087,7 +1125,8 @@ export const usePosStore = create<PosState>((set, get) => ({
           0,
           newPoints,
           `🎁 Bonus Palier 20 000 DA Atteint : +${earnedCreditBonus} DA Crédit Avoir Client`,
-          transactionId
+          transactionId,
+          earnedCreditBonus
         ));
       }
 
@@ -1098,7 +1137,10 @@ export const usePosStore = create<PosState>((set, get) => ({
         loyaltyTier: newTier.name,
         loyaltyPoints: newPoints,
         storeCredit: newCredit,
+        currentCreditBalanceDzd: newCredit,
+        totalLifetimeSpentDzd: newTotalSpent,
         currentDebt: newDebt,
+        pointBuckets: finalBuckets,
         ledger: [...newEntries, ...existingLedger],
       };
 
