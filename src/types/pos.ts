@@ -511,7 +511,7 @@ export interface HardwareStatus {
   customerDisplayConnected: boolean;
 }
 
-export const APP_VERSION = '1.4.4';
+export const APP_VERSION = '1.4.5';
 
 export const formatDZD = (amount: number): string => {
   return new Intl.NumberFormat('fr-DZ', {
