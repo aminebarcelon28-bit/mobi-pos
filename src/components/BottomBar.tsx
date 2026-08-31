@@ -18,6 +18,7 @@ import {
   ArrowDownCircle,
   Keyboard,
   Boxes,
+  RotateCcw,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { useToast } from './ui/Toast';
@@ -92,6 +93,8 @@ export const BottomBar: React.FC = () => {
         <span>Rapports: <span className="hotkey-badge text-emerald-300">F9</span></span>
         <span className="text-pos-border">|</span>
         <span>Stock: <span className="hotkey-badge text-emerald-300">F10</span></span>
+        <span className="text-pos-border">|</span>
+        <span>Remboursement: <span className="hotkey-badge text-emerald-300">F11</span></span>
       </div>
 
       <div className="flex items-center justify-between gap-2">
@@ -145,7 +148,7 @@ export const BottomBar: React.FC = () => {
           <button
             onClick={handleHoldSaleClick}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer"
-            title="Mettre la Vente en Attente / En Pause (F7)"
+            title="Mettre la Vente en Attente (F7)"
           >
             <PauseCircle className="w-3.5 h-3.5 text-teal-500" />
             <span>Mettre en Attente</span>
@@ -172,15 +175,25 @@ export const BottomBar: React.FC = () => {
             <span className="hotkey-badge">F10</span>
           </button>
 
+          {/* Refund / Remboursement F11 */}
+          <button
+            onClick={() => openModal('refund')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer"
+            title="Retours Marchandise & Remboursements (F11)"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-purple-400" />
+            <span>Remboursement</span>
+            <span className="hotkey-badge">F11</span>
+          </button>
+
           <div className="relative" ref={menuRef}>
             <button
               onClick={() => setIsMoreMenuOpen(!isMoreMenuOpen)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer"
-              title="Menu Outils Supplémentaires (F11)"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-muted hover:text-pos-text transition font-medium cursor-pointer"
+              title="Autres Actions & Menus"
             >
               <SlidersHorizontal className="w-3.5 h-3.5 text-pos-muted" />
               <span>Plus</span>
-              <span className="hotkey-badge">F11</span>
             </button>
             
             {isMoreMenuOpen && (

@@ -16,11 +16,22 @@ export const useKeyboardHotkeys = () => {
         e.preventDefault();
       }
 
-      // Handle Escape to close active modal regardless of focus
+      // Handle Escape or F11 to close/toggle refund modal
       if (e.key === 'Escape') {
         if (activeModal) {
           e.preventDefault();
           closeModal();
+        }
+        return;
+      }
+
+      // F11: Direct Toggle for Refund Modal
+      if (e.key === 'F11') {
+        e.preventDefault();
+        if (activeModal === 'refund') {
+          closeModal();
+        } else {
+          openModal('refund');
         }
         return;
       }
