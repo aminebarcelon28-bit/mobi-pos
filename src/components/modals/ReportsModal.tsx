@@ -464,8 +464,14 @@ export const ReportsModal: React.FC = () => {
   if (activeModal !== 'reports') return null;
 
   return (
-    <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-[90vh] flex flex-col relative">
+    <div
+      onClick={closeModal}
+      className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 select-none cursor-pointer"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-[90vh] flex flex-col relative cursor-default"
+      >
         
         {/* Modal Header */}
         <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">

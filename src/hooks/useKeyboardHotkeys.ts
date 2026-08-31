@@ -16,7 +16,7 @@ export const useKeyboardHotkeys = () => {
         e.preventDefault();
       }
 
-      // Handle Escape or F11 to close/toggle refund modal
+      // Universal Escape handler: Always closes any open modal
       if (e.key === 'Escape') {
         if (activeModal) {
           e.preventDefault();
@@ -25,13 +25,97 @@ export const useKeyboardHotkeys = () => {
         return;
       }
 
-      // F11: Direct Toggle for Refund Modal
+      // Modal Function Key Toggles:
+      // If the modal corresponding to the pressed function key is already open, pressing the function key again closes it.
+      if (e.key === 'F12') {
+        e.preventDefault();
+        if (activeModal === 'settings') {
+          closeModal();
+        } else {
+          openModal('settings');
+        }
+        return;
+      }
+
       if (e.key === 'F11') {
         e.preventDefault();
         if (activeModal === 'refund') {
           closeModal();
         } else {
           openModal('refund');
+        }
+        return;
+      }
+
+      if (e.key === 'F10') {
+        e.preventDefault();
+        if (activeModal === 'inventory_manager') {
+          closeModal();
+        } else {
+          openModal('inventory_manager');
+        }
+        return;
+      }
+
+      if (e.key === 'F9') {
+        e.preventDefault();
+        if (activeModal === 'reports') {
+          closeModal();
+        } else {
+          openModal('reports');
+        }
+        return;
+      }
+
+      if (e.key === 'F8') {
+        e.preventDefault();
+        if (activeModal === 'hotkey_guide') {
+          closeModal();
+        } else {
+          openModal('hotkey_guide');
+        }
+        return;
+      }
+
+      if (e.key === 'F6') {
+        e.preventDefault();
+        if (activeModal === 'discount') {
+          closeModal();
+        } else {
+          openModal('discount');
+        }
+        return;
+      }
+
+      if (e.key === 'F5') {
+        e.preventDefault();
+        if (activeModal === 'customers') {
+          closeModal();
+        } else {
+          openModal('customers');
+        }
+        return;
+      }
+
+      if (e.key === 'F4') {
+        e.preventDefault();
+        if (activeModal === 'hold') {
+          closeModal();
+        } else {
+          openModal('hold');
+        }
+        return;
+      }
+
+      if (e.key === 'F3') {
+        e.preventDefault();
+        if (activeModal === 'payment') {
+          closeModal();
+        } else {
+          const currentCart = usePosStore.getState().cart;
+          if (currentCart.length > 0) {
+            openModal('payment');
+          }
         }
         return;
       }
@@ -65,48 +149,8 @@ export const useKeyboardHotkeys = () => {
           break;
         }
 
-        case 'F3': {
-          const currentCart = usePosStore.getState().cart;
-          if (currentCart.length > 0) {
-            openModal('payment');
-          }
-          break;
-        }
-
-        case 'F4':
-          openModal('hold');
-          break;
-
-        case 'F5':
-          openModal('customers');
-          break;
-
-        case 'F6':
-          openModal('discount');
-          break;
-
         case 'F7':
           holdSale();
-          break;
-
-        case 'F8':
-          openModal('hotkey_guide');
-          break;
-
-        case 'F9':
-          openModal('reports');
-          break;
-
-        case 'F10':
-          openModal('inventory_manager');
-          break;
-
-        case 'F11':
-          openModal('refund');
-          break;
-
-        case 'F12':
-          openModal('settings');
           break;
 
         default:

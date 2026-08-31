@@ -495,6 +495,22 @@ export const SettingsModal: React.FC = () => {
     };
   }, [activeModal, runAutoDetection, showToast]);
 
+  // Capture-phase keyboard listener for Escape & F12 to immediately exit settings
+  useEffect(() => {
+    if (activeModal !== 'settings') return;
+
+    const handleLocalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' || e.key === 'F12') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeModal();
+      }
+    };
+
+    window.addEventListener('keydown', handleLocalKeyDown, true);
+    return () => window.removeEventListener('keydown', handleLocalKeyDown, true);
+  }, [activeModal, closeModal]);
+
   if (activeModal !== 'settings') return null;
 
   // ── File Upload Handler ──
@@ -574,8 +590,14 @@ export const SettingsModal: React.FC = () => {
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-[90vh] flex flex-col">
+    <div
+      onClick={closeModal}
+      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none cursor-pointer"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-[90vh] flex flex-col cursor-default"
+      >
 
         {/* ═══ Header ═══ */}
         <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
@@ -595,7 +617,12 @@ export const SettingsModal: React.FC = () => {
               </p>
             </div>
           </div>
-          <button onClick={closeModal} className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition">
+          <button
+            type="button"
+            onClick={closeModal}
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+            title="Fermer les paramètres (Échap / F12)"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -1772,8 +1799,14 @@ export const SettingsModal: React.FC = () => {
         {/* ═══ Footer ═══ */}
         <div className="p-3 border-t border-pos-border bg-pos-card flex justify-between items-center text-xs text-pos-muted shrink-0">
           <span>Centre de Commande Matériel • {connectedCount}/{devices.length} prêts • Plug & Play Auto-Reconnaissance actif</span>
-          <button onClick={closeModal} className="px-4 py-1.5 rounded-xl bg-pos-hover text-pos-text font-semibold cursor-pointer">
-            Fermer
+          <button
+            type="button"
+            onClick={closeModal}
+            className="px-5 py-2 rounded-xl bg-pos-hover hover:bg-pos-border text-pos-text font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+            title="Quitter les paramètres"
+          >
+            <span>Fermer les Paramètres</span>
+            <span className="text-[10px] bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border text-pos-muted">Échap / F12</span>
           </button>
         </div>
       </div>
