@@ -45,6 +45,39 @@ export const InventoryManagerModal: React.FC = () => {
           </div>
         </div>
 
+        {/* Real-Time Inventory Valuation & Profit Audit Banner */}
+        <div className="p-3 bg-pos-card/60 border-b border-pos-border grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          <div className="bg-pos-bg border border-pos-border p-2.5 rounded-xl">
+            <span className="text-[9px] font-bold uppercase text-pos-muted block">Valeur Stock au Coût</span>
+            <p className="text-xs sm:text-sm font-black font-mono text-pos-text mt-0.5">
+              {formatDZD(products.reduce((sum, p) => sum + (p.stock || 0) * (p.costPrice || 0), 0))}
+            </p>
+          </div>
+
+          <div className="bg-pos-bg border border-pos-border p-2.5 rounded-xl">
+            <span className="text-[9px] font-bold uppercase text-pos-muted block">Valeur Marchande (Vente)</span>
+            <p className="text-xs sm:text-sm font-black font-mono text-emerald-400 mt-0.5">
+              {formatDZD(products.reduce((sum, p) => sum + (p.stock || 0) * p.price, 0))}
+            </p>
+          </div>
+
+          <div className="bg-pos-bg border border-pos-border p-2.5 rounded-xl">
+            <span className="text-[9px] font-bold uppercase text-pos-muted block">Marge Potentielle Latente</span>
+            <p className="text-xs sm:text-sm font-black font-mono text-cyan-400 mt-0.5">
+              {formatDZD(
+                products.reduce((sum, p) => sum + (p.stock || 0) * (p.price - (p.costPrice || 0)), 0)
+              )}
+            </p>
+          </div>
+
+          <div className="bg-pos-bg border border-pos-border p-2.5 rounded-xl">
+            <span className="text-[9px] font-bold uppercase text-pos-muted block">Volume Total Pièces</span>
+            <p className="text-xs sm:text-sm font-black font-mono text-amber-400 mt-0.5">
+              {products.reduce((sum, p) => sum + (p.stock || 0), 0)} unités ({products.length} réf.)
+            </p>
+          </div>
+        </div>
+
         {/* Toolbar & Filter Bar */}
         <div className="p-3 border-b border-pos-border bg-pos-bg flex items-center justify-between gap-3">
           <div className="relative flex-1 max-w-md">

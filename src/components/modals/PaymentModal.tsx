@@ -124,13 +124,15 @@ export const PaymentModal: React.FC = () => {
     const totalTendered = finalTenders.reduce((acc, t) => acc + t.amount, 0);
     const calculatedChange = Math.max(0, totalTendered - montantTotal);
 
-    const result = processPayment(finalTenders);
+    const result = await processPayment(finalTenders);
     if (result && !result.success) {
       setIsProcessing(false);
       if (result.reason === 'INSUFFICIENT_CASH') {
         showToast('Montant insuffisant pour valider la vente.', 'error');
       } else if (result.reason?.startsWith('IMEI_REQUIRED')) {
         showToast('Veuillez saisir les numéros IMEI pour tous les articles sérialisés.', 'warning');
+      } else if (result.reason === 'PERSISTENCE_FAILED') {
+        showToast('Erreur d\'écriture base de données. Vente non enregistrée.', 'error');
       } else {
         showToast('Échec de validation de la vente.', 'error');
       }

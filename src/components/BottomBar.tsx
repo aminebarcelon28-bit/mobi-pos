@@ -14,11 +14,13 @@ import {
   Sliders,
   CheckCircle2,
   Database,
+  Play,
+  ArrowDownCircle,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 
 export const BottomBar: React.FC = () => {
-  const { openModal, holdSale, clearCart, heldSales } = usePosStore();
+  const { openModal, holdSale, clearCart, heldSales, activeShift } = usePosStore();
   const [timeStr, setTimeStr] = useState('');
   const [dateStr, setDateStr] = useState('');
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
@@ -141,13 +143,32 @@ export const BottomBar: React.FC = () => {
             {isMoreMenuOpen && (
               <div className="absolute bottom-full left-0 mb-2 w-56 bg-pos-panel border border-pos-border rounded-xl shadow-xl overflow-hidden z-50">
                 <div className="p-1.5 space-y-1">
-                  <button
-                    onClick={() => { openModal('shift_zreport'); setIsMoreMenuOpen(false); }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-pos-hover text-xs text-pos-text transition"
-                  >
-                    <ShieldAlert className="w-4 h-4 text-emerald-400" />
-                    <span>Rapport Z (Clôture)</span>
-                  </button>
+                  {activeShift ? (
+                    <>
+                      <button
+                        onClick={() => { openModal('shift_movement'); setIsMoreMenuOpen(false); }}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-pos-hover text-xs text-amber-400 font-bold transition"
+                      >
+                        <ArrowDownCircle className="w-4 h-4 text-amber-400" />
+                        <span>Dépense / Mouvement Caisse</span>
+                      </button>
+                      <button
+                        onClick={() => { openModal('shift_close'); setIsMoreMenuOpen(false); }}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-pos-hover text-xs text-emerald-400 font-bold transition"
+                      >
+                        <ShieldAlert className="w-4 h-4 text-emerald-400" />
+                        <span>Clôture Caisse & Rapport Z</span>
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => { openModal('shift_open'); setIsMoreMenuOpen(false); }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-pos-hover text-xs text-emerald-400 font-bold transition"
+                    >
+                      <Play className="w-4 h-4 text-emerald-400" />
+                      <span>Ouvrir la Caisse (Start Shift)</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => { openModal('receipt_template'); setIsMoreMenuOpen(false); }}
                     className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-pos-hover text-xs text-pos-text transition"

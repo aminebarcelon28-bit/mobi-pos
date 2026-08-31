@@ -45,6 +45,13 @@ try {
   writeFileSync(cargoPath, cargoContent);
   console.log(`  ✓ Updated src-tauri/Cargo.toml to ${targetVersion}`);
 
+  // 5. Update src/types/pos.ts APP_VERSION
+  const posTypesPath = resolve('src/types/pos.ts');
+  let posTypesContent = readFileSync(posTypesPath, 'utf-8');
+  posTypesContent = posTypesContent.replace(/export const APP_VERSION = '.*?';/, `export const APP_VERSION = '${targetVersion}';`);
+  writeFileSync(posTypesPath, posTypesContent);
+  console.log(`  ✓ Updated src/types/pos.ts to ${targetVersion}`);
+
   // 5. Git Commit
   console.log('📌 Creating release commit...');
   execSync('git add .', { stdio: 'inherit' });

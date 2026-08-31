@@ -21,9 +21,11 @@ import {
   DollarSign,
   Plus,
   Trash2,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import { formatDZD } from '../../types/pos';
+import { formatDZD, formatDateTime } from '../../types/pos';
 import type { SaleTransaction, ExpenseCategory, PaymentMethodType } from '../../types/pos';
 import { SalesAnalyticsCharts } from '../reports/SalesAnalyticsCharts';
 import { useToast } from '../ui/Toast';
@@ -72,6 +74,8 @@ export const ReportsModal: React.FC = () => {
   const [paymentFilter, setPaymentFilter] = useState('Tous');
   const [statusFilter, setStatusFilter] = useState('Tous');
   const [dateRangeFilter, setDateRangeFilter] = useState<'all' | 'today' | '7days' | '30days'>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 50;
 
   // Export Tab State
   const [exportSuccess, setExportSuccess] = useState<string | null>(null);
@@ -211,6 +215,14 @@ export const ReportsModal: React.FC = () => {
 
     return matchesPayment && matchesStatus && matchesSearch;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / PAGE_SIZE));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+
+  const paginatedTransactions = useMemo(() => {
+    const start = (safeCurrentPage - 1) * PAGE_SIZE;
+    return filteredTransactions.slice(start, start + PAGE_SIZE);
+  }, [filteredTransactions, safeCurrentPage]);
 
   const handleReprintFromInspector = (t: SaleTransaction) => {
     setInspectingTransaction(null);
@@ -603,14 +615,14 @@ export const ReportsModal: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-pos-border/40">
-                        {filteredTransactions.length === 0 ? (
+                        {paginatedTransactions.length === 0 ? (
                           <tr>
                             <td colSpan={9} className="p-8 text-center text-pos-muted font-medium">
                               Aucune transaction ne correspond à vos critères de recherche.
                             </td>
                           </tr>
                         ) : (
-                          filteredTransactions.map((t) => {
+                          paginatedTransactions.map((t) => {
                             const isVoided = t.status === 'VOIDED';
                             const isRefund = Boolean(t.isRefund);
                             const isRefunded = t.status === 'REFUNDED';
@@ -690,7 +702,7 @@ export const ReportsModal: React.FC = () => {
                                     {t.paymentMethod}
                                   </span>
                                 </td>
-                                <td className="p-3 text-right text-pos-muted text-[11px] font-mono">{t.createdAt}</td>
+                                <td className="p-3 text-right text-pos-muted text-[11px] font-mono">{formatDateTime(t.createdAt)}</td>
                                 <td className="p-3 text-center">
                                   <div className="flex items-center justify-center gap-1.5">
                                     <button
@@ -716,6 +728,38 @@ export const ReportsModal: React.FC = () => {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* Pagination Controls */}
+                  {filteredTransactions.length > PAGE_SIZE && (
+                    <div className="flex items-center justify-between px-4 py-2.5 bg-pos-card border border-pos-border rounded-xl text-xs font-bold text-pos-text">
+                      <span className="text-pos-muted text-[11px]">
+                        Affichage {((safeCurrentPage - 1) * PAGE_SIZE) + 1} à {Math.min(safeCurrentPage * PAGE_SIZE, filteredTransactions.length)} sur {filteredTransactions.length} transactions
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={safeCurrentPage <= 1}
+                          onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                          className="px-2.5 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover disabled:opacity-40 disabled:cursor-not-allowed border border-pos-border text-pos-text transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                          <span>Précédent</span>
+                        </button>
+                        <span className="px-2 font-mono text-[11px] text-pos-muted">
+                          Page <strong className="text-pos-text">{safeCurrentPage}</strong> / {totalPages}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={safeCurrentPage >= totalPages}
+                          onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                          className="px-2.5 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover disabled:opacity-40 disabled:cursor-not-allowed border border-pos-border text-pos-text transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>Suivant</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1017,7 +1061,7 @@ export const ReportsModal: React.FC = () => {
                                 }`}
                               >
                                 <td className="p-2.5 font-mono font-bold">{t.receiptNumber}</td>
-                                <td className="p-2.5 font-mono text-pos-muted">{t.createdAt}</td>
+                                <td className="p-2.5 font-mono text-pos-muted">{formatDateTime(t.createdAt)}</td>
                                 <td className="p-2.5">{t.customer?.name || 'Client de passage'}</td>
                                 <td className="p-2.5 text-center">{t.items.reduce((acc, i) => acc + i.quantity, 0)}</td>
                                 <td className="p-2.5 text-right font-black text-pos-text">
@@ -1084,7 +1128,7 @@ export const ReportsModal: React.FC = () => {
                       Inspection Reçu #{inspectingTransaction.receiptNumber}
                     </h3>
                     <p className="text-[10px] text-pos-muted">
-                      {inspectingTransaction.createdAt} • Caissier: {inspectingTransaction.cashierName || 'Yacine (Caisse 1)'}
+                      {formatDateTime(inspectingTransaction.createdAt)} • Caissier: {inspectingTransaction.cashierName || 'Yacine (Caisse 1)'}
                     </p>
                   </div>
                 </div>

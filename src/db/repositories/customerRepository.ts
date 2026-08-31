@@ -27,8 +27,8 @@ export const customerRepository = {
 
   async clearAll(): Promise<void> {
     const customers = await sqliteAdapter.getAllCustomers();
-    for (const c of customers) {
-      await sqliteAdapter.deleteCustomer(c.id);
+    if (customers.length > 0) {
+      await Promise.all(customers.map((c) => sqliteAdapter.deleteCustomer(c.id)));
     }
   },
 };

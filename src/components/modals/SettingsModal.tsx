@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
-import { formatDZD } from '../../types/pos';
+import { formatDZD, APP_VERSION } from '../../types/pos';
 import { DEFAULT_LOYALTY_CONFIG, calculateFinancialProfitImpact } from '../../utils/loyaltyEngine';
 import { sqliteAdapter, type DbStats, type IntegrityReport } from '../../db/sqliteAdapter';
 import { useAppUpdater } from '../../hooks/useAppUpdater';
@@ -257,7 +257,16 @@ const resultConfig: Record<DiagnosticResult, { label: string; color: string; ico
 // ══════════════════════════════════════════════════════════════
 
 export const SettingsModal: React.FC = () => {
-  const { activeModal, closeModal, exportDatabase, importDatabase, receiptSettings, setReceiptSettings } = usePosStore();
+  const {
+    activeModal,
+    closeModal,
+    exportDatabase,
+    importDatabase,
+    receiptSettings,
+    setReceiptSettings,
+    managerPin,
+    setManagerPin,
+  } = usePosStore();
   const { showToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const updater = useAppUpdater();
@@ -272,6 +281,11 @@ export const SettingsModal: React.FC = () => {
   const [scannerTestActive, setScannerTestActive] = useState(false);
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
   const scannerInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Manager Security PIN State ──
+  const [newPinInput, setNewPinInput] = useState('');
+  const [confirmPinInput, setConfirmPinInput] = useState('');
+  const [isUpdatingPin, setIsUpdatingPin] = useState(false);
 
   // ── SQLite Engine & Diagnostics State ──
   const [dbStats, setDbStats] = useState<DbStats | null>(null);
@@ -1349,6 +1363,76 @@ export const SettingsModal: React.FC = () => {
                 )}
               </div>
 
+              {/* Manager Security PIN Card */}
+              <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3 shadow-md">
+                <div className="flex items-center justify-between border-b border-pos-border/60 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-purple-400" />
+                    <h4 className="text-xs font-bold text-pos-text uppercase tracking-wider">
+                      Code PIN Manager & Sécurité Financière
+                    </h4>
+                  </div>
+                  <span className="text-[10px] text-pos-muted">
+                    PIN Actif : <strong className="text-emerald-400 font-mono">{managerPin ? `${'•'.repeat(managerPin.length)}` : '••••'}</strong> (Configuré)
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="flex-1">
+                    <label className="text-[10px] text-pos-muted font-bold block mb-1">Nouveau PIN Manager (4 à 6 chiffres)</label>
+                    <input
+                      type="password"
+                      maxLength={6}
+                      value={newPinInput}
+                      onChange={(e) => setNewPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="Ex: 4892"
+                      className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-[10px] text-pos-muted font-bold block mb-1">Confirmer le Nouveau PIN</label>
+                    <input
+                      type="password"
+                      maxLength={6}
+                      value={confirmPinInput}
+                      onChange={(e) => setConfirmPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="Ex: 4892"
+                      className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
+                    />
+                  </div>
+                  <div className="pt-4">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!newPinInput || newPinInput.length < 4) {
+                          showToast('Le code PIN doit comporter au moins 4 chiffres.', 'error');
+                          return;
+                        }
+                        if (newPinInput !== confirmPinInput) {
+                          showToast('Les deux codes PIN saisis ne correspondent pas.', 'error');
+                          return;
+                        }
+                        setIsUpdatingPin(true);
+                        try {
+                          await setManagerPin(newPinInput);
+                          setNewPinInput('');
+                          setConfirmPinInput('');
+                          showToast('Nouveau Code PIN Manager enregistré avec succès.', 'success');
+                        } catch (e: any) {
+                          showToast(`Erreur : ${e?.message || e}`, 'error');
+                        } finally {
+                          setIsUpdatingPin(false);
+                        }
+                      }}
+                      disabled={isUpdatingPin || !newPinInput || !confirmPinInput}
+                      className="py-2 px-4 rounded-lg bg-purple-500 hover:bg-purple-400 text-slate-950 font-bold text-xs transition disabled:opacity-40 cursor-pointer shadow-md"
+                    >
+                      {isUpdatingPin ? 'Enregistrement...' : 'Modifier PIN'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               {/* JSON Backup & Restore Cards */}
               <div className="grid grid-cols-2 gap-4">
                 {/* Export Card */}
@@ -1425,7 +1509,7 @@ export const SettingsModal: React.FC = () => {
                       <div className="flex items-center gap-2">
                         <h3 className="text-base font-black text-pos-text tracking-wide">MobiPOS Pro</h3>
                         <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 border border-purple-500/40 text-purple-300 font-mono font-black text-xs">
-                          v1.4.3
+                          v{APP_VERSION}
                         </span>
                         <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">
                           Canal Stable
@@ -1455,7 +1539,7 @@ export const SettingsModal: React.FC = () => {
                     {updater.checkStatusMessage ||
                       (updater.isUpdateAvailable
                         ? `🚀 Version ${updater.updateInfo?.version} disponible au téléchargement !`
-                        : '✅ Votre système est synchronisé avec la version de production la plus récente (v1.4.3).')}
+                        : `✅ Votre système est synchronisé avec la version de production la plus récente (v${APP_VERSION}).`)}
                   </p>
                 </div>
               </div>

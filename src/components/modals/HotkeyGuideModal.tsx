@@ -19,6 +19,7 @@ export const HotkeyGuideModal: React.FC = () => {
     { key: 'F10', label: 'Rapports & Ventes' },
     { key: 'F11', label: 'Gestion de Stock' },
     { key: 'F12', label: 'Paramètres Caisse' },
+    { key: '1 - 9', label: 'Ajout Rapide Produits 1 à 9' },
     { key: 'Esc', label: 'Fermer / Annuler' },
   ];
 

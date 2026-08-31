@@ -6,7 +6,7 @@ import {
   ArrowDownLeft, ArrowUpRight, Copy, ExternalLink
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import { formatDZD } from '../../types/pos';
+import { formatDZD, formatDateTime } from '../../types/pos';
 import type { Customer, PricingTier, SaleTransaction, PaymentMethodType } from '../../types/pos';
 import { calculateNextTierProgress, calculateCustomerTier } from '../../utils/loyaltyEngine';
 import { buildWhatsAppUrl } from '../../utils/phoneUtils';
@@ -72,6 +72,16 @@ export const CustomersModal: React.FC = () => {
       results = results.filter(c => c.pricingTier === tierFilter);
     }
 
+    // Pre-calculate spent lookup map once to avoid O(N log N * M) recalculation during sort
+    const spentMap = new Map<string, number>();
+    if (sortField === 'totalSpent') {
+      (transactions || []).forEach(t => {
+        if (t.customer?.id && t.status !== 'VOIDED' && !t.isRefund) {
+          spentMap.set(t.customer.id, (spentMap.get(t.customer.id) || 0) + (t.total || 0));
+        }
+      });
+    }
+
     results.sort((a, b) => {
       let cmp = 0;
       switch (sortField) {
@@ -79,8 +89,8 @@ export const CustomersModal: React.FC = () => {
         case 'loyaltyPoints': cmp = (a.loyaltyPoints || 0) - (b.loyaltyPoints || 0); break;
         case 'storeCredit': cmp = (a.storeCredit || 0) - (b.storeCredit || 0); break;
         case 'totalSpent': {
-          const aSpent = getCustomerMetrics(a.id).totalSpent;
-          const bSpent = getCustomerMetrics(b.id).totalSpent;
+          const aSpent = spentMap.get(a.id) ?? a.totalSpent ?? 0;
+          const bSpent = spentMap.get(b.id) ?? b.totalSpent ?? 0;
           cmp = aSpent - bSpent;
           break;
         }
@@ -89,7 +99,7 @@ export const CustomersModal: React.FC = () => {
     });
 
     return results;
-  }, [customers, searchQuery, tierFilter, sortField, sortDir, getCustomerMetrics]);
+  }, [customers, searchQuery, tierFilter, sortField, sortDir, transactions]);
 
   const showSuccess = (msg: string) => {
     setSuccessMsg(msg);
@@ -587,7 +597,7 @@ export const CustomersModal: React.FC = () => {
                         <div key={t.id} className="flex items-center justify-between bg-pos-bg p-2.5 rounded-lg border border-pos-border text-xs hover:border-pos-text/20 transition">
                           <div className="flex items-center gap-2.5">
                             <span className="font-mono text-[10px] text-pos-muted">{t.receiptNumber}</span>
-                            <span className="text-pos-muted">{t.createdAt}</span>
+                            <span className="text-pos-muted">{formatDateTime(t.createdAt)}</span>
                           </div>
                           <div className="flex items-center gap-3">
                             <span className="text-[10px] text-pos-muted">{(t.items || []).length} art.</span>

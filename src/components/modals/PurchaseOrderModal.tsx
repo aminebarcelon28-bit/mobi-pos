@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, FileText, CheckCircle2, Printer, Smartphone } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import { formatDZD } from '../../types/pos';
+import { formatDZD, formatDateTime } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { printCoordinator } from '../../utils/printCoordinator';
 
@@ -47,7 +47,7 @@ export const PurchaseOrderModal: React.FC = () => {
             </div>
             <div>
               <h2 className="text-sm font-bold text-pos-text">Bon de Commande Fournisseur #{activeDraftPO.poNumber}</h2>
-              <p className="text-[10px] text-pos-muted">Fournisseur: {activeDraftPO.vendorName} • Date: {activeDraftPO.createdAt}</p>
+              <p className="text-[10px] text-pos-muted">Fournisseur: {activeDraftPO.vendorName} • Date: {formatDateTime(activeDraftPO.createdAt)}</p>
             </div>
           </div>
           <button onClick={closeModal} className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition-colors">
@@ -143,7 +143,7 @@ export const PurchaseOrderModal: React.FC = () => {
               <div className="bg-gray-100 p-3 rounded border border-gray-300">
                 <p className="text-xs font-black uppercase text-black">BON DE COMMANDE FOURNISSEUR</p>
                 <p className="text-sm font-bold text-gray-900 mt-1">N° : {activeDraftPO.poNumber}</p>
-                <p className="text-[10px] text-gray-600">Date: {activeDraftPO.createdAt}</p>
+                <p className="text-[10px] text-gray-600">Date: {formatDateTime(activeDraftPO.createdAt)}</p>
               </div>
             </div>
           </div>

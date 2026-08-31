@@ -1,9 +1,31 @@
 import { useState, useEffect, useCallback } from 'react';
+import { APP_VERSION } from '../types/pos';
 
 export interface UpdateInfo {
   version: string;
   body?: string;
   date?: string;
+}
+
+/**
+ * SemVer comparison utility to verify if remoteVersion is strictly newer than currentVersion.
+ * Prevents false positive update prompts when versions are identical or formatted differently.
+ */
+export function isNewerVersion(remoteVersionStr?: string, currentVersionStr?: string): boolean {
+  if (!remoteVersionStr || !currentVersionStr) return false;
+
+  const clean = (v: string) => v.trim().replace(/^v/i, '').split('-')[0];
+  const remoteParts = clean(remoteVersionStr).split('.').map((p) => parseInt(p, 10) || 0);
+  const currentParts = clean(currentVersionStr).split('.').map((p) => parseInt(p, 10) || 0);
+
+  const maxLength = Math.max(remoteParts.length, currentParts.length, 3);
+  for (let i = 0; i < maxLength; i++) {
+    const r = remoteParts[i] || 0;
+    const c = currentParts[i] || 0;
+    if (r > c) return true;
+    if (r < c) return false;
+  }
+  return false;
 }
 
 export function useAppUpdater() {
@@ -27,7 +49,10 @@ export function useAppUpdater() {
       const { check } = await import('@tauri-apps/plugin-updater');
       const update = await check();
 
-      if (update && update.available) {
+      const currentVer = update?.currentVersion || APP_VERSION;
+      const hasNewerVersion = update && update.version && isNewerVersion(update.version, currentVer);
+
+      if (hasNewerVersion && update) {
         setIsUpdateAvailable(true);
         setPendingUpdateObj(update);
         setUpdateInfo({
@@ -38,10 +63,13 @@ export function useAppUpdater() {
         setCheckStatusMessage(`Mise à jour v${update.version} disponible !`);
       } else {
         setIsUpdateAvailable(false);
+        setPendingUpdateObj(null);
         setCheckStatusMessage('Vous utilisez déjà la version la plus récente de MobiPOS.');
       }
     } catch (err: any) {
       console.warn('Tauri Updater check skipped or failed:', err);
+      setIsUpdateAvailable(false);
+      setPendingUpdateObj(null);
       const msg = err?.message || 'Impossible de joindre le serveur de mise à jour GitHub.';
       setError(msg);
       setCheckStatusMessage(`Vérification échouée: ${msg}`);

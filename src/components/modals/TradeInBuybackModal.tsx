@@ -11,7 +11,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import { formatDZD } from '../../types/pos';
+import { formatDZD, formatDateTime } from '../../types/pos';
 import type { BrandName, ConditionGrade, TradeInItem } from '../../types/pos';
 import { printCoordinator } from '../../utils/printCoordinator';
 
@@ -445,7 +445,7 @@ export const TradeInBuybackModal: React.FC = () => {
                         ) : (
                           <span className="text-emerald-400 font-bold">(Payé Cash)</span>
                         )}{' '}
-                        • {trade.createdAt}
+                        • {formatDateTime(trade.createdAt)}
                       </div>
                     </div>
 
@@ -485,7 +485,7 @@ export const TradeInBuybackModal: React.FC = () => {
               <div className="text-right bg-gray-100 p-3 rounded border border-gray-300">
                 <p className="text-xs font-black uppercase text-black">ATTESTATION OFFICIELLE DE CESSION</p>
                 <p className="text-xs font-bold text-gray-900 mt-1">Réf: {printingTrade.id}</p>
-                <p className="text-[10px] text-gray-600">Date: {printingTrade.createdAt}</p>
+                <p className="text-[10px] text-gray-600">Date: {formatDateTime(printingTrade.createdAt)}</p>
               </div>
             </div>
 

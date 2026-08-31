@@ -26,5 +26,7 @@ dist-ssr
 # Tauri Signing Keys & Target
 *.key
 *.key.pub
+*SECRET*.txt
+*.sig
 src-tauri/target
 

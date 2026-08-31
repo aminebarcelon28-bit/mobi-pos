@@ -1,9 +1,11 @@
 import React, { useState, useRef } from 'react';
 import { X, FileText, CheckCircle2, Upload, AlertCircle, Check, X as XIcon } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
+import { productRepository } from '../../db/repositories/productRepository';
+import type { Product } from '../../types/pos';
 
 export const InvoiceIngestionModal: React.FC = () => {
-  const { activeModal, closeModal, products, saveProduct } = usePosStore();
+  const { activeModal, closeModal, products } = usePosStore();
   const [rawText, setRawText] = useState<string>('');
   const [ingestStatus, setIngestStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [parsedLines, setParsedLines] = useState<{ sku: string; qty: number; cost?: number; imei?: string; matched: boolean }[]>([]);
@@ -29,10 +31,11 @@ export const InvoiceIngestionModal: React.FC = () => {
     reader.readAsText(file);
   };
 
-  const handleProcessIngestion = () => {
+  const handleProcessIngestion = async () => {
     try {
       const lines = rawText.split('\n').filter(line => line.trim() !== '');
       const newParsedLines: typeof parsedLines = [];
+      const updatedProductsMap = new Map<string, Product>();
 
       lines.forEach((line) => {
         const delimiter = line.includes(';') ? ';' : line.includes('\t') ? '\t' : ',';
@@ -53,19 +56,35 @@ export const InvoiceIngestionModal: React.FC = () => {
 
           const imei = parts[3] ? parts[3].trim() : undefined;
 
-          const existing = products.find((p) => p.sku.toLowerCase() === sku.toLowerCase() || p.barcode.toLowerCase() === sku.toLowerCase());
-          if (existing && qty > 0) {
-            saveProduct({
-              ...existing,
-              stock: existing.stock + qty,
-              costPrice: cost !== undefined ? cost : existing.costPrice,
-            });
+          const currentProd =
+            Array.from(updatedProductsMap.values()).find(
+              (p) => p.sku.toLowerCase() === sku.toLowerCase() || p.barcode.toLowerCase() === sku.toLowerCase()
+            ) ||
+            products.find(
+              (p) => p.sku.toLowerCase() === sku.toLowerCase() || p.barcode.toLowerCase() === sku.toLowerCase()
+            );
+
+          if (currentProd && qty > 0) {
+            const updated: Product = {
+              ...currentProd,
+              stock: currentProd.stock + qty,
+              costPrice: cost !== undefined ? cost : currentProd.costPrice,
+            };
+            updatedProductsMap.set(updated.id, updated);
             newParsedLines.push({ sku, qty, cost, imei, matched: true });
           } else {
             newParsedLines.push({ sku, qty, cost, imei, matched: false });
           }
         }
       });
+
+      if (updatedProductsMap.size > 0) {
+        const updatedList = Array.from(updatedProductsMap.values());
+        await productRepository.bulkSave(updatedList);
+        usePosStore.setState((state) => ({
+          products: state.products.map((p) => updatedProductsMap.get(p.id) || p),
+        }));
+      }
 
       setParsedLines(newParsedLines);
       

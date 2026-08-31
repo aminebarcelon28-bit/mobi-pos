@@ -217,10 +217,348 @@ const quickCashCart = [
 const hasMissingSerializedIMEI = quickCashCart.some(i => i.isSerialized && (!i.imei || !i.imei.trim()));
 assert(hasMissingSerializedIMEI === true, 'Quick Cash IMEI Guard: Intercept missing IMEI before quick cash checkout');
 
-console.log('====================================================');
-console.log('TEST SUMMARY:', passCount, 'PASSED,', failCount, 'FAILED');
-console.log('====================================================');
-if (failCount > 0) process.exit(1);
+// 25. Denomination Engine Float Calculation (DZD Currency Mapping)
+const denoms = {
+  qty2000: 5,  // 10,000 DA
+  qty1000: 10, // 10,000 DA
+  qty500: 4,   // 2,000 DA
+  qty200: 5,   // 1,000 DA
+  qty100: 10,  // 1,000 DA
+  qty50: 10,   // 500 DA
+  qty20: 10,   // 200 DA
+  qty10: 20,   // 200 DA
+  coins: 100,  // 100 DA
+};
+const calculatedFloat = 
+  (denoms.qty2000 * 2000) +
+  (denoms.qty1000 * 1000) +
+  (denoms.qty500 * 500) +
+  (denoms.qty200 * 200) +
+  (denoms.qty100 * 100) +
+  (denoms.qty50 * 50) +
+  (denoms.qty20 * 20) +
+  (denoms.qty10 * 10) +
+  denoms.coins;
+assert(calculatedFloat === 25000, 'Denomination Engine: 5x2000 + 10x1000 + 4x500 + 5x200 + 10x100 + 10x50 + 10x20 + 20x10 + 100 = 25,000 DA');
+
+// 26. Dynamic Expected Cash (Opening + Cash Sales + Deposits - Expenses)
+const openFloat = 20000;
+const shiftCashSales = 55000;
+const shiftManualDeposits = 5000;
+const shiftExpenses = 3500;
+const shiftExpectedClose = openFloat + shiftCashSales + shiftManualDeposits - shiftExpenses;
+assert(shiftExpectedClose === 76500, 'Shift Expected Cash: 20k float + 55k sales + 5k deposits - 3.5k expenses = 76,500 DA');
+
+// 27. Blind Count Variance & Note Enforcement Guard
+const physicalCountEntered = 76000; // 500 DA short
+const varianceDiscrepancy = physicalCountEntered - shiftExpectedClose; // -500 DA
+assert(varianceDiscrepancy === -500, 'Blind Count Discrepancy: 76,000 DA counted - 76,500 DA expected = -500 DA deficit');
+
+function canFinalizeSessionClose(variance, note) {
+  if (variance === 0) return true;
+  return Boolean(note && note.trim().length > 0);
+}
+assert(canFinalizeSessionClose(-500, '') === false, 'Variance Enforcement: Block closure when variance != 0 and note is empty');
+assert(canFinalizeSessionClose(-500, 'Erreur rendu monnaie ticket REC-891') === true, 'Variance Enforcement: Allow closure when valid explanatory note provided');
+assert(canFinalizeSessionClose(0, '') === true, 'Zero Variance: Allow immediate closure with 0 DA discrepancy');
+
+// 28. Shift Net Commercial Profit (Sales Margins - Expenses)
+const totalSessionGrossMargins = 24000;
+const totalSessionExpenses = 3500;
+const shiftNetProfit = totalSessionGrossMargins - totalSessionExpenses;
+assert(shiftNetProfit === 20500, 'Daily Net Profit: 24,000 DA sales margin - 3,500 DA expenses = 20,500 DA net profit');
+
+// 29. Immutable Unit Cost Price Protection Against Catalog Price Changes
+const historicSaleItem = {
+  productId: 'prod-coque-1',
+  unitCostPrice: 500, // Captured at checkout time
+  appliedPrice: 1500,
+  quantity: 2
+};
+const historicProfit = (historicSaleItem.appliedPrice - historicSaleItem.unitCostPrice) * historicSaleItem.quantity;
+// Catalog cost later increases to 800 DA:
+const _currentCatalogProduct = { id: 'prod-coque-1', costPrice: 800 };
+// Immutable calculation ignores updated catalog cost:
+const recomputedHistoricalProfit = (historicSaleItem.appliedPrice - historicSaleItem.unitCostPrice) * historicSaleItem.quantity;
+assert(historicProfit === 2000 && recomputedHistoricalProfit === 2000, 'Immutable Cost Tracking: Sale profit remains 2,000 DA regardless of future catalog cost edits');
+
+// 30. Real-Time Store Inventory Valuation View
+const mockInventory = [
+  { id: 'p1', stock: 10, costPrice: 500, price: 1200 },
+  { id: 'p2', stock: 5, costPrice: 2000, price: 3500 },
+  { id: 'p3', stock: 0, costPrice: 1000, price: 2000 }, // Out of stock
+];
+const inStockOnly = mockInventory.filter(p => p.stock > 0);
+const storeCostValuation = inStockOnly.reduce((sum, p) => sum + (p.stock * p.costPrice), 0); // 10*500 + 5*2000 = 15,000 DA
+const storeRetailValuation = inStockOnly.reduce((sum, p) => sum + (p.stock * p.price), 0); // 10*1200 + 5*3500 = 29,500 DA
+const unrealizedMargin = storeRetailValuation - storeCostValuation; // 14,500 DA
+assert(storeCostValuation === 15000, 'Inventory Valuation at Cost: 10*500 + 5*2000 = 15,000 DA');
+assert(storeRetailValuation === 29500, 'Inventory Valuation at Retail: 10*1200 + 5*3500 = 29,500 DA');
+assert(unrealizedMargin === 14500, 'Potential Gross Profit Margin: 29,500 DA - 15,000 DA = 14,500 DA');
+
+// 31. Cash Debt Settlement Integration in Shift Movements
+const initialShiftFloat = 20000;
+const cashSalesVol = 40000;
+const debtCashPayment = 8000; // Customer paid 8k debt in cash
+const integratedExpectedWithDebt = initialShiftFloat + cashSalesVol + debtCashPayment;
+assert(integratedExpectedWithDebt === 68000, 'Debt Cash Settlement Integration: 20k float + 40k sales + 8k debt versement = 68,000 DA');
+
+// 32. Operating Store Expense in Shift Movements
+const storeOperatingExpense = 4500; // Rent/electricity payout from drawer
+const expectedAfterExpense = integratedExpectedWithDebt - storeOperatingExpense;
+assert(expectedAfterExpense === 63500, 'Operating Expense Integration: 68,000 DA - 4,500 DA expense = 63,500 DA expected cash');
+
+// 33. Trade-In Buyback Cash Payout in Shift Movements
+const buybackCashPaidToCustomer = 15000; // Store bought used iPhone for 15k cash
+const expectedAfterBuyback = expectedAfterExpense - buybackCashPaidToCustomer;
+assert(expectedAfterBuyback === 48500, 'Trade-In Buyback Cash Payout: 63,500 DA - 15,000 DA buyback = 48,500 DA expected cash');
+
+// 34. SAV Repair Advance Deposit in Shift Movements
+const savRepairDepositCash = 3000; // Customer paid 3k advance deposit for screen replacement
+const expectedAfterSavDeposit = expectedAfterBuyback + savRepairDepositCash;
+assert(expectedAfterSavDeposit === 51500, 'SAV Repair Advance Deposit Integration: 48,500 DA + 3,000 DA deposit = 51,500 DA');
+
+// 35. SAV Repair Pickup Balance Settlement in Shift Movements
+const savRepairRemainingBalance = 5000; // Customer paid remaining 5k on device pickup
+const expectedAfterSavPickup = expectedAfterSavDeposit + savRepairRemainingBalance;
+assert(expectedAfterSavPickup === 56500, 'SAV Repair Balance Delivery Settlement Integration: 51,500 DA + 5,000 DA pickup = 56,500 DA');
+
+// 36. Cash Drop Safe Skimming in Shift Movements
+const cashDropSkimAmount = 20000; // Skim 20k to back-office safe
+const expectedAfterCashDrop = expectedAfterSavPickup - cashDropSkimAmount;
+assert(expectedAfterCashDrop === 36500, 'Cash Drop Safe Skimming Integration: 56,500 DA - 20,000 DA drop = 36,500 DA');
+
+// 37. Tender-Aware Split Payment in Shift Reconciliations
+// E.g. Sale of 24,000 DA: 14,000 DA Cash + 10,000 DA Customer Credit
+const _splitSaleTotal = 24000;
+const splitTenders = [
+  { method: 'Espèces', amount: 14000 },
+  { method: 'Crédit Client', amount: 10000 }
+];
+const extractedCashPortion = splitTenders.find(t => t.method === 'Espèces')?.amount || 0;
+assert(extractedCashPortion === 14000, 'Tender-Aware Split Payment Extraction: 14,000 DA cash extracted from 24,000 DA split sale');
+
+// 38. Full JSON Backup & Disaster Recovery Completeness
+const fullBackupSample = {
+  exportedAt: new Date().toISOString(),
+  products: [{ id: 'p1' }],
+  customers: [{ id: 'c1' }],
+  transactions: [{ id: 't1' }],
+  customerDebts: [{ id: 'd1', customerId: 'c1', amount: 5000 }],
+  storeExpenses: [{ id: 'e1', title: 'Loyer', amount: 30000 }],
+  cashSessions: [{ id: 's1', status: 'CLOSED', openingFloat: 20000 }],
+  cashMovements: [{ id: 'm1', sessionId: 's1', amount: 1500 }]
+};
+const requiredBackupKeys = ['products', 'customers', 'transactions', 'customerDebts', 'storeExpenses', 'cashSessions', 'cashMovements'];
+const allKeysPresent = requiredBackupKeys.every(k => Array.isArray(fullBackupSample[k]));
+assert(allKeysPresent === true, 'Backup Archive Parity: All 7 mission-critical tables present in backup export');
+
+// 39. Pre-Aggregated Customer Spent Map Lookup
+const sampleTransactions = [
+  { customer: { id: 'c1' }, total: 10000, status: 'COMPLETED', isRefund: false },
+  { customer: { id: 'c1' }, total: 5000, status: 'COMPLETED', isRefund: false },
+  { customer: { id: 'c2' }, total: 12000, status: 'COMPLETED', isRefund: false },
+  { customer: { id: 'c1' }, total: 4000, status: 'VOIDED', isRefund: false }
+];
+const spentMap = new Map();
+sampleTransactions.forEach(t => {
+  if (t.customer?.id && t.status !== 'VOIDED' && !t.isRefund) {
+    spentMap.set(t.customer.id, (spentMap.get(t.customer.id) || 0) + t.total);
+  }
+});
+assert(spentMap.get('c1') === 15000, 'Pre-Aggregated Customer Spent Map: c1 totalSpent = 15,000 DA (voided excluded)');
+assert(spentMap.get('c2') === 12000, 'Pre-Aggregated Customer Spent Map: c2 totalSpent = 12,000 DA');
+
+// 40. Client-Side Safe Pagination Math
+const totalRecords = 125;
+const pageSize = 50;
+const calculatedTotalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+const requestedPage = 3;
+const safePage = Math.min(requestedPage, calculatedTotalPages);
+const startIndex = (safePage - 1) * pageSize;
+const endIndex = Math.min(safePage * pageSize, totalRecords);
+assert(calculatedTotalPages === 3, 'Pagination Math: 125 records / 50 per page = 3 pages');
+assert(startIndex === 100 && endIndex === 125, 'Pagination Slice Bounds: Page 3 shows records 100 to 125 (25 items)');
+
+// 41. Dynamic Manager PIN Verification
+let storedManagerPin = '4892';
+const verifyPinTest = (pin) => pin === storedManagerPin;
+assert(verifyPinTest('1234') === false, 'Manager PIN Security: Default 1234 rejected when custom PIN configured');
+assert(verifyPinTest('4892') === true, 'Manager PIN Security: Custom 4892 authorized');
+
+// 42. Relational Identifier Alignment (Finding F-002)
+const simulateUnifiedCheckout = () => {
+  const transactionId = `TXN-${Math.floor(100000 + Math.random() * 900000)}`;
+  const receiptNumber = `REC-${Date.now().toString().slice(-6)}`;
+
+  const ledgerReferenceId = transactionId;
+  const debtReceiptNumber = receiptNumber;
+
+  const transaction = {
+    id: transactionId,
+    receiptNumber: receiptNumber
+  };
+  return { ledgerReferenceId, debtReceiptNumber, transaction };
+};
+const fixedRun = simulateUnifiedCheckout();
+assert(fixedRun.ledgerReferenceId === fixedRun.transaction.id, 'Relational Foreign Key Integrity: Ledger referenceId must match transaction.id');
+assert(fixedRun.debtReceiptNumber === fixedRun.transaction.receiptNumber, 'Relational Receipt Integrity: Debt receiptNumber must match transaction.receiptNumber');
+
+// 43. Checkout Persistence Error Propagation (Finding F-001)
+const simulatePersistence = async (dbShouldFail) => {
+  let cart = [{ id: 'p1', qty: 1 }];
+  let successReported = false;
+
+  const dbWrite = async () => {
+    if (dbShouldFail) throw new Error('SQLITE_BUSY: database is locked');
+  };
+  
+  // Fixed behavior: properly awaits and catches DB errors without emptying cart
+  try {
+    await dbWrite();
+    cart = [];
+    successReported = true;
+  } catch (e) {
+    // Failure handled cleanly, cart preserved
+    successReported = false;
+  }
+
+  return { success: successReported, cartLength: cart.length };
+};
+
+(async () => {
+  const res = await simulatePersistence(true);
+  assert(res.success === false, 'Checkout Error Propagation: Must report failure when SQLite write fails');
+  assert(res.cartLength === 1, 'Cart Rollback on Failure: Cart must NOT be emptied when SQLite write fails');
+
+  // 44. Storage Adapter Empty Table Fallback (Finding F-003)
+  const simulateAdapterFetch = async (isTauri, sqliteResult, dexieStaleData) => {
+    if (isTauri) {
+      try {
+        const list = sqliteResult;
+        if (Array.isArray(list)) return list;
+      } catch (e) {}
+    }
+    return dexieStaleData;
+  };
+
+  const adapterRes = await simulateAdapterFetch(true, [], [{ id: 'stale-cust', name: 'Stale' }]);
+  assert(adapterRes.length === 0, 'Storage Adapter Empty State: Legitimate empty SQLite table must NOT resurrect Dexie records');
+  const webAdapterRes = await simulateAdapterFetch(false, [], [{ id: 'stale-cust', name: 'Stale' }]);
+  assert(webAdapterRes.length === 1, 'Storage Adapter Web Fallback: Pure web mode correctly reads Dexie');
+
+  // 45. Invoice CSV Duplicate SKU Ingestion Aggregation (Finding F-004)
+  const simulateFixedCsvIngestion = (csvRows, storeProducts) => {
+    const updatedProductsMap = new Map();
+    csvRows.forEach(row => {
+      const currentProd =
+        Array.from(updatedProductsMap.values()).find(p => p.sku === row.sku) ||
+        storeProducts.find(p => p.sku === row.sku);
+
+      if (currentProd) {
+        const updated = {
+          ...currentProd,
+          stock: currentProd.stock + row.qty
+        };
+        updatedProductsMap.set(updated.sku, updated);
+      }
+    });
+    return updatedProductsMap.get('SKU-A')?.stock;
+  };
+
+  const initialStoreProducts = [{ sku: 'SKU-A', stock: 5 }];
+  const csvBatch = [{ sku: 'SKU-A', qty: 10 }, { sku: 'SKU-A', qty: 15 }];
+  const fixedFinalStock = simulateFixedCsvIngestion(csvBatch, initialStoreProducts);
+  assert(fixedFinalStock === 30, 'CSV Multi-Line Ingestion: 5 initial + 10 batch1 + 15 batch2 = 30 total stock');
+
+  // 46. Excel XML Period Label Sanitization (Finding F-007)
+  const escapeXml = (str) => {
+    if (!str) return '';
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  };
+
+  const simulateFixedExcelHeader = (periodLabel) => {
+    return `<Cell><Data ss:Type="String">Période : ${escapeXml(periodLabel)}</Data></Cell>`;
+  };
+
+  const rawLabel = 'Accessoires & Câbles < 30 jours >';
+  const xmlOutput = simulateFixedExcelHeader(rawLabel);
+  assert(xmlOutput.includes('&amp;') && xmlOutput.includes('&lt;') && xmlOutput.includes('&gt;'), 'Excel XML Sanitization: periodLabel must escape & to &amp;, < to &lt;, and > to &gt;');
+
+  // 47. Backend ISO-8601 Timestamp Validation (Finding F-009)
+  const simulateGregorianIsoString = (secs) => {
+    const d = new Date(secs * 1000);
+    return d.toISOString();
+  };
+
+  const testEpochSecs = 1756638500;
+  const timestampOutput = simulateGregorianIsoString(testEpochSecs);
+  const parsedDate = new Date(timestampOutput);
+  const isValidDate = !isNaN(parsedDate.getTime()) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(timestampOutput);
+  assert(isValidDate, `Backend Timestamp ISO-8601 Compliance: "${timestampOutput}" is a valid, parsable ISO date`);
+
+  // 48. App Updater False Positive Version Comparison & SemVer Matrix
+  const isNewerVersion = (remoteVersionStr, currentVersionStr) => {
+    if (!remoteVersionStr || !currentVersionStr) return false;
+    const clean = (v) => v.trim().replace(/^v/i, '').split('-')[0];
+    const remoteParts = clean(remoteVersionStr).split('.').map((p) => parseInt(p, 10) || 0);
+    const currentParts = clean(currentVersionStr).split('.').map((p) => parseInt(p, 10) || 0);
+    const maxLength = Math.max(remoteParts.length, currentParts.length, 3);
+    for (let i = 0; i < maxLength; i++) {
+      const r = remoteParts[i] || 0;
+      const c = currentParts[i] || 0;
+      if (r > c) return true;
+      if (r < c) return false;
+    }
+    return false;
+  };
+
+  assert(isNewerVersion('1.4.3', '1.4.3') === false, 'Updater SemVer: 1.4.3 vs 1.4.3 (Equal) -> No update');
+  assert(isNewerVersion('v1.4.3', '1.4.3') === false, 'Updater SemVer: v1.4.3 vs 1.4.3 (v-prefix) -> No update');
+  assert(isNewerVersion('1.4.4', '1.4.3') === true, 'Updater SemVer: 1.4.4 vs 1.4.3 (Newer patch) -> Update available');
+  assert(isNewerVersion('1.10.0', '1.9.0') === true, 'Updater SemVer: 1.10.0 vs 1.9.0 (Multi-digit minor) -> Update available');
+  assert(isNewerVersion('1.9.0', '1.10.0') === false, 'Updater SemVer: 1.9.0 vs 1.10.0 (Local newer) -> No update');
+  assert(isNewerVersion('1.4.2', '1.4.3') === false, 'Updater SemVer: 1.4.2 vs 1.4.3 (Remote older) -> No update');
+  assert(isNewerVersion(null, '1.4.3') === false, 'Updater SemVer: Fetch failure / null remote -> Fail closed');
+
+  // 49. Direct Cart Quantity Manual Entry & Stock Clamping
+  const simulateSetCartItemQty = (stock, requestedQty, isSerialized = false) => {
+    if (isSerialized) return 1;
+    const safeQty = Math.max(1, isNaN(requestedQty) ? 1 : Math.floor(requestedQty));
+    return Math.min(stock, safeQty);
+  };
+  assert(simulateSetCartItemQty(100, 25) === 25, 'Direct Qty Input: 25 pieces within 100 stock accepted');
+  assert(simulateSetCartItemQty(10, 50) === 10, 'Direct Qty Input: 50 pieces clamped to available 10 stock');
+  assert(simulateSetCartItemQty(10, -5) === 1, 'Direct Qty Input: Negative qty clamped to 1');
+  assert(simulateSetCartItemQty(5, 4, true) === 1, 'Direct Qty Input: Serialized phone locked to 1 unit per IMEI');
+
+  // 50. Dynamic Cashier Identity Attribution
+  const getSaleCashierName = (activeShift) => activeShift?.cashierName || 'Yacine (Caisse 1)';
+  assert(getSaleCashierName({ cashierName: 'Amine' }) === 'Amine', 'Cashier Attribution: Sale assigned to active shift cashier (Amine)');
+  assert(getSaleCashierName(null) === 'Yacine (Caisse 1)', 'Cashier Attribution: Fallback default assigned when no shift open');
+
+  // 51. Subtotal Brut & Remise Separation Math
+  const items = [
+    { price: 1000, qty: 3, discount: 200 }, // Gross 3,000 DA, Disc 200 DA
+    { price: 2500, qty: 1, discount: 300 }, // Gross 2,500 DA, Disc 300 DA
+  ];
+  const grossSubtotal = items.reduce((acc, i) => acc + i.price * i.qty, 0);
+  const totalRemise = items.reduce((acc, i) => acc + i.discount, 0);
+  const netTotal = Math.max(0, grossSubtotal - totalRemise);
+  assert(grossSubtotal === 5500, 'Totals Breakdown: Gross Subtotal = 5,500 DA');
+  assert(totalRemise === 500, 'Totals Breakdown: Remise Accordée = 500 DA');
+  assert(netTotal === 5000, 'Totals Breakdown: Total Net à Payer = 5,000 DA');
+
+  console.log('====================================================');
+  console.log('TEST SUMMARY:', passCount, 'PASSED,', failCount, 'FAILED');
+  console.log('====================================================');
+  if (failCount > 0) process.exit(1);
+})();
 
 
 

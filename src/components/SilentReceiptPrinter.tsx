@@ -1,6 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { usePosStore } from '../store/usePosStore';
-import { formatDZD } from '../types/pos';
+import { formatDZD, formatDateTime } from '../types/pos';
 import { renderBarcodeToCanvas } from '../utils/barcodeGenerator';
 
 export const SilentReceiptPrinter: React.FC = () => {
@@ -39,7 +39,7 @@ export const SilentReceiptPrinter: React.FC = () => {
           {receiptSettings.address && <p className="text-[10px] text-gray-700">{receiptSettings.address}</p>}
           {receiptSettings.phone && <p className="text-[10px] text-gray-700">Tél: {receiptSettings.phone}</p>}
           <p className="text-[9px] text-gray-600 mt-1">N° Ticket: {lastTransaction.receiptNumber}</p>
-          <p className="text-[9px] text-gray-600">{lastTransaction.createdAt}</p>
+          <p className="text-[9px] text-gray-600">{formatDateTime(lastTransaction.createdAt)}</p>
         </div>
 
         {/* Customer Info */}

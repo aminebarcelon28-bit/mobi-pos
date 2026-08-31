@@ -10,6 +10,7 @@ export const CartPanel: React.FC = () => {
   const {
     cart,
     updateCartQty,
+    setCartItemQty,
     removeFromCart,
     clearCart,
     openModal,
@@ -32,10 +33,23 @@ export const CartPanel: React.FC = () => {
     return pricingTier === 'Wholesale' ? item.product.wholesalePrice || item.product.price * 0.75 : item.product.price;
   };
 
-  const subtotal = cart.reduce((acc, item) => acc + getItemPrice(item) * item.quantity - (item.discount || 0), 0);
+  const grossTotal = cart.reduce((acc, item) => acc + getItemPrice(item) * item.quantity, 0);
+  const totalDiscount = cart.reduce((acc, item) => acc + (item.discount || 0), 0);
+  const subtotal = Math.max(0, grossTotal - totalDiscount);
   const total = subtotal;
 
   const quickBills = [500, 1000, 2000, 5000, 10000];
+
+  const handleClearCart = () => {
+    if (cart.length === 0) return;
+    const totalItems = cart.reduce((acc, i) => acc + i.quantity, 0);
+    if (totalItems > 1) {
+      const ok = window.confirm(`Voulez-vous vraiment vider les ${totalItems} articles de la vente en cours ?`);
+      if (!ok) return;
+    }
+    soundEngine.playKeyBeep?.();
+    clearCart();
+  };
 
   // Determine primary device model & recommended products with useMemo
   const { primaryModel, recommendedProducts } = useMemo(() => {
@@ -64,14 +78,14 @@ export const CartPanel: React.FC = () => {
     return { primaryModel: mainModel, recommendedProducts: recs };
   }, [cart, products]);
 
-  const handleQuickCashWithBill = (billAmount: number) => {
+  const handleQuickCashWithBill = async (billAmount: number) => {
     if (cart.length === 0) return;
     const hasMissingIMEI = cart.some((item) => item.product.isSerialized && (!item.imeiNumber || !item.imeiNumber.trim()));
     if (hasMissingIMEI) {
       openModal('payment');
       return;
     }
-    const res = processPayment([{ method: 'Espèces', amount: billAmount }]);
+    const res = await processPayment([{ method: 'Espèces', amount: billAmount }]);
     if (res && res.success) {
       printCoordinator.printReceipt(50);
     }
@@ -100,12 +114,9 @@ export const CartPanel: React.FC = () => {
                 <Percent className="w-3.5 h-3.5" />
               </button>
               <button
-                onClick={() => {
-                  soundEngine.playKeyBeep?.();
-                  clearCart();
-                }}
+                onClick={handleClearCart}
                 className="p-1.5 hover:bg-red-500/10 text-pos-muted hover:text-red-400 rounded-lg transition cursor-pointer"
-                title="Vider le panier"
+                title="Vider le panier (Confirmation requise)"
               >
                 <Trash2 className="w-4 h-4" />
               </button>
@@ -200,22 +211,17 @@ export const CartPanel: React.FC = () => {
                 key={item.product.id}
                 className="bg-pos-card border border-pos-border/80 rounded-xl p-2.5 flex items-start gap-2.5 hover:border-emerald-500/40 transition group"
               >
-                <img
-                  src={item.product.imageUrl}
-                  alt={item.product.title}
-                  className="w-11 h-11 rounded-lg object-cover bg-pos-bg border border-pos-border shrink-0"
-                />
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-start gap-1">
                     <h3 className="text-xs font-semibold text-pos-text truncate leading-tight" title={item.product.title}>
                       {item.product.title}
                     </h3>
-                    <span className="text-xs font-black text-pos-text pl-1 shrink-0">
+                    <span className="text-xs font-black text-pos-text pl-1 shrink-0 font-mono">
                       {formatDZD(unitPrice * item.quantity - item.discount)}
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5 mt-0.5">
-                    <span className="text-[10px] text-pos-muted truncate">{item.product.brand}</span>
+                    <span className="text-[10px] text-pos-muted truncate font-bold">{item.product.brand}</span>
                     {pricingTier === 'Wholesale' && (
                       <span className="text-[8.5px] bg-amber-500/10 text-amber-500 font-bold px-1 rounded border border-amber-500/30 shrink-0">
                         Gros
@@ -228,21 +234,40 @@ export const CartPanel: React.FC = () => {
                   <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-pos-border/40">
                     <div className="flex items-center gap-1 bg-pos-bg border border-pos-border rounded-lg p-0.5">
                       <button
+                        type="button"
                         onClick={() => {
                           soundEngine.playScan();
                           updateCartQty(item.product.id, -1);
                         }}
                         className="w-5 h-5 rounded hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition cursor-pointer"
+                        title="Diminuer quantité (-1)"
                       >
                         <Minus className="w-3 h-3" />
                       </button>
-                      <span className="w-5 text-center text-xs font-bold text-pos-text">{item.quantity}</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max={item.product.stock}
+                        value={item.quantity}
+                        disabled={item.product.isSerialized}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value, 10);
+                          if (!isNaN(val) && val >= 1) {
+                            setCartItemQty(item.product.id, val);
+                          }
+                        }}
+                        className="w-9 text-center text-xs font-black text-pos-text bg-transparent focus:bg-pos-card rounded border-none focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
+                        title={item.product.isSerialized ? '1 appareil par IMEI' : `Saisir quantité directement (Max: ${item.product.stock})`}
+                      />
                       <button
+                        type="button"
                         onClick={() => {
                           soundEngine.playScan();
                           updateCartQty(item.product.id, 1);
                         }}
-                        className="w-5 h-5 rounded hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition cursor-pointer"
+                        disabled={item.product.isSerialized || item.quantity >= item.product.stock}
+                        className="w-5 h-5 rounded hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="Augmenter quantité (+1)"
                       >
                         <Plus className="w-3 h-3" />
                       </button>
@@ -263,10 +288,33 @@ export const CartPanel: React.FC = () => {
 
       {/* Totals Summary & Compact Payment Controls */}
       <div className="p-3 border-t border-pos-border bg-pos-panel space-y-2 shrink-0">
-        {/* Total Net Header */}
-        <div className="flex justify-between items-baseline">
-          <span className="text-xs font-extrabold text-pos-text tracking-wider uppercase">Total Net à Payer</span>
-          <span className="text-xl font-black text-emerald-500 tracking-tight">{formatDZD(total)}</span>
+        {/* Breakdown of Subtotal and Discounts if active */}
+        {totalDiscount > 0 && (
+          <div className="space-y-1 pb-1.5 border-b border-pos-border/40 text-xs">
+            <div className="flex justify-between items-center text-pos-muted">
+              <span className="text-[11px] font-semibold">Sous-Total Brut :</span>
+              <span className="font-mono font-bold">{formatDZD(grossTotal)}</span>
+            </div>
+            <div className="flex justify-between items-center text-purple-400 font-bold">
+              <span className="text-[11px] flex items-center gap-1">
+                <Percent className="w-3 h-3" /> Remise Accordée :
+              </span>
+              <span className="font-mono">-{formatDZD(totalDiscount)}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Total Net Header - 1-Second Glance Dominance */}
+        <div className="flex justify-between items-baseline pt-0.5">
+          <div>
+            <span className="text-xs font-black text-pos-text tracking-wider uppercase block">
+              Total Net à Payer
+            </span>
+            <span className="text-[10px] text-pos-muted font-medium">TTC • Rendu auto</span>
+          </div>
+          <span className="text-2xl md:text-3xl font-black text-emerald-400 tracking-tight font-mono">
+            {formatDZD(total)}
+          </span>
         </div>
 
         {/* Compact Quick Cash Denominations (1-Click Change Calculator) */}

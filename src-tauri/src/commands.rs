@@ -249,6 +249,35 @@ pub fn sqlite_get_all_settings(db: State<'_, Arc<DatabaseManager>>) -> Result<Ve
     db.get_all_settings().map_err(|e| e.to_string())
 }
 
+// ── CUSTOMER DEBTS (KREDY) ──
+
+#[tauri::command]
+pub fn sqlite_save_customer_debt(db: State<'_, Arc<DatabaseManager>>, debt: Value) -> Result<(), String> {
+    db.save_customer_debt(&debt).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_get_all_customer_debts(db: State<'_, Arc<DatabaseManager>>) -> Result<Vec<Value>, String> {
+    db.get_all_customer_debts().map_err(|e| e.to_string())
+}
+
+// ── STORE EXPENSES (EBITDA) ──
+
+#[tauri::command]
+pub fn sqlite_save_store_expense(db: State<'_, Arc<DatabaseManager>>, expense: Value) -> Result<(), String> {
+    db.save_store_expense(&expense).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_get_all_store_expenses(db: State<'_, Arc<DatabaseManager>>) -> Result<Vec<Value>, String> {
+    db.get_all_store_expenses().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_delete_store_expense(db: State<'_, Arc<DatabaseManager>>, id: String) -> Result<(), String> {
+    db.delete_store_expense(&id).map_err(|e| e.to_string())
+}
+
 // ── CLEAR & FULL EXPORT/IMPORT ──
 
 #[tauri::command]
@@ -264,4 +293,87 @@ pub fn sqlite_export_full_json(db: State<'_, Arc<DatabaseManager>>) -> Result<St
 #[tauri::command]
 pub fn sqlite_import_full_json(db: State<'_, Arc<DatabaseManager>>, json_string: String) -> Result<(), String> {
     db.import_full_json(&json_string).map_err(|e| e.to_string())
+}
+
+// ── CASH SESSIONS & INVENTORY AUDIT ──
+
+#[tauri::command]
+pub fn sqlite_start_shift(
+    db: State<'_, Arc<DatabaseManager>>,
+    opening_float: i64,
+    cashier_name: Option<String>,
+    opening_note: Option<String>,
+    denominations_json: Option<String>,
+) -> Result<Value, String> {
+    db.start_shift(
+        opening_float,
+        cashier_name.as_deref(),
+        opening_note.as_deref(),
+        denominations_json.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_log_expense(
+    db: State<'_, Arc<DatabaseManager>>,
+    session_id: Option<String>,
+    movement_type: String,
+    amount: i64,
+    reason: String,
+    cashier_name: Option<String>,
+) -> Result<Value, String> {
+    db.log_cash_movement(
+        session_id.as_deref(),
+        &movement_type,
+        amount,
+        &reason,
+        cashier_name.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_close_shift(
+    db: State<'_, Arc<DatabaseManager>>,
+    session_id: Option<String>,
+    blind_count: i64,
+    closing_note: Option<String>,
+    cashier_name: Option<String>,
+) -> Result<Value, String> {
+    db.close_shift(
+        session_id.as_deref(),
+        blind_count,
+        closing_note.as_deref(),
+        cashier_name.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_get_active_shift(db: State<'_, Arc<DatabaseManager>>) -> Result<Option<Value>, String> {
+    db.get_active_shift().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_get_all_shifts(db: State<'_, Arc<DatabaseManager>>) -> Result<Vec<Value>, String> {
+    db.get_all_shifts().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_get_shift_details(db: State<'_, Arc<DatabaseManager>>, session_id: String) -> Result<Value, String> {
+    db.get_shift_details(&session_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_get_inventory_valuation(db: State<'_, Arc<DatabaseManager>>) -> Result<Value, String> {
+    db.get_inventory_valuation().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_generate_session_backup_json(
+    db: State<'_, Arc<DatabaseManager>>,
+    session_id: String,
+) -> Result<String, String> {
+    db.generate_session_backup_json(&session_id).map_err(|e| e.to_string())
 }

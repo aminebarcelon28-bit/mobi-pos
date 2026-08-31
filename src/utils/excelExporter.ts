@@ -1,4 +1,5 @@
 import type { SaleTransaction } from '../types/pos';
+import { formatDateTime } from '../types/pos';
 
 /**
  * Generates an ultra-professional, multi-sheet, color-coded Microsoft Excel XML (SpreadsheetML) file.
@@ -297,7 +298,7 @@ export function generateProfessionalExcelXml(
    <!-- Row 2: Subtitle Info -->
    <Row ss:Height="20">
     <Cell ss:MergeAcross="12" ss:StyleID="Subtitle">
-     <Data ss:Type="String">  Export généré le : ${exportDate}  |  Période : ${periodLabel}  |  Total Transactions : ${transactions.length}</Data>
+     <Data ss:Type="String">  Export généré le : ${escapeXml(exportDate)}  |  Période : ${escapeXml(periodLabel)}  |  Total Transactions : ${transactions.length}</Data>
     </Cell>
    </Row>
 
@@ -381,7 +382,7 @@ export function generateProfessionalExcelXml(
        return `<Row ss:Height="22">
     <Cell ss:StyleID="${rowStyleCenter}"><Data ss:Type="String">${escapeXml(t.receiptNumber)}</Data></Cell>
     <Cell ss:StyleID="${rowStyleCenter}"><Data ss:Type="String">${statusLabel}</Data></Cell>
-    <Cell ss:StyleID="${rowStyleCenter}"><Data ss:Type="String">${escapeXml(t.createdAt)}</Data></Cell>
+    <Cell ss:StyleID="${rowStyleCenter}"><Data ss:Type="String">${escapeXml(formatDateTime(t.createdAt))}</Data></Cell>
     <Cell ss:StyleID="${rowStyleLeft}"><Data ss:Type="String">${customerName}</Data></Cell>
     <Cell ss:StyleID="${rowStyleCenter}"><Data ss:Type="Number">${itemCount}</Data></Cell>
     <Cell ss:StyleID="${rowStyleCurrency}"><Data ss:Type="Number">${subtotal}</Data></Cell>
@@ -455,7 +456,7 @@ export function generateProfessionalExcelXml(
 
          return `<Row ss:Height="20">
     <Cell ss:StyleID="${isZebra ? 'RowZebraCenter' : 'RowCenter'}"><Data ss:Type="String">${escapeXml(t.receiptNumber)}</Data></Cell>
-    <Cell ss:StyleID="${isZebra ? 'RowZebraCenter' : 'RowCenter'}"><Data ss:Type="String">${escapeXml(t.createdAt)}</Data></Cell>
+    <Cell ss:StyleID="${isZebra ? 'RowZebraCenter' : 'RowCenter'}"><Data ss:Type="String">${escapeXml(formatDateTime(t.createdAt))}</Data></Cell>
     <Cell ss:StyleID="${isZebra ? 'RowZebraCenter' : 'RowCenter'}"><Data ss:Type="String">${escapeXml(p?.sku || 'N/A')}</Data></Cell>
     <Cell ss:StyleID="${isZebra ? 'RowZebraCenter' : 'RowCenter'}"><Data ss:Type="String">${escapeXml(p?.barcode || 'N/A')}</Data></Cell>
     <Cell ss:StyleID="${isZebra ? 'RowZebraLeft' : 'RowLeft'}"><Data ss:Type="String">${escapeXml(p?.title || 'Article')}</Data></Cell>

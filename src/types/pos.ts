@@ -64,6 +64,7 @@ export interface CartItem {
   serialNumber?: string;
   imeiNumber?: string;
   appliedPrice: number;
+  unitCostPrice?: number; // Immutable unit cost price captured permanently at checkout
   volumeTierApplied?: boolean;
 }
 
@@ -421,6 +422,65 @@ export interface CashDropEntry {
   user: string;
 }
 
+export interface DenominationCount {
+  qty2000: number;
+  qty1000: number;
+  qty500: number;
+  qty200: number;
+  qty100: number;
+  qty50: number;
+  qty20: number;
+  qty10: number;
+  coins: number;
+}
+
+export interface CashMovement {
+  id: string;
+  sessionId: string;
+  type: 'EXPENSE' | 'MANUAL_DEPOSIT';
+  amount: number; // In DA
+  reason: string;
+  cashierName?: string;
+  createdAt: string;
+}
+
+export interface CashSession {
+  id: string;
+  openedAt: string;
+  closedAt?: string | null;
+  openingFloat: number;
+  cashSales?: number;
+  manualDeposits?: number;
+  expenses?: number;
+  expectedCash?: number | null;
+  actualCash?: number | null;
+  discrepancy?: number;
+  dailyNetProfit?: number;
+  status: 'OPEN' | 'CLOSED';
+  cashierName: string;
+  openingNote?: string;
+  closingNote?: string | null;
+  denominations?: DenominationCount | null;
+  movements?: CashMovement[];
+  updatedAt?: string;
+}
+
+export interface InventoryValuation {
+  totalSkus: number;
+  totalUnits: number;
+  totalCostValue: number;
+  totalRetailValue: number;
+  potentialProfitMargin: number;
+}
+
+export interface ShiftCloseReport {
+  session: CashSession;
+  inventoryValuationSnapshot?: InventoryValuation;
+  dbIntegrity?: unknown;
+  backupType?: string;
+  generatedAt?: string;
+}
+
 export interface ShiftZReportData {
   shiftId: string;
   openedAt: string;
@@ -451,6 +511,8 @@ export interface HardwareStatus {
   customerDisplayConnected: boolean;
 }
 
+export const APP_VERSION = '1.4.4';
+
 export const formatDZD = (amount: number): string => {
   return new Intl.NumberFormat('fr-DZ', {
     style: 'currency',
@@ -460,4 +522,17 @@ export const formatDZD = (amount: number): string => {
   })
     .format(amount)
     .replace('DZD', 'DA');
+};
+
+export const formatDateTime = (dateStr?: string): string => {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString('fr-DZ', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 };

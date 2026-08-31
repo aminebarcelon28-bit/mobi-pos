@@ -59,9 +59,22 @@ fn main() {
             commands::sqlite_set_setting,
             commands::sqlite_get_setting,
             commands::sqlite_get_all_settings,
+            commands::sqlite_save_customer_debt,
+            commands::sqlite_get_all_customer_debts,
+            commands::sqlite_save_store_expense,
+            commands::sqlite_get_all_store_expenses,
+            commands::sqlite_delete_store_expense,
             commands::sqlite_clear_all_data,
             commands::sqlite_export_full_json,
             commands::sqlite_import_full_json,
+            commands::sqlite_start_shift,
+            commands::sqlite_log_expense,
+            commands::sqlite_close_shift,
+            commands::sqlite_get_active_shift,
+            commands::sqlite_get_all_shifts,
+            commands::sqlite_get_shift_details,
+            commands::sqlite_get_inventory_valuation,
+            commands::sqlite_generate_session_backup_json,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

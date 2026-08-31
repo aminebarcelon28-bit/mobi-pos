@@ -38,6 +38,7 @@ export const Header: React.FC = () => {
     logSecurityAction,
     products,
     addToCart,
+    activeShift,
   } = usePosStore();
   
   const [isPinOpen, setIsPinOpen] = useState(false);
@@ -273,6 +274,27 @@ export const Header: React.FC = () => {
           >
             <Sliders className="w-4 h-4 text-pos-muted" />
           </button>
+
+          {/* Cash Register Session Status Widget */}
+          {activeShift ? (
+            <button
+              onClick={() => openModal('shift_close')}
+              className="px-2.5 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+              title="Session Caisse Ouverte • Cliquez pour Clôturer / Rapport Z"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="hidden sm:inline font-mono">Caisse : {activeShift.cashierName}</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => openModal('shift_open')}
+              className="px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer animate-pulse"
+              title="Caisse Fermée • Cliquez pour Ouvrir la Session"
+            >
+              <span className="w-2 h-2 rounded-full bg-amber-400" />
+              <span>Ouvrir Caisse</span>
+            </button>
+          )}
 
           <ThemeToggle />
         </div>

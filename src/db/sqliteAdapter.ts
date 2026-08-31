@@ -12,6 +12,10 @@ import type {
   ProductBundle,
   CustomerDebtEntry,
   StoreExpense,
+  CashSession,
+  CashMovement,
+  DenominationCount,
+  InventoryValuation,
 } from '../types/pos';
 import { db as dexieDb } from './database';
 
@@ -149,7 +153,7 @@ export const sqliteAdapter = {
     if (isTauriEnv()) {
       try {
         const list = await invoke<Product[]>('sqlite_get_all_products');
-        if (list && list.length > 0) return list;
+        if (Array.isArray(list)) return list;
       } catch (e) {
         console.warn('Failed to load products from SQLite, reading Dexie:', e);
       }
@@ -196,7 +200,7 @@ export const sqliteAdapter = {
     if (isTauriEnv()) {
       try {
         const list = await invoke<Customer[]>('sqlite_get_all_customers');
-        if (list && list.length > 0) return list;
+        if (Array.isArray(list)) return list;
       } catch (e) {
         console.warn('Failed to load customers from SQLite, reading Dexie:', e);
       }
@@ -233,6 +237,7 @@ export const sqliteAdapter = {
         });
       } catch (e) {
         console.error('SQLite atomic sale transaction error:', e);
+        throw e;
       }
     }
 
@@ -253,7 +258,7 @@ export const sqliteAdapter = {
     if (isTauriEnv()) {
       try {
         const list = await invoke<SaleTransaction[]>('sqlite_get_all_transactions');
-        if (list && list.length > 0) return list;
+        if (Array.isArray(list)) return list;
       } catch (e) {
         console.warn('Failed to load transactions from SQLite, reading Dexie:', e);
       }
@@ -357,7 +362,7 @@ export const sqliteAdapter = {
     if (isTauriEnv()) {
       try {
         const list = await invoke<RepairOrder[]>('sqlite_get_all_repair_orders');
-        if (list && list.length > 0) return list;
+        if (Array.isArray(list)) return list;
       } catch (e) {
         console.warn('Failed to load repair orders from SQLite:', e);
       }
@@ -393,7 +398,7 @@ export const sqliteAdapter = {
     if (isTauriEnv()) {
       try {
         const list = await invoke<PurchaseOrder[]>('sqlite_get_all_purchase_orders');
-        if (list && list.length > 0) return list;
+        if (Array.isArray(list)) return list;
       } catch (e) {
         console.warn('Failed to load purchase orders from SQLite:', e);
       }
@@ -418,7 +423,7 @@ export const sqliteAdapter = {
     if (isTauriEnv()) {
       try {
         const list = await invoke<TradeInItem[]>('sqlite_get_all_trade_ins');
-        if (list && list.length > 0) return list;
+        if (Array.isArray(list)) return list;
       } catch (e) {
         console.warn('Failed to load trade-ins from SQLite:', e);
       }
@@ -443,7 +448,7 @@ export const sqliteAdapter = {
     if (isTauriEnv()) {
       try {
         const list = await invoke<IMEIRecord[]>('sqlite_get_all_imei_records');
-        if (list && list.length > 0) return list;
+        if (Array.isArray(list)) return list;
       } catch (e) {
         console.warn('Failed to load IMEI records from SQLite:', e);
       }
@@ -468,7 +473,7 @@ export const sqliteAdapter = {
     if (isTauriEnv()) {
       try {
         const list = await invoke<SecurityAuditLogEntry[]>('sqlite_get_all_audit_logs');
-        if (list && list.length > 0) return list;
+        if (Array.isArray(list)) return list;
       } catch (e) {
         console.warn('Failed to load audit logs from SQLite:', e);
       }
@@ -497,7 +502,7 @@ export const sqliteAdapter = {
     if (isTauriEnv()) {
       try {
         const list = await invoke<CashDropEntry[]>('sqlite_get_cash_drops', { isPayout });
-        if (list && list.length > 0) return list;
+        if (Array.isArray(list)) return list;
       } catch (e) {
         console.warn('Failed to load cash drops from SQLite:', e);
       }
@@ -522,7 +527,7 @@ export const sqliteAdapter = {
     if (isTauriEnv()) {
       try {
         const list = await invoke<ProductBundle[]>('sqlite_get_all_bundles');
-        if (list && list.length > 0) return list;
+        if (Array.isArray(list)) return list;
       } catch (e) {
         console.warn('Failed to load bundles from SQLite:', e);
       }
@@ -715,7 +720,7 @@ export const sqliteAdapter = {
     if (isTauriEnv()) {
       try {
         const nativeDebts = await invoke<CustomerDebtEntry[]>('sqlite_get_all_customer_debts');
-        if (Array.isArray(nativeDebts) && nativeDebts.length > 0) {
+        if (Array.isArray(nativeDebts)) {
           return nativeDebts;
         }
       } catch (e) {
@@ -741,7 +746,7 @@ export const sqliteAdapter = {
     if (isTauriEnv()) {
       try {
         const nativeExpenses = await invoke<StoreExpense[]>('sqlite_get_all_store_expenses');
-        if (Array.isArray(nativeExpenses) && nativeExpenses.length > 0) {
+        if (Array.isArray(nativeExpenses)) {
           return nativeExpenses;
         }
       } catch (e) {
@@ -760,6 +765,256 @@ export const sqliteAdapter = {
       }
     }
     await dexieDb.storeExpenses.delete(id);
+  },
+
+  // ── CASH REGISTER SESSIONS & MOVEMENTS ──
+
+  async startShift(
+    openingFloat: number,
+    cashierName?: string,
+    openingNote?: string,
+    denominations?: DenominationCount
+  ): Promise<CashSession> {
+    if (isTauriEnv()) {
+      try {
+        const nativeSession = await invoke<CashSession>('sqlite_start_shift', {
+          openingFloat: Math.round(openingFloat),
+          cashierName: cashierName || null,
+          openingNote: openingNote || null,
+          denominationsJson: denominations ? JSON.stringify(denominations) : null,
+        });
+        if (nativeSession && nativeSession.id) {
+          await dexieDb.cashSessions.put(nativeSession);
+          return nativeSession;
+        }
+      } catch (e) {
+        console.warn('Native SQLite start shift failed, falling back to local Dexie:', e);
+      }
+    }
+
+    const newSession: CashSession = {
+      id: `SHIFT-${Date.now()}`,
+      openedAt: new Date().toISOString(),
+      closedAt: null,
+      openingFloat: Math.round(openingFloat),
+      expectedCash: null,
+      actualCash: null,
+      status: 'OPEN',
+      cashierName: cashierName || 'Caissier Principal',
+      openingNote: openingNote || '',
+      closingNote: null,
+      discrepancy: 0,
+      denominations: denominations || null,
+      movements: [],
+      updatedAt: new Date().toISOString(),
+    };
+
+    await dexieDb.cashSessions.put(newSession);
+    return newSession;
+  },
+
+  async logExpense(
+    amount: number,
+    movementType: 'EXPENSE' | 'MANUAL_DEPOSIT' = 'EXPENSE',
+    reason: string,
+    cashierName?: string,
+    sessionId?: string
+  ): Promise<CashMovement> {
+    if (isTauriEnv()) {
+      try {
+        const nativeMovement = await invoke<CashMovement>('sqlite_log_expense', {
+          sessionId: sessionId || null,
+          movementType,
+          amount: Math.round(amount),
+          reason,
+          cashierName: cashierName || null,
+        });
+        if (nativeMovement && nativeMovement.id) {
+          await dexieDb.cashMovements.put(nativeMovement);
+          return nativeMovement;
+        }
+      } catch (e) {
+        console.warn('Native SQLite log expense failed, falling back to local Dexie:', e);
+      }
+    }
+
+    const fallbackSession = sessionId || (await dexieDb.cashSessions.where('status').equals('OPEN').first())?.id || 'DEFAULT_SHIFT';
+    const movement: CashMovement = {
+      id: `MOV-${Date.now()}`,
+      sessionId: fallbackSession,
+      type: movementType,
+      amount: Math.round(amount),
+      reason,
+      cashierName: cashierName || 'Caissier',
+      createdAt: new Date().toISOString(),
+    };
+
+    await dexieDb.cashMovements.put(movement);
+    return movement;
+  },
+
+  async closeShift(
+    blindCount: number,
+    closingNote?: string,
+    cashierName?: string,
+    sessionId?: string
+  ): Promise<CashSession> {
+    if (isTauriEnv()) {
+      try {
+        const nativeClosed = await invoke<CashSession>('sqlite_close_shift', {
+          sessionId: sessionId || null,
+          blindCount: Math.round(blindCount),
+          closingNote: closingNote || null,
+          cashierName: cashierName || null,
+        });
+        if (nativeClosed && nativeClosed.id) {
+          await dexieDb.cashSessions.put(nativeClosed);
+          return nativeClosed;
+        }
+      } catch (e) {
+        console.warn('Native SQLite close shift failed, falling back to local Dexie:', e);
+      }
+    }
+
+    const openSession = sessionId
+      ? await dexieDb.cashSessions.get(sessionId)
+      : await dexieDb.cashSessions.where('status').equals('OPEN').first();
+
+    const currentSessionId = openSession?.id || `SHIFT-${Date.now()}`;
+    const movements = await dexieDb.cashMovements.where('sessionId').equals(currentSessionId).toArray();
+    const deposits = movements.filter((m) => m.type === 'MANUAL_DEPOSIT').reduce((sum, m) => sum + m.amount, 0);
+    const expenses = movements.filter((m) => m.type === 'EXPENSE').reduce((sum, m) => sum + m.amount, 0);
+
+    const openingFloat = openSession?.openingFloat || 0;
+    const txns = await dexieDb.transactions.toArray();
+    const sessionTxns = txns.filter(
+      (t) => (!openSession?.openedAt || t.createdAt >= openSession.openedAt) && t.paymentMethod === 'Espèces' && t.status !== 'VOIDED' && !t.isRefund
+    );
+    const cashSales = sessionTxns.reduce((sum, t) => sum + t.total, 0);
+    const totalProfits = sessionTxns.reduce((sum, t) => sum + (t.profit || 0), 0);
+
+    const expectedCash = openingFloat + cashSales + deposits - expenses;
+    const actualCash = Math.round(blindCount);
+    const discrepancy = actualCash - expectedCash;
+    const dailyNetProfit = totalProfits - expenses;
+
+    const closedSession: CashSession = {
+      id: currentSessionId,
+      openedAt: openSession?.openedAt || new Date().toISOString(),
+      closedAt: new Date().toISOString(),
+      openingFloat,
+      cashSales,
+      manualDeposits: deposits,
+      expenses,
+      expectedCash,
+      actualCash,
+      discrepancy,
+      dailyNetProfit,
+      status: 'CLOSED',
+      cashierName: cashierName || openSession?.cashierName || 'Caissier Principal',
+      openingNote: openSession?.openingNote || '',
+      closingNote: closingNote || '',
+      movements,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await dexieDb.cashSessions.put(closedSession);
+    return closedSession;
+  },
+
+  async getActiveShift(): Promise<CashSession | null> {
+    if (isTauriEnv()) {
+      try {
+        const nativeActive = await invoke<CashSession | null>('sqlite_get_active_shift');
+        if (nativeActive) {
+          return nativeActive;
+        }
+      } catch (e) {
+        console.warn('Native SQLite get active shift failed, falling back to local Dexie:', e);
+      }
+    }
+
+    const open = await dexieDb.cashSessions.where('status').equals('OPEN').first();
+    if (!open) return null;
+    const movements = await dexieDb.cashMovements.where('sessionId').equals(open.id).toArray();
+    return { ...open, movements };
+  },
+
+  async getAllShifts(): Promise<CashSession[]> {
+    if (isTauriEnv()) {
+      try {
+        const nativeShifts = await invoke<CashSession[]>('sqlite_get_all_shifts');
+        if (Array.isArray(nativeShifts)) {
+          return nativeShifts;
+        }
+      } catch (e) {
+        console.warn('Native SQLite get all shifts failed, falling back to local Dexie:', e);
+      }
+    }
+    return await dexieDb.cashSessions.orderBy('openedAt').reverse().toArray();
+  },
+
+  async getShiftDetails(sessionId: string): Promise<CashSession | null> {
+    if (isTauriEnv()) {
+      try {
+        const details = await invoke<CashSession>('sqlite_get_shift_details', { sessionId });
+        if (details) return details;
+      } catch (e) {
+        console.warn('Native SQLite get shift details failed:', e);
+      }
+    }
+    const session = await dexieDb.cashSessions.get(sessionId);
+    if (!session) return null;
+    const movements = await dexieDb.cashMovements.where('sessionId').equals(sessionId).toArray();
+    return { ...session, movements };
+  },
+
+  async getInventoryValuation(): Promise<InventoryValuation> {
+    if (isTauriEnv()) {
+      try {
+        const valuation = await invoke<InventoryValuation>('sqlite_get_inventory_valuation');
+        if (valuation) return valuation;
+      } catch (e) {
+        console.warn('Native SQLite get inventory valuation failed, falling back to local calculation:', e);
+      }
+    }
+
+    const products = await dexieDb.products.toArray();
+    const inStockProducts = products.filter((p) => (p.stock || 0) > 0);
+    const totalSkus = inStockProducts.length;
+    const totalUnits = inStockProducts.reduce((sum, p) => sum + p.stock, 0);
+    const totalCostValue = Math.round(inStockProducts.reduce((sum, p) => sum + p.stock * (p.costPrice || 0), 0));
+    const totalRetailValue = Math.round(inStockProducts.reduce((sum, p) => sum + p.stock * p.price, 0));
+    const potentialProfitMargin = totalRetailValue - totalCostValue;
+
+    return {
+      totalSkus,
+      totalUnits,
+      totalCostValue,
+      totalRetailValue,
+      potentialProfitMargin,
+    };
+  },
+
+  async generateSessionBackupJson(sessionId: string): Promise<string> {
+    if (isTauriEnv()) {
+      try {
+        return await invoke<string>('sqlite_generate_session_backup_json', { sessionId });
+      } catch (e) {
+        console.warn('Native SQLite generate backup json failed, generating client-side snapshot:', e);
+      }
+    }
+
+    const session = await this.getShiftDetails(sessionId);
+    const valuation = await this.getInventoryValuation();
+    const backup = {
+      backupType: 'CASH_SESSION_Z_REPORT_BACKUP',
+      generatedAt: new Date().toISOString(),
+      session,
+      inventoryValuationSnapshot: valuation,
+      mode: 'IndexedDB Redundant Mirror',
+    };
+    return JSON.stringify(backup, null, 2);
   },
 
   async clearAllData(): Promise<void> {
@@ -784,6 +1039,8 @@ export const sqliteAdapter = {
       dexieDb.bundles.clear(),
       dexieDb.customerDebts.clear(),
       dexieDb.storeExpenses.clear(),
+      dexieDb.cashSessions.clear(),
+      dexieDb.cashMovements.clear(),
     ]);
   },
 };

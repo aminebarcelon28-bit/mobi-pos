@@ -27,6 +27,10 @@ import type {
   ProcessRefundPayload,
   CustomerDebtEntry,
   StoreExpense,
+  CashSession,
+  CashMovement,
+  DenominationCount,
+  InventoryValuation,
 } from '../types/pos';
 import { INITIAL_PRODUCTS, INITIAL_CUSTOMERS } from '../data/mockData';
 import {
@@ -92,6 +96,9 @@ interface PosState {
     | 'licensing'
     | 'security_audit'
     | 'shift_zreport'
+    | 'shift_open'
+    | 'shift_movement'
+    | 'shift_close'
     | 'vendor_procurement'
     | 'purchase_order'
     | 'repair_work_order'
@@ -125,6 +132,7 @@ interface PosState {
   // ── Cart ──
   addToCart: (product: Product, overridePin?: boolean) => { success: boolean; reason?: string };
   updateCartQty: (productId: string, delta: number) => void;
+  setCartItemQty: (productId: string, quantity: number) => void;
   removeFromCart: (productId: string) => void;
   clearCart: () => void;
   setCartItemDiscount: (productId: string, discount: number) => void;
@@ -158,8 +166,8 @@ interface PosState {
 
   // ── Payment & Refunds / Voids ──
   setCashTendered: (amount: number) => void;
-  processPayment: (tenders?: PaymentTender[]) => { success: boolean; reason?: string };
-  quickCashPayment: () => { success: boolean; reason?: string };
+  processPayment: (tenders?: PaymentTender[]) => Promise<{ success: boolean; reason?: string }>;
+  quickCashPayment: () => Promise<{ success: boolean; reason?: string }>;
   voidTransaction: (transactionId: string, reason: string, cashierName?: string) => Promise<{ success: boolean; reason?: string }>;
   processRefund: (payload: ProcessRefundPayload) => Promise<{ success: boolean; refundTransaction?: SaleTransaction; reason?: string }>;
 
@@ -168,6 +176,8 @@ interface PosState {
   reprintReceipt: (transaction: SaleTransaction) => void;
 
   // ── Security ──
+  managerPin: string;
+  setManagerPin: (newPin: string) => Promise<void>;
   logSecurityAction: (action: string, details: string, user?: string, requiresPin?: boolean) => void;
   verifyManagerPin: (pin: string) => boolean;
 
@@ -208,6 +218,31 @@ interface PosState {
   storeExpenses: StoreExpense[];
   addStoreExpense: (expense: Omit<StoreExpense, 'id' | 'createdAt'>) => Promise<void>;
   deleteStoreExpense: (id: string) => Promise<void>;
+
+  // ── Cash Register Sessions & Inventory Audit ──
+  activeShift: CashSession | null;
+  allShifts: CashSession[];
+  inventoryValuation: InventoryValuation | null;
+  startShift: (
+    openingFloat: number,
+    cashierName?: string,
+    openingNote?: string,
+    denominations?: DenominationCount
+  ) => Promise<{ success: boolean; session?: CashSession; reason?: string }>;
+  logCashMovement: (
+    amount: number,
+    type: 'EXPENSE' | 'MANUAL_DEPOSIT',
+    reason: string,
+    cashierName?: string
+  ) => Promise<{ success: boolean; movement?: CashMovement; reason?: string }>;
+  closeShift: (
+    blindCount: number,
+    closingNote?: string,
+    cashierName?: string
+  ) => Promise<{ success: boolean; session?: CashSession; reason?: string }>;
+  fetchActiveShift: () => Promise<void>;
+  fetchInventoryValuation: () => Promise<void>;
+  fetchAllShifts: () => Promise<void>;
 
   // ── IMEI ──
   validateIMEI: (imei: string) => { valid: boolean; reason?: string };
@@ -257,7 +292,11 @@ export const usePosStore = create<PosState>((set, get) => ({
       requiresPin: false,
     },
   ],
+  managerPin: '1234',
   shiftFloat: 20000,
+  activeShift: null,
+  allShifts: [],
+  inventoryValuation: null,
   cashDrops: [],
   payouts: [],
   receiptSettings: {
@@ -399,6 +438,22 @@ export const usePosStore = create<PosState>((set, get) => ({
     set({ cart: updated });
   },
 
+  setCartItemQty: (productId, quantity) => {
+    const { cart } = get();
+    const safeQty = Math.max(1, isNaN(quantity) ? 1 : Math.floor(quantity));
+    const updated = cart.map((item) => {
+      if (item.product.id === productId) {
+        if (item.product.isSerialized) {
+          return item; // Serialized items stay 1
+        }
+        const clampedQty = Math.min(item.product.stock, safeQty);
+        return { ...item, quantity: clampedQty };
+      }
+      return item;
+    });
+    set({ cart: updated });
+  },
+
   removeFromCart: (productId) => {
     const { cart } = get();
     set({ cart: cart.filter((item) => item.product.id !== productId) });
@@ -464,7 +519,7 @@ export const usePosStore = create<PosState>((set, get) => ({
   },
 
   retrieveSale: (saleId) => {
-    const { heldSales, cart, currentCustomer } = get();
+    const { heldSales, cart, currentCustomer, products } = get();
     const target = heldSales.find((h) => h.id === saleId);
     if (target) {
       let updatedHeldSales = heldSales.filter((h) => h.id !== saleId);
@@ -476,9 +531,13 @@ export const usePosStore = create<PosState>((set, get) => ({
           timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
         });
       }
+      const refreshedItems = target.items.map((cartItem) => {
+        const currentProd = products.find((p) => p.id === cartItem.product.id);
+        return currentProd ? { ...cartItem, product: currentProd } : cartItem;
+      });
       const activeTier = target.customer ? target.customer.pricingTier : 'Retail';
       set({
-        cart: target.items,
+        cart: refreshedItems,
         currentCustomer: target.customer,
         pricingTier: activeTier,
         heldSales: updatedHeldSales,
@@ -741,6 +800,9 @@ export const usePosStore = create<PosState>((set, get) => ({
       let bundles = await sqliteAdapter.getAllBundles();
       let customerDebts = await sqliteAdapter.getAllCustomerDebts();
       let storeExpenses = await sqliteAdapter.getAllStoreExpenses();
+      let activeShift = await sqliteAdapter.getActiveShift();
+      let allShifts = await sqliteAdapter.getAllShifts();
+      let inventoryValuation = await sqliteAdapter.getInventoryValuation();
 
       // 2. Migration loader: Check if legacy localStorage or mock data needed on initial startup
       const legacyProducts = localStorage.getItem('mobi_pos_products');
@@ -790,6 +852,8 @@ export const usePosStore = create<PosState>((set, get) => ({
         } catch {}
       }
 
+      let managerPin = await sqliteAdapter.getSetting('manager_pin', '1234');
+
       // 3. Update store state with database records
       set({
         products,
@@ -804,6 +868,11 @@ export const usePosStore = create<PosState>((set, get) => ({
         bundles,
         customerDebts,
         storeExpenses,
+        activeShift,
+        allShifts,
+        inventoryValuation,
+        managerPin: typeof managerPin === 'string' && managerPin.length >= 4 ? managerPin : '1234',
+        shiftFloat: activeShift?.openingFloat || 20000,
         isDbInitialized: true,
       });
     } catch (e) {
@@ -853,8 +922,8 @@ export const usePosStore = create<PosState>((set, get) => ({
 
   setCashTendered: (amount) => set({ cashTendered: amount }),
 
-  processPayment: (tenders) => {
-    const { cart, currentCustomer, cashTendered, products, transactions, pricingTier, storeCreditApplied, logSecurityAction, customers } = get();
+  processPayment: async (tenders) => {
+    const { cart, currentCustomer, cashTendered, products, transactions, pricingTier, storeCreditApplied, logSecurityAction, customers, activeShift } = get();
     if (cart.length === 0) return { success: false, reason: 'EMPTY_CART' };
 
     // IMEI enforcement for serialized items
@@ -915,7 +984,17 @@ export const usePosStore = create<PosState>((set, get) => ({
     }
 
     const changeDue = Math.max(0, directTendered - remainingToPay);
-    const costTotal = cart.reduce((acc, item) => acc + (item.product.costPrice || item.product.price * 0.4) * item.quantity, 0);
+    
+    // Capture immutable unit cost price at exact checkout time to protect historical profit margins
+    const frozenCartItems: CartItem[] = cart.map((item) => ({
+      ...item,
+      unitCostPrice: item.unitCostPrice ?? item.product.costPrice ?? Math.round(item.product.price * 0.4),
+    }));
+
+    const costTotal = frozenCartItems.reduce(
+      (acc, item) => acc + (item.unitCostPrice || 0) * item.quantity,
+      0
+    );
     
     // Exact Net Profit = Net Revenue (Total After All Discounts & Credit) minus Total Cost of Goods Sold (COGS)
     const profit = total - costTotal;
@@ -935,6 +1014,9 @@ export const usePosStore = create<PosState>((set, get) => ({
     if (hasSyncConflict) {
       logSecurityAction('Conflit de Sync Stock Négatif (CRDT)', 'Vente enregistrée avec stock final à 0 un.', 'Système Local', false);
     }
+
+    const transactionId = `TXN-${Math.floor(100000 + Math.random() * 900000)}`;
+    const receiptNumber = `REC-${Date.now().toString().slice(-6)}`;
 
     const { customerDebts } = get();
     let newCustomerDebts = customerDebts;
@@ -959,9 +1041,6 @@ export const usePosStore = create<PosState>((set, get) => ({
       const newPoints = currentCustomer.loyaltyPoints + earnedPoints;
       const newDebt = (currentCustomer.currentDebt || 0) + creditDebtAmount;
 
-      const txnId = `TXN-${Math.floor(100000 + Math.random() * 900000)}`;
-      const receiptNo = `REC-${Date.now().toString().slice(-6)}`;
-
       const newEntries: LoyaltyLedgerEntry[] = [];
       if (earnedPoints > 0) {
         newEntries.push(createLedgerEntry(
@@ -969,8 +1048,8 @@ export const usePosStore = create<PosState>((set, get) => ({
           'earn',
           earnedPoints,
           newPoints,
-          `Achat Ticket ${receiptNo} (${total} DA - Multiplicateur ${currentTier.name} ${currentTier.pointsMultiplier}x)`,
-          txnId
+          `Achat Ticket ${receiptNumber} (${total} DA - Multiplicateur ${currentTier.name} ${currentTier.pointsMultiplier}x)`,
+          transactionId
         ));
       }
 
@@ -981,7 +1060,7 @@ export const usePosStore = create<PosState>((set, get) => ({
           0,
           newPoints,
           `🎁 Bonus Palier 20 000 DA Atteint : +${earnedCreditBonus} DA Crédit Avoir Client`,
-          txnId
+          transactionId
         ));
       }
 
@@ -1009,11 +1088,11 @@ export const usePosStore = create<PosState>((set, get) => ({
           type: 'DEBT_ACQUIRED',
           amount: creditDebtAmount,
           balanceAfter: newDebt,
-          receiptNumber: receiptNo,
+          receiptNumber: receiptNumber,
           paymentMethod: 'Crédit Client',
-          notes: `Vente à crédit - Ticket N° ${receiptNo}`,
+          notes: `Vente à crédit - Ticket N° ${receiptNumber}`,
           createdAt: new Date().toISOString(),
-          recordedBy: 'Caisse 1 (Yacine)',
+          recordedBy: activeShift?.cashierName ? `Caisse (${activeShift.cashierName})` : 'Caisse 1 (Yacine)',
         };
         sqliteAdapter.saveCustomerDebt(debtEntry);
         newCustomerDebts = [debtEntry, ...customerDebts];
@@ -1021,10 +1100,10 @@ export const usePosStore = create<PosState>((set, get) => ({
     }
 
     const transaction: SaleTransaction = {
-      id: `TXN-${Math.floor(100000 + Math.random() * 900000)}`,
-      receiptNumber: `REC-${Date.now().toString().slice(-6)}`,
+      id: transactionId,
+      receiptNumber: receiptNumber,
       customer: updatedCustomer,
-      items: [...cart],
+      items: frozenCartItems,
       subtotal: grossSubtotal,
       discountTotal: cart.reduce((acc, item) => acc + item.discount, 0),
       total,
@@ -1036,25 +1115,26 @@ export const usePosStore = create<PosState>((set, get) => ({
       tenders,
       cashTendered: tenders ? tenders.reduce((acc, t) => acc + t.amount, 0) : cashTendered,
       changeDue,
-      createdAt: new Date().toLocaleDateString('fr-DZ', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
+      createdAt: new Date().toISOString(),
+      cashierName: activeShift?.cashierName || 'Yacine (Caisse 1)',
       debtAdded: creditDebtAmount > 0 ? creditDebtAmount : undefined,
       debtRemainingTotal: updatedCustomer?.currentDebt,
     };
 
     const newTransactions = [transaction, ...transactions];
 
-    sqliteAdapter.processSaleTransactionAtomic(
-      transaction,
-      updatedProducts,
-      updatedCustomer || undefined,
-      undefined
-    );
+    try {
+      await sqliteAdapter.processSaleTransactionAtomic(
+        transaction,
+        updatedProducts,
+        updatedCustomer || undefined,
+        undefined
+      );
+    } catch (e) {
+      console.error('Checkout atomic persistence failed:', e);
+      soundEngine.playError();
+      return { success: false, reason: 'PERSISTENCE_FAILED' };
+    }
 
     soundEngine.playSuccess();
     soundEngine.playCashDrawer();
@@ -1076,7 +1156,7 @@ export const usePosStore = create<PosState>((set, get) => ({
     return { success: true };
   },
 
-  quickCashPayment: () => {
+  quickCashPayment: async () => {
     const { cart, pricingTier, processPayment } = get();
     if (cart.length === 0) return { success: false, reason: 'EMPTY_CART' };
 
@@ -1090,7 +1170,7 @@ export const usePosStore = create<PosState>((set, get) => ({
       return acc + itemPrice * item.quantity - (item.discount || 0);
     }, 0);
 
-    return processPayment([{ method: 'Espèces', amount: grossSubtotal }]);
+    return await processPayment([{ method: 'Espèces', amount: grossSubtotal }]);
   },
 
   voidTransaction: async (transactionId, reason, cashierName) => {
@@ -1188,13 +1268,7 @@ export const usePosStore = create<PosState>((set, get) => ({
       ...txn,
       status: 'VOIDED',
       voidReason: reason,
-      voidedAt: new Date().toLocaleDateString('fr-DZ', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
+      voidedAt: new Date().toISOString(),
       voidedBy: cashierName || 'Manager',
     };
 
@@ -1365,13 +1439,7 @@ export const usePosStore = create<PosState>((set, get) => ({
       paymentMethod: refundMethod,
       cashTendered: refundMethod === 'Espèces' ? refundTotal : 0,
       changeDue: 0,
-      createdAt: new Date().toLocaleDateString('fr-DZ', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
+      createdAt: new Date().toISOString(),
     };
 
     // 5. Update Original Transaction status
@@ -1468,7 +1536,20 @@ export const usePosStore = create<PosState>((set, get) => ({
   },
 
   verifyManagerPin: (pin) => {
-    return pin === '1234';
+    const currentPin = get().managerPin || '1234';
+    return pin === currentPin;
+  },
+
+  setManagerPin: async (newPin) => {
+    if (!newPin || newPin.length < 4) return;
+    await sqliteAdapter.setSetting('manager_pin', newPin);
+    set({ managerPin: newPin });
+    get().logSecurityAction(
+      'Mise à Jour Code PIN Gérant',
+      'Le code PIN administrateur a été modifié avec succès',
+      'Manager',
+      true
+    );
   },
 
   // ══════════════════════════════════════════
@@ -1521,7 +1602,7 @@ export const usePosStore = create<PosState>((set, get) => ({
       id: `po-${Date.now()}`,
       poNumber: `PO-${Date.now().toString().slice(-6)}`,
       vendorName,
-      createdAt: new Date().toLocaleDateString('fr-DZ'),
+      createdAt: new Date().toISOString(),
       items: lineItems,
       totalAmount,
       status: 'Draft',
@@ -1601,21 +1682,45 @@ export const usePosStore = create<PosState>((set, get) => ({
       id: `rep-${Date.now()}`,
       ticketNumber: `REP-${Math.floor(1000 + Math.random() * 9000)}`,
       totalCost,
-      createdAt: new Date().toLocaleDateString('fr-DZ', { hour: '2-digit', minute: '2-digit' } as Intl.DateTimeFormatOptions),
+      createdAt: new Date().toISOString(),
     };
     const updated = [newOrder, ...repairOrders];
     await repairRepository.save(newOrder);
+
+    // Auto-record advance deposit in cash if shift is open
+    const deposit = orderInput.depositAmount || 0;
+    if (deposit > 0 && get().activeShift) {
+      await get().logCashMovement(
+        deposit,
+        'MANUAL_DEPOSIT',
+        `Acompte SAV Réparation: Ticket #${newOrder.ticketNumber} (${newOrder.customerName} - ${newOrder.deviceModel})`
+      );
+    }
+
     set({ repairOrders: updated });
   },
 
   updateRepairOrderStatus: async (orderId, newStatus) => {
     const { repairOrders } = get();
+    const target = repairOrders.find((r) => r.id === orderId);
     const updated = repairOrders.map((r) =>
-      r.id === orderId ? { ...r, status: newStatus, updatedAt: new Date().toLocaleDateString('fr-DZ', { hour: '2-digit', minute: '2-digit' } as Intl.DateTimeFormatOptions) } : r
+      r.id === orderId ? { ...r, status: newStatus, updatedAt: new Date().toISOString() } : r
     );
-    const target = updated.find((r) => r.id === orderId);
     if (target) {
-      await repairRepository.save(target);
+      const updatedOrder = { ...target, status: newStatus, updatedAt: new Date().toISOString() };
+      await repairRepository.save(updatedOrder);
+
+      // If repair was marked finished/picked up and had a remaining unpaid balance, record in shift
+      if (newStatus === 'Prêt / Terminé' && get().activeShift) {
+        const remaining = Math.max(0, target.totalCost - (target.depositAmount || 0));
+        if (remaining > 0) {
+          await get().logCashMovement(
+            remaining,
+            'MANUAL_DEPOSIT',
+            `Solde Restant SAV Réparation: Ticket #${target.ticketNumber} (${target.customerName})`
+          );
+        }
+      }
     }
     set({ repairOrders: updated });
   },
@@ -1628,7 +1733,7 @@ export const usePosStore = create<PosState>((set, get) => ({
             ...r,
             ...updates,
             totalCost: (updates.laborCost ?? r.laborCost) + (updates.partsCost ?? r.partsCost),
-            updatedAt: new Date().toLocaleDateString('fr-DZ', { hour: '2-digit', minute: '2-digit' } as Intl.DateTimeFormatOptions),
+            updatedAt: new Date().toISOString(),
           }
         : r
     );
@@ -1652,7 +1757,7 @@ export const usePosStore = create<PosState>((set, get) => ({
       ...tradeInput,
       resalePrice,
       id: `trade-${Date.now()}`,
-      createdAt: new Date().toLocaleDateString('fr-DZ', { hour: '2-digit', minute: '2-digit' } as Intl.DateTimeFormatOptions),
+      createdAt: new Date().toISOString(),
     };
 
     // Convert trade-in directly into sellable serialized inventory product
@@ -1682,6 +1787,15 @@ export const usePosStore = create<PosState>((set, get) => ({
 
     await productRepository.save(convertedProduct);
     await sqliteAdapter.saveTradeIn(newTradeIn);
+
+    // Auto-record drawer payout if paid in cash during active shift
+    if (!tradeInput.creditToWallet && get().activeShift) {
+      await get().logCashMovement(
+        tradeInput.buybackValue,
+        'EXPENSE',
+        `Décaissement Rachat Occasion: ${newTradeIn.deviceModel} (IMEI: ${newTradeIn.imei})`
+      );
+    }
 
     // Issue store credit if requested
     let updatedCustomers = customers;
@@ -1787,10 +1901,20 @@ export const usePosStore = create<PosState>((set, get) => ({
     const newDrop: CashDropEntry = {
       ...entry,
       id: `drop-${Date.now()}`,
-      timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+      timestamp: new Date().toISOString(),
     };
     const updated = [newDrop, ...cashDrops];
     await sqliteAdapter.saveCashDrop(newDrop, false);
+
+    // Auto-record drawer skimming into active shift movements
+    if (get().activeShift) {
+      await get().logCashMovement(
+        newDrop.amount,
+        'EXPENSE',
+        `Prélèvement Coffre (Cash Drop): ${newDrop.reason || 'Délestage caisse'}`
+      );
+    }
+
     set({ cashDrops: updated });
   },
 
@@ -1868,6 +1992,15 @@ export const usePosStore = create<PosState>((set, get) => ({
     await customerRepository.save(updatedCustomer);
     await sqliteAdapter.saveCustomerDebt(debtEntry);
 
+    // Auto-record drawer deposit if paid in cash during an active shift
+    if (method === 'Espèces' && get().activeShift) {
+      await get().logCashMovement(
+        validAmount,
+        'MANUAL_DEPOSIT',
+        `Versement Règlement Dette: ${customer.name} (Ticket ${receiptNo})`
+      );
+    }
+
     logSecurityAction(
       'Règlement Dette Client Enregistré',
       `Client: ${customer.name} - Versement: ${validAmount} DA (${method}) - Dette restante: ${newDebt} DA`,
@@ -1906,6 +2039,16 @@ export const usePosStore = create<PosState>((set, get) => ({
     };
     const updated = [newExpense, ...storeExpenses];
     await sqliteAdapter.saveStoreExpense(newExpense);
+
+    // Auto-record drawer expense movement if a shift is currently open
+    if (get().activeShift) {
+      await get().logCashMovement(
+        validAmount,
+        'EXPENSE',
+        `Dépense d'exploitation (${newExpense.category}): ${newExpense.title}`
+      );
+    }
+
     logSecurityAction(
       'Enregistrement Charge d\'Exploitation',
       `${newExpense.category}: ${newExpense.title} (${validAmount} DA)`,
@@ -1920,5 +2063,112 @@ export const usePosStore = create<PosState>((set, get) => ({
     const updated = storeExpenses.filter((e) => e.id !== id);
     await sqliteAdapter.deleteStoreExpense(id);
     set({ storeExpenses: updated });
+  },
+
+  // ══════════════════════════════════════════
+  // Cash Register Sessions & Inventory Audit
+  // ══════════════════════════════════════════
+
+  startShift: async (openingFloat, cashierName, openingNote, denominations) => {
+    const { logSecurityAction } = get();
+    try {
+      const session = await sqliteAdapter.startShift(openingFloat, cashierName, openingNote, denominations);
+      const allShifts = await sqliteAdapter.getAllShifts();
+      logSecurityAction(
+        'Ouverture Session Caisse (Shift Open)',
+        `Fond de caisse initial: ${openingFloat} DA • Caissier: ${cashierName || 'Caissier Principal'} • ID: ${session.id}`,
+        cashierName || 'Caissier',
+        false
+      );
+      soundEngine.playSuccess();
+      set({
+        activeShift: session,
+        allShifts,
+        shiftFloat: openingFloat,
+        activeModal: null,
+      });
+      return { success: true, session };
+    } catch (e: unknown) {
+      console.error('Failed to start shift:', e);
+      return { success: false, reason: e instanceof Error ? e.message : 'Erreur ouverture shift' };
+    }
+  },
+
+  logCashMovement: async (amount, type, reason, cashierName) => {
+    const { activeShift, logSecurityAction } = get();
+    try {
+      const movement = await sqliteAdapter.logExpense(amount, type, reason, cashierName, activeShift?.id);
+      const refreshedActive = await sqliteAdapter.getActiveShift();
+      logSecurityAction(
+        type === 'EXPENSE' ? 'Décaissement / Dépense Caisse' : 'Apport de Caisse / Dépôt Manuel',
+        `Montant: ${amount} DA • Motif: ${reason} • Shift: ${activeShift?.id || 'Actif'}`,
+        cashierName || 'Caissier',
+        false
+      );
+      soundEngine.playCashDrawer();
+      set({
+        activeShift: refreshedActive,
+        activeModal: null,
+      });
+      return { success: true, movement };
+    } catch (e: unknown) {
+      console.error('Failed to log cash movement:', e);
+      return { success: false, reason: e instanceof Error ? e.message : 'Erreur mouvement caisse' };
+    }
+  },
+
+  closeShift: async (blindCount, closingNote, cashierName) => {
+    const { activeShift, logSecurityAction } = get();
+    try {
+      const closedSession = await sqliteAdapter.closeShift(blindCount, closingNote, cashierName, activeShift?.id);
+      const allShifts = await sqliteAdapter.getAllShifts();
+      const inventoryValuation = await sqliteAdapter.getInventoryValuation();
+
+      logSecurityAction(
+        'Clôture Caisse & Rapport Z (Blind Count)',
+        `Montant compté: ${blindCount} DA • Théorique: ${closedSession.expectedCash} DA • Écart: ${closedSession.discrepancy} DA • Profit Net: ${closedSession.dailyNetProfit} DA`,
+        cashierName || 'Caissier Principal',
+        Boolean(closedSession.discrepancy && closedSession.discrepancy !== 0)
+      );
+
+      soundEngine.playSuccess();
+      set({
+        activeShift: null,
+        allShifts,
+        inventoryValuation,
+        activeModal: null,
+      });
+      return { success: true, session: closedSession };
+    } catch (e: unknown) {
+      console.error('Failed to close shift:', e);
+      return { success: false, reason: e instanceof Error ? e.message : 'Erreur clôture shift' };
+    }
+  },
+
+  fetchActiveShift: async () => {
+    try {
+      const activeShift = await sqliteAdapter.getActiveShift();
+      set({ activeShift, shiftFloat: activeShift?.openingFloat || get().shiftFloat });
+    } catch (e) {
+      console.warn('Failed to fetch active shift:', e);
+    }
+  },
+
+  fetchInventoryValuation: async () => {
+    try {
+      const inventoryValuation = await sqliteAdapter.getInventoryValuation();
+      set({ inventoryValuation });
+    } catch (e) {
+      console.warn('Failed to fetch inventory valuation:', e);
+    }
+  },
+
+  fetchAllShifts: async () => {
+    try {
+      const allShifts = await sqliteAdapter.getAllShifts();
+      set({ allShifts });
+    } catch (e) {
+      console.warn('Failed to fetch all shifts:', e);
+    }
   },
 }));

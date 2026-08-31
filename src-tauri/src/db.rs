@@ -1,5 +1,5 @@
 use parking_lot::Mutex;
-use rusqlite::{params, Connection, Result, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Result, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -56,6 +56,7 @@ impl DatabaseManager {
             PRAGMA synchronous = NORMAL;
             PRAGMA foreign_keys = ON;
             PRAGMA busy_timeout = 5000;
+            PRAGMA wal_autocheckpoint = 1000;
             PRAGMA cache_size = -64000;
             PRAGMA mmap_size = 268435456;
             PRAGMA temp_store = MEMORY;
@@ -166,11 +167,13 @@ impl DatabaseManager {
                 payment_method TEXT DEFAULT 'Espèces',
                 cash_tendered REAL DEFAULT 0,
                 change_due REAL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'COMPLETED',
                 created_at TEXT NOT NULL,
                 json_payload TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_transactions_receipt ON transactions(receipt_number);
+            CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
             CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at);
             CREATE INDEX IF NOT EXISTS idx_transactions_customer ON transactions(customer_id);
 
@@ -299,8 +302,96 @@ impl DatabaseManager {
                 value_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            -- 15. Cash Sessions Table (POS Drawer Shifts)
+            CREATE TABLE IF NOT EXISTS cash_sessions (
+                id TEXT PRIMARY KEY,
+                opened_at TEXT NOT NULL,
+                closed_at TEXT,
+                opening_float INTEGER NOT NULL,
+                expected_cash INTEGER,
+                actual_cash INTEGER,
+                status TEXT NOT NULL DEFAULT 'OPEN',
+                cashier_name TEXT,
+                opening_note TEXT,
+                closing_note TEXT,
+                discrepancy INTEGER,
+                json_payload TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_sessions_status ON cash_sessions(status);
+            CREATE INDEX IF NOT EXISTS idx_sessions_opened_at ON cash_sessions(opened_at);
+
+            -- 16. Drawer Movements Table (Expenses & Manual Deposits)
+            CREATE TABLE IF NOT EXISTS cash_movements (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                cashier_name TEXT,
+                created_at TEXT NOT NULL,
+                json_payload TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES cash_sessions(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_movements_session ON cash_movements(session_id);
+            CREATE INDEX IF NOT EXISTS idx_movements_type ON cash_movements(type);
+
+            -- 17. Real-Time Inventory Valuation SQL View
+            CREATE VIEW IF NOT EXISTS v_inventory_valuation AS
+            SELECT
+                COUNT(*) as total_skus,
+                COALESCE(SUM(stock), 0) as total_units,
+                COALESCE(CAST(ROUND(SUM(stock * cost_price)) AS INTEGER), 0) as total_cost_value,
+                COALESCE(CAST(ROUND(SUM(stock * price)) AS INTEGER), 0) as total_retail_value,
+                COALESCE(CAST(ROUND(SUM(stock * (price - cost_price))) AS INTEGER), 0) as potential_profit_margin
+            FROM products
+            WHERE stock > 0;
+
+            -- 18. Customer Debts (Kredy) Table
+            CREATE TABLE IF NOT EXISTS customer_debts (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT NOT NULL,
+                customer_name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                amount REAL NOT NULL,
+                balance_after REAL NOT NULL,
+                receipt_number TEXT,
+                payment_method TEXT,
+                notes TEXT,
+                recorded_by TEXT,
+                created_at TEXT NOT NULL,
+                json_payload TEXT NOT NULL,
+                FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_customer_debts_cust ON customer_debts(customer_id);
+            CREATE INDEX IF NOT EXISTS idx_customer_debts_created ON customer_debts(created_at);
+
+            -- 19. Store Expenses (EBITDA) Table
+            CREATE TABLE IF NOT EXISTS store_expenses (
+                id TEXT PRIMARY KEY,
+                category TEXT NOT NULL,
+                title TEXT NOT NULL,
+                amount REAL NOT NULL,
+                payment_method TEXT NOT NULL,
+                paid_to TEXT,
+                notes TEXT,
+                recorded_by TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                json_payload TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_store_expenses_category ON store_expenses(category);
+            CREATE INDEX IF NOT EXISTS idx_store_expenses_created ON store_expenses(created_at);
             ",
         )?;
+
+        // Backward compatibility migration for older SQLite database files
+        let _ = conn.execute("ALTER TABLE transactions ADD COLUMN status TEXT DEFAULT 'COMPLETED'", []);
+        let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status)", []);
 
         // Record initial migration
         conn.execute(
@@ -605,6 +696,7 @@ impl DatabaseManager {
         let payment_method = transaction["paymentMethod"].as_str().unwrap_or("Espèces");
         let cash_tendered = transaction["cashTendered"].as_f64().unwrap_or(0.0);
         let change_due = transaction["changeDue"].as_f64().unwrap_or(0.0);
+        let status = transaction["status"].as_str().unwrap_or("COMPLETED");
         let created_at = transaction["createdAt"].as_str().unwrap_or_default();
         let json_payload = serde_json::to_string(transaction).unwrap_or_default();
 
@@ -612,12 +704,12 @@ impl DatabaseManager {
             "INSERT OR REPLACE INTO transactions (
                 id, receipt_number, customer_id, subtotal, tax, discount_total,
                 total, cost_total, profit, profit_margin, pricing_tier,
-                payment_method, cash_tendered, change_due, created_at, json_payload
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                payment_method, cash_tendered, change_due, status, created_at, json_payload
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 txn_id, receipt_number, customer_id, subtotal, tax, discount_total,
                 total, cost_total, profit, profit_margin, pricing_tier,
-                payment_method, cash_tendered, change_due, created_at, json_payload
+                payment_method, cash_tendered, change_due, status, created_at, json_payload
             ],
         )?;
 
@@ -637,7 +729,10 @@ impl DatabaseManager {
                 let applied_price = item["appliedPrice"].as_f64().unwrap_or(0.0);
                 let discount = item["discount"].as_f64().unwrap_or(0.0);
                 let imei_number = item["imeiNumber"].as_str();
-                let cost_price = item["product"]["costPrice"].as_f64().unwrap_or(0.0);
+                let cost_price = item["unitCostPrice"]
+                    .as_f64()
+                    .or_else(|| item["product"]["costPrice"].as_f64())
+                    .unwrap_or(0.0);
                 let item_json = serde_json::to_string(item).unwrap_or_default();
 
                 item_stmt.execute(params![
@@ -757,7 +852,7 @@ impl DatabaseManager {
         // 1. Update the transaction row with voided JSON payload (preserves audit trail)
         let json_payload = serde_json::to_string(voided_transaction).unwrap_or_default();
         tx.execute(
-            "UPDATE transactions SET json_payload = ?1 WHERE id = ?2",
+            "UPDATE transactions SET status = 'VOIDED', json_payload = ?1 WHERE id = ?2",
             params![json_payload, transaction_id],
         )?;
 
@@ -862,6 +957,7 @@ impl DatabaseManager {
         let payment_method = refund_transaction["paymentMethod"].as_str().unwrap_or("Espèces");
         let cash_tendered = refund_transaction["cashTendered"].as_f64().unwrap_or(0.0);
         let change_due = refund_transaction["changeDue"].as_f64().unwrap_or(0.0);
+        let status = refund_transaction["status"].as_str().unwrap_or("REFUNDED");
         let created_at = refund_transaction["createdAt"].as_str().unwrap_or_default();
         let json_payload = serde_json::to_string(refund_transaction).unwrap_or_default();
 
@@ -869,22 +965,23 @@ impl DatabaseManager {
             "INSERT OR REPLACE INTO transactions (
                 id, receipt_number, customer_id, subtotal, tax, discount_total,
                 total, cost_total, profit, profit_margin, pricing_tier,
-                payment_method, cash_tendered, change_due, created_at, json_payload
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                payment_method, cash_tendered, change_due, status, created_at, json_payload
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 txn_id, receipt_number, customer_id, subtotal, tax, discount_total,
                 total, cost_total, profit, profit_margin, pricing_tier,
-                payment_method, cash_tendered, change_due, created_at, json_payload
+                payment_method, cash_tendered, change_due, status, created_at, json_payload
             ],
         )?;
 
         // 2. Update Original Transaction if provided
         if let Some(orig) = updated_original_transaction {
             let orig_id = orig["id"].as_str().unwrap_or_default();
+            let orig_status = orig["status"].as_str().unwrap_or("REFUNDED");
             let orig_json = serde_json::to_string(orig).unwrap_or_default();
             tx.execute(
-                "UPDATE transactions SET json_payload = ?1 WHERE id = ?2",
-                params![orig_json, orig_id],
+                "UPDATE transactions SET status = ?1, json_payload = ?2 WHERE id = ?3",
+                params![orig_status, orig_json, orig_id],
             )?;
         }
 
@@ -1356,12 +1453,137 @@ impl DatabaseManager {
         Ok(results)
     }
 
+    // ── CUSTOMER DEBTS (KREDY) ──
+
+    pub fn save_customer_debt(&self, debt: &Value) -> Result<()> {
+        let conn = self.conn.lock();
+        let id = debt["id"].as_str().unwrap_or_default();
+        let customer_id = debt["customerId"].as_str().unwrap_or_default();
+        let customer_name = debt["customerName"].as_str().unwrap_or_default();
+        let movement_type = debt["type"].as_str().unwrap_or("DEBT_ACQUIRED");
+        let amount = debt["amount"].as_f64().unwrap_or(0.0);
+        let balance_after = debt["balanceAfter"].as_f64().unwrap_or(0.0);
+        let receipt_number = debt["receiptNumber"].as_str();
+        let payment_method = debt["paymentMethod"].as_str();
+        let notes = debt["notes"].as_str();
+        let recorded_by = debt["recordedBy"].as_str();
+        let created_at = debt["createdAt"].as_str().unwrap_or_default();
+        let json_payload = serde_json::to_string(debt).unwrap_or_default();
+
+        conn.execute(
+            "INSERT OR REPLACE INTO customer_debts (
+                id, customer_id, customer_name, type, amount, balance_after,
+                receipt_number, payment_method, notes, recorded_by, created_at, json_payload
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                id, customer_id, customer_name, movement_type, amount, balance_after,
+                receipt_number, payment_method, notes, recorded_by, created_at, json_payload
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_all_customer_debts(&self) -> Result<Vec<Value>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT json_payload FROM customer_debts ORDER BY created_at DESC")?;
+        let rows = stmt.query_map([], |row| {
+            let s: String = row.get(0)?;
+            Ok(serde_json::from_str::<Value>(&s).unwrap_or(Value::Null))
+        })?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            if let Ok(v) = r {
+                if !v.is_null() {
+                    results.push(v);
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    // ── STORE EXPENSES (EBITDA) ──
+
+    pub fn save_store_expense(&self, expense: &Value) -> Result<()> {
+        let conn = self.conn.lock();
+        let id = expense["id"].as_str().unwrap_or_default();
+        let category = expense["category"].as_str().unwrap_or("Autre Charge");
+        let title = expense["title"].as_str().unwrap_or_default();
+        let amount = expense["amount"].as_f64().unwrap_or(0.0);
+        let payment_method = expense["paymentMethod"].as_str().unwrap_or("Espèces");
+        let paid_to = expense["paidTo"].as_str();
+        let notes = expense["notes"].as_str();
+        let recorded_by = expense["recordedBy"].as_str().unwrap_or("Admin");
+        let created_at = expense["createdAt"].as_str().unwrap_or_default();
+        let json_payload = serde_json::to_string(expense).unwrap_or_default();
+
+        conn.execute(
+            "INSERT OR REPLACE INTO store_expenses (
+                id, category, title, amount, payment_method, paid_to, notes,
+                recorded_by, created_at, json_payload
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                id, category, title, amount, payment_method, paid_to, notes,
+                recorded_by, created_at, json_payload
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_all_store_expenses(&self) -> Result<Vec<Value>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT json_payload FROM store_expenses ORDER BY created_at DESC")?;
+        let rows = stmt.query_map([], |row| {
+            let s: String = row.get(0)?;
+            Ok(serde_json::from_str::<Value>(&s).unwrap_or(Value::Null))
+        })?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            if let Ok(v) = r {
+                if !v.is_null() {
+                    results.push(v);
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    pub fn delete_store_expense(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute("DELETE FROM store_expenses WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn get_all_cash_movements(&self) -> Result<Vec<Value>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT json_payload FROM cash_movements ORDER BY created_at ASC")?;
+        let rows = stmt.query_map([], |r| {
+            let s: String = r.get(0)?;
+            Ok(serde_json::from_str::<Value>(&s).unwrap_or(Value::Null))
+        })?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            if let Ok(v) = r {
+                if !v.is_null() {
+                    results.push(v);
+                }
+            }
+        }
+        Ok(results)
+    }
+
     // ── CLEAR & FULL EXPORT/IMPORT ──
 
     pub fn clear_all_data(&self) -> Result<()> {
         let conn = self.conn.lock();
         conn.execute_batch(
             "
+            DELETE FROM cash_movements;
+            DELETE FROM cash_sessions;
+            DELETE FROM customer_debts;
+            DELETE FROM store_expenses;
             DELETE FROM transaction_items;
             DELETE FROM transactions;
             DELETE FROM loyalty_ledger;
@@ -1392,6 +1614,10 @@ impl DatabaseManager {
         let payouts = self.get_cash_drops(true)?;
         let bundles = self.get_all_bundles()?;
         let settings = self.get_all_settings()?;
+        let customer_debts = self.get_all_customer_debts()?;
+        let store_expenses = self.get_all_store_expenses()?;
+        let cash_sessions = self.get_all_shifts()?;
+        let cash_movements = self.get_all_cash_movements()?;
 
         let export_obj = serde_json::json!({
             "exportedAt": chrono_now_string(),
@@ -1409,6 +1635,10 @@ impl DatabaseManager {
             "payouts": payouts,
             "bundles": bundles,
             "settings": settings,
+            "customerDebts": customer_debts,
+            "storeExpenses": store_expenses,
+            "cashSessions": cash_sessions,
+            "cashMovements": cash_movements,
         });
 
         serde_json::to_string_pretty(&export_obj).map_err(|e| {
@@ -1433,6 +1663,10 @@ impl DatabaseManager {
         // Clean tables
         tx.execute_batch(
             "
+            DELETE FROM cash_movements;
+            DELETE FROM cash_sessions;
+            DELETE FROM customer_debts;
+            DELETE FROM store_expenses;
             DELETE FROM transaction_items;
             DELETE FROM transactions;
             DELETE FROM loyalty_ledger;
@@ -1502,8 +1736,8 @@ impl DatabaseManager {
                 "INSERT OR REPLACE INTO transactions (
                     id, receipt_number, customer_id, subtotal, tax, discount_total,
                     total, cost_total, profit, profit_margin, pricing_tier,
-                    payment_method, cash_tendered, change_due, created_at, json_payload
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                    payment_method, cash_tendered, change_due, status, created_at, json_payload
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             )?;
             for t in txns {
                 let id = t["id"].as_str().unwrap_or_default();
@@ -1520,13 +1754,14 @@ impl DatabaseManager {
                 let payment_method = t["paymentMethod"].as_str().unwrap_or("Espèces");
                 let cash_tendered = t["cashTendered"].as_f64().unwrap_or(0.0);
                 let change_due = t["changeDue"].as_f64().unwrap_or(0.0);
+                let status = t["status"].as_str().unwrap_or("COMPLETED");
                 let created_at = t["createdAt"].as_str().unwrap_or_default();
                 let json_payload = serde_json::to_string(t).unwrap_or_default();
 
                 stmt.execute(params![
                     id, receipt_number, customer_id, subtotal, tax, discount_total,
                     total, cost_total, profit, profit_margin, pricing_tier,
-                    payment_method, cash_tendered, change_due, created_at, json_payload
+                    payment_method, cash_tendered, change_due, status, created_at, json_payload
                 ])?;
             }
         }
@@ -1564,6 +1799,254 @@ impl DatabaseManager {
             }
         }
 
+        // Import purchase orders
+        if let Some(pos) = val["purchaseOrders"].as_array() {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO purchase_orders (
+                    id, po_number, vendor_name, total_amount, status, created_at, json_payload
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for p in pos {
+                let id = p["id"].as_str().unwrap_or_default();
+                let po_number = p["poNumber"].as_str().unwrap_or_default();
+                let vendor_name = p["vendorName"].as_str().unwrap_or_default();
+                let total_amount = p["totalAmount"].as_f64().unwrap_or(0.0);
+                let status = p["status"].as_str().unwrap_or("Draft");
+                let created_at = p["createdAt"].as_str().unwrap_or_default();
+                let json_payload = serde_json::to_string(p).unwrap_or_default();
+
+                stmt.execute(params![id, po_number, vendor_name, total_amount, status, created_at, json_payload])?;
+            }
+        }
+
+        // Import trade-ins
+        if let Some(trades) = val["tradeIns"].as_array() {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO trade_ins (
+                    id, device_model, imei, brand, condition_grade, buyback_value,
+                    resale_margin_percent, resale_price, customer_name, credit_to_wallet,
+                    created_at, json_payload
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            )?;
+            for t in trades {
+                let id = t["id"].as_str().unwrap_or_default();
+                let device_model = t["deviceModel"].as_str().unwrap_or_default();
+                let imei = t["imei"].as_str().unwrap_or_default();
+                let brand = t["brand"].as_str().unwrap_or_default();
+                let condition_grade = t["conditionGrade"].as_str().unwrap_or_default();
+                let buyback_value = t["buybackValue"].as_f64().unwrap_or(0.0);
+                let resale_margin_percent = t["resaleMarginPercent"].as_f64().unwrap_or(0.0);
+                let resale_price = t["resalePrice"].as_f64().unwrap_or(0.0);
+                let customer_name = t["customerName"].as_str().unwrap_or_default();
+                let credit_to_wallet = if t["creditToWallet"].as_bool().unwrap_or(false) { 1 } else { 0 };
+                let created_at = t["createdAt"].as_str().unwrap_or_default();
+                let json_payload = serde_json::to_string(t).unwrap_or_default();
+
+                stmt.execute(params![
+                    id, device_model, imei, brand, condition_grade, buyback_value,
+                    resale_margin_percent, resale_price, customer_name, credit_to_wallet,
+                    created_at, json_payload
+                ])?;
+            }
+        }
+
+        // Import IMEI records
+        if let Some(imeis) = val["imeiRecords"].as_array() {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO imei_records (
+                    imei, product_id, purchase_order_id, sale_transaction_id,
+                    warranty_expires_at, received_at, sold_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for i in imeis {
+                let imei = i["imei"].as_str().unwrap_or_default();
+                let product_id = i["productId"].as_str().unwrap_or_default();
+                let purchase_order_id = i["purchaseOrderId"].as_str();
+                let sale_transaction_id = i["saleTransactionId"].as_str();
+                let warranty_expires_at = i["warrantyExpiresAt"].as_str();
+                let received_at = i["receivedAt"].as_str().unwrap_or_default();
+                let sold_at = i["soldAt"].as_str();
+
+                stmt.execute(params![
+                    imei, product_id, purchase_order_id, sale_transaction_id,
+                    warranty_expires_at, received_at, sold_at
+                ])?;
+            }
+        }
+
+        // Import audit logs
+        if let Some(logs) = val["securityAuditLogs"].as_array() {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO security_audit_logs (id, timestamp, user, action, details, requires_pin) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for l in logs {
+                let id = l["id"].as_str().unwrap_or_default();
+                let timestamp = l["timestamp"].as_str().unwrap_or_default();
+                let user = l["user"].as_str().unwrap_or("System");
+                let action = l["action"].as_str().unwrap_or_default();
+                let details = l["details"].as_str().unwrap_or_default();
+                let requires_pin = if l["requiresPin"].as_bool().unwrap_or(false) { 1 } else { 0 };
+
+                stmt.execute(params![id, timestamp, user, action, details, requires_pin])?;
+            }
+        }
+
+        // Import cash drops & payouts
+        if let Some(drops) = val["cashDrops"].as_array() {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO cash_drops (id, timestamp, amount, reason, user, is_payout) VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+            )?;
+            for d in drops {
+                let id = d["id"].as_str().unwrap_or_default();
+                let timestamp = d["timestamp"].as_str().unwrap_or_default();
+                let amount = d["amount"].as_f64().unwrap_or(0.0);
+                let reason = d["reason"].as_str().unwrap_or_default();
+                let user = d["user"].as_str().unwrap_or("Admin");
+                stmt.execute(params![id, timestamp, amount, reason, user])?;
+            }
+        }
+        if let Some(payouts) = val["payouts"].as_array() {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO cash_drops (id, timestamp, amount, reason, user, is_payout) VALUES (?1, ?2, ?3, ?4, ?5, 1)",
+            )?;
+            for p in payouts {
+                let id = p["id"].as_str().unwrap_or_default();
+                let timestamp = p["timestamp"].as_str().unwrap_or_default();
+                let amount = p["amount"].as_f64().unwrap_or(0.0);
+                let reason = p["reason"].as_str().unwrap_or_default();
+                let user = p["user"].as_str().unwrap_or("Admin");
+                stmt.execute(params![id, timestamp, amount, reason, user])?;
+            }
+        }
+
+        // Import bundles
+        if let Some(bundles) = val["bundles"].as_array() {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO product_bundles (id, bundle_title, barcode, bundle_price, child_skus_json, json_payload) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for b in bundles {
+                let id = b["id"].as_str().unwrap_or_default();
+                let bundle_title = b["bundleTitle"].as_str().unwrap_or_default();
+                let barcode = b["barcode"].as_str().unwrap_or_default();
+                let bundle_price = b["bundlePrice"].as_f64().unwrap_or(0.0);
+                let child_skus_json = serde_json::to_string(&b["childSkus"]).unwrap_or_else(|_| "[]".into());
+                let json_payload = serde_json::to_string(b).unwrap_or_default();
+
+                stmt.execute(params![id, bundle_title, barcode, bundle_price, child_skus_json, json_payload])?;
+            }
+        }
+
+        // Import Customer Debts
+        if let Some(debts) = val["customerDebts"].as_array() {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO customer_debts (
+                    id, customer_id, customer_name, type, amount, balance_after,
+                    receipt_number, payment_method, notes, recorded_by, created_at, json_payload
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            )?;
+            for d in debts {
+                let id = d["id"].as_str().unwrap_or_default();
+                let customer_id = d["customerId"].as_str().unwrap_or_default();
+                let customer_name = d["customerName"].as_str().unwrap_or_default();
+                let movement_type = d["type"].as_str().unwrap_or("DEBT_ACQUIRED");
+                let amount = d["amount"].as_f64().unwrap_or(0.0);
+                let balance_after = d["balanceAfter"].as_f64().unwrap_or(0.0);
+                let receipt_number = d["receiptNumber"].as_str();
+                let payment_method = d["paymentMethod"].as_str();
+                let notes = d["notes"].as_str();
+                let recorded_by = d["recordedBy"].as_str();
+                let created_at = d["createdAt"].as_str().unwrap_or_default();
+                let json_payload = serde_json::to_string(d).unwrap_or_default();
+
+                stmt.execute(params![
+                    id, customer_id, customer_name, movement_type, amount, balance_after,
+                    receipt_number, payment_method, notes, recorded_by, created_at, json_payload
+                ])?;
+            }
+        }
+
+        // Import Store Expenses
+        if let Some(expenses) = val["storeExpenses"].as_array() {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO store_expenses (
+                    id, category, title, amount, payment_method, paid_to, notes,
+                    recorded_by, created_at, json_payload
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            )?;
+            for e in expenses {
+                let id = e["id"].as_str().unwrap_or_default();
+                let category = e["category"].as_str().unwrap_or("Autre Charge");
+                let title = e["title"].as_str().unwrap_or_default();
+                let amount = e["amount"].as_f64().unwrap_or(0.0);
+                let payment_method = e["paymentMethod"].as_str().unwrap_or("Espèces");
+                let paid_to = e["paidTo"].as_str();
+                let notes = e["notes"].as_str();
+                let recorded_by = e["recordedBy"].as_str().unwrap_or("Admin");
+                let created_at = e["createdAt"].as_str().unwrap_or_default();
+                let json_payload = serde_json::to_string(e).unwrap_or_default();
+
+                stmt.execute(params![
+                    id, category, title, amount, payment_method, paid_to, notes,
+                    recorded_by, created_at, json_payload
+                ])?;
+            }
+        }
+
+        // Import Cash Sessions
+        if let Some(sessions) = val["cashSessions"].as_array() {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO cash_sessions (
+                    id, opened_at, closed_at, opening_float, expected_cash, actual_cash,
+                    status, cashier_name, opening_note, closing_note, discrepancy,
+                    json_payload, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            )?;
+            for s in sessions {
+                let id = s["id"].as_str().unwrap_or_default();
+                let opened_at = s["openedAt"].as_str().unwrap_or_default();
+                let closed_at = s["closedAt"].as_str();
+                let opening_float = s["openingFloat"].as_i64().unwrap_or(0);
+                let expected_cash = s["expectedCash"].as_i64();
+                let actual_cash = s["actualCash"].as_i64();
+                let status = s["status"].as_str().unwrap_or("CLOSED");
+                let cashier_name = s["cashierName"].as_str();
+                let opening_note = s["openingNote"].as_str();
+                let closing_note = s["closingNote"].as_str();
+                let discrepancy = s["discrepancy"].as_i64();
+                let json_payload = serde_json::to_string(s).unwrap_or_default();
+                let updated_at = s["updatedAt"].as_str().unwrap_or(opened_at);
+
+                stmt.execute(params![
+                    id, opened_at, closed_at, opening_float, expected_cash, actual_cash,
+                    status, cashier_name, opening_note, closing_note, discrepancy,
+                    json_payload, updated_at
+                ])?;
+            }
+        }
+
+        // Import Cash Movements
+        if let Some(movements) = val["cashMovements"].as_array() {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO cash_movements (
+                    id, session_id, type, amount, reason, cashier_name, created_at, json_payload
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            for m in movements {
+                let id = m["id"].as_str().unwrap_or_default();
+                let session_id = m["sessionId"].as_str().unwrap_or_default();
+                let m_type = m["type"].as_str().unwrap_or("EXPENSE");
+                let amount = m["amount"].as_i64().unwrap_or(0);
+                let reason = m["reason"].as_str().unwrap_or_default();
+                let cashier_name = m["cashierName"].as_str();
+                let created_at = m["createdAt"].as_str().unwrap_or_default();
+                let json_payload = serde_json::to_string(m).unwrap_or_default();
+
+                stmt.execute(params![
+                    id, session_id, m_type, amount, reason, cashier_name, created_at, json_payload
+                ])?;
+            }
+        }
+
         // Import settings
         if let Some(settings) = val["settings"].as_array() {
             let mut stmt = tx.prepare(
@@ -1579,6 +2062,403 @@ impl DatabaseManager {
 
         tx.commit()?;
         Ok(())
+    }
+
+    // ── CASH REGISTER SESSIONS & MOVEMENTS (INTEGER PRECISION MATH) ──
+
+    pub fn start_shift(
+        &self,
+        opening_float: i64,
+        cashier_name: Option<&str>,
+        opening_note: Option<&str>,
+        denominations_json: Option<&str>,
+    ) -> Result<Value> {
+        let conn = self.conn.lock();
+
+        // If an open shift already exists, return it
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT json_payload FROM cash_sessions WHERE status = 'OPEN' ORDER BY opened_at DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+
+        if let Some(json_str) = existing {
+            if let Ok(v) = serde_json::from_str::<Value>(&json_str) {
+                return Ok(v);
+            }
+        }
+
+        let now = chrono_now_string();
+        let session_id = format!("SHIFT-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs());
+        let cashier = cashier_name.unwrap_or("Caissier Principal");
+        let note = opening_note.unwrap_or("");
+
+        let session_obj = serde_json::json!({
+            "id": session_id,
+            "openedAt": now,
+            "closedAt": Value::Null,
+            "openingFloat": opening_float,
+            "expectedCash": Value::Null,
+            "actualCash": Value::Null,
+            "status": "OPEN",
+            "cashierName": cashier,
+            "openingNote": note,
+            "closingNote": Value::Null,
+            "discrepancy": 0,
+            "denominations": denominations_json.and_then(|d| serde_json::from_str::<Value>(d).ok()).unwrap_or(Value::Null),
+            "updatedAt": now
+        });
+
+        let json_payload = serde_json::to_string(&session_obj).unwrap_or_default();
+
+        conn.execute(
+            "INSERT INTO cash_sessions (
+                id, opened_at, closed_at, opening_float, expected_cash,
+                actual_cash, status, cashier_name, opening_note, closing_note,
+                discrepancy, json_payload, updated_at
+            ) VALUES (?1, ?2, NULL, ?3, NULL, NULL, 'OPEN', ?4, ?5, NULL, 0, ?6, ?7)",
+            params![
+                session_id, now, opening_float, cashier, note, json_payload, now
+            ],
+        )?;
+
+        Ok(session_obj)
+    }
+
+    pub fn log_cash_movement(
+        &self,
+        session_id_opt: Option<&str>,
+        movement_type: &str,
+        amount: i64,
+        reason: &str,
+        cashier_name: Option<&str>,
+    ) -> Result<Value> {
+        let conn = self.conn.lock();
+
+        let session_id = match session_id_opt {
+            Some(s) if !s.trim().is_empty() => s.to_string(),
+            _ => {
+                conn.query_row(
+                    "SELECT id FROM cash_sessions WHERE status = 'OPEN' ORDER BY opened_at DESC LIMIT 1",
+                    [],
+                    |r| r.get::<_, String>(0),
+                ).map_err(|_| rusqlite::Error::QueryReturnedNoRows)?
+            }
+        };
+
+        let now = chrono_now_string();
+        let mov_id = format!("MOV-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis());
+        let cashier = cashier_name.unwrap_or("Caissier");
+
+        let mov_obj = serde_json::json!({
+            "id": mov_id,
+            "sessionId": session_id,
+            "type": movement_type,
+            "amount": amount,
+            "reason": reason,
+            "cashierName": cashier,
+            "createdAt": now
+        });
+
+        let json_payload = serde_json::to_string(&mov_obj).unwrap_or_default();
+
+        conn.execute(
+            "INSERT INTO cash_movements (
+                id, session_id, type, amount, reason, cashier_name, created_at, json_payload
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                mov_id, session_id, movement_type, amount, reason, cashier, now, json_payload
+            ],
+        )?;
+
+        Ok(mov_obj)
+    }
+
+    pub fn get_active_shift(&self) -> Result<Option<Value>> {
+        let conn = self.conn.lock();
+
+        let row_opt = conn.query_row(
+            "SELECT id, json_payload FROM cash_sessions WHERE status = 'OPEN' ORDER BY opened_at DESC LIMIT 1",
+            [],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        ).optional()?;
+
+        match row_opt {
+            Some((session_id, json_payload)) => {
+                let mut session_val: Value = serde_json::from_str(&json_payload).unwrap_or(Value::Null);
+
+                // Fetch movements for this session
+                let mut stmt = conn.prepare(
+                    "SELECT json_payload FROM cash_movements WHERE session_id = ?1 ORDER BY created_at ASC",
+                )?;
+                let mov_rows = stmt.query_map(params![session_id], |r| {
+                    let s: String = r.get(0)?;
+                    Ok(serde_json::from_str::<Value>(&s).unwrap_or(Value::Null))
+                })?;
+
+                let mut movements = Vec::new();
+                for m in mov_rows {
+                    if let Ok(v) = m {
+                        if !v.is_null() {
+                            movements.push(v);
+                        }
+                    }
+                }
+
+                session_val["movements"] = serde_json::json!(movements);
+                Ok(Some(session_val))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_all_shifts(&self) -> Result<Vec<Value>> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT json_payload FROM cash_sessions ORDER BY opened_at DESC")?;
+        let rows = stmt.query_map([], |r| {
+            let s: String = r.get(0)?;
+            Ok(serde_json::from_str::<Value>(&s).unwrap_or(Value::Null))
+        })?;
+
+        let mut results = Vec::new();
+        for r in rows {
+            if let Ok(v) = r {
+                if !v.is_null() {
+                    results.push(v);
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    pub fn get_shift_details(&self, session_id: &str) -> Result<Value> {
+        let conn = self.conn.lock();
+        let json_payload: String = conn.query_row(
+            "SELECT json_payload FROM cash_sessions WHERE id = ?1",
+            params![session_id],
+            |r| r.get(0),
+        )?;
+
+        let mut session_val: Value = serde_json::from_str(&json_payload).unwrap_or(Value::Null);
+
+        let mut stmt = conn.prepare(
+            "SELECT json_payload FROM cash_movements WHERE session_id = ?1 ORDER BY created_at ASC",
+        )?;
+        let mov_rows = stmt.query_map(params![session_id], |r| {
+            let s: String = r.get(0)?;
+            Ok(serde_json::from_str::<Value>(&s).unwrap_or(Value::Null))
+        })?;
+
+        let mut movements = Vec::new();
+        for m in mov_rows {
+            if let Ok(v) = m {
+                if !v.is_null() {
+                    movements.push(v);
+                }
+            }
+        }
+
+        session_val["movements"] = serde_json::json!(movements);
+        Ok(session_val)
+    }
+
+    pub fn close_shift(
+        &self,
+        session_id_opt: Option<&str>,
+        blind_count: i64,
+        closing_note: Option<&str>,
+        cashier_name: Option<&str>,
+    ) -> Result<Value> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+
+        let session_id = match session_id_opt {
+            Some(s) if !s.trim().is_empty() => s.to_string(),
+            _ => {
+                tx.query_row(
+                    "SELECT id FROM cash_sessions WHERE status = 'OPEN' ORDER BY opened_at DESC LIMIT 1",
+                    [],
+                    |r| r.get::<_, String>(0),
+                ).map_err(|_| rusqlite::Error::QueryReturnedNoRows)?
+            }
+        };
+
+        let (opened_at, opening_float): (String, i64) = tx.query_row(
+            "SELECT opened_at, opening_float FROM cash_sessions WHERE id = ?1",
+            params![session_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+
+        // Sum movements: Deposits vs Expenses (in integer precision)
+        let manual_deposits: i64 = tx.query_row(
+            "SELECT COALESCE(SUM(amount), 0) FROM cash_movements WHERE session_id = ?1 AND type = 'MANUAL_DEPOSIT'",
+            params![session_id],
+            |r| r.get(0),
+        ).unwrap_or(0);
+
+        let expenses: i64 = tx.query_row(
+            "SELECT COALESCE(SUM(amount), 0) FROM cash_movements WHERE session_id = ?1 AND type = 'EXPENSE'",
+            params![session_id],
+            |r| r.get(0),
+        ).unwrap_or(0);
+
+        let (raw_cash_sales, cash_refunds, total_sale_margins) = {
+            let mut raw_cash: i64 = 0;
+            let mut refunds: i64 = 0;
+            let mut margins: i64 = 0;
+
+            let mut stmt = tx.prepare(
+                "SELECT json_payload, total, profit, payment_method FROM transactions WHERE created_at >= ?1",
+            )?;
+
+            let rows = stmt.query_map(params![opened_at], |r| {
+                let json_str: String = r.get(0)?;
+                let total_val: f64 = r.get(1)?;
+                let profit_val: f64 = r.get(2)?;
+                let payment_method: String = r.get(3)?;
+                Ok((json_str, total_val, profit_val, payment_method))
+            })?;
+
+            for row in rows {
+                if let Ok((json_str, total_val, profit_val, payment_method)) = row {
+                    let parsed: Value = serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null);
+
+                    // Exclude voided transactions
+                    let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                    if status == "VOIDED" {
+                        continue;
+                    }
+
+                    let is_refund = parsed.get("isRefund").and_then(|v| v.as_bool()).unwrap_or(false);
+
+                    if is_refund {
+                        // Determine how much physical cash was returned to customer
+                        let mut cash_refund_amount: i64 = 0;
+                        let refund_method = parsed
+                            .get("refundMethod")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(payment_method.as_str());
+                        if refund_method == "Espèces" {
+                            cash_refund_amount = total_val.round() as i64;
+                        }
+                        refunds += cash_refund_amount;
+                    } else {
+                        // Regular Sale — inspect split tenders if present
+                        let mut cash_collected: i64 = 0;
+
+                        if let Some(tenders) = parsed.get("tenders").and_then(|v| v.as_array()) {
+                            for tender in tenders {
+                                let method = tender.get("method").and_then(|v| v.as_str()).unwrap_or("");
+                                if method == "Espèces" {
+                                    let amt = tender.get("amount").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                    cash_collected += amt.round() as i64;
+                                }
+                            }
+                        } else if payment_method == "Espèces" {
+                            cash_collected = total_val.round() as i64;
+                        }
+
+                        raw_cash += cash_collected;
+                        margins += profit_val.round() as i64;
+                    }
+                }
+            }
+            (raw_cash, refunds, margins)
+        };
+
+        let cash_sales = raw_cash_sales - cash_refunds;
+
+        // Automated Expected Cash Formula: opening_float + cash_sales + manual_deposits - expenses
+        let expected_cash = opening_float + cash_sales + manual_deposits - expenses;
+        let actual_cash = blind_count;
+        let discrepancy = actual_cash - expected_cash;
+        let daily_net_profit = total_sale_margins - expenses;
+        let now = chrono_now_string();
+        let cashier = cashier_name.unwrap_or("Caissier Principal");
+        let note = closing_note.unwrap_or("");
+
+        let session_obj = serde_json::json!({
+            "id": session_id,
+            "openedAt": opened_at,
+            "closedAt": now,
+            "openingFloat": opening_float,
+            "cashSales": cash_sales,
+            "manualDeposits": manual_deposits,
+            "expenses": expenses,
+            "expectedCash": expected_cash,
+            "actualCash": actual_cash,
+            "discrepancy": discrepancy,
+            "dailyNetProfit": daily_net_profit,
+            "status": "CLOSED",
+            "cashierName": cashier,
+            "closingNote": note,
+            "updatedAt": now
+        });
+
+        let json_payload = serde_json::to_string(&session_obj).unwrap_or_default();
+
+        tx.execute(
+            "UPDATE cash_sessions SET
+                closed_at = ?1,
+                expected_cash = ?2,
+                actual_cash = ?3,
+                discrepancy = ?4,
+                status = 'CLOSED',
+                closing_note = ?5,
+                json_payload = ?6,
+                updated_at = ?7
+            WHERE id = ?8",
+            params![
+                now, expected_cash, actual_cash, discrepancy, note, json_payload, now, session_id
+            ],
+        )?;
+
+        tx.commit()?;
+        Ok(session_obj)
+    }
+
+    pub fn get_inventory_valuation(&self) -> Result<Value> {
+        let conn = self.conn.lock();
+
+        let row = conn.query_row(
+            "SELECT total_skus, total_units, total_cost_value, total_retail_value, potential_profit_margin FROM v_inventory_valuation",
+            [],
+            |r| {
+                Ok(serde_json::json!({
+                    "totalSkus": r.get::<_, i64>(0)?,
+                    "totalUnits": r.get::<_, i64>(1)?,
+                    "totalCostValue": r.get::<_, i64>(2)?,
+                    "totalRetailValue": r.get::<_, i64>(3)?,
+                    "potentialProfitMargin": r.get::<_, i64>(4)?,
+                }))
+            },
+        ).unwrap_or_else(|_| serde_json::json!({
+            "totalSkus": 0,
+            "totalUnits": 0,
+            "totalCostValue": 0,
+            "totalRetailValue": 0,
+            "potentialProfitMargin": 0,
+        }));
+
+        Ok(row)
+    }
+
+    pub fn generate_session_backup_json(&self, session_id: &str) -> Result<String> {
+        let shift_details = self.get_shift_details(session_id)?;
+        let inventory_valuation = self.get_inventory_valuation()?;
+        let integrity_report = self.run_integrity_check()?;
+
+        let backup = serde_json::json!({
+            "backupType": "CASH_SESSION_Z_REPORT_BACKUP",
+            "generatedAt": chrono_now_string(),
+            "session": shift_details,
+            "inventoryValuationSnapshot": inventory_valuation,
+            "dbIntegrity": integrity_report
+        });
+
+        serde_json::to_string_pretty(&backup).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
     }
 }
 
@@ -1643,5 +2523,25 @@ fn chrono_now_string() -> String {
     let now = std::time::SystemTime::now();
     let duration = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let secs = duration.as_secs();
-    format!("{}-08-19T19:00:00Z", secs)
+    let millis = duration.subsec_millis();
+
+    let days = secs / 86400;
+    let day_secs = secs % 86400;
+    let hours = day_secs / 3600;
+    let mins = (day_secs % 3600) / 60;
+    let s = day_secs % 60;
+
+    // Howard Hinnant's algorithm for Gregorian day-to-date conversion
+    let z = days as i64 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", y, m, d, hours, mins, s, millis)
 }

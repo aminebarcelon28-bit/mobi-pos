@@ -1,7 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 import { X, Printer, Check, Zap, Sparkles } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import { formatDZD } from '../../types/pos';
+import { formatDZD, formatDateTime } from '../../types/pos';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
 import { resolvePrinterForDocument } from '../../utils/printerRoutingEngine';
 import { printCoordinator } from '../../utils/printCoordinator';
@@ -107,7 +107,7 @@ export const ReceiptModal: React.FC = () => {
                   <p className="text-[9px] text-gray-500 mt-1">N° Ticket: {lastTransaction.receiptNumber}</p>
                 </>
               )}
-              <p className="text-[9px] text-gray-500 mt-0.5">{lastTransaction.createdAt}</p>
+              <p className="text-[9px] text-gray-500 mt-0.5">{formatDateTime(lastTransaction.createdAt)}</p>
             </div>
 
             {/* Customer Info */}

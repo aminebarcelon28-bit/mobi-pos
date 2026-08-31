@@ -29,8 +29,8 @@ export const productRepository = {
 
   async clearAll(): Promise<void> {
     const prods = await sqliteAdapter.getAllProducts();
-    for (const p of prods) {
-      await sqliteAdapter.deleteProduct(p.id);
+    if (prods.length > 0) {
+      await Promise.all(prods.map((p) => sqliteAdapter.deleteProduct(p.id)));
     }
   },
 };

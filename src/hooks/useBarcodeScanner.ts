@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { usePosStore } from '../store/usePosStore';
+import { soundEngine } from '../utils/audioFeedback';
 
 /**
  * Hook global pour détecter la saisie d'un lecteur de code-barres USB (HID).
@@ -10,25 +11,6 @@ import { usePosStore } from '../store/usePosStore';
  * - La saisie se termine toujours par la touche Entrée (keyCode 13).
  * - On ignore les saisies lentes humaines (> 50ms) pour ne pas interférer avec la saisie normale au clavier.
  */
-function playScannerBeep(isSuccess: boolean = true) {
-  try {
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(isSuccess ? 1046.5 : 300, ctx.currentTime); // High C pitch for scan beep
-    gain.gain.setValueAtTime(0.12, ctx.currentTime);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.1);
-  } catch {
-    // Ignore audio autoplay restrictions
-  }
-}
-
 export function useBarcodeScanner(): { lastScannedCode: string | null; scannerActive: boolean } {
   const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
   const [scannerActive, setScannerActive] = useState<boolean>(false);
@@ -54,13 +36,20 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
     const store = usePosStore.getState();
     const activeModal = store.activeModal;
 
-    // Guard: Ignore scanner if an unrelated modal is open (e.g. settings, security audit, pin prompt, reports)
-    if (activeModal && activeModal !== 'payment' && activeModal !== 'product_editor' && activeModal !== 'label_printer') {
+    // Guard: If editor or label printer is open, only expose lastScannedCode for barcode field auto-fill
+    if (activeModal === 'product_editor' || activeModal === 'label_printer') {
+      setLastScannedCode(code);
+      soundEngine.playScan();
+      return;
+    }
+
+    // Guard: If any other modal is open (e.g. payment, settings, security audit, pin prompt, reports, refund), ignore scan
+    if (activeModal !== null) {
       return;
     }
 
     setScannerActive(true);
-    playScannerBeep(true);
+    soundEngine.playScan();
     
     const products = store.products || [];
     const bundles = store.bundles || [];

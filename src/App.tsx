@@ -25,6 +25,9 @@ const ReceiptTemplateModal = React.lazy(() => import('./components/modals/Receip
 const LicensingModal = React.lazy(() => import('./components/modals/LicensingModal').then(m => ({ default: m.LicensingModal })));
 const SecurityAuditModal = React.lazy(() => import('./components/modals/SecurityAuditModal').then(m => ({ default: m.SecurityAuditModal })));
 const ShiftZReportModal = React.lazy(() => import('./components/modals/ShiftZReportModal').then(m => ({ default: m.ShiftZReportModal })));
+const ShiftOpenModal = React.lazy(() => import('./components/modals/ShiftOpenModal').then(m => ({ default: m.ShiftOpenModal })));
+const ShiftMovementModal = React.lazy(() => import('./components/modals/ShiftMovementModal').then(m => ({ default: m.ShiftMovementModal })));
+const ShiftCloseModal = React.lazy(() => import('./components/modals/ShiftCloseModal').then(m => ({ default: m.ShiftCloseModal })));
 const VendorProcurementModal = React.lazy(() => import('./components/modals/VendorProcurementModal').then(m => ({ default: m.VendorProcurementModal })));
 const PurchaseOrderModal = React.lazy(() => import('./components/modals/PurchaseOrderModal').then(m => ({ default: m.PurchaseOrderModal })));
 const RepairWorkOrderModal = React.lazy(() => import('./components/modals/RepairWorkOrderModal').then(m => ({ default: m.RepairWorkOrderModal })));
@@ -101,6 +104,9 @@ export const App: React.FC = () => {
               <LicensingModal />
               <SecurityAuditModal />
               <ShiftZReportModal />
+              <ShiftOpenModal />
+              <ShiftMovementModal />
+              <ShiftCloseModal />
               <VendorProcurementModal />
               <PurchaseOrderModal />
               <RepairWorkOrderModal />

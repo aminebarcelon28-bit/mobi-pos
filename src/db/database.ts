@@ -12,6 +12,8 @@ import type {
   ProductBundle,
   CustomerDebtEntry,
   StoreExpense,
+  CashSession,
+  CashMovement,
 } from '../types/pos';
 
 export interface AppSettingItem {
@@ -33,13 +35,15 @@ export class MobiPosDatabase extends Dexie {
   bundles!: Table<ProductBundle, string>;
   customerDebts!: Table<CustomerDebtEntry, string>;
   storeExpenses!: Table<StoreExpense, string>;
+  cashSessions!: Table<CashSession, string>;
+  cashMovements!: Table<CashMovement, string>;
   appSettings!: Table<AppSettingItem, string>;
 
   constructor() {
     super('MobiPosDB');
 
-    // Schema v1 with secondary indexes for fast lookups
-    this.version(2).stores({
+    // Schema v3 with secondary indexes for fast lookups
+    this.version(3).stores({
       products: 'id, sku, barcode, category, brand, title',
       customers: 'id, phone, name, loyaltyCardCode, barcode',
       transactions: 'id, receiptNumber, createdAt',
@@ -53,6 +57,8 @@ export class MobiPosDatabase extends Dexie {
       bundles: 'id, barcode',
       customerDebts: 'id, customerId, createdAt',
       storeExpenses: 'id, category, createdAt',
+      cashSessions: 'id, status, openedAt',
+      cashMovements: 'id, sessionId, type, createdAt',
       appSettings: 'key',
     });
   }

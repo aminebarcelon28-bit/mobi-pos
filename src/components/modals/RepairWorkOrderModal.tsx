@@ -19,10 +19,11 @@ import {
   Check,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import { formatDZD } from '../../types/pos';
+import { formatDZD, formatDateTime } from '../../types/pos';
 import type { ConditionChecklist, RepairOrder } from '../../types/pos';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { buildWhatsAppUrl } from '../../utils/phoneUtils';
+import { useToast } from '../ui/Toast';
 
 const initialChecklist: ConditionChecklist = {
   screenOk: false,
@@ -56,6 +57,8 @@ export const RepairWorkOrderModal: React.FC = () => {
     customers,
     receiptSettings,
   } = usePosStore();
+
+  const { showToast } = useToast();
 
   const [activeTab, setActiveTab] = useState<'Nouveau' | 'Historique'>('Nouveau');
   const [successMsg, setSuccessMsg] = useState<string>('');
@@ -161,7 +164,7 @@ export const RepairWorkOrderModal: React.FC = () => {
   const handleSaveOrder = (e: React.FormEvent) => {
     e.preventDefault();
     if (!customerName.trim() || !deviceModel.trim()) {
-      alert('Veuillez renseigner le nom du client et le modèle d\'appareil avant d\'enregistrer.');
+      showToast('Veuillez renseigner le nom du client et le modèle d\'appareil avant d\'enregistrer.', 'warning');
       return;
     }
 
@@ -757,7 +760,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                         {order.depositAmount ? (
                           <span className="text-[10px] text-cyan-400 font-semibold block">Acompte: {formatDZD(order.depositAmount)}</span>
                         ) : null}
-                        <span className="text-[10px] text-pos-muted mt-0.5 block">{order.createdAt}</span>
+                        <span className="text-[10px] text-pos-muted mt-0.5 block">{formatDateTime(order.createdAt)}</span>
                       </div>
                     </div>
 
@@ -828,7 +831,7 @@ export const RepairWorkOrderModal: React.FC = () => {
               <div className="text-right bg-gray-100 p-2 rounded border border-gray-300">
                 <p className="text-[10px] font-black uppercase">FICHE D'INTERVENTION SAV</p>
                 <p className="text-sm font-bold text-gray-900">N° {printingOrder.ticketNumber}</p>
-                <p className="text-[9px] text-gray-600">Date: {printingOrder.createdAt}</p>
+                <p className="text-[9px] text-gray-600">Date: {formatDateTime(printingOrder.createdAt)}</p>
               </div>
             </div>
 

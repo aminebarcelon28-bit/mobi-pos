@@ -33,7 +33,15 @@ export const useKeyboardHotkeys = () => {
       switch (e.key) {
         case 'F1':
           if (!isInputFocused) {
-            clearCart();
+            const currentCart = usePosStore.getState().cart;
+            if (currentCart.length > 0) {
+              const totalItems = currentCart.reduce((acc, i) => acc + i.quantity, 0);
+              if (totalItems > 1) {
+                const ok = window.confirm(`Voulez-vous vraiment vider les ${totalItems} articles de la vente en cours ? (F1)`);
+                if (!ok) break;
+              }
+              clearCart();
+            }
           }
           break;
 
