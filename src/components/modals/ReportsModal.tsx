@@ -23,6 +23,12 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
+  LayoutDashboard,
+  Boxes,
+  Coins,
+  Scale,
+  Landmark,
+  Sparkles,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
@@ -45,13 +51,21 @@ export const ReportsModal: React.FC = () => {
     storeExpenses,
     addStoreExpense,
     deleteStoreExpense,
+    products,
+    customers,
+    customerDebts,
+    activeShift,
+    allShifts,
+    repairOrders,
+    tradeIns,
+    cashDrops,
   } = usePosStore();
 
   const { showToast } = useToast();
 
   const [pinVerified, setPinVerified] = useState(false);
   const [pinInput, setPinInput] = useState('');
-  const [activeTab, setActiveTab] = useState<'analytics' | 'history' | 'expenses' | 'export'>('history');
+  const [activeTab, setActiveTab] = useState<'summary' | 'history' | 'analytics' | 'expenses' | 'export'>('summary');
 
   // Expense State
   const [showNewExpenseModal, setShowNewExpenseModal] = useState(false);
@@ -159,6 +173,90 @@ export const ReportsModal: React.FC = () => {
   const totalOperatingExpenses = dateFilteredExpenses.reduce((acc, e) => acc + (e.amount || 0), 0);
   const trueEbitdaNetProfit = totalNetProfit - totalOperatingExpenses;
   const ebitdaMargin = totalRevenue > 0 ? ((trueEbitdaNetProfit / totalRevenue) * 100).toFixed(1) : '0';
+
+  // ── Inventory & Asset Valuation ──
+  const totalStockUnits = useMemo(() => (products || []).reduce((acc, p) => acc + (p.stock || 0), 0), [products]);
+  const totalStockCostValue = useMemo(
+    () => (products || []).reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice ?? Math.round(p.price * 0.5)), 0),
+    [products]
+  );
+  const totalStockRetailValue = useMemo(() => (products || []).reduce((acc, p) => acc + (p.stock || 0) * p.price, 0), [products]);
+  const potentialInventoryProfit = Math.max(0, totalStockRetailValue - totalStockCostValue);
+  const potentialMarginPct = totalStockRetailValue > 0 ? ((potentialInventoryProfit / totalStockRetailValue) * 100).toFixed(1) : '0';
+  const lowStockCount = useMemo(() => (products || []).filter((p) => p.stock <= (p.reorderPoint || 5)).length, [products]);
+  const outOfStockCount = useMemo(() => (products || []).filter((p) => p.stock <= 0).length, [products]);
+
+  // ── Cash Drawer Reconciliation (Expected vs Counted) ──
+  const openingFloat = activeShift?.openingFloat ?? (allShifts && allShifts.length > 0 ? allShifts[0].openingFloat : 20000);
+  const cashSales = useMemo(() => {
+    return dateFilteredTransactions
+      .filter((t) => t.status !== 'VOIDED' && !t.isRefund)
+      .reduce((acc, t) => {
+        if (t.tenders && t.tenders.length > 0) {
+          return acc + t.tenders.filter((tender) => tender.method === 'Espèces').reduce((sum, tender) => sum + tender.amount, 0);
+        }
+        return t.paymentMethod === 'Espèces' ? acc + t.total : acc;
+      }, 0);
+  }, [dateFilteredTransactions]);
+
+  const debtCashCollected = useMemo(() => {
+    return (customerDebts || [])
+      .filter((d) => d.type === 'PAYMENT_SETTLED' && d.paymentMethod === 'Espèces')
+      .reduce((acc, d) => acc + d.amount, 0);
+  }, [customerDebts]);
+
+  const savCashCollected = useMemo(() => {
+    return (repairOrders || [])
+      .reduce(
+        (acc, r) =>
+          acc +
+          (r.depositAmount || 0) +
+          (r.status === 'Prêt / Terminé' ? Math.max(0, r.totalCost - (r.depositAmount || 0)) : 0),
+        0
+      );
+  }, [repairOrders]);
+
+  const cashExpensesOut = useMemo(() => {
+    return dateFilteredExpenses.filter((e) => e.paymentMethod === 'Espèces').reduce((acc, e) => acc + (e.amount || 0), 0);
+  }, [dateFilteredExpenses]);
+
+  const tradeInPayoutsOut = useMemo(() => {
+    return (tradeIns || []).reduce((acc, t) => acc + (t.buybackValue || 0), 0);
+  }, [tradeIns]);
+
+  const cashDropsOut = useMemo(() => {
+    return (cashDrops || []).reduce((acc, d) => acc + d.amount, 0);
+  }, [cashDrops]);
+
+  const expectedCashInDrawer = Math.max(
+    0,
+    openingFloat + cashSales + debtCashCollected + savCashCollected - cashExpensesOut - tradeInPayoutsOut - cashDropsOut
+  );
+
+  const actualCountedCash = useMemo(() => {
+    if (activeShift?.actualCash !== undefined && activeShift?.actualCash !== null) {
+      return activeShift.actualCash;
+    }
+    if (activeShift?.denominations) {
+      return Object.entries(activeShift.denominations).reduce(
+        (acc, [denom, count]) => acc + parseInt(denom, 10) * (typeof count === 'number' ? count : 0),
+        0
+      );
+    }
+    return null;
+  }, [activeShift]);
+
+  const cashDiscrepancy = actualCountedCash !== null ? actualCountedCash - expectedCashInDrawer : 0;
+
+  // ── Customer Debts & Store Credit Liabilities ──
+  const totalCustomerDebt = useMemo(() => (customers || []).reduce((acc, c) => acc + (c.currentDebt || 0), 0), [customers]);
+  const debtCustomerCount = useMemo(() => (customers || []).filter((c) => (c.currentDebt || 0) > 0).length, [customers]);
+  const totalStoreCreditLiability = useMemo(() => (customers || []).reduce((acc, c) => acc + (c.storeCredit || 0), 0), [customers]);
+
+  // ── Waterfall P&L Breakdown Metrics ──
+  const grossSalesRevenue = validSales.reduce((acc, t) => acc + (t.subtotal || t.total), 0);
+  const totalDiscountsGiven = validSales.reduce((acc, t) => acc + (t.discountTotal || 0), 0);
+  const totalRefunds = totalRefundsValue;
 
   const handleAddExpenseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -428,8 +526,20 @@ export const ReportsModal: React.FC = () => {
           <div className="flex-1 flex flex-col overflow-hidden">
             
             {/* Top Navigation Tabs */}
-            <div className="flex border-b border-pos-border bg-pos-card px-4 shrink-0 justify-between items-center">
-              <div className="flex">
+            <div className="flex border-b border-pos-border bg-pos-card px-4 shrink-0 justify-between items-center overflow-x-auto">
+              <div className="flex shrink-0">
+                <button
+                  onClick={() => setActiveTab('summary')}
+                  className={`py-3 px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
+                    activeTab === 'summary'
+                      ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5'
+                      : 'border-transparent text-pos-muted hover:text-pos-text'
+                  }`}
+                >
+                  <LayoutDashboard className="w-3.5 h-3.5 text-emerald-400" />
+                  Synthèse Financière & Bilan
+                </button>
+
                 <button
                   onClick={() => setActiveTab('history')}
                   className={`py-3 px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
@@ -480,7 +590,7 @@ export const ReportsModal: React.FC = () => {
               </div>
 
               {/* Quick Date Range Filter */}
-              <div className="flex items-center gap-1.5 py-1">
+              <div className="flex items-center gap-1.5 py-1 shrink-0 pl-2">
                 <Calendar className="w-3.5 h-3.5 text-pos-muted" />
                 <span className="text-[10px] font-bold text-pos-muted uppercase mr-1">Période :</span>
                 {(['all', 'today', '7days', '30days'] as const).map((r) => (
@@ -509,6 +619,352 @@ export const ReportsModal: React.FC = () => {
             {/* Scrollable Tab Content Body */}
             <div className="p-5 overflow-y-auto space-y-5 flex-1 bg-pos-bg">
               
+              {/* ── 1. Financial Summary & Executive Balance Sheet ── */}
+              {activeTab === 'summary' && (
+                <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                  {/* Top Executive KPI Cards */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                    {/* Net Revenue */}
+                    <div className="bg-pos-card border border-pos-border p-4 rounded-2xl relative overflow-hidden shadow-sm">
+                      <div className="flex justify-between items-start">
+                        <span className="text-[10px] text-pos-muted uppercase font-black tracking-wider">Chiffre d'Affaires Net</span>
+                        <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
+                          <ShoppingBag className="w-4 h-4" />
+                        </div>
+                      </div>
+                      <p className="text-2xl font-black font-mono text-emerald-400 mt-2">{formatDZD(totalRevenue)}</p>
+                      <div className="flex items-center justify-between text-[11px] text-pos-muted mt-2 pt-2 border-t border-pos-border/40 font-medium">
+                        <span>{validSales.length} ventes validées</span>
+                        <span className="font-mono font-bold">Panier: {formatDZD(averageBasket)}</span>
+                      </div>
+                    </div>
+
+                    {/* Gross Commercial Margin */}
+                    <div className="bg-pos-card border border-pos-border p-4 rounded-2xl relative overflow-hidden shadow-sm">
+                      <div className="flex justify-between items-start">
+                        <span className="text-[10px] text-pos-muted uppercase font-black tracking-wider">Marge Commerciale Brute</span>
+                        <div className="p-2 rounded-xl bg-cyan-500/10 text-cyan-400">
+                          <TrendingUp className="w-4 h-4" />
+                        </div>
+                      </div>
+                      <p className="text-2xl font-black font-mono text-cyan-400 mt-2">{formatDZD(totalNetProfit)}</p>
+                      <div className="flex items-center justify-between text-[11px] text-pos-muted mt-2 pt-2 border-t border-pos-border/40 font-medium">
+                        <span>Taux de Marge Brute</span>
+                        <span className="font-mono font-bold text-cyan-400">{netProfitMargin}%</span>
+                      </div>
+                    </div>
+
+                    {/* Operating Expenses (OPEX) */}
+                    <div className="bg-pos-card border border-pos-border p-4 rounded-2xl relative overflow-hidden shadow-sm">
+                      <div className="flex justify-between items-start">
+                        <span className="text-[10px] text-pos-muted uppercase font-black tracking-wider">Frais & Charges (OPEX)</span>
+                        <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400">
+                          <DollarSign className="w-4 h-4" />
+                        </div>
+                      </div>
+                      <p className="text-2xl font-black font-mono text-amber-400 mt-2">{formatDZD(totalOperatingExpenses)}</p>
+                      <div className="flex items-center justify-between text-[11px] text-pos-muted mt-2 pt-2 border-t border-pos-border/40 font-medium">
+                        <span>{dateFilteredExpenses.length} charges enregistrées</span>
+                        <span className="text-amber-300 font-bold">Déduit du bénéfice</span>
+                      </div>
+                    </div>
+
+                    {/* True Net Profit (EBITDA) */}
+                    <div className="bg-pos-card border-2 border-emerald-500/30 p-4 rounded-2xl relative overflow-hidden shadow-md shadow-emerald-500/5">
+                      <div className="flex justify-between items-start">
+                        <span className="text-[10px] text-emerald-400 uppercase font-black tracking-wider">Résultat Net (EBITDA)</span>
+                        <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-300">
+                          <Sparkles className="w-4 h-4" />
+                        </div>
+                      </div>
+                      <p className={`text-2xl font-black font-mono mt-2 ${trueEbitdaNetProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {formatDZD(trueEbitdaNetProfit)}
+                      </p>
+                      <div className="flex items-center justify-between text-[11px] text-pos-muted mt-2 pt-2 border-t border-pos-border/40 font-medium">
+                        <span>Rentabilité Nette</span>
+                        <span className={`font-mono font-bold ${Number(ebitdaMargin) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {ebitdaMargin}%
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Grid: Inventory Valuation vs Cash Drawer Reconciliation */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* Inventory & Stock Valuation Card */}
+                    <div className="bg-pos-card border border-pos-border rounded-2xl p-4.5 space-y-3.5">
+                      <div className="flex items-center justify-between pb-2 border-b border-pos-border/60">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 rounded-xl bg-blue-500/10 text-blue-400">
+                            <Boxes className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h3 className="text-xs font-black text-pos-text uppercase tracking-wider">Valorisation de l'Inventaire & Stock</h3>
+                            <p className="text-[10px] text-pos-muted">Capital immobilisé et valorisation marchande en temps réel</p>
+                          </div>
+                        </div>
+                        <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400">
+                          {totalStockUnits} pièces ({products.length} réf.)
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div className="bg-pos-bg border border-pos-border/80 p-3 rounded-xl">
+                          <span className="text-[9.5px] font-bold text-pos-muted uppercase block">Valeur au Coût d'Achat (Actif)</span>
+                          <span className="text-base font-black font-mono text-pos-text mt-1 block">{formatDZD(totalStockCostValue)}</span>
+                          <span className="text-[9px] text-pos-muted">Capital investi dans le stock</span>
+                        </div>
+                        <div className="bg-pos-bg border border-pos-border/80 p-3 rounded-xl">
+                          <span className="text-[9.5px] font-bold text-pos-muted uppercase block">Valeur Marchande (Prix Vente)</span>
+                          <span className="text-base font-black font-mono text-emerald-400 mt-1 block">{formatDZD(totalStockRetailValue)}</span>
+                          <span className="text-[9px] text-pos-muted">Chiffre d'affaires potentiel</span>
+                        </div>
+                      </div>
+
+                      <div className="bg-gradient-to-r from-blue-950/30 to-indigo-950/30 border border-blue-500/30 rounded-xl p-3 flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] font-bold text-blue-300 uppercase block">Marge Brute Potentielle en Rayon</span>
+                          <span className="text-xs text-pos-muted">Bénéfice latent après écoulement du stock</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-base font-black font-mono text-blue-400 block">+{formatDZD(potentialInventoryProfit)}</span>
+                          <span className="text-[10px] font-bold text-blue-300 font-mono">Taux : {potentialMarginPct}%</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between text-xs pt-1 px-1">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-amber-400" />
+                          <span className="text-[11px] text-pos-muted">Articles en seuil critique (&le; stock min) :</span>
+                          <span className="font-bold font-mono text-amber-400">{lowStockCount}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-red-400" />
+                          <span className="text-[11px] text-pos-muted">Ruptures de stock (0 un.) :</span>
+                          <span className="font-bold font-mono text-red-400">{outOfStockCount}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Cash Drawer Reconciliation (Expected vs Actual) Card */}
+                    <div className="bg-pos-card border border-pos-border rounded-2xl p-4.5 space-y-3.5">
+                      <div className="flex items-center justify-between pb-2 border-b border-pos-border/60">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400">
+                            <Coins className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h3 className="text-xs font-black text-pos-text uppercase tracking-wider">Réconciliation du Tiroir-Caisse</h3>
+                            <p className="text-[10px] text-pos-muted">Flux de trésorerie espèces et vérification des écarts</p>
+                          </div>
+                        </div>
+                        <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full border ${
+                          cashDiscrepancy === 0
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                            : cashDiscrepancy > 0
+                            ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+                            : 'bg-red-500/10 border-red-500/30 text-red-400'
+                        }`}>
+                          {actualCountedCash !== null ? (cashDiscrepancy === 0 ? '✓ Caisse Équilibrée' : `Écart : ${formatDZD(cashDiscrepancy)}`) : 'Session Active'}
+                        </span>
+                      </div>
+
+                      {/* Detailed Cash Movement Breakdown */}
+                      <div className="space-y-1.5 text-xs bg-pos-bg p-3 rounded-xl border border-pos-border/80">
+                        <div className="flex justify-between items-center text-pos-muted">
+                          <span>Fond de Caisse Initial :</span>
+                          <span className="font-mono font-bold text-pos-text">{formatDZD(openingFloat)}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-emerald-400">
+                          <span>(+) Ventes encaissées en Espèces :</span>
+                          <span className="font-mono font-bold">+{formatDZD(cashSales)}</span>
+                        </div>
+                        {debtCashCollected > 0 && (
+                          <div className="flex justify-between items-center text-emerald-400">
+                            <span>(+) Versements Dettes Clients (Kredy) :</span>
+                            <span className="font-mono font-bold">+{formatDZD(debtCashCollected)}</span>
+                          </div>
+                        )}
+                        {savCashCollected > 0 && (
+                          <div className="flex justify-between items-center text-emerald-400">
+                            <span>(+) Acomptes SAV / Réparations :</span>
+                            <span className="font-mono font-bold">+{formatDZD(savCashCollected)}</span>
+                          </div>
+                        )}
+                        {cashExpensesOut > 0 && (
+                          <div className="flex justify-between items-center text-amber-400">
+                            <span>(-) Dépenses sorties de caisse :</span>
+                            <span className="font-mono font-bold">-{formatDZD(cashExpensesOut)}</span>
+                          </div>
+                        )}
+                        {tradeInPayoutsOut > 0 && (
+                          <div className="flex justify-between items-center text-amber-400">
+                            <span>(-) Rachats Téléphones (Trade-In) :</span>
+                            <span className="font-mono font-bold">-{formatDZD(tradeInPayoutsOut)}</span>
+                          </div>
+                        )}
+                        {cashDropsOut > 0 && (
+                          <div className="flex justify-between items-center text-purple-400">
+                            <span>(-) Écrémages / Dépôts au Coffre :</span>
+                            <span className="font-mono font-bold">-{formatDZD(cashDropsOut)}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Expected vs Actual Totals Banner */}
+                      <div className="bg-gradient-to-r from-emerald-950/40 to-teal-950/40 border border-emerald-500/40 rounded-xl p-3 flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] font-bold text-emerald-300 uppercase block">Espèces Théoriques Attendues</span>
+                          <span className="text-xs text-pos-muted">Total calculé en temps réel</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-lg font-black font-mono text-emerald-400 block">{formatDZD(expectedCashInDrawer)}</span>
+                          {actualCountedCash !== null && (
+                            <span className="text-[10px] font-mono text-pos-muted">Compté : {formatDZD(actualCountedCash)}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Financial Waterfall Table (Compte de Résultat Simplifié) & Customer Credit Liabilities */}
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                    {/* Waterfall Accounting Table (2 Cols) */}
+                    <div className="lg:col-span-2 bg-pos-card border border-pos-border rounded-2xl p-4.5 space-y-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-pos-border/60">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400">
+                            <Scale className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h3 className="text-xs font-black text-pos-text uppercase tracking-wider">Compte de Résultat d'Exploitation (P&L)</h3>
+                            <p className="text-[10px] text-pos-muted">Décomposition analytique du chiffre d'affaires jusqu'au résultat net</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-pos-border/80 text-pos-muted text-[10px] uppercase">
+                              <th className="text-left py-2 px-2">Ligne Comptable</th>
+                              <th className="text-right py-2 px-2">Montant (DA)</th>
+                              <th className="text-right py-2 px-2">% CA Net</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-pos-border/40 font-mono">
+                            <tr>
+                              <td className="py-2 px-2 text-pos-text font-sans font-semibold">Chiffre d'Affaires Brut (Articles)</td>
+                              <td className="text-right py-2 px-2 font-bold">{formatDZD(grossSalesRevenue)}</td>
+                              <td className="text-right py-2 px-2 text-pos-muted">-</td>
+                            </tr>
+                            {totalDiscountsGiven > 0 && (
+                              <tr className="text-purple-400">
+                                <td className="py-2 px-2 font-sans">(-) Remises & Rabais Accordés</td>
+                                <td className="text-right py-2 px-2">-{formatDZD(totalDiscountsGiven)}</td>
+                                <td className="text-right py-2 px-2">
+                                  {totalRevenue > 0 ? ((totalDiscountsGiven / totalRevenue) * 100).toFixed(1) : 0}%
+                                </td>
+                              </tr>
+                            )}
+                            {totalRefunds > 0 && (
+                              <tr className="text-red-400">
+                                <td className="py-2 px-2 font-sans">(-) Retours & Remboursements Clients</td>
+                                <td className="text-right py-2 px-2">-{formatDZD(totalRefunds)}</td>
+                                <td className="text-right py-2 px-2">
+                                  {totalRevenue > 0 ? ((totalRefunds / totalRevenue) * 100).toFixed(1) : 0}%
+                                </td>
+                              </tr>
+                            )}
+                            <tr className="bg-pos-bg/80 font-bold text-emerald-400 border-y border-pos-border">
+                              <td className="py-2.5 px-2 font-sans uppercase text-[11px] font-black">(=) Chiffre d'Affaires Net Réalisé</td>
+                              <td className="text-right py-2.5 px-2 text-sm">{formatDZD(totalRevenue)}</td>
+                              <td className="text-right py-2.5 px-2">100.0%</td>
+                            </tr>
+                            <tr className="text-amber-400/90">
+                              <td className="py-2 px-2 font-sans">(-) Coût d'Achat des Marchandises Vendues (COGS)</td>
+                              <td className="text-right py-2 px-2">-{formatDZD(totalCost)}</td>
+                              <td className="text-right py-2 px-2">
+                                {totalRevenue > 0 ? ((totalCost / totalRevenue) * 100).toFixed(1) : 0}%
+                              </td>
+                            </tr>
+                            <tr className="bg-cyan-950/20 font-bold text-cyan-400 border-y border-cyan-500/20">
+                              <td className="py-2 px-2 font-sans uppercase text-[11px] font-black">(=) Marge Commerciale Brute</td>
+                              <td className="text-right py-2 px-2 text-sm">{formatDZD(totalNetProfit)}</td>
+                              <td className="text-right py-2 px-2">{netProfitMargin}%</td>
+                            </tr>
+                            <tr className="text-amber-400">
+                              <td className="py-2 px-2 font-sans">(-) Frais & Charges d'Exploitation (Loyer, Factures, Salaires)</td>
+                              <td className="text-right py-2 px-2">-{formatDZD(totalOperatingExpenses)}</td>
+                              <td className="text-right py-2 px-2">
+                                {totalRevenue > 0 ? ((totalOperatingExpenses / totalRevenue) * 100).toFixed(1) : 0}%
+                              </td>
+                            </tr>
+                            <tr className="bg-emerald-950/40 border-2 border-emerald-500/40 text-emerald-300 font-black">
+                              <td className="py-3 px-3 font-sans uppercase text-xs">(=) BÉNÉFICE NET D'EXPLOITATION (EBITDA)</td>
+                              <td className="text-right py-3 px-3 text-base">{formatDZD(trueEbitdaNetProfit)}</td>
+                              <td className="text-right py-3 px-3 text-sm">{ebitdaMargin}%</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Customer Receivables & Liabilities (1 Col) */}
+                    <div className="bg-pos-card border border-pos-border rounded-2xl p-4.5 space-y-4 flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center gap-2 pb-2 border-b border-pos-border/60">
+                          <div className="p-2 rounded-xl bg-orange-500/10 text-orange-400">
+                            <Landmark className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h3 className="text-xs font-black text-pos-text uppercase tracking-wider">Créances & Engagements</h3>
+                            <p className="text-[10px] text-pos-muted">Carnet de dettes et avoirs clients</p>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3 mt-3.5">
+                          {/* Total Customer Debt (Kredy) */}
+                          <div className="bg-pos-bg border border-pos-border p-3.5 rounded-xl space-y-1">
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="font-bold text-orange-400">Crédits Clients en Cours (Kredy)</span>
+                              <span className="text-[10px] px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 font-mono font-bold">
+                                {debtCustomerCount} clients
+                              </span>
+                            </div>
+                            <p className="text-xl font-black font-mono text-orange-400">{formatDZD(totalCustomerDebt)}</p>
+                            <p className="text-[10px] text-pos-muted">Sommes dues par les clients réguliers</p>
+                          </div>
+
+                          {/* Total Store Credit Liabilities */}
+                          <div className="bg-pos-bg border border-pos-border p-3.5 rounded-xl space-y-1">
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="font-bold text-purple-400">Avoirs & Crédits Magasin Émis</span>
+                              <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono font-bold">
+                                Passif
+                              </span>
+                            </div>
+                            <p className="text-xl font-black font-mono text-purple-400">{formatDZD(totalStoreCreditLiability)}</p>
+                            <p className="text-[10px] text-pos-muted">Bons d'achat et soldes de retour non réclamés</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Quick Action Buttons */}
+                      <div className="pt-3 border-t border-pos-border/60 space-y-2">
+                        <button
+                          onClick={() => setActiveTab('export')}
+                          className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-emerald-600/20"
+                        >
+                          <FileSpreadsheet className="w-4 h-4" />
+                          Exporter Bilan Complet vers Excel
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {activeTab === 'analytics' && <SalesAnalyticsCharts />}
 
               {activeTab === 'history' && (
