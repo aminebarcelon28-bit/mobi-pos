@@ -8,19 +8,20 @@ export const HotkeyGuideModal: React.FC = () => {
   if (activeModal !== 'hotkey_guide') return null;
 
   const hotkeys = [
-    { key: 'F1', label: 'Nouveau Panier' },
+    { key: 'F1', label: 'Nouveau Panier / Réinitialiser' },
     { key: 'F2', label: 'Recherche Produit' },
-    { key: 'F3', label: 'Encaisser (Espèces)' },
+    { key: 'F3', label: 'Encaisser (Paiement)' },
     { key: 'F4', label: 'Reprendre Ventes en Attente' },
-    { key: 'F5', label: 'Fichier Clients' },
-    { key: 'F6', label: 'Appliquer Remise' },
+    { key: 'F5', label: 'Fichier Clients & Dettes (Kredy)' },
+    { key: 'F6', label: 'Appliquer Remise Panier' },
     { key: 'F7', label: 'Mettre la Vente en Attente' },
-    { key: 'F9', label: 'Dernier Reçu / Ticket' },
-    { key: 'F10', label: 'Rapports & Ventes' },
-    { key: 'F11', label: 'Gestion de Stock' },
-    { key: 'F12', label: 'Paramètres Caisse' },
+    { key: 'F8', label: 'Guide des Raccourcis Clavier' },
+    { key: 'F9', label: 'Rapports & Synthèse Financière' },
+    { key: 'F10', label: 'Gestion de Stock & Inventaire' },
+    { key: 'F11', label: 'Retours & Remboursements (Avoirs)' },
+    { key: 'F12', label: 'Paramètres & Diagnostic Caisse' },
     { key: '1 - 9', label: 'Ajout Rapide Produits 1 à 9' },
-    { key: 'Esc', label: 'Fermer / Annuler' },
+    { key: 'Esc', label: 'Fermer la fenêtre / Annuler' },
   ];
 
   return (

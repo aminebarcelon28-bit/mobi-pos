@@ -231,23 +231,23 @@ export const CartPanel: React.FC = () => {
                   </div>
 
                   {/* Quantity Stepper & Actions */}
-                  <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-pos-border/40">
-                    <div className="flex items-center gap-1 bg-pos-bg border border-pos-border rounded-lg p-0.5">
+                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-pos-border/40 gap-2">
+                    <div className="flex items-center gap-1 bg-pos-bg border border-pos-border rounded-xl p-1 shadow-inner">
                       <button
                         type="button"
                         onClick={() => {
                           soundEngine.playScan();
                           updateCartQty(item.product.id, -1);
                         }}
-                        className="w-5 h-5 rounded hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition cursor-pointer"
+                        className="w-7 h-7 rounded-lg bg-pos-card hover:bg-pos-hover active:scale-95 text-pos-muted hover:text-pos-text border border-pos-border/60 flex items-center justify-center transition cursor-pointer"
                         title="Diminuer quantité (-1)"
                       >
-                        <Minus className="w-3 h-3" />
+                        <Minus className="w-3.5 h-3.5 stroke-[2.5]" />
                       </button>
                       <input
                         type="number"
                         min="1"
-                        max={item.product.stock}
+                        max={item.product.stock > 0 ? item.product.stock : 9999}
                         value={item.quantity}
                         disabled={item.product.isSerialized}
                         onChange={(e) => {
@@ -256,8 +256,8 @@ export const CartPanel: React.FC = () => {
                             setCartItemQty(item.product.id, val);
                           }
                         }}
-                        className="w-9 text-center text-xs font-black text-pos-text bg-transparent focus:bg-pos-card rounded border-none focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
-                        title={item.product.isSerialized ? '1 appareil par IMEI' : `Saisir quantité directement (Max: ${item.product.stock})`}
+                        className="w-10 text-center text-xs font-black text-pos-text bg-transparent focus:bg-pos-card rounded-md border-none focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono py-0.5"
+                        title={item.product.isSerialized ? '1 appareil par IMEI' : `Saisir quantité directement (Stock dispo: ${item.product.stock})`}
                       />
                       <button
                         type="button"
@@ -265,18 +265,25 @@ export const CartPanel: React.FC = () => {
                           soundEngine.playScan();
                           updateCartQty(item.product.id, 1);
                         }}
-                        disabled={item.product.isSerialized || item.quantity >= item.product.stock}
-                        className="w-5 h-5 rounded hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                        disabled={item.product.isSerialized}
+                        className="w-7 h-7 rounded-lg bg-pos-card hover:bg-emerald-500/20 active:scale-95 text-pos-muted hover:text-emerald-400 border border-pos-border/60 flex items-center justify-center transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                         title="Augmenter quantité (+1)"
                       >
-                        <Plus className="w-3 h-3" />
+                        <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
                       </button>
                     </div>
+
                     <button
-                      onClick={() => removeFromCart(item.product.id)}
-                      className="text-[10px] text-red-400 opacity-0 group-hover:opacity-100 hover:underline transition cursor-pointer"
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playKeyBeep?.();
+                        removeFromCart(item.product.id);
+                      }}
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 transition cursor-pointer"
+                      title="Retirer cet article de la vente"
                     >
-                      Supprimer
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Supprimer</span>
                     </button>
                   </div>
                 </div>

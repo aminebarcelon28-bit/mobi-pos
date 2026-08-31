@@ -54,12 +54,13 @@ export const useKeyboardHotkeys = () => {
           break;
         }
 
-        case 'F3':
+        case 'F3': {
           const currentCart = usePosStore.getState().cart;
           if (currentCart.length > 0) {
             openModal('payment');
           }
           break;
+        }
 
         case 'F4':
           openModal('hold');
@@ -77,16 +78,20 @@ export const useKeyboardHotkeys = () => {
           holdSale();
           break;
 
-        case 'F9':
-          openModal('receipt');
+        case 'F8':
+          openModal('hotkey_guide');
           break;
 
-        case 'F10':
+        case 'F9':
           openModal('reports');
           break;
 
-        case 'F11':
+        case 'F10':
           openModal('inventory_manager');
+          break;
+
+        case 'F11':
+          openModal('refund');
           break;
 
         case 'F12':

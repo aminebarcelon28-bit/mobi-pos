@@ -16,11 +16,15 @@ import {
   Database,
   Play,
   ArrowDownCircle,
+  Keyboard,
+  Boxes,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
+import { useToast } from './ui/Toast';
 
 export const BottomBar: React.FC = () => {
   const { openModal, holdSale, clearCart, heldSales, activeShift } = usePosStore();
+  const { showToast } = useToast();
   const [timeStr, setTimeStr] = useState('');
   const [dateStr, setDateStr] = useState('');
   const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
@@ -53,6 +57,26 @@ export const BottomBar: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const handleHoldSaleClick = () => {
+    const res = holdSale();
+    if (res && res.success) {
+      showToast('Vente mise en attente avec succès ! (Ticket sauvegardé)', 'success');
+    } else {
+      showToast('Le panier est vide. Aucun article à mettre en attente.', 'warning');
+    }
+  };
+
+  const handleClearCartClick = () => {
+    const currentCart = usePosStore.getState().cart;
+    if (currentCart.length === 0) return;
+    if (currentCart.length > 1) {
+      const ok = window.confirm(`Voulez-vous vraiment vider les ${currentCart.reduce((a, i) => a + i.quantity, 0)} articles de la vente en cours ?`);
+      if (!ok) return;
+    }
+    clearCart();
+    showToast('Panier réinitialisé.', 'info');
+  };
+
   return (
     <footer className="bg-pos-panel border-t border-pos-border px-3 py-2 select-none relative">
       {/* Floating Shortcut Hint Bar */}
@@ -65,15 +89,18 @@ export const BottomBar: React.FC = () => {
         <span className="text-pos-border">|</span>
         <span>Remise: <span className="hotkey-badge text-emerald-300">F6</span></span>
         <span className="text-pos-border">|</span>
-        <span>Rapports: <span className="hotkey-badge text-emerald-300">F10</span></span>
+        <span>Rapports: <span className="hotkey-badge text-emerald-300">F9</span></span>
+        <span className="text-pos-border">|</span>
+        <span>Stock: <span className="hotkey-badge text-emerald-300">F10</span></span>
       </div>
 
       <div className="flex items-center justify-between gap-2">
         {/* Function Keys Grid */}
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
           <button
-            onClick={clearCart}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium"
+            onClick={handleClearCartClick}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer"
+            title="Nouveau Panier / Réinitialiser (F1)"
           >
             <PlusCircle className="w-3.5 h-3.5 text-emerald-500" />
             <span>Nouveau</span>
@@ -82,7 +109,8 @@ export const BottomBar: React.FC = () => {
 
           <button
             onClick={() => openModal('hold')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium relative"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium relative cursor-pointer"
+            title="Reprendre les Ventes en Attente (F4)"
           >
             <FileSearch className="w-3.5 h-3.5 text-amber-500" />
             <span>Reprendre</span>
@@ -96,7 +124,8 @@ export const BottomBar: React.FC = () => {
 
           <button
             onClick={() => openModal('customers')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer"
+            title="Fichier Clients & Dettes Kredy (F5)"
           >
             <Users className="w-3.5 h-3.5 text-blue-500" />
             <span>Clients</span>
@@ -105,7 +134,8 @@ export const BottomBar: React.FC = () => {
 
           <button
             onClick={() => openModal('discount')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer"
+            title="Appliquer une Remise Panier (F6)"
           >
             <Percent className="w-3.5 h-3.5 text-purple-500" />
             <span>Remise</span>
@@ -113,8 +143,9 @@ export const BottomBar: React.FC = () => {
           </button>
 
           <button
-            onClick={holdSale}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium"
+            onClick={handleHoldSaleClick}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer"
+            title="Mettre la Vente en Attente / En Pause (F7)"
           >
             <PauseCircle className="w-3.5 h-3.5 text-teal-500" />
             <span>Mettre en Attente</span>
@@ -123,17 +154,29 @@ export const BottomBar: React.FC = () => {
 
           <button
             onClick={() => openModal('reports')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer"
+            title="Rapports Financiers & Synthèse (F9)"
           >
             <BarChart3 className="w-3.5 h-3.5 text-cyan-400" />
             <span>Rapports</span>
+            <span className="hotkey-badge">F9</span>
+          </button>
+
+          <button
+            onClick={() => openModal('inventory_manager')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer"
+            title="Gestion de Stock & Inventaire (F10)"
+          >
+            <Boxes className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Stock</span>
             <span className="hotkey-badge">F10</span>
           </button>
 
           <div className="relative" ref={menuRef}>
             <button
               onClick={() => setIsMoreMenuOpen(!isMoreMenuOpen)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer"
+              title="Menu Outils Supplémentaires (F11)"
             >
               <SlidersHorizontal className="w-3.5 h-3.5 text-pos-muted" />
               <span>Plus</span>
@@ -141,20 +184,20 @@ export const BottomBar: React.FC = () => {
             </button>
             
             {isMoreMenuOpen && (
-              <div className="absolute bottom-full left-0 mb-2 w-56 bg-pos-panel border border-pos-border rounded-xl shadow-xl overflow-hidden z-50">
-                <div className="p-1.5 space-y-1">
+              <div className="absolute bottom-full left-0 mb-2 w-60 bg-pos-panel border border-pos-border rounded-2xl shadow-2xl overflow-hidden z-50 animate-in fade-in zoom-in-95">
+                <div className="p-2 space-y-1">
                   {activeShift ? (
                     <>
                       <button
                         onClick={() => { openModal('shift_movement'); setIsMoreMenuOpen(false); }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-pos-hover text-xs text-amber-400 font-bold transition"
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-amber-400 font-bold transition cursor-pointer"
                       >
                         <ArrowDownCircle className="w-4 h-4 text-amber-400" />
                         <span>Dépense / Mouvement Caisse</span>
                       </button>
                       <button
                         onClick={() => { openModal('shift_close'); setIsMoreMenuOpen(false); }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-pos-hover text-xs text-emerald-400 font-bold transition"
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-emerald-400 font-bold transition cursor-pointer"
                       >
                         <ShieldAlert className="w-4 h-4 text-emerald-400" />
                         <span>Clôture Caisse & Rapport Z</span>
@@ -163,29 +206,36 @@ export const BottomBar: React.FC = () => {
                   ) : (
                     <button
                       onClick={() => { openModal('shift_open'); setIsMoreMenuOpen(false); }}
-                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-pos-hover text-xs text-emerald-400 font-bold transition"
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-emerald-400 font-bold transition cursor-pointer"
                     >
                       <Play className="w-4 h-4 text-emerald-400" />
                       <span>Ouvrir la Caisse (Start Shift)</span>
                     </button>
                   )}
                   <button
+                    onClick={() => { openModal('hotkey_guide'); setIsMoreMenuOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  >
+                    <Keyboard className="w-4 h-4 text-emerald-400" />
+                    <span>Guide des Raccourcis (F8)</span>
+                  </button>
+                  <button
                     onClick={() => { openModal('receipt_template'); setIsMoreMenuOpen(false); }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-pos-hover text-xs text-pos-text transition"
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
                   >
                     <Sliders className="w-4 h-4 text-cyan-400" />
                     <span>Modèle de Ticket</span>
                   </button>
                   <button
                     onClick={() => { openModal('invoice_ingestion'); setIsMoreMenuOpen(false); }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-pos-hover text-xs text-pos-text transition"
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
                   >
                     <FileText className="w-4 h-4 text-amber-400" />
-                    <span>Ingestion Facture</span>
+                    <span>Ingestion Facture Fournisseur</span>
                   </button>
                   <button
-                    onClick={() => { /* openModal('licensing') */ setIsMoreMenuOpen(false); }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-pos-hover text-xs text-pos-text transition"
+                    onClick={() => { openModal('licensing'); setIsMoreMenuOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
                   >
                     <CheckCircle2 className="w-4 h-4 text-purple-400" />
                     <span>Licence & Activation</span>
@@ -197,7 +247,8 @@ export const BottomBar: React.FC = () => {
 
           <button
             onClick={() => openModal('settings')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer"
+            title="Paramètres & Diagnostic (F12)"
           >
             <Settings className="w-3.5 h-3.5 text-pos-muted" />
             <span>Paramètres</span>

@@ -141,7 +141,7 @@ interface PosState {
   setCartItemIMEI: (productId: string, imei: string) => void;
 
   // ── Held Sales ──
-  holdSale: () => void;
+  holdSale: () => { success: boolean; reason?: string };
   retrieveSale: (saleId: string) => void;
 
   // ── Products ──
@@ -427,10 +427,13 @@ export const usePosStore = create<PosState>((set, get) => ({
             return item; // Serialized items represent 1 device per IMEI; add distinct units individually
           }
           const newQty = item.quantity + delta;
-          if (delta > 0 && newQty > item.product.stock) {
-            return item; // Do not exceed available stock
+          if (newQty <= 0) {
+            return null; // Decrement to 0 removes line cleanly
           }
-          return newQty > 0 ? { ...item, quantity: newQty } : null;
+          if (delta > 0 && typeof item.product.stock === 'number' && item.product.stock > 0 && newQty > item.product.stock) {
+            return item; // Do not exceed available physical stock
+          }
+          return { ...item, quantity: newQty };
         }
         return item;
       })
@@ -508,14 +511,19 @@ export const usePosStore = create<PosState>((set, get) => ({
 
   holdSale: () => {
     const { cart, currentCustomer, heldSales } = get();
-    if (cart.length === 0) return;
+    if (cart.length === 0) {
+      soundEngine.playError();
+      return { success: false, reason: 'EMPTY_CART' };
+    }
     const newHold: HeldSale = {
       id: `hold-${Date.now()}`,
       customer: currentCustomer,
       items: [...cart],
       timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
     };
+    soundEngine.playKeyBeep?.();
     set({ heldSales: [...heldSales, newHold], cart: [], storeCreditApplied: 0 });
+    return { success: true };
   },
 
   retrieveSale: (saleId) => {

@@ -262,7 +262,7 @@ export const Header: React.FC = () => {
           <button
             onClick={() => openModal('reports')}
             className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-            title="Rapports Financiers & Analytics (F10)"
+            title="Rapports Financiers & Synthèse (F9)"
           >
             <BarChart3 className="w-4 h-4 text-cyan-400" />
           </button>
