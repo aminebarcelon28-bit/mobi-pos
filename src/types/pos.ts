@@ -226,6 +226,7 @@ export interface CustomerDebtEntry {
 }
 
 export type ExpenseCategory =
+  | 'Achat Marchandises / Fournisseur'
   | 'Loyer'
   | 'Électricité / Eau'
   | 'Salaires / Avances'
@@ -344,9 +345,15 @@ export interface POLineItem {
   title: string;
   sku: string;
   currentStock: number;
-  suggestedQty: number;
-  unitCost: number;
+  suggestedQty: number;      // Ordered quantity
+  receivedQty?: number;       // Manually verified / received quantity
+  unitCost: number;          // PO agreed unit cost
+  actualUnitCost?: number;   // Invoice verified cost (price fluctuation)
   totalCost: number;
+  actualTotalCost?: number;
+  imeis?: string[];
+  status?: 'Pending' | 'Partially Received' | 'Received' | 'Discrepancy' | 'Cancelled';
+  discrepancyReason?: string;
 }
 
 export interface PurchaseOrder {
@@ -354,9 +361,23 @@ export interface PurchaseOrder {
   poNumber: string;
   vendorName: string;
   createdAt: string;
+  validatedAt?: string;
+  receivedAt?: string;
   items: POLineItem[];
   totalAmount: number;
-  status: 'Draft' | 'Approved' | 'Sent' | 'Received';
+  actualTotalAmount?: number;
+  status:
+    | 'Draft'
+    | 'Waiting List'
+    | 'Approved'
+    | 'Sent'
+    | 'Partially Received'
+    | 'Completed'
+    | 'Received'
+    | 'Cancelled';
+  expenseRecorded?: boolean;
+  expenseId?: string;
+  notes?: string;
 }
 
 export interface ConditionChecklist {
@@ -651,7 +672,7 @@ export interface HardwareStatus {
   customerDisplayConnected: boolean;
 }
 
-export const APP_VERSION = '1.5.6';
+export const APP_VERSION = '1.5.7';
 
 export const formatDZD = (amount: number): string => {
   return new Intl.NumberFormat('fr-DZ', {
