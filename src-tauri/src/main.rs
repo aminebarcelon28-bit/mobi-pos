@@ -8,11 +8,89 @@ use db::DatabaseManager;
 use std::sync::Arc;
 use tauri::Manager;
 
+/// Remove the legacy lowercase "mobi-pos" installation that caused duplicate
+/// app entries on Windows when upgrading from v1.4.5.  This runs once on every
+/// launch and is a no-op if the stale folder/shortcuts are already gone.
+fn cleanup_legacy_duplicate() {
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        let legacy_dir = std::path::PathBuf::from(&local_app_data).join("mobi-pos");
+        if legacy_dir.exists() {
+            let _ = std::fs::remove_dir_all(&legacy_dir);
+        }
+    }
+
+    // Remove stale desktop shortcuts (both user and public desktops)
+    let shortcut_names = ["mobi-pos.lnk"];
+    let mut dirs_to_check: Vec<std::path::PathBuf> = Vec::new();
+
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        dirs_to_check.push(std::path::PathBuf::from(&profile).join("Desktop"));
+    }
+    if let Some(public) = std::env::var_os("PUBLIC") {
+        dirs_to_check.push(std::path::PathBuf::from(&public).join("Desktop"));
+    }
+    // Start-menu entries
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        dirs_to_check.push(
+            std::path::PathBuf::from(&appdata)
+                .join("Microsoft")
+                .join("Windows")
+                .join("Start Menu")
+                .join("Programs")
+                .join("mobi-pos"),
+        );
+    }
+    if let Some(pd) = std::env::var_os("PROGRAMDATA") {
+        dirs_to_check.push(
+            std::path::PathBuf::from(&pd)
+                .join("Microsoft")
+                .join("Windows")
+                .join("Start Menu")
+                .join("Programs")
+                .join("mobi-pos"),
+        );
+    }
+
+    for dir in &dirs_to_check {
+        if !dir.exists() {
+            continue;
+        }
+        // If the path itself is a directory named "mobi-pos" (start-menu folder), remove it
+        if dir.file_name().map(|n| n == "mobi-pos").unwrap_or(false) && dir.is_dir() {
+            let _ = std::fs::remove_dir_all(dir);
+            continue;
+        }
+        // Otherwise look for stale shortcut files
+        for name in &shortcut_names {
+            let lnk = dir.join(name);
+            if lnk.exists() {
+                let _ = std::fs::remove_file(&lnk);
+            }
+        }
+    }
+
+    // Clean orphaned registry uninstall entry (best-effort, ignore errors)
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let _ = Command::new("reg")
+            .args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\mobi-pos",
+                "/f",
+            ])
+            .output();
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // Auto-clean any leftover duplicate "mobi-pos" install from v1.4.5
+            cleanup_legacy_duplicate();
+
             let app_data_dir = app
                 .path()
                 .app_data_dir()

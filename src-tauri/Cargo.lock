@@ -1867,7 +1867,7 @@ dependencies = [
 
 [[package]]
 name = "mobi-pos"
-version = "1.4.7"
+version = "1.4.9"
 dependencies = [
  "parking_lot",
  "rusqlite",

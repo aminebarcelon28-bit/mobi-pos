@@ -1,0 +1,11 @@
+{
+    "platforms":  {
+                      "windows-x86_64":  {
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVReVdiNnltU3ZVMkhnL3BLSWorNTRnbk8zaGFjZ0ZGQ2hrTXUvT0hvazZVRThUTVR5UWJ5cmx5ZFJ2WnJNUnVSU2haV1J5MHlpT0Q4Sk5XZmQ3dFAxcGNnMWJvdmRDalFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MTg0OTM0CWZpbGU6TW9iaVBPU18xLjQuOV94NjQtc2V0dXAuZXhlCnhmcWNhMnF3RFFoYUc1UmVsUWhzV1ZVUFk2SW9jWXJQTzNaS1ZpNURjSTVNaEdhWmdqVjJ6OGdTTTlGZTYxbWgwRjh3aDRYeTJJOUt6NTZhdEdnK0F3PT0K",
+                                             "url":  "https://github.com/aminebarcelon28-bit/mobi-pos/releases/download/v1.4.9/MobiPOS_1.4.9_x64-setup.exe"
+                                         }
+                  },
+    "pub_date":  "2026-08-31T14:03:56Z",
+    "version":  "1.4.9",
+    "notes":  "v1.4.9 - Correctif anti-duplication et nettoyage automatique des anciennes installations."
+}
