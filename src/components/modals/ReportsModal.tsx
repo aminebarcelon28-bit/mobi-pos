@@ -238,8 +238,19 @@ export const ReportsModal: React.FC = () => {
       return activeShift.actualCash;
     }
     if (activeShift?.denominations) {
+      const denomMultipliers: Record<string, number> = {
+        qty2000: 2000,
+        qty1000: 1000,
+        qty500: 500,
+        qty200: 200,
+        qty100: 100,
+        qty50: 50,
+        qty20: 20,
+        qty10: 10,
+        coins: 1,
+      };
       return Object.entries(activeShift.denominations).reduce(
-        (acc, [denom, count]) => acc + parseInt(denom, 10) * (typeof count === 'number' ? count : 0),
+        (acc, [denom, count]) => acc + (denomMultipliers[denom] || 0) * (typeof count === 'number' ? count : 0),
         0
       );
     }

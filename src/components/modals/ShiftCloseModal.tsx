@@ -71,14 +71,21 @@ export const ShiftCloseModal: React.FC = () => {
       return (
         t.status !== 'VOIDED' &&
         !t.isRefund &&
-        t.paymentMethod === 'Espèces' &&
         (!openedAt || t.createdAt >= openedAt)
       );
     });
   }, [transactions, openedAt]);
 
   const totalCashSales = useMemo(() => {
-    return sessionTxns.reduce((sum, t) => sum + t.total, 0);
+    return sessionTxns.reduce((sum, t) => {
+      if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
+        const cashTenderTotal = t.tenders
+          .filter((tender) => tender.method === 'Espèces')
+          .reduce((acc, tender) => acc + tender.amount, 0);
+        return sum + cashTenderTotal;
+      }
+      return t.paymentMethod === 'Espèces' ? sum + t.total : sum;
+    }, 0);
   }, [sessionTxns]);
 
   const totalSaleMargins = useMemo(() => {

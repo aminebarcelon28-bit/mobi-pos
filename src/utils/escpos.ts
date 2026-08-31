@@ -210,20 +210,51 @@ export function buildCashDrawerPulse(): Uint8Array {
   return builder.init().openCashDrawer().build();
 }
 
+function isTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
 /**
- * Envoie le tampon à l'imprimante via le spooler Windows.
- * Note: À relier à Tauri IPC invoke quand le backend sera prêt.
+ * Envoie le tampon brut ESC/POS directement à l'imprimante via le spooler Windows (winspool.drv).
  */
 export async function printViaWindowsSpooler(printerName: string, buffer: Uint8Array): Promise<boolean> {
-  console.log(`[STUB - Tauri IPC] Impression via Windows Spooler sur l'imprimante "${printerName}" avec ${buffer.length} octets.`);
+  if (isTauri()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('sqlite_print_raw_escpos', {
+        printerName,
+        data: Array.from(buffer),
+      });
+      return true;
+    } catch (err) {
+      console.error(`[ESC/POS Spooler Error] Failed to print to "${printerName}":`, err);
+      return false;
+    }
+  }
+  console.log(`[Web Mode Mock] Impression ESC/POS sur "${printerName}" (${buffer.length} octets)`);
+  return true;
+}
+
+/**
+ * Déclenche l'ouverture physique du tiroir-caisse via impulsion ESC/POS.
+ */
+export async function openCashDrawerViaSpooler(printerName: string): Promise<boolean> {
+  if (isTauri()) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('sqlite_open_cash_drawer', { printerName });
+      return true;
+    } catch (err) {
+      console.error(`[Cash Drawer Error] Failed to pulse cash drawer on "${printerName}":`, err);
+      return false;
+    }
+  }
   return true;
 }
 
 /**
  * Envoie le tampon à l'imprimante via un port série (ex: COM1, COM2).
- * Note: À relier à Tauri IPC invoke quand le backend sera prêt.
  */
 export async function printViaSerialPort(portName: string, buffer: Uint8Array): Promise<boolean> {
-  console.log(`[STUB - Tauri IPC] Impression via Port Série sur "${portName}" avec ${buffer.length} octets.`);
-  return true;
+  return await printViaWindowsSpooler(portName, buffer);
 }

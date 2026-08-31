@@ -161,6 +161,23 @@ export const sqliteAdapter = {
     return await dexieDb.products.toArray();
   },
 
+  async findProductByBarcodeOrSku(query: string): Promise<Product | undefined> {
+    const trimmed = query.trim();
+    if (!trimmed) return undefined;
+    if (isTauriEnv()) {
+      try {
+        const prod = await invoke<Product | null>('sqlite_find_product_by_barcode_or_sku', { query: trimmed });
+        if (prod) return prod;
+      } catch (e) {
+        console.warn('Failed to find product by barcode/sku in SQLite, querying Dexie:', e);
+      }
+    }
+    const lower = trimmed.toLowerCase();
+    const byBarcode = await dexieDb.products.where('barcode').equalsIgnoreCase(trimmed).first();
+    if (byBarcode) return byBarcode;
+    return await dexieDb.products.where('sku').equalsIgnoreCase(lower).first();
+  },
+
   async deleteProduct(id: string): Promise<void> {
     if (isTauriEnv()) {
       try {
@@ -206,6 +223,20 @@ export const sqliteAdapter = {
       }
     }
     return await dexieDb.customers.toArray();
+  },
+
+  async findCustomerByPhone(phone: string): Promise<Customer | undefined> {
+    const trimmed = phone.trim();
+    if (!trimmed) return undefined;
+    if (isTauriEnv()) {
+      try {
+        const cust = await invoke<Customer | null>('sqlite_find_customer_by_phone', { phone: trimmed });
+        if (cust) return cust;
+      } catch (e) {
+        console.warn('Failed to find customer by phone in SQLite, querying Dexie:', e);
+      }
+    }
+    return await dexieDb.customers.where('phone').equals(trimmed).first();
   },
 
   async deleteCustomer(id: string): Promise<void> {
@@ -888,9 +919,17 @@ export const sqliteAdapter = {
     const openingFloat = openSession?.openingFloat || 0;
     const txns = await dexieDb.transactions.toArray();
     const sessionTxns = txns.filter(
-      (t) => (!openSession?.openedAt || t.createdAt >= openSession.openedAt) && t.paymentMethod === 'Espèces' && t.status !== 'VOIDED' && !t.isRefund
+      (t) => (!openSession?.openedAt || t.createdAt >= openSession.openedAt) && t.status !== 'VOIDED' && !t.isRefund
     );
-    const cashSales = sessionTxns.reduce((sum, t) => sum + t.total, 0);
+    const cashSales = sessionTxns.reduce((sum, t) => {
+      if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
+        const cashTenderTotal = t.tenders
+          .filter((tender) => tender.method === 'Espèces')
+          .reduce((acc, tender) => acc + tender.amount, 0);
+        return sum + cashTenderTotal;
+      }
+      return t.paymentMethod === 'Espèces' ? sum + t.total : sum;
+    }, 0);
     const totalProfits = sessionTxns.reduce((sum, t) => sum + (t.profit || 0), 0);
 
     const expectedCash = openingFloat + cashSales + deposits - expenses;

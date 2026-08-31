@@ -399,6 +399,27 @@ impl DatabaseManager {
             [],
         )?;
 
+        // Migration v2: Ensure indexed lookups and referential integrity indexes are active
+        let current_version: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |r| r.get(0),
+        ).unwrap_or(0);
+
+        if current_version < 2 {
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)", []);
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku)", []);
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone)", []);
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at)", []);
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_customer ON transactions(customer_id)", []);
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_imei_product ON imei_records(product_id)", []);
+            let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_customer_debts_customer ON customer_debts(customer_id)", []);
+            let _ = conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (2, datetime('now'))",
+                [],
+            );
+        }
+
         Ok(())
     }
 
@@ -504,10 +525,33 @@ impl DatabaseManager {
     }
 
     pub fn backup_to_file(&self, dest_path: &str) -> Result<String> {
-        let conn = self.conn.lock();
-        let query = format!("VACUUM INTO '{}';", dest_path.replace('\'', "''"));
-        conn.execute(&query, [])?;
+        let src_conn = self.conn.lock();
+        let mut dst_conn = Connection::open(dest_path)?;
+        let backup = rusqlite::backup::Backup::new(&src_conn, &mut dst_conn)?;
+        backup.run_to_completion(5, std::time::Duration::from_millis(100), None)?;
         Ok(format!("Backup snapshot written to {}", dest_path))
+    }
+
+    pub fn find_product_by_barcode_or_sku(&self, query: &str) -> Result<Option<Value>> {
+        let conn = self.conn.lock();
+        let trimmed = query.trim();
+        let mut stmt = conn.prepare("SELECT json_payload FROM products WHERE barcode = ?1 OR LOWER(sku) = LOWER(?1) LIMIT 1")?;
+        let res: Option<String> = stmt.query_row(params![trimmed], |r| r.get(0)).optional()?;
+        match res {
+            Some(s) => Ok(serde_json::from_str::<Value>(&s).ok()),
+            None => Ok(None),
+        }
+    }
+
+    pub fn find_customer_by_phone(&self, phone: &str) -> Result<Option<Value>> {
+        let conn = self.conn.lock();
+        let trimmed = phone.trim();
+        let mut stmt = conn.prepare("SELECT json_payload FROM customers WHERE phone = ?1 LIMIT 1")?;
+        let res: Option<String> = stmt.query_row(params![trimmed], |r| r.get(0)).optional()?;
+        match res {
+            Some(s) => Ok(serde_json::from_str::<Value>(&s).ok()),
+            None => Ok(None),
+        }
     }
 
     // ── PRODUCTS ──

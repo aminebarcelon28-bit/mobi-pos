@@ -46,6 +46,14 @@ pub fn sqlite_get_all_products(db: State<'_, Arc<DatabaseManager>>) -> Result<Ve
 }
 
 #[tauri::command]
+pub fn sqlite_find_product_by_barcode_or_sku(
+    db: State<'_, Arc<DatabaseManager>>,
+    query: String,
+) -> Result<Option<Value>, String> {
+    db.find_product_by_barcode_or_sku(&query).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn sqlite_delete_product(db: State<'_, Arc<DatabaseManager>>, id: String) -> Result<(), String> {
     db.delete_product(&id).map_err(|e| e.to_string())
 }
@@ -65,6 +73,14 @@ pub fn sqlite_bulk_save_customers(db: State<'_, Arc<DatabaseManager>>, customers
 #[tauri::command]
 pub fn sqlite_get_all_customers(db: State<'_, Arc<DatabaseManager>>) -> Result<Vec<Value>, String> {
     db.get_all_customers().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_find_customer_by_phone(
+    db: State<'_, Arc<DatabaseManager>>,
+    phone: String,
+) -> Result<Option<Value>, String> {
+    db.find_customer_by_phone(&phone).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -376,4 +392,15 @@ pub fn sqlite_generate_session_backup_json(
     session_id: String,
 ) -> Result<String, String> {
     db.generate_session_backup_json(&session_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn sqlite_print_raw_escpos(printer_name: String, data: Vec<u8>) -> Result<(), String> {
+    crate::printer::print_raw_bytes(&printer_name, &data)
+}
+
+#[tauri::command]
+pub fn sqlite_open_cash_drawer(printer_name: String) -> Result<(), String> {
+    let pulse_bytes = vec![0x1B, 0x70, 0x00, 0x19, 0xFA];
+    crate::printer::print_raw_bytes(&printer_name, &pulse_bytes)
 }

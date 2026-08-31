@@ -40,6 +40,7 @@ import {
   createLedgerEntry,
 } from '../utils/loyaltyEngine';
 import { calculateStockAlerts } from '../utils/alertEngine';
+import { hashPin, verifyPin } from '../utils/security';
 import { productRepository } from '../db/repositories/productRepository';
 import { customerRepository } from '../db/repositories/customerRepository';
 import { repairRepository } from '../db/repositories/repairRepository';
@@ -1545,16 +1546,17 @@ export const usePosStore = create<PosState>((set, get) => ({
 
   verifyManagerPin: (pin) => {
     const currentPin = get().managerPin || '1234';
-    return pin === currentPin;
+    return verifyPin(pin, currentPin);
   },
 
   setManagerPin: async (newPin) => {
     if (!newPin || newPin.length < 4) return;
-    await sqliteAdapter.setSetting('manager_pin', newPin);
-    set({ managerPin: newPin });
+    const hashedPin = hashPin(newPin);
+    await sqliteAdapter.setSetting('manager_pin', hashedPin);
+    set({ managerPin: hashedPin });
     get().logSecurityAction(
       'Mise à Jour Code PIN Gérant',
-      'Le code PIN administrateur a été modifié avec succès',
+      'Le code PIN administrateur a été chiffré et modifié avec succès (SHA-256/Salt)',
       'Manager',
       true
     );
@@ -1988,10 +1990,23 @@ export const usePosStore = create<PosState>((set, get) => ({
       recordedBy: 'Caisse 1 (Yacine)',
     };
 
+    let newLedger = customer.ledger || [];
+    if (excessCredit > 0) {
+      const creditLedgerEntry = createLedgerEntry(
+        customer.id,
+        'conversion',
+        0,
+        customer.loyaltyPoints,
+        `Surplus versement dette (+${excessCredit} DA) crédité en Avoir Client (Réf ${receiptNo})`
+      );
+      newLedger = [creditLedgerEntry, ...newLedger];
+    }
+
     const updatedCustomer: Customer = {
       ...customer,
       currentDebt: newDebt,
       storeCredit: updatedStoreCredit,
+      ledger: newLedger,
     };
 
     const updatedCustomers = customers.map((c) => (c.id === customerId ? updatedCustomer : c));

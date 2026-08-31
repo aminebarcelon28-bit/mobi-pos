@@ -7,12 +7,7 @@ export const productRepository = {
   },
 
   async findByBarcodeOrSku(query: string): Promise<Product | undefined> {
-    const trimmed = query.trim().toLowerCase();
-    if (!trimmed) return undefined;
-    const products = await sqliteAdapter.getAllProducts();
-    return products.find(
-      (p) => p.barcode.toLowerCase() === trimmed || p.sku.toLowerCase() === trimmed
-    );
+    return await sqliteAdapter.findProductByBarcodeOrSku(query);
   },
 
   async save(product: Product): Promise<void> {

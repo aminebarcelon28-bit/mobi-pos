@@ -3,6 +3,7 @@
 
 mod commands;
 mod db;
+pub mod printer;
 
 use db::DatabaseManager;
 use std::sync::Arc;
@@ -109,10 +110,12 @@ fn main() {
             commands::sqlite_save_product,
             commands::sqlite_bulk_save_products,
             commands::sqlite_get_all_products,
+            commands::sqlite_find_product_by_barcode_or_sku,
             commands::sqlite_delete_product,
             commands::sqlite_save_customer,
             commands::sqlite_bulk_save_customers,
             commands::sqlite_get_all_customers,
+            commands::sqlite_find_customer_by_phone,
             commands::sqlite_delete_customer,
             commands::sqlite_process_sale_transaction_atomic,
             commands::sqlite_void_transaction_atomic,
@@ -153,6 +156,8 @@ fn main() {
             commands::sqlite_get_shift_details,
             commands::sqlite_get_inventory_valuation,
             commands::sqlite_generate_session_backup_json,
+            commands::sqlite_print_raw_escpos,
+            commands::sqlite_open_cash_drawer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

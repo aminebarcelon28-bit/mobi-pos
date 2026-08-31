@@ -2,7 +2,8 @@ import React, { useState, useRef } from 'react';
 import { X, FileText, CheckCircle2, Upload, AlertCircle, Check, X as XIcon } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { productRepository } from '../../db/repositories/productRepository';
-import type { Product } from '../../types/pos';
+import { sqliteAdapter } from '../../db/sqliteAdapter';
+import type { Product, IMEIRecord } from '../../types/pos';
 
 export const InvoiceIngestionModal: React.FC = () => {
   const { activeModal, closeModal, products } = usePosStore();
@@ -36,8 +37,9 @@ export const InvoiceIngestionModal: React.FC = () => {
       const lines = rawText.split('\n').filter(line => line.trim() !== '');
       const newParsedLines: typeof parsedLines = [];
       const updatedProductsMap = new Map<string, Product>();
+      const newImeis: IMEIRecord[] = [];
 
-      lines.forEach((line) => {
+      for (const line of lines) {
         const delimiter = line.includes(';') ? ';' : line.includes('\t') ? '\t' : ',';
         const parts = line.split(delimiter).map((p) => p.trim().replace(/^["']|["']$/g, ''));
         if (parts.length >= 2) {
@@ -65,24 +67,39 @@ export const InvoiceIngestionModal: React.FC = () => {
             );
 
           if (currentProd && qty > 0) {
+            const isSerialized = Boolean(imei || currentProd.isSerialized);
             const updated: Product = {
               ...currentProd,
               stock: currentProd.stock + qty,
               costPrice: cost !== undefined ? cost : currentProd.costPrice,
+              isSerialized,
+              imeiNumber: imei || currentProd.imeiNumber,
             };
             updatedProductsMap.set(updated.id, updated);
+
+            if (imei) {
+              const imeiRec: IMEIRecord = {
+                imei,
+                productId: currentProd.id,
+                receivedAt: new Date().toISOString(),
+              };
+              await sqliteAdapter.saveIMEIRecord(imeiRec);
+              newImeis.push(imeiRec);
+            }
+
             newParsedLines.push({ sku, qty, cost, imei, matched: true });
           } else {
             newParsedLines.push({ sku, qty, cost, imei, matched: false });
           }
         }
-      });
+      }
 
       if (updatedProductsMap.size > 0) {
         const updatedList = Array.from(updatedProductsMap.values());
         await productRepository.bulkSave(updatedList);
         usePosStore.setState((state) => ({
           products: state.products.map((p) => updatedProductsMap.get(p.id) || p),
+          imeiRecords: newImeis.length > 0 ? [...newImeis, ...state.imeiRecords] : state.imeiRecords,
         }));
       }
 

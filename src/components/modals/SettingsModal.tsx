@@ -264,7 +264,6 @@ export const SettingsModal: React.FC = () => {
     importDatabase,
     receiptSettings,
     setReceiptSettings,
-    managerPin,
     setManagerPin,
   } = usePosStore();
   const { showToast } = useToast();
@@ -1373,7 +1372,7 @@ export const SettingsModal: React.FC = () => {
                     </h4>
                   </div>
                   <span className="text-[10px] text-pos-muted">
-                    PIN Actif : <strong className="text-emerald-400 font-mono">{managerPin ? `${'•'.repeat(managerPin.length)}` : '••••'}</strong> (Configuré)
+                    PIN Actif : <strong className="text-emerald-400 font-mono">••••</strong> (Chiffré SHA-256 / Salé)
                   </span>
                 </div>
 

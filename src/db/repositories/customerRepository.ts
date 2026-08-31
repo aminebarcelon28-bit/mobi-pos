@@ -7,10 +7,7 @@ export const customerRepository = {
   },
 
   async findByPhone(phone: string): Promise<Customer | undefined> {
-    const trimmed = phone.trim();
-    if (!trimmed) return undefined;
-    const customers = await sqliteAdapter.getAllCustomers();
-    return customers.find((c) => c.phone.trim() === trimmed);
+    return await sqliteAdapter.findCustomerByPhone(phone);
   },
 
   async save(customer: Customer): Promise<void> {
