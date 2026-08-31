@@ -114,6 +114,14 @@ export class EscPosBuilder {
   }
 
   /**
+   * Coupe le ticket (alias pour compatibilité).
+   */
+  cut(partial: boolean = false): this {
+    this.buffer.push(GS, 0x56, partial ? 0x01 : 0x00);
+    return this;
+  }
+
+  /**
    * Renvoie le tampon compilé prêt à être envoyé.
    */
   build(): Uint8Array {

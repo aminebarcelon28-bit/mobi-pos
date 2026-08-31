@@ -354,18 +354,104 @@ export interface ProductBundle {
 
 export type ConditionGrade = 'Grade A (Comme Neuf)' | 'Grade B (Bon État)' | 'Grade C (Usagé)' | 'Grade D (Écran Fissuré)';
 
+export type PreOwnedDeviceStatus =
+  | 'EN_TEST_DIAGNOSTIC'  // Ingested, undergoing hardware audit & data wipe
+  | 'PRET_A_LA_VENTE'     // Tested, certified, and active on POS sales catalog
+  | 'PIECES_DETACHEES';   // Hardware failed testing; routed for technician spare parts
+
+export interface PreOwnedInspectionChecklist {
+  icloudFrpRemoved: boolean;   // Crucial: No activation lock
+  networkUnlocked: boolean;    // Works with Mobilis, Djezzy, Ooredoo
+  faceIdTouchIdOk: boolean;
+  trueToneOk: boolean;
+  batteryHealthPercent: number; // e.g. 88%
+  camerasOk: boolean;
+  speakersMicOk: boolean;
+  chassisGrade: 'Grade A (Comme neuf)' | 'Grade B (Très bon état)' | 'Grade C (Traces d\'usure)';
+  testedByTechnician: string;
+  testedAt?: string;
+}
+
 export interface TradeInItem {
   id: string;
   deviceModel: string;
   imei: string;
   brand: BrandName;
   conditionGrade: ConditionGrade;
-  buybackValue: number;
-  resaleMarginPercent: number;
-  resalePrice: number;
   customerName: string;
+  customerPhone?: string;
+  nationalIdNumber?: string;
+  buybackValue: number;          // Cost basis for store (e.g. 50,000 DA)
+  resaleMarginPercent: number;
+  resalePrice: number;          // Retail listing price
+  targetResalePrice?: number;
   creditToWallet: boolean;
+  status?: PreOwnedDeviceStatus;
+  inspectionChecklist?: PreOwnedInspectionChecklist;
   createdAt: string;
+  certifiedAt?: string;
+}
+
+export type RepairNotificationType =
+  | 'READY_FOR_PICKUP'
+  | 'QUOTE_APPROVAL_REQUIRED'
+  | 'PARTS_DELAY_NOTICE';
+
+export interface CashTenderBreakdown {
+  totalDue: number;
+  cashTendered: number;
+  changeDue: number;
+  isFullyPaid: boolean;
+  suggestedShortcuts: number[];
+  changeDenominationBreakdown: Record<number, number>;
+}
+
+export interface ImeiLifecycleDossier {
+  imei: string;
+  productTitle: string;
+  isSold: boolean;
+  soldAt?: string;
+  warrantyExpiresAt?: string;
+  isWarrantyValid: boolean;
+  daysRemaining?: number;
+  originalReceiptNumber?: string;
+  originalCustomerName?: string;
+  originalCustomerPhone?: string;
+  purchasePrice?: number;
+  repairHistoryCount: number;
+}
+
+export type PosDocumentType =
+  | 'SALE_RECEIPT'
+  | 'REPAIR_CLAIM_STUB'
+  | 'REPAIR_WORK_ORDER'
+  | 'TRADE_IN_VOUCHER'
+  | 'PRODUCT_LABEL'
+  | 'Z_REPORT'
+  | 'CUSTOMER_DEBT_STATEMENT';
+
+export interface MobileHardwareProfile {
+  frontDeskReceiptPrinter: string | null;
+  workshopTechnicianPrinter: string | null;
+  barcodeLabelPrinter: string | null;
+  customerVfdPort: string | null;
+}
+
+export type DeviceCategory =
+  | 'thermalPrinter'
+  | 'labelPrinter'
+  | 'customerVfdDisplay'
+  | 'weighingScale'
+  | 'barcodeScanner'
+  | 'genericSerial';
+
+export interface DiscoveredDevice {
+  id: string;
+  name: string;
+  category: DeviceCategory;
+  portOrQueue: string;
+  isUsb: boolean;
+  description?: string;
 }
 
 export interface IMEIRecord {
@@ -403,6 +489,14 @@ export interface ReceiptSettings {
   autoPrintEnabled?: boolean;
   printerRouting?: PrinterRoutingConfig;
   loyaltyConfig?: LoyaltyProgramConfig;
+  paperWidth?: '80mm' | '58mm';
+  taxNumber?: string; // NIF / NIS / RC
+  footerMessage?: string;
+  printerInterface?: 'BROWSER' | 'SPOOLER' | 'NETWORK' | 'SERIAL';
+  printerName?: string;
+  baridimobRip?: string;        // 16 or 20-digit BaridiMob RIP
+  ccpAccount?: string;          // CCP Account + Clé
+  bankBeneficiaryName?: string; // Account Holder Name
 }
 
 export interface SecurityAuditLogEntry {
@@ -511,7 +605,7 @@ export interface HardwareStatus {
   customerDisplayConnected: boolean;
 }
 
-export const APP_VERSION = '1.5.4';
+export const APP_VERSION = '1.5.5';
 
 export const formatDZD = (amount: number): string => {
   return new Intl.NumberFormat('fr-DZ', {

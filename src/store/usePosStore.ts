@@ -31,6 +31,7 @@ import type {
   CashMovement,
   DenominationCount,
   InventoryValuation,
+  ImeiLifecycleDossier,
 } from '../types/pos';
 import { INITIAL_PRODUCTS, INITIAL_CUSTOMERS } from '../data/mockData';
 import {
@@ -110,10 +111,14 @@ interface PosState {
     | 'pin_prompt'
     | 'loyalty_card'
     | 'refund'
+    | 'whatsapp_dispatch'
+    | 'imei_inspector'
     | null;
   pendingPinAction: (() => void) | null;
   editingProduct: Product | null;
   selectedTransactionForRefund: SaleTransaction | null;
+  selectedRepairOrderForNotification: RepairOrder | null;
+  activeImeiDossier: ImeiLifecycleDossier | null;
   paymentMethod: 'Espèces';
   cashTendered: number;
   lastTransaction: SaleTransaction | null;
@@ -129,6 +134,8 @@ interface PosState {
   closeModal: () => void;
   setPendingPinAction: (action: (() => void) | null) => void;
   setSelectedTransactionForRefund: (t: SaleTransaction | null) => void;
+  setSelectedRepairOrderForNotification: (order: RepairOrder | null) => void;
+  setActiveImeiDossier: (dossier: ImeiLifecycleDossier | null) => void;
 
   // ── Cart ──
   addToCart: (product: Product, overridePin?: boolean) => { success: boolean; reason?: string };
@@ -339,6 +346,8 @@ export const usePosStore = create<PosState>((set, get) => ({
   pendingPinAction: null,
   editingProduct: null,
   selectedTransactionForRefund: null,
+  selectedRepairOrderForNotification: null,
+  activeImeiDossier: null,
   paymentMethod: 'Espèces',
   cashTendered: 0,
   lastTransaction: null,
@@ -374,9 +383,18 @@ export const usePosStore = create<PosState>((set, get) => ({
     }
     set({ activeModal: modal });
   },
-  closeModal: () => set({ activeModal: null, editingProduct: null, selectedTransactionForRefund: null }),
+  closeModal: () =>
+    set({
+      activeModal: null,
+      editingProduct: null,
+      selectedTransactionForRefund: null,
+      selectedRepairOrderForNotification: null,
+      activeImeiDossier: null,
+    }),
   setPendingPinAction: (action) => set({ pendingPinAction: action }),
   setSelectedTransactionForRefund: (t) => set({ selectedTransactionForRefund: t }),
+  setSelectedRepairOrderForNotification: (order) => set({ selectedRepairOrderForNotification: order }),
+  setActiveImeiDossier: (dossier) => set({ activeImeiDossier: dossier }),
 
   // ══════════════════════════════════════════
   // Cart

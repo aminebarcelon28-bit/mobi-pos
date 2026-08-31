@@ -39,6 +39,8 @@ const PinPromptModal = React.lazy(() => import('./components/modals/PinPromptMod
 const LoyaltyCardModal = React.lazy(() => import('./components/modals/LoyaltyCardModal').then(m => ({ default: m.LoyaltyCardModal })));
 const UpdateModal = React.lazy(() => import('./components/modals/UpdateModal').then(m => ({ default: m.UpdateModal })));
 const RefundModal = React.lazy(() => import('./components/modals/RefundModal').then(m => ({ default: m.RefundModal })));
+const WhatsAppDispatchModal = React.lazy(() => import('./components/modals/WhatsAppDispatchModal').then(m => ({ default: m.WhatsAppDispatchModal })));
+const ImeiWarrantyInspectorModal = React.lazy(() => import('./components/modals/ImeiWarrantyInspectorModal').then(m => ({ default: m.ImeiWarrantyInspectorModal })));
 
 import { usePosStore } from './store/usePosStore';
 
@@ -118,6 +120,8 @@ export const App: React.FC = () => {
               <LoyaltyCardModal />
               <UpdateModal />
               <RefundModal />
+              <WhatsAppDispatchModal />
+              <ImeiWarrantyInspectorModal />
             </ErrorBoundary>
           </Suspense>
         </div>
