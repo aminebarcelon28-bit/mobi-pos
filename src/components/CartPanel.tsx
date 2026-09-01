@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift } from 'lucide-react';
+import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
@@ -19,6 +19,7 @@ export const CartPanel: React.FC = () => {
     products,
     addToCart,
     currentCustomer,
+    setCurrentCustomer,
     redeemLoyaltyPoints,
     processPayment,
     applyCartDiscountPercent,
@@ -154,27 +155,90 @@ export const CartPanel: React.FC = () => {
         )}
 
         {/* Customer Badge & Loyalty Points Widget */}
-        {currentCustomer && (
-          <div className="bg-pos-card border border-pos-border p-2 rounded-xl flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2 truncate">
-              <div className="w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-[10px]">
-                {currentCustomer.name.slice(0, 2).toUpperCase()}
+        {currentCustomer ? (
+          <div className="bg-pos-card border border-pos-border rounded-xl p-2.5 space-y-2 text-xs shadow-sm">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 min-w-0">
+                {currentCustomer.avatarUrl ? (
+                  <img
+                    src={currentCustomer.avatarUrl}
+                    alt={currentCustomer.name}
+                    className="w-7 h-7 rounded-full object-cover border border-emerald-500/40 shrink-0"
+                  />
+                ) : (
+                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-slate-950 font-black text-xs flex items-center justify-center shrink-0">
+                    {currentCustomer.name.slice(0, 2).toUpperCase()}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="font-black text-pos-text truncate text-xs">{currentCustomer.name}</p>
+                  <p className="text-[10px] text-pos-muted truncate">
+                    {currentCustomer.phone || currentCustomer.registeredDevice || 'Client Enregistré'}
+                  </p>
+                </div>
               </div>
-              <div className="truncate">
-                <p className="font-bold text-pos-text truncate">{currentCustomer.name}</p>
-                <p className="text-[9px] text-pos-muted">{currentCustomer.loyaltyPoints} pts de fidélité • Solde: {formatDZD(currentCustomer.storeCredit)}</p>
+
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => openModal('customers')}
+                  className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-md transition cursor-pointer"
+                  title="Changer de Client (F5)"
+                >
+                  <User className="w-3.5 h-3.5 text-cyan-400" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCurrentCustomer(null)}
+                  className="p-1 hover:bg-red-500/10 text-pos-muted hover:text-red-400 rounded-md transition cursor-pointer"
+                  title="Détacher le client du panier"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
+
+            {/* Financial & Loyalty Pills */}
+            <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
+              <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold flex items-center gap-1">
+                <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                {currentCustomer.loyaltyPoints} pts
+              </span>
+
+              {(currentCustomer.storeCredit || 0) > 0 && (
+                <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold font-mono">
+                  Avoir: {formatDZD(currentCustomer.storeCredit)}
+                </span>
+              )}
+
+              {(currentCustomer.currentDebt || 0) > 0 && (
+                <span className="px-2 py-0.5 rounded-md bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold font-mono">
+                  Dette: {formatDZD(currentCustomer.currentDebt || 0)}
+                </span>
+              )}
+            </div>
+
+            {/* Point Conversion Button */}
             {currentCustomer.loyaltyPoints >= 10 && (
               <button
                 type="button"
                 onClick={() => redeemLoyaltyPoints(currentCustomer.id, 10)}
-                className="px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 font-bold text-[10px] rounded-lg transition shrink-0 cursor-pointer"
+                className="w-full py-1 bg-gradient-to-r from-amber-500/20 to-yellow-500/20 hover:from-amber-500/30 hover:to-yellow-500/30 border border-amber-500/50 text-amber-300 font-black text-[11px] rounded-lg transition flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
               >
-                Convertir 10 pts (+100 DA)
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>Convertir 10 pts (+100 DA d'Avoir)</span>
               </button>
             )}
           </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => openModal('customers')}
+            className="w-full py-2 bg-pos-card hover:bg-pos-hover border border-dashed border-pos-border hover:border-emerald-500/50 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text flex items-center justify-center gap-2 transition cursor-pointer"
+          >
+            <UserCheck className="w-4 h-4 text-emerald-400" />
+            <span>+ Assigner un Client (F5)</span>
+          </button>
         )}
 
         {/* Pricing Tier Selector (Retail / Wholesale / B2B) */}

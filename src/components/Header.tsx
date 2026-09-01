@@ -3,9 +3,7 @@ import {
   Search,
   UserCheck,
   Star,
-  MoreVertical,
   Smartphone,
-  ShieldCheck,
   PlusCircle,
   BarChart3,
   Barcode,
@@ -24,6 +22,9 @@ import {
   CreditCard,
   DollarSign,
   Database,
+  Grid,
+  ChevronDown,
+  X,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { calculateStockAlerts } from '../utils/alertEngine';
@@ -31,6 +32,7 @@ import { ThemeToggle } from './ThemeToggle';
 import { PinDialog } from './ui/PinDialog';
 import { useToast } from './ui/Toast';
 import { soundEngine } from '../utils/audioFeedback';
+import { formatDZD } from '../types/pos';
 
 export const Header: React.FC = () => {
   const {
@@ -48,8 +50,13 @@ export const Header: React.FC = () => {
     purchaseOrders,
     heldSales,
   } = usePosStore();
-  
+
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(() => soundEngine.getProfile().isMuted);
+  const [isToolsDropdownOpen, setIsToolsDropdownOpen] = useState(false);
+  const toolsMenuRef = useRef<HTMLDivElement>(null);
+  const [isPinOpen, setIsPinOpen] = useState(false);
+  const { showToast } = useToast();
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const waitingTicketsCount = useMemo(() => {
     const waitingPOs = (purchaseOrders || []).filter(
@@ -63,6 +70,12 @@ export const Header: React.FC = () => {
     return (customers || []).filter((c) => (c.currentDebt || 0) > 0).length;
   }, [customers]);
 
+  const { stockAlerts, criticalCount } = useMemo(() => {
+    const alerts = calculateStockAlerts(products);
+    const critical = alerts.filter((a) => a.severity === 'critical').length;
+    return { stockAlerts: alerts, criticalCount: critical };
+  }, [products]);
+
   const handleToggleMute = () => {
     const muted = soundEngine.toggleMute();
     setIsAudioMuted(muted);
@@ -70,9 +83,16 @@ export const Header: React.FC = () => {
       soundEngine.playScan();
     }
   };
-  const [isPinOpen, setIsPinOpen] = useState(false);
-  const { showToast } = useToast();
-  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (toolsMenuRef.current && !toolsMenuRef.current.contains(event.target as Node)) {
+        setIsToolsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Global Barcode Scanner Hardware Listener
   useEffect(() => {
@@ -101,30 +121,39 @@ export const Header: React.FC = () => {
       lastKeyTime = currentTime;
 
       if (e.key === 'Enter') {
-        if (buffer.length >= 3) {
+        if (buffer.length >= 2) {
+          e.preventDefault();
           const scannedCode = buffer.trim();
-          buffer = '';
 
-          // 1. Check if matches a Product Barcode or SKU
+          // 1. Check Product Barcode or SKU Match
           const foundProduct = products.find(
-            p => p.barcode === scannedCode || p.sku.toLowerCase() === scannedCode.toLowerCase()
+            (p) =>
+              p.barcode === scannedCode ||
+              p.sku.toLowerCase() === scannedCode.toLowerCase()
           );
 
           if (foundProduct) {
             addToCart(foundProduct);
-            showToast(`📦 Scanné : ${foundProduct.title}`, 'success');
+            showToast(`+1 ${foundProduct.title} ajouté au panier`, 'success');
+            soundEngine.playScan();
+            buffer = '';
             return;
           }
 
-          // 2. Check if matches a Customer PVC Card or Phone Number
-          const foundCustomer = customers.find(
-            c => (c.id && `LOY-${c.id}` === scannedCode) || c.phone === scannedCode || c.name.toLowerCase() === scannedCode.toLowerCase()
+          // 2. Check Customer Loyalty Barcode or Phone Match
+          const foundCustomer = (customers || []).find(
+            (c) =>
+              c.phone === scannedCode ||
+              c.phone.replace(/^0/, '+213') === scannedCode ||
+              c.id === scannedCode ||
+              `LOY-${c.id}` === scannedCode
           );
 
           if (foundCustomer) {
             setCurrentCustomer(foundCustomer);
+            showToast(`Client ${foundCustomer.name} identifié !`, 'success');
             soundEngine.playSuccess();
-            showToast(`👤 Client identifié : ${foundCustomer.name}`, 'success');
+            buffer = '';
             return;
           }
 
@@ -141,21 +170,20 @@ export const Header: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [products, customers, addToCart, setCurrentCustomer, setSearchQuery, showToast]);
 
-  const { stockAlerts, criticalCount } = useMemo(() => {
-    const alerts = calculateStockAlerts(products);
-    const critical = alerts.filter((a) => a.severity === 'critical').length;
-    return { stockAlerts: alerts, criticalCount: critical };
-  }, [products]);
-
   const handleNoSaleDrawerOpen = () => {
     setIsPinOpen(true);
   };
 
   const handlePinSuccess = () => {
     soundEngine.playCashDrawer();
-    logSecurityAction('Ouverture Manuelle Tiroir ("No Sale")', 'Tiroir-caisse ouvert sans vente par Administrateur', 'Yacine (Admin)', true);
+    logSecurityAction(
+      'Ouverture Manuelle Tiroir ("No Sale")',
+      'Tiroir-caisse ouvert sans vente par Administrateur',
+      'Yacine (Admin)',
+      true
+    );
     showToast(
-      'Ouverture manuelle du tiroir-caisse autorisée (Signal RJ11 envoyé). Action enregistrée dans le journal de sécurité.',
+      'Ouverture manuelle du tiroir-caisse autorisée (Signal RJ11 envoyé). Action enregistrée.',
       'success'
     );
     setIsPinOpen(false);
@@ -163,75 +191,80 @@ export const Header: React.FC = () => {
 
   return (
     <>
-      <header className="bg-pos-panel border-b border-pos-border px-4 py-2.5 flex items-center justify-between gap-3 select-none transition-colors duration-200">
-        {/* Brand & Logo */}
-        <div className="flex items-center gap-3 min-w-[240px]">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-lg shadow-emerald-500/20">
-            <Smartphone className="w-6 h-6 stroke-[2.5]" />
+      <header className="bg-pos-panel border-b border-pos-border px-3 py-2 flex items-center justify-between gap-2.5 select-none transition-colors duration-200 shrink-0 z-30">
+        {/* ══════════════════════════════════════════════════════════════ */}
+        {/* 1. LEFT: SLEEK BRAND & GLOBAL SEARCH */}
+        {/* ══════════════════════════════════════════════════════════════ */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 shrink-0">
+            <Smartphone className="w-5 h-5 stroke-[2.5]" />
           </div>
           <div>
-            <h1 className="font-extrabold text-lg tracking-wider text-pos-text leading-none flex items-center gap-1.5">
-              ACCESSOIRES <span className="text-emerald-500 font-medium text-xs tracking-normal uppercase bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/30">MOBI</span>
-            </h1>
-            <p className="text-[11px] text-pos-muted font-medium mt-0.5 flex items-center gap-1">
-              <ShieldCheck className="w-3 h-3 text-emerald-500" /> Caisse Enterprise • SAV & Bundles
-            </p>
+            <div className="flex items-center gap-1.5 leading-none">
+              <span className="font-black text-sm text-pos-text tracking-tight">MobiPOS</span>
+              <span className="text-[9px] uppercase font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded">
+                PRO
+              </span>
+            </div>
+            <span className="text-[10px] text-pos-muted font-medium">Accessoires & Caisse</span>
           </div>
         </div>
 
-        {/* Global Search Input */}
-        <div className="flex-1 max-w-lg relative">
-          <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-pos-muted" />
+        {/* Global Search Bar */}
+        <div className="flex-1 max-w-xs md:max-w-sm lg:max-w-md xl:max-w-lg relative mx-1">
+          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
           <input
             ref={searchInputRef}
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Scanner code-barres ou rechercher Réf/SKU (F2)..."
-            className="w-full bg-pos-bg border border-pos-border rounded-lg pl-10 pr-12 py-2 text-sm text-pos-text placeholder-pos-muted focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
+            className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-14 py-1.5 text-xs text-pos-text placeholder-pos-muted focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-medium"
           />
-          <span className="absolute right-3 top-1/2 -translate-y-1/2 hotkey-badge">F2</span>
+          {searchQuery ? (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-8 top-1/2 -translate-y-1/2 text-pos-muted hover:text-pos-text p-1 cursor-pointer"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          ) : null}
+          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 hotkey-badge text-[10px]">F2</span>
         </div>
 
-        {/* Action Controls: Enterprise Tools */}
-        <div className="flex items-center gap-1.5">
-          {/* Repair Work Orders Trigger */}
+        {/* ══════════════════════════════════════════════════════════════ */}
+        {/* 2. CENTER: PRIMARY ACTION CONTROLS & DROPDOWN */}
+        {/* ══════════════════════════════════════════════════════════════ */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Quick Add Product */}
+          <button
+            onClick={() => setEditingProduct(null)}
+            className="px-2.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer shrink-0"
+            title="Ajouter un Nouveau Produit (avec photo et code-barres)"
+          >
+            <PlusCircle className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">+ Produit</span>
+          </button>
+
+          {/* SAV Repair Work Orders */}
           <button
             onClick={() => openModal('repair_work_order')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
+            className="p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-emerald-400 hover:text-emerald-300 transition cursor-pointer"
             title="Gestion des Réparations & Tickets SAV"
           >
-            <Wrench className="w-4 h-4 text-emerald-400" />
+            <Wrench className="w-4 h-4" />
           </button>
 
-          {/* Trade-In Buyback Trigger */}
-          <button
-            onClick={() => openModal('trade_in_buyback')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-            title="Reprise & Rachat Smartphones d'Occasion"
-          >
-            <RefreshCw className="w-4 h-4 text-cyan-400" />
-          </button>
-
-          {/* Kitting Bundle Trigger */}
-          <button
-            onClick={() => openModal('kitting_bundle')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-            title="Packs Protection & Bundles"
-          >
-            <Package className="w-4 h-4 text-amber-400" />
-          </button>
-
-          {/* Notification Bell for Stock Alerts */}
+          {/* Stock Alerts Bell */}
           <button
             onClick={() => openModal('vendor_procurement')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition relative cursor-pointer"
+            className="relative p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-emerald-400 hover:text-emerald-300 transition cursor-pointer"
             title={`Alertes Réapprovisionnement (${stockAlerts.length} articles en alerte)`}
           >
-            <Bell className="w-4 h-4 text-emerald-400" />
+            <Bell className="w-4 h-4" />
             {stockAlerts.length > 0 && (
               <span
-                className={`absolute -top-1 -right-1 px-1.5 py-0.2 rounded-full text-[9px] font-bold text-white shadow-md ${
+                className={`absolute -top-1 -right-1 px-1 rounded-full text-[9px] font-black text-white ${
                   criticalCount > 0 ? 'bg-red-500 animate-pulse' : 'bg-amber-500'
                 }`}
               >
@@ -240,37 +273,13 @@ export const Header: React.FC = () => {
             )}
           </button>
 
-          <button
-            onClick={() => setEditingProduct(null)}
-            className="px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-500/20 transition cursor-pointer"
-            title="Ajouter un Nouveau Produit avec Photo"
-          >
-            <PlusCircle className="w-4 h-4" /> <span className="hidden lg:inline">+ Produit</span>
-          </button>
-
-          <button
-            onClick={() => openModal('label_printer')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-            title="Générateur & Impression d'Étiquettes Codes-barres (ESC/POS)"
-          >
-            <Barcode className="w-4 h-4 text-emerald-500" />
-          </button>
-
-          {/* IMEI & Warranty Inspector */}
-          <button
-            onClick={() => openModal('imei_inspector')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
-            title="Inspecteur Traçabilité IMEI & Garanties Téléphones"
-          >
-            <Smartphone className="w-4 h-4 text-cyan-400" />
-          </button>
-
+          {/* Command Tickets & Waiting List */}
           <button
             onClick={() => openModal('command_tickets')}
-            className="relative p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-amber-400 hover:text-amber-300 transition cursor-pointer"
+            className="relative p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-amber-400 hover:text-amber-300 transition cursor-pointer"
             title="File d'Attente des Commandes & Ventes Suspendues"
           >
-            <Clock className="w-4 h-4 text-amber-400" />
+            <Clock className="w-4 h-4" />
             {waitingTicketsCount > 0 && (
               <span className="absolute -top-1 -right-1 bg-amber-500 text-slate-950 font-black text-[9px] w-4 h-4 rounded-full flex items-center justify-center border border-pos-card animate-pulse">
                 {waitingTicketsCount > 9 ? '9+' : waitingTicketsCount}
@@ -281,10 +290,10 @@ export const Header: React.FC = () => {
           {/* Customer Debt & Kredy Ledger */}
           <button
             onClick={() => openModal('debt_ledger')}
-            className="relative p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-rose-400 hover:text-rose-300 transition cursor-pointer"
+            className="relative p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-rose-400 hover:text-rose-300 transition cursor-pointer"
             title="Registre & Suivi des Dettes Clients (Kredy)"
           >
-            <CreditCard className="w-4 h-4 text-rose-400" />
+            <CreditCard className="w-4 h-4" />
             {indebtedCount > 0 && (
               <span className="absolute -top-1 -right-1 bg-rose-500 text-white font-black text-[9px] w-4 h-4 rounded-full flex items-center justify-center border border-pos-card">
                 {indebtedCount > 9 ? '9+' : indebtedCount}
@@ -292,158 +301,257 @@ export const Header: React.FC = () => {
             )}
           </button>
 
-          {/* Expense & EBITDA Manager */}
+          {/* Store Expenses Manager */}
           <button
             onClick={() => openModal('expense_manager')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-amber-400 hover:text-amber-300 transition cursor-pointer"
+            className="p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-amber-400 hover:text-amber-300 transition cursor-pointer"
             title="Gestionnaire des Dépenses & Sorties de Caisse (EBITDA)"
           >
-            <DollarSign className="w-4 h-4 text-amber-400" />
+            <DollarSign className="w-4 h-4" />
           </button>
 
-          {/* Database Maintenance & WAL Health */}
-          <button
-            onClick={() => openModal('db_maintenance')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
-            title="Centre de Maintenance & Intégrité SQLite WAL"
-          >
-            <Database className="w-4 h-4 text-cyan-400" />
-          </button>
+          {/* ── Secondary Tools & Modules Dropdown Menu ── */}
+          <div className="relative" ref={toolsMenuRef}>
+            <button
+              onClick={() => setIsToolsDropdownOpen(!isToolsDropdownOpen)}
+              className={`p-1.5 rounded-xl border transition cursor-pointer flex items-center gap-1 ${
+                isToolsDropdownOpen
+                  ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50'
+                  : 'bg-pos-card hover:bg-pos-hover border-pos-border text-pos-muted hover:text-pos-text'
+              }`}
+              title="Centre d'Outils & Modules Complémentaires"
+            >
+              <Grid className="w-4 h-4 text-cyan-400" />
+              <ChevronDown className="w-3 h-3" />
+            </button>
 
-          <button
-            onClick={() => openModal('invoice_ingestion')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-            title="Ingestion Automatique Facture Fournisseur"
-          >
-            <FileText className="w-4 h-4 text-emerald-500" />
-          </button>
+            {isToolsDropdownOpen && (
+              <div className="absolute right-0 top-full mt-2 w-64 bg-pos-panel border border-pos-border rounded-2xl shadow-2xl overflow-hidden z-50 animate-in fade-in zoom-in-95 p-1.5 space-y-1">
+                <span className="text-[10px] font-bold text-pos-muted uppercase px-2 py-1 block">
+                  Modules Spécialisés
+                </span>
 
-          <button
-            onClick={handleNoSaleDrawerOpen}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-            title="Ouverture Tiroir-Caisse Sécurisée ('No Sale' - PIN Requis)"
-          >
-            <Unlock className="w-4 h-4 text-amber-500" />
-          </button>
+                <button
+                  onClick={() => {
+                    openModal('invoice_ingestion');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <FileText className="w-4 h-4 text-emerald-400" />
+                  <span>Ingestion Facture Fournisseur</span>
+                </button>
 
-          <button
-            onClick={() => openModal('security_audit')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-            title="Journal d'Audit de Sécurité RBAC"
-          >
-            <ShieldAlert className="w-4 h-4 text-amber-500" />
-          </button>
+                <button
+                  onClick={() => {
+                    openModal('label_printer');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <Barcode className="w-4 h-4 text-emerald-500" />
+                  <span>Étiquettes Codes-barres</span>
+                </button>
 
-          <button
-            onClick={() => openModal('refund')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-purple-400 hover:text-purple-300 transition cursor-pointer"
-            title="Retours Marchandise & Remboursements (Avoirs)"
-          >
-            <RotateCcw className="w-4 h-4 text-purple-400" />
-          </button>
+                <button
+                  onClick={() => {
+                    openModal('imei_inspector');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <Smartphone className="w-4 h-4 text-cyan-400" />
+                  <span>Traçabilité IMEI & Garantie</span>
+                </button>
 
-          <button
-            onClick={() => openModal('reports')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-            title="Rapports Financiers & Synthèse (F9)"
-          >
-            <BarChart3 className="w-4 h-4 text-cyan-400" />
-          </button>
+                <button
+                  onClick={() => {
+                    openModal('kitting_bundle');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <Package className="w-4 h-4 text-amber-400" />
+                  <span>Packs Protection & Bundles</span>
+                </button>
 
-          <button
-            onClick={() => openModal('receipt_template')}
-            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-            title="Personnaliser le Modèle de Ticket"
-          >
-            <Sliders className="w-4 h-4 text-pos-muted" />
-          </button>
+                <button
+                  onClick={() => {
+                    openModal('trade_in_buyback');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <RefreshCw className="w-4 h-4 text-cyan-400" />
+                  <span>Reprise Occasion (Trade-In)</span>
+                </button>
 
-          {/* Cash Register Session Status Widget */}
+                <div className="border-t border-pos-border my-1" />
+
+                <button
+                  onClick={() => {
+                    openModal('reports');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <BarChart3 className="w-4 h-4 text-cyan-400" />
+                  <span>Rapports Financiers & Bilan (F9)</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    openModal('refund');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4 text-purple-400" />
+                  <span>Retours & Remboursements (F11)</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    handleNoSaleDrawerOpen();
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <Unlock className="w-4 h-4 text-amber-400" />
+                  <span>Ouvrir Tiroir Caisse ('No Sale')</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    openModal('security_audit');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <ShieldAlert className="w-4 h-4 text-amber-500" />
+                  <span>Journal d'Audit Sécurité</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    openModal('receipt_template');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <Sliders className="w-4 h-4 text-pos-muted" />
+                  <span>Modèle de Ticket</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    openModal('db_maintenance');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <Database className="w-4 h-4 text-cyan-400" />
+                  <span>Maintenance Base SQLite WAL</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Cash Register Session Status */}
           {activeShift ? (
             <button
               onClick={() => openModal('shift_close')}
-              className="px-2.5 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+              className="px-2.5 py-1 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0"
               title="Session Caisse Ouverte • Cliquez pour Clôturer / Rapport Z"
             >
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="hidden sm:inline font-mono">Caisse : {activeShift.cashierName}</span>
+              <span className="font-mono text-[11px]">{activeShift.cashierName}</span>
             </button>
           ) : (
             <button
               onClick={() => openModal('shift_open')}
-              className="px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer animate-pulse"
-              title="Caisse Fermée • Cliquez pour Ouvrir la Session"
+              className="px-2 py-1 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer animate-pulse shrink-0"
+              title="Caisse Fermée • Cliquez pour Ouvrir"
             >
               <span className="w-2 h-2 rounded-full bg-amber-400" />
               <span>Ouvrir Caisse</span>
             </button>
           )}
 
+          {/* Audio Mute Toggle */}
           <button
             type="button"
             onClick={handleToggleMute}
-            className={`p-2 rounded-xl border transition cursor-pointer ${
+            className={`p-1.5 rounded-xl border transition cursor-pointer shrink-0 ${
               isAudioMuted
                 ? 'bg-red-500/10 border-red-500/30 text-red-400'
                 : 'bg-pos-card border-pos-border text-emerald-400 hover:border-emerald-400'
             }`}
-            title={isAudioMuted ? 'Activer le son (Audio Muet)' : 'Mode Silencieux (Muet)'}
+            title={isAudioMuted ? 'Activer le son' : 'Mode Silencieux'}
           >
             {isAudioMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
 
-          <ThemeToggle />
+          {/* Dark / Light Theme Toggle */}
+          <div className="shrink-0">
+            <ThemeToggle />
+          </div>
         </div>
 
-        {/* Customer Profile Widget */}
-        {currentCustomer ? (
-          <div className="flex items-center gap-3 bg-pos-card border border-pos-border px-3 py-1.5 rounded-lg shadow-sm">
-            <img
-              src={currentCustomer.avatarUrl}
-              alt={currentCustomer.name}
-              className="w-9 h-9 rounded-full object-cover border border-emerald-500/50"
-            />
-            <div className="text-left text-xs">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-pos-text">{currentCustomer.name}</span>
-                <span className="text-[10px] bg-emerald-500/10 text-emerald-500 font-medium px-1.5 py-0.2 rounded border border-emerald-500/30">
-                  {currentCustomer.registeredDevice}
-                </span>
-              </div>
-              <p className="text-[11px] text-pos-muted mt-0.5">
-                {currentCustomer.email} | {currentCustomer.phone}
-              </p>
-            </div>
+        {/* ══════════════════════════════════════════════════════════════ */}
+        {/* 3. RIGHT: ANCHORED BEAUTIFUL CUSTOMER PROFILE WIDGET */}
+        {/* ══════════════════════════════════════════════════════════════ */}
+        <div className="shrink-0 max-w-[260px]">
+          {currentCustomer ? (
+            <div
+              onClick={() => openModal('customers')}
+              className="flex items-center gap-2 bg-pos-card hover:bg-pos-hover border border-pos-border hover:border-emerald-500/40 p-1.5 rounded-xl shadow-sm transition cursor-pointer"
+              title="Cliquez pour changer ou modifier le client (F5)"
+            >
+              {currentCustomer.avatarUrl ? (
+                <img
+                  src={currentCustomer.avatarUrl}
+                  alt={currentCustomer.name}
+                  className="w-8 h-8 rounded-full object-cover border border-emerald-500/50 shrink-0"
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-slate-950 font-black text-xs flex items-center justify-center shrink-0">
+                  {currentCustomer.name.slice(0, 2).toUpperCase()}
+                </div>
+              )}
 
-            <div className="ml-2 pl-3 border-l border-pos-border flex items-center gap-2">
-              <div className="text-right">
-                <p className="text-[9px] uppercase tracking-wider text-pos-muted font-bold">Fidélité</p>
-                <p className="text-xs font-bold text-amber-500 flex items-center justify-end gap-1">
-                  <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
-                  {currentCustomer.loyaltyPoints.toLocaleString()} PTS
-                </p>
+              <div className="text-left text-xs min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-pos-text truncate text-xs">{currentCustomer.name}</span>
+                </div>
+                <div className="flex items-center gap-2 text-[10px] text-pos-muted mt-0.5">
+                  <span className="text-amber-400 font-bold flex items-center gap-0.5">
+                    <Star className="w-2.5 h-2.5 fill-amber-400" />
+                    {currentCustomer.loyaltyPoints} pts
+                  </span>
+                  {(currentCustomer.storeCredit || 0) > 0 && (
+                    <span className="text-emerald-400 font-bold font-mono">
+                      +{formatDZD(currentCustomer.storeCredit)}
+                    </span>
+                  )}
+                </div>
               </div>
-              <button 
-                onClick={() => openModal('customers')}
-                className="p-1 hover:bg-pos-hover rounded text-pos-muted hover:text-pos-text transition cursor-pointer"
-                title="Options Client"
-              >
-                <MoreVertical className="w-4 h-4" />
-              </button>
             </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => openModal('customers')}
-            className="flex items-center gap-2 bg-pos-card hover:bg-pos-hover border border-pos-border px-3.5 py-2 rounded-lg text-xs font-medium text-pos-muted hover:text-pos-text transition cursor-pointer"
-          >
-            <UserCheck className="w-4 h-4 text-emerald-500" /> Profil Client
-          </button>
-        )}
+          ) : (
+            <button
+              onClick={() => openModal('customers')}
+              className="flex items-center gap-1.5 bg-pos-card hover:bg-pos-hover border border-pos-border hover:border-emerald-500/40 px-3 py-1.5 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text transition cursor-pointer"
+              title="Sélectionner ou Créer un Client (F5)"
+            >
+              <UserCheck className="w-4 h-4 text-emerald-400" />
+              <span>+ Client (F5)</span>
+            </button>
+          )}
+        </div>
       </header>
 
-      <PinDialog 
-        isOpen={isPinOpen} 
+      <PinDialog
+        isOpen={isPinOpen}
         onSuccess={handlePinSuccess}
         onCancel={() => setIsPinOpen(false)}
         title="Autorisation Requise"
