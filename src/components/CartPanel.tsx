@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
+import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
@@ -22,6 +22,8 @@ export const CartPanel: React.FC = () => {
     redeemLoyaltyPoints,
     processPayment,
     applyCartDiscountPercent,
+    storeCreditApplied,
+    setStoreCreditApplied,
   } = usePosStore();
 
   const [isDiscountOpen, setIsDiscountOpen] = useState(false);
@@ -36,7 +38,8 @@ export const CartPanel: React.FC = () => {
   const grossTotal = cart.reduce((acc, item) => acc + getItemPrice(item) * item.quantity, 0);
   const totalDiscount = cart.reduce((acc, item) => acc + (item.discount || 0), 0);
   const subtotal = Math.max(0, grossTotal - totalDiscount);
-  const total = subtotal;
+  const netTotal = Math.max(0, subtotal - (storeCreditApplied || 0));
+  const total = netTotal;
 
   const quickBills = [500, 1000, 2000, 5000, 10000];
 
@@ -295,19 +298,50 @@ export const CartPanel: React.FC = () => {
 
       {/* Totals Summary & Compact Payment Controls */}
       <div className="p-3 border-t border-pos-border bg-pos-panel space-y-2 shrink-0">
-        {/* Breakdown of Subtotal and Discounts if active */}
-        {totalDiscount > 0 && (
-          <div className="space-y-1 pb-1.5 border-b border-pos-border/40 text-xs">
+        {/* Customer Available Store Credit Quick Bar */}
+        {currentCustomer && (currentCustomer.storeCredit || 0) > 0 && storeCreditApplied === 0 && (
+          <div className="bg-purple-950/40 border border-purple-500/40 rounded-xl px-2.5 py-1.5 flex items-center justify-between text-xs animate-in fade-in">
+            <div className="flex items-center gap-1.5 text-purple-200">
+              <Gift className="w-3.5 h-3.5 text-purple-300 shrink-0" />
+              <span className="text-[10px] font-bold">Avoir Dispo : <span className="font-mono text-purple-300 font-extrabold">{formatDZD(currentCustomer.storeCredit)}</span></span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const maxCredit = Math.min(currentCustomer.storeCredit, subtotal);
+                setStoreCreditApplied(maxCredit);
+                soundEngine.playSuccess();
+              }}
+              className="px-2 py-0.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[9.5px] font-extrabold transition cursor-pointer"
+            >
+              Appliquer Avoir
+            </button>
+          </div>
+        )}
+
+        {/* Breakdown of Subtotal, Discounts and Store Credit if active */}
+        {(totalDiscount > 0 || (storeCreditApplied || 0) > 0) && (
+          <div className="space-y-1 pb-1.5 border-b border-pos-border/40 text-xs font-mono">
             <div className="flex justify-between items-center text-pos-muted">
-              <span className="text-[11px] font-semibold">Sous-Total Brut :</span>
-              <span className="font-mono font-bold">{formatDZD(grossTotal)}</span>
+              <span className="text-[11px] font-sans font-semibold">Sous-Total Brut :</span>
+              <span className="font-bold">{formatDZD(grossTotal)}</span>
             </div>
-            <div className="flex justify-between items-center text-purple-400 font-bold">
-              <span className="text-[11px] flex items-center gap-1">
-                <Percent className="w-3 h-3" /> Remise Accordée :
-              </span>
-              <span className="font-mono">-{formatDZD(totalDiscount)}</span>
-            </div>
+            {totalDiscount > 0 && (
+              <div className="flex justify-between items-center text-purple-400 font-bold">
+                <span className="text-[11px] font-sans flex items-center gap-1">
+                  <Percent className="w-3 h-3" /> Remise Accordée :
+                </span>
+                <span>-{formatDZD(totalDiscount)}</span>
+              </div>
+            )}
+            {(storeCreditApplied || 0) > 0 && (
+              <div className="flex justify-between items-center text-emerald-400 font-bold">
+                <span className="text-[11px] font-sans flex items-center gap-1">
+                  <Gift className="w-3 h-3 text-purple-300" /> Avoir Client Déduit :
+                </span>
+                <span className="text-purple-300">-{formatDZD(storeCreditApplied)}</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -315,7 +349,7 @@ export const CartPanel: React.FC = () => {
         <div className="flex justify-between items-baseline pt-0.5">
           <div>
             <span className="text-xs font-black text-pos-text tracking-wider uppercase block">
-              Total Net à Payer
+              {(storeCreditApplied || 0) > 0 ? 'Net Restant à Payer' : 'Total Net à Payer'}
             </span>
             <span className="text-[10px] text-pos-muted font-medium">TTC • Rendu auto</span>
           </div>

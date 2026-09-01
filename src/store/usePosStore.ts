@@ -117,6 +117,10 @@ interface PosState {
     | 'refund'
     | 'whatsapp_dispatch'
     | 'imei_inspector'
+    | 'command_tickets'
+    | 'debt_ledger'
+    | 'expense_manager'
+    | 'db_maintenance'
     | null;
   pendingPinAction: (() => void) | null;
   editingProduct: Product | null;
@@ -155,6 +159,7 @@ interface PosState {
   // ── Held Sales ──
   holdSale: () => { success: boolean; reason?: string };
   retrieveSale: (saleId: string) => void;
+  deleteHeldSale: (saleId: string) => void;
 
   // ── Products ──
   setEditingProduct: (product: Product | null) => void;
@@ -600,6 +605,11 @@ export const usePosStore = create<PosState>((set, get) => ({
         activeModal: null,
       });
     }
+  },
+
+  deleteHeldSale: (saleId) => {
+    const { heldSales } = get();
+    set({ heldSales: heldSales.filter((h) => h.id !== saleId) });
   },
 
   // ══════════════════════════════════════════

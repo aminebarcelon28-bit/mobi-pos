@@ -41,6 +41,10 @@ const UpdateModal = React.lazy(() => import('./components/modals/UpdateModal').t
 const RefundModal = React.lazy(() => import('./components/modals/RefundModal').then(m => ({ default: m.RefundModal })));
 const WhatsAppDispatchModal = React.lazy(() => import('./components/modals/WhatsAppDispatchModal').then(m => ({ default: m.WhatsAppDispatchModal })));
 const ImeiWarrantyInspectorModal = React.lazy(() => import('./components/modals/ImeiWarrantyInspectorModal').then(m => ({ default: m.ImeiWarrantyInspectorModal })));
+const CommandTicketDashboardModal = React.lazy(() => import('./components/modals/CommandTicketDashboardModal').then(m => ({ default: m.CommandTicketDashboardModal })));
+const DebtLedgerModal = React.lazy(() => import('./components/modals/DebtLedgerModal').then(m => ({ default: m.DebtLedgerModal })));
+const ExpenseManagerModal = React.lazy(() => import('./components/modals/ExpenseManagerModal').then(m => ({ default: m.ExpenseManagerModal })));
+const DatabaseMaintenanceModal = React.lazy(() => import('./components/modals/DatabaseMaintenanceModal').then(m => ({ default: m.DatabaseMaintenanceModal })));
 
 import { usePosStore } from './store/usePosStore';
 
@@ -122,6 +126,10 @@ export const App: React.FC = () => {
               <RefundModal />
               <WhatsAppDispatchModal />
               <ImeiWarrantyInspectorModal />
+              <CommandTicketDashboardModal />
+              <DebtLedgerModal />
+              <ExpenseManagerModal />
+              <DatabaseMaintenanceModal />
             </ErrorBoundary>
           </Suspense>
         </div>

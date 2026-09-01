@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { Search, Edit2, Zap, AlertCircle, Truck, LayoutGrid, List } from 'lucide-react';
+import { Search, Edit2, Zap, AlertCircle, Truck, LayoutGrid, List, Sparkles } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { useCatalogHotkeys } from '../hooks/useCatalogHotkeys';
 import { formatDZD } from '../types/pos';
@@ -549,6 +549,14 @@ export const ProductCatalog: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => openModal('compatibility')}
+              className="px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 cursor-pointer shadow-sm"
+              title="Vérifier la compatibilité des modèles et verres trempés"
+            >
+              <Sparkles className="w-3.5 h-3.5" /> Compatibilité
+            </button>
+
             <button
               onClick={() => setShowQuickTiles(!showQuickTiles)}
               className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 border cursor-pointer ${

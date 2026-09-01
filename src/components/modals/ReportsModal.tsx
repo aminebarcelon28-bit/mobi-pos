@@ -29,6 +29,7 @@ import {
   Scale,
   Landmark,
   Sparkles,
+  Receipt,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
@@ -630,6 +631,16 @@ export const ReportsModal: React.FC = () => {
                       : '30 Jours'}
                   </button>
                 ))}
+
+                <button
+                  type="button"
+                  onClick={() => openModal('shift_zreport')}
+                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 transition cursor-pointer flex items-center gap-1 ml-1"
+                  title="Aperçu et Contrôle du Rapport Z de Caisse"
+                >
+                  <Receipt className="w-3 h-3 text-amber-400" />
+                  <span>Rapport Z</span>
+                </button>
               </div>
             </div>
 

@@ -89,6 +89,16 @@ export class CashReceiptBuilder {
         .align('left');
     }
 
+    const storeCreditTender = transaction.tenders?.find(t => t.method === 'Avoir Client');
+    if (storeCreditTender && storeCreditTender.amount > 0) {
+      builder
+        .text(`Avoir Client Déduit :`)
+        .align('right')
+        .text(`-${storeCreditTender.amount.toLocaleString('fr-DZ')} DA`)
+        .newline()
+        .align('left');
+    }
+
     builder
       .bold(true)
       .text(`TOTAL NET À PAYER :`)
@@ -99,6 +109,11 @@ export class CashReceiptBuilder {
       .newline()
       .align('left')
       .bold(false)
+      .text(`Mode Règlement :`)
+      .align('right')
+      .text(` ${transaction.paymentMethod || 'Espèces'}`)
+      .newline()
+      .align('left')
       .text(`Espèces Données (Client) :`)
       .align('right')
       .text(` ${tenderedFormatted}`)
@@ -109,7 +124,18 @@ export class CashReceiptBuilder {
       .align('right')
       .text(` ${changeFormatted}`)
       .newline()
-      .bold(false)
+      .bold(false);
+
+    if (transaction.customer?.storeCredit !== undefined && transaction.customer.storeCredit > 0) {
+      builder
+        .text(`Nouveau Solde Avoir Client :`)
+        .align('right')
+        .text(` ${transaction.customer.storeCredit.toLocaleString('fr-DZ')} DA`)
+        .newline()
+        .align('left');
+    }
+
+    builder
       .text(separatorLine)
       .newline()
       .align('center')

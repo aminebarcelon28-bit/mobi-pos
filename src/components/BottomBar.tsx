@@ -19,6 +19,13 @@ import {
   Keyboard,
   Boxes,
   RotateCcw,
+  Clock,
+  CreditCard,
+  DollarSign,
+  Smartphone,
+  Monitor,
+  Sparkles,
+  Receipt,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { useToast } from './ui/Toast';
@@ -226,6 +233,62 @@ export const BottomBar: React.FC = () => {
                     </button>
                   )}
                   <button
+                    onClick={() => { openModal('command_tickets'); setIsMoreMenuOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-amber-400 font-bold transition cursor-pointer"
+                  >
+                    <Clock className="w-4 h-4 text-amber-400" />
+                    <span>File d'Attente & Commandes</span>
+                  </button>
+                  <button
+                    onClick={() => { openModal('debt_ledger'); setIsMoreMenuOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-rose-400 font-bold transition cursor-pointer"
+                  >
+                    <CreditCard className="w-4 h-4 text-rose-400" />
+                    <span>Dettes & Crédits (Kredy)</span>
+                  </button>
+                  <button
+                    onClick={() => { openModal('expense_manager'); setIsMoreMenuOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-amber-400 font-bold transition cursor-pointer"
+                  >
+                    <DollarSign className="w-4 h-4 text-amber-400" />
+                    <span>Dépenses & Sorties Caisse</span>
+                  </button>
+                  <button
+                    onClick={() => { openModal('db_maintenance'); setIsMoreMenuOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-cyan-400 font-bold transition cursor-pointer"
+                  >
+                    <Database className="w-4 h-4 text-cyan-400" />
+                    <span>Maintenance Base SQLite WAL</span>
+                  </button>
+                  <button
+                    onClick={() => { openModal('compatibility'); setIsMoreMenuOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-cyan-400 font-medium transition cursor-pointer"
+                  >
+                    <Sparkles className="w-4 h-4 text-cyan-400" />
+                    <span>Guide Compatibilité Modèles</span>
+                  </button>
+                  <button
+                    onClick={() => { openModal('imei_inspector'); setIsMoreMenuOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-emerald-400 font-medium transition cursor-pointer"
+                  >
+                    <Smartphone className="w-4 h-4 text-emerald-400" />
+                    <span>Traçabilité IMEI & Garanties</span>
+                  </button>
+                  <button
+                    onClick={() => { openModal('customer_display'); setIsMoreMenuOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  >
+                    <Monitor className="w-4 h-4 text-purple-400" />
+                    <span>Double Écran Client (Display)</span>
+                  </button>
+                  <button
+                    onClick={() => { openModal('shift_zreport'); setIsMoreMenuOpen(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  >
+                    <Receipt className="w-4 h-4 text-amber-400" />
+                    <span>Rapport Z (Aperçu Direct)</span>
+                  </button>
+                  <button
                     onClick={() => { openModal('hotkey_guide'); setIsMoreMenuOpen(false); }}
                     className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
                   >
@@ -272,9 +335,9 @@ export const BottomBar: React.FC = () => {
         {/* System Time & Connection Indicators */}
         <div className="flex items-center gap-2.5 pl-3 border-l border-pos-border shrink-0">
           <button
-            onClick={() => openModal('settings')}
+            onClick={() => openModal('db_maintenance')}
             className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-[10px] font-bold text-cyan-300 transition cursor-pointer"
-            title="Moteur SQLite WAL Actif • Intégrité Totale & Zéro Perte de Données"
+            title="Moteur SQLite WAL Actif • Cliquez pour ouvrir le Centre de Maintenance"
           >
             <Database className="w-3 h-3 text-cyan-400" />
             <span>SQLite WAL</span>

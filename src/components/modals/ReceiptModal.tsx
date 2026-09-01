@@ -178,6 +178,13 @@ export const ReceiptModal: React.FC = () => {
                 </>
               )}
 
+              {lastTransaction.tenders?.some(t => t.method === 'Avoir Client') && (
+                <div className="flex justify-between text-purple-700 font-bold text-[10px]">
+                  <span>AVOIR CLIENT DÉDUIT:</span>
+                  <span>-{formatDZD(lastTransaction.tenders.find(t => t.method === 'Avoir Client')?.amount || 0)}</span>
+                </div>
+              )}
+
               <div className="flex justify-between font-extrabold text-sm pt-1 border-t border-black">
                 <span>{lastTransaction.isRefund ? "TOTAL AVOIR / REMBOURSÉ:" : "TOTAL NET A PAYER:"}</span>
                 <span className={lastTransaction.isRefund ? "text-purple-900" : ""}>
@@ -201,6 +208,12 @@ export const ReceiptModal: React.FC = () => {
                       <span>{formatDZD(lastTransaction.changeDue)}</span>
                     </div>
                   </>
+                )}
+                {lastTransaction.customer?.storeCredit !== undefined && lastTransaction.customer.storeCredit > 0 && (
+                  <div className="flex justify-between text-purple-900 font-bold pt-1 border-t border-gray-200">
+                    <span>Nouveau Solde Avoir:</span>
+                    <span>{formatDZD(lastTransaction.customer.storeCredit)}</span>
+                  </div>
                 )}
               </div>
             </div>

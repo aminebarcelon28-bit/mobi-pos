@@ -22,7 +22,6 @@ import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
 import type { ConditionChecklist, RepairOrder } from '../../types/pos';
 import { printCoordinator } from '../../utils/printCoordinator';
-import { buildWhatsAppUrl } from '../../utils/phoneUtils';
 import { useToast } from '../ui/Toast';
 
 const initialChecklist: ConditionChecklist = {
@@ -56,6 +55,8 @@ export const RepairWorkOrderModal: React.FC = () => {
     updateRepairOrderStatus,
     customers,
     receiptSettings,
+    openModal,
+    setSelectedRepairOrderForNotification,
   } = usePosStore();
 
   const { showToast } = useToast();
@@ -141,10 +142,8 @@ export const RepairWorkOrderModal: React.FC = () => {
   };
 
   const handleSendWhatsAppNotification = (order: RepairOrder) => {
-    const remaining = Math.max(0, order.totalCost - (order.depositAmount || 0));
-    const msg = `Bonjour ${order.customerName},\n\nVotre appareil *${order.deviceModel}* (Ticket N° *${order.ticketNumber}*) est réparé et prêt à être récupéré chez *MOBI ACCESSORIES* !\n\n💰 Montant restant à régler : *${remaining.toLocaleString('fr-DZ')} DA*\n📍 Boulevard Mohamed V, Alger Centre\n\nMerci de votre confiance !`;
-    const url = buildWhatsAppUrl(order.customerPhone, msg);
-    window.open(url, '_blank');
+    setSelectedRepairOrderForNotification(order);
+    openModal('whatsapp_dispatch');
   };
 
   const handleSetAllChecklistOk = (target: 'pre' | 'post') => {

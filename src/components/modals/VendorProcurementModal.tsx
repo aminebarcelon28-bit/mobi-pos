@@ -38,6 +38,8 @@ export const VendorProcurementModal: React.FC = () => {
   const {
     activeModal,
     closeModal,
+    openModal,
+    purchaseOrders,
     products,
     createDraftPOForVendor,
     directRestockVendor,
@@ -446,6 +448,24 @@ export const VendorProcurementModal: React.FC = () => {
               }`}
             >
               Ruptures Seules ({criticalItemsCount})
+            </button>
+
+            <button
+              onClick={() => openModal('command_tickets')}
+              className="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30 transition cursor-pointer flex items-center gap-1.5"
+              title="Ouvrir le Tableau de Bord des Commandes & File d'Attente"
+            >
+              <Clock className="w-3.5 h-3.5 text-amber-400" />
+              <span>File d'Attente ({purchaseOrders.filter((po) => po.status === 'Waiting List' || po.status === 'Draft').length})</span>
+            </button>
+
+            <button
+              onClick={() => openModal('purchase_order')}
+              className="px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-500/20 text-blue-300 border border-blue-500/40 hover:bg-blue-500/30 transition cursor-pointer flex items-center gap-1.5"
+              title="Ouvrir le Bon de Commande Détaillé & Réception Fournisseur"
+            >
+              <FileText className="w-3.5 h-3.5 text-blue-400" />
+              <span>Bons de Commande</span>
             </button>
           </div>
         </div>

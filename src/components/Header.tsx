@@ -20,6 +20,10 @@ import {
   RotateCcw,
   Volume2,
   VolumeX,
+  Clock,
+  CreditCard,
+  DollarSign,
+  Database,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { calculateStockAlerts } from '../utils/alertEngine';
@@ -41,9 +45,23 @@ export const Header: React.FC = () => {
     products,
     addToCart,
     activeShift,
+    purchaseOrders,
+    heldSales,
   } = usePosStore();
   
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(() => soundEngine.getProfile().isMuted);
+
+  const waitingTicketsCount = useMemo(() => {
+    const waitingPOs = (purchaseOrders || []).filter(
+      (po) => po.status === 'Waiting List' || po.status === 'Draft' || po.status === 'Partially Received'
+    ).length;
+    const held = (heldSales || []).length;
+    return waitingPOs + held;
+  }, [purchaseOrders, heldSales]);
+
+  const indebtedCount = useMemo(() => {
+    return (customers || []).filter((c) => (c.currentDebt || 0) > 0).length;
+  }, [customers]);
 
   const handleToggleMute = () => {
     const muted = soundEngine.toggleMute();
@@ -233,9 +251,63 @@ export const Header: React.FC = () => {
           <button
             onClick={() => openModal('label_printer')}
             className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-            title="Imprimer Étiquettes Code-Barres"
+            title="Générateur & Impression d'Étiquettes Codes-barres (ESC/POS)"
           >
             <Barcode className="w-4 h-4 text-emerald-500" />
+          </button>
+
+          {/* IMEI & Warranty Inspector */}
+          <button
+            onClick={() => openModal('imei_inspector')}
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
+            title="Inspecteur Traçabilité IMEI & Garanties Téléphones"
+          >
+            <Smartphone className="w-4 h-4 text-cyan-400" />
+          </button>
+
+          <button
+            onClick={() => openModal('command_tickets')}
+            className="relative p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-amber-400 hover:text-amber-300 transition cursor-pointer"
+            title="File d'Attente des Commandes & Ventes Suspendues"
+          >
+            <Clock className="w-4 h-4 text-amber-400" />
+            {waitingTicketsCount > 0 && (
+              <span className="absolute -top-1 -right-1 bg-amber-500 text-slate-950 font-black text-[9px] w-4 h-4 rounded-full flex items-center justify-center border border-pos-card animate-pulse">
+                {waitingTicketsCount > 9 ? '9+' : waitingTicketsCount}
+              </span>
+            )}
+          </button>
+
+          {/* Customer Debt & Kredy Ledger */}
+          <button
+            onClick={() => openModal('debt_ledger')}
+            className="relative p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-rose-400 hover:text-rose-300 transition cursor-pointer"
+            title="Registre & Suivi des Dettes Clients (Kredy)"
+          >
+            <CreditCard className="w-4 h-4 text-rose-400" />
+            {indebtedCount > 0 && (
+              <span className="absolute -top-1 -right-1 bg-rose-500 text-white font-black text-[9px] w-4 h-4 rounded-full flex items-center justify-center border border-pos-card">
+                {indebtedCount > 9 ? '9+' : indebtedCount}
+              </span>
+            )}
+          </button>
+
+          {/* Expense & EBITDA Manager */}
+          <button
+            onClick={() => openModal('expense_manager')}
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-amber-400 hover:text-amber-300 transition cursor-pointer"
+            title="Gestionnaire des Dépenses & Sorties de Caisse (EBITDA)"
+          >
+            <DollarSign className="w-4 h-4 text-amber-400" />
+          </button>
+
+          {/* Database Maintenance & WAL Health */}
+          <button
+            onClick={() => openModal('db_maintenance')}
+            className="p-2 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
+            title="Centre de Maintenance & Intégrité SQLite WAL"
+          >
+            <Database className="w-4 h-4 text-cyan-400" />
           </button>
 
           <button
