@@ -25,6 +25,10 @@ import {
   Grid,
   ChevronDown,
   X,
+  ArrowDownCircle,
+  Monitor,
+  CheckCircle2,
+  Keyboard,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { calculateStockAlerts } from '../utils/alertEngine';
@@ -458,6 +462,50 @@ export const Header: React.FC = () => {
                 >
                   <Sliders className="w-4 h-4 text-pos-muted" />
                   <span>Modèle de Ticket</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    openModal('shift_movement');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <ArrowDownCircle className="w-4 h-4 text-amber-400" />
+                  <span>Dépense / Mouvement Caisse</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    openModal('customer_display');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <Monitor className="w-4 h-4 text-purple-400" />
+                  <span>Double Écran Client</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    openModal('hotkey_guide');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <Keyboard className="w-4 h-4 text-emerald-400" />
+                  <span>Guide des Raccourcis (F8)</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    openModal('licensing');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-purple-400" />
+                  <span>Licence & Activation</span>
                 </button>
 
                 <button

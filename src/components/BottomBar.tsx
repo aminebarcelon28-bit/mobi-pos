@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   PlusCircle,
   FileSearch,
@@ -6,36 +6,19 @@ import {
   Percent,
   PauseCircle,
   BarChart3,
-  SlidersHorizontal,
   Settings,
-  ShieldAlert,
-  FileText,
-  Sliders,
-  CheckCircle2,
   Database,
-  Play,
-  ArrowDownCircle,
-  Keyboard,
   Boxes,
   RotateCcw,
-  Clock,
-  CreditCard,
-  DollarSign,
-  Smartphone,
-  Monitor,
-  Sparkles,
-  Receipt,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { useToast } from './ui/Toast';
 
 export const BottomBar: React.FC = () => {
-  const { openModal, holdSale, clearCart, heldSales, activeShift } = usePosStore();
+  const { openModal, holdSale, clearCart, heldSales } = usePosStore();
   const { showToast } = useToast();
   const [timeStr, setTimeStr] = useState('');
   const [dateStr, setDateStr] = useState('');
-  const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const updateTime = () => {
@@ -52,16 +35,6 @@ export const BottomBar: React.FC = () => {
     updateTime();
     const interval = setInterval(updateTime, 1000);
     return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setIsMoreMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   const handleHoldSaleClick = () => {
@@ -87,10 +60,10 @@ export const BottomBar: React.FC = () => {
   };
 
   return (
-    <footer className="bg-pos-panel border-t border-pos-border px-3 py-1.5 select-none shrink-0 relative z-20">
-      <div className="flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
-        {/* Function Keys Grid */}
-        <div className="flex items-center gap-1.5 shrink-0 py-0.5">
+    <footer className="bg-pos-panel border-t border-pos-border px-3 py-1.5 select-none shrink-0 relative z-20 w-full">
+      <div className="flex items-center justify-between gap-3 w-full">
+        {/* Left Side: Shortcut Function Keys */}
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 min-w-0">
           <button
             onClick={handleClearCartClick}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
@@ -166,7 +139,6 @@ export const BottomBar: React.FC = () => {
             <span className="hotkey-badge">F10</span>
           </button>
 
-          {/* Refund / Remboursement F11 */}
           <button
             onClick={() => openModal('refund')}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
@@ -176,183 +148,6 @@ export const BottomBar: React.FC = () => {
             <span>Remboursement</span>
             <span className="hotkey-badge">F11</span>
           </button>
-
-          <div className="relative shrink-0" ref={menuRef}>
-            <button
-              onClick={() => setIsMoreMenuOpen(!isMoreMenuOpen)}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-bold transition cursor-pointer whitespace-nowrap ${
-                isMoreMenuOpen
-                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
-                  : 'bg-pos-card hover:bg-pos-hover border-pos-border text-pos-muted hover:text-pos-text'
-              }`}
-              title="Autres Actions & Menus"
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span>Plus</span>
-            </button>
-
-            {isMoreMenuOpen && (
-              <div className="absolute bottom-full left-0 mb-2 w-64 bg-pos-panel border border-pos-border rounded-2xl shadow-2xl overflow-hidden z-50 animate-in fade-in zoom-in-95 max-h-[70vh] overflow-y-auto">
-                <div className="p-2 space-y-1">
-                  {activeShift ? (
-                    <>
-                      <button
-                        onClick={() => {
-                          openModal('shift_movement');
-                          setIsMoreMenuOpen(false);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-amber-400 font-bold transition cursor-pointer"
-                      >
-                        <ArrowDownCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                        <span>Dépense / Mouvement Caisse</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          openModal('shift_close');
-                          setIsMoreMenuOpen(false);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-emerald-400 font-bold transition cursor-pointer"
-                      >
-                        <ShieldAlert className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <span>Clôture Caisse & Rapport Z</span>
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        openModal('shift_open');
-                        setIsMoreMenuOpen(false);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-emerald-400 font-bold transition cursor-pointer"
-                    >
-                      <Play className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>Ouvrir la Caisse (Start Shift)</span>
-                    </button>
-                  )}
-                  <button
-                    onClick={() => {
-                      openModal('command_tickets');
-                      setIsMoreMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-amber-400 font-bold transition cursor-pointer"
-                  >
-                    <Clock className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>File d'Attente & Commandes</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      openModal('debt_ledger');
-                      setIsMoreMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-rose-400 font-bold transition cursor-pointer"
-                  >
-                    <CreditCard className="w-4 h-4 text-rose-400 shrink-0" />
-                    <span>Dettes & Crédits (Kredy)</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      openModal('expense_manager');
-                      setIsMoreMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-amber-400 font-bold transition cursor-pointer"
-                  >
-                    <DollarSign className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Dépenses & Sorties Caisse</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      openModal('db_maintenance');
-                      setIsMoreMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-cyan-400 font-bold transition cursor-pointer"
-                  >
-                    <Database className="w-4 h-4 text-cyan-400 shrink-0" />
-                    <span>Maintenance Base SQLite WAL</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      openModal('compatibility');
-                      setIsMoreMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-cyan-400 font-medium transition cursor-pointer"
-                  >
-                    <Sparkles className="w-4 h-4 text-cyan-400 shrink-0" />
-                    <span>Guide Compatibilité Modèles</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      openModal('imei_inspector');
-                      setIsMoreMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-emerald-400 font-medium transition cursor-pointer"
-                  >
-                    <Smartphone className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span>Traçabilité IMEI & Garanties</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      openModal('customer_display');
-                      setIsMoreMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
-                  >
-                    <Monitor className="w-4 h-4 text-purple-400 shrink-0" />
-                    <span>Double Écran Client (Display)</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      openModal('shift_zreport');
-                      setIsMoreMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
-                  >
-                    <Receipt className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Rapport Z (Aperçu Direct)</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      openModal('hotkey_guide');
-                      setIsMoreMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
-                  >
-                    <Keyboard className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span>Guide des Raccourcis (F8)</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      openModal('receipt_template');
-                      setIsMoreMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
-                  >
-                    <Sliders className="w-4 h-4 text-cyan-400 shrink-0" />
-                    <span>Modèle de Ticket</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      openModal('invoice_ingestion');
-                      setIsMoreMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
-                  >
-                    <FileText className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Ingestion Facture Fournisseur</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      openModal('licensing');
-                      setIsMoreMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-purple-400 shrink-0" />
-                    <span>Licence & Activation</span>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
 
           <button
             onClick={() => openModal('settings')}
@@ -365,25 +160,25 @@ export const BottomBar: React.FC = () => {
           </button>
         </div>
 
-        {/* System Time & Connection Indicators */}
-        <div className="flex items-center gap-2 pl-2 border-l border-pos-border shrink-0 text-xs">
+        {/* Right Corner: Telemetry & System Clock */}
+        <div className="flex items-center gap-3 pl-3 border-l border-pos-border shrink-0 text-xs">
           <button
             onClick={() => openModal('db_maintenance')}
-            className="flex items-center gap-1 px-2 py-1 rounded-md bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-[10px] font-bold text-cyan-300 transition cursor-pointer shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-[11px] font-bold text-cyan-300 transition cursor-pointer shadow-sm shrink-0"
             title="Moteur SQLite WAL Actif • Cliquez pour ouvrir le Centre de Maintenance"
           >
-            <Database className="w-3 h-3 text-cyan-400 shrink-0" />
-            <span className="font-mono">WAL OK</span>
+            <Database className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <span className="font-mono">SQLite WAL</span>
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
           </button>
 
           <div className="text-right whitespace-nowrap leading-tight">
-            <span className="font-bold text-pos-text text-xs tracking-wide font-mono">{timeStr || '18:59'}</span>
-            <p className="text-[10px] text-pos-muted capitalize">{dateStr || '1 Septembre'}</p>
+            <span className="font-black text-pos-text text-xs tracking-wide font-mono">{timeStr || '19:30'}</span>
+            <p className="text-[10px] text-pos-muted capitalize font-medium">{dateStr || '1 Septembre 2026'}</p>
           </div>
 
           <div
-            className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50 animate-pulse shrink-0"
+            className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-md shadow-emerald-500/50 animate-pulse shrink-0"
             title="Système En Ligne & Synchronisé"
           />
         </div>
