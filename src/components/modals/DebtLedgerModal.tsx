@@ -52,12 +52,13 @@ export const DebtLedgerModal: React.FC = () => {
   const [newLimitInput, setNewLimitInput] = useState<string>('');
   const [managerPin, setManagerPin] = useState<string>('');
 
-  if (activeModal !== 'debt_ledger') return null;
-
   // ══════════════════════════════════════════════════════════════
   // AGGREGATIONS & METRICS
   // ══════════════════════════════════════════════════════════════
-  const allIndebted = (customers || []).filter((c) => (c.currentDebt || 0) > 0);
+  const allIndebted = useMemo(() => {
+    return (customers || []).filter((c) => (c.currentDebt || 0) > 0);
+  }, [customers]);
+
   const totalOutstandingDebt = allIndebted.reduce((sum, c) => sum + (c.currentDebt || 0), 0);
   const totalCreditLimits = allIndebted.reduce((sum, c) => sum + (c.debtLimit || 50000), 0);
   const overLimitCount = allIndebted.filter((c) => (c.currentDebt || 0) >= (c.debtLimit || 50000)).length;
@@ -78,6 +79,8 @@ export const DebtLedgerModal: React.FC = () => {
 
     return list.sort((a, b) => (b.currentDebt || 0) - (a.currentDebt || 0));
   }, [allIndebted, searchQuery, filterType]);
+
+  if (activeModal !== 'debt_ledger') return null;
 
   // ══════════════════════════════════════════════════════════════
   // ACTIONS: REPAYMENT & WHATSAPP

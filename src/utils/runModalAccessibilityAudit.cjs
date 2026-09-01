@@ -8,16 +8,10 @@ console.log('===================================================================
 const modalsDir = path.join(__dirname, '../components/modals');
 const appTsxPath = path.join(__dirname, '../App.tsx');
 const storePath = path.join(__dirname, '../store/usePosStore.ts');
-const headerPath = path.join(__dirname, '../components/Header.tsx');
-const bottomBarPath = path.join(__dirname, '../components/BottomBar.tsx');
-const hotkeysPath = path.join(__dirname, '../hooks/useKeyboardHotkeys.ts');
 
 const modalFiles = fs.readdirSync(modalsDir).filter(f => f.endsWith('.tsx'));
 const appTsxContent = fs.readFileSync(appTsxPath, 'utf8');
 const storeContent = fs.readFileSync(storePath, 'utf8');
-const headerContent = fs.readFileSync(headerPath, 'utf8');
-const bottomBarContent = fs.readFileSync(bottomBarPath, 'utf8');
-const hotkeysContent = fs.readFileSync(hotkeysPath, 'utf8');
 
 // Combine all source code to find any openModal(...) calls
 function getAllSrcFiles(dir, fileList = []) {

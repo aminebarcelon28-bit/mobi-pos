@@ -57,12 +57,10 @@ export const ExpenseManagerModal: React.FC = () => {
   const [paidTo, setPaidTo] = useState('');
   const [notes, setNotes] = useState('');
 
-  if (activeModal !== 'expense_manager') return null;
-
   // ══════════════════════════════════════════════════════════════
   // AGGREGATIONS & METRICS
   // ══════════════════════════════════════════════════════════════
-  const allExpenses = storeExpenses || [];
+  const allExpenses = useMemo(() => storeExpenses || [], [storeExpenses]);
   const now = new Date();
   const todayStr = now.toISOString().slice(0, 10);
   const currentMonthStr = now.toISOString().slice(0, 7);
@@ -104,6 +102,8 @@ export const ExpenseManagerModal: React.FC = () => {
 
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [allExpenses, dateFilter, selectedCategoryFilter, searchQuery, todayStr, currentMonthStr]);
+
+  if (activeModal !== 'expense_manager') return null;
 
   // ══════════════════════════════════════════════════════════════
   // ACTIONS: ADD, DELETE & EXPORT

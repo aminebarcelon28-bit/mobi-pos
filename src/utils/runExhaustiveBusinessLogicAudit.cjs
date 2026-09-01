@@ -95,7 +95,6 @@ console.log('\n📁 MODULE 2: Net-Paid Point Accrual (Anti-Perpetual Inflation)'
     { category: 'Smartphones', price: 50000, qty: 1, mult: 1.0 }
   ];
   const grossTotal = 53000;
-  const storeCreditApplied = 10000;
   const netCashPaid = 43000;
   const tierMult = 1.25; // Silver Tier customer
 
@@ -124,7 +123,7 @@ console.log('\n📁 MODULE 2: Net-Paid Point Accrual (Anti-Perpetual Inflation)'
   );
 
   // Invariant verification: Zero spend = Zero points
-  const zeroPtsA = Math.floor((0 / 100) * tierMult);
+  const zeroPtsA = Math.floor(0 * tierMult);
   const zeroPtsB = 0;
   dualAssert('Zero Net Spend generates 0 points', zeroPtsA, zeroPtsB, zeroPtsA === 0);
 }

@@ -74,7 +74,7 @@ console.log('\n--- TEST 3: Partial Credit + Debt Split ---');
   const customerCurrentDebt = 15000;
   const debtLimit = 50000;
 
-  const appliedCredit = 4000;
+  const appliedCredit = Math.min(customerStoreCredit, grossSubtotal);
   const netRemaining = grossSubtotal - appliedCredit; // 16,000 DA
   const cashPaid = 6000;
   const placedOnCredit = netRemaining - cashPaid; // 10,000 DA

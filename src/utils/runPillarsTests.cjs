@@ -1,4 +1,4 @@
-﻿const assert = require('assert');
+const assert = require('assert');
 
 console.log('\n=======================================================================');
 console.log('RUNNING VERIFICATION FOR 10 ENTERPRISE PILLARS');
@@ -135,7 +135,7 @@ it('Rejects catalog promotion if iCloud / Google FRP is not removed', () => {
     if (!uncertifiedChecklist.icloudFrpRemoved) {
       throw new Error('iCloud lock active');
     }
-  } catch (e) {
+  } catch (_e) {
     threw = true;
   }
   assert.strictEqual(threw, true, 'Must block locked devices');

@@ -71,6 +71,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
       showToast('WAL Checkpoint exécuté avec succès.', 'success');
       await loadStats();
     } catch (e) {
+      console.error(e);
       soundEngine.playError();
       showToast('Erreur lors du checkpoint WAL.', 'error');
     } finally {
@@ -87,6 +88,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
       showToast('Base de données SQLite défragmentée et compactée !', 'success');
       await loadStats();
     } catch (e) {
+      console.error(e);
       soundEngine.playError();
       showToast('Erreur lors du VACUUM.', 'error');
     } finally {
@@ -107,6 +109,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
       soundEngine.playSuccess();
       showToast('Vérification d\'intégrité physique validée !', 'success');
     } catch (e) {
+      console.error(e);
       soundEngine.playError();
       showToast('Erreur lors de la vérification d\'intégrité.', 'error');
     } finally {
@@ -124,6 +127,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
       soundEngine.playSuccess();
       showToast(`Instantané de sauvegarde créé : ${fileName}`, 'success');
     } catch (e) {
+      console.error(e);
       soundEngine.playError();
       showToast('Erreur lors de la création de la sauvegarde snapshot.', 'error');
     } finally {

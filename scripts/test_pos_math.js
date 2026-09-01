@@ -418,7 +418,7 @@ const simulatePersistence = async (dbShouldFail) => {
     await dbWrite();
     cart = [];
     successReported = true;
-  } catch (e) {
+  } catch (_e) {
     // Failure handled cleanly, cart preserved
     successReported = false;
   }
@@ -437,7 +437,7 @@ const simulatePersistence = async (dbShouldFail) => {
       try {
         const list = sqliteResult;
         if (Array.isArray(list)) return list;
-      } catch (e) {}
+      } catch (_e) {}
     }
     return dexieStaleData;
   };
