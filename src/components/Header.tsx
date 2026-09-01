@@ -195,20 +195,27 @@ export const Header: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* 1. LEFT: SLEEK BRAND & GLOBAL SEARCH */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="flex items-center gap-2.5 shrink-0">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 shrink-0">
+        <button
+          type="button"
+          onClick={() => openModal('compatibility')}
+          className="flex items-center gap-2.5 shrink-0 hover:opacity-90 transition cursor-pointer text-left group"
+          title="Guide de Compatibilité Modèles Smartphones & Accessoires (Cliquez pour ouvrir)"
+        >
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 group-hover:scale-105 transition shrink-0">
             <Smartphone className="w-5 h-5 stroke-[2.5]" />
           </div>
           <div>
             <div className="flex items-center gap-1.5 leading-none">
-              <span className="font-black text-sm text-pos-text tracking-tight">MobiPOS</span>
+              <span className="font-black text-sm text-pos-text tracking-tight group-hover:text-emerald-400 transition">
+                MobiPOS
+              </span>
               <span className="text-[9px] uppercase font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded">
                 PRO
               </span>
             </div>
             <span className="text-[10px] text-pos-muted font-medium">Accessoires & Caisse</span>
           </div>
-        </div>
+        </button>
 
         {/* Global Search Bar */}
         <div className="flex-1 max-w-xs md:max-w-sm lg:max-w-md xl:max-w-lg relative mx-1">
@@ -244,6 +251,16 @@ export const Header: React.FC = () => {
           >
             <PlusCircle className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">+ Produit</span>
+          </button>
+
+          {/* Smartphone IMEI & Warranty Inspector */}
+          <button
+            type="button"
+            onClick={() => openModal('imei_inspector')}
+            className="p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
+            title="Inspecteur Traçabilité IMEI & Modèles Téléphones (Cliquez pour ouvrir)"
+          >
+            <Smartphone className="w-4 h-4" />
           </button>
 
           {/* SAV Repair Work Orders */}
