@@ -4,6 +4,7 @@
   "version": "1.6.2",
   "type": "module",
   "scripts": {
+    "tauri": "tauri",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "node scripts/test_pos_math.js && node scripts/test_cloud_sync_and_migration.mjs",
