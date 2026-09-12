@@ -204,11 +204,9 @@ export const LabelPrinterModal: React.FC = () => {
                       }`}
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
-                        <img
-                          src={p.imageUrl}
-                          alt={p.title}
-                          className="w-10 h-10 rounded-lg object-cover bg-pos-bg border border-pos-border shrink-0"
-                        />
+                        <div className="w-10 h-10 rounded-lg bg-pos-bg border border-pos-border flex items-center justify-center shrink-0 text-emerald-400">
+                          <Tag className="w-5 h-5" />
+                        </div>
                         <div className="min-w-0">
                           <h4 className="text-xs font-bold text-pos-text truncate">{p.title}</h4>
                           <div className="flex items-center gap-2 text-[10px] text-pos-muted mt-0.5">

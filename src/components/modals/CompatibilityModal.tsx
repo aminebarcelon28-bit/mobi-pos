@@ -116,7 +116,9 @@ export const CompatibilityModal: React.FC = () => {
                 <div className="grid grid-cols-2 gap-3">
                   {matchingProducts.map(prod => (
                     <div key={prod.id} className="bg-pos-card border border-pos-border rounded-xl p-3 flex gap-3 hover:border-emerald-500/30 transition group">
-                      <img src={prod.imageUrl} alt={prod.title} className="w-16 h-16 rounded-lg object-cover bg-pos-bg shrink-0" />
+                      <div className="w-16 h-16 rounded-lg bg-pos-bg border border-pos-border flex items-center justify-center shrink-0 text-emerald-400">
+                        <Package className="w-8 h-8" />
+                      </div>
                       <div className="flex-1 flex flex-col justify-between min-w-0">
                         <div>
                           <p className="text-xs font-semibold text-pos-text leading-tight line-clamp-2" title={prod.title}>

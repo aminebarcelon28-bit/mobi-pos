@@ -38,7 +38,8 @@ export interface Product {
   volumeDiscounts?: VolumeDiscountTier[];
   costPrice: number;
   stock: number;
-  imageUrl: string;
+  /** @deprecated Legacy image field - product image processing is decommissioned */
+  imageUrl?: string;
   color?: string;
   material?: string;
   isMagSafe?: boolean;
@@ -675,7 +676,7 @@ export interface HardwareStatus {
   customerDisplayConnected: boolean;
 }
 
-export const APP_VERSION = '1.6.2';
+export const APP_VERSION = '1.6.3';
 
 export const formatDZD = (amount: number): string => {
   return new Intl.NumberFormat('fr-DZ', {

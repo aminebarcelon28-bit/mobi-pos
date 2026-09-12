@@ -504,7 +504,9 @@ export const CartPanel: React.FC = () => {
                   className="min-w-[130px] bg-pos-card border border-pos-border rounded-lg p-1.5 flex flex-col gap-1 shrink-0 hover:border-emerald-500/50 transition"
                 >
                   <div className="flex items-start gap-1.5">
-                    <img src={prod.imageUrl} alt={prod.title} className="w-7 h-7 rounded object-cover bg-pos-bg shrink-0" />
+                    <div className="w-7 h-7 rounded bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0 text-emerald-400">
+                      <Tag className="w-3.5 h-3.5" />
+                    </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-[9.5px] font-semibold text-pos-text truncate" title={prod.title}>
                         {prod.title}

@@ -52,6 +52,13 @@ try {
   writeFileSync(posTypesPath, posTypesContent);
   console.log(`  ✓ Updated src/types/pos.ts to ${targetVersion}`);
 
+  // 5b. Update src/constants/index.ts APP_VERSION
+  const constantsPath = resolve('src/constants/index.ts');
+  let constantsContent = readFileSync(constantsPath, 'utf-8');
+  constantsContent = constantsContent.replace(/APP_VERSION:\s*'.*?',/, `APP_VERSION: '${targetVersion}',`);
+  writeFileSync(constantsPath, constantsContent);
+  console.log(`  ✓ Updated src/constants/index.ts to ${targetVersion}`);
+
   // 5. Git Commit
   console.log('📌 Creating release commit...');
   execSync('git add .', { stdio: 'inherit' });

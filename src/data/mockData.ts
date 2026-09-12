@@ -20,7 +20,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     leadTimeDays: 7,
     dailySalesVelocity: 2.5,
     reorderPoint: 20,
-    imageUrl: 'https://images.unsplash.com/photo-1603313011101-320f26a4f6f6?w=300&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
   {
     id: 'prod-2',
@@ -40,7 +40,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     leadTimeDays: 5,
     dailySalesVelocity: 3.0,
     reorderPoint: 18,
-    imageUrl: 'https://images.unsplash.com/photo-1592899677977-9c10ca588bbd?w=300&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
   {
     id: 'prod-3',
@@ -58,7 +58,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     leadTimeDays: 7,
     dailySalesVelocity: 1.8,
     reorderPoint: 15,
-    imageUrl: 'https://images.unsplash.com/photo-1622445268465-8438a05b2259?w=300&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
   {
     id: 'prod-4',
@@ -79,7 +79,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     leadTimeDays: 7,
     dailySalesVelocity: 2.0,
     reorderPoint: 17,
-    imageUrl: 'https://images.unsplash.com/photo-1541877944-ac82a091518a?w=300&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
   {
     id: 'prod-5',
@@ -99,7 +99,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     leadTimeDays: 6,
     dailySalesVelocity: 1.5,
     reorderPoint: 12,
-    imageUrl: 'https://images.unsplash.com/photo-1610945265064-0e34e5519bbf?w=300&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
   {
     id: 'prod-6',
@@ -117,7 +117,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     leadTimeDays: 10,
     dailySalesVelocity: 0.8,
     reorderPoint: 10,
-    imageUrl: 'https://images.unsplash.com/photo-1583863788434-e58a36330cf0?w=300&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
   {
     id: 'prod-7',
@@ -135,7 +135,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     leadTimeDays: 4,
     dailySalesVelocity: 2.2,
     reorderPoint: 12,
-    imageUrl: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
 ];
 
@@ -149,7 +149,7 @@ export const INITIAL_CUSTOMERS: Customer[] = [
     loyaltyPoints: 1250,
     storeCredit: 1500,
     pricingTier: 'Retail',
-    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
+    avatarUrl: '',
   },
   {
     id: 'cust-2',

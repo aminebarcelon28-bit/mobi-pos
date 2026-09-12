@@ -36,10 +36,11 @@ export type MigrationProgressCallback = (step: string, current: number, total: n
  */
 function sanitizePayloadForCloud(rawRecord: Record<string, unknown>): Record<string, unknown> {
   const sanitized = { ...rawRecord };
-  if (typeof sanitized.imageUrl === 'string' && sanitized.imageUrl.startsWith('data:')) {
+  // Product image processing decommissioned: ensure image payload properties are purged
+  if ('imageUrl' in sanitized) {
     sanitized.imageUrl = '';
   }
-  if (typeof sanitized.image_url === 'string' && sanitized.image_url.startsWith('data:')) {
+  if ('image_url' in sanitized) {
     sanitized.image_url = '';
   }
   return sanitized;
@@ -119,7 +120,7 @@ export class MigrationManager {
         wholesale_price: p.wholesalePrice ?? 0,
         cost_price: p.costPrice ?? 0,
         stock: p.stock ?? 0,
-        image_url: p.imageUrl && !p.imageUrl.startsWith('data:') ? p.imageUrl : '',
+        image_url: '',
         is_serialized: p.isSerialized ? 1 : 0,
         imei_number: p.imeiNumber ?? null,
         vendor_name: p.vendorName ?? null,

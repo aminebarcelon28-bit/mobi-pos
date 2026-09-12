@@ -347,9 +347,9 @@ class SyncManager {
     const v = (x: unknown): InValue => (x === undefined ? null : x) as InValue;
     const version = Number(payload.version ?? 1);
 
-    // Strip data URL image blobs to enforce blob guardrail
-    if (typeof payload.imageUrl === 'string' && payload.imageUrl.startsWith('data:')) payload.imageUrl = '';
-    if (typeof payload.image_url === 'string' && payload.image_url.startsWith('data:')) payload.image_url = '';
+    // Product image processing decommissioned: ensure image fields are purged
+    payload.imageUrl = '';
+    payload.image_url = '';
 
     if (op.operation === 'DELETE') {
       const table = op.entity_type === 'order' ? 'transactions'

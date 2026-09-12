@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   X,
-  Upload,
   Sparkles,
   Check,
   Trash2,
@@ -11,7 +10,6 @@ import {
   Barcode as BarcodeIcon,
   AlertTriangle,
   Shield,
-  Image as ImageIcon,
   Printer,
   CheckCircle2,
   Wand2,
@@ -65,7 +63,7 @@ const PRESET_TEMPLATES = [
     isMagSafe: true,
     vendorName: 'Distributeur Officiel Apple Algérie',
     reorderPoint: 10,
-    imageUrl: 'https://images.unsplash.com/photo-1603313011101-320f26a4f6f6?w=400&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
   {
     title: 'Verre Trempé ZAGG InvisibleShield 9H Privacy',
@@ -81,7 +79,7 @@ const PRESET_TEMPLATES = [
     isMagSafe: false,
     vendorName: 'Importateur Direct Grossiste Bab Ezzouar',
     reorderPoint: 15,
-    imageUrl: 'https://images.unsplash.com/photo-1592899677977-9c10ca588bbd?w=400&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
   {
     title: 'Chargeur Rapide 25W Type-C Super Fast Charge',
@@ -97,7 +95,7 @@ const PRESET_TEMPLATES = [
     isMagSafe: false,
     vendorName: 'Grossiste Électronique Alger Centre',
     reorderPoint: 10,
-    imageUrl: 'https://images.unsplash.com/photo-1583863788434-e58a36330cf0?w=400&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
   {
     title: 'Câble Tressé Renforcé 100W PD Type-C vers Type-C',
@@ -113,7 +111,7 @@ const PRESET_TEMPLATES = [
     isMagSafe: false,
     vendorName: 'Anker Official Dealer Alger',
     reorderPoint: 12,
-    imageUrl: 'https://images.unsplash.com/photo-1595941069915-4ebc5337c463?w=400&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
   {
     title: 'Adaptateur Secteur 20W USB-C Original',
@@ -129,7 +127,7 @@ const PRESET_TEMPLATES = [
     isMagSafe: false,
     vendorName: 'Distributeur Officiel Apple Algérie',
     reorderPoint: 8,
-    imageUrl: 'https://images.unsplash.com/photo-1610945265064-0e34e5519bbf?w=400&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
   {
     title: 'Support Voiture Magnétique MagSafe Grille Aération',
@@ -145,19 +143,8 @@ const PRESET_TEMPLATES = [
     isMagSafe: true,
     vendorName: 'Belkin Store El Biar',
     reorderPoint: 5,
-    imageUrl: 'https://images.unsplash.com/photo-1586953208448-b95a79798f07?w=400&auto=format&fit=crop&q=80',
+    imageUrl: '',
   },
-];
-
-const STOCK_IMAGES_GALLERY = [
-  { label: 'Coque Silicone Noire', url: 'https://images.unsplash.com/photo-1603313011101-320f26a4f6f6?w=400&auto=format&fit=crop&q=80' },
-  { label: 'Coque Cuir Élégante', url: 'https://images.unsplash.com/photo-1541872703-74c5e44368f9?w=400&auto=format&fit=crop&q=80' },
-  { label: 'Chargeur Rapide 20W', url: 'https://images.unsplash.com/photo-1583863788434-e58a36330cf0?w=400&auto=format&fit=crop&q=80' },
-  { label: 'Câble Tressé USB-C', url: 'https://images.unsplash.com/photo-1595941069915-4ebc5337c463?w=400&auto=format&fit=crop&q=80' },
-  { label: 'Verre Trempé Protection', url: 'https://images.unsplash.com/photo-1592899677977-9c10ca588bbd?w=400&auto=format&fit=crop&q=80' },
-  { label: 'Écouteurs & Audio', url: 'https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=400&auto=format&fit=crop&q=80' },
-  { label: 'Accessoire Universel', url: 'https://images.unsplash.com/photo-1580910051074-3eb694886505?w=400&auto=format&fit=crop&q=80' },
-  { label: 'Batterie Externe PowerBank', url: 'https://images.unsplash.com/photo-1609091839311-d5365f9ff1c5?w=400&auto=format&fit=crop&q=80' },
 ];
 
 const COLOR_OPTIONS = [
@@ -197,7 +184,6 @@ export const ProductEditorModal: React.FC = () => {
   } = usePosStore();
 
   const { showToast } = useToast();
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const barcodeCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const [formData, setFormData] = useState<ProductInput>({
@@ -211,7 +197,7 @@ export const ProductEditorModal: React.FC = () => {
     wholesalePrice: 2400,
     costPrice: 1500,
     stock: 20,
-    imageUrl: 'https://images.unsplash.com/photo-1603313011101-320f26a4f6f6?w=400&auto=format&fit=crop&q=80',
+    imageUrl: '',
     color: 'Noir Titane',
     material: 'Silicone Liquide Soft-Touch',
     isMagSafe: false,
@@ -226,8 +212,6 @@ export const ProductEditorModal: React.FC = () => {
     minPrice: 2000,
   });
 
-  const [dragActive, setDragActive] = useState(false);
-  const [showGallery, setShowGallery] = useState(false);
   const [autoPrintLabel, setAutoPrintLabel] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -266,7 +250,7 @@ export const ProductEditorModal: React.FC = () => {
           wholesalePrice: 2400,
           costPrice: 1500,
           stock: 20,
-          imageUrl: 'https://images.unsplash.com/photo-1603313011101-320f26a4f6f6?w=400&auto=format&fit=crop&q=80',
+          imageUrl: '',
           color: 'Noir Titane',
           material: 'Silicone Liquide Soft-Touch',
           isMagSafe: true,
@@ -348,59 +332,9 @@ export const ProductEditorModal: React.FC = () => {
       isMagSafe: preset.isMagSafe,
       vendorName: preset.vendorName,
       reorderPoint: preset.reorderPoint,
-      imageUrl: preset.imageUrl,
+      imageUrl: '',
     }));
     showToast(`Modèle "${preset.title}" appliqué avec succès`, 'info');
-  };
-
-  const handleImageFile = (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      showToast('Fichier image invalide (formats acceptés: PNG, JPG, WEBP)', 'error');
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.src = e.target?.result as string;
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 480;
-        const MAX_HEIGHT = 480;
-        let width = img.width;
-        let height = img.height;
-
-        if (width > height) {
-          if (width > MAX_WIDTH) {
-            height *= MAX_WIDTH / width;
-            width = MAX_WIDTH;
-          }
-        } else {
-          if (height > MAX_HEIGHT) {
-            width *= MAX_HEIGHT / height;
-            height = MAX_HEIGHT;
-          }
-        }
-
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
-
-        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        setFormData((prev) => ({ ...prev, imageUrl: compressedDataUrl }));
-        showToast('Image compressée et chargée avec succès (<100KB)', 'success');
-      };
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleImageFile(e.dataTransfer.files[0]);
-    }
   };
 
   const handleFormSubmit = async (e: React.FormEvent) => {
@@ -575,88 +509,22 @@ export const ProductEditorModal: React.FC = () => {
           {/* Section 1: Photo & Main Identifiers */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
             
-            {/* Image Preview & Upload Zone */}
+            {/* Product Identity & Classification Badge */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-[10px] font-black text-pos-muted uppercase tracking-wider">
-                  Photo du Produit
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setShowGallery(!showGallery)}
-                  className="text-[10px] text-emerald-400 font-bold hover:underline flex items-center gap-1 cursor-pointer"
-                >
-                  <ImageIcon className="w-3 h-3" /> {showGallery ? 'Masquer Galerie' : 'Galerie Magasin'}
-                </button>
-              </div>
+              <label className="text-[10px] font-black text-pos-muted uppercase tracking-wider flex items-center gap-1.5">
+                <Tag className="w-3.5 h-3.5 text-emerald-400" />
+                Classification Article
+              </label>
 
-              {/* Upload Drag Box */}
-              <div className="grid grid-cols-1 gap-2">
-                <div
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDragActive(true);
-                  }}
-                  onDragLeave={() => setDragActive(false)}
-                  onDrop={handleDrop}
-                  onClick={() => fileInputRef.current?.click()}
-                  className={`h-36 rounded-xl border-2 border-dashed flex flex-col items-center justify-center p-3 cursor-pointer transition relative overflow-hidden group ${
-                    dragActive
-                      ? 'border-emerald-500 bg-emerald-950/20'
-                      : 'border-pos-border hover:border-emerald-500/60 bg-pos-card'
-                  }`}
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => e.target.files?.[0] && handleImageFile(e.target.files[0])}
-                    className="hidden"
-                  />
-                  {formData.imageUrl ? (
-                    <>
-                      <img
-                        src={formData.imageUrl}
-                        alt="Aperçu"
-                        className="w-full h-full object-contain mix-blend-normal rounded-lg"
-                      />
-                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center transition p-2 text-center">
-                        <Upload className="w-5 h-5 text-white mb-1" />
-                        <span className="text-[10px] text-white font-bold">Changer / Remplacer Photo</span>
-                        <span className="text-[8px] text-gray-300">Glisser ou cliquer</span>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex flex-col items-center text-center">
-                      <Upload className="w-6 h-6 text-emerald-400 mb-1" />
-                      <p className="text-xs font-bold text-pos-text">Glisser-déposer une image</p>
-                      <p className="text-[9px] text-pos-muted mt-0.5">PNG, JPG, WEBP (Max 5 Mo)</p>
-                    </div>
-                  )}
+              <div className="h-36 rounded-xl border border-pos-border bg-pos-card p-3 flex flex-col items-center justify-center text-center gap-2">
+                <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                  <Tag className="w-6 h-6" />
                 </div>
-
-                {/* Stock Images Popover */}
-                {showGallery && (
-                  <div className="p-2 bg-pos-card border border-pos-border rounded-xl space-y-1.5 animate-in fade-in">
-                    <span className="text-[9px] font-black text-pos-muted uppercase block">Photos Types Accessoires :</span>
-                    <div className="grid grid-cols-4 gap-1.5">
-                      {STOCK_IMAGES_GALLERY.map((img) => (
-                        <button
-                          key={img.label}
-                          type="button"
-                          onClick={() => {
-                            setFormData((prev) => ({ ...prev, imageUrl: img.url }));
-                            setShowGallery(false);
-                          }}
-                          className="h-12 rounded-lg border border-pos-border overflow-hidden hover:border-emerald-400 transition relative group"
-                          title={img.label}
-                        >
-                          <img src={img.url} alt={img.label} className="w-full h-full object-cover" />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <div>
+                  <p className="text-xs font-bold text-pos-text">{formData.category}</p>
+                  <p className="text-[10px] font-semibold text-emerald-400">{formData.brand}</p>
+                </div>
+                <span className="text-[9px] text-pos-muted truncate max-w-[180px]">{formData.compatibleModel || 'Tous modèles compatibles'}</span>
               </div>
             </div>
 

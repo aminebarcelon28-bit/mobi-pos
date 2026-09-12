@@ -117,11 +117,9 @@ export const InventoryManagerModal: React.FC = () => {
               {(filtered || []).map((product) => (
                 <tr key={product.id} className="hover:bg-pos-hover/50 transition group">
                   <td className="p-3 flex items-center gap-3">
-                    <img
-                      src={product.imageUrl}
-                      alt={product.title}
-                      className="w-10 h-10 rounded-lg object-cover bg-pos-card border border-pos-border shrink-0"
-                    />
+                    <div className="w-10 h-10 rounded-lg bg-pos-card border border-pos-border flex items-center justify-center shrink-0 text-emerald-400">
+                      <Package className="w-5 h-5" />
+                    </div>
                     <div>
                       <p className="font-bold text-pos-text line-clamp-1">{product.title}</p>
                       <span className="text-[10px] text-pos-muted">{product.category}</span>

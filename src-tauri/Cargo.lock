@@ -2083,7 +2083,7 @@ dependencies = [
 
 [[package]]
 name = "mobi-pos"
-version = "1.6.2"
+version = "1.6.3"
 dependencies = [
  "keyring",
  "parking_lot",
