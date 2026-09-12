@@ -54,7 +54,7 @@ export const SilentReceiptPrinter: React.FC = () => {
 
         {/* Items Table */}
         <div className="py-2.5 space-y-1.5 border-b border-dashed border-gray-600">
-          {lastTransaction.items.map((item) => {
+          {(lastTransaction?.items || []).map((item) => {
             const unitPrice = item.appliedPrice || item.product.price;
             const grossLinePrice = unitPrice * item.quantity;
             const netLinePrice = Math.max(0, grossLinePrice - item.discount);

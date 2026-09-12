@@ -4,7 +4,7 @@
  */
 import type { DiscoveredDevice, PosDocumentType, MobileHardwareProfile } from '../types/pos';
 import { printViaWindowsSpooler, openCashDrawerViaSpooler } from './escpos';
-import { invoke } from '@tauri-apps/api/core';
+import { updateCustomerDisplayVfd } from '../api/hardware';
 
 export class MobilePosRoutingEngine {
   private static profile: MobileHardwareProfile = {
@@ -91,15 +91,7 @@ export class MobilePosRoutingEngine {
   public static async updateCustomerDisplay(line1: string, line2: string): Promise<void> {
     if (!this.profile.customerVfdPort) return;
     try {
-      await invoke('hardware_update_vfd', {
-        interface: {
-          type: 'serial',
-          port_name: this.profile.customerVfdPort,
-          baud_rate: 9600,
-        },
-        item_title: line1.slice(0, 20),
-        total_price_formatted: line2.slice(0, 20),
-      });
+      await updateCustomerDisplayVfd(this.profile.customerVfdPort, line1, line2);
     } catch (e) {
       console.warn('[VFD Display] Stream update failed:', e);
     }

@@ -260,9 +260,9 @@ export const VendorProcurementModal: React.FC = () => {
       return;
     }
 
-    const res = await directRestockVendor(vendorName, selectedLineItems);
-    if (res.success) {
-      showToast(`Réception réussie : +${res.count} unités ajoutées en stock pour ${vendorName} !`, 'success');
+    const restockResult = await directRestockVendor(vendorName, selectedLineItems);
+    if (restockResult.success) {
+      showToast(`Réception réussie : +${restockResult.count} unités ajoutées en stock pour ${vendorName} !`, 'success');
     } else {
       showToast('Erreur lors de la mise à jour des stocks.', 'error');
     }

@@ -81,16 +81,16 @@ export class EscPosBuilder {
   /**
    * Imprime un code-barres avec les commandes GS k.
    */
-  barcode(data: string, type: 'CODE128' | 'EAN13' = 'CODE128'): this {
+  barcode(barcodeValue: string, type: 'CODE128' | 'EAN13' = 'CODE128'): this {
     if (type === 'CODE128') {
-      this.buffer.push(GS, 0x6B, 0x49, data.length);
-      for (let i = 0; i < data.length; i++) {
-        this.buffer.push(data.charCodeAt(i));
+      this.buffer.push(GS, 0x6B, 0x49, barcodeValue.length);
+      for (let i = 0; i < barcodeValue.length; i++) {
+        this.buffer.push(barcodeValue.charCodeAt(i));
       }
     } else {
-      this.buffer.push(GS, 0x6B, 0x43, data.length);
-      for (let i = 0; i < data.length; i++) {
-        this.buffer.push(data.charCodeAt(i));
+      this.buffer.push(GS, 0x6B, 0x43, barcodeValue.length);
+      for (let i = 0; i < barcodeValue.length; i++) {
+        this.buffer.push(barcodeValue.charCodeAt(i));
       }
     }
     return this;
@@ -218,6 +218,8 @@ export function buildCashDrawerPulse(): Uint8Array {
   return builder.init().openCashDrawer().build();
 }
 
+import { printRawEscpos, openCashDrawer } from '../api/hardware';
+
 function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
@@ -228,18 +230,14 @@ function isTauri(): boolean {
 export async function printViaWindowsSpooler(printerName: string, buffer: Uint8Array): Promise<boolean> {
   if (isTauri()) {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('sqlite_print_raw_escpos', {
-        printerName,
-        data: Array.from(buffer),
-      });
+      await printRawEscpos(printerName, buffer);
       return true;
     } catch (err) {
       console.error(`[ESC/POS Spooler Error] Failed to print to "${printerName}":`, err);
       return false;
     }
   }
-  console.log(`[Web Mode Mock] Impression ESC/POS sur "${printerName}" (${buffer.length} octets)`);
+  // Web preview mode: silent simulation
   return true;
 }
 
@@ -249,8 +247,7 @@ export async function printViaWindowsSpooler(printerName: string, buffer: Uint8A
 export async function openCashDrawerViaSpooler(printerName: string): Promise<boolean> {
   if (isTauri()) {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('sqlite_open_cash_drawer', { printerName });
+      await openCashDrawer(printerName);
       return true;
     } catch (err) {
       console.error(`[Cash Drawer Error] Failed to pulse cash drawer on "${printerName}":`, err);

@@ -5,15 +5,16 @@ import {
   XCircle, Clock, Play, Tag, QrCode, ScanLine, Cable,
   Bluetooth, Usb, ChevronDown, ChevronUp, Settings, HardDrive,
   Server, RotateCcw, Database, Shield, Radio, Sparkles,
-  Award, TrendingUp, Volume2, VolumeX, Music
+  Award, TrendingUp, Volume2, VolumeX, Music, Cloud
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
 import { formatDZD, APP_VERSION } from '../../types/pos';
 import { DEFAULT_LOYALTY_CONFIG, calculateFinancialProfitImpact } from '../../utils/loyaltyEngine';
-import { sqliteAdapter, type DbStats, type IntegrityReport } from '../../db/sqliteAdapter';
+import { maintenanceService, type DbStats, type IntegrityReport } from '../../services/maintenanceService';
 import { useAppUpdater } from '../../hooks/useAppUpdater';
 import { soundEngine } from '../../utils/audioFeedback';
+import { CloudSyncPanel } from '../settings/CloudSyncPanel';
 
 // ══════════════════════════════════════════════════════════════
 // TYPES
@@ -23,7 +24,7 @@ type DeviceCategory = 'receipt_printer' | 'label_printer' | 'barcode_scanner' | 
 type ConnectionType = 'USB' | 'Bluetooth' | 'Wi-Fi' | 'Serial' | 'HID' | 'Network' | 'HDMI';
 type DeviceStatus = 'connected' | 'ready' | 'active' | 'testing' | 'error' | 'offline' | 'warning';
 type DiagnosticResult = 'pass' | 'fail' | 'warning' | 'pending' | 'running';
-type SettingsTab = 'hardware' | 'diagnostics' | 'loyalty' | 'backup' | 'updates';
+type SettingsTab = 'hardware' | 'cloud_sync' | 'diagnostics' | 'loyalty' | 'backup' | 'updates';
 
 interface PeripheralDevice {
   id: string;
@@ -304,7 +305,7 @@ export const SettingsModal: React.FC = () => {
 
   const loadDbStats = useCallback(async () => {
     try {
-      const stats = await sqliteAdapter.getStats();
+      const stats = await maintenanceService.getDatabaseStats();
       setDbStats(stats);
     } catch (e) {
       console.warn('Failed to load SQLite stats:', e);
@@ -314,7 +315,7 @@ export const SettingsModal: React.FC = () => {
   const handleRunIntegrityCheck = async () => {
     setIsCheckingIntegrity(true);
     try {
-      const report = await sqliteAdapter.runIntegrityCheck();
+      const report = await maintenanceService.runDatabaseIntegrityCheck();
       setIntegrityReport(report);
       if (report.is_healthy) {
         showToast('✅ Intégrité SQLite 100% Validée : Aucune corruption détectée', 'success');
@@ -322,8 +323,9 @@ export const SettingsModal: React.FC = () => {
         showToast('⚠️ Avertissement d\'intégrité détecté sur la base de données', 'warning');
       }
       await loadDbStats();
-    } catch (e: any) {
-      showToast(`Erreur lors du test d'intégrité : ${e?.message || e}`, 'error');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast(`Erreur lors du test d'intégrité : ${msg}`, 'error');
     } finally {
       setIsCheckingIntegrity(false);
     }
@@ -332,11 +334,12 @@ export const SettingsModal: React.FC = () => {
   const handleCheckpointWal = async () => {
     setIsCheckpointing(true);
     try {
-      const msg = await sqliteAdapter.checkpointWal();
+      const msg = await maintenanceService.checkpointDatabaseWal();
       showToast(`⚡ WAL Checkpoint : ${msg}`, 'success');
       await loadDbStats();
-    } catch (e: any) {
-      showToast(`Erreur Checkpoint : ${e?.message || e}`, 'error');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast(`Erreur Checkpoint : ${msg}`, 'error');
     } finally {
       setIsCheckpointing(false);
     }
@@ -345,11 +348,12 @@ export const SettingsModal: React.FC = () => {
   const handleVacuum = async () => {
     setIsVacuuming(true);
     try {
-      const msg = await sqliteAdapter.vacuum();
+      const msg = await maintenanceService.vacuumDatabase();
       showToast(`🧹 Défragmentation VACUUM : ${msg}`, 'success');
       await loadDbStats();
-    } catch (e: any) {
-      showToast(`Erreur VACUUM : ${e?.message || e}`, 'error');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast(`Erreur VACUUM : ${msg}`, 'error');
     } finally {
       setIsVacuuming(false);
     }
@@ -417,21 +421,19 @@ export const SettingsModal: React.FC = () => {
 
     try {
       // Check browser WebUSB & WebHID capabilities
-      const hasUSB = 'usb' in navigator;
-      const hasHID = 'hid' in navigator;
-      let detectedUsbDevices: any[] = [];
-      let detectedHidDevices: any[] = [];
+      let detectedUsbDevices: USBDevice[] = [];
+      let detectedHidDevices: HIDDevice[] = [];
 
-      if (hasUSB) {
+      if (navigator.usb) {
         try {
-          detectedUsbDevices = await (navigator as any).usb.getDevices();
-        } catch { /* Permission or context restriction */ }
+          detectedUsbDevices = await navigator.usb.getDevices();
+        } catch { /* Permission or context restriction - harmless in browser/webview */ }
       }
 
-      if (hasHID) {
+      if (navigator.hid) {
         try {
-          detectedHidDevices = await (navigator as any).hid.getDevices();
-        } catch { /* Permission or context restriction */ }
+          detectedHidDevices = await navigator.hid.getDevices();
+        } catch { /* Permission or context restriction - harmless in browser/webview */ }
       }
 
       const totalDetected = detectedUsbDevices.length + detectedHidDevices.length;
@@ -467,30 +469,30 @@ export const SettingsModal: React.FC = () => {
   useEffect(() => {
     if (activeModal !== 'settings') return;
 
-    const handleUSBConnect = (e: any) => {
+    const handleUSBConnect = (e: { device: USBDevice }) => {
       const devName = e.device?.productName || 'Nouveau périphérique USB';
       showToast(`🔌 ÉQUIPEMENT RECONNU : ${devName} branché ! Auto-connexion...`, 'success');
       runAutoDetection(true);
     };
 
-    const handleUSBDisconnect = (e: any) => {
+    const handleUSBDisconnect = (e: { device: USBDevice }) => {
       const devName = e.device?.productName || 'Périphérique USB';
       showToast(`🔌 Périphérique débranché : ${devName}.`, 'warning');
       runAutoDetection(true);
     };
 
-    if ('usb' in navigator) {
-      (navigator as any).usb.addEventListener('connect', handleUSBConnect);
-      (navigator as any).usb.addEventListener('disconnect', handleUSBDisconnect);
+    if (navigator.usb) {
+      navigator.usb.addEventListener('connect', handleUSBConnect);
+      navigator.usb.addEventListener('disconnect', handleUSBDisconnect);
     }
 
     // Run initial scan when modal opens
     runAutoDetection(true);
 
     return () => {
-      if ('usb' in navigator) {
-        (navigator as any).usb.removeEventListener('connect', handleUSBConnect);
-        (navigator as any).usb.removeEventListener('disconnect', handleUSBDisconnect);
+      if (navigator.usb) {
+        navigator.usb.removeEventListener('connect', handleUSBConnect);
+        navigator.usb.removeEventListener('disconnect', handleUSBDisconnect);
       }
     };
   }, [activeModal, runAutoDetection, showToast]);
@@ -521,12 +523,12 @@ export const SettingsModal: React.FC = () => {
     reader.onload = async (event) => {
       const content = event.target?.result as string;
       if (content) {
-        const res = await importDatabase(content);
-        if (res.success) {
+        const importResult = await importDatabase(content);
+        if (importResult.success) {
           showToast('Base de données restaurée avec succès !', 'success');
           closeModal();
         } else {
-          showToast(res.reason || 'Échec de la restauration', 'error');
+          showToast(importResult.reason || 'Échec de la restauration', 'error');
         }
       }
     };
@@ -583,6 +585,7 @@ export const SettingsModal: React.FC = () => {
 
   const tabs: { key: SettingsTab; label: string; icon: React.ReactNode }[] = [
     { key: 'hardware', label: 'Matériel & Périphériques', icon: <Cpu className="w-4 h-4" /> },
+    { key: 'cloud_sync', label: 'Synchronisation Cloud', icon: <Cloud className="w-4 h-4 text-sky-400" /> },
     { key: 'diagnostics', label: 'Diagnostique Avancé', icon: <Activity className="w-4 h-4" /> },
     { key: 'loyalty', label: 'Configuration Fidélité', icon: <Award className="w-4 h-4 text-amber-400" /> },
     { key: 'backup', label: 'Moteur SQLite & Données', icon: <Database className="w-4 h-4 text-cyan-400" /> },
@@ -671,7 +674,7 @@ export const SettingsModal: React.FC = () => {
             </div>
             <div>
               <span className="text-[9px] text-pos-muted uppercase font-bold block">Protocoles</span>
-              <span className="text-sm font-black text-purple-400">{new Set(devices.map(d => d.protocol)).size}</span>
+              <span className="text-sm font-black text-purple-400">{new Set((devices || []).map(d => d.protocol)).size}</span>
             </div>
           </div>
         </div>
@@ -695,6 +698,9 @@ export const SettingsModal: React.FC = () => {
 
         {/* ═══ Content Body ═══ */}
         <div className="flex-1 overflow-y-auto p-4 border-t border-pos-border bg-pos-bg">
+
+          {/* ══════ TAB: Cloud Sync (Turso) ══════ */}
+          {activeTab === 'cloud_sync' && <CloudSyncPanel />}
 
           {/* ══════ TAB: Hardware & Peripherals ══════ */}
           {activeTab === 'hardware' && (
@@ -820,10 +826,16 @@ export const SettingsModal: React.FC = () => {
 
               {/* Device Cards */}
               <div className="space-y-3">
-                {devices.map(device => {
-                  const st = statusConfig[device.status];
+                {(devices || []).map(device => {
+                  const st = (device?.status && statusConfig[device.status]) || statusConfig['offline'] || {
+                    color: 'text-rose-400',
+                    bgColor: 'bg-rose-500/10',
+                    borderColor: 'border-rose-500/30',
+                    label: 'Hors-Ligne',
+                    icon: null
+                  };
                   const isExpanded = expandedDevice === device.id;
-                  const compat = BRAND_COMPATIBILITY[device.category];
+                  const compat = (device?.category && BRAND_COMPATIBILITY[device.category]) || { brands: [], protocols: [] };
 
                   return (
                     <div key={device.id} className={`bg-pos-card border rounded-xl overflow-hidden transition-all ${isExpanded ? 'border-cyan-500/50 shadow-lg shadow-cyan-500/5' : 'border-pos-border hover:border-pos-text/20'}`}>
@@ -914,7 +926,7 @@ export const SettingsModal: React.FC = () => {
                           <div>
                             <span className="text-[9px] text-pos-muted uppercase font-bold block mb-1.5">Fonctionnalités</span>
                             <div className="flex flex-wrap gap-1.5">
-                              {device.capabilities.map((cap, i) => (
+                              {(device.capabilities || []).map((cap, i) => (
                                 <span key={i} className="px-2 py-0.5 rounded-md bg-pos-bg border border-pos-border text-[10px] font-semibold text-pos-text">
                                   {cap}
                                 </span>
@@ -932,7 +944,7 @@ export const SettingsModal: React.FC = () => {
                               <div>
                                 <span className="text-[9px] text-pos-muted uppercase font-bold block mb-1">Marques Supportées</span>
                                 <div className="flex flex-wrap gap-1">
-                                  {compat.brands.map((b, i) => (
+                                  {(compat?.brands || []).map((b, i) => (
                                     <span key={i} className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${b === device.brand ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-pos-card text-pos-muted border-pos-border'}`}>
                                       {b === device.brand && <span className="mr-0.5">✓</span>}{b}
                                     </span>
@@ -942,7 +954,7 @@ export const SettingsModal: React.FC = () => {
                               <div>
                                 <span className="text-[9px] text-pos-muted uppercase font-bold block mb-1">Protocoles de Communication</span>
                                 <div className="flex flex-wrap gap-1">
-                                  {compat.protocols.map((p, i) => (
+                                  {(compat?.protocols || []).map((p, i) => (
                                     <span key={i} className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${p === device.protocol || (device.protocol || '').includes(p) ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' : 'bg-pos-card text-pos-muted border-pos-border'}`}>
                                       {(p === device.protocol || (device.protocol || '').includes(p)) && <span className="mr-0.5">●</span>}{p}
                                     </span>
@@ -1189,9 +1201,9 @@ export const SettingsModal: React.FC = () => {
                   </div>
 
                   {/* Test Rows */}
-                  {diagnosticTests.map(test => {
-                    const rc = resultConfig[test.result];
-                    const device = devices.find(d => d.id === test.deviceId);
+                  {(diagnosticTests || []).map(test => {
+                    const rc = (test?.result && resultConfig[test.result as DiagnosticResult]) || resultConfig['pending'];
+                    const device = (devices || []).find(d => d.id === test.deviceId);
                     return (
                       <div key={test.id} className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between hover:border-pos-text/20 transition">
                         <div className="flex items-center gap-3">
@@ -1525,10 +1537,10 @@ export const SettingsModal: React.FC = () => {
                       )}
                     </div>
                     <div className="text-[11px] font-mono opacity-90 pl-6">
-                      {integrityReport.integrity_messages.map((m, idx) => (
+                      {(integrityReport?.integrity_messages || []).map((m, idx) => (
                         <div key={idx}>➔ {m}</div>
                       ))}
-                      {integrityReport.foreign_key_violations.map((f, idx) => (
+                      {(integrityReport?.foreign_key_violations || []).map((f, idx) => (
                         <div key={`fk-${idx}`} className="text-red-400">➔ Violation FK : {f}</div>
                       ))}
                     </div>
@@ -1591,8 +1603,9 @@ export const SettingsModal: React.FC = () => {
                           setNewPinInput('');
                           setConfirmPinInput('');
                           showToast('Nouveau Code PIN Manager enregistré avec succès.', 'success');
-                        } catch (e: any) {
-                          showToast(`Erreur : ${e?.message || e}`, 'error');
+                        } catch (e: unknown) {
+                          const msg = e instanceof Error ? e.message : String(e);
+                          showToast(`Erreur : ${msg}`, 'error');
                         } finally {
                           setIsUpdatingPin(false);
                         }

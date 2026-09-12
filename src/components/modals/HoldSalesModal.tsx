@@ -12,7 +12,7 @@ export const HoldSalesModal: React.FC = () => {
       <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95">
         <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
           <h2 className="text-base font-bold text-white flex items-center gap-2">
-            Ventes en Attente ({heldSales.length})
+            Ventes en Attente ({(heldSales || []).length})
           </h2>
           <button
             onClick={closeModal}
@@ -23,13 +23,13 @@ export const HoldSalesModal: React.FC = () => {
         </div>
 
         <div className="p-5 space-y-3 max-h-[60vh] overflow-y-auto">
-          {heldSales.length === 0 ? (
+          {(heldSales || []).length === 0 ? (
             <div className="text-center py-8 text-pos-muted">
               <Clock className="w-8 h-8 mx-auto mb-2 opacity-40" />
               <p className="text-xs">Aucune vente en attente actuellement.</p>
             </div>
           ) : (
-            heldSales.map((sale) => (
+            (heldSales || []).map((sale) => (
               <div
                 key={sale.id}
                 className="bg-pos-card border border-pos-border rounded-xl p-4 flex items-center justify-between hover:border-emerald-500/50 transition"
@@ -45,7 +45,7 @@ export const HoldSalesModal: React.FC = () => {
                     </span>
                   </div>
                   <p className="text-xs text-pos-muted mt-1">
-                    {sale.items.length} Articles ({sale.items.map((i) => i.product.title).join(', ')})
+                    {(sale.items || []).length} Articles ({(sale.items || []).map((i) => i.product?.title || '').filter(Boolean).join(', ')})
                   </p>
                 </div>
 

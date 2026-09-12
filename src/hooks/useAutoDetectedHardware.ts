@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
+import { scanHardwareDevices } from '../api/hardware';
 import type { DiscoveredDevice } from '../types/pos';
 import type { BindingResult } from '../utils/autoHardwareBinder';
 import { AutoHardwareBinder } from '../utils/autoHardwareBinder';
@@ -30,7 +30,7 @@ export function useAutoDetectedHardware() {
   const fetchInitialDevices = useCallback(async () => {
     try {
       setIsScanning(true);
-      const list = await invoke<DiscoveredDevice[]>('hardware_scan_devices');
+      const list = await scanHardwareDevices<DiscoveredDevice>();
       processDeviceList(list || []);
     } catch (err) {
       console.warn('[HAL Auto-Detect] Initial hardware scan fallback:', err);
@@ -45,12 +45,21 @@ export function useAutoDetectedHardware() {
       fetchInitialDevices();
     }
 
+    let isMounted = true;
     let unlistenFn: (() => void) | undefined;
+
     const setupListener = async () => {
       try {
-        unlistenFn = await listen<DiscoveredDevice[]>('hardware://device-list-updated', (event) => {
-          processDeviceList(event.payload);
+        const unlisten = await listen<DiscoveredDevice[]>('hardware://device-list-updated', (event) => {
+          if (isMounted) {
+            processDeviceList(event.payload);
+          }
         });
+        if (!isMounted) {
+          unlisten();
+        } else {
+          unlistenFn = unlisten;
+        }
       } catch (e) {
         console.warn('Failed to attach hardware hotplug listener:', e);
       }
@@ -59,6 +68,7 @@ export function useAutoDetectedHardware() {
     setupListener();
 
     return () => {
+      isMounted = false;
       if (unlistenFn) unlistenFn();
     };
   }, [fetchInitialDevices, processDeviceList]);

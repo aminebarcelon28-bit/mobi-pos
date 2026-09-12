@@ -38,8 +38,7 @@ export const PinDialog: React.FC<PinDialogProps> = ({
   const handleVerify = useCallback((currentPin: string) => {
     if (currentPin.length !== 4) return;
     
-    // Default fallback '1234' just in case store function isn't fully implemented
-    const isSuccess = verifyManagerPin ? verifyManagerPin(currentPin) : currentPin === '1234';
+    const isSuccess = Boolean(verifyManagerPin && verifyManagerPin(currentPin));
 
     if (isSuccess) {
       if (logSecurityAction) {

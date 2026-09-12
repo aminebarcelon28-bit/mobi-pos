@@ -33,7 +33,6 @@ export const ReceiptModal: React.FC = () => {
   };
 
   const handlePrintThermal = () => {
-    console.log(`[SmartRouting] Ticket ${lastTransaction.receiptNumber} routé automatiquement vers: ${targetPrinter.printerName}`);
     printCoordinator.printReceipt(20);
   };
 
@@ -130,7 +129,7 @@ export const ReceiptModal: React.FC = () => {
               <p className="text-[9px] font-bold uppercase text-gray-600">
                 {lastTransaction.isRefund ? "Articles Retournés :" : "Articles Achetés :"}
               </p>
-              {lastTransaction.items.map((item) => {
+              {(lastTransaction.items || []).map((item) => {
                 const unitPrice = item.appliedPrice || item.product.price;
                 const grossLinePrice = unitPrice * item.quantity;
                 const netLinePrice = Math.max(0, grossLinePrice - item.discount);

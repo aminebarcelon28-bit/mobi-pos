@@ -1,12 +1,11 @@
 import React, { useState, useRef } from 'react';
 import { X, FileText, CheckCircle2, Upload, AlertCircle, Check, X as XIcon } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import { productRepository } from '../../db/repositories/productRepository';
-import { sqliteAdapter } from '../../db/sqliteAdapter';
+import { CsvInvoiceRowSchema } from '../../schemas/invoiceSchema';
 import type { Product, IMEIRecord } from '../../types/pos';
 
 export const InvoiceIngestionModal: React.FC = () => {
-  const { activeModal, closeModal, products } = usePosStore();
+  const { activeModal, closeModal, products, ingestInvoiceBatch } = usePosStore();
   const [rawText, setRawText] = useState<string>('');
   const [ingestStatus, setIngestStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [parsedLines, setParsedLines] = useState<{ sku: string; qty: number; cost?: number; imei?: string; matched: boolean }[]>([]);
@@ -45,7 +44,7 @@ export const InvoiceIngestionModal: React.FC = () => {
         if (parts.length >= 2) {
           const sku = parts[0];
           const rawQty = parts[1].replace(/[^\d-]/g, '');
-          const qty = Math.max(0, parseInt(rawQty, 10) || 0);
+          const qty = parseInt(rawQty, 10) || 0;
 
           let cost: number | undefined = undefined;
           if (parts[2]) {
@@ -57,6 +56,18 @@ export const InvoiceIngestionModal: React.FC = () => {
           }
 
           const imei = parts[3] ? parts[3].trim() : undefined;
+
+          const validation = CsvInvoiceRowSchema.safeParse({
+            sku,
+            qty,
+            cost,
+            imei: imei || undefined,
+          });
+
+          if (!validation.success) {
+            newParsedLines.push({ sku, qty, cost, imei, matched: false });
+            continue;
+          }
 
           const currentProd =
             Array.from(updatedProductsMap.values()).find(
@@ -83,7 +94,6 @@ export const InvoiceIngestionModal: React.FC = () => {
                 productId: currentProd.id,
                 receivedAt: new Date().toISOString(),
               };
-              await sqliteAdapter.saveIMEIRecord(imeiRec);
               newImeis.push(imeiRec);
             }
 
@@ -96,11 +106,7 @@ export const InvoiceIngestionModal: React.FC = () => {
 
       if (updatedProductsMap.size > 0) {
         const updatedList = Array.from(updatedProductsMap.values());
-        await productRepository.bulkSave(updatedList);
-        usePosStore.setState((state) => ({
-          products: state.products.map((p) => updatedProductsMap.get(p.id) || p),
-          imeiRecords: newImeis.length > 0 ? [...newImeis, ...state.imeiRecords] : state.imeiRecords,
-        }));
+        await ingestInvoiceBatch(updatedList, newImeis);
       }
 
       setParsedLines(newParsedLines);
@@ -112,8 +118,9 @@ export const InvoiceIngestionModal: React.FC = () => {
         type: 'success', 
         message: `Succès ! ${matchedCount} références mises à jour. ${unmatchedCount} non trouvées.` 
       });
-    } catch {
-      setIngestStatus({ type: 'error', message: 'Erreur lors du traitement des données.' });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erreur lors du traitement des données.';
+      setIngestStatus({ type: 'error', message: msg });
     }
   };
 

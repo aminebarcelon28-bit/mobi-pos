@@ -80,11 +80,11 @@ export function useAppUpdater() {
         setIsUpdateAvailable(false);
         setCheckStatusMessage('Vous utilisez déjà la version la plus récente de MobiPOS.');
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.warn('Tauri Updater check skipped or failed:', err);
       pendingUpdateRef.current = null;
       setIsUpdateAvailable(false);
-      const msg = err?.message || 'Impossible de joindre le serveur de mise à jour GitHub.';
+      const msg = err instanceof Error ? err.message : 'Impossible de joindre le serveur de mise à jour GitHub.';
       if (isManual) {
         setError(msg);
         setCheckStatusMessage(`Vérification échouée : ${msg}`);
@@ -122,9 +122,9 @@ export function useAppUpdater() {
 
       setDownloading(false);
       setReadyToRelaunch(true);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setDownloading(false);
-      setError(err?.message || 'Échec du téléchargement et de l\'installation de la mise à jour.');
+      setError(err instanceof Error ? err.message : 'Échec du téléchargement et de l\'installation de la mise à jour.');
     }
   }, []);
 
@@ -132,7 +132,7 @@ export function useAppUpdater() {
     try {
       const { relaunch } = await import('@tauri-apps/plugin-process');
       await relaunch();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to relaunch application:', err);
     }
   }, []);

@@ -41,14 +41,14 @@ const END_GUARD = '101';
  * @param type Le type de code-barres ('code128' ou 'ean13')
  * @returns boolean
  */
-export function isValidBarcode(data: string, type: 'code128' | 'ean13'): boolean {
-  if (!data) return false;
+export function isValidBarcode(barcodeValue: string, type: 'code128' | 'ean13'): boolean {
+  if (!barcodeValue) return false;
   if (type === 'ean13') {
-    return /^\d{13}$/.test(data);
+    return /^\d{13}$/.test(barcodeValue);
   } else if (type === 'code128') {
     // Vérifier que tous les caractères sont dans la table ASCII 32-127 (Code 128B)
-    for (let i = 0; i < data.length; i++) {
-      const charCode = data.charCodeAt(i);
+    for (let i = 0; i < barcodeValue.length; i++) {
+      const charCode = barcodeValue.charCodeAt(i);
       if (charCode < 32 || charCode > 127) {
         return false;
       }
@@ -60,11 +60,11 @@ export function isValidBarcode(data: string, type: 'code128' | 'ean13'): boolean
 
 /**
  * Encode les données en Code 128 (Jeu de caractères B)
- * @param data Chaîne de caractères ASCII à encoder
+ * @param barcodeValue Chaîne de caractères ASCII à encoder
  * @returns Chaîne binaire représentant le code-barres complet
  */
-function encodeCode128(data: string): string {
-  if (!isValidBarcode(data, 'code128')) {
+function encodeCode128(barcodeValue: string): string {
+  if (!isValidBarcode(barcodeValue, 'code128')) {
     throw new Error("Données invalides pour le Code 128");
   }
 
@@ -73,8 +73,8 @@ function encodeCode128(data: string): string {
   let checksum = START_B;
   let binaryString = CODE128_PATTERNS[START_B];
 
-  for (let i = 0; i < data.length; i++) {
-    const value = data.charCodeAt(i) - 32;
+  for (let i = 0; i < barcodeValue.length; i++) {
+    const value = barcodeValue.charCodeAt(i) - 32;
     checksum += value * (i + 1);
     binaryString += CODE128_PATTERNS[value];
   }
@@ -91,29 +91,29 @@ function encodeCode128(data: string): string {
  * @param data Chaîne de 13 chiffres
  * @returns Chaîne binaire représentant le code-barres
  */
-function encodeEAN13(data: string): string {
-  if (!isValidBarcode(data, 'ean13')) {
+function encodeEAN13(barcodeValue: string): string {
+  if (!isValidBarcode(barcodeValue, 'ean13')) {
     throw new Error("Données invalides pour l'EAN-13 (doit contenir exactement 13 chiffres)");
   }
 
   // Vérification du checksum EAN-13
   let sum = 0;
   for (let i = 0; i < 12; i++) {
-    sum += parseInt(data[i]) * (i % 2 === 0 ? 1 : 3);
+    sum += parseInt(barcodeValue[i]) * (i % 2 === 0 ? 1 : 3);
   }
   const checkDigit = (10 - (sum % 10)) % 10;
-  if (checkDigit !== parseInt(data[12])) {
+  if (checkDigit !== parseInt(barcodeValue[12])) {
     throw new Error("Chiffre de contrôle EAN-13 invalide");
   }
 
-  const firstDigit = parseInt(data[0]);
+  const firstDigit = parseInt(barcodeValue[0]);
   const parity = EAN13_PARITY[firstDigit];
   
   let binaryString = START_GUARD;
 
   // Côté gauche (6 chiffres)
   for (let i = 1; i <= 6; i++) {
-    const digit = parseInt(data[i]);
+    const digit = parseInt(barcodeValue[i]);
     if (parity[i - 1] === 'L') {
       binaryString += EAN13_L[digit];
     } else {
@@ -125,7 +125,7 @@ function encodeEAN13(data: string): string {
 
   // Côté droit (6 chiffres restants)
   for (let i = 7; i <= 12; i++) {
-    const digit = parseInt(data[i]);
+    const digit = parseInt(barcodeValue[i]);
     binaryString += EAN13_R[digit];
   }
 
@@ -144,13 +144,13 @@ interface BarcodeOptions {
 /**
  * Rend un code-barres sur un élément Canvas.
  * @param canvas L'élément HTMLCanvasElement
- * @param data Les données du code-barres
+ * @param barcodeValue Les données du code-barres
  * @param type Le type ('code128' ou 'ean13')
  * @param options Options de rendu (dimensions, texte)
  */
 export function renderBarcodeToCanvas(
   canvas: HTMLCanvasElement,
-  data: string,
+  barcodeValue: string,
   type: 'code128' | 'ean13',
   options?: BarcodeOptions
 ): void {
@@ -171,7 +171,7 @@ export function renderBarcodeToCanvas(
 
   let binaryString = '';
   try {
-    binaryString = type === 'code128' ? encodeCode128(data) : encodeEAN13(data);
+    binaryString = type === 'code128' ? encodeCode128(barcodeValue) : encodeEAN13(barcodeValue);
   } catch {
     ctx.fillStyle = '#ff0000';
     ctx.font = '12px sans-serif';
@@ -204,24 +204,24 @@ export function renderBarcodeToCanvas(
     if (type === 'ean13') {
       // Affichage typique de l'EAN-13
       const textY = height - 2;
-      ctx.fillText(data[0], 10, textY);
-      ctx.fillText(data.substring(1, 7), width * 0.35, textY);
-      ctx.fillText(data.substring(7, 13), width * 0.75, textY);
+      ctx.fillText(barcodeValue[0], 10, textY);
+      ctx.fillText(barcodeValue.substring(1, 7), width * 0.35, textY);
+      ctx.fillText(barcodeValue.substring(7, 13), width * 0.75, textY);
     } else {
-      ctx.fillText(data, width / 2, height - 2);
+      ctx.fillText(barcodeValue, width / 2, height - 2);
     }
   }
 }
 
 /**
  * Génère un code SVG pour un code-barres.
- * @param data Les données du code-barres
+ * @param barcodeValue Les données du code-barres
  * @param type Le type ('code128' ou 'ean13')
  * @param options Options de rendu (dimensions, texte)
  * @returns Chaîne contenant le code SVG
  */
 export function generateBarcodeSVG(
-  data: string,
+  barcodeValue: string,
   type: 'code128' | 'ean13',
   options?: BarcodeOptions
 ): string {
@@ -232,7 +232,7 @@ export function generateBarcodeSVG(
 
   let binaryString = '';
   try {
-    binaryString = type === 'code128' ? encodeCode128(data) : encodeEAN13(data);
+    binaryString = type === 'code128' ? encodeCode128(barcodeValue) : encodeEAN13(barcodeValue);
   } catch {
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="white"/><text x="10" y="${height/2}" fill="red">Invalide</text></svg>`;
   }
@@ -258,12 +258,12 @@ export function generateBarcodeSVG(
     const textY = height - 2;
     if (type === 'ean13') {
       textElement = `
-        <text x="10" y="${textY}" font-family="monospace" font-size="${fontSize}" text-anchor="middle" fill="black">${data[0]}</text>
-        <text x="${width * 0.35}" y="${textY}" font-family="monospace" font-size="${fontSize}" text-anchor="middle" fill="black">${data.substring(1, 7)}</text>
-        <text x="${width * 0.75}" y="${textY}" font-family="monospace" font-size="${fontSize}" text-anchor="middle" fill="black">${data.substring(7, 13)}</text>
+        <text x="10" y="${textY}" font-family="monospace" font-size="${fontSize}" text-anchor="middle" fill="black">${barcodeValue[0]}</text>
+        <text x="${width * 0.35}" y="${textY}" font-family="monospace" font-size="${fontSize}" text-anchor="middle" fill="black">${barcodeValue.substring(1, 7)}</text>
+        <text x="${width * 0.75}" y="${textY}" font-family="monospace" font-size="${fontSize}" text-anchor="middle" fill="black">${barcodeValue.substring(7, 13)}</text>
       `;
     } else {
-      textElement = `<text x="${width / 2}" y="${textY}" font-family="monospace" font-size="${fontSize}" text-anchor="middle" fill="black">${data}</text>`;
+      textElement = `<text x="${width / 2}" y="${textY}" font-family="monospace" font-size="${fontSize}" text-anchor="middle" fill="black">${barcodeValue}</text>`;
     }
   }
 

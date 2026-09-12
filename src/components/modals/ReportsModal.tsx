@@ -37,6 +37,7 @@ import type { SaleTransaction, ExpenseCategory, PaymentMethodType } from '../../
 import { SalesAnalyticsCharts } from '../reports/SalesAnalyticsCharts';
 import { useToast } from '../ui/Toast';
 import { generateProfessionalExcelXml } from '../../utils/excelExporter';
+import { getEffectiveCostPrice } from '../../utils/pricingEngine';
 
 export const ReportsModal: React.FC = () => {
   const {
@@ -137,11 +138,11 @@ export const ReportsModal: React.FC = () => {
     });
   }, [transactions, dateRangeFilter]);
 
-  const validSales = dateFilteredTransactions.filter((t) => t.status !== 'VOIDED' && !t.isRefund);
-  const totalGrossRevenue = validSales.reduce((acc, t) => acc + t.total, 0);
-  const totalRefundsValue = dateFilteredTransactions.filter((t) => t.isRefund).reduce((acc, t) => acc + t.total, 0);
+  const validSales = (dateFilteredTransactions || []).filter((t) => t.status !== 'VOIDED' && !t.isRefund);
+  const totalGrossRevenue = validSales.reduce((acc, t) => acc + (t.total || 0), 0);
+  const totalRefundsValue = (dateFilteredTransactions || []).filter((t) => t.isRefund).reduce((acc, t) => acc + (t.total || 0), 0);
   const totalRevenue = Math.max(0, totalGrossRevenue - totalRefundsValue);
-  const totalCost = validSales.reduce((acc, t) => acc + (t.costTotal || t.total * 0.5), 0);
+  const totalCost = validSales.reduce((acc, t) => acc + (t.costTotal || getEffectiveCostPrice({ price: t.total || 0 })), 0);
   const totalNetProfit = totalRevenue - totalCost;
   const netProfitMargin = totalRevenue > 0 ? ((totalNetProfit / totalRevenue) * 100).toFixed(1) : '0';
   const averageBasket = validSales.length > 0 ? totalGrossRevenue / validSales.length : 0;
@@ -171,14 +172,14 @@ export const ReportsModal: React.FC = () => {
     });
   }, [storeExpenses, dateRangeFilter]);
 
-  const totalOperatingExpenses = dateFilteredExpenses.reduce((acc, e) => acc + (e.amount || 0), 0);
+  const totalOperatingExpenses = (dateFilteredExpenses || []).reduce((acc, e) => acc + (e.amount || 0), 0);
   const trueEbitdaNetProfit = totalNetProfit - totalOperatingExpenses;
   const ebitdaMargin = totalRevenue > 0 ? ((trueEbitdaNetProfit / totalRevenue) * 100).toFixed(1) : '0';
 
   // ── Inventory & Asset Valuation ──
   const totalStockUnits = useMemo(() => (products || []).reduce((acc, p) => acc + (p.stock || 0), 0), [products]);
   const totalStockCostValue = useMemo(
-    () => (products || []).reduce((acc, p) => acc + (p.stock || 0) * (p.costPrice ?? Math.round(p.price * 0.5)), 0),
+    () => (products || []).reduce((acc, p) => acc + (p.stock || 0) * getEffectiveCostPrice(p), 0),
     [products]
   );
   const totalStockRetailValue = useMemo(() => (products || []).reduce((acc, p) => acc + (p.stock || 0) * p.price, 0), [products]);
@@ -190,13 +191,13 @@ export const ReportsModal: React.FC = () => {
   // ── Cash Drawer Reconciliation (Expected vs Counted) ──
   const openingFloat = activeShift?.openingFloat ?? (allShifts && allShifts.length > 0 ? allShifts[0].openingFloat : 20000);
   const cashSales = useMemo(() => {
-    return dateFilteredTransactions
+    return (dateFilteredTransactions || [])
       .filter((t) => t.status !== 'VOIDED' && !t.isRefund)
       .reduce((acc, t) => {
-        if (t.tenders && t.tenders.length > 0) {
-          return acc + t.tenders.filter((tender) => tender.method === 'Espèces').reduce((sum, tender) => sum + tender.amount, 0);
+        if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
+          return acc + t.tenders.filter((tender) => tender.method === 'Espèces').reduce((sum, tender) => sum + (tender.amount || 0), 0);
         }
-        return t.paymentMethod === 'Espèces' ? acc + t.total : acc;
+        return t.paymentMethod === 'Espèces' ? acc + (t.total || 0) : acc;
       }, 0);
   }, [dateFilteredTransactions]);
 
@@ -218,7 +219,7 @@ export const ReportsModal: React.FC = () => {
   }, [repairOrders]);
 
   const cashExpensesOut = useMemo(() => {
-    return dateFilteredExpenses.filter((e) => e.paymentMethod === 'Espèces').reduce((acc, e) => acc + (e.amount || 0), 0);
+    return (dateFilteredExpenses || []).filter((e) => e.paymentMethod === 'Espèces').reduce((acc, e) => acc + (e.amount || 0), 0);
   }, [dateFilteredExpenses]);
 
   const tradeInPayoutsOut = useMemo(() => {
@@ -266,8 +267,8 @@ export const ReportsModal: React.FC = () => {
   const totalStoreCreditLiability = useMemo(() => (customers || []).reduce((acc, c) => acc + (c.storeCredit || 0), 0), [customers]);
 
   // ── Waterfall P&L Breakdown Metrics ──
-  const grossSalesRevenue = validSales.reduce((acc, t) => acc + (t.subtotal || t.total), 0);
-  const totalDiscountsGiven = validSales.reduce((acc, t) => acc + (t.discountTotal || 0), 0);
+  const grossSalesRevenue = (validSales || []).reduce((acc, t) => acc + (t.subtotal || t.total || 0), 0);
+  const totalDiscountsGiven = (validSales || []).reduce((acc, t) => acc + (t.discountTotal || 0), 0);
   const totalRefunds = totalRefundsValue;
 
   const handleAddExpenseSubmit = async (e: React.FormEvent) => {
@@ -297,7 +298,7 @@ export const ReportsModal: React.FC = () => {
   };
 
   // Filtered Transactions for History List
-  const filteredTransactions = dateFilteredTransactions.filter((t) => {
+  const filteredTransactions = (dateFilteredTransactions || []).filter((t) => {
     const matchesPayment = paymentFilter === 'Tous' || t.paymentMethod === paymentFilter;
 
     let matchesStatus = true;
@@ -326,12 +327,12 @@ export const ReportsModal: React.FC = () => {
     return matchesPayment && matchesStatus && matchesSearch;
   });
 
-  const totalPages = Math.max(1, Math.ceil(filteredTransactions.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil((filteredTransactions || []).length / PAGE_SIZE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
 
   const paginatedTransactions = useMemo(() => {
     const start = (safeCurrentPage - 1) * PAGE_SIZE;
-    return filteredTransactions.slice(start, start + PAGE_SIZE);
+    return (filteredTransactions || []).slice(start, start + PAGE_SIZE);
   }, [filteredTransactions, safeCurrentPage]);
 
   const handleReprintFromInspector = (t: SaleTransaction) => {
@@ -353,14 +354,14 @@ export const ReportsModal: React.FC = () => {
       return;
     }
 
-    const res = await voidTransaction(t.id, voidReason, 'Manager');
-    if (res.success) {
+    const voidResult = await voidTransaction(t.id, voidReason, 'Manager');
+    if (voidResult.success) {
       showToast(`Vente #${t.receiptNumber} annulée avec succès. Stocks et fidélité restaurés.`, 'success');
       setInspectingTransaction(null);
       setIsVoiding(false);
       setVoidPin('');
     } else {
-      showToast(`Erreur lors de l'annulation: ${res.reason}`, 'error');
+      showToast(`Erreur lors de l'annulation: ${voidResult.reason}`, 'error');
     }
   };
 
@@ -409,12 +410,12 @@ export const ReportsModal: React.FC = () => {
     const headers =
       'N° Reçu;Statut;Date & Heure;Client;Articles (Qté);Sous-Total (DA);Remise (DA);Total Net (DA);Coût Achat (DA);Bénéfice (DA);Marge (%);Mode Paiement\n';
 
-    const rows = dateFilteredTransactions
+    const rows = (dateFilteredTransactions || [])
       .map((t) => {
         const customerName = (t.customer?.name || 'Client de passage').replace(/;/g, ' ');
         const dateStr = (t.createdAt || '').replace(/;/g, ' ');
         const payment = (t.paymentMethod || 'Espèces').replace(/;/g, ' ');
-        const itemCount = t.items.reduce((acc, i) => acc + i.quantity, 0);
+        const itemCount = (t.items || []).reduce((acc, i) => acc + i.quantity, 0);
         const subtotal = t.subtotal || t.total;
         const discount = t.discountTotal || 0;
         const cost = t.status === 'VOIDED' ? 0 : t.costTotal || 0;
@@ -447,10 +448,10 @@ export const ReportsModal: React.FC = () => {
 
   const handleCopyToClipboard = () => {
     const headers = 'N° Reçu\tDate\tClient\tArticles\tTotal Net (DA)\tBénéfice (DA)\tMode Paiement\tStatut\n';
-    const rows = dateFilteredTransactions
+    const rows = (dateFilteredTransactions || [])
       .map((t) => {
         const customerName = t.customer?.name || 'Client de passage';
-        const itemCount = t.items.reduce((acc, i) => acc + i.quantity, 0);
+        const itemCount = (t.items || []).reduce((acc, i) => acc + i.quantity, 0);
         return `${t.receiptNumber}\t${t.createdAt}\t${customerName}\t${itemCount}\t${t.total}\t${t.profit || 0}\t${t.paymentMethod}\t${t.status}`;
       })
       .join('\n');
@@ -567,7 +568,7 @@ export const ReportsModal: React.FC = () => {
                   }`}
                 >
                   <ShoppingBag className="w-3.5 h-3.5" />
-                  Historique Transactions & Inspection ({transactions.length})
+                  Historique Transactions & Inspection ({(transactions || []).length})
                 </button>
 
                 <button
@@ -732,7 +733,7 @@ export const ReportsModal: React.FC = () => {
                           </div>
                         </div>
                         <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400">
-                          {totalStockUnits} pièces ({products.length} réf.)
+                          {totalStockUnits} pièces ({(products || []).length} réf.)
                         </span>
                       </div>
 
@@ -1002,7 +1003,7 @@ export const ReportsModal: React.FC = () => {
                   <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                     <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
                       <span className="text-[9px] text-pos-muted uppercase font-bold">Total Transactions</span>
-                      <p className="text-base font-black text-pos-text mt-0.5">{dateFilteredTransactions.length}</p>
+                      <p className="text-base font-black text-pos-text mt-0.5">{(dateFilteredTransactions || []).length}</p>
                     </div>
 
                     <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
@@ -1099,14 +1100,14 @@ export const ReportsModal: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-pos-border/40">
-                        {paginatedTransactions.length === 0 ? (
+                        {(!paginatedTransactions || paginatedTransactions.length === 0) ? (
                           <tr>
                             <td colSpan={9} className="p-8 text-center text-pos-muted font-medium">
                               Aucune transaction ne correspond à vos critères de recherche.
                             </td>
                           </tr>
                         ) : (
-                          paginatedTransactions.map((t) => {
+                          (paginatedTransactions || []).map((t) => {
                             const isVoided = t.status === 'VOIDED';
                             const isRefund = Boolean(t.isRefund);
                             const isRefunded = t.status === 'REFUNDED';
@@ -1164,7 +1165,7 @@ export const ReportsModal: React.FC = () => {
                                 </td>
                                 <td className="p-3 text-pos-muted font-medium">
                                   <span className="bg-pos-bg border border-pos-border px-2 py-0.5 rounded text-[10px] font-bold text-pos-text">
-                                    {t.items.reduce((acc, i) => acc + i.quantity, 0)} articles
+                                    {(t.items || []).reduce((acc, i) => acc + i.quantity, 0)} articles
                                   </span>
                                 </td>
                                 <td
@@ -1344,7 +1345,7 @@ export const ReportsModal: React.FC = () => {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-pos-border/40 font-mono">
-                            {dateFilteredExpenses
+                            {(dateFilteredExpenses || [])
                               .filter((e) => expenseCategoryFilter === 'Tous' || e.category === expenseCategoryFilter)
                               .map((exp) => (
                                 <tr key={exp.id} className="hover:bg-pos-bg/50 transition">
@@ -1528,7 +1529,7 @@ export const ReportsModal: React.FC = () => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-pos-border/40 font-medium">
-                          {dateFilteredTransactions.slice(0, 15).map((t, idx) => {
+                          {(dateFilteredTransactions || []).slice(0, 15).map((t, idx) => {
                             const isVoided = t.status === 'VOIDED';
                             const isRefund = Boolean(t.isRefund);
                             return (
@@ -1547,7 +1548,7 @@ export const ReportsModal: React.FC = () => {
                                 <td className="p-2.5 font-mono font-bold">{t.receiptNumber}</td>
                                 <td className="p-2.5 font-mono text-pos-muted">{formatDateTime(t.createdAt)}</td>
                                 <td className="p-2.5">{t.customer?.name || 'Client de passage'}</td>
-                                <td className="p-2.5 text-center">{t.items.reduce((acc, i) => acc + i.quantity, 0)}</td>
+                                <td className="p-2.5 text-center">{(t.items || []).reduce((acc, i) => acc + i.quantity, 0)}</td>
                                 <td className="p-2.5 text-right font-black text-pos-text">
                                   {isRefund ? `-${formatDZD(t.total)}` : formatDZD(t.total)}
                                 </td>
@@ -1647,7 +1648,7 @@ export const ReportsModal: React.FC = () => {
                 <div className="space-y-2">
                   <span className="text-[10px] uppercase font-bold text-pos-muted block">Articles du Ticket :</span>
                   <div className="bg-pos-card border border-pos-border rounded-xl overflow-hidden divide-y divide-pos-border">
-                    {inspectingTransaction.items.map((item, idx) => {
+                    {(inspectingTransaction?.items || []).map((item, idx) => {
                       const itemPrice = item.appliedPrice || item.product?.price || 0;
                       return (
                         <div key={idx} className="p-2.5 flex justify-between items-center text-xs">

@@ -37,21 +37,25 @@ class SoundEngine {
       if (saved) {
         this.profile = { ...this.profile, ...JSON.parse(saved) };
       }
-    } catch {}
+    } catch {
+      // Safe to ignore per R5.1: Private browsing or disabled localStorage should not block sound engine initialization.
+    }
   }
 
   private saveProfile(): void {
     if (typeof window === 'undefined') return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.profile));
-    } catch {}
+    } catch {
+      // Safe to ignore per R5.1: Storage quota exceeded or disabled localStorage does not compromise audio playback.
+    }
   }
 
   private getContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
 
     if (!this.ctx) {
-      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioCtxClass = window.AudioContext || window.webkitAudioContext;
       if (AudioCtxClass) {
         this.ctx = new AudioCtxClass();
       }
@@ -125,7 +129,9 @@ class SoundEngine {
 
       osc.start();
       osc.stop(ctx.currentTime + 0.06);
-    } catch {}
+    } catch {
+      // Safe to ignore per R5.1: Web Audio synthesis failure (e.g. autoplay restrictions) must never interrupt checkout.
+    }
   }
 
   /**
@@ -156,7 +162,9 @@ class SoundEngine {
 
       osc.start(now);
       osc.stop(now + 0.18);
-    } catch {}
+    } catch {
+      // Safe to ignore per R5.1: Web Audio synthesis failure must never interrupt checkout.
+    }
   }
 
   /**
@@ -188,7 +196,9 @@ class SoundEngine {
         osc.start(now + idx * 0.08);
         osc.stop(now + idx * 0.08 + 0.12);
       });
-    } catch {}
+    } catch {
+      // Safe to ignore per R5.1: Web Audio synthesis failure must never interrupt checkout.
+    }
   }
 
   /**
@@ -222,7 +232,9 @@ class SoundEngine {
         osc.start(now + index * 0.05);
         osc.stop(now + index * 0.05 + 0.22);
       });
-    } catch {}
+    } catch {
+      // Safe to ignore per R5.1: Web Audio synthesis failure must never interrupt checkout.
+    }
   }
 
   /**
@@ -252,7 +264,9 @@ class SoundEngine {
 
       osc.start();
       osc.stop(ctx.currentTime + 0.09);
-    } catch {}
+    } catch {
+      // Safe to ignore per R5.1: Web Audio synthesis failure must never interrupt checkout.
+    }
   }
 
   /**
@@ -281,9 +295,20 @@ class SoundEngine {
 
       osc.start();
       osc.stop(ctx.currentTime + 0.03);
-    } catch {}
+    } catch {
+      // Safe to ignore per R5.1: Web Audio synthesis failure must never interrupt checkout.
+    }
   }
 }
 
 export const soundEngine = new SoundEngine();
 export const AudioFeedbackEngine = soundEngine;
+
+import { audioBus } from './audioEvents';
+
+// Decoupled audio event bus subscriptions (R1.5, R1.6)
+audioBus.on('scan', () => soundEngine.playScan());
+audioBus.on('success', () => soundEngine.playSuccess());
+audioBus.on('error', () => soundEngine.playError());
+audioBus.on('keyBeep', () => soundEngine.playKeyBeep());
+audioBus.on('cashDrawer', () => soundEngine.playCashDrawer());

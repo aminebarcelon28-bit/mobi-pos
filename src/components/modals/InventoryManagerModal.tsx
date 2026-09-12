@@ -56,14 +56,14 @@ export const InventoryManagerModal: React.FC = () => {
           <div className="bg-pos-bg border border-pos-border p-2.5 rounded-xl">
             <span className="text-[9px] font-bold uppercase text-pos-muted block">Valeur Stock au Coût</span>
             <p className="text-xs sm:text-sm font-black font-mono text-pos-text mt-0.5">
-              {formatDZD(products.reduce((sum, p) => sum + (p.stock || 0) * (p.costPrice || 0), 0))}
+              {formatDZD((products || []).reduce((sum, p) => sum + (p.stock || 0) * (p.costPrice || 0), 0))}
             </p>
           </div>
 
           <div className="bg-pos-bg border border-pos-border p-2.5 rounded-xl">
             <span className="text-[9px] font-bold uppercase text-pos-muted block">Valeur Marchande (Vente)</span>
             <p className="text-xs sm:text-sm font-black font-mono text-emerald-400 mt-0.5">
-              {formatDZD(products.reduce((sum, p) => sum + (p.stock || 0) * p.price, 0))}
+              {formatDZD((products || []).reduce((sum, p) => sum + (p.stock || 0) * p.price, 0))}
             </p>
           </div>
 
@@ -71,7 +71,7 @@ export const InventoryManagerModal: React.FC = () => {
             <span className="text-[9px] font-bold uppercase text-pos-muted block">Marge Potentielle Latente</span>
             <p className="text-xs sm:text-sm font-black font-mono text-cyan-400 mt-0.5">
               {formatDZD(
-                products.reduce((sum, p) => sum + (p.stock || 0) * (p.price - (p.costPrice || 0)), 0)
+                (products || []).reduce((sum, p) => sum + (p.stock || 0) * (p.price - (p.costPrice || 0)), 0)
               )}
             </p>
           </div>
@@ -79,7 +79,7 @@ export const InventoryManagerModal: React.FC = () => {
           <div className="bg-pos-bg border border-pos-border p-2.5 rounded-xl">
             <span className="text-[9px] font-bold uppercase text-pos-muted block">Volume Total Pièces</span>
             <p className="text-xs sm:text-sm font-black font-mono text-amber-400 mt-0.5">
-              {products.reduce((sum, p) => sum + (p.stock || 0), 0)} unités ({products.length} réf.)
+              {(products || []).reduce((sum, p) => sum + (p.stock || 0), 0)} unités ({(products || []).length} réf.)
             </p>
           </div>
         </div>
@@ -114,7 +114,7 @@ export const InventoryManagerModal: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-pos-border/40">
-              {filtered.map((product) => (
+              {(filtered || []).map((product) => (
                 <tr key={product.id} className="hover:bg-pos-hover/50 transition group">
                   <td className="p-3 flex items-center gap-3">
                     <img

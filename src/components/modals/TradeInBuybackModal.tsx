@@ -56,9 +56,10 @@ export const TradeInBuybackModal: React.FC = () => {
   if (activeModal !== 'trade_in_buyback') return null;
 
   // KPI Computations
-  const totalTradeIns = tradeIns.length;
-  const totalBuybackCapital = tradeIns.reduce((acc, t) => acc + t.buybackValue, 0);
-  const totalProjectedResale = tradeIns.reduce((acc, t) => acc + t.resalePrice, 0);
+  const safeTradeIns = tradeIns || [];
+  const totalTradeIns = safeTradeIns.length;
+  const totalBuybackCapital = safeTradeIns.reduce((acc, t) => acc + (t.buybackValue || 0), 0);
+  const totalProjectedResale = safeTradeIns.reduce((acc, t) => acc + (t.resalePrice || 0), 0);
   const totalProjectedProfit = totalProjectedResale - totalBuybackCapital;
 
   const suggestedSellingPrice = Math.round(buybackValue * (1 + resaleMarginPercent / 100));
@@ -211,13 +212,13 @@ export const TradeInBuybackModal: React.FC = () => {
                   <span className="text-xs font-bold text-pos-text flex items-center gap-1.5">
                     <UserCheck className="w-4 h-4 text-emerald-400" /> Informations du Client Vendeur
                   </span>
-                  {customers.length > 0 && (
+                  {(customers || []).length > 0 && (
                     <select
                       onChange={(e) => handleSelectCustomer(e.target.value)}
                       className="bg-pos-card border border-pos-border text-pos-text text-xs rounded-lg px-2.5 py-1 focus:border-emerald-400 focus:outline-none"
                     >
                       <option value="">Sélectionner un client du répertoire...</option>
-                      {customers.map(c => (
+                      {(customers || []).map(c => (
                         <option key={c.id} value={c.id}>{c.name} ({c.phone})</option>
                       ))}
                     </select>
@@ -417,13 +418,13 @@ export const TradeInBuybackModal: React.FC = () => {
               </div>
 
               {/* History Items Cards */}
-              {filteredTradeIns.length === 0 ? (
+              {(filteredTradeIns || []).length === 0 ? (
                 <div className="text-center text-pos-muted text-xs py-12 bg-pos-card border border-pos-border rounded-2xl">
                   <RefreshCw className="w-8 h-8 opacity-40 mx-auto mb-2" />
                   <p className="font-semibold">Aucune reprise ne correspond à votre recherche.</p>
                 </div>
               ) : (
-                filteredTradeIns.map((trade) => (
+                (filteredTradeIns || []).map((trade) => (
                   <div key={trade.id} className="bg-pos-card border border-pos-border p-4.5 rounded-2xl flex justify-between items-center text-xs shadow-sm hover:border-emerald-500/40 transition">
                     <div>
                       <div className="font-extrabold text-pos-text text-sm mb-1 flex items-center gap-2">

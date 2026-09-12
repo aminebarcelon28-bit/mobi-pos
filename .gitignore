@@ -23,6 +23,11 @@ dist-ssr
 *.sln
 *.sw?
 
+# Env + secrets (Turso tokens live here — NEVER commit)
+.env
+.env.local
+proxy/.env
+
 # Tauri Signing Keys & Target
 *.key
 *.key.pub

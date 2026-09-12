@@ -102,7 +102,7 @@ export const DebtLedgerModal: React.FC = () => {
     }
 
     setIsProcessing(true);
-    const res = await recordCustomerDebtPayment(
+    const debtPaymentResult = await recordCustomerDebtPayment(
       payingCustomer.id,
       amount,
       paymentMethod,
@@ -110,7 +110,7 @@ export const DebtLedgerModal: React.FC = () => {
     );
     setIsProcessing(false);
 
-    if (res.success) {
+    if (debtPaymentResult.success) {
       soundEngine.playSuccess();
       showToast(`Versement de ${formatDZD(amount)} enregistré avec succès !`, 'success');
       setPayingCustomer(null);

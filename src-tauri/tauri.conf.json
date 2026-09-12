@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "MobiPOS",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "identifier": "com.mobi.pos",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' https: ipc:;"
+      "csp": "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' https: wss: ipc: http://localhost:* ws://localhost:* https://*.turso.io wss://*.turso.io;"
     }
   },
   "bundle": {
@@ -31,6 +31,12 @@
       "appimage",
       "app"
     ],
+    "android": {
+      "versionCode": 7
+    },
+    "iOS": {
+      "bundleVersion": "1.6.2"
+    },
     "createUpdaterArtifacts": true,
     "windows": {
       "nsis": {

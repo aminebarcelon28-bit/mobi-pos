@@ -1,13 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Shared capability: core + local SQLite (all platforms)",
   "windows": [
     "main"
   ],
   "permissions": [
     "core:default",
-    "updater:default",
-    "process:default"
+    "sql:default",
+    "sql:allow-load",
+    "sql:allow-execute",
+    "sql:allow-select",
+    "sql:allow-close"
   ]
 }

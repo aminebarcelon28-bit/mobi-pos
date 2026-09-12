@@ -375,12 +375,12 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
             /* Recently Sold / Recorded Serialized Phones */
             <div className="space-y-2">
               <span className="text-[11px] font-bold text-pos-muted uppercase tracking-wider block">
-                Appareils & Téléphones Récents ({serializedDevices.length})
+                Appareils & Téléphones Récents ({(serializedDevices || []).length})
               </span>
 
-              {serializedDevices.length > 0 ? (
+              {(serializedDevices || []).length > 0 ? (
                 <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                  {serializedDevices.map((dev, idx) => (
+                  {(serializedDevices || []).map((dev, idx) => (
                     <div
                       key={idx}
                       onClick={() => handleLookup(dev.imei)}

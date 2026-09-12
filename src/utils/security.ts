@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Cryptographic Security Engine for MobiPOS
  * Implements PBKDF2 / SHA-256 salted PIN hashing with backward-compatible migration.
  */
@@ -80,11 +80,28 @@ function sha256Sync(ascii: string): string {
   return result;
 }
 
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 function generateRandomSalt(length = 16): string {
   const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const randomBytes = new Uint8Array(length);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(randomBytes);
+  } else {
+    for (let i = 0; i < length; i++) {
+      randomBytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
   let salt = '';
   for (let i = 0; i < length; i++) {
-    salt += chars.charAt(Math.floor(Math.random() * chars.length));
+    salt += chars.charAt(randomBytes[i] % chars.length);
   }
   return salt;
 }
@@ -105,7 +122,10 @@ export function hashPin(pin: string, salt?: string): string {
  */
 export function verifyPin(inputPin: string, storedHashOrPlain: string): boolean {
   const cleanInput = inputPin.trim();
-  if (!storedHashOrPlain) return cleanInput === '1234';
+  if (!storedHashOrPlain) {
+    // Fail-closed per R10.1: Never accept hardcoded fallback credentials
+    return false;
+  }
 
   // Format: v1$salt$digest
   if (storedHashOrPlain.startsWith('v1$')) {
@@ -114,12 +134,12 @@ export function verifyPin(inputPin: string, storedHashOrPlain: string): boolean 
       const salt = parts[1];
       const expectedDigest = parts[2];
       const computed = sha256Sync(`${salt}:${cleanInput}:mobi_pos_salt_v1`);
-      return computed === expectedDigest;
+      return timingSafeEqual(computed, expectedDigest);
     }
   }
 
   // Legacy plaintext fallback
-  return cleanInput === storedHashOrPlain;
+  return timingSafeEqual(cleanInput, storedHashOrPlain);
 }
 
 /**

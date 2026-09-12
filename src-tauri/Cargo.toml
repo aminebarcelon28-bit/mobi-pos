@@ -1,9 +1,13 @@
 [package]
 name = "mobi-pos"
-version = "1.6.1"
+version = "1.6.2"
 description = "Mobile Phone Accessories Point of Sale System"
 authors = ["Mobi Team"]
 edition = "2021"
+
+[lib]
+name = "mobi_pos_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -14,8 +18,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-rusqlite = { version = "0.33", features = ["bundled", "backup"] }
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 parking_lot = "0.12"
+keyring = { version = "3", features = ["windows-native"] }
 
 [features]
 default = ["custom-protocol"]

@@ -26,31 +26,32 @@ export const ShiftZReportModal: React.FC = () => {
   if (activeModal !== 'shift_zreport') return null;
 
   // Financial Shift Auditing (Strict zero-variance accounting)
-  const validCashSales = transactions.filter(
+  const safeTransactions = transactions || [];
+  const validCashSales = safeTransactions.filter(
     (t) => t.status !== 'VOIDED' && !t.isRefund && t.paymentMethod === 'Espèces'
   );
   const totalCashSales = validCashSales.reduce(
     (acc, t) =>
       acc +
-      (t.tenders
-        ? t.tenders.filter((td) => td.method === 'Espèces').reduce((sum, td) => sum + td.amount, 0)
-        : t.total),
+      (t.tenders && Array.isArray(t.tenders)
+        ? t.tenders.filter((td) => td.method === 'Espèces').reduce((sum, td) => sum + (td.amount || 0), 0)
+        : (t.total || 0)),
     0
   );
-  const totalCashRefunds = transactions
+  const totalCashRefunds = safeTransactions
     .filter((t) => t.isRefund && t.paymentMethod === 'Espèces')
-    .reduce((acc, t) => acc + t.total, 0);
+    .reduce((acc, t) => acc + (t.total || 0), 0);
 
   const todayDebtSettlements = (customerDebts || [])
     .filter((d) => d.type === 'PAYMENT_SETTLED' && d.paymentMethod === 'Espèces')
-    .reduce((acc, d) => acc + d.amount, 0);
+    .reduce((acc, d) => acc + (d.amount || 0), 0);
 
   const todayCashExpenses = (storeExpenses || [])
     .filter((e) => e.paymentMethod === 'Espèces')
-    .reduce((acc, e) => acc + e.amount, 0);
+    .reduce((acc, e) => acc + (e.amount || 0), 0);
 
-  const totalDrops = cashDrops.reduce((acc, d) => acc + d.amount, 0);
-  const totalPayouts = payouts.reduce((acc, p) => acc + p.amount, 0);
+  const totalDrops = (cashDrops || []).reduce((acc, d) => acc + (d.amount || 0), 0);
+  const totalPayouts = (payouts || []).reduce((acc, p) => acc + (p.amount || 0), 0);
   const expectedCash = shiftFloat + totalCashSales + todayDebtSettlements - totalCashRefunds - totalDrops - totalPayouts - todayCashExpenses;
   const variance = actualCountedCash - expectedCash;
 
@@ -221,11 +222,11 @@ export const ShiftZReportModal: React.FC = () => {
                 Enregistrer Dépôt
               </button>
             </div>
-            {cashDrops.length > 0 && (
+            {(cashDrops || []).length > 0 && (
               <div className="mt-4">
                 <h5 className="text-xs font-semibold text-pos-muted mb-2">Dépôts récents</h5>
                 <ul className="space-y-1 text-xs">
-                  {cashDrops.map((drop) => (
+                  {(cashDrops || []).map((drop) => (
                     <li key={drop.id} className="flex justify-between items-center bg-pos-card p-2 rounded-lg border border-pos-border">
                       <span className="text-pos-text">{drop.reason}</span>
                       <span className="font-bold text-amber-400">{formatDZD(drop.amount)}</span>

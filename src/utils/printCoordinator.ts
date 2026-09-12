@@ -15,7 +15,7 @@ interface PrintJobOptions {
 class PrintCoordinator {
   private isPrinting: boolean = false;
   private activeChannel: PrintChannelType | null = null;
-  private cleanupTimer: any = null;
+  private cleanupTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * Returns whether a print job is currently underway

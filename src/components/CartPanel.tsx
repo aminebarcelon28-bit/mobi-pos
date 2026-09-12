@@ -5,6 +5,7 @@ import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
 import { soundEngine } from '../utils/audioFeedback';
 import { printCoordinator } from '../utils/printCoordinator';
+import { getProductPriceForTier } from '../utils/pricingEngine';
 
 export const CartPanel: React.FC = () => {
   const {
@@ -33,7 +34,7 @@ export const CartPanel: React.FC = () => {
   // Calculate gross total based on active pricing tier
   const getItemPrice = (item: typeof cart[0]) => {
     if (item.appliedPrice !== undefined) return item.appliedPrice;
-    return pricingTier === 'Wholesale' ? item.product.wholesalePrice || item.product.price * 0.75 : item.product.price;
+    return getProductPriceForTier(item.product, pricingTier);
   };
 
   const grossTotal = cart.reduce((acc, item) => acc + getItemPrice(item) * item.quantity, 0);
@@ -89,8 +90,8 @@ export const CartPanel: React.FC = () => {
       openModal('payment');
       return;
     }
-    const res = await processPayment([{ method: 'Espèces', amount: billAmount }]);
-    if (res && res.success) {
+    const paymentResult = await processPayment([{ method: 'Espèces', amount: billAmount }]);
+    if (paymentResult && paymentResult.success) {
       printCoordinator.printReceipt(50);
     }
   };

@@ -617,6 +617,9 @@ export interface CashSession {
   actualCash?: number | null;
   discrepancy?: number;
   dailyNetProfit?: number;
+  totalSalesCount?: number;
+  totalSalesRevenue?: number;
+  totalProfits?: number;
   status: 'OPEN' | 'CLOSED';
   cashierName: string;
   openingNote?: string;
@@ -672,7 +675,7 @@ export interface HardwareStatus {
   customerDisplayConnected: boolean;
 }
 
-export const APP_VERSION = '1.6.1';
+export const APP_VERSION = '1.6.2';
 
 export const formatDZD = (amount: number): string => {
   return new Intl.NumberFormat('fr-DZ', {
@@ -687,9 +690,9 @@ export const formatDZD = (amount: number): string => {
 
 export const formatDateTime = (dateStr?: string): string => {
   if (!dateStr) return '';
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return dateStr;
-  return d.toLocaleDateString('fr-DZ', {
+  const parsedDate = new Date(dateStr);
+  if (isNaN(parsedDate.getTime())) return dateStr;
+  return parsedDate.toLocaleDateString('fr-DZ', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

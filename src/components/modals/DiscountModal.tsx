@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Percent, Check, DollarSign, Tag } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
+import { getProductPriceForTier } from '../../utils/pricingEngine';
 
 const PROMO_CODES: Record<string, { type: 'percent' | 'amount'; value: number; label: string }> = {
   SOLDES10: { type: 'percent', value: 10, label: 'Remise Soldes 10%' },
@@ -23,7 +24,7 @@ export const DiscountModal: React.FC = () => {
 
   // Calculate gross cart total before discount
   const cartSubtotal = cart.reduce((acc, item) => {
-    const itemPrice = pricingTier === 'Wholesale' ? item.product.wholesalePrice || item.product.price * 0.75 : item.product.price;
+    const itemPrice = item.appliedPrice !== undefined ? item.appliedPrice : getProductPriceForTier(item.product, pricingTier);
     return acc + itemPrice * item.quantity;
   }, 0);
 

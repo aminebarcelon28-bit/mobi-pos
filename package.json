@@ -1,19 +1,24 @@
 {
   "name": "phone3",
   "private": true,
-  "version": "1.6.1",
+  "version": "1.6.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test": "node scripts/test_pos_math.js && node scripts/test_cloud_sync_and_migration.mjs",
+    "test:math": "node scripts/test_pos_math.js",
+    "test:cloud": "node scripts/test_cloud_sync_and_migration.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
     "release": "node scripts/release.js"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "@tailwindcss/postcss": "^4.3.3",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-process": "^2.0.0",
+    "@tauri-apps/plugin-sql": "^2.4.1",
     "@tauri-apps/plugin-updater": "^2.0.0",
     "autoprefixer": "^10.5.4",
     "clsx": "^2.1.1",
@@ -25,9 +30,11 @@
     "react-dom": "^19.2.8",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.3",
+    "zod": "^4.6.2",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

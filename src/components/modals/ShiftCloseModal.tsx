@@ -15,7 +15,7 @@ import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, type DenominationCount } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { printCoordinator } from '../../utils/printCoordinator';
-import { sqliteAdapter } from '../../db/sqliteAdapter';
+import { maintenanceService } from '../../services/maintenanceService';
 
 export const ShiftCloseModal: React.FC = () => {
   const {
@@ -131,7 +131,7 @@ export const ShiftCloseModal: React.FC = () => {
   const handleDownloadBackup = async () => {
     if (!activeShift) return;
     try {
-      const jsonString = await sqliteAdapter.generateSessionBackupJson(activeShift.id);
+      const jsonString = await maintenanceService.generateSessionBackupJson(activeShift.id);
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -157,19 +157,19 @@ export const ShiftCloseModal: React.FC = () => {
       return;
     }
 
-    const res = await closeShift(
+    const closeShiftResult = await closeShift(
       physicalCount,
       closingNote.trim() || undefined,
       cashierName.trim() || undefined
     );
 
-    if (res.success) {
+    if (closeShiftResult.success) {
       // Print official Z-Report
       printCoordinator.printZReport(40);
       showToast('Session caisse clôturée avec succès. Rapport Z imprimé.', 'success');
       closeModal();
     } else {
-      showToast(res.reason || 'Erreur lors de la clôture de caisse.', 'error');
+      showToast(closeShiftResult.reason || 'Erreur lors de la clôture de caisse.', 'error');
     }
   };
 

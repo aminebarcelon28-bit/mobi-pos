@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { TrendingUp, Activity, PieChart } from 'lucide-react';
@@ -7,53 +7,89 @@ export const SalesAnalyticsCharts: React.FC = () => {
   const { transactions } = usePosStore();
   const [hoveredHour, setHoveredHour] = useState<number | null>(null);
 
-  // --- Derived Data Calculations (Simplified for Demo) ---
-  
-  // KPI Metrics
-  const safeTransactions = transactions || [];
-  const totalOrders = safeTransactions.length;
-  const totalRevenue = safeTransactions.reduce((acc, t) => acc + (t.total || 0), 0);
-  const totalProfit = safeTransactions.reduce((acc, t) => acc + (t.profit || 0), 0);
-  
-  const avgTicket = totalOrders > 0 ? totalRevenue / totalOrders : 0;
-  const totalItems = safeTransactions.reduce((acc, t) => acc + (t.items || []).reduce((sum, item) => sum + (item.quantity || 0), 0), 0);
-  const avgItemVelocity = totalOrders > 0 ? (totalItems / totalOrders).toFixed(1) : '0';
-  const grossMarginPct = totalRevenue > 0 ? ((totalProfit / totalRevenue) * 100).toFixed(1) : '0';
+  // --- Derived Data Calculations ---
+  const safeTransactions = useMemo(() => transactions || [], [transactions]);
 
-  // Bar Chart: Hourly Traffic (08:00 - 20:00)
-  const hourlyData = Array.from({ length: 13 }, (_, i) => {
-    const hour = i + 8;
-    const realMatches = transactions.filter(t => {
-      const d = new Date(t.createdAt);
-      return !isNaN(d.getTime()) ? d.getHours() === hour : false;
-    }).length;
-    return { hour, volume: realMatches };
-  });
+  // KPI Metrics (Calculated in a single pass)
+  const { avgTicket, avgItemVelocity, grossMarginPct } = useMemo(() => {
+    const totalOrders = safeTransactions.length;
+    let revenueSum = 0;
+    let profitSum = 0;
+    let itemsSum = 0;
 
-  const maxVolume = Math.max(...hourlyData.map(d => d.volume), 1);
+    for (const txn of safeTransactions) {
+      revenueSum += (txn.total || 0);
+      profitSum += (txn.profit || 0);
+      if (txn.items) {
+        for (const item of txn.items) {
+          itemsSum += (item.quantity || 0);
+        }
+      }
+    }
 
-  // Area Chart: Weekly Trend (7 Days)
-  const trendData = Array.from({ length: 7 }, (_, i) => {
-    const targetDate = new Date();
-    targetDate.setDate(targetDate.getDate() - (6 - i));
-    const dayStr = targetDate.toLocaleDateString('fr-DZ', { weekday: 'short' });
-    
-    const dayTxns = transactions.filter(t => {
-      const d = new Date(t.createdAt);
-      return !isNaN(d.getTime()) && d.toDateString() === targetDate.toDateString();
-    });
-
-    const revenue = dayTxns.reduce((acc, t) => acc + t.total, 0);
-    const profit = dayTxns.reduce((acc, t) => acc + t.profit, 0);
+    const avgTicketCalc = totalOrders > 0 ? revenueSum / totalOrders : 0;
+    const velocityCalc = totalOrders > 0 ? (itemsSum / totalOrders).toFixed(1) : '0';
+    const marginCalc = revenueSum > 0 ? ((profitSum / revenueSum) * 100).toFixed(1) : '0';
 
     return {
-      day: dayStr,
-      revenue,
-      profit
+      totalRevenue: revenueSum,
+      totalProfit: profitSum,
+      avgTicket: avgTicketCalc,
+      avgItemVelocity: velocityCalc,
+      grossMarginPct: marginCalc,
     };
-  });
-  
-  const maxRev = Math.max(...trendData.map(d => d.revenue), 1);
+  }, [safeTransactions]);
+
+  // Bar Chart: Hourly Traffic (08:00 - 20:00) in a single pass
+  const hourlyData = useMemo(() => {
+    const counts = new Array<number>(13).fill(0);
+    for (const txn of safeTransactions) {
+      const createdDate = new Date(txn.createdAt);
+      if (!isNaN(createdDate.getTime())) {
+        const hour = createdDate.getHours();
+        if (hour >= 8 && hour <= 20) {
+          counts[hour - 8]++;
+        }
+      }
+    }
+    return Array.from({ length: 13 }, (_, i) => ({
+      hour: i + 8,
+      volume: counts[i],
+    }));
+  }, [safeTransactions]);
+
+  const maxVolume = useMemo(() => Math.max(...hourlyData.map(d => d.volume), 1), [hourlyData]);
+
+  // Area Chart: Weekly Trend (7 Days) in a single pass
+  const trendData = useMemo(() => {
+    const dayBuckets = new Map<string, { day: string; revenue: number; profit: number }>();
+    const orderedDays: string[] = [];
+
+    for (let i = 0; i < 7; i++) {
+      const targetDate = new Date();
+      targetDate.setDate(targetDate.getDate() - (6 - i));
+      const key = targetDate.toDateString();
+      const dayStr = targetDate.toLocaleDateString('fr-DZ', { weekday: 'short' });
+      dayBuckets.set(key, { day: dayStr, revenue: 0, profit: 0 });
+      orderedDays.push(key);
+    }
+
+    for (const txn of safeTransactions) {
+      const createdDate = new Date(txn.createdAt);
+      if (!isNaN(createdDate.getTime())) {
+        const key = createdDate.toDateString();
+        const bucket = dayBuckets.get(key);
+        if (bucket) {
+          bucket.revenue += (txn.total || 0);
+          bucket.profit += (txn.profit || 0);
+        }
+      }
+    }
+
+    return orderedDays.map((key) => dayBuckets.get(key)!);
+  }, [safeTransactions]);
+
+  const maxRev = useMemo(() => Math.max(...trendData.map(d => d.revenue), 1), [trendData]);
 
   // Donut Chart: Categories
   const categories = [

@@ -103,7 +103,7 @@ export const KittingBundleModal: React.FC = () => {
       setSelectedSkus(matchingSkus);
     } else {
       // Pick first 2 available products
-      setSelectedSkus(products.slice(0, 2).map(p => p.sku));
+      setSelectedSkus((products || []).slice(0, 2).map(p => p.sku));
     }
   };
 
@@ -279,17 +279,17 @@ export const KittingBundleModal: React.FC = () => {
               </div>
 
               {/* Bundles List */}
-              {filteredBundles.length === 0 ? (
+              {(filteredBundles || []).length === 0 ? (
                 <div className="text-center text-pos-muted text-xs py-12 bg-pos-card border border-pos-border rounded-2xl">
                   <Package className="w-8 h-8 opacity-40 mx-auto mb-2" />
                   <p className="font-semibold">Aucun pack configuré dans le catalogue.</p>
                 </div>
               ) : (
-                filteredBundles.map((bundle) => {
+                (filteredBundles || []).map((bundle) => {
                   let hasOutOfStock = false;
                   let totalValue = 0;
 
-                  const childDetails = bundle.childSkus.map((sku) => {
+                  const childDetails = (bundle?.childSkus || []).map((sku) => {
                     const p = products.find((prod) => prod.sku === sku);
                     if (!p || p.stock <= 0) hasOutOfStock = true;
                     if (p) totalValue += p.price;
@@ -360,11 +360,11 @@ export const KittingBundleModal: React.FC = () => {
 
                           <button
                             onClick={() => {
-                              const res = addBundleToCart(bundle.id);
-                              if (res.success) {
+                              const bundleAddResult = addBundleToCart(bundle.id);
+                              if (bundleAddResult.success) {
                                 showSuccess(`Pack "${bundle.bundleTitle}" ajouté au panier !`);
                               } else {
-                                showError(res.reason || "Erreur lors de l'ajout.");
+                                showError(bundleAddResult.reason || "Erreur lors de l'ajout.");
                               }
                             }}
                             disabled={hasOutOfStock}
@@ -466,7 +466,7 @@ export const KittingBundleModal: React.FC = () => {
                 </div>
 
                 <div className="flex-1 overflow-y-auto space-y-1 pr-1">
-                  {filteredProducts.map((p) => {
+                  {(filteredProducts || []).map((p) => {
                     const isSelected = selectedSkus.includes(p.sku);
                     return (
                       <div

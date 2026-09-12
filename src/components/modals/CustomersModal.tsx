@@ -48,15 +48,54 @@ export const CustomersModal: React.FC = () => {
   const [registeredDevice, setRegisteredDevice] = useState('');
   const [pricingTier, setPricingTier] = useState<PricingTier>('Retail');
 
-  // Compute customer metrics from transaction history
-  const getCustomerMetrics = React.useCallback((customerId: string) => {
-    const customerTxns = (transactions || []).filter(t => t.customer?.id === customerId);
-    const totalSpent = customerTxns.reduce((acc, t) => acc + (t.total || 0), 0);
-    const totalOrders = customerTxns.length;
-    const avgBasket = totalOrders > 0 ? totalSpent / totalOrders : 0;
-    const lastPurchase = customerTxns.length > 0 ? customerTxns[0]?.createdAt : null;
-    return { totalSpent, totalOrders, avgBasket, lastPurchase, transactions: customerTxns };
+  // Pre-calculate customer metrics lookup map once to avoid O(N * M) recalculation during render
+  const customerMetricsMap = useMemo(() => {
+    const map = new Map<string, {
+      totalSpent: number;
+      totalOrders: number;
+      avgBasket: number;
+      lastPurchase: string | null;
+      transactions: typeof transactions;
+    }>();
+    if (!transactions) return map;
+
+    for (const t of transactions) {
+      const custId = t.customer?.id;
+      if (!custId) continue;
+      let entry = map.get(custId);
+      if (!entry) {
+        entry = { totalSpent: 0, totalOrders: 0, avgBasket: 0, lastPurchase: null, transactions: [] };
+        map.set(custId, entry);
+      }
+      entry.transactions.push(t);
+      if (t.status !== 'VOIDED' && !t.isRefund) {
+        entry.totalSpent += (t.total || 0);
+      }
+      entry.totalOrders += 1;
+      if (!entry.lastPurchase && t.createdAt) {
+        entry.lastPurchase = t.createdAt;
+      }
+    }
+
+    for (const entry of map.values()) {
+      entry.avgBasket = entry.totalOrders > 0 ? entry.totalSpent / entry.totalOrders : 0;
+    }
+
+    return map;
   }, [transactions]);
+
+  const defaultMetrics = useMemo(() => ({
+    totalSpent: 0,
+    totalOrders: 0,
+    avgBasket: 0,
+    lastPurchase: null as string | null,
+    transactions: [] as NonNullable<typeof transactions>,
+  }), []);
+
+  // Compute customer metrics from transaction history via O(1) Map lookup
+  const getCustomerMetrics = React.useCallback((customerId: string) => {
+    return customerMetricsMap.get(customerId) || defaultMetrics;
+  }, [customerMetricsMap, defaultMetrics]);
 
   // Filtered & Sorted Customers (hook must be above early return)
   const filteredCustomers = useMemo(() => {
@@ -72,16 +111,6 @@ export const CustomersModal: React.FC = () => {
       results = results.filter(c => c.pricingTier === tierFilter);
     }
 
-    // Pre-calculate spent lookup map once to avoid O(N log N * M) recalculation during sort
-    const spentMap = new Map<string, number>();
-    if (sortField === 'totalSpent') {
-      (transactions || []).forEach(t => {
-        if (t.customer?.id && t.status !== 'VOIDED' && !t.isRefund) {
-          spentMap.set(t.customer.id, (spentMap.get(t.customer.id) || 0) + (t.total || 0));
-        }
-      });
-    }
-
     results.sort((a, b) => {
       let cmp = 0;
       switch (sortField) {
@@ -89,8 +118,8 @@ export const CustomersModal: React.FC = () => {
         case 'loyaltyPoints': cmp = (a.loyaltyPoints || 0) - (b.loyaltyPoints || 0); break;
         case 'storeCredit': cmp = (a.storeCredit || 0) - (b.storeCredit || 0); break;
         case 'totalSpent': {
-          const aSpent = spentMap.get(a.id) ?? a.totalSpent ?? 0;
-          const bSpent = spentMap.get(b.id) ?? b.totalSpent ?? 0;
+          const aSpent = customerMetricsMap.get(a.id)?.totalSpent ?? a.totalSpent ?? 0;
+          const bSpent = customerMetricsMap.get(b.id)?.totalSpent ?? b.totalSpent ?? 0;
           cmp = aSpent - bSpent;
           break;
         }
@@ -99,7 +128,7 @@ export const CustomersModal: React.FC = () => {
     });
 
     return results;
-  }, [customers, searchQuery, tierFilter, sortField, sortDir, transactions]);
+  }, [customers, searchQuery, tierFilter, sortField, sortDir, customerMetricsMap]);
 
   const showSuccess = (msg: string) => {
     setSuccessMsg(msg);
@@ -133,13 +162,13 @@ export const CustomersModal: React.FC = () => {
       alert('Veuillez saisir un montant valide.');
       return;
     }
-    const res = await recordCustomerDebtPayment(
+    const debtPaymentResult = await recordCustomerDebtPayment(
       debtPaymentCustomer.id,
       amount,
       debtPaymentMethod,
       debtPaymentNotes
     );
-    if (res.success) {
+    if (debtPaymentResult.success) {
       showSuccess(`Versement de ${formatDZD(amount)} enregistré avec succès !`);
       setDebtPaymentCustomer(null);
       setDebtPaymentAmount('');
@@ -593,13 +622,13 @@ export const CustomersModal: React.FC = () => {
                 <div className="bg-pos-card border border-pos-border rounded-xl p-4">
                   <h4 className="text-xs font-bold text-pos-text mb-3 flex items-center gap-1.5">
                     <History className="w-4 h-4 text-cyan-400" /> Historique d'Achats Récents
-                    <span className="ml-auto text-[10px] text-pos-muted font-normal">{metrics.transactions.length} transactions</span>
+                    <span className="ml-auto text-[10px] text-pos-muted font-normal">{(metrics?.transactions || []).length} transactions</span>
                   </h4>
-                  {metrics.transactions.length === 0 ? (
+                  {(metrics?.transactions || []).length === 0 ? (
                     <p className="text-xs text-pos-muted text-center py-4">Aucune transaction enregistrée pour ce client.</p>
                   ) : (
                     <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                      {metrics.transactions.slice(0, 10).map((t: SaleTransaction) => (
+                      {(metrics?.transactions || []).slice(0, 10).map((t: SaleTransaction) => (
                         <div key={t.id} className="flex items-center justify-between bg-pos-bg p-2.5 rounded-lg border border-pos-border text-xs hover:border-pos-text/20 transition">
                           <div className="flex items-center gap-2.5">
                             <span className="font-mono text-[10px] text-pos-muted">{t.receiptNumber}</span>
@@ -661,7 +690,7 @@ export const CustomersModal: React.FC = () => {
 
               {/* Customer Cards Grid */}
               <div className="grid grid-cols-2 gap-3">
-                {filteredCustomers.map(customer => {
+                {(filteredCustomers || []).map(customer => {
                   const metrics = getCustomerMetrics(customer.id);
                   const isSelected = currentCustomer?.id === customer.id;
                   const hasDebt = (customer.currentDebt || 0) > 0;
@@ -882,7 +911,7 @@ export const CustomersModal: React.FC = () => {
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 gap-3">
-                    {indebtedCustomers.map(customer => {
+                    {(indebtedCustomers || []).map(customer => {
                       const debt = customer.currentDebt || 0;
                       return (
                         <div

@@ -77,7 +77,7 @@ export const PurchaseOrderModal: React.FC = () => {
     if (!selectedPO) return;
     setIsProcessing(true);
 
-    const verifiedItems = selectedPO.items.map((item) => {
+    const verifiedItems = (selectedPO.items || []).map((item) => {
       const receivedQty = verifiedQtyMap[item.productId] !== undefined ? verifiedQtyMap[item.productId] : item.suggestedQty;
       const actualUnitCost = verifiedCostMap[item.productId] !== undefined ? verifiedCostMap[item.productId] : item.unitCost;
       const discrepancyReason = discrepancyReasons[item.productId] || '';
@@ -96,7 +96,7 @@ export const PurchaseOrderModal: React.FC = () => {
       };
     });
 
-    const res = await validateAndReceivePO({
+    const poReceiptResult = await validateAndReceivePO({
       poId: selectedPO.id,
       verifiedItems,
       recordExpense: autoRecordExpense,
@@ -105,8 +105,8 @@ export const PurchaseOrderModal: React.FC = () => {
 
     setIsProcessing(false);
 
-    if (res.success) {
-      if (res.isPartial) {
+    if (poReceiptResult.success) {
+      if (poReceiptResult.isPartial) {
         showToast(
           `📦 Réception partielle validée pour Bon #${selectedPO.poNumber}. Le reliquat reste sur la Liste d'Attente.`,
           'info'
@@ -118,8 +118,8 @@ export const PurchaseOrderModal: React.FC = () => {
         );
       }
 
-      if (autoRecordExpense && res.totalReceivedCost > 0) {
-        showToast(`💶 Dépense fournisseur de ${formatDZD(res.totalReceivedCost)} enregistrée avec succès.`, 'success');
+      if (autoRecordExpense && poReceiptResult.totalReceivedCost > 0) {
+        showToast(`💶 Dépense fournisseur de ${formatDZD(poReceiptResult.totalReceivedCost)} enregistrée avec succès.`, 'success');
       }
 
       setInspectingPO(null);
@@ -142,14 +142,14 @@ export const PurchaseOrderModal: React.FC = () => {
     }
   };
 
-  const totalVerifiedUnits = selectedPO
+  const totalVerifiedUnits = selectedPO && selectedPO.items
     ? selectedPO.items.reduce((acc, item) => {
         const qty = verifiedQtyMap[item.productId] !== undefined ? verifiedQtyMap[item.productId] : item.suggestedQty;
         return acc + qty;
       }, 0)
     : 0;
 
-  const totalVerifiedCostAmount = selectedPO
+  const totalVerifiedCostAmount = selectedPO && selectedPO.items
     ? selectedPO.items.reduce((acc, item) => {
         const qty = verifiedQtyMap[item.productId] !== undefined ? verifiedQtyMap[item.productId] : item.suggestedQty;
         const cost = verifiedCostMap[item.productId] !== undefined ? verifiedCostMap[item.productId] : item.unitCost;
@@ -270,9 +270,9 @@ export const PurchaseOrderModal: React.FC = () => {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {waitingListOrders.map((po) => {
-                    const totalUnits = po.items.reduce((acc, i) => acc + i.suggestedQty, 0);
-                    const receivedUnits = po.items.reduce((acc, i) => acc + (i.receivedQty || 0), 0);
+                  {(waitingListOrders || []).map((po) => {
+                    const totalUnits = (po.items || []).reduce((acc, i) => acc + i.suggestedQty, 0);
+                    const receivedUnits = (po.items || []).reduce((acc, i) => acc + (i.receivedQty || 0), 0);
                     const isPartial = po.status === 'Partially Received';
 
                     return (
@@ -307,13 +307,13 @@ export const PurchaseOrderModal: React.FC = () => {
 
                           <div className="mt-3 bg-pos-bg p-2.5 rounded-xl border border-pos-border text-xs space-y-1">
                             <div className="flex justify-between text-[10px] font-bold text-pos-muted uppercase border-b border-pos-border/40 pb-1">
-                              <span>{po.items.length} Références Commandées</span>
+                              <span>{(po.items || []).length} Références Commandées</span>
                               <span>
                                 {receivedUnits} / {totalUnits} unités reçues
                               </span>
                             </div>
                             <div className="max-h-24 overflow-y-auto space-y-1 pt-1">
-                              {po.items.map((item) => (
+                              {(po.items || []).map((item) => (
                                 <div key={item.productId} className="flex justify-between text-[11px]">
                                   <span className="text-pos-text truncate max-w-[200px]">{item.title}</span>
                                   <span className="font-mono text-emerald-400 font-bold">
@@ -401,7 +401,7 @@ export const PurchaseOrderModal: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-pos-border/40">
-                      {selectedPO.items.map((item) => {
+                      {(selectedPO?.items || []).map((item) => {
                         const verifiedQty =
                           verifiedQtyMap[item.productId] !== undefined
                             ? verifiedQtyMap[item.productId]
@@ -638,7 +638,7 @@ export const PurchaseOrderModal: React.FC = () => {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {completedOrders.map((po) => (
+                  {(completedOrders || []).map((po) => (
                     <div
                       key={po.id}
                       className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 shadow-sm flex flex-col justify-between"
@@ -668,10 +668,10 @@ export const PurchaseOrderModal: React.FC = () => {
 
                         <div className="mt-3 bg-pos-bg p-2.5 rounded-xl border border-pos-border text-xs space-y-1">
                           <span className="text-[10px] font-bold text-pos-muted uppercase block border-b border-pos-border/40 pb-1">
-                            {po.items.length} Références Intégrées en Stock
+                            {(po.items || []).length} Références Intégrées en Stock
                           </span>
                           <div className="max-h-20 overflow-y-auto space-y-1 pt-1">
-                            {po.items.map((item) => (
+                            {(po.items || []).map((item) => (
                               <div key={item.productId} className="flex justify-between text-[11px]">
                                 <span className="text-pos-text truncate max-w-[200px]">{item.title}</span>
                                 <span className="font-mono text-emerald-400 font-bold">
@@ -751,7 +751,7 @@ export const PurchaseOrderModal: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-300">
-                {selectedPO.items.map((item, idx) => (
+                {(selectedPO?.items || []).map((item, idx) => (
                   <tr key={item.productId}>
                     <td className="p-2 text-gray-500 font-mono">{idx + 1}</td>
                     <td className="p-2 font-bold">{item.title}</td>

@@ -97,7 +97,14 @@ mod win {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(mobile)]
+mod win {
+    pub fn print_raw(_printer_name: &str, _data: &[u8]) -> Result<(), String> {
+        Err("Impression mobile non configurée (prévoir plugin Bluetooth/BLE).".into())
+    }
+}
+
+#[cfg(all(not(target_os = "windows"), not(mobile)))]
 mod win {
     pub fn print_raw(_printer_name: &str, _data: &[u8]) -> Result<(), String> {
         Ok(())

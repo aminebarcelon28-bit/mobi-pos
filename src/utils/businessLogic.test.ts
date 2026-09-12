@@ -5,6 +5,7 @@
  */
 
 import { formatDZD } from '../types/pos';
+import { getWholesalePrice, getProductPriceForTier, getEffectiveCostPrice } from './pricingEngine';
 
 export const runBusinessLogicTests = (): { success: boolean; results: string[] } => {
   const results: string[] = [];
@@ -115,14 +116,17 @@ export const runBusinessLogicTests = (): { success: boolean; results: string[] }
     `Expected profit 28000 / margin 56.0%, got ${netProfit} / ${profitMargin}%`
   );
 
-  // ═══ Test 10: Tarif Wholesale (Fallback 75%) ═══
+  // ═══ Test 10: Tarif Wholesale & Coût Unitaire via pricingEngine ═══
   const retailPrice = 4200;
   const wholesalePrice = undefined;
-  const effectiveWholesale = wholesalePrice || retailPrice * 0.75;
+  const effectiveWholesale = getWholesalePrice({ price: retailPrice, wholesalePrice });
+  const tierPriceWholesale = getProductPriceForTier({ price: retailPrice, wholesalePrice }, 'Wholesale');
+  const tierPriceRetail = getProductPriceForTier({ price: retailPrice, wholesalePrice }, 'Retail');
+  const fallbackCost = getEffectiveCostPrice({ price: retailPrice });
   assert(
-    effectiveWholesale === 3150,
-    'Tarif Wholesale Fallback (4 200 DA × 0.75 = 3 150 DA)',
-    `Expected wholesale 3150 DA, got ${effectiveWholesale}`
+    effectiveWholesale === 3150 && tierPriceWholesale === 3150 && tierPriceRetail === 4200 && fallbackCost === 2100,
+    'Tarif Wholesale Fallback & Coût Standard via pricingEngine (Wholesale 3 150 DA, Coût 2 100 DA)',
+    `Expected wholesale 3150 DA / cost 2100 DA, got ${effectiveWholesale} / ${fallbackCost}`
   );
 
   // ═══ Test 11: Blind Till Variance ═══

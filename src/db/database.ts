@@ -38,6 +38,8 @@ export class MobiPosDatabase extends Dexie {
   cashSessions!: Table<CashSession, string>;
   cashMovements!: Table<CashMovement, string>;
   appSettings!: Table<AppSettingItem, string>;
+  inventoryLedger!: Table<Record<string, unknown>, string>;
+  syncOutbox!: Table<Record<string, unknown>, string>;
 
   constructor() {
     super('MobiPosDB');
@@ -60,6 +62,29 @@ export class MobiPosDatabase extends Dexie {
       cashSessions: 'id, status, openedAt',
       cashMovements: 'id, sessionId, type, createdAt',
       appSettings: 'key',
+    });
+
+    // v4: offline-first sync (web fallback mirror of plugin-sql tables).
+    // plugin-sql remains source of truth on Tauri; Dexie mirrors for browser preview.
+    this.version(4).stores({
+      products: 'id, sku, barcode, category, brand, title',
+      customers: 'id, phone, name, loyaltyCardCode, barcode',
+      transactions: 'id, receiptNumber, createdAt',
+      repairOrders: 'id, ticketNumber, status, imei, customerPhone',
+      purchaseOrders: 'id, poNumber, vendorName, status',
+      tradeIns: 'id, imei, brand, createdAt',
+      imeiRecords: 'imei, productId, receivedAt',
+      securityAuditLogs: 'id, timestamp, user',
+      cashDrops: 'id, timestamp',
+      payouts: 'id, timestamp',
+      bundles: 'id, barcode',
+      customerDebts: 'id, customerId, createdAt',
+      storeExpenses: 'id, category, createdAt',
+      cashSessions: 'id, status, openedAt',
+      cashMovements: 'id, sessionId, type, createdAt',
+      appSettings: 'key',
+      inventoryLedger: 'id, productId, createdAt',
+      syncOutbox: 'idempotencyKey, status, entityType',
     });
   }
 }

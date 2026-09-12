@@ -3,8 +3,9 @@ import { Search, Edit2, Zap, AlertCircle, Truck, LayoutGrid, List, Sparkles } fr
 import { usePosStore } from '../store/usePosStore';
 import { useCatalogHotkeys } from '../hooks/useCatalogHotkeys';
 import { formatDZD } from '../types/pos';
-import type { CategoryType, SortOption, Product, BrandName } from '../types/pos';
+import type { CategoryType, SortOption, Product, BrandName, PricingTier } from '../types/pos';
 import { PinDialog } from './ui/PinDialog';
+import { getProductPriceForTier } from '../utils/pricingEngine';
 
 const CATEGORIES: CategoryType[] = [
   'Tous les produits',
@@ -71,7 +72,7 @@ const ProductTile = React.memo(({
   onEdit: (p: Product) => void;
   onOrderStock: (p: Product) => void;
 }) => {
-  const activePrice = pricingTier === 'Wholesale' ? product.wholesalePrice || product.price * 0.75 : product.price;
+  const activePrice = getProductPriceForTier(product, pricingTier as PricingTier);
   const isLowStock = product.stock <= (product.reorderPoint || 10) && product.stock > 0;
   const isOutOfStock = product.stock <= 0;
 
@@ -203,7 +204,7 @@ const ProductTableRow = React.memo(({
   onEdit: (p: Product) => void;
   onOrderStock: (p: Product) => void;
 }) => {
-  const activePrice = pricingTier === 'Wholesale' ? product.wholesalePrice || product.price * 0.75 : product.price;
+  const activePrice = getProductPriceForTier(product, pricingTier as PricingTier);
   const isLowStock = product.stock <= (product.reorderPoint || 10) && product.stock > 0;
   const isOutOfStock = product.stock <= 0;
 

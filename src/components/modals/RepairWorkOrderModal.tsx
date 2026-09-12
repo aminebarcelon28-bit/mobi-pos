@@ -86,15 +86,16 @@ export const RepairWorkOrderModal: React.FC = () => {
   const [printingOrder, setPrintingOrder] = useState<RepairOrder | null>(null);
 
   // KPI Computations
-  const totalOrders = repairOrders.length;
-  const diagnosticCount = repairOrders.filter(r => r.status === 'Diagnostic').length;
-  const pendingPartsCount = repairOrders.filter(r => r.status === 'En attente de pièces').length;
-  const inProgressCount = repairOrders.filter(r => r.status === 'En cours').length;
-  const completedCount = repairOrders.filter(r => r.status === 'Prêt / Terminé').length;
-  const totalRevenue = repairOrders.reduce((acc, r) => acc + (r.totalCost || 0), 0);
+  const safeRepairOrders = repairOrders || [];
+  const totalOrders = safeRepairOrders.length;
+  const diagnosticCount = safeRepairOrders.filter(r => r.status === 'Diagnostic').length;
+  const pendingPartsCount = safeRepairOrders.filter(r => r.status === 'En attente de pièces').length;
+  const inProgressCount = safeRepairOrders.filter(r => r.status === 'En cours').length;
+  const completedCount = safeRepairOrders.filter(r => r.status === 'Prêt / Terminé').length;
+  const totalRevenue = safeRepairOrders.reduce((acc, r) => acc + (r.totalCost || 0), 0);
 
   // Filtered Repair Orders for History Tab
-  const filteredOrders = repairOrders.filter((order) => {
+  const filteredOrders = safeRepairOrders.filter((order) => {
     const matchesStatus = historyStatusFilter === 'Tous' || order.status === historyStatusFilter;
     const q = historySearch.trim().toLowerCase();
     const matchesSearch =
@@ -356,7 +357,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                       className="bg-pos-card border border-pos-border text-pos-text text-xs rounded-lg px-2.5 py-1 focus:border-emerald-400 focus:outline-none"
                     >
                       <option value="">Sélectionner un client existant...</option>
-                      {customers.map(c => (
+                      {(customers || []).map(c => (
                         <option key={c.id} value={c.id}>{c.name} ({c.phone})</option>
                       ))}
                     </select>
@@ -664,7 +665,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                   <span className="text-xs text-pos-muted font-bold">Statut du Ticket:</span>
                   <select
                     value={status}
-                    onChange={(e) => setStatus(e.target.value as any)}
+                    onChange={(e) => setStatus(e.target.value as RepairOrder['status'])}
                     className="bg-pos-bg border border-pos-border rounded-xl px-3.5 py-2 text-xs font-bold text-pos-text focus:outline-none cursor-pointer"
                   >
                     <option value="Diagnostic">Statut: Diagnostic</option>
@@ -728,13 +729,13 @@ export const RepairWorkOrderModal: React.FC = () => {
               </div>
 
               {/* History Ticket Cards List */}
-              {filteredOrders.length === 0 ? (
+              {(filteredOrders || []).length === 0 ? (
                 <div className="text-center text-pos-muted text-xs py-12 bg-pos-card border border-pos-border rounded-2xl">
                   <Wrench className="w-8 h-8 opacity-40 mx-auto mb-2" />
                   <p className="font-semibold">Aucun ticket de réparation ne correspond à vos critères.</p>
                 </div>
               ) : (
-                filteredOrders.map((order) => (
+                (filteredOrders || []).map((order) => (
                   <div key={order.id} className="bg-pos-card border border-pos-border p-4.5 rounded-2xl flex flex-col gap-3 text-xs shadow-sm hover:border-emerald-500/40 transition">
                     <div className="flex justify-between items-start">
                       <div>

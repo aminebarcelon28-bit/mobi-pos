@@ -19,6 +19,7 @@ import type { PaymentTender, PaymentMethodType } from '../../types/pos';
 import { useToast } from '../../components/ui/Toast';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { soundEngine } from '../../utils/audioFeedback';
+import { getProductPriceForTier } from '../../utils/pricingEngine';
 
 export const PaymentModal: React.FC = () => {
   const {
@@ -47,9 +48,7 @@ export const PaymentModal: React.FC = () => {
     const itemPrice =
       item.appliedPrice !== undefined
         ? item.appliedPrice
-        : pricingTier === 'Wholesale'
-        ? item.product.wholesalePrice || item.product.price * 0.75
-        : item.product.price;
+        : getProductPriceForTier(item.product, pricingTier);
     return acc + itemPrice * item.quantity - (item.discount || 0);
   }, 0);
 

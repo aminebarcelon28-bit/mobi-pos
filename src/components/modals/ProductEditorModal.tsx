@@ -439,10 +439,10 @@ export const ProductEditorModal: React.FC = () => {
     }
 
     setIsSubmitting(true);
-    const res = await saveProduct(formData);
+    const saveResult = await saveProduct(formData);
     setIsSubmitting(false);
 
-    if (res.success) {
+    if (saveResult.success) {
       showToast(
         editingProduct
           ? `Produit "${formData.title}" mis à jour avec succès.`
@@ -454,7 +454,7 @@ export const ProductEditorModal: React.FC = () => {
         openModal('label_printer');
       }
     } else {
-      showToast(`Erreur lors de l'enregistrement : ${res.reason}`, 'error');
+      showToast(`Erreur lors de l'enregistrement : ${saveResult.reason}`, 'error');
     }
   };
 

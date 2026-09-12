@@ -13,10 +13,9 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import { sqliteAdapter } from '../../db/sqliteAdapter';
-import type { DbStats, IntegrityReport } from '../../db/sqliteAdapter';
+import { maintenanceService, type DbStats, type IntegrityReport } from '../../services/maintenanceService';
 import { useToast } from '../ui/Toast';
-import { soundEngine } from '../../utils/audioFeedback';
+import { audioBus } from '../../utils/audioEvents';
 
 export const DatabaseMaintenanceModal: React.FC = () => {
   const {
@@ -48,9 +47,9 @@ export const DatabaseMaintenanceModal: React.FC = () => {
 
   const loadStats = async () => {
     try {
-      const s = await sqliteAdapter.getStats();
+      const s = await maintenanceService.getDatabaseStats();
       setStats(s);
-      const rep = await sqliteAdapter.runIntegrityCheck();
+      const rep = await maintenanceService.runDatabaseIntegrityCheck();
       setIntegrity(rep);
     } catch (e) {
       console.error('Failed to load DB stats:', e);
@@ -65,14 +64,14 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   const handleCheckpointWal = async () => {
     setIsProcessing(true);
     try {
-      const msg = await sqliteAdapter.checkpointWal();
+      const msg = await maintenanceService.checkpointDatabaseWal();
       setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] ${msg}`);
-      soundEngine.playSuccess();
+      audioBus.emit('success');
       showToast('WAL Checkpoint exécuté avec succès.', 'success');
       await loadStats();
     } catch (e) {
       console.error(e);
-      soundEngine.playError();
+      audioBus.emit('error');
       showToast('Erreur lors du checkpoint WAL.', 'error');
     } finally {
       setIsProcessing(false);
@@ -82,14 +81,14 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   const handleVacuum = async () => {
     setIsProcessing(true);
     try {
-      const msg = await sqliteAdapter.vacuum();
+      const msg = await maintenanceService.vacuumDatabase();
       setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] ${msg}`);
-      soundEngine.playSuccess();
+      audioBus.emit('success');
       showToast('Base de données SQLite défragmentée et compactée !', 'success');
       await loadStats();
     } catch (e) {
       console.error(e);
-      soundEngine.playError();
+      audioBus.emit('error');
       showToast('Erreur lors du VACUUM.', 'error');
     } finally {
       setIsProcessing(false);
@@ -99,18 +98,18 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   const handleRunIntegrity = async () => {
     setIsProcessing(true);
     try {
-      const rep = await sqliteAdapter.runIntegrityCheck();
+      const rep = await maintenanceService.runDatabaseIntegrityCheck();
       setIntegrity(rep);
       setActionOutput(
         `[${new Date().toLocaleTimeString('fr-FR')}] Diagnostic d'intégrité terminé : ${
           rep.is_healthy ? '100% Intègre (Aucune corruption)' : 'Anomalies détectées'
         }`
       );
-      soundEngine.playSuccess();
+      audioBus.emit('success');
       showToast('Vérification d\'intégrité physique validée !', 'success');
     } catch (e) {
       console.error(e);
-      soundEngine.playError();
+      audioBus.emit('error');
       showToast('Erreur lors de la vérification d\'intégrité.', 'error');
     } finally {
       setIsProcessing(false);
@@ -122,13 +121,13 @@ export const DatabaseMaintenanceModal: React.FC = () => {
     try {
       const now = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const fileName = `MobiPOS_Backup_${now}.db`;
-      const res = await sqliteAdapter.backupToFile(fileName);
-      setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] Instantané créé : ${res}`);
-      soundEngine.playSuccess();
+      const backupResult = await maintenanceService.backupDatabaseToFile(fileName);
+      setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] Instantané créé : ${backupResult}`);
+      audioBus.emit('success');
       showToast(`Instantané de sauvegarde créé : ${fileName}`, 'success');
     } catch (e) {
       console.error(e);
-      soundEngine.playError();
+      audioBus.emit('error');
       showToast('Erreur lors de la création de la sauvegarde snapshot.', 'error');
     } finally {
       setIsProcessing(false);
@@ -158,7 +157,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    soundEngine.playSuccess();
+    audioBus.emit('success');
     showToast('Sauvegarde JSON intégrale téléchargée.', 'success');
   };
 
@@ -296,7 +295,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
 
             <div className="text-[11px] text-pos-muted bg-pos-bg p-2.5 rounded-xl border border-pos-border font-mono break-all">
               <span className="font-bold text-pos-text">Emplacement Fichier : </span>
-              {stats?.db_path || 'C:\\Users\\Click\\AppData\\Roaming\\mobi-pos\\mobi_pos.db'}
+              {stats?.db_path || 'mobi_pos.db (Base de Données Locale)'}
             </div>
           </div>
 

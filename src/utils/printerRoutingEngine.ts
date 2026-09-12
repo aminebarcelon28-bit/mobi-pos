@@ -75,12 +75,12 @@ export const dispatchSmartPrintJob = (
   const target = resolvePrinterForDocument(docType, config);
 
   if (showToast) {
+    const detailSuffix = details ? ` (${details})` : '';
     showToast(
-      `⚡ Routage Intelligent : [${target.documentTypeLabel}] routé automatiquement vers ${target.printerName}`,
+      `⚡ Routage Intelligent : [${target.documentTypeLabel}]${detailSuffix} routé automatiquement vers ${target.printerName}`,
       'info'
     );
   }
 
-  console.log(`[SmartPrintRouter] Document: ${docType} (${details}) -> Target Printer: ${target.printerName} (${target.protocol})`);
   return target;
 };

@@ -13,19 +13,10 @@ export const CompatibilityModal: React.FC = () => {
   const modelsForBrand = useMemo(() => {
     const models = new Set<string>();
     products.forEach(p => {
-      // In a real DB this might be strict, here we check if brand matches or title contains it if brand is 'Autre'
       if ((p.brand === selectedBrand || p.title.includes(selectedBrand)) && p.compatibleModel && p.compatibleModel !== 'Universel' && p.compatibleModel !== 'N/A') {
         models.add(p.compatibleModel);
       }
     });
-    // Fallback static models if store has none, to make it look robust for the demo
-    if (models.size === 0) {
-      if (selectedBrand === 'Apple') return ['iPhone 15 Pro Max', 'iPhone 15 Pro', 'iPhone 14 Pro', 'iPhone 13'];
-      if (selectedBrand === 'Samsung') return ['Galaxy S24 Ultra', 'Galaxy S23 FE', 'Galaxy A54', 'Galaxy Z Fold 5'];
-      if (selectedBrand === 'Xiaomi') return ['Redmi Note 13 Pro', 'Xiaomi 14 Ultra', 'POCO X6 Pro'];
-      if (selectedBrand === 'Oppo') return ['Reno 10 Pro', 'Find X5 Pro', 'A78'];
-      if (selectedBrand === 'Google') return ['Pixel 8 Pro', 'Pixel 7a', 'Pixel Fold'];
-    }
     return Array.from(models).sort();
   }, [products, selectedBrand]);
 
@@ -79,19 +70,23 @@ export const CompatibilityModal: React.FC = () => {
 
             <div className="p-4 flex-1 overflow-y-auto hide-scrollbar space-y-2">
               <span className="text-xs font-bold text-pos-muted uppercase tracking-wider mb-2 block">2. Modèle</span>
-              {modelsForBrand.map(model => (
-                <button
-                  key={model}
-                  onClick={() => setSelectedModel(model)}
-                  className={`w-full text-left px-4 py-3 rounded-xl text-sm font-semibold transition border ${
-                    selectedModel === model
-                      ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
-                      : 'bg-pos-bg border-pos-border/50 text-pos-text hover:border-emerald-500/30'
-                  }`}
-                >
-                  {model}
-                </button>
-              ))}
+              {modelsForBrand.length === 0 ? (
+                <p className="text-xs text-pos-muted italic py-4">Aucun modèle spécifique répertorié</p>
+              ) : (
+                modelsForBrand.map(model => (
+                  <button
+                    key={model}
+                    onClick={() => setSelectedModel(model)}
+                    className={`w-full text-left px-4 py-3 rounded-xl text-sm font-semibold transition border ${
+                      selectedModel === model
+                        ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
+                        : 'bg-pos-bg border-pos-border/50 text-pos-text hover:border-emerald-500/30'
+                    }`}
+                  >
+                    {model}
+                  </button>
+                ))
+              )}
             </div>
           </div>
 

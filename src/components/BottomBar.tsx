@@ -10,15 +10,39 @@ import {
   Database,
   Boxes,
   RotateCcw,
+  Cloud,
+  CloudOff,
+  RefreshCw,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { useToast } from './ui/Toast';
+import { useSyncStatus } from '../hooks/useSyncStatus';
+import { syncManager } from '../sync/SyncManager';
 
 export const BottomBar: React.FC = () => {
   const { openModal, holdSale, clearCart, heldSales } = usePosStore();
   const { showToast } = useToast();
+  const sync = useSyncStatus();
   const [timeStr, setTimeStr] = useState('');
   const [dateStr, setDateStr] = useState('');
+
+  const handleSyncClick = () => {
+    if (!sync.online) {
+      showToast('Hors ligne — les ventes restent en file locale et partiront à la reconnexion.', 'warning');
+      return;
+    }
+    if (sync.pendingCount === 0 && !sync.pushing && !sync.pulling) {
+      showToast(
+        sync.lastPullAt
+          ? `Synchronisé avec Turso. Dernier pull: ${new Date(sync.lastPullAt).toLocaleTimeString('fr-FR')}.`
+          : 'Synchronisé avec Turso.',
+        'success',
+      );
+      return;
+    }
+    void syncManager.kick();
+    showToast('Synchronisation Turso forcée…', 'info');
+  };
 
   useEffect(() => {
     const updateTime = () => {
@@ -38,8 +62,8 @@ export const BottomBar: React.FC = () => {
   }, []);
 
   const handleHoldSaleClick = () => {
-    const res = holdSale();
-    if (res && res.success) {
+    const holdResult = holdSale();
+    if (holdResult && holdResult.success) {
       showToast('Vente mise en attente avec succès ! (Ticket sauvegardé)', 'success');
     } else {
       showToast('Le panier est vide. Aucun article à mettre en attente.', 'warning');
@@ -162,6 +186,46 @@ export const BottomBar: React.FC = () => {
 
         {/* Right Corner: Telemetry & System Clock */}
         <div className="flex items-center gap-3 pl-3 border-l border-pos-border shrink-0 text-xs">
+          <button
+            onClick={handleSyncClick}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition cursor-pointer shadow-sm shrink-0 ${
+              !sync.online
+                ? 'bg-slate-500/10 hover:bg-slate-500/20 border-slate-500/30 text-slate-300'
+                : sync.pushing || sync.pulling
+                  ? 'bg-sky-500/10 hover:bg-sky-500/20 border-sky-500/30 text-sky-300'
+                  : sync.pendingCount > 0
+                    ? 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-300'
+                    : 'bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
+            }`}
+            title={
+              !sync.online
+                ? 'Hors ligne — file locale active, sync auto à la reconnexion'
+                : sync.lastError ?? `Turso sync — cliquez pour forcer. Dernier pull: ${sync.lastPullAt ?? '—'}`
+            }
+          >
+            {!sync.online ? (
+              <CloudOff className="w-3.5 h-3.5 shrink-0" />
+            ) : sync.pushing || sync.pulling ? (
+              <RefreshCw className="w-3.5 h-3.5 shrink-0 animate-spin" />
+            ) : (
+              <Cloud className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span className="font-mono">
+              {!sync.online
+                ? 'Hors ligne'
+                : sync.pushing || sync.pulling
+                  ? 'Sync…'
+                  : sync.pendingCount > 0
+                    ? `${sync.pendingCount} en attente`
+                    : 'Sync Turso'}
+            </span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                !sync.online ? 'bg-slate-400' : sync.pendingCount > 0 ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'
+              }`}
+            />
+          </button>
+
           <button
             onClick={() => openModal('db_maintenance')}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-[11px] font-bold text-cyan-300 transition cursor-pointer shadow-sm shrink-0"

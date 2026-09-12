@@ -54,8 +54,19 @@ export class ErrorBoundary extends Component<Props, State> {
           </div>
 
           {this.state.error && (
-            <div className="bg-pos-bg p-3 rounded-xl border border-pos-border text-left font-mono text-[10px] text-rose-300 max-h-24 overflow-y-auto">
-              {this.state.error.toString()}
+            <div className="space-y-2 text-left">
+              <div className="bg-pos-bg p-3 rounded-xl border border-pos-border font-mono text-[10px] text-rose-300 max-h-24 overflow-y-auto">
+                {this.state.error.toString()}
+              </div>
+              {(this.state.error?.stack || this.state.errorInfo?.componentStack) && (
+                <details className="text-[9px] font-mono text-pos-muted bg-pos-card p-2 rounded-lg border border-pos-border" open>
+                  <summary className="cursor-pointer font-bold text-rose-400">Détails techniques</summary>
+                  <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[9px] text-rose-200/80 max-h-48 overflow-y-auto">
+                    {this.state.error?.stack}
+                    {this.state.errorInfo?.componentStack && `\n\n--- React Component Stack ---\n${this.state.errorInfo.componentStack}`}
+                  </pre>
+                </details>
+              )}
             </div>
           )}
 

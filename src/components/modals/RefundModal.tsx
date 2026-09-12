@@ -87,10 +87,10 @@ export const RefundModal: React.FC = () => {
     const q = searchQuery.toLowerCase().trim();
     if (!q) return true;
     return (
-      t.receiptNumber.toLowerCase().includes(q) ||
+      (t.receiptNumber || '').toLowerCase().includes(q) ||
       (t.customer?.name && t.customer.name.toLowerCase().includes(q)) ||
       (t.customer?.phone && t.customer.phone.toLowerCase().includes(q)) ||
-      t.items.some((i) => i.product.title.toLowerCase().includes(q) || i.product.sku.toLowerCase().includes(q))
+      (t.items || []).some((i) => (i.product?.title || '').toLowerCase().includes(q) || (i.product?.sku || '').toLowerCase().includes(q))
     );
   });
 
@@ -102,8 +102,8 @@ export const RefundModal: React.FC = () => {
 
   // Calculate refund items
   const activeRefundItems: RefundItem[] = selectedTxn
-    ? selectedTxn.items
-        .filter((item) => selectedItemIds[item.product.id])
+    ? (selectedTxn.items || [])
+        .filter((item) => selectedItemIds[item.product?.id])
         .map((item) => {
           const qty = Math.min(item.quantity, refundQuantities[item.product.id] || item.quantity);
           const unitPrice = item.appliedPrice || item.product.price;
@@ -167,7 +167,7 @@ export const RefundModal: React.FC = () => {
     setIsSubmitting(true);
     try {
       const finalReason = refundReason === 'Autre' && customReason.trim() ? customReason.trim() : refundReason;
-      const res = await processRefund({
+      const refundResult = await processRefund({
         originalTransaction: selectedTxn,
         refundItems: activeRefundItems,
         refundMethod,
@@ -175,7 +175,7 @@ export const RefundModal: React.FC = () => {
         cashierName: 'Manager',
       });
 
-      if (res.success) {
+      if (refundResult.success) {
         showToast(
           `Remboursement de ${formatDZD(totalRefundAmount)} validé avec succès (${refundMethod}).`,
           'success'
@@ -183,7 +183,7 @@ export const RefundModal: React.FC = () => {
         setSelectedTxn(null);
         setSelectedTransactionForRefund(null);
       } else {
-        showToast(`Erreur lors du remboursement: ${res.reason}`, 'error');
+        showToast(`Erreur lors du remboursement: ${refundResult.reason}`, 'error');
       }
     } catch (err) {
       console.error('Refund submission error:', err);
@@ -244,13 +244,13 @@ export const RefundModal: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto divide-y divide-pos-border/40 p-1">
-              {filteredTransactions.length === 0 ? (
+              {(filteredTransactions || []).length === 0 ? (
                 <div className="p-6 text-center text-xs text-pos-muted">
                   <Receipt className="w-8 h-8 mx-auto mb-2 text-pos-muted/40" />
                   Aucun ticket éligible trouvé.
                 </div>
               ) : (
-                filteredTransactions.slice(0, 30).map((t) => {
+                (filteredTransactions || []).slice(0, 30).map((t) => {
                   const isSelected = selectedTxn?.id === t.id;
                   return (
                     <button
@@ -337,7 +337,7 @@ export const RefundModal: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-pos-border/40">
-                        {selectedTxn.items.map((item) => {
+                        {(selectedTxn.items || []).map((item) => {
                           const isChecked = Boolean(selectedItemIds[item.product.id]);
                           const isRestocked = Boolean(restockMap[item.product.id]);
                           const qty = refundQuantities[item.product.id] || item.quantity;

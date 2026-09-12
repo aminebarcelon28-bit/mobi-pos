@@ -53,9 +53,86 @@ export const App: React.FC = () => {
   const { scannerActive } = useBarcodeScanner();
   const initDatabase = usePosStore((state) => state.initDatabase);
   const cart = usePosStore((state) => state.cart);
+  const activeModal = usePosStore((state) => state.activeModal);
 
+  // Background two-way sync (Turso). On a fresh laptop the first pull runs
+  // BEFORE initDatabase, so cloud data lands in Dexie first and the demo
+  // seed guard (empty-catalog check) does not fire. Failures are silent
+  // (offline-first) and surfaced via useSyncStatus() where needed.
+  // NOTE: initDatabase runs ONLY here (in finally) — no separate effect.
+  // Later pulls that land rows refresh the UI store via onPullApplied.
   React.useEffect(() => {
-    initDatabase();
+    let cancelled = false;
+    let unsubPull: (() => void) | undefined;
+    let refreshTimer: number | undefined;
+    (async () => {
+      try {
+        const { getDeviceId } = await import('./sync/device');
+        const { syncManager } = await import('./sync/SyncManager');
+        if (cancelled) return;
+        unsubPull = syncManager.onPullApplied(() => {
+          if (cancelled) return;
+          if (refreshTimer) window.clearTimeout(refreshTimer);
+          refreshTimer = window.setTimeout(() => {
+            usePosStore.getState().refreshAfterPull().catch((err: unknown) => {
+              console.warn('[sync] Debounced UI refresh error:', err);
+            });
+          }, 1500);
+        });
+        await syncManager.start(getDeviceId());
+        if (!cancelled) await syncManager.initialPull();
+      } catch (e) {
+        console.warn('SyncManager start skipped:', e);
+      } finally {
+        if (!cancelled) {
+          await initDatabase();
+          // Pulls that landed during boot need one refresh too.
+          if (!cancelled) {
+            usePosStore.getState().refreshAfterPull().catch((err: unknown) => {
+              console.warn('[sync] Post-boot UI refresh error:', err);
+            });
+          }
+          // One-time catch-up for rows pulled before the Dexie mirrors
+          // existed (cursor has moved past them): mirror plugin-sql into
+          // Dexie, then refresh the UI once more if anything moved.
+          if (!cancelled) {
+            try {
+              const { remirrorToDexie } = await import('./db/backfill');
+              const mirrorResult = await remirrorToDexie();
+              if (mirrorResult.mirrored > 0) {
+                usePosStore.getState().refreshAfterPull().catch((err: unknown) => {
+                  console.warn('[sync] Post-remirror UI refresh error:', err);
+                });
+              }
+            } catch (e) {
+              console.warn('Remirror skipped:', e);
+            }
+          }
+          // One-time orphan backfill: anything Dexie holds that predates the
+          // outbox gets enqueued now (idempotent). Then the live loops own it.
+          if (!cancelled) {
+            try {
+              const { backfillAllToOutbox } = await import('./db/backfill');
+              const { syncManager } = await import('./sync/SyncManager');
+              const backfillResult = await backfillAllToOutbox();
+              if (backfillResult.enqueued > 0) {
+                syncManager.notifyLocalWrite();
+              }
+            } catch (e) {
+              console.warn('Backfill skipped:', e);
+            }
+          }
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (refreshTimer) window.clearTimeout(refreshTimer);
+      unsubPull?.();
+      import('./sync/SyncManager').then((m) => m.syncManager.stop()).catch((err: unknown) => {
+        console.warn('[sync] Error stopping sync manager:', err);
+      });
+    };
   }, [initDatabase]);
 
   React.useEffect(() => {
@@ -94,42 +171,42 @@ export const App: React.FC = () => {
           {/* Dialog Modals with Isolated Error Boundaries */}
           <Suspense fallback={null}>
             <ErrorBoundary fallbackTitle="Erreur d'Affichage du Modal">
-              <PaymentModal />
-              <ReceiptModal />
-              <HoldSalesModal />
-              <DiscountModal />
-              <CustomersModal />
-              <SettingsModal />
-              <CompatibilityModal />
-              <ProductEditorModal />
-              <InventoryManagerModal />
-              <ReportsModal />
-              <LabelPrinterModal />
-              <InvoiceIngestionModal />
-              <ReceiptTemplateModal />
-              <LicensingModal />
-              <SecurityAuditModal />
-              <ShiftZReportModal />
-              <ShiftOpenModal />
-              <ShiftMovementModal />
-              <ShiftCloseModal />
-              <VendorProcurementModal />
-              <PurchaseOrderModal />
-              <RepairWorkOrderModal />
-              <TradeInBuybackModal />
-              <KittingBundleModal />
-              <HotkeyGuideModal />
-              <CustomerDisplayModal />
-              <PinPromptModal />
-              <LoyaltyCardModal />
+              {activeModal === 'payment' && <PaymentModal />}
+              {activeModal === 'receipt' && <ReceiptModal />}
+              {activeModal === 'hold' && <HoldSalesModal />}
+              {activeModal === 'discount' && <DiscountModal />}
+              {activeModal === 'customers' && <CustomersModal />}
+              {activeModal === 'settings' && <SettingsModal />}
+              {activeModal === 'compatibility' && <CompatibilityModal />}
+              {activeModal === 'product_editor' && <ProductEditorModal />}
+              {activeModal === 'inventory_manager' && <InventoryManagerModal />}
+              {activeModal === 'reports' && <ReportsModal />}
+              {activeModal === 'label_printer' && <LabelPrinterModal />}
+              {activeModal === 'invoice_ingestion' && <InvoiceIngestionModal />}
+              {activeModal === 'receipt_template' && <ReceiptTemplateModal />}
+              {activeModal === 'licensing' && <LicensingModal />}
+              {activeModal === 'security_audit' && <SecurityAuditModal />}
+              {activeModal === 'shift_zreport' && <ShiftZReportModal />}
+              {activeModal === 'shift_open' && <ShiftOpenModal />}
+              {activeModal === 'shift_movement' && <ShiftMovementModal />}
+              {activeModal === 'shift_close' && <ShiftCloseModal />}
+              {activeModal === 'vendor_procurement' && <VendorProcurementModal />}
+              {activeModal === 'purchase_order' && <PurchaseOrderModal />}
+              {activeModal === 'repair_work_order' && <RepairWorkOrderModal />}
+              {activeModal === 'trade_in_buyback' && <TradeInBuybackModal />}
+              {activeModal === 'kitting_bundle' && <KittingBundleModal />}
+              {activeModal === 'hotkey_guide' && <HotkeyGuideModal />}
+              {activeModal === 'customer_display' && <CustomerDisplayModal />}
+              {activeModal === 'pin_prompt' && <PinPromptModal />}
+              {activeModal === 'loyalty_card' && <LoyaltyCardModal />}
               <UpdateModal />
-              <RefundModal />
-              <WhatsAppDispatchModal />
-              <ImeiWarrantyInspectorModal />
-              <CommandTicketDashboardModal />
-              <DebtLedgerModal />
-              <ExpenseManagerModal />
-              <DatabaseMaintenanceModal />
+              {activeModal === 'refund' && <RefundModal />}
+              {activeModal === 'whatsapp_dispatch' && <WhatsAppDispatchModal />}
+              {activeModal === 'imei_inspector' && <ImeiWarrantyInspectorModal />}
+              {activeModal === 'command_tickets' && <CommandTicketDashboardModal />}
+              {activeModal === 'debt_ledger' && <DebtLedgerModal />}
+              {activeModal === 'expense_manager' && <ExpenseManagerModal />}
+              {activeModal === 'db_maintenance' && <DatabaseMaintenanceModal />}
             </ErrorBoundary>
           </Suspense>
         </div>

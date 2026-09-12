@@ -328,7 +328,7 @@ export const ExpenseManagerModal: React.FC = () => {
         {/* EXPENSES LIST TABLE */}
         {/* ══════════════════════════════════════════════════════════════ */}
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
-          {filteredExpenses.length === 0 ? (
+          {(filteredExpenses || []).length === 0 ? (
             <div className="p-12 text-center bg-pos-card border border-pos-border rounded-2xl space-y-3">
               <FileSpreadsheet className="w-12 h-12 text-pos-muted mx-auto opacity-40" />
               <h3 className="font-bold text-sm text-pos-text">Aucune dépense enregistrée</h3>
@@ -337,7 +337,7 @@ export const ExpenseManagerModal: React.FC = () => {
               </p>
             </div>
           ) : (
-            filteredExpenses.map((exp) => (
+            (filteredExpenses || []).map((exp) => (
               <div
                 key={exp.id}
                 className="bg-pos-card border border-pos-border hover:border-amber-500/40 rounded-xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm transition"

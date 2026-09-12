@@ -75,7 +75,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
   const totalWaitingUnits = waitingPOs.reduce(
     (acc, po) =>
       acc +
-      po.items.reduce(
+      (po.items || []).reduce(
         (sum, item) => sum + Math.max(0, item.suggestedQty - (item.receivedQty || 0)),
         0
       ),
@@ -143,7 +143,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
     if (!receivingPO) return;
     setIsProcessing(true);
 
-    const verifiedItems = receivingPO.items.map((item) => {
+    const verifiedItems = (receivingPO.items || []).map((item) => {
       const receivedQty = verifiedQtyMap[item.productId] !== undefined ? verifiedQtyMap[item.productId] : item.suggestedQty;
       const actualUnitCost = verifiedCostMap[item.productId] !== undefined ? verifiedCostMap[item.productId] : item.unitCost;
       const discrepancyReason = discrepancyReasons[item.productId] || '';
@@ -156,7 +156,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
       };
     });
 
-    const res = await validateAndReceivePO({
+    const poReceiveResult = await validateAndReceivePO({
       poId: receivingPO.id,
       verifiedItems,
       recordExpense: autoRecordExpense,
@@ -165,9 +165,9 @@ export const CommandTicketDashboardModal: React.FC = () => {
 
     setIsProcessing(false);
 
-    if (res.success) {
+    if (poReceiveResult.success) {
       soundEngine.playSuccess();
-      if (res.isPartial) {
+      if (poReceiveResult.isPartial) {
         showToast(
           `📦 Réception partielle validée pour Bon #${receivingPO.poNumber}. Le reliquat reste sur la Liste d'Attente.`,
           'info'
@@ -179,8 +179,8 @@ export const CommandTicketDashboardModal: React.FC = () => {
         );
       }
 
-      if (autoRecordExpense && res.totalReceivedCost > 0) {
-        showToast(`💶 Charge Fournisseur de ${formatDZD(res.totalReceivedCost)} liée à l'EBITDA.`, 'success');
+      if (autoRecordExpense && poReceiveResult.totalReceivedCost > 0) {
+        showToast(`💶 Charge Fournisseur de ${formatDZD(poReceiveResult.totalReceivedCost)} liée à l'EBITDA.`, 'success');
       }
 
       setReceivingPO(null);
@@ -468,11 +468,11 @@ export const CommandTicketDashboardModal: React.FC = () => {
                   </button>
                 </div>
               ) : (
-                filteredPOs.map((po) => {
+                (filteredPOs || []).map((po) => {
                   const isExpanded = expandedPoId === po.id;
                   const isWaiting = po.status === 'Waiting List' || po.status === 'Draft' || po.status === 'Partially Received';
-                  const totalUnits = po.items.reduce((sum, item) => sum + item.suggestedQty, 0);
-                  const receivedUnits = po.items.reduce((sum, item) => sum + (item.receivedQty || 0), 0);
+                  const totalUnits = (po.items || []).reduce((sum, item) => sum + item.suggestedQty, 0);
+                  const receivedUnits = (po.items || []).reduce((sum, item) => sum + (item.receivedQty || 0), 0);
 
                   return (
                     <div
@@ -603,7 +603,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-pos-border/40 font-mono">
-                                {po.items.map((item) => (
+                                {(po.items || []).map((item) => (
                                   <tr key={item.productId} className="hover:bg-pos-card/50">
                                     <td className="py-2 px-3">
                                       <span className="font-sans font-bold text-pos-text block">{item.title}</span>
@@ -655,9 +655,9 @@ export const CommandTicketDashboardModal: React.FC = () => {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {filteredHeldSales.map((hs) => {
+                  {(filteredHeldSales || []).map((hs) => {
                     const custName = hs.customer?.name || 'Client Comptant (Passage)';
-                    const totalAmount = hs.items.reduce(
+                    const totalAmount = (hs.items || []).reduce(
                       (sum, item) => sum + (item.appliedPrice || item.product.price) * item.quantity - (item.discount || 0),
                       0
                     );
@@ -684,7 +684,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
 
                         {/* Items list preview */}
                         <div className="space-y-1 max-h-32 overflow-y-auto pr-1 text-xs">
-                          {hs.items.map((it) => (
+                          {(hs.items || []).map((it) => (
                             <div key={it.product.id} className="flex justify-between text-pos-muted">
                               <span className="truncate pr-2 font-medium">
                                 {it.quantity}x {it.product.title}
@@ -731,7 +731,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {filteredRepairs.map((repair) => (
+                  {(filteredRepairs || []).map((repair) => (
                     <div
                       key={repair.id}
                       className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 shadow-sm hover:border-emerald-500/40 transition"
@@ -836,7 +836,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                 </p>
 
                 <div className="space-y-2">
-                  {receivingPO.items.map((item) => {
+                  {(receivingPO?.items || []).map((item) => {
                     const currentQty = verifiedQtyMap[item.productId] !== undefined ? verifiedQtyMap[item.productId] : item.suggestedQty;
                     const currentCost = verifiedCostMap[item.productId] !== undefined ? verifiedCostMap[item.productId] : item.unitCost;
 

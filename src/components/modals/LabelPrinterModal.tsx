@@ -38,14 +38,14 @@ export const LabelPrinterModal: React.FC = () => {
 
   // Extract unique brands for filtering
   const availableBrands = useMemo(() => {
-    const brands = new Set(products.map(p => p.brand).filter(Boolean));
+    const brands = new Set((products || []).map(p => p.brand).filter(Boolean));
     return ['Toutes les marques', ...Array.from(brands)];
   }, [products]);
 
   // Filtered product list based on search, category, brand
   const filteredProducts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return products.filter((p) => {
+    return (products || []).filter((p) => {
       const matchesCategory = categoryFilter === 'Tous les produits' || p.category === categoryFilter;
       const matchesBrand = brandFilter === 'Toutes les marques' || p.brand === brandFilter;
       const matchesSearch =
@@ -191,7 +191,7 @@ export const LabelPrinterModal: React.FC = () => {
                   <p className="text-[10px]">Essayez de modifier votre recherche ou vos filtres.</p>
                 </div>
               ) : (
-                filteredProducts.map((p) => {
+                (filteredProducts || []).map((p) => {
                   const isSelected = p.id === selectedProduct?.id;
                   return (
                     <div

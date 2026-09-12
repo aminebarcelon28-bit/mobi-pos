@@ -27,21 +27,21 @@ export const ShiftMovementModal: React.FC = () => {
       return;
     }
 
-    const res = await logCashMovement(
+    const movementResult = await logCashMovement(
       validAmount,
       type,
       reason.trim(),
       cashierName.trim() || undefined
     );
 
-    if (res.success) {
+    if (movementResult.success) {
       showToast(
         `${type === 'EXPENSE' ? 'Dépense' : 'Apport'} de ${formatDZD(validAmount)} enregistré avec succès.`,
         'success'
       );
       closeModal();
     } else {
-      showToast(res.reason || 'Erreur enregistrement mouvement', 'error');
+      showToast(movementResult.reason || 'Erreur enregistrement mouvement', 'error');
     }
   };
 

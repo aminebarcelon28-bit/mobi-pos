@@ -50,8 +50,8 @@ export const PinPromptModal: React.FC = () => {
       }
     } else {
       setError(true);
-      showToast('Code PIN incorrect (Défaut: 1234)', 'error');
-      logSecurityAction('Échec Vérification PIN', `Code saisi invalide: ${pin}`, 'Caissier', true);
+      showToast('Code PIN incorrect', 'error');
+      logSecurityAction('Échec Vérification PIN', `Code PIN saisi incorrect (longueur: ${pin.length})`, 'Caissier', true);
     }
   };
 

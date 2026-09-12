@@ -61,6 +61,20 @@ export const Header: React.FC = () => {
   const [isPinOpen, setIsPinOpen] = useState(false);
   const { showToast } = useToast();
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const [localSearch, setLocalSearch] = useState(searchQuery);
+
+  useEffect(() => {
+    setLocalSearch(searchQuery);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (localSearch !== searchQuery) {
+        setSearchQuery(localSearch);
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [localSearch, searchQuery, setSearchQuery]);
 
   const waitingTicketsCount = useMemo(() => {
     const waitingPOs = (purchaseOrders || []).filter(
@@ -227,14 +241,22 @@ export const Header: React.FC = () => {
           <input
             ref={searchInputRef}
             type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            value={localSearch}
+            onChange={(e) => setLocalSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                setSearchQuery(localSearch);
+              }
+            }}
             placeholder="Scanner code-barres ou rechercher Réf/SKU (F2)..."
             className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-14 py-1.5 text-xs text-pos-text placeholder-pos-muted focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-medium"
           />
-          {searchQuery ? (
+          {localSearch ? (
             <button
-              onClick={() => setSearchQuery('')}
+              onClick={() => {
+                setLocalSearch('');
+                setSearchQuery('');
+              }}
               className="absolute right-8 top-1/2 -translate-y-1/2 text-pos-muted hover:text-pos-text p-1 cursor-pointer"
             >
               <X className="w-3 h-3" />
