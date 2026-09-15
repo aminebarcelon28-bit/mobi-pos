@@ -163,22 +163,70 @@ assert.strictEqual(mobileSale.inventoryDeltas[1].delta, -1);
 pass('Mobile sale generates valid atomic outbox and inventory ledger deltas');
 
 // -----------------------------------------------------------------------------
-// TEST 6: WhatsApp Message Formulation & Phone Sanitation
+// TEST 6: Phone Calling & WhatsApp Debt Reminder Protocol
 // -----------------------------------------------------------------------------
-console.log('\n--- TEST 6: WhatsApp Debt Reminder Generator ---');
+console.log('\n--- TEST 6: Phone Calling & WhatsApp Debt Reminder Protocol ---');
+
+function normalizeAlgerianPhoneMock(input) {
+  const raw = (input || '').trim();
+  const digitsOnly = raw.replace(/\D/g, '');
+  if (!digitsOnly) return { isValid: false, local: '', international: '', whatsAppFormat: '', dialDigits: '' };
+
+  let standard9 = '';
+  if (digitsOnly.startsWith('00213') && digitsOnly.length === 14) standard9 = digitsOnly.slice(5);
+  else if (digitsOnly.startsWith('213') && digitsOnly.length === 12) standard9 = digitsOnly.slice(3);
+  else if (digitsOnly.startsWith('0') && digitsOnly.length === 10) standard9 = digitsOnly.slice(1);
+  else if (digitsOnly.length === 9) standard9 = digitsOnly;
+  else standard9 = digitsOnly;
+
+  const local = standard9.length === 9 ? `0${standard9}` : raw;
+  const whatsAppFormat = standard9.length === 9 ? `213${standard9}` : digitsOnly;
+  const dialDigits = local.replace(/\D/g, '');
+
+  let operator = 'Inconnu';
+  if (standard9.startsWith('6')) operator = 'Mobilis';
+  else if (standard9.startsWith('7')) operator = 'Djezzy';
+  else if (standard9.startsWith('5')) operator = 'Ooredoo';
+  else if (['2', '3', '4'].includes(standard9[0])) operator = 'Fixe';
+
+  return {
+    isValid: standard9.length === 9 && ['5', '6', '7', '2', '3', '4'].includes(standard9[0]),
+    local,
+    whatsAppFormat,
+    dialDigits,
+    operator,
+    telUri: `tel:${dialDigits}`,
+  };
+}
 
 function formatWhatsAppLink(customer, storeName) {
-  const cleanPhone = (customer.phone || '').replace(/[^0-9]/g, '');
-  const internationalPhone = cleanPhone.startsWith('0') ? '213' + cleanPhone.slice(1) : cleanPhone;
+  const norm = normalizeAlgerianPhoneMock(customer.phone);
   const message = `Bonjour ${customer.name},\nNous vous rappelons que votre solde de créance auprès de ${storeName} est de ${customer.currentDebt} DA.\nMerci pour votre fidélité !`;
-  return `https://wa.me/${internationalPhone}?text=${encodeURIComponent(message)}`;
+  return `https://wa.me/${norm.whatsAppFormat}?text=${encodeURIComponent(message)}`;
 }
+
+// Case A: Mobilis number with spaces
+const mobilis = normalizeAlgerianPhoneMock('0661 88 77 55');
+assert.strictEqual(mobilis.operator, 'Mobilis');
+assert.strictEqual(mobilis.telUri, 'tel:0661887755', 'tel: URI must contain ZERO spaces for native OS dialer');
+assert.strictEqual(mobilis.whatsAppFormat, '213661887755');
+
+// Case B: Djezzy number with international +213 prefix
+const djezzy = normalizeAlgerianPhoneMock('+213 770 12 34 56');
+assert.strictEqual(djezzy.operator, 'Djezzy');
+assert.strictEqual(djezzy.telUri, 'tel:0770123456');
+assert.strictEqual(djezzy.whatsAppFormat, '213770123456');
+
+// Case C: Ooredoo number
+const ooredoo = normalizeAlgerianPhoneMock('0555 99 88 77');
+assert.strictEqual(ooredoo.operator, 'Ooredoo');
+assert.strictEqual(ooredoo.telUri, 'tel:0555998877');
 
 const waLink = formatWhatsAppLink({ name: 'Karim', phone: '0555 12 34 56', currentDebt: 12500 }, 'MobiPOS Alger');
 assert.ok(waLink.includes('wa.me/213555123456'), 'Phone must format to Algerian E.164 without leading 0');
 assert.ok(waLink.includes('12500'), 'Message must contain exact debt amount');
 assert.ok(waLink.includes('MobiPOS%20Alger'), 'Store name must be URI encoded');
-pass('WhatsApp debt reminders sanitize Algerian numbers and format clean direct URLs');
+pass('Phone dialer triggers clean zero-space tel: URI and WhatsApp opens direct wa.me chat');
 
 // -----------------------------------------------------------------------------
 // TEST 7: Mobile Camera QR Code Pairing Payload Ingestion

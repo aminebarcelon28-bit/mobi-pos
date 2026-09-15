@@ -11,9 +11,12 @@ import { usePosStore } from '../../../store/usePosStore';
 import type { Customer } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
 import { soundEngine } from '../../../utils/audioFeedback';
+import { normalizeAlgerianPhone, buildWhatsAppUrl } from '../../../utils/phoneUtils';
+import { useToast } from '../../ui/Toast';
 
 export const KredyTab: React.FC = () => {
   const { customers, receiptSettings } = usePosStore();
+  const { showToast } = useToast();
   const [search, setSearch] = useState('');
   const [filterDebtorsOnly, setFilterDebtorsOnly] = useState(true);
 
@@ -39,31 +42,57 @@ export const KredyTab: React.FC = () => {
     });
   }, [customers, search, filterDebtorsOnly]);
 
-  const handleWhatsApp = (customer: Customer) => {
+  const handleWhatsApp = (customer: Customer, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     soundEngine.playKeyBeep?.();
     if (!customer.phone) {
-      alert(`Numéro de téléphone non renseigné pour ${customer.name}.`);
+      showToast(`Numéro de téléphone non renseigné pour ${customer.name}.`, 'warning');
       return;
     }
-    const cleanPhone = customer.phone.replace(/[^0-9]/g, '');
-    const phoneWithCountry = cleanPhone.startsWith('0')
-      ? '213' + cleanPhone.slice(1)
-      : cleanPhone;
 
     const storeName = receiptSettings?.storeName || 'MobiPOS';
-    const message = encodeURIComponent(
-      `Bonjour ${customer.name},\nNous vous rappelons que votre solde de créance auprès de ${storeName} est de ${formatDZD(
-        customer.currentDebt || 0
-      )}.\nMerci pour votre fidélité !`
-    );
+    const message = `Bonjour ${customer.name},\nNous vous rappelons que votre solde de créance auprès de ${storeName} est de ${formatDZD(
+      customer.currentDebt || 0
+    )}.\nMerci pour votre fidélité !`;
 
-    window.open(`https://wa.me/${phoneWithCountry}?text=${message}`, '_blank');
+    const waUrl = buildWhatsAppUrl(customer.phone, message);
+    try {
+      const a = document.createElement('a');
+      a.href = waUrl;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch {
+      window.open(waUrl, '_blank', 'noopener,noreferrer');
+    }
   };
 
-  const handleCall = (phone?: string) => {
+  const handleCall = (phone?: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     soundEngine.playKeyBeep?.();
-    if (!phone) return;
-    window.open(`tel:${phone}`, '_self');
+    if (!phone) {
+      showToast('Aucun numéro de téléphone disponible', 'warning');
+      return;
+    }
+    const norm = normalizeAlgerianPhone(phone);
+    const dialDigits = norm.local || norm.digitsOnly || phone.replace(/\D/g, '');
+    if (!dialDigits) {
+      showToast('Format de numéro non valide', 'error');
+      return;
+    }
+    const telUrl = `tel:${dialDigits}`;
+    try {
+      const a = document.createElement('a');
+      a.href = telUrl;
+      a.target = '_self';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch {
+      window.location.href = telUrl;
+    }
   };
 
   return (
@@ -161,9 +190,16 @@ export const KredyTab: React.FC = () => {
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <h4 className="text-xs font-black text-pos-text">{c.name}</h4>
-                    <span className="text-[10px] text-pos-muted block mt-0.5 font-mono">
-                      {c.phone || 'Aucun numéro'}
-                    </span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="text-[10px] text-pos-muted font-mono">
+                        {c.phone ? (normalizeAlgerianPhone(c.phone).formattedDisplay || c.phone) : 'Aucun numéro'}
+                      </span>
+                      {c.phone && normalizeAlgerianPhone(c.phone).operator !== 'Inconnu' && (
+                        <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded bg-pos-panel border border-pos-border text-pos-muted">
+                          {normalizeAlgerianPhone(c.phone).operator}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <div className="text-right">
@@ -189,28 +225,55 @@ export const KredyTab: React.FC = () => {
                 {/* Communication Actions */}
                 <div className="flex items-center gap-2 pt-1 border-t border-pos-border/50">
                   {c.phone ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => handleCall(c.phone)}
-                        className="flex-1 py-1.5 rounded-xl bg-pos-panel border border-pos-border hover:border-cyan-400 text-pos-text text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer"
-                      >
-                        <Phone className="w-3.5 h-3.5 text-cyan-400" />
-                        <span>Appeler</span>
-                      </button>
+                    (() => {
+                      const norm = normalizeAlgerianPhone(c.phone);
+                      const dialDigits = norm.local || norm.digitsOnly || c.phone.replace(/\D/g, '');
+                      const telUrl = `tel:${dialDigits}`;
+                      const storeName = receiptSettings?.storeName || 'MobiPOS';
+                      const message = `Bonjour ${c.name},\nNous vous rappelons que votre solde de créance auprès de ${storeName} est de ${formatDZD(
+                        debt
+                      )}.\nMerci pour votre fidélité !`;
+                      const waUrl = buildWhatsAppUrl(c.phone, message);
 
-                      <button
-                        type="button"
-                        onClick={() => handleWhatsApp(c)}
-                        className="flex-1 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/40 hover:bg-emerald-500/20 text-emerald-300 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer"
-                      >
-                        <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>WhatsApp</span>
-                      </button>
-                    </>
+                      return (
+                        <>
+                          <a
+                            href={telUrl}
+                            onClick={(e) => {
+                              soundEngine.playKeyBeep?.();
+                              if (!dialDigits) {
+                                e.preventDefault();
+                                handleCall(c.phone, e);
+                              }
+                            }}
+                            className="flex-1 py-2 rounded-xl bg-pos-panel border border-cyan-500/40 hover:bg-cyan-500/10 text-cyan-400 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 no-underline cursor-pointer shadow-sm"
+                          >
+                            <Phone className="w-3.5 h-3.5" />
+                            <span>Appeler</span>
+                          </a>
+
+                          <a
+                            href={waUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => {
+                              soundEngine.playKeyBeep?.();
+                              if (!c.phone) {
+                                e.preventDefault();
+                                handleWhatsApp(c, e);
+                              }
+                            }}
+                            className="flex-1 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/40 hover:bg-emerald-500/25 text-emerald-300 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 no-underline cursor-pointer shadow-sm"
+                          >
+                            <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>WhatsApp</span>
+                          </a>
+                        </>
+                      );
+                    })()
                   ) : (
-                    <span className="text-[10px] text-pos-muted italic">
-                      Ajoutez un numéro de téléphone pour activer les rappels WhatsApp.
+                    <span className="text-[10px] text-pos-muted italic py-1">
+                      Ajoutez un numéro de téléphone pour activer les appels et rappels WhatsApp.
                     </span>
                   )}
                 </div>
