@@ -82,11 +82,18 @@ class PrintCoordinator {
 
     const delay = options.delayMs !== undefined ? options.delayMs : 50;
 
+    const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
     setTimeout(() => {
       try {
-        window.print();
+        if (!isTauri) {
+          window.print();
+        } else {
+          console.log(`[PrintCoordinator] Direct hardware mode in Tauri for channel: ${channel} (window.print suppressed)`);
+          cleanup();
+        }
       } catch (err) {
-        console.error('[PrintCoordinator] window.print() execution error:', err);
+        console.error('[PrintCoordinator] print execution error:', err);
         cleanup();
       }
     }, delay);

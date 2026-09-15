@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { usePosStore } from '../store/usePosStore';
 
 export const useKeyboardHotkeys = () => {
-  const { openModal, closeModal, activeModal, clearCart, holdSale } = usePosStore();
+  const { openModal, closeModal, activeModal, clearCart, holdSale, reprintReceipt, lastTransaction } = usePosStore();
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -16,57 +16,87 @@ export const useKeyboardHotkeys = () => {
         e.preventDefault();
       }
 
-      // Universal Escape handler: Always closes any open modal
+      // Universal Escape handler: Closes any open modal or unfocuses active input
       if (e.key === 'Escape') {
         if (activeModal) {
           e.preventDefault();
           closeModal();
+          return;
+        }
+        if (isInputFocused && e.target instanceof HTMLElement) {
+          e.preventDefault();
+          e.target.blur();
+          return;
+        }
+      }
+
+      // F1 or Slash: Quick focus on Global Search
+      if ((e.key === 'F1' || (e.key === '/' && !isInputFocused)) && !activeModal) {
+        e.preventDefault();
+        const searchInput = document.querySelector('input[type="text"]') as HTMLInputElement;
+        if (searchInput) {
+          searchInput.focus();
+          searchInput.select();
         }
         return;
       }
 
-      // Modal Function Key Toggles:
-      // If the modal corresponding to the pressed function key is already open, pressing the function key again closes it.
-      if (e.key === 'F12') {
+      // F2 or Spacebar (when cart has items and not typing): Instant Cash Tender
+      if ((e.key === 'F2' || (e.key === ' ' && !isInputFocused)) && !activeModal) {
+        const currentCart = usePosStore.getState().cart;
+        if (currentCart.length > 0) {
+          e.preventDefault();
+          openModal('payment');
+          return;
+        }
+      }
+
+      // F3 (or F5 alias): Customer Directory & Assign Client
+      if (e.key === 'F3' || e.key === 'F5') {
         e.preventDefault();
-        if (activeModal === 'settings') {
+        if (activeModal === 'customers') {
           closeModal();
         } else {
-          openModal('settings');
+          openModal('customers');
         }
         return;
       }
 
-      if (e.key === 'F11') {
+      // F4: Global Basket Discount
+      if (e.key === 'F4') {
         e.preventDefault();
-        if (activeModal === 'refund') {
+        if (activeModal === 'discount') {
           closeModal();
         } else {
-          openModal('refund');
+          openModal('discount');
         }
         return;
       }
 
-      if (e.key === 'F10') {
+      // F6: Suspend Sale (Hold) or Recall Held Tickets
+      if (e.key === 'F6') {
         e.preventDefault();
-        if (activeModal === 'inventory_manager') {
+        const currentCart = usePosStore.getState().cart;
+        if (currentCart.length > 0 && activeModal === null) {
+          holdSale();
+        } else if (activeModal === 'hold') {
           closeModal();
         } else {
-          openModal('inventory_manager');
+          openModal('hold');
         }
         return;
       }
 
-      if (e.key === 'F9') {
+      // F7: Instant Reprint of Last Receipt
+      if (e.key === 'F7') {
         e.preventDefault();
-        if (activeModal === 'reports') {
-          closeModal();
-        } else {
-          openModal('reports');
+        if (lastTransaction) {
+          reprintReceipt(lastTransaction);
         }
         return;
       }
 
+      // F8: Keyboard Hotkey Guide
       if (e.key === 'F8') {
         e.preventDefault();
         if (activeModal === 'hotkey_guide') {
@@ -77,88 +107,62 @@ export const useKeyboardHotkeys = () => {
         return;
       }
 
-      if (e.key === 'F6') {
+      // F9: Financial Reports & Z-Report
+      if (e.key === 'F9') {
         e.preventDefault();
-        if (activeModal === 'discount') {
+        if (activeModal === 'reports') {
           closeModal();
         } else {
-          openModal('discount');
+          openModal('reports');
         }
         return;
       }
 
-      if (e.key === 'F5') {
+      // F10: Stock & Inventory Manager
+      if (e.key === 'F10') {
         e.preventDefault();
-        if (activeModal === 'customers') {
+        if (activeModal === 'inventory_manager') {
           closeModal();
         } else {
-          openModal('customers');
+          openModal('inventory_manager');
         }
         return;
       }
 
-      if (e.key === 'F4') {
+      // F11: Refunds & Returns
+      if (e.key === 'F11') {
         e.preventDefault();
-        if (activeModal === 'hold') {
+        if (activeModal === 'refund') {
           closeModal();
         } else {
-          openModal('hold');
+          openModal('refund');
         }
         return;
       }
 
-      if (e.key === 'F3') {
+      // F12: Hardware Settings & Peripherals
+      if (e.key === 'F12') {
         e.preventDefault();
-        if (activeModal === 'payment') {
+        if (activeModal === 'settings') {
           closeModal();
         } else {
-          const currentCart = usePosStore.getState().cart;
-          if (currentCart.length > 0) {
-            openModal('payment');
-          }
+          openModal('settings');
         }
         return;
       }
 
-      // If a modal is open or the user is typing in an input, do not trigger background global POS shortcuts
-      if (activeModal !== null) {
-        return;
-      }
-
-      switch (e.key) {
-        case 'F1':
-          if (!isInputFocused) {
-            const currentCart = usePosStore.getState().cart;
-            if (currentCart.length > 0) {
-              const totalItems = currentCart.reduce((acc, i) => acc + i.quantity, 0);
-              if (totalItems > 1) {
-                const ok = window.confirm(`Voulez-vous vraiment vider les ${totalItems} articles de la vente en cours ? (F1)`);
-                if (!ok) break;
-              }
-              clearCart();
-            }
-          }
-          break;
-
-        case 'F2': {
-          const searchInput = document.querySelector('input[type="text"]') as HTMLInputElement;
-          if (searchInput) {
-            searchInput.focus();
-            searchInput.select();
-          }
-          break;
+      // Shift+Delete or Ctrl+Delete: Reset / Clear Cart (with verification)
+      if ((e.key === 'Delete' || e.key === 'Backspace') && (e.shiftKey || e.ctrlKey) && !isInputFocused && !activeModal) {
+        e.preventDefault();
+        const currentCart = usePosStore.getState().cart;
+        if (currentCart.length > 0) {
+          clearCart();
         }
-
-        case 'F7':
-          holdSale();
-          break;
-
-        default:
-          break;
+        return;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeModal, clearCart, holdSale, openModal, closeModal]);
+  }, [activeModal, clearCart, holdSale, openModal, closeModal, reprintReceipt, lastTransaction]);
 };

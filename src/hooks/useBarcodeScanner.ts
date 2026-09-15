@@ -49,13 +49,24 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
     }
 
     setScannerActive(true);
-    soundEngine.playScan();
-    
+
+    // 1. Parse multiplier syntax (e.g. 5*BARCODE, 12xBARCODE)
+    let multiplier = 1;
+    let effectiveCode = code;
+    const multiplierMatch = code.match(/^(\d{1,3})\s*[*xX]\s*(.+)$/);
+    if (multiplierMatch && multiplierMatch[1] && multiplierMatch[2]) {
+      multiplier = Math.max(1, parseInt(multiplierMatch[1], 10));
+      effectiveCode = multiplierMatch[2].trim();
+    }
+
+    // 2. Strip AIM symbology prefix if scanner outputs it (e.g. "]C1", "]E0", "]d2")
+    effectiveCode = effectiveCode.replace(/^\][A-Za-z0-9]{2}/, '');
+
     const products = store.products || [];
     const bundles = store.bundles || [];
     const customers = store.customers || [];
     
-    const cleanCode = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const cleanCode = effectiveCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
     // Check if code matches a Customer Loyalty Card Barcode (PVC / Digital Pass)
     const customerMatch = customers.find(c => {
@@ -66,40 +77,47 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
       const barcode = (c.barcode || '').toUpperCase().trim();
 
       return (
-        c.id === code ||
-        c.id.toUpperCase() === code.toUpperCase() ||
-        rawPhone === code ||
-        cleanPhone === code ||
-        cardCode === code.toUpperCase() ||
-        barcode === code.toUpperCase() ||
-        `LOY-${c.id.toUpperCase()}` === code.toUpperCase() ||
-        `LOYALTY-${c.id.toUpperCase()}` === code.toUpperCase() ||
-        `CUST-${c.id.toUpperCase()}` === code.toUpperCase() ||
+        c.id === effectiveCode ||
+        c.id.toUpperCase() === effectiveCode.toUpperCase() ||
+        rawPhone === effectiveCode ||
+        cleanPhone === effectiveCode ||
+        cardCode === effectiveCode.toUpperCase() ||
+        barcode === effectiveCode.toUpperCase() ||
+        `LOY-${c.id.toUpperCase()}` === effectiveCode.toUpperCase() ||
+        `LOYALTY-${c.id.toUpperCase()}` === effectiveCode.toUpperCase() ||
+        `CUST-${c.id.toUpperCase()}` === effectiveCode.toUpperCase() ||
         (cleanCode.length >= 3 && cleanCode.includes(cleanId))
       );
     });
 
     if (customerMatch) {
+      soundEngine.playScan();
       store.setCurrentCustomer(customerMatch);
       store.logSecurityAction(
         `Identification Carte PVC Scannée: ${customerMatch.name}`,
-        `Code Scanné: ${code} - Avoir Client: ${customerMatch.storeCredit} DA - Points: ${customerMatch.loyaltyPoints}`,
+        `Code Scanné: ${effectiveCode} - Avoir Client: ${customerMatch.storeCredit} DA - Points: ${customerMatch.loyaltyPoints}`,
         'Lecteur Code-barres USB HID',
         true
       );
       setLastScannedCode(null);
     } else {
-      const productMatch = products.find(p => p.barcode === code || p.sku === code || p.id === code);
+      const productMatch = products.find(p => p.barcode === effectiveCode || p.sku === effectiveCode || p.id === effectiveCode);
       if (productMatch) {
-        store.addToCart(productMatch);
+        soundEngine.playScan();
+        store.addToCart(productMatch, false, multiplier);
         setLastScannedCode(null);
       } else {
-        const bundleMatch = bundles.find(b => b.barcode === code || b.id === code);
+        const bundleMatch = bundles.find(b => b.barcode === effectiveCode || b.id === effectiveCode);
         if (bundleMatch) {
-          store.addBundleToCart(bundleMatch.id);
+          soundEngine.playScan();
+          for (let i = 0; i < multiplier; i++) {
+            store.addBundleToCart(bundleMatch.id);
+          }
           setLastScannedCode(null);
         } else {
-          setLastScannedCode(code);
+          // Unrecognized scan: trigger audible error feedback for the cashier
+          soundEngine.playError();
+          setLastScannedCode(effectiveCode);
         }
       }
     }

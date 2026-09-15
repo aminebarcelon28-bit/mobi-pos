@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sparkles, DownloadCloud, RotateCcw, X, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Sparkles, DownloadCloud, RotateCcw, X, CheckCircle2, AlertCircle, Smartphone, ExternalLink, ShieldCheck } from 'lucide-react';
 import { useAppUpdater } from '../../hooks/useAppUpdater';
 
 export const UpdateModal: React.FC = () => {
@@ -10,8 +10,13 @@ export const UpdateModal: React.FC = () => {
     progress,
     readyToRelaunch,
     error,
+    hasNativeInstaller,
+    isAndroidDevice,
+    isIOSDevice,
+    isMobile,
     downloadAndInstall,
     relaunchApp,
+    openDownloadPage,
     dismissUpdate,
   } = useAppUpdater();
 
@@ -24,19 +29,27 @@ export const UpdateModal: React.FC = () => {
         <div className="p-5 border-b border-pos-border bg-gradient-to-r from-blue-950/40 via-pos-card to-purple-950/40 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center border border-blue-500/30 shadow-lg">
-              <Sparkles className="w-5 h-5 animate-pulse text-blue-400" />
+              {isMobile ? <Smartphone className="w-5 h-5 text-blue-400" /> : <Sparkles className="w-5 h-5 animate-pulse text-blue-400" />}
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-extrabold text-pos-text tracking-wide">
-                  Mise à Jour Disponible
+                  {isAndroidDevice
+                    ? 'Mise à Jour Android'
+                    : isIOSDevice
+                    ? 'Mise à Jour iOS'
+                    : 'Mise à Jour Disponible'}
                 </h2>
                 <span className="px-2 py-0.5 rounded-full bg-blue-500/20 border border-blue-500/40 text-blue-300 text-[10px] font-black uppercase font-mono">
-                  {updateInfo?.version || 'Nouveau'}
+                  v{updateInfo?.version || 'Nouveau'}
                 </span>
               </div>
               <p className="text-[11px] text-pos-muted">
-                Une nouvelle version de MobiPOS est prête au téléchargement.
+                {isAndroidDevice
+                  ? 'Une nouvelle version APK de MobiPOS est prête pour votre smartphone.'
+                  : isIOSDevice
+                  ? 'Une nouvelle version de MobiPOS est disponible sur l\'App Store.'
+                  : 'Une nouvelle version de MobiPOS est prête au téléchargement.'}
               </p>
             </div>
           </div>
@@ -54,10 +67,19 @@ export const UpdateModal: React.FC = () => {
         <div className="p-6 space-y-4">
           <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-2">
             <h3 className="text-xs font-bold text-pos-muted uppercase tracking-wider">
-              Nouveautés & Modificateurs
+              Nouveautés & Correctifs
             </h3>
             <div className="text-xs text-pos-text/90 font-sans leading-relaxed whitespace-pre-wrap max-h-36 overflow-y-auto pr-1">
-              {updateInfo?.body || 'Performances optimisées, sécurité renforcée et corrections de bugs.'}
+              {updateInfo?.body || 'Performances optimisées, sécurité renforcée et synchronisation cloud multi-tenant.'}
+            </div>
+          </div>
+
+          {/* Data Protection Invariant Notice */}
+          <div className="p-3 border border-emerald-500/30 bg-emerald-950/20 rounded-xl flex items-start gap-2.5">
+            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            <div className="text-[11px] text-emerald-300/90 leading-relaxed">
+              <span className="font-bold text-emerald-300">Zéro Perte de Données : </span>
+              Votre base de données locale de caisse (SQLite) et vos identifiants Cloud Sync restent intégralement préservés lors de la mise à jour.
             </div>
           </div>
 
@@ -69,7 +91,7 @@ export const UpdateModal: React.FC = () => {
             </div>
           )}
 
-          {/* Download Progress Bar */}
+          {/* Download Progress Bar (Desktop native installer) */}
           {downloading && (
             <div className="space-y-2">
               <div className="flex justify-between text-xs font-bold">
@@ -112,12 +134,38 @@ export const UpdateModal: React.FC = () => {
               >
                 Plus tard
               </button>
-              <button
-                onClick={downloadAndInstall}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer"
-              >
-                <DownloadCloud className="w-4 h-4" /> Mettre à jour maintenant
-              </button>
+
+              {hasNativeInstaller ? (
+                <button
+                  onClick={downloadAndInstall}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer"
+                >
+                  <DownloadCloud className="w-4 h-4" /> Mettre à jour maintenant
+                </button>
+              ) : isAndroidDevice ? (
+                <button
+                  onClick={() => openDownloadPage()}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer"
+                >
+                  <DownloadCloud className="w-4 h-4" /> Télécharger l'APK v{updateInfo?.version}
+                  <ExternalLink className="w-3.5 h-3.5 opacity-75" />
+                </button>
+              ) : isIOSDevice ? (
+                <button
+                  onClick={() => openDownloadPage('https://apps.apple.com')}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer"
+                >
+                  <ExternalLink className="w-4 h-4" /> Ouvrir l'App Store
+                </button>
+              ) : (
+                <button
+                  onClick={() => openDownloadPage()}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer"
+                >
+                  <DownloadCloud className="w-4 h-4" /> Télécharger la Mise à Jour
+                  <ExternalLink className="w-3.5 h-3.5 opacity-75" />
+                </button>
+              )}
             </>
           )}
 

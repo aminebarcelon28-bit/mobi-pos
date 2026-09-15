@@ -67,6 +67,8 @@ export type ActiveModalType =
   | 'debt_ledger'
   | 'expense_manager'
   | 'db_maintenance'
+  | 'mobile_simulator'
+  | 'cloud_pairing'
   | null;
 
 export interface CartSlice {
@@ -74,7 +76,7 @@ export interface CartSlice {
   storeCreditApplied: number;
   heldSales: HeldSale[];
 
-  addToCart: (product: Product, overridePin?: boolean) => { success: boolean; reason?: string };
+  addToCart: (product: Product, overridePin?: boolean, quantity?: number) => { success: boolean; reason?: string };
   updateCartQty: (productId: string, delta: number) => void;
   setCartItemQty: (productId: string, quantity: number) => void;
   removeFromCart: (productId: string) => void;
@@ -100,7 +102,10 @@ export interface CatalogSlice {
   setSearchQuery: (query: string) => void;
   setSelectedCategory: (category: CategoryType) => void;
   setEditingProduct: (product: Product | null) => void;
-  saveProduct: (productInput: ProductInput) => Promise<{ success: boolean; reason?: string }>;
+  saveProduct: (
+    productInput: ProductInput,
+    options?: { keepModalOpen?: boolean }
+  ) => Promise<{ success: boolean; reason?: string }>;
   deleteProduct: (id: string) => Promise<void>;
   ingestInvoiceBatch: (updatedProducts: Product[], newImeis: IMEIRecord[]) => Promise<void>;
 }
@@ -154,6 +159,7 @@ export interface ShiftSlice {
   fetchActiveShift: () => Promise<void>;
   fetchInventoryValuation: () => Promise<void>;
   fetchAllShifts: () => Promise<void>;
+  printXReport: () => Promise<boolean>;
 }
 
 export interface OrderSlice {

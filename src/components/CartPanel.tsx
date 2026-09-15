@@ -1,10 +1,9 @@
-import React, { useMemo, useState } from 'react';
-import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X } from 'lucide-react';
+import React, { useMemo, useState, useEffect } from 'react';
+import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X, ShoppingBag } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
 import { soundEngine } from '../utils/audioFeedback';
-import { printCoordinator } from '../utils/printCoordinator';
 import { getProductPriceForTier } from '../utils/pricingEngine';
 
 export const CartPanel: React.FC = () => {
@@ -26,10 +25,64 @@ export const CartPanel: React.FC = () => {
     applyCartDiscountPercent,
     storeCreditApplied,
     setStoreCreditApplied,
+    logSecurityAction,
   } = usePosStore();
 
   const [isDiscountOpen, setIsDiscountOpen] = useState(false);
   const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
+  const [selectedCartIndex, setSelectedCartIndex] = useState<number | null>(null);
+
+  // Keyboard navigation for cart items (ArrowUp / ArrowDown / + / - / Delete)
+  useEffect(() => {
+    const handleCartKeyNav = (e: KeyboardEvent) => {
+      const activeModal = usePosStore.getState().activeModal;
+      if (activeModal !== null) return;
+      const activeEl = document.activeElement;
+      if (activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement) return;
+
+      const currentCart = usePosStore.getState().cart;
+      if (currentCart.length === 0) return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedCartIndex((prev) => (prev === null ? 0 : (prev + 1) % currentCart.length));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedCartIndex((prev) => (prev === null ? currentCart.length - 1 : (prev - 1 + currentCart.length) % currentCart.length));
+      } else if (e.key === '+' || e.key === '=') {
+        if (selectedCartIndex !== null && currentCart[selectedCartIndex]) {
+          e.preventDefault();
+          soundEngine.playScan();
+          updateCartQty(currentCart[selectedCartIndex].product.id, 1);
+        }
+      } else if (e.key === '-') {
+        if (selectedCartIndex !== null && currentCart[selectedCartIndex]) {
+          e.preventDefault();
+          soundEngine.playScan();
+          updateCartQty(currentCart[selectedCartIndex].product.id, -1);
+        }
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedCartIndex !== null && currentCart[selectedCartIndex]) {
+          e.preventDefault();
+          const itemToRemove = currentCart[selectedCartIndex];
+          soundEngine.playKeyBeep?.();
+          logSecurityAction(
+            'Suppression Article Panier (Clavier)',
+            `Article: ${itemToRemove.product.title} (${itemToRemove.quantity} unités)`,
+            'Caissier',
+            false
+          );
+          removeFromCart(itemToRemove.product.id);
+          setSelectedCartIndex((prev) =>
+            prev !== null && prev >= currentCart.length - 1 ? Math.max(0, currentCart.length - 2) : prev
+          );
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleCartKeyNav);
+    return () => window.removeEventListener('keydown', handleCartKeyNav);
+  }, [selectedCartIndex, updateCartQty, removeFromCart, logSecurityAction]);
 
   // Calculate gross total based on active pricing tier
   const getItemPrice = (item: typeof cart[0]) => {
@@ -43,7 +96,8 @@ export const CartPanel: React.FC = () => {
   const netTotal = Math.max(0, subtotal - (storeCreditApplied || 0));
   const total = netTotal;
 
-  const quickBills = [500, 1000, 2000, 5000, 10000];
+  // Realistic Algerian Cash Denominations (no 10,000 DA bill exists)
+  const quickBills = [500, 1000, 2000, 3000, 4000, 5000];
 
   const handleClearCart = () => {
     if (cart.length === 0) return;
@@ -52,8 +106,15 @@ export const CartPanel: React.FC = () => {
       const ok = window.confirm(`Voulez-vous vraiment vider les ${totalItems} articles de la vente en cours ?`);
       if (!ok) return;
     }
+    logSecurityAction(
+      'Annulation Complète Panier',
+      `Panier vidé (${totalItems} unités, montant: ${grossTotal} DA)`,
+      'Caissier',
+      true
+    );
     soundEngine.playKeyBeep?.();
     clearCart();
+    setSelectedCartIndex(null);
   };
 
   // Determine primary device model & recommended products with useMemo
@@ -90,10 +151,7 @@ export const CartPanel: React.FC = () => {
       openModal('payment');
       return;
     }
-    const paymentResult = await processPayment([{ method: 'Espèces', amount: billAmount }]);
-    if (paymentResult && paymentResult.success) {
-      printCoordinator.printReceipt(50);
-    }
+    await processPayment([{ method: 'Espèces', amount: billAmount }]);
   };
 
   return (
@@ -184,7 +242,7 @@ export const CartPanel: React.FC = () => {
                   type="button"
                   onClick={() => openModal('customers')}
                   className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-md transition cursor-pointer"
-                  title="Changer de Client (F5)"
+                  title="Changer de Client (F3)"
                 >
                   <User className="w-3.5 h-3.5 text-cyan-400" />
                 </button>
@@ -238,7 +296,7 @@ export const CartPanel: React.FC = () => {
             className="w-full py-2 bg-pos-card hover:bg-pos-hover border border-dashed border-pos-border hover:border-emerald-500/50 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text flex items-center justify-center gap-2 transition cursor-pointer"
           >
             <UserCheck className="w-4 h-4 text-emerald-400" />
-            <span>+ Assigner un Client (F5)</span>
+            <span>+ Assigner un Client (F3)</span>
           </button>
         )}
 
@@ -265,19 +323,62 @@ export const CartPanel: React.FC = () => {
       {/* Cart Items List */}
       <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
         {cart.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-pos-muted space-y-2 p-4 text-center">
-            <div className="w-12 h-12 rounded-full bg-pos-card flex items-center justify-center border border-pos-border">
-              <Trash2 className="w-5 h-5 opacity-50" />
+          <div className="h-full flex flex-col items-center justify-center p-3 text-center space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-inner">
+              <ShoppingBag className="w-6 h-6 stroke-[2.2]" />
             </div>
-            <p className="text-xs font-semibold">Panier vide. Scannez un article ou choisissez dans le catalogue.</p>
+            <div className="space-y-1 max-w-[280px]">
+              <p className="text-xs font-black text-pos-text uppercase tracking-wider">Caisse Prête à Vendre</p>
+              <p className="text-[11px] text-pos-muted">Scannez un code-barres USB ou utilisez les raccourcis ci-dessous :</p>
+            </div>
+            <div className="w-full bg-pos-card border border-pos-border rounded-xl p-2.5 space-y-1.5 text-left text-[10.5px] shadow-sm">
+              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
+                <span className="text-pos-muted">Rechercher catalogue</span>
+                <span className="font-mono font-bold text-emerald-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F1 ou /</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
+                <span className="text-pos-muted">Encaisser Espèces</span>
+                <span className="font-mono font-bold text-emerald-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F2 ou Espace</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
+                <span className="text-pos-muted">Client / Dette / Fidélité</span>
+                <span className="font-mono font-bold text-amber-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F3</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
+                <span className="text-pos-muted">Remise globale panier</span>
+                <span className="font-mono font-bold text-purple-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F4</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
+                <span className="text-pos-muted">Mettre la vente en attente</span>
+                <span className="font-mono font-bold text-cyan-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F6</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
+                <span className="text-pos-muted">Réimprimer dernier ticket</span>
+                <span className="font-mono font-bold text-indigo-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F7</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
+                <span className="text-pos-muted">Guide des raccourcis</span>
+                <span className="font-mono font-bold text-amber-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F8</span>
+              </div>
+              <div className="flex justify-between items-center py-0.5">
+                <span className="text-pos-muted">Quantité multiple au scan</span>
+                <span className="font-mono font-bold text-pos-text bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">5*CODE</span>
+              </div>
+            </div>
           </div>
         ) : (
-          cart.map((item) => {
+          cart.map((item, idx) => {
             const unitPrice = getItemPrice(item);
+            const isSelected = selectedCartIndex === idx;
             return (
               <div
                 key={item.product.id}
-                className="bg-pos-card border border-pos-border/80 rounded-xl p-2.5 flex items-start gap-2.5 hover:border-emerald-500/40 transition group"
+                onClick={() => setSelectedCartIndex(idx)}
+                className={`bg-pos-card border rounded-xl p-2.5 flex items-start gap-2.5 transition group cursor-pointer ${
+                  isSelected
+                    ? 'border-emerald-500 ring-2 ring-emerald-500/40 bg-emerald-500/[0.04]'
+                    : 'border-pos-border/80 hover:border-emerald-500/40'
+                }`}
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-start gap-1">
@@ -303,7 +404,8 @@ export const CartPanel: React.FC = () => {
                     <div className="flex items-center gap-1 bg-pos-bg border border-pos-border rounded-xl p-1 shadow-inner">
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           soundEngine.playScan();
                           updateCartQty(item.product.id, -1);
                         }}
@@ -318,6 +420,7 @@ export const CartPanel: React.FC = () => {
                         max={item.product.stock > 0 ? item.product.stock : 9999}
                         value={item.quantity}
                         disabled={item.product.isSerialized}
+                        onClick={(e) => e.stopPropagation()}
                         onChange={(e) => {
                           const val = parseInt(e.target.value, 10);
                           if (!isNaN(val) && val >= 1) {
@@ -329,7 +432,8 @@ export const CartPanel: React.FC = () => {
                       />
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           soundEngine.playScan();
                           updateCartQty(item.product.id, 1);
                         }}
@@ -343,9 +447,17 @@ export const CartPanel: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.stopPropagation();
                         soundEngine.playKeyBeep?.();
+                        logSecurityAction(
+                          'Suppression Article Panier',
+                          `Article: ${item.product.title} (${item.quantity} unités)`,
+                          'Caissier',
+                          false
+                        );
                         removeFromCart(item.product.id);
+                        setSelectedCartIndex(null);
                       }}
                       className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 transition cursor-pointer"
                       title="Retirer cet article de la vente"
@@ -429,7 +541,7 @@ export const CartPanel: React.FC = () => {
             <span className="text-[9px] text-pos-muted uppercase font-bold tracking-wider block">
               Coupures Rapides (Espèces) :
             </span>
-            <div className="grid grid-cols-5 gap-1">
+            <div className="grid grid-cols-6 gap-1">
               {quickBills.map((bill) => {
                 const isUnder = bill < total;
                 return (
@@ -461,7 +573,7 @@ export const CartPanel: React.FC = () => {
             onClick={() => openModal('payment')}
             disabled={cart.length === 0}
             className="w-full glow-btn bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-40 text-white rounded-xl py-3 px-3 flex items-center justify-between shadow-md shadow-emerald-600/25 group cursor-pointer transition"
-            title="Encaissement en Espèces & Calcul Rendu de Monnaie - F3"
+            title="Encaisser en Espèces & Calcul Rendu de Monnaie - F2 / Espace"
           >
             <div className="flex items-center gap-2 min-w-0">
               <Banknote className="w-5 h-5 text-emerald-200 shrink-0" />
@@ -472,7 +584,7 @@ export const CartPanel: React.FC = () => {
                 Cash Only
               </span>
               <span className="hotkey-badge bg-black/50 text-emerald-200 border-white/20 px-2 py-0.5 text-[10px] font-black shrink-0">
-                F3
+                F2
               </span>
             </div>
           </button>

@@ -17,11 +17,27 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     'ALTER TABLE transaction_items ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
     'ALTER TABLE inventory_ledger ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
     'ALTER TABLE customers ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE security_audit_logs ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE repair_orders ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE purchase_orders ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE trade_ins ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE imei_records ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE cash_drops ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE product_bundles ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE customer_debts ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE store_expenses ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE cash_sessions ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE cash_movements ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE app_settings ADD COLUMN key TEXT;',
+    'ALTER TABLE app_settings ADD COLUMN value_json TEXT;',
+    'ALTER TABLE app_settings ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'UPDATE app_settings SET key = id WHERE key IS NULL AND id IS NOT NULL;',
+    'UPDATE app_settings SET value_json = data_json WHERE value_json IS NULL AND data_json IS NOT NULL;',
   ];
   for (const sql of statements) {
     try {
       await db.execute(sql);
-    } catch (_err) {
+    } catch {
       // Expected if column already exists on upgraded database
     }
   }
@@ -103,42 +119,45 @@ export interface CheckoutWriteInput {
  */
 export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ deviceId: string }> {
   const db = await getLocalDb();
-  const deviceId = await getOrCreateDeviceId(db);
+  const deviceId = (await getOrCreateDeviceId(db)) || 'default';
   const now = utcNowIso();
-
-  // Ensure referenced products exist locally (stub if seed only hit Dexie).
-  // MUST run before order_items (FK product_id -> products).
-  for (const p of input.productSnapshots ?? []) {
-    await db.execute(
-      `INSERT OR IGNORE INTO products (id, sku, barcode, title, brand, category, price,
-        wholesale_price, cost_price, stock, json_payload, device_id, idempotency_key,
-        sync_status, created_at, updated_at, deleted)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,0,0,0,$8,$9,$10,'pending',$11,$11,0)`,
-      [
-        p.id, p.sku ?? '', p.barcode ?? '', p.title ?? p.id, p.brand ?? '',
-        p.category ?? '', p.price ?? 0, JSON.stringify(p), deviceId,
-        `stub-${p.id}`, now,
-      ],
-    );
-  }
-
-  // (Product UPSERTs are enqueued after the stock recompute below, so the
-  // payload carries post-sale stock and rowids stay parent-first.)
-  const touchedIds = [...new Set([
-    ...(input.productSnapshots ?? []).map((p) => p.id),
-    ...input.deltas.map((d) => d.productId),
-  ])];
-
-  const orderKey = ((input.orderRow.idempotency_key as string) || newIdempotencyKey()) as string;
-  const orderSync = 'pending';
-  // Canonical receipt JSON: full transaction when available (restorable),
-  // otherwise the partial order row.
-  const receiptJson = JSON.stringify(input.fullTx ?? input.orderRow);
 
   // Transaction rules (rules.md R3.5 / Section 10 Blocker prevention):
   // Every multi-statement write MUST be inside an explicit transaction.
   await db.execute('BEGIN IMMEDIATE TRANSACTION;');
   try {
+    // Ensure referenced products exist locally (stub if seed only hit Dexie).
+    // MUST run before order_items (FK product_id -> products).
+    for (const p of input.productSnapshots ?? []) {
+      const pId = String(p.id || `prod-${Date.now()}`);
+      await db.execute(
+        `INSERT OR IGNORE INTO products (id, sku, barcode, title, brand, category, price,
+          wholesale_price, cost_price, stock, json_payload, device_id, idempotency_key,
+          sync_status, created_at, updated_at, deleted)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,0,0,0,$8,$9,$10,'pending',$11,$11,0)`,
+        [
+          pId, p.sku ?? '', p.barcode ?? '', p.title || pId || 'Article', p.brand || 'Autre',
+          p.category || 'Tous les produits', Number(p.price ?? 0), JSON.stringify(p), deviceId,
+          `stub-${pId}`, now,
+        ],
+      );
+    }
+
+    // (Product UPSERTs are enqueued after the stock recompute below, so the
+    // payload carries post-sale stock and rowids stay parent-first.)
+    const touchedIds = [...new Set([
+      ...(input.productSnapshots ?? []).map((p) => String(p.id || '')).filter(Boolean),
+      ...input.deltas.map((d) => String(d.productId || '')).filter(Boolean),
+    ])];
+
+    const txId = String(input.orderRow.id || `TXN-${Date.now()}`);
+    const receiptNo = String(input.orderRow.receipt_number || input.orderRow.receiptNumber || txId);
+    const orderKey = String(input.orderRow.idempotency_key || newIdempotencyKey());
+    const orderSync = 'pending';
+    // Canonical receipt JSON: full transaction when available (restorable),
+    // otherwise the partial order row.
+    const receiptJson = JSON.stringify(input.fullTx ?? input.orderRow ?? { id: txId });
+
     await db.execute(
       `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
         cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
@@ -148,19 +167,34 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
          status=excluded.status, json_payload=excluded.json_payload, updated_at=excluded.updated_at,
          sync_status='pending', idempotency_key=excluded.idempotency_key`,
       [
-        input.orderRow.id, input.orderRow.receipt_number ?? input.orderRow.id,
-        input.orderRow.customer_id ?? null, input.orderRow.subtotal ?? 0, input.orderRow.tax ?? 0,
-        input.orderRow.discount_total ?? 0, input.orderRow.total ?? 0, input.orderRow.cost_total ?? 0,
-        input.orderRow.profit ?? 0, input.orderRow.profit_margin ?? 0,
-        input.orderRow.pricing_tier ?? 'Retail', input.orderRow.payment_method ?? 'Espèces',
-        input.orderRow.cash_tendered ?? 0, input.orderRow.change_due ?? 0,
-        input.orderRow.status ?? 'COMPLETED', (input.orderRow.created_at as string) ?? now,
-        receiptJson, deviceId, orderKey, orderSync, now,
+        txId,
+        receiptNo,
+        (input.orderRow.customer_id as string) ?? (input.orderRow.customerId as string) ?? null,
+        Number(input.orderRow.subtotal ?? 0),
+        Number(input.orderRow.tax ?? 0),
+        Number(input.orderRow.discount_total ?? input.orderRow.discountTotal ?? 0),
+        Number(input.orderRow.total ?? 0),
+        Number(input.orderRow.cost_total ?? input.orderRow.costTotal ?? 0),
+        Number(input.orderRow.profit ?? 0),
+        Number(input.orderRow.profit_margin ?? input.orderRow.profitMargin ?? 0),
+        String(input.orderRow.pricing_tier ?? input.orderRow.pricingTier ?? 'Retail'),
+        String(input.orderRow.payment_method ?? input.orderRow.paymentMethod ?? 'Espèces'),
+        Number(input.orderRow.cash_tendered ?? input.orderRow.cashTendered ?? 0),
+        Number(input.orderRow.change_due ?? input.orderRow.changeDue ?? 0),
+        String(input.orderRow.status ?? 'COMPLETED'),
+        String(input.orderRow.created_at ?? input.orderRow.createdAt ?? now),
+        receiptJson,
+        deviceId,
+        orderKey,
+        orderSync,
+        now,
       ],
     );
 
-    for (const it of input.items) {
-      const itemKey = ((it.idempotency_key as string) || newIdempotencyKey()) as string;
+    for (const [idx, it] of input.items.entries()) {
+      const itemId = String(it.id || `${txId}-item-${idx}`);
+      const prodId = String(it.product_id || it.productId || 'unknown');
+      const itemKey = String(it.idempotency_key || newIdempotencyKey());
       await db.execute(
         `INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price, discount,
           imei_number, cost_price, json_payload, device_id, idempotency_key, sync_status, created_at, updated_at, deleted)
@@ -168,40 +202,66 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
          ON CONFLICT(id) DO UPDATE SET quantity=excluded.quantity, applied_price=excluded.applied_price,
            json_payload=excluded.json_payload, updated_at=excluded.updated_at, sync_status='pending'`,
         [
-          it.id, input.orderRow.id, it.product_id, (it.quantity as number) ?? 1,
-          (it.applied_price as number) ?? 0, (it.discount as number) ?? 0,
-          (it.imei_number as string) ?? null, (it.cost_price as number) ?? 0,
-          JSON.stringify(it), deviceId, itemKey, now,
+          itemId,
+          txId,
+          prodId,
+          Number(it.quantity ?? 1),
+          Number(it.applied_price ?? it.appliedPrice ?? 0),
+          Number(it.discount ?? 0),
+          (it.imei_number as string) ?? (it.imeiNumber as string) ?? null,
+          Number(it.cost_price ?? it.costPrice ?? 0),
+          JSON.stringify({ ...it, id: itemId, transaction_id: txId, product_id: prodId }),
+          deviceId,
+          itemKey,
+          now,
         ],
       );
       await db.execute(
         `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
          VALUES ($1,'order_item',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
-        [itemKey, it.id, JSON.stringify({ ...it, transaction_id: input.orderRow.id })],
+        [itemKey, itemId, JSON.stringify({ ...it, id: itemId, transaction_id: txId, product_id: prodId })],
       );
+
+      const imeiNum = String((it.imei_number as string) ?? (it.imeiNumber as string) ?? '').trim();
+      if (imeiNum) {
+        await db.execute(
+          `INSERT INTO imei_records (imei, product_id, sale_transaction_id, sold_at, received_at, version)
+           VALUES ($1, $2, $3, $4, $4, 1)
+           ON CONFLICT(imei) DO UPDATE SET sale_transaction_id=excluded.sale_transaction_id, sold_at=excluded.sold_at,
+             product_id=excluded.product_id, version=imei_records.version + 1`,
+          [imeiNum, prodId, txId, now],
+        );
+        const imeiKey = `imei-${imeiNum}-${Date.now()}`;
+        await db.execute(
+          `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+           VALUES ($1,'imei',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
+          [imeiKey, imeiNum, JSON.stringify({ imei: imeiNum, product_id: prodId, sale_transaction_id: txId, sold_at: now, received_at: now, version: 1 })],
+        );
+      }
     }
 
-    for (const d of input.deltas) {
+    for (const [idx, d] of input.deltas.entries()) {
       const ledgerId = newIdempotencyKey();
       const ledgerKey = newIdempotencyKey();
+      const prodId = String(d.productId || 'unknown');
       await db.execute(
         `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
           idempotency_key, sync_status, created_at, updated_at, deleted)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$9,0)`,
-        [ledgerId, d.productId, d.delta, d.reason, d.refType, d.refId, deviceId, ledgerKey, now],
+        [ledgerId, prodId, Number(d.delta ?? 0), String(d.reason ?? 'SALE'), String(d.refType ?? 'order'), String(d.refId ?? `${txId}-${idx}`), deviceId, ledgerKey, now],
       );
       await db.execute(
         `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
          VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
         [
           ledgerKey, ledgerId,
-          JSON.stringify({ id: ledgerId, product_id: d.productId, delta: d.delta, reason: d.reason, ref_type: d.refType, ref_id: d.refId, device_id: deviceId, idempotency_key: ledgerKey }),
+          JSON.stringify({ id: ledgerId, product_id: prodId, delta: Number(d.delta ?? 0), reason: String(d.reason ?? 'SALE'), ref_type: String(d.refType ?? 'order'), ref_id: String(d.refId ?? `${txId}-${idx}`), device_id: deviceId, idempotency_key: ledgerKey }),
         ],
       );
     }
 
     // Recompute cached stock for touched products (allow-negative + alert policy).
-    const touched = [...new Set(input.deltas.map((d) => d.productId))];
+    const touched = [...new Set(input.deltas.map((d) => String(d.productId || '')).filter(Boolean))];
     for (const pid of touched) {
       await db.execute(
         `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0),0),
@@ -221,7 +281,7 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
       await db.execute(
         `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
          VALUES ($1,'product',$2,'UPSERT',$3,'pending')
-         ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
+         ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, error=NULL, updated_at=$4`,
         [pkey, pid, JSON.stringify(prow), now],
       );
     }
@@ -229,7 +289,7 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
     await db.execute(
       `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
        VALUES ($1,'order',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
-      [orderKey, input.orderRow.id, receiptJson],
+      [orderKey, txId, receiptJson],
     );
 
     await db.execute('COMMIT;');
@@ -278,46 +338,56 @@ export async function appendInventoryDeltas(
   opts?: { notifySync?: () => void },
 ): Promise<{ deviceId: string }> {
   const db = await getLocalDb();
-  const deviceId = await getOrCreateDeviceId(db);
+  const deviceId = (await getOrCreateDeviceId(db)) || 'default';
   const now = utcNowIso();
-  for (const d of deltas) {
-    const ledgerId = newIdempotencyKey();
-    const ledgerKey = newIdempotencyKey();
-    await db.execute(
-      `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
-        idempotency_key, sync_status, created_at, updated_at, deleted)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$9,0)`,
-      [ledgerId, d.productId, d.delta, d.reason, d.refType, d.refId, deviceId, ledgerKey, now],
-    );
-    await db.execute(
-      `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-       VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
-      [
-        ledgerKey, ledgerId,
-        JSON.stringify({ id: ledgerId, product_id: d.productId, delta: d.delta, reason: d.reason, ref_type: d.refType, ref_id: d.refId, device_id: deviceId, idempotency_key: ledgerKey }),
-      ],
-    );
+
+  await db.execute('BEGIN IMMEDIATE TRANSACTION;');
+  try {
+    for (const d of deltas) {
+      const ledgerId = newIdempotencyKey();
+      const ledgerKey = newIdempotencyKey();
+      const prodId = String(d.productId || 'unknown');
+      await db.execute(
+        `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
+          idempotency_key, sync_status, created_at, updated_at, deleted)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$9,0)`,
+        [ledgerId, prodId, Number(d.delta ?? 0), String(d.reason ?? 'ADJUST'), d.refType ? String(d.refType) : null, d.refId ? String(d.refId) : null, deviceId, ledgerKey, now],
+      );
+      await db.execute(
+        `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+         VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
+        [
+          ledgerKey, ledgerId,
+          JSON.stringify({ id: ledgerId, product_id: prodId, delta: Number(d.delta ?? 0), reason: String(d.reason ?? 'ADJUST'), ref_type: d.refType ?? null, ref_id: d.refId ?? null, device_id: deviceId, idempotency_key: ledgerKey }),
+        ],
+      );
+    }
+    const touched = [...new Set(deltas.map((d) => String(d.productId || '')).filter(Boolean))];
+    for (const pid of touched) {
+      await db.execute(
+        `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0), stock),
+          updated_at=$2, sync_status='pending' WHERE id=$1`,
+        [pid, now],
+      );
+    }
+    for (const pid of touched) {
+      const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pid]).catch(() => [])) as Array<Record<string, unknown>>;
+      const prow = rows?.[0];
+      if (!prow) continue;
+      const pkey = (prow.idempotency_key as string) || `stub-${pid}`;
+      await db.execute(
+        `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+         VALUES ($1,'product',$2,'UPSERT',$3,'pending')
+         ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
+        [pkey, pid, JSON.stringify(prow), now],
+      );
+    }
+    await db.execute('COMMIT;');
+  } catch (err) {
+    await db.execute('ROLLBACK;').catch(() => {});
+    throw err;
   }
-  const touched = [...new Set(deltas.map((d) => d.productId))];
-  for (const pid of touched) {
-    await db.execute(
-      `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0), stock),
-        updated_at=$2, sync_status='pending' WHERE id=$1`,
-      [pid, now],
-    );
-  }
-  for (const pid of touched) {
-    const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pid]).catch(() => [])) as Array<Record<string, unknown>>;
-    const prow = rows?.[0];
-    if (!prow) continue;
-    const pkey = (prow.idempotency_key as string) || `stub-${pid}`;
-    await db.execute(
-      `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-       VALUES ($1,'product',$2,'UPSERT',$3,'pending')
-       ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
-      [pkey, pid, JSON.stringify(prow), now],
-    );
-  }
+
   try {
     opts?.notifySync?.();
   } catch (err: unknown) {
@@ -343,23 +413,25 @@ export interface ProductSyncInput {
  */
 export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
   const db = await getLocalDb();
-  const deviceId = await getOrCreateDeviceId(db);
+  const deviceId = (await getOrCreateDeviceId(db)) || 'default';
   const now = utcNowIso();
   const wantStock = Math.trunc(p.stock ?? 0);
+  const pId = String(p.id || `prod-${Date.now()}`);
+  const title = String(p.title || p.sku || pId || 'Article');
+  const brand = String(p.brand || 'Autre');
+  const category = String(p.category || 'Tous les produits');
 
   await db.execute('BEGIN IMMEDIATE TRANSACTION;');
   try {
-    const existing = (await db.select('SELECT idempotency_key, created_at FROM products WHERE id=$1', [p.id]).catch(() => [])) as Array<Record<string, unknown>>;
+    const existing = (await db.select('SELECT idempotency_key, created_at FROM products WHERE id=$1', [pId]).catch(() => [])) as Array<Record<string, unknown>>;
     const prev = existing?.[0];
     const pkey = (prev?.idempotency_key as string) || newIdempotencyKey();
 
-    const sumRows = (await db.select(
-      'SELECT COALESCE(SUM(delta),0) as s FROM inventory_ledger WHERE product_id=$1 AND deleted=0', [p.id],
-    ).catch(() => [{ s: 0 }])) as Array<{ s: number }>;
-    const hasLedger = ((await db.select(
-      'SELECT COUNT(*) as n FROM inventory_ledger WHERE product_id=$1 AND deleted=0', [p.id],
-    ).catch(() => [{ n: 0 }])) as Array<{ n: number }>)[0]?.n > 0;
-    const currentSum = Number(sumRows?.[0]?.s ?? 0);
+    const ledgerStats = (await db.select(
+      'SELECT COALESCE(SUM(delta),0) as s, COUNT(*) as n FROM inventory_ledger WHERE product_id=$1 AND deleted=0', [pId],
+    ).catch(() => [{ s: 0, n: 0 }])) as Array<{ s: number; n: number }>;
+    const currentSum = Number(ledgerStats?.[0]?.s ?? 0);
+    const hasLedger = Number(ledgerStats?.[0]?.n ?? 0) > 0;
 
     await db.execute(
       `INSERT INTO products (id, sku, barcode, title, brand, category, price, wholesale_price,
@@ -376,8 +448,8 @@ export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
          reorder_point=excluded.reorder_point, json_payload=excluded.json_payload,
          updated_at=excluded.updated_at, sync_status='pending', deleted=0`,
       [
-        p.id, p.sku ?? '', p.barcode ?? '', p.title, p.brand ?? '', p.category ?? '',
-        p.price ?? 0, p.wholesalePrice ?? 0, p.costPrice ?? 0, wantStock,
+        pId, p.sku ?? '', p.barcode ?? '', title, brand, category,
+        Number(p.price ?? 0), Number(p.wholesalePrice ?? 0), Number(p.costPrice ?? 0), wantStock,
         p.imageUrl ?? null, p.isSerialized ? 1 : 0, p.imeiNumber ?? null, p.vendorName ?? null,
         p.leadTimeDays ?? 7, p.dailySalesVelocity ?? 0, p.reorderPoint ?? 5,
         JSON.stringify(p.raw ?? p), deviceId, pkey, (prev?.created_at as string) ?? now, now,
@@ -394,32 +466,56 @@ export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
         `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
           idempotency_key, sync_status, created_at, updated_at, deleted)
          VALUES ($1,$2,$3,'ADJUST','manual',$2,$4,$5,'pending',$6,$6,0)`,
-        [ledgerId, p.id, adjust, deviceId, ledgerKey, now],
+        [ledgerId, pId, adjust, deviceId, ledgerKey, now],
       );
       await db.execute(
         `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
          VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
         [ledgerKey, ledgerId, JSON.stringify({
-          id: ledgerId, product_id: p.id, delta: adjust, reason: 'ADJUST',
-          ref_type: 'manual', ref_id: p.id, device_id: deviceId, idempotency_key: ledgerKey,
+          id: ledgerId, product_id: pId, delta: adjust, reason: 'ADJUST',
+          ref_type: 'manual', ref_id: pId, device_id: deviceId, idempotency_key: ledgerKey,
         })],
       );
       await db.execute(
         `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0), stock),
           updated_at=$2, sync_status='pending' WHERE id=$1`,
-        [p.id, now],
+        [pId, now],
       );
     }
 
-    const rows = (await db.select('SELECT * FROM products WHERE id=$1', [p.id]).catch(() => [])) as Array<Record<string, unknown>>;
-    if (rows?.[0]) {
-      await db.execute(
-        `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-         VALUES ($1,'product',$2,'UPSERT',$3,'pending')
-         ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
-        [pkey, p.id, JSON.stringify(rows[0]), now],
-      );
-    }
+    const productPayload = {
+      id: pId,
+      sku: p.sku ?? '',
+      barcode: p.barcode ?? '',
+      title,
+      brand,
+      category,
+      price: Number(p.price ?? 0),
+      wholesale_price: Number(p.wholesalePrice ?? 0),
+      cost_price: Number(p.costPrice ?? 0),
+      stock: wantStock,
+      image_url: p.imageUrl ?? null,
+      is_serialized: p.isSerialized ? 1 : 0,
+      imei_number: p.imeiNumber ?? null,
+      vendor_name: p.vendorName ?? null,
+      lead_time_days: p.leadTimeDays ?? 7,
+      daily_sales_velocity: p.dailySalesVelocity ?? 0,
+      reorder_point: p.reorderPoint ?? 5,
+      json_payload: JSON.stringify(p.raw ?? p),
+      device_id: deviceId,
+      idempotency_key: pkey,
+      sync_status: 'pending',
+      created_at: (prev?.created_at as string) ?? now,
+      updated_at: now,
+      deleted: 0,
+    };
+
+    await db.execute(
+      `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+       VALUES ($1,'product',$2,'UPSERT',$3,'pending')
+       ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
+      [pkey, pId, JSON.stringify(productPayload), now],
+    );
     await db.execute('COMMIT;');
   } catch (err) {
     await db.execute('ROLLBACK;').catch(() => {});
@@ -434,7 +530,7 @@ export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
 export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promise<void> {
   if (!products || products.length === 0) return;
   const db = await getLocalDb();
-  const deviceId = await getOrCreateDeviceId(db);
+  const deviceId = (await getOrCreateDeviceId(db)) || 'default';
   const now = utcNowIso();
 
   const CHUNK_SIZE = 100;
@@ -443,16 +539,20 @@ export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promi
     await db.execute('BEGIN IMMEDIATE TRANSACTION;');
     try {
       for (const p of chunk) {
+        const pId = String(p.id || `prod-${Date.now()}`);
+        const title = String(p.title || p.sku || pId || 'Article');
+        const brand = String(p.brand || 'Autre');
+        const category = String(p.category || 'Tous les produits');
         const wantStock = Math.trunc(p.stock ?? 0);
-        const existing = (await db.select('SELECT idempotency_key, created_at FROM products WHERE id=$1', [p.id]).catch(() => [])) as Array<Record<string, unknown>>;
+        const existing = (await db.select('SELECT idempotency_key, created_at FROM products WHERE id=$1', [pId]).catch(() => [])) as Array<Record<string, unknown>>;
         const prev = existing?.[0];
         const pkey = (prev?.idempotency_key as string) || newIdempotencyKey();
 
         const sumRows = (await db.select(
-          'SELECT COALESCE(SUM(delta),0) as s FROM inventory_ledger WHERE product_id=$1 AND deleted=0', [p.id],
+          'SELECT COALESCE(SUM(delta),0) as s FROM inventory_ledger WHERE product_id=$1 AND deleted=0', [pId],
         ).catch(() => [{ s: 0 }])) as Array<{ s: number }>;
         const hasLedger = ((await db.select(
-          'SELECT COUNT(*) as n FROM inventory_ledger WHERE product_id=$1 AND deleted=0', [p.id],
+          'SELECT COUNT(*) as n FROM inventory_ledger WHERE product_id=$1 AND deleted=0', [pId],
         ).catch(() => [{ n: 0 }])) as Array<{ n: number }>)[0]?.n > 0;
         const currentSum = Number(sumRows?.[0]?.s ?? 0);
 
@@ -471,8 +571,8 @@ export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promi
              reorder_point=excluded.reorder_point, json_payload=excluded.json_payload,
              updated_at=excluded.updated_at, sync_status='pending', deleted=0`,
           [
-            p.id, p.sku ?? '', p.barcode ?? '', p.title, p.brand ?? '', p.category ?? '',
-            p.price ?? 0, p.wholesalePrice ?? 0, p.costPrice ?? 0, wantStock,
+            pId, p.sku ?? '', p.barcode ?? '', title, brand, category,
+            Number(p.price ?? 0), Number(p.wholesalePrice ?? 0), Number(p.costPrice ?? 0), wantStock,
             p.imageUrl ?? null, p.isSerialized ? 1 : 0, p.imeiNumber ?? null, p.vendorName ?? null,
             p.leadTimeDays ?? 7, p.dailySalesVelocity ?? 0, p.reorderPoint ?? 5,
             JSON.stringify(p.raw ?? p), deviceId, pkey, (prev?.created_at as string) ?? now, now,
@@ -488,30 +588,30 @@ export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promi
             `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
               idempotency_key, sync_status, created_at, updated_at, deleted)
              VALUES ($1,$2,$3,'ADJUST','manual',$2,$4,$5,'pending',$6,$6,0)`,
-            [ledgerId, p.id, adjust, deviceId, ledgerKey, now],
+            [ledgerId, pId, adjust, deviceId, ledgerKey, now],
           );
           await db.execute(
             `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
              VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
             [ledgerKey, ledgerId, JSON.stringify({
-              id: ledgerId, product_id: p.id, delta: adjust, reason: 'ADJUST',
-              ref_type: 'manual', ref_id: p.id, device_id: deviceId, idempotency_key: ledgerKey,
+              id: ledgerId, product_id: pId, delta: adjust, reason: 'ADJUST',
+              ref_type: 'manual', ref_id: pId, device_id: deviceId, idempotency_key: ledgerKey,
             })],
           );
           await db.execute(
             `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0), stock),
               updated_at=$2, sync_status='pending' WHERE id=$1`,
-            [p.id, now],
+            [pId, now],
           );
         }
 
-        const rows = (await db.select('SELECT * FROM products WHERE id=$1', [p.id]).catch(() => [])) as Array<Record<string, unknown>>;
+        const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pId]).catch(() => [])) as Array<Record<string, unknown>>;
         if (rows?.[0]) {
           await db.execute(
             `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
              VALUES ($1,'product',$2,'UPSERT',$3,'pending')
-             ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
-            [pkey, p.id, JSON.stringify(rows[0]), now],
+             ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, error=NULL, updated_at=$4`,
+            [pkey, pId, JSON.stringify(rows[0]), now],
           );
         }
       }
@@ -528,19 +628,21 @@ export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promi
 export async function syncProductDelete(id: string): Promise<void> {
   const db = await getLocalDb();
   const now = utcNowIso();
-  const rows = (await db.select('SELECT * FROM products WHERE id=$1', [id]).catch(() => [])) as Array<Record<string, unknown>>;
-  const pkey = (rows?.[0]?.idempotency_key as string) || `legacy-${id}`;
-  const snapshot = { ...(rows?.[0] ?? { id }), deleted: 1, updated_at: now };
+  const safeId = String(id || '');
+  if (!safeId) return;
+  const rows = (await db.select('SELECT * FROM products WHERE id=$1', [safeId]).catch(() => [])) as Array<Record<string, unknown>>;
+  const pkey = (rows?.[0]?.idempotency_key as string) || `legacy-${safeId}`;
+  const snapshot = { ...(rows?.[0] ?? { id: safeId }), deleted: 1, updated_at: now };
   await db.execute(
-    `UPDATE products SET deleted=1, updated_at=$1, sync_status='pending' WHERE id=$2`, [now, id],
+    `UPDATE products SET deleted=1, updated_at=$1, sync_status='pending' WHERE id=$2`, [now, safeId],
   ).catch((err: unknown) => {
     console.warn('[sync:soft-delete] Failed to update product deleted flag:', err);
   });
   await db.execute(
     `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
      VALUES ($1,'product',$2,'DELETE',$3,'pending')
-     ON CONFLICT(idempotency_key) DO UPDATE SET operation='DELETE', payload_json=excluded.payload_json, updated_at=$4`,
-    [pkey, id, JSON.stringify(snapshot), now],
+     ON CONFLICT(idempotency_key) DO UPDATE SET operation='DELETE', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, error=NULL, updated_at=$4`,
+    [pkey, safeId, JSON.stringify(snapshot), now],
   );
 }
 
@@ -554,6 +656,8 @@ async function stableEntityKey(
   db: { select: (sql: string, args?: unknown[]) => Promise<unknown>; execute: (sql: string, args?: unknown[]) => Promise<unknown> },
   entity: string, id: string,
 ): Promise<string> {
+  const safeEntity = String(entity || 'unknown');
+  const safeId = String(id || 'unknown');
   // entity_keys also self-creates here so pre-v4 local DBs work with no rebuild.
   await db.execute(
     `CREATE TABLE IF NOT EXISTS entity_keys (entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
@@ -562,7 +666,7 @@ async function stableEntityKey(
     console.warn('[sync:entity-keys] Table init skipped:', err);
   });
   const rows = (await db.select(
-    'SELECT idempotency_key FROM entity_keys WHERE entity_type=$1 AND entity_id=$2', [entity, id],
+    'SELECT idempotency_key FROM entity_keys WHERE entity_type=$1 AND entity_id=$2', [safeEntity, safeId],
   ).catch((err: unknown) => {
     console.warn('[sync:entity-keys] Key lookup failed:', err);
     return [];
@@ -571,7 +675,7 @@ async function stableEntityKey(
   const key = newIdempotencyKey();
   await db.execute(
     'INSERT OR IGNORE INTO entity_keys (entity_type, entity_id, idempotency_key) VALUES ($1,$2,$3)',
-    [entity, id, key],
+    [safeEntity, safeId, key],
   ).catch((err: unknown) => {
     console.warn('[sync:entity-keys] Key registration skipped:', err);
   });
@@ -588,12 +692,13 @@ export async function enqueueGenericSync(
 ): Promise<void> {
   const db = await getLocalDb();
   const now = utcNowIso();
-  const key = await stableEntityKey(db, entity, id);
+  const safeId = String(id || (entityPayload?.id as string) || `${entity}-${Date.now()}`);
+  const key = await stableEntityKey(db, entity, safeId);
   await db.execute(
     `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
      VALUES ($1,$2,$3,'UPSERT',$4,'pending')
-     ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$5`,
-    [key, entity, id, JSON.stringify(entityPayload), now],
+     ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, error=NULL, updated_at=$5`,
+    [key, entity, safeId, JSON.stringify(entityPayload ?? {}), now],
   );
 }
 
@@ -601,12 +706,13 @@ export async function enqueueGenericSync(
 export async function enqueueGenericDelete(entity: GenericEntity, id: string): Promise<void> {
   const db = await getLocalDb();
   const now = utcNowIso();
-  const key = await stableEntityKey(db, entity, id);
+  const safeId = String(id || `${entity}-${Date.now()}`);
+  const key = await stableEntityKey(db, entity, safeId);
   await db.execute(
     `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
      VALUES ($1,$2,$3,'DELETE',$4,'pending')
-     ON CONFLICT(idempotency_key) DO UPDATE SET operation='DELETE', payload_json=excluded.payload_json, updated_at=$5`,
-    [key, entity, id, JSON.stringify({ id, deleted: 1 }), now],
+     ON CONFLICT(idempotency_key) DO UPDATE SET operation='DELETE', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, error=NULL, updated_at=$5`,
+    [key, entity, safeId, JSON.stringify({ id: safeId, deleted: 1 }), now],
   );
 }
 
@@ -637,7 +743,7 @@ export async function enqueueOrderSync(
   await db.execute(
     `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
      VALUES ($1,'order',$2,'UPSERT',$3,'pending')
-     ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
+     ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, error=NULL, updated_at=$4`,
     [key, orderId, JSON.stringify({ ...payload, idempotency_key: key, updated_at: now }), now],
   );
 }

@@ -1,39 +1,47 @@
 import React, { useRef, useEffect } from 'react';
-import { X, Printer, Check, Zap, Sparkles } from 'lucide-react';
+import { X, Printer, Check, Zap, Sparkles, ChevronLeft } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
 import { resolvePrinterForDocument } from '../../utils/printerRoutingEngine';
-import { printCoordinator } from '../../utils/printCoordinator';
+import { directPrintReceipt } from '../../utils/escpos';
 
 export const ReceiptModal: React.FC = () => {
-  const { activeModal, closeModal, lastTransaction, receiptSettings } = usePosStore();
+  const {
+    activeModal,
+    closeModal,
+    lastTransaction,
+    selectedTransactionForRefund,
+    receiptSettings,
+  } = usePosStore();
   const barcodeCanvasRef = useRef<HTMLCanvasElement>(null);
   const targetPrinter = resolvePrinterForDocument('receipt', receiptSettings.printerRouting);
 
+  const currentTx = selectedTransactionForRefund || lastTransaction;
+
   useEffect(() => {
-    if (activeModal === 'receipt' && lastTransaction?.receiptNumber) {
+    if (activeModal === 'receipt' && currentTx?.receiptNumber) {
       if (barcodeCanvasRef.current) {
-        renderBarcodeToCanvas(barcodeCanvasRef.current, lastTransaction.receiptNumber, 'code128', {
+        renderBarcodeToCanvas(barcodeCanvasRef.current, currentTx.receiptNumber, 'code128', {
           height: 40,
           showText: false,
         });
       }
-      // Immediate auto-print execution if enabled in settings
+      // Immediate direct hardware print if enabled in settings
       if (receiptSettings.autoPrintEnabled !== false) {
-        printCoordinator.printReceipt(150);
+        void directPrintReceipt(currentTx, receiptSettings);
       }
     }
-  }, [activeModal, lastTransaction, receiptSettings.autoPrintEnabled]);
+  }, [activeModal, currentTx, receiptSettings]);
 
-  if (activeModal !== 'receipt' || !lastTransaction) return null;
+  if (activeModal !== 'receipt' || !currentTx) return null;
 
   const handlePrintBrowser = () => {
-    printCoordinator.printReceipt(20);
+    void directPrintReceipt(currentTx, receiptSettings);
   };
 
   const handlePrintThermal = () => {
-    printCoordinator.printReceipt(20);
+    void directPrintReceipt(currentTx, receiptSettings);
   };
 
   return (
@@ -42,9 +50,18 @@ export const ReceiptModal: React.FC = () => {
         {/* Header */}
         <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={closeModal}
+              className="p-1 -ml-1 rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center gap-1 font-bold text-xs"
+              title="Retour"
+            >
+              <ChevronLeft className="w-5 h-5 text-cyan-400 stroke-[2.5]" />
+              <span className="hidden sm:inline">Retour</span>
+            </button>
             <div
               className={`w-7 h-7 rounded-full flex items-center justify-center ${
-                lastTransaction.isRefund
+                currentTx.isRefund
                   ? 'bg-purple-500/20 text-purple-400'
                   : 'bg-emerald-500/20 text-emerald-400'
               }`}
@@ -53,18 +70,18 @@ export const ReceiptModal: React.FC = () => {
             </div>
             <div>
               <h2 className="text-sm font-bold text-pos-text">
-                {lastTransaction.isRefund
-                  ? "Avoir / Remboursement Émis avec Succès"
-                  : "Paiement Enregistré avec Succès"}
+                {currentTx.isRefund
+                  ? "Avoir / Remboursement"
+                  : "Ticket de Caisse"}
               </h2>
               <span className="text-[9px] text-emerald-400 font-bold flex items-center gap-1 mt-0.5">
-                <Sparkles className="w-3 h-3" /> Routé vers: {targetPrinter.printerName}
+                <Sparkles className="w-3 h-3" /> {targetPrinter.printerName}
               </span>
             </div>
           </div>
           <button
             onClick={closeModal}
-            className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition"
+            className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -88,37 +105,37 @@ export const ReceiptModal: React.FC = () => {
               <p className="text-[10px] text-gray-600">{receiptSettings.address}</p>
               <p className="text-[10px] text-gray-600">Tél: {receiptSettings.phone}</p>
               
-              {lastTransaction.isRefund ? (
+              {currentTx.isRefund ? (
                 <div className="mt-2 py-1 px-2 bg-gray-100 border border-gray-300 rounded text-center">
                   <p className="font-extrabold text-[11px] uppercase tracking-wider text-black">
                     *** BON D'AVOIR / REMBOURSEMENT ***
                   </p>
-                  <p className="text-[9px] font-bold text-gray-700">N° Avoir: {lastTransaction.receiptNumber}</p>
-                  {lastTransaction.originalReceiptNumber && (
-                    <p className="text-[8px] text-gray-600">Sur Ticket Vente: #{lastTransaction.originalReceiptNumber}</p>
+                  <p className="text-[9px] font-bold text-gray-700">N° Avoir: {currentTx.receiptNumber}</p>
+                  {currentTx.originalReceiptNumber && (
+                    <p className="text-[8px] text-gray-600">Sur Ticket Vente: #{currentTx.originalReceiptNumber}</p>
                   )}
-                  {lastTransaction.refundReason && (
-                    <p className="text-[8px] italic text-gray-600 mt-0.5">Motif: {lastTransaction.refundReason}</p>
+                  {currentTx.refundReason && (
+                    <p className="text-[8px] italic text-gray-600 mt-0.5">Motif: {currentTx.refundReason}</p>
                   )}
                 </div>
               ) : (
                 <>
-                  <p className="text-[9px] text-gray-500 mt-1">N° Ticket: {lastTransaction.receiptNumber}</p>
+                  <p className="text-[9px] text-gray-500 mt-1">N° Ticket: {currentTx.receiptNumber}</p>
                 </>
               )}
-              <p className="text-[9px] text-gray-500 mt-0.5">{formatDateTime(lastTransaction.createdAt)}</p>
+              <p className="text-[9px] text-gray-500 mt-0.5">{formatDateTime(currentTx.createdAt)}</p>
             </div>
 
             {/* Customer Info */}
-            {lastTransaction.customer && (
+            {currentTx.customer && (
               <div className="py-2 border-b border-dashed border-gray-400 text-[10px]">
-                <p><span className="font-bold">Client:</span> {lastTransaction.customer.name}</p>
-                {lastTransaction.customer.registeredDevice && (
-                  <p><span className="font-bold">Appareil:</span> {lastTransaction.customer.registeredDevice}</p>
+                <p><span className="font-bold">Client:</span> {currentTx.customer.name}</p>
+                {currentTx.customer.registeredDevice && (
+                  <p><span className="font-bold">Appareil:</span> {currentTx.customer.registeredDevice}</p>
                 )}
-                {lastTransaction.isRefund && lastTransaction.paymentMethod === 'Avoir Client' && (
+                {currentTx.isRefund && currentTx.paymentMethod === 'Avoir Client' && (
                   <p className="font-bold text-purple-800 mt-0.5">
-                    Solde Avoir Client Total: {formatDZD(lastTransaction.customer.storeCredit)}
+                    Solde Avoir Client Total: {formatDZD(currentTx.customer.storeCredit)}
                   </p>
                 )}
               </div>
@@ -127,9 +144,9 @@ export const ReceiptModal: React.FC = () => {
             {/* Items Table */}
             <div className="py-3 space-y-2 border-b border-dashed border-gray-400">
               <p className="text-[9px] font-bold uppercase text-gray-600">
-                {lastTransaction.isRefund ? "Articles Retournés :" : "Articles Achetés :"}
+                {currentTx.isRefund ? "Articles Retournés :" : "Articles Achetés :"}
               </p>
-              {(lastTransaction.items || []).map((item) => {
+              {(currentTx.items || []).map((item) => {
                 const unitPrice = item.appliedPrice || item.product.price;
                 const grossLinePrice = unitPrice * item.quantity;
                 const netLinePrice = Math.max(0, grossLinePrice - item.discount);
@@ -164,54 +181,54 @@ export const ReceiptModal: React.FC = () => {
             {/* Totals Breakdown */}
             <div className="py-3 space-y-1 text-[11px]">
               {/* Show Subtotal and Discount Breakdown if discount exists */}
-              {lastTransaction.discountTotal > 0 && (
+              {currentTx.discountTotal > 0 && (
                 <>
                   <div className="flex justify-between text-gray-700 text-[10px]">
                     <span>SOUS-TOTAL BRUT:</span>
-                    <span>{formatDZD(lastTransaction.subtotal + lastTransaction.discountTotal)}</span>
+                    <span>{formatDZD(currentTx.subtotal + currentTx.discountTotal)}</span>
                   </div>
                   <div className="flex justify-between text-purple-700 font-bold text-[10px]">
                     <span>REMISE ACCORDÉE:</span>
-                    <span>-{formatDZD(lastTransaction.discountTotal)}</span>
+                    <span>-{formatDZD(currentTx.discountTotal)}</span>
                   </div>
                 </>
               )}
 
-              {lastTransaction.tenders?.some(t => t.method === 'Avoir Client') && (
+              {currentTx.tenders?.some(t => t.method === 'Avoir Client') && (
                 <div className="flex justify-between text-purple-700 font-bold text-[10px]">
                   <span>AVOIR CLIENT DÉDUIT:</span>
-                  <span>-{formatDZD(lastTransaction.tenders.find(t => t.method === 'Avoir Client')?.amount || 0)}</span>
+                  <span>-{formatDZD(currentTx.tenders.find(t => t.method === 'Avoir Client')?.amount || 0)}</span>
                 </div>
               )}
 
               <div className="flex justify-between font-extrabold text-sm pt-1 border-t border-black">
-                <span>{lastTransaction.isRefund ? "TOTAL AVOIR / REMBOURSÉ:" : "TOTAL NET A PAYER:"}</span>
-                <span className={lastTransaction.isRefund ? "text-purple-900" : ""}>
-                  {formatDZD(lastTransaction.total)}
+                <span>{currentTx.isRefund ? "TOTAL AVOIR / REMBOURSÉ:" : "TOTAL NET A PAYER:"}</span>
+                <span className={currentTx.isRefund ? "text-purple-900" : ""}>
+                  {formatDZD(currentTx.total)}
                 </span>
               </div>
 
               <div className="pt-2 text-[10px] border-t border-dashed border-gray-400 space-y-0.5">
                 <div className="flex justify-between">
-                  <span>{lastTransaction.isRefund ? "Mode de Remboursement:" : "Mode de Règlement:"}</span>
-                  <span className="font-bold">{lastTransaction.paymentMethod || 'Espèces (Comptant)'}</span>
+                  <span>{currentTx.isRefund ? "Mode de Remboursement:" : "Mode de Règlement:"}</span>
+                  <span className="font-bold">{currentTx.paymentMethod || 'Espèces (Comptant)'}</span>
                 </div>
-                {!lastTransaction.isRefund && (
+                {!currentTx.isRefund && (
                   <>
                     <div className="flex justify-between">
                       <span>Espèces Reçues:</span>
-                      <span>{formatDZD(lastTransaction.cashTendered)}</span>
+                      <span>{formatDZD(currentTx.cashTendered)}</span>
                     </div>
                     <div className="flex justify-between font-bold">
                       <span>Rendu Monnaie:</span>
-                      <span>{formatDZD(lastTransaction.changeDue)}</span>
+                      <span>{formatDZD(currentTx.changeDue)}</span>
                     </div>
                   </>
                 )}
-                {lastTransaction.customer?.storeCredit !== undefined && lastTransaction.customer.storeCredit > 0 && (
+                {currentTx.customer?.storeCredit !== undefined && currentTx.customer.storeCredit > 0 && (
                   <div className="flex justify-between text-purple-900 font-bold pt-1 border-t border-gray-200">
                     <span>Nouveau Solde Avoir:</span>
-                    <span>{formatDZD(lastTransaction.customer.storeCredit)}</span>
+                    <span>{formatDZD(currentTx.customer.storeCredit)}</span>
                   </div>
                 )}
               </div>
@@ -224,7 +241,7 @@ export const ReceiptModal: React.FC = () => {
               </p>
               <canvas ref={barcodeCanvasRef} className="h-10 my-1 mix-blend-multiply max-w-[90%]" />
               <p className="text-[8px] text-gray-500">
-                {lastTransaction.isRefund
+                {currentTx.isRefund
                   ? "Ce bon d'avoir est valable en magasin sur présentation de ce document."
                   : receiptSettings.customFooterMsg}
               </p>

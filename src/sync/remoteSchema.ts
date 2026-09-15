@@ -187,18 +187,21 @@ export const REMOTE_MIGRATIONS: RemoteMigration[] = [
       'ALTER TABLE customers ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
     ],
   },
+  {
+    version: 3,
+    description: 'Add optimistic concurrency version column to all generic sync tables',
+    statements: GENERIC_SYNC_TABLES.map(
+      (table) => `ALTER TABLE ${table} ADD COLUMN version INTEGER NOT NULL DEFAULT 1;`
+    ),
+  },
 ];
 
-export const LATEST_REMOTE_VERSION = 2;
+export const LATEST_REMOTE_VERSION = 3;
 
 export async function ensureRemoteSchemaColumns(client: Client): Promise<void> {
-  const alterStatements = [
-    'ALTER TABLE products ADD COLUMN version INTEGER NOT NULL DEFAULT 1',
-    'ALTER TABLE transactions ADD COLUMN version INTEGER NOT NULL DEFAULT 1',
-    'ALTER TABLE transaction_items ADD COLUMN version INTEGER NOT NULL DEFAULT 1',
-    'ALTER TABLE inventory_ledger ADD COLUMN version INTEGER NOT NULL DEFAULT 1',
-    'ALTER TABLE customers ADD COLUMN version INTEGER NOT NULL DEFAULT 1',
-  ];
+  const alterStatements = ALL_REMOTE_SYNC_TABLES.map(
+    (table) => `ALTER TABLE ${table} ADD COLUMN version INTEGER NOT NULL DEFAULT 1`
+  );
   for (const stmt of alterStatements) {
     try {
       await client.execute(stmt);

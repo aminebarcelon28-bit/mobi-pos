@@ -12,8 +12,9 @@ import {
   Shield,
   Printer,
   CheckCircle2,
-  Wand2,
-  Tag,
+  Package,
+  Copy,
+  Coins,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
@@ -48,129 +49,105 @@ const CATEGORIES: CategoryType[] = [
   'Téléphones d\'Occasion (Reprise)',
 ];
 
-const PRESET_TEMPLATES = [
-  {
-    title: 'Coque Silicone MagSafe iPhone 15 Pro Max',
-    brand: 'Apple' as BrandName,
-    category: 'Coques iPhone' as CategoryType,
-    compatibleModel: 'iPhone 15 Pro Max',
-    price: 3500,
-    wholesalePrice: 2400,
-    costPrice: 1500,
-    stock: 20,
-    color: 'Noir Titane',
-    material: 'Silicone Liquide MagSafe',
-    isMagSafe: true,
-    vendorName: 'Distributeur Officiel Apple Algérie',
-    reorderPoint: 10,
-    imageUrl: '',
-  },
-  {
-    title: 'Verre Trempé ZAGG InvisibleShield 9H Privacy',
-    brand: 'ZAGG' as BrandName,
-    category: 'Protège-Écran' as CategoryType,
-    compatibleModel: 'iPhone 15 Pro Max / 14 Pro Max',
-    price: 2800,
-    wholesalePrice: 1800,
-    costPrice: 1100,
-    stock: 35,
-    color: 'Anti-Espion Teinté',
-    material: 'Verre Trempé 9H',
-    isMagSafe: false,
-    vendorName: 'Importateur Direct Grossiste Bab Ezzouar',
-    reorderPoint: 15,
-    imageUrl: '',
-  },
-  {
-    title: 'Chargeur Rapide 25W Type-C Super Fast Charge',
-    brand: 'Samsung' as BrandName,
-    category: 'Chargeurs' as CategoryType,
-    compatibleModel: 'Galaxy S24 / S23 / A55 / Universel Type-C',
-    price: 3800,
-    wholesalePrice: 2600,
-    costPrice: 1700,
-    stock: 25,
-    color: 'Noir Mat',
-    material: 'Polycarbonate Ignifugé',
-    isMagSafe: false,
-    vendorName: 'Grossiste Électronique Alger Centre',
-    reorderPoint: 10,
-    imageUrl: '',
-  },
-  {
-    title: 'Câble Tressé Renforcé 100W PD Type-C vers Type-C',
-    brand: 'Anker' as BrandName,
-    category: 'Câbles' as CategoryType,
-    compatibleModel: 'Universel USB-C Power Delivery',
-    price: 2200,
-    wholesalePrice: 1500,
-    costPrice: 950,
-    stock: 30,
-    color: 'Gris Sidéral',
-    material: 'Nylon Tressé Ultra-Résistant',
-    isMagSafe: false,
-    vendorName: 'Anker Official Dealer Alger',
-    reorderPoint: 12,
-    imageUrl: '',
-  },
-  {
-    title: 'Adaptateur Secteur 20W USB-C Original',
-    brand: 'Apple' as BrandName,
-    category: 'Chargeurs' as CategoryType,
-    compatibleModel: 'iPhone 15 / 14 / 13 / iPad',
-    price: 4500,
-    wholesalePrice: 3200,
-    costPrice: 2200,
-    stock: 15,
-    color: 'Blanc Brillant',
-    material: 'Polycarbonate',
-    isMagSafe: false,
-    vendorName: 'Distributeur Officiel Apple Algérie',
-    reorderPoint: 8,
-    imageUrl: '',
-  },
-  {
-    title: 'Support Voiture Magnétique MagSafe Grille Aération',
-    brand: 'Belkin' as BrandName,
-    category: 'Coques iPhone' as CategoryType,
-    compatibleModel: 'iPhone 12 à 15 / Coques MagSafe',
-    price: 4200,
-    wholesalePrice: 3000,
-    costPrice: 2100,
-    stock: 12,
-    color: 'Noir Aluminium',
-    material: 'Aluminium Anodisé & Aimants N52',
-    isMagSafe: true,
-    vendorName: 'Belkin Store El Biar',
-    reorderPoint: 5,
-    imageUrl: '',
-  },
-];
+/**
+ * Intelligent Title Casing utility preserving acronyms, tech specs & brands
+ */
+function formatSmartTitleCase(input: string): string {
+  if (!input || !input.trim()) return '';
 
-const COLOR_OPTIONS = [
-  'Noir Titane',
-  'Noir Mat',
-  'Blanc / Argent',
-  'Transparent',
-  'Titane Naturel',
-  'Bleu Nuit',
-  'Rouge Product',
-  'Vert Forêt',
-  'Gris Sidéral',
-  'Or / Champagne',
-  'Violet Profond',
-];
+  const EXACT_TOKENS: Record<string, string> = {
+    iphone: 'iPhone',
+    ipad: 'iPad',
+    imac: 'iMac',
+    macbook: 'MacBook',
+    airpods: 'AirPods',
+    applewatch: 'AppleWatch',
+    magsafe: 'MagSafe',
+    'usb-c': 'USB-C',
+    'type-c': 'Type-C',
+    'usb-a': 'USB-A',
+    usb: 'USB',
+    pd: 'PD',
+    gan: 'GaN',
+    qc: 'QC',
+    '5g': '5G',
+    '4g': '4G',
+    lte: 'LTE',
+    nfc: 'NFC',
+    oled: 'OLED',
+    amoled: 'AMOLED',
+    lcd: 'LCD',
+    led: 'LED',
+    rgb: 'RGB',
+    zagg: 'ZAGG',
+    tpu: 'TPU',
+    abs: 'ABS',
+    pc: 'PC',
+    pet: 'PET',
+    dzd: 'DZD',
+    da: 'DA',
+    sav: 'SAV',
+    imei: 'IMEI',
+    ean: 'EAN',
+    sku: 'SKU',
+    '9h': '9H',
+    fastcharge: 'FastCharge',
+    quickcharge: 'QuickCharge',
+    invisibleshield: 'InvisibleShield',
+  };
 
-const MATERIAL_OPTIONS = [
-  'Silicone Liquide Soft-Touch',
-  'Verre Trempé 9H Dureté',
-  'Cuir Véritable',
-  'Polycarbonate Antichoc',
-  'Fibre de Carbone / Kevlar',
-  'Nylon Tressé Renforcé',
-  'Aluminium Anodisé',
-  'TPU Flexible Transparent',
-];
+  const LOWERCASE_WORDS = new Set([
+    'de', 'du', 'des', 'pour', 'et', 'en', 'vers', 'sans', 'avec', 'à', 'au', 'aux',
+  ]);
+
+  const words = input.trim().split(/\s+/);
+
+  const formatted = words.map((word, index) => {
+    if (word.includes('/') || word.includes('-')) {
+      const parts = word.split(/([/-])/);
+      return parts
+        .map((part) => {
+          if (part === '/' || part === '-') return part;
+          const lowerPart = part.toLowerCase();
+          if (EXACT_TOKENS[lowerPart]) return EXACT_TOKENS[lowerPart];
+          if (/^\d+(?:w|v|a|mah|gb|tb|mb|mm|cm|m)$/i.test(part)) {
+            return part.toUpperCase();
+          }
+          if (part.length === 0) return '';
+          return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+        })
+        .join('');
+    }
+
+    const lower = word.toLowerCase();
+
+    if (EXACT_TOKENS[lower]) {
+      return EXACT_TOKENS[lower];
+    }
+
+    if (/^\d+(?:w|v|a|mah|gb|tb|mb|mm|cm|m)$/i.test(word)) {
+      return word.toUpperCase();
+    }
+
+    if (index > 0 && LOWERCASE_WORDS.has(lower)) {
+      return lower;
+    }
+
+    if (lower.startsWith("d'") || lower.startsWith("l'")) {
+      const prefix = lower.slice(0, 2);
+      const rest = word.slice(2);
+      const lowerRest = rest.toLowerCase();
+      const restFormatted = EXACT_TOKENS[lowerRest]
+        ? EXACT_TOKENS[lowerRest]
+        : rest.charAt(0).toUpperCase() + rest.slice(1).toLowerCase();
+      return prefix + restFormatted;
+    }
+
+    return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+  });
+
+  return formatted.join(' ');
+}
 
 export const ProductEditorModal: React.FC = () => {
   const {
@@ -185,13 +162,14 @@ export const ProductEditorModal: React.FC = () => {
 
   const { showToast } = useToast();
   const barcodeCanvasRef = useRef<HTMLCanvasElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState<ProductInput>({
     sku: '',
     barcode: '',
     title: '',
     brand: 'Apple',
-    compatibleModel: 'iPhone 15 Pro Max',
+    compatibleModel: '',
     category: 'Coques iPhone',
     price: 3500,
     wholesalePrice: 2400,
@@ -203,30 +181,100 @@ export const ProductEditorModal: React.FC = () => {
     isMagSafe: false,
     isSerialized: false,
     imeiNumber: '',
-    vendorName: 'Distributeur Officiel Apple Algérie',
+    vendorName: '',
     leadTimeDays: 7,
     dailySalesVelocity: 2.0,
-    reorderPoint: 10,
+    reorderPoint: 5,
     warrantyMonths: 0,
     shelfLocation: 'Rayon A1',
     minPrice: 2000,
+    isActive: true,
   });
 
   const [autoPrintLabel, setAutoPrintLabel] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Generate 100% collision-free EAN-13 and unique SKU
-  const handleGenerateFreshCodes = () => {
+  // Generate 100% collision-free EAN-13
+  const handleGenerateFreshEan13 = () => {
     const freshBarcode = generateUniqueEan13Barcode(products, '613');
-    const freshSku = generateUniqueSku(products, formData.category, formData.brand);
-    setFormData((prev) => ({
-      ...prev,
-      barcode: freshBarcode,
-      sku: freshSku,
-    }));
-    showToast(`Code EAN-13 généré : ${freshBarcode} (Algérie 613)`, 'info');
+    setFormData((prev) => ({ ...prev, barcode: freshBarcode }));
+    showToast(`Code EAN-13 certifié généré : ${freshBarcode} (Algérie 613)`, 'info');
   };
 
+  // Generate unique SKU
+  const handleGenerateFreshSku = () => {
+    const freshSku = generateUniqueSku(products, formData.category, formData.brand);
+    setFormData((prev) => ({ ...prev, sku: freshSku }));
+    showToast(`Référence SKU générée : ${freshSku}`, 'info');
+  };
+
+  // Dynamic Price Calculator via Markup Multipliers
+  const applyMarginPreset = (multiplier: number) => {
+    const cost = formData.costPrice || 0;
+    if (cost <= 0) {
+      showToast("Renseignez d'abord le prix d'achat coûtant pour calculer les marges.", 'info');
+      return;
+    }
+    const retail = Math.ceil((cost * multiplier) / 50) * 50;
+    const wholesaleMult = 1 + (multiplier - 1) * 0.6;
+    const wholesale = Math.max(cost, Math.ceil((cost * wholesaleMult) / 50) * 50);
+    const floor = Math.max(cost, Math.ceil((cost * 1.1) / 50) * 50);
+
+    setFormData((prev) => ({
+      ...prev,
+      price: retail,
+      wholesalePrice: wholesale,
+      minPrice: floor,
+    }));
+    showToast(`Prix calculés automatiquement (+${Math.round((multiplier - 1) * 100)}% marge)`, 'success');
+  };
+
+  // Round prices to clean 100 DA steps
+  const roundTo100DA = () => {
+    setFormData((prev) => ({
+      ...prev,
+      price: Math.ceil(prev.price / 100) * 100,
+      wholesalePrice: Math.ceil(prev.wholesalePrice / 100) * 100,
+      minPrice: Math.ceil((prev.minPrice || 0) / 100) * 100,
+    }));
+    showToast('Prix arrondis au palier supérieur de 100 DA', 'info');
+  };
+
+  // Duplicate attributes from existing catalog item
+  const handleDuplicateFromProduct = (productId: string) => {
+    const source = products.find((p) => p.id === productId);
+    if (!source) return;
+
+    const freshBarcode = generateUniqueEan13Barcode(products, '613');
+    const freshSku = generateUniqueSku(products, source.category, source.brand);
+
+    setFormData({
+      ...source,
+      id: undefined,
+      title: `${source.title} (Copie)`,
+      barcode: freshBarcode,
+      sku: freshSku,
+      imageUrl: '',
+      stock: 10,
+      isActive: true,
+    });
+
+    showToast(`Fiche copiée depuis "${source.title}" (nouveaux EAN & SKU générés)`, 'success');
+    titleInputRef.current?.focus();
+  };
+
+  // Global Esc key listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && activeModal === 'product_editor') {
+        closeModal();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeModal, closeModal]);
+
+  // Sync state on modal open
   useEffect(() => {
     if (activeModal === 'product_editor') {
       if (editingProduct) {
@@ -235,6 +283,8 @@ export const ProductEditorModal: React.FC = () => {
           warrantyMonths: editingProduct.warrantyMonths || 0,
           shelfLocation: editingProduct.shelfLocation || 'Rayon A1',
           minPrice: editingProduct.minPrice || Math.round(editingProduct.price * 0.8),
+          isActive: editingProduct.isActive !== false,
+          imageUrl: '',
         });
       } else {
         const freshBarcode = generateUniqueEan13Barcode(products, '613');
@@ -244,7 +294,7 @@ export const ProductEditorModal: React.FC = () => {
           barcode: freshBarcode,
           title: '',
           brand: 'Apple',
-          compatibleModel: 'iPhone 15 Pro Max',
+          compatibleModel: '',
           category: 'Coques iPhone',
           price: 3500,
           wholesalePrice: 2400,
@@ -253,18 +303,20 @@ export const ProductEditorModal: React.FC = () => {
           imageUrl: '',
           color: 'Noir Titane',
           material: 'Silicone Liquide Soft-Touch',
-          isMagSafe: true,
+          isMagSafe: false,
           isSerialized: false,
           imeiNumber: '',
-          vendorName: 'Distributeur Officiel Apple Algérie',
+          vendorName: '',
           leadTimeDays: 7,
           dailySalesVelocity: 2.0,
-          reorderPoint: 10,
+          reorderPoint: 5,
           warrantyMonths: 0,
           shelfLocation: 'Rayon A1',
           minPrice: 2000,
+          isActive: true,
         });
       }
+      setTimeout(() => titleInputRef.current?.focus(), 80);
     }
   }, [editingProduct, activeModal, products]);
 
@@ -274,9 +326,9 @@ export const ProductEditorModal: React.FC = () => {
       try {
         const type = isValidBarcode(formData.barcode, 'ean13') ? 'ean13' : 'code128';
         renderBarcodeToCanvas(barcodeCanvasRef.current, formData.barcode, type, {
-          width: 240,
-          height: 60,
-          fontSize: 11,
+          width: 200,
+          height: 38,
+          fontSize: 9,
           showText: true,
         });
       } catch {
@@ -294,63 +346,22 @@ export const ProductEditorModal: React.FC = () => {
     return findSkuDuplicate(formData.sku, editingProduct?.id, products);
   }, [formData.sku, editingProduct, products]);
 
-  // Magic Title Generator
-  const handleGenerateSmartTitle = () => {
-    let prefix = 'Accessoire';
-    const cat = formData.category.toLowerCase();
-    if (cat.includes('coque')) prefix = 'Coque';
-    else if (cat.includes('charge')) prefix = 'Chargeur';
-    else if (cat.includes('câble') || cat.includes('cable')) prefix = 'Câble';
-    else if (cat.includes('protège') || cat.includes('verre')) prefix = 'Verre Trempé';
-    else if (cat.includes('reprise') || cat.includes('occasion')) prefix = 'Smartphone';
+  // Shared validation and save routine
+  const executeSave = async (options?: { keepModalOpen?: boolean }): Promise<boolean> => {
+    const formattedTitle = formatSmartTitleCase(formData.title);
 
-    const magSafeTag = formData.isMagSafe ? 'MagSafe ' : '';
-    const brandTag = formData.brand !== 'Autre' ? `${formData.brand} ` : '';
-    const modelTag = formData.compatibleModel ? `${formData.compatibleModel}` : '';
-    const colorTag = formData.color ? ` - ${formData.color}` : '';
-
-    const autoTitle = `${prefix} ${brandTag}${magSafeTag}${modelTag}${colorTag}`.replace(/\s+/g, ' ').trim();
-    setFormData((prev) => ({ ...prev, title: autoTitle }));
-    showToast(`Désignation générée : ${autoTitle}`, 'success');
-  };
-
-  const handleApplyPreset = (preset: typeof PRESET_TEMPLATES[0]) => {
-    const freshSku = generateUniqueSku(products, preset.category, preset.brand);
-    setFormData((prev) => ({
-      ...prev,
-      sku: freshSku,
-      title: preset.title,
-      brand: preset.brand,
-      category: preset.category,
-      compatibleModel: preset.compatibleModel,
-      price: preset.price,
-      wholesalePrice: preset.wholesalePrice,
-      costPrice: preset.costPrice,
-      stock: preset.stock,
-      color: preset.color,
-      material: preset.material,
-      isMagSafe: preset.isMagSafe,
-      vendorName: preset.vendorName,
-      reorderPoint: preset.reorderPoint,
-      imageUrl: '',
-    }));
-    showToast(`Modèle "${preset.title}" appliqué avec succès`, 'info');
-  };
-
-  const handleFormSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!formData.title.trim()) {
-      showToast('Veuillez renseigner la désignation du produit.', 'error');
-      return;
+    if (!formattedTitle.trim()) {
+      showToast('Veuillez renseigner la désignation commerciale du produit.', 'error');
+      titleInputRef.current?.focus();
+      return false;
     }
 
     if (duplicateBarcodeProduct) {
       showToast(
-        `Erreur : Le code-barres "${formData.barcode}" est déjà utilisé par "${duplicateBarcodeProduct.title}".`,
+        `Erreur : Le code-barres "${formData.barcode}" est déjà attribué à "${duplicateBarcodeProduct.title}".`,
         'error'
       );
-      return;
+      return false;
     }
 
     if (duplicateSkuProduct) {
@@ -358,37 +369,93 @@ export const ProductEditorModal: React.FC = () => {
         `Erreur : La référence SKU "${formData.sku}" est déjà utilisée par "${duplicateSkuProduct.title}".`,
         'error'
       );
-      return;
+      return false;
     }
 
     if (formData.price <= 0) {
       showToast('Le prix de vente au détail doit être strictement supérieur à 0 DA.', 'error');
-      return;
+      return false;
     }
 
     if (formData.costPrice && formData.price < formData.costPrice) {
-      if (!window.confirm(`⚠️ Attention : Le prix de vente (${formData.price} DA) est inférieur au prix d'achat coûtant (${formData.costPrice} DA). Confirmez-vous la vente à perte ?`)) {
-        return;
+      if (
+        !window.confirm(
+          `⚠️ Attention : Le prix de vente (${formData.price} DA) est inférieur au prix coûtant (${formData.costPrice} DA). Confirmez-vous la vente à perte ?`
+        )
+      ) {
+        return false;
       }
     }
 
     setIsSubmitting(true);
-    const saveResult = await saveProduct(formData);
+    const savePayload: ProductInput = {
+      ...formData,
+      title: formattedTitle,
+      imageUrl: '',
+    };
+    const saveResult = await saveProduct(savePayload, { keepModalOpen: options?.keepModalOpen });
     setIsSubmitting(false);
 
     if (saveResult.success) {
       showToast(
         editingProduct
-          ? `Produit "${formData.title}" mis à jour avec succès.`
-          : `Produit "${formData.title}" ajouté au catalogue avec succès !`,
+          ? `Produit "${formattedTitle}" mis à jour avec succès.`
+          : `Produit "${formattedTitle}" enregistré au catalogue !`,
         'success'
       );
 
       if (autoPrintLabel) {
         openModal('label_printer');
       }
+      return true;
     } else {
       showToast(`Erreur lors de l'enregistrement : ${saveResult.reason}`, 'error');
+      return false;
+    }
+  };
+
+  // Form submit (triggered by pressing Enter from ANY input or clicking primary submit)
+  const handleFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const success = await executeSave({ keepModalOpen: false });
+    if (success) {
+      closeModal();
+    }
+  };
+
+  // "Enregistrer & Nouveau" button handler
+  const handleSaveAndNew = async () => {
+    const success = await executeSave({ keepModalOpen: true });
+    if (success) {
+      const freshBarcode = generateUniqueEan13Barcode(products, '613');
+      const freshSku = generateUniqueSku(products, formData.category, formData.brand);
+      setFormData({
+        sku: freshSku,
+        barcode: freshBarcode,
+        title: '',
+        brand: formData.brand,
+        compatibleModel: '',
+        category: formData.category,
+        price: formData.price,
+        wholesalePrice: formData.wholesalePrice,
+        costPrice: formData.costPrice,
+        stock: 20,
+        imageUrl: '',
+        color: 'Noir Titane',
+        material: 'Silicone Liquide Soft-Touch',
+        isMagSafe: false,
+        isSerialized: false,
+        imeiNumber: '',
+        vendorName: formData.vendorName,
+        leadTimeDays: 7,
+        dailySalesVelocity: 2.0,
+        reorderPoint: 5,
+        warrantyMonths: 0,
+        shelfLocation: formData.shelfLocation || 'Rayon A1',
+        minPrice: formData.minPrice || Math.round(formData.price * 0.8),
+        isActive: true,
+      });
+      titleInputRef.current?.focus();
     }
   };
 
@@ -396,541 +463,751 @@ export const ProductEditorModal: React.FC = () => {
 
   // Real-Time Commercial Margin Calculations
   const grossProfit = Math.max(0, formData.price - (formData.costPrice || 0));
-  const profitMarginPercent = formData.price > 0 ? ((grossProfit / formData.price) * 100).toFixed(1) : '0';
+  const profitMarginPercent =
+    formData.price > 0 ? ((grossProfit / formData.price) * 100).toFixed(1) : '0';
   const wholesaleProfit = Math.max(0, formData.wholesalePrice - (formData.costPrice || 0));
   const wholesaleMarginPercent =
-    formData.wholesalePrice > 0 ? ((wholesaleProfit / formData.wholesalePrice) * 100).toFixed(1) : '0';
+    formData.wholesalePrice > 0
+      ? ((wholesaleProfit / formData.wholesalePrice) * 100).toFixed(1)
+      : '0';
 
-  const isLossPrice = formData.costPrice > 0 && formData.price <= formData.costPrice;
-  const isWholesaleLoss = formData.costPrice > 0 && formData.wholesalePrice <= formData.costPrice;
+  const isLossPrice = (formData.costPrice || 0) > 0 && formData.price <= (formData.costPrice || 0);
+  const isWholesaleLoss =
+    (formData.costPrice || 0) > 0 && formData.wholesalePrice <= (formData.costPrice || 0);
+  const isLowStock = (formData.stock || 0) <= (formData.reorderPoint || 0);
+
+  // Stock Financial Valuation
+  const totalCostInvestment = (formData.stock || 0) * (formData.costPrice || 0);
+  const totalRetailValuation = (formData.stock || 0) * (formData.price || 0);
+  const totalExpectedGain = Math.max(0, totalRetailValuation - totalCostInvestment);
 
   return (
-    <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 max-h-[94vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[92vh] h-[700px] overflow-hidden animate-in fade-in zoom-in-95">
         
-        {/* Modal Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-emerald-500/20">
-              <Sparkles className="w-5 h-5 stroke-[2.5]" />
+        {/* ========================================================================= */}
+        {/* 1. STICKY HEADER (Top Bar)                                               */}
+        {/* ========================================================================= */}
+        <div className="px-5 py-3 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-4">
+          
+          {/* Header Left: Title + Enterprise V2 Badge + Actif/Inactif Toggle */}
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-bold shadow-md shadow-emerald-500/20 shrink-0">
+              <Sparkles className="w-4 h-4 stroke-[2.5]" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-pos-text tracking-wide">
-                  {editingProduct ? 'MODIFICATION FICHE PRODUIT' : 'CRÉATION FICHE PRODUIT CATALOGUE'}
-                </h2>
-                <span className="text-[10px] bg-emerald-500/10 text-emerald-400 font-black px-2 py-0.5 rounded border border-emerald-500/30 uppercase">
-                  ENTERPRISE v2
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h2 className="text-sm font-black text-pos-text tracking-wide whitespace-nowrap">
+                {editingProduct ? 'MODIFICATION FICHE PRODUIT' : 'CRÉATION FICHE PRODUIT'}
+              </h2>
+              <span className="text-[10px] bg-emerald-500/10 text-emerald-400 font-black px-2 py-0.5 rounded border border-emerald-500/30 uppercase tracking-wider shrink-0">
+                ENTERPRISE V2
+              </span>
+              
+              {/* Actif / Inactif Toggle Switch */}
+              <button
+                type="button"
+                onClick={() => setFormData((prev) => ({ ...prev, isActive: prev.isActive === false }))}
+                className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-pos-bg border border-pos-border hover:border-emerald-500/40 transition cursor-pointer shrink-0"
+                title="Statut d'activation du produit dans le catalogue"
+              >
+                <div
+                  className={`w-6 h-3.5 rounded-full transition-colors relative flex items-center ${
+                    formData.isActive !== false ? 'bg-emerald-500' : 'bg-slate-700'
+                  }`}
+                >
+                  <div
+                    className={`w-2.5 h-2.5 rounded-full bg-white transition-transform absolute ${
+                      formData.isActive !== false ? 'left-3' : 'left-0.5'
+                    }`}
+                  />
+                </div>
+                <span
+                  className={`text-[11px] font-bold ${
+                    formData.isActive !== false ? 'text-emerald-400' : 'text-slate-400'
+                  }`}
+                >
+                  {formData.isActive !== false ? 'Actif' : 'Inactif'}
                 </span>
-              </div>
-              <p className="text-[11px] text-pos-muted">
-                Gestion des prix gros/détail, codes EAN-13 certifiés sans doublon & marges en direct
-              </p>
+              </button>
             </div>
           </div>
-          <button
-            onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition"
-          >
-            <X className="w-5 h-5" />
-          </button>
+
+          {/* Header Right: Dupliquer un Article Existant + Close Button */}
+          <div className="flex items-center gap-2.5 shrink-0">
+            {!editingProduct && products.length > 0 && (
+              <div className="relative">
+                <select
+                  defaultValue=""
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      handleDuplicateFromProduct(e.target.value);
+                      e.target.value = '';
+                    }
+                  }}
+                  className="h-8 bg-pos-bg border border-pos-border hover:border-emerald-500/40 text-pos-text text-xs rounded-lg px-2.5 pr-7 font-semibold focus:border-emerald-400 focus:outline-none cursor-pointer appearance-none transition"
+                >
+                  <option value="" disabled>
+                    📋 Dupliquer depuis le catalogue...
+                  </option>
+                  {products.slice(0, 30).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.title} ({p.brand})
+                    </option>
+                  ))}
+                </select>
+                <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-pos-muted text-[10px]">
+                  <Copy className="w-3 h-3 text-emerald-400" />
+                </div>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={closeModal}
+              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer"
+              title="Fermer (Échap)"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
         </div>
 
-        {/* Fast-Fill Template Toolbar (Only when creating new product) */}
-        {!editingProduct && (
-          <div className="bg-pos-bg border-b border-pos-border px-4 py-2 flex items-center justify-between gap-3 shrink-0 overflow-hidden">
-            <div className="flex items-center gap-1.5 shrink-0 text-pos-muted">
-              <Wand2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="text-[10px] font-black uppercase tracking-wider">
-                Modèles Rapides :
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
-              {PRESET_TEMPLATES.map((tmpl) => (
-                <button
-                  key={tmpl.title}
-                  type="button"
-                  onClick={() => handleApplyPreset(tmpl)}
-                  className="px-2.5 py-1 rounded-lg bg-pos-card border border-pos-border text-pos-text hover:border-emerald-400 text-[10px] font-bold shrink-0 transition flex items-center gap-1 cursor-pointer"
-                >
-                  <Tag className="w-2.5 h-2.5 text-emerald-400" />
-                  {tmpl.title.split(' ')[0]} {tmpl.title.split(' ')[1]} {tmpl.title.split(' ')[2] || ''}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Scrollable Form Body */}
-        <form onSubmit={handleFormSubmit} className="p-5 overflow-y-auto space-y-4 flex-1 bg-pos-bg">
+        {/* ========================================================================= */}
+        {/* FORM CONTAINER (Supports Enter key from any field)                       */}
+        {/* ========================================================================= */}
+        <form onSubmit={handleFormSubmit} className="flex flex-col flex-1 min-h-0 bg-pos-bg">
           
-          {/* Top Barcode Conflict Warning Banner */}
-          {duplicateBarcodeProduct && (
-            <div className="p-3 bg-red-500/10 border border-red-500/40 rounded-xl flex items-start justify-between gap-3 text-red-400 animate-in fade-in">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-bold text-xs">Code-Barres déjà attribué à un autre article !</p>
-                  <p className="text-[11px] text-red-300/80 mt-0.5">
-                    Le code <span className="font-mono font-bold text-red-200">{formData.barcode}</span> appartient déjà au produit :{' '}
-                    <span className="font-bold text-white">"{duplicateBarcodeProduct.title}"</span> (SKU: {duplicateBarcodeProduct.sku}).
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={handleGenerateFreshCodes}
-                className="px-3 py-1 bg-red-500 text-slate-950 font-black text-xs rounded-lg shadow hover:bg-red-400 shrink-0 transition cursor-pointer"
-              >
-                Générer un Nouveau Code EAN
-              </button>
-            </div>
-          )}
-
-          {/* SKU Conflict Warning Banner */}
-          {duplicateSkuProduct && (
-            <div className="p-3 bg-amber-500/10 border border-amber-500/40 rounded-xl flex items-center justify-between gap-3 text-amber-400 animate-in fade-in">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                <p className="text-xs font-bold">
-                  La référence SKU <span className="font-mono text-white">{formData.sku}</span> est déjà utilisée par "{duplicateSkuProduct.title}".
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleGenerateFreshCodes}
-                className="px-3 py-1 bg-amber-500 text-slate-950 font-black text-xs rounded-lg shadow hover:bg-amber-400 shrink-0 transition cursor-pointer"
-              >
-                Nouveau SKU Unique
-              </button>
-            </div>
-          )}
-
-          {/* Section 1: Photo & Main Identifiers */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+          {/* ======================================================================= */}
+          {/* MAIN 2-COLUMN BODY (Zero Scroll Guaranteed on 1080p/768p)               */}
+          {/* ======================================================================= */}
+          <div className="flex-1 min-h-0 overflow-y-auto lg:overflow-y-hidden p-4 sm:p-5 flex flex-col lg:flex-row gap-5">
             
-            {/* Product Identity & Classification Badge */}
-            <div className="space-y-2">
-              <label className="text-[10px] font-black text-pos-muted uppercase tracking-wider flex items-center gap-1.5">
-                <Tag className="w-3.5 h-3.5 text-emerald-400" />
-                Classification Article
-              </label>
-
-              <div className="h-36 rounded-xl border border-pos-border bg-pos-card p-3 flex flex-col items-center justify-center text-center gap-2">
-                <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-                  <Tag className="w-6 h-6" />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-pos-text">{formData.category}</p>
-                  <p className="text-[10px] font-semibold text-emerald-400">{formData.brand}</p>
-                </div>
-                <span className="text-[9px] text-pos-muted truncate max-w-[180px]">{formData.compatibleModel || 'Tous modèles compatibles'}</span>
-              </div>
-            </div>
-
-            {/* Title, Brand, Category, Model */}
-            <div className="md:col-span-2 space-y-3">
+            {/* --------------------------------------------------------------------- */}
+            {/* 2. LEFT COLUMN (50% Width) — Identification & Attributes              */}
+            {/* --------------------------------------------------------------------- */}
+            <div className="w-full lg:w-1/2 flex flex-col justify-between gap-3 shrink-0">
               
-              {/* Product Title with Magic Auto-Naming Assistant */}
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <label className="text-[11px] font-bold text-pos-text flex items-center gap-1">
-                    Désignation Commerciale du Produit <span className="text-emerald-400 font-bold">*</span>
-                  </label>
+              {/* Conflict Warnings (Compact inline banners) */}
+              {duplicateBarcodeProduct && (
+                <div className="p-2 bg-red-500/10 border border-red-500/40 rounded-xl flex items-center justify-between gap-2 text-red-400 text-xs animate-in fade-in">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">
+                      Code <strong className="font-mono">{formData.barcode}</strong> déjà attribué à "{duplicateBarcodeProduct.title}"
+                    </span>
+                  </div>
                   <button
                     type="button"
-                    onClick={handleGenerateSmartTitle}
-                    className="text-[10px] text-emerald-400 font-bold hover:text-emerald-300 flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30 transition cursor-pointer"
-                    title="Générer automatiquement le titre à partir des caractéristiques"
+                    onClick={handleGenerateFreshEan13}
+                    className="px-2 py-0.5 bg-red-500 text-slate-950 font-black text-[10px] rounded hover:bg-red-400 shrink-0 cursor-pointer"
                   >
-                    <Wand2 className="w-3 h-3" /> Titre Magique ✨
+                    Nouveau Code
                   </button>
                 </div>
+              )}
+
+              {duplicateSkuProduct && (
+                <div className="p-2 bg-amber-500/10 border border-amber-500/40 rounded-xl flex items-center justify-between gap-2 text-amber-400 text-xs animate-in fade-in">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">
+                      SKU <strong className="font-mono">{formData.sku}</strong> déjà utilisé par "{duplicateSkuProduct.title}"
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleGenerateFreshSku}
+                    className="px-2 py-0.5 bg-amber-500 text-slate-950 font-black text-[10px] rounded hover:bg-amber-400 shrink-0 cursor-pointer"
+                  >
+                    Nouveau SKU
+                  </button>
+                </div>
+              )}
+
+              {/* Product Title Input (Clean Full-Width Input) */}
+              <div className="space-y-1">
+                <label className="text-[11px] font-bold text-pos-text flex items-center gap-1">
+                  Désignation Commerciale du Produit <span className="text-emerald-400 font-bold">*</span>
+                </label>
                 <input
+                  ref={titleInputRef}
                   type="text"
                   required
                   value={formData.title}
                   onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                  onBlur={(e) => {
+                    const formatted = formatSmartTitleCase(e.target.value);
+                    if (formatted !== formData.title) {
+                      setFormData((prev) => ({ ...prev, title: formatted }));
+                    }
+                  }}
                   placeholder="ex: Coque Silicone MagSafe iPhone 15 Pro Max - Noir Titane"
-                  className="w-full bg-pos-card border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
+                  className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-3 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none transition shadow-sm"
                 />
               </div>
 
-              {/* Brand & Category */}
-              <div className="grid grid-cols-2 gap-3">
+              {/* Row 1 (3-column grid): Marque, Catégorie, Modèle */}
+              <div className="grid grid-cols-3 gap-2.5">
                 <div>
-                  <label className="text-[10px] font-bold text-pos-muted block mb-1">Marque / Fabricant</label>
+                  <label className="text-[10px] font-bold text-pos-muted block mb-1">
+                    Marque / Fabricant
+                  </label>
                   <select
                     value={formData.brand}
                     onChange={(e) => setFormData({ ...formData, brand: e.target.value as BrandName })}
-                    className="w-full bg-pos-card border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer"
+                    className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-2 text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer transition"
                   >
                     {BRANDS.map((b) => (
-                      <option key={b} value={b}>{b}</option>
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
                     ))}
                   </select>
                 </div>
 
                 <div>
-                  <label className="text-[10px] font-bold text-pos-muted block mb-1">Catégorie Article</label>
+                  <label className="text-[10px] font-bold text-pos-muted block mb-1">
+                    Catégorie Article
+                  </label>
                   <select
                     value={formData.category}
-                    onChange={(e) => setFormData({ ...formData, category: e.target.value as CategoryType })}
-                    className="w-full bg-pos-card border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer"
+                    onChange={(e) =>
+                      setFormData({ ...formData, category: e.target.value as CategoryType })
+                    }
+                    className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-2 text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer transition"
                   >
                     {CATEGORIES.map((c) => (
-                      <option key={c} value={c}>{c}</option>
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
                     ))}
                   </select>
                 </div>
-              </div>
 
-              {/* Compatible Model & Supplier */}
-              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] font-bold text-pos-muted block mb-1">Modèle Compatible</label>
+                  <label className="text-[10px] font-bold text-pos-muted block mb-1">
+                    Modèle Compatible
+                  </label>
                   <input
                     type="text"
                     value={formData.compatibleModel}
                     onChange={(e) => setFormData({ ...formData, compatibleModel: e.target.value })}
-                    placeholder="ex: iPhone 15 Pro Max / Universel"
-                    className="w-full bg-pos-card border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
+                    placeholder="ex: iPhone 15 Pro Max"
+                    className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-2.5 text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none transition"
                   />
                 </div>
+              </div>
 
+              {/* Row 2 (2-column grid): Fournisseur, SKU avec bouton Auto */}
+              <div className="grid grid-cols-2 gap-2.5">
                 <div>
-                  <label className="text-[10px] font-bold text-pos-muted block mb-1">Fournisseur / Grossiste</label>
+                  <label className="text-[10px] font-bold text-pos-muted block mb-1">
+                    Fournisseur / Grossiste
+                  </label>
                   <input
                     type="text"
                     value={formData.vendorName}
                     onChange={(e) => setFormData({ ...formData, vendorName: e.target.value })}
                     placeholder="ex: Distributeur Officiel Apple Algérie"
-                    className="w-full bg-pos-card border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
+                    className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-2.5 text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none transition"
                   />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-pos-muted block mb-1">
+                    Référence SKU Interne
+                  </label>
+                  <div className="relative flex items-center">
+                    <input
+                      type="text"
+                      value={formData.sku}
+                      onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
+                      placeholder="ex: COQ-APP-5735"
+                      className={`w-full h-9 bg-pos-card border rounded-lg pl-2.5 pr-14 text-xs font-mono font-bold text-pos-text focus:outline-none transition ${
+                        duplicateSkuProduct
+                          ? 'border-amber-500 focus:border-amber-400'
+                          : 'border-pos-border focus:border-emerald-400'
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleGenerateFreshSku}
+                      className="absolute right-1 top-1 bottom-1 px-2 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold transition cursor-pointer"
+                      title="Générer un SKU unique"
+                    >
+                      Auto
+                    </button>
+                  </div>
                 </div>
               </div>
 
-            </div>
-          </div>
-
-          {/* Section 2: Barcode & SKU Suite (Guaranteed Zero Collision) */}
-          <div className="p-3.5 bg-pos-card border border-pos-border rounded-2xl space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <BarcodeIcon className="w-4 h-4 text-emerald-400" />
-                <h3 className="text-xs font-black text-pos-text uppercase tracking-wider">
-                  Identification & Code-Barres EAN-13 Certifié
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={handleGenerateFreshCodes}
-                className="px-3 py-1 rounded-xl bg-emerald-500/15 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/30 text-xs font-black flex items-center gap-1.5 transition cursor-pointer"
-              >
-                <RefreshCw className="w-3 h-3" /> Générer Nouveau Code EAN-13 Unique
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
-              
-              {/* SKU Field */}
-              <div>
-                <label className="text-[10px] font-bold text-pos-muted block mb-1">Référence SKU Interne</label>
-                <input
-                  type="text"
-                  value={formData.sku}
-                  onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
-                  placeholder="ex: COQ-APP-1024"
-                  className={`w-full bg-pos-bg border rounded-xl px-3 py-2 text-xs font-mono font-bold text-pos-text focus:outline-none ${
-                    duplicateSkuProduct ? 'border-amber-500 focus:border-amber-400' : 'border-pos-border focus:border-emerald-400'
-                  }`}
-                />
-              </div>
-
-              {/* Barcode Field */}
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <label className="text-[10px] font-bold text-pos-muted">Code-Barres EAN-13</label>
+              {/* Row 3 — Unified Barcode Card */}
+              <div className="p-3 bg-pos-card/60 border border-pos-border rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-black text-pos-muted uppercase tracking-wider flex items-center gap-1.5">
+                    <BarcodeIcon className="w-3.5 h-3.5 text-emerald-400" />
+                    Code-Barres EAN-13 Certifié
+                  </span>
                   {isValidBarcode(formData.barcode, 'ean13') && !duplicateBarcodeProduct && (
-                    <span className="text-[9px] text-emerald-400 font-bold flex items-center gap-0.5">
-                      <CheckCircle2 className="w-2.5 h-2.5" /> Conforme GS1
+                    <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" /> Conforme GS1
                     </span>
                   )}
                 </div>
-                <input
-                  type="text"
-                  value={formData.barcode}
-                  onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
-                  placeholder="ex: 6130001234567"
-                  className={`w-full bg-pos-bg border rounded-xl px-3 py-2 text-xs font-mono font-bold focus:outline-none ${
-                    duplicateBarcodeProduct
-                      ? 'border-red-500 text-red-400 focus:border-red-400'
-                      : 'border-pos-border text-emerald-400 focus:border-emerald-400'
-                  }`}
-                />
+
+                <div className="flex items-center gap-2.5">
+                  {/* Inline Barcode Input */}
+                  <input
+                    type="text"
+                    value={formData.barcode}
+                    onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
+                    placeholder="ex: 6138318449885"
+                    className={`flex-1 h-9 bg-pos-bg border rounded-lg px-2.5 text-xs font-mono font-bold focus:outline-none transition ${
+                      duplicateBarcodeProduct
+                        ? 'border-red-500 text-red-400 focus:border-red-400'
+                        : 'border-pos-border text-emerald-400 focus:border-emerald-400'
+                    }`}
+                  />
+
+                  {/* Générer EAN-13 Button */}
+                  <button
+                    type="button"
+                    onClick={handleGenerateFreshEan13}
+                    className="h-9 px-3 rounded-lg bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/30 text-xs font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    Générer EAN-13
+                  </button>
+
+                  {/* Compact Live Barcode Canvas Preview */}
+                  <div className="h-9 w-32 bg-white rounded-lg border border-pos-border px-1 flex items-center justify-center shrink-0 shadow-sm overflow-hidden">
+                    <canvas ref={barcodeCanvasRef} className="h-7 w-full mix-blend-multiply" />
+                  </div>
+                </div>
               </div>
 
-              {/* Barcode Live Canvas Visualizer */}
-              <div className="flex flex-col items-center justify-center p-2 bg-white rounded-xl border border-pos-border shadow-sm">
-                <canvas ref={barcodeCanvasRef} className="h-10 mix-blend-multiply max-w-full" />
+              {/* Secondary Attribute Strip (MagSafe, IMEI, Auto-Print) */}
+              <div className="flex items-center justify-between gap-3 px-2 py-1.5 bg-pos-card/30 border border-pos-border/40 rounded-lg text-xs font-bold text-pos-text">
+                <label className="flex items-center gap-1.5 cursor-pointer hover:text-emerald-400 transition">
+                  <input
+                    type="checkbox"
+                    checked={formData.isMagSafe || false}
+                    onChange={(e) => setFormData({ ...formData, isMagSafe: e.target.checked })}
+                    className="w-3.5 h-3.5 rounded text-emerald-500 focus:ring-emerald-400 cursor-pointer"
+                  />
+                  <span className="flex items-center gap-1 text-[11px]">
+                    <Zap className="w-3 h-3 text-emerald-400" /> MagSafe
+                  </span>
+                </label>
+
+                <label className="flex items-center gap-1.5 cursor-pointer hover:text-cyan-400 transition">
+                  <input
+                    type="checkbox"
+                    checked={formData.isSerialized || false}
+                    onChange={(e) => setFormData({ ...formData, isSerialized: e.target.checked })}
+                    className="w-3.5 h-3.5 rounded text-emerald-500 focus:ring-emerald-400 cursor-pointer"
+                  />
+                  <span className="flex items-center gap-1 text-[11px]">
+                    <Shield className="w-3 h-3 text-cyan-400" /> Sérialisé IMEI
+                  </span>
+                </label>
+
+                <label className="flex items-center gap-1.5 cursor-pointer hover:text-emerald-400 transition">
+                  <input
+                    type="checkbox"
+                    checked={autoPrintLabel}
+                    onChange={(e) => setAutoPrintLabel(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded text-emerald-500 focus:ring-emerald-400 cursor-pointer"
+                  />
+                  <span className="flex items-center gap-1 text-[11px] text-emerald-400">
+                    <Printer className="w-3 h-3" /> Imprimer Étiquette
+                  </span>
+                </label>
               </div>
 
             </div>
+
+            {/* --------------------------------------------------------------------- */}
+            {/* 3. RIGHT COLUMN (50% Width) — Tarification & Valorisation Stock       */}
+            {/* --------------------------------------------------------------------- */}
+            <div className="w-full lg:w-1/2 flex flex-col justify-between gap-3 shrink-0">
+              
+              {/* Top Section: Stock Initial & Financial Valuation Dashboard */}
+              <div className="p-3 bg-pos-card/60 border border-pos-border rounded-xl space-y-2.5">
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="text-[10px] font-bold text-pos-text block mb-1">
+                      Stock Initial *
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      value={formData.stock}
+                      onChange={(e) =>
+                        setFormData({ ...formData, stock: parseInt(e.target.value) || 0 })
+                      }
+                      className={`w-full h-9 bg-pos-bg border rounded-lg px-2.5 text-xs font-black text-pos-text focus:outline-none transition ${
+                        isLowStock
+                          ? 'border-amber-500/60 focus:border-amber-400'
+                          : 'border-pos-border focus:border-emerald-400'
+                      }`}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold text-pos-muted block mb-1">
+                      Seuil d'Alerte Minimum
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={formData.reorderPoint}
+                      onChange={(e) =>
+                        setFormData({ ...formData, reorderPoint: parseInt(e.target.value) || 0 })
+                      }
+                      className="w-full h-9 bg-pos-bg border border-pos-border rounded-lg px-2.5 text-xs font-bold text-pos-muted focus:border-emerald-400 focus:outline-none transition"
+                    />
+                  </div>
+                </div>
+
+                {/* Valorisation Financière du Stock (High-Value Retail Dashboard) */}
+                <div className="grid grid-cols-3 gap-2 pt-1 border-t border-pos-border/50">
+                  <div className="bg-pos-bg px-2 py-1 rounded-lg border border-pos-border text-center">
+                    <span className="text-[8px] text-pos-muted font-bold block uppercase tracking-wider">
+                      Coût Total Lot
+                    </span>
+                    <span className="text-xs font-bold text-slate-300">
+                      {formatDZD(totalCostInvestment)}
+                    </span>
+                  </div>
+
+                  <div className="bg-pos-bg px-2 py-1 rounded-lg border border-pos-border text-center">
+                    <span className="text-[8px] text-pos-muted font-bold block uppercase tracking-wider">
+                      Vente Estimée
+                    </span>
+                    <span className="text-xs font-bold text-emerald-400">
+                      {formatDZD(totalRetailValuation)}
+                    </span>
+                  </div>
+
+                  <div className="bg-pos-bg px-2 py-1 rounded-lg border border-pos-border text-center">
+                    <span className="text-[8px] text-pos-muted font-bold block uppercase tracking-wider">
+                      Plus-Value Lot
+                    </span>
+                    <span className="text-xs font-black text-emerald-400">
+                      +{formatDZD(totalExpectedGain)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Pricing Grid & Automated Margin Calculator */}
+              <div className="p-3 bg-pos-card/60 border border-pos-border rounded-xl space-y-2.5">
+                
+                {/* Header with Quick Margin Calculator Presets */}
+                <div className="flex items-center justify-between flex-wrap gap-1">
+                  <span className="text-[10px] font-black text-pos-muted uppercase tracking-wider flex items-center gap-1">
+                    <TrendingUp className="w-3.5 h-3.5 text-emerald-400" />
+                    Grille Tarifaire (DA)
+                  </span>
+
+                  {/* Smart Margin Helper Buttons */}
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => applyMarginPreset(1.3)}
+                      className="px-1.5 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[9px] font-bold transition cursor-pointer"
+                      title="Calculer automatiquement avec +30% de marge"
+                    >
+                      +30%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyMarginPreset(1.5)}
+                      className="px-1.5 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[9px] font-bold transition cursor-pointer"
+                      title="Calculer automatiquement avec +50% de marge"
+                    >
+                      +50%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => applyMarginPreset(2.0)}
+                      className="px-1.5 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[9px] font-bold transition cursor-pointer"
+                      title="Calculer avec coefficient x2 (Coques / Verres)"
+                    >
+                      x2.0
+                    </button>
+                    <button
+                      type="button"
+                      onClick={roundTo100DA}
+                      className="px-1.5 py-0.5 rounded bg-pos-bg hover:bg-pos-hover text-pos-muted hover:text-pos-text border border-pos-border text-[9px] font-bold transition cursor-pointer flex items-center gap-0.5"
+                      title="Arrondir tous les prix aux 100 DA supérieurs"
+                    >
+                      <Coins className="w-2.5 h-2.5 text-amber-400" />
+                      100 DA
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2x2 Price Inputs */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  {/* Prix Achat (Cost) */}
+                  <div>
+                    <label className="text-[10px] font-bold text-pos-muted block mb-1">
+                      Prix Achat Cost (DA)
+                    </label>
+                    <input
+                      type="number"
+                      step="50"
+                      min="0"
+                      value={formData.costPrice}
+                      onChange={(e) =>
+                        setFormData({ ...formData, costPrice: parseFloat(e.target.value) || 0 })
+                      }
+                      className="w-full h-9 bg-pos-bg border border-pos-border rounded-lg px-2.5 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none transition"
+                    />
+                  </div>
+
+                  {/* Prix Vente Détail */}
+                  <div>
+                    <label className="text-[10px] font-bold text-emerald-400 block mb-1">
+                      Prix Vente Détail (DA) *
+                    </label>
+                    <input
+                      type="number"
+                      step="50"
+                      required
+                      min="0"
+                      value={formData.price}
+                      onChange={(e) =>
+                        setFormData({ ...formData, price: parseFloat(e.target.value) || 0 })
+                      }
+                      className={`w-full h-9 bg-pos-bg border rounded-lg px-2.5 text-xs font-black text-emerald-400 focus:outline-none transition ${
+                        isLossPrice ? 'border-red-500' : 'border-pos-border focus:border-emerald-400'
+                      }`}
+                    />
+                  </div>
+
+                  {/* Prix Vente Gros */}
+                  <div>
+                    <label className="text-[10px] font-bold text-amber-400 block mb-1">
+                      Prix Vente Gros (DA) *
+                    </label>
+                    <input
+                      type="number"
+                      step="50"
+                      required
+                      min="0"
+                      value={formData.wholesalePrice}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          wholesalePrice: parseFloat(e.target.value) || 0,
+                        })
+                      }
+                      className={`w-full h-9 bg-pos-bg border rounded-lg px-2.5 text-xs font-black text-amber-400 focus:outline-none transition ${
+                        isWholesaleLoss
+                          ? 'border-red-500'
+                          : 'border-pos-border focus:border-amber-400'
+                      }`}
+                    />
+                  </div>
+
+                  {/* Prix Plancher Min */}
+                  <div>
+                    <label className="text-[10px] font-bold text-pos-muted block mb-1">
+                      Prix Plancher Min (DA)
+                    </label>
+                    <input
+                      type="number"
+                      step="50"
+                      min="0"
+                      value={formData.minPrice || 0}
+                      onChange={(e) =>
+                        setFormData({ ...formData, minPrice: parseFloat(e.target.value) || 0 })
+                      }
+                      className="w-full h-9 bg-pos-bg border border-pos-border rounded-lg px-2.5 text-xs font-bold text-pos-muted focus:border-emerald-400 focus:outline-none transition"
+                    />
+                  </div>
+                </div>
+
+                {/* Real-Time Margin Badges */}
+                <div className="grid grid-cols-3 gap-2 pt-1">
+                  <div className="bg-pos-bg px-2 py-1 rounded-lg border border-pos-border flex flex-col items-center justify-center text-center">
+                    <span className="text-[9px] text-pos-muted font-bold">Bénéfice Détail</span>
+                    <span
+                      className={`font-black text-xs truncate ${
+                        isLossPrice ? 'text-red-400' : 'text-emerald-400'
+                      }`}
+                    >
+                      {isLossPrice ? 'Perte !' : `+${formatDZD(grossProfit)}`}
+                    </span>
+                  </div>
+
+                  <div className="bg-pos-bg px-2 py-1 rounded-lg border border-pos-border flex flex-col items-center justify-center text-center">
+                    <span className="text-[9px] text-pos-muted font-bold">Marge Détail</span>
+                    <span
+                      className={`font-black text-xs ${
+                        isLossPrice ? 'text-red-400' : 'text-emerald-400'
+                      }`}
+                    >
+                      {profitMarginPercent}%
+                    </span>
+                  </div>
+
+                  <div className="bg-pos-bg px-2 py-1 rounded-lg border border-pos-border flex flex-col items-center justify-center text-center">
+                    <span className="text-[9px] text-pos-muted font-bold">Marge Gros</span>
+                    <span
+                      className={`font-black text-xs ${
+                        isWholesaleLoss ? 'text-red-400' : 'text-amber-400'
+                      }`}
+                    >
+                      {wholesaleMarginPercent}%
+                    </span>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Additional Logistics / Rayon Row */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="text-[10px] font-bold text-pos-muted block mb-1">
+                    Emplacement Rayon
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.shelfLocation || 'Rayon A1'}
+                    onChange={(e) => setFormData({ ...formData, shelfLocation: e.target.value })}
+                    placeholder="ex: Rayon A2 - Vitrine 1"
+                    className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-2.5 text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none transition"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-pos-muted block mb-1">
+                    Garantie Magasin
+                  </label>
+                  <select
+                    value={formData.warrantyMonths || 0}
+                    onChange={(e) =>
+                      setFormData({ ...formData, warrantyMonths: parseInt(e.target.value) || 0 })
+                    }
+                    className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-2.5 text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer transition"
+                  >
+                    <option value={0}>Sans Garantie</option>
+                    <option value={1}>1 Mois Garantie SAV</option>
+                    <option value={3}>3 Mois Garantie SAV</option>
+                    <option value={6}>6 Mois Garantie SAV</option>
+                    <option value={12}>1 An Garantie Constructeur</option>
+                    <option value={24}>2 Ans Garantie Officielle</option>
+                  </select>
+                </div>
+              </div>
+
+            </div>
+
           </div>
 
-          {/* Section 3: Commercial Pricing & Margins */}
-          <div className="p-3.5 bg-pos-card border border-pos-border rounded-2xl space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-emerald-400" />
-                <h3 className="text-xs font-black text-pos-text uppercase tracking-wider">
-                  Tarification Commerciale & Marges de Vente
-                </h3>
-              </div>
-            </div>
-
-            {/* Price inputs */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              
-              <div>
-                <label className="text-[10px] font-bold text-pos-muted block mb-1">Prix Achat Cost (DA)</label>
-                <input
-                  type="number"
-                  step="50"
-                  value={formData.costPrice}
-                  onChange={(e) => setFormData({ ...formData, costPrice: parseFloat(e.target.value) || 0 })}
-                  className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-bold text-emerald-400 block mb-1">Prix Détail (DA) *</label>
-                <input
-                  type="number"
-                  step="50"
-                  required
-                  value={formData.price}
-                  onChange={(e) => setFormData({ ...formData, price: parseFloat(e.target.value) || 0 })}
-                  className={`w-full bg-pos-bg border rounded-xl px-3 py-2 text-xs font-black text-emerald-400 focus:outline-none ${
-                    isLossPrice ? 'border-red-500' : 'border-pos-border focus:border-emerald-400'
-                  }`}
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-bold text-amber-400 block mb-1">Prix Gros (DA) *</label>
-                <input
-                  type="number"
-                  step="50"
-                  required
-                  value={formData.wholesalePrice}
-                  onChange={(e) => setFormData({ ...formData, wholesalePrice: parseFloat(e.target.value) || 0 })}
-                  className={`w-full bg-pos-bg border rounded-xl px-3 py-2 text-xs font-black text-amber-400 focus:outline-none ${
-                    isWholesaleLoss ? 'border-red-500' : 'border-pos-border focus:border-amber-400'
-                  }`}
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-bold text-pos-muted block mb-1">Prix Plancher Min (DA)</label>
-                <input
-                  type="number"
-                  step="50"
-                  value={formData.minPrice || 0}
-                  onChange={(e) => setFormData({ ...formData, minPrice: parseFloat(e.target.value) || 0 })}
-                  className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-muted focus:border-emerald-400 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-bold text-pos-text block mb-1">Stock Quantité *</label>
-                <input
-                  type="number"
-                  required
-                  value={formData.stock}
-                  onChange={(e) => setFormData({ ...formData, stock: parseInt(e.target.value) || 0 })}
-                  className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-black text-pos-text focus:border-emerald-400 focus:outline-none"
-                />
-              </div>
-
-            </div>
-
-            {/* Real-time Profit & Margin Metric Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
-              
-              <div className="bg-pos-bg p-2.5 rounded-xl border border-pos-border flex justify-between items-center">
-                <span className="text-[10px] text-pos-muted font-bold">Bénéfice Unitaire Détail :</span>
-                <span className={`font-black text-sm ${isLossPrice ? 'text-red-400' : 'text-emerald-400'}`}>
-                  {isLossPrice ? 'Vente à perte !' : `+${formatDZD(grossProfit)}`}
-                </span>
-              </div>
-
-              <div className="bg-pos-bg p-2.5 rounded-xl border border-pos-border flex justify-between items-center">
-                <span className="text-[10px] text-pos-muted font-bold">Marge Brute Détail % :</span>
-                <span className={`font-black text-xs px-2 py-0.5 rounded ${isLossPrice ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'}`}>
-                  {profitMarginPercent}%
-                </span>
-              </div>
-
-              <div className="bg-pos-bg p-2.5 rounded-xl border border-pos-border flex justify-between items-center">
-                <span className="text-[10px] text-pos-muted font-bold">Marge Prix Gros % :</span>
-                <span className={`font-black text-xs px-2 py-0.5 rounded ${isWholesaleLoss ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'}`}>
-                  {wholesaleMarginPercent}%
-                </span>
-              </div>
-
-            </div>
-          </div>
-
-          {/* Section 4: Specifications, Options & Inventory Features */}
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 bg-pos-card border border-pos-border p-3.5 rounded-2xl">
+          {/* ======================================================================= */}
+          {/* 4. PINNED ACTION FOOTER (Bottom Bar)                                    */}
+          {/* ======================================================================= */}
+          <div className="px-5 py-3 border-t border-pos-border bg-pos-card flex items-center justify-between shrink-0 gap-3">
             
-            {/* Color Selector */}
-            <div>
-              <label className="text-[10px] font-bold text-pos-muted block mb-1">Couleur</label>
-              <select
-                value={formData.color || 'Noir Titane'}
-                onChange={(e) => setFormData({ ...formData, color: e.target.value })}
-                className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer"
-              >
-                {COLOR_OPTIONS.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
+            {/* Footer Left: Keyboard Shortcut Hints */}
+            <div className="flex items-center gap-3 text-[11px] text-pos-muted font-medium">
+              <span className="inline-flex items-center gap-1">
+                <kbd className="px-1.5 py-0.5 rounded bg-pos-bg border border-pos-border font-mono text-[10px] font-bold text-pos-text shadow-xs">
+                  Échap
+                </kbd>
+                <span>Annuler</span>
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <kbd className="px-1.5 py-0.5 rounded bg-pos-bg border border-pos-border font-mono text-[10px] font-bold text-pos-text shadow-xs">
+                  ↵ Entrée
+                </kbd>
+                <span>Enregistrer</span>
+              </span>
             </div>
 
-            {/* Material */}
-            <div>
-              <label className="text-[10px] font-bold text-pos-muted block mb-1">Matière / Finition</label>
-              <select
-                value={formData.material || 'Silicone Liquide Soft-Touch'}
-                onChange={(e) => setFormData({ ...formData, material: e.target.value })}
-                className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer"
-              >
-                {MATERIAL_OPTIONS.map((m) => (
-                  <option key={m} value={m}>{m}</option>
-                ))}
-              </select>
-            </div>
+            {/* Footer Right: Action Buttons */}
+            <div className="flex items-center gap-2">
+              {editingProduct && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (
+                      confirm(
+                        `Voulez-vous vraiment supprimer le produit "${editingProduct.title}" du catalogue ?`
+                      )
+                    ) {
+                      deleteProduct(editingProduct.id);
+                      showToast(`Produit "${editingProduct.title}" supprimé du catalogue.`, 'info');
+                      closeModal();
+                    }
+                  }}
+                  className="h-9 px-3 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold flex items-center gap-1.5 transition border border-rose-500/30 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Supprimer
+                </button>
+              )}
 
-            {/* Warranty */}
-            <div>
-              <label className="text-[10px] font-bold text-pos-muted block mb-1">Garantie Magasin</label>
-              <select
-                value={formData.warrantyMonths || 0}
-                onChange={(e) => setFormData({ ...formData, warrantyMonths: parseInt(e.target.value) || 0 })}
-                className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer"
-              >
-                <option value={0}>Sans Garantie</option>
-                <option value={1}>1 Mois Garantie SAV</option>
-                <option value={3}>3 Mois Garantie SAV</option>
-                <option value={6}>6 Mois Garantie SAV</option>
-                <option value={12}>1 An Garantie Constructeur</option>
-                <option value={24}>2 Ans Garantie Officielle</option>
-              </select>
-            </div>
-
-            {/* Shelf Location */}
-            <div>
-              <label className="text-[10px] font-bold text-pos-muted block mb-1">Emplacement Rayon</label>
-              <input
-                type="text"
-                value={formData.shelfLocation || 'Rayon A1'}
-                onChange={(e) => setFormData({ ...formData, shelfLocation: e.target.value })}
-                placeholder="ex: Rayon A2 - Vitrine 1"
-                className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
-              />
-            </div>
-
-            {/* Toggles: MagSafe & Serialized IMEI */}
-            <div className="sm:col-span-4 flex flex-wrap items-center gap-6 pt-2 border-t border-pos-border/60">
-              
-              <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-pos-text">
-                <input
-                  type="checkbox"
-                  checked={formData.isMagSafe || false}
-                  onChange={(e) => setFormData({ ...formData, isMagSafe: e.target.checked })}
-                  className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-400 cursor-pointer"
-                />
-                <span className="flex items-center gap-1">
-                  <Zap className="w-3.5 h-3.5 text-emerald-400" /> Compatibilité MagSafe / Induction
-                </span>
-              </label>
-
-              <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-pos-text">
-                <input
-                  type="checkbox"
-                  checked={formData.isSerialized || false}
-                  onChange={(e) => setFormData({ ...formData, isSerialized: e.target.checked })}
-                  className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-400 cursor-pointer"
-                />
-                <span className="flex items-center gap-1">
-                  <Shield className="w-3.5 h-3.5 text-cyan-400" /> Produit Sérialisé (Gestion IMEI / N° Série)
-                </span>
-              </label>
-
-              <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-pos-text ml-auto">
-                <input
-                  type="checkbox"
-                  checked={autoPrintLabel}
-                  onChange={(e) => setAutoPrintLabel(e.target.checked)}
-                  className="w-4 h-4 rounded text-emerald-500 focus:ring-emerald-400 cursor-pointer"
-                />
-                <span className="flex items-center gap-1 text-emerald-400">
-                  <Printer className="w-3.5 h-3.5" /> Ouvrir impression d'étiquette après enregistrement
-                </span>
-              </label>
-
-            </div>
-
-          </div>
-
-          {/* Footer Actions */}
-          <div className="p-4 border-t border-pos-border bg-pos-card flex justify-between items-center -mx-5 -mb-5 mt-4 shrink-0">
-            {editingProduct ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (confirm(`Voulez-vous vraiment supprimer le produit "${editingProduct.title}" du catalogue ?`)) {
-                    deleteProduct(editingProduct.id);
-                    showToast(`Produit "${editingProduct.title}" supprimé du catalogue.`, 'info');
-                    closeModal();
-                  }
-                }}
-                className="px-3.5 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold flex items-center gap-1.5 transition border border-rose-500/30 cursor-pointer"
-              >
-                <Trash2 className="w-4 h-4" /> Supprimer Produit
-              </button>
-            ) : <div />}
-
-            <div className="flex gap-2">
+              {/* Annuler */}
               <button
                 type="button"
                 onClick={closeModal}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition cursor-pointer"
+                className="h-9 px-4 rounded-lg text-xs font-bold text-pos-muted hover:text-pos-text hover:bg-pos-hover transition cursor-pointer"
               >
                 Annuler
               </button>
+
+              {/* Enregistrer & Nouveau */}
+              {!editingProduct && (
+                <button
+                  type="button"
+                  disabled={
+                    isSubmitting ||
+                    Boolean(duplicateBarcodeProduct) ||
+                    Boolean(duplicateSkuProduct)
+                  }
+                  onClick={handleSaveAndNew}
+                  className="h-9 px-4 rounded-lg bg-pos-card hover:bg-pos-hover text-pos-text border border-pos-border hover:border-emerald-500/50 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Package className="w-3.5 h-3.5 text-emerald-400" />
+                  Enregistrer & Nouveau
+                </button>
+              )}
+
+              {/* Enregistrer le Produit (Primary Submit button, triggers on Enter) */}
               <button
                 type="submit"
-                disabled={isSubmitting || Boolean(duplicateBarcodeProduct) || Boolean(duplicateSkuProduct)}
-                className={`px-6 py-2.5 rounded-xl text-slate-950 font-bold text-xs shadow-lg flex items-center gap-1.5 transition cursor-pointer ${
+                disabled={
+                  isSubmitting ||
+                  Boolean(duplicateBarcodeProduct) ||
+                  Boolean(duplicateSkuProduct)
+                }
+                className={`h-9 px-5 rounded-lg text-slate-950 font-black text-xs shadow-md flex items-center gap-1.5 transition cursor-pointer focus:ring-2 focus:ring-emerald-400 focus:outline-none ${
                   duplicateBarcodeProduct || duplicateSkuProduct
                     ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                    : 'bg-emerald-500 hover:bg-emerald-400 shadow-emerald-500/20'
+                    : 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 shadow-emerald-500/20'
                 }`}
               >
-                <Check className="w-4 h-4" />
+                <Check className="w-4 h-4 stroke-[3]" />
                 {isSubmitting
-                  ? 'Enregistrement en cours...'
+                  ? 'Enregistrement...'
                   : editingProduct
                   ? 'Mettre à Jour la Fiche'
-                  : 'Enregistrer le Produit au Catalogue'}
+                  : 'Enregistrer le Produit'}
               </button>
             </div>
+
           </div>
 
         </form>
+
       </div>
     </div>
   );

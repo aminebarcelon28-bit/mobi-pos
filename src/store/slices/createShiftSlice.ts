@@ -140,4 +140,63 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
       console.warn('Failed to fetch all shifts:', e);
     }
   },
+
+  printXReport: async () => {
+    const { activeShift, receiptSettings, logSecurityAction, transactions } = get();
+    if (!activeShift) {
+      return false;
+    }
+    try {
+      const openedAt = activeShift.openedAt;
+      const sessionTxns = transactions.filter(
+        (t) => (!openedAt || t.createdAt >= openedAt) && t.status !== 'VOIDED' && !t.isRefund
+      );
+      const sessionRefunds = transactions.filter(
+        (t) => (!openedAt || t.createdAt >= openedAt) && t.status !== 'VOIDED' && t.isRefund
+      );
+
+      const cashSales = sessionTxns.reduce((sum, t) => {
+        if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
+          const cashTenderTotal = t.tenders
+            .filter((tender) => tender.method === 'Espèces')
+            .reduce((acc, tender) => acc + tender.amount, 0);
+          return sum + Math.max(0, cashTenderTotal - (t.changeDue || 0));
+        }
+        return t.paymentMethod === 'Espèces' ? sum + Math.max(0, t.total) : sum;
+      }, 0);
+
+      const cashRefunds = sessionRefunds.reduce((sum, t) => {
+        return (t.refundMethod === 'Espèces' || t.paymentMethod === 'Espèces') ? sum + t.total : sum;
+      }, 0);
+
+      const deposits = (activeShift.movements || [])
+        .filter((m) => m.type === 'MANUAL_DEPOSIT')
+        .reduce((sum, m) => sum + m.amount, 0);
+      const expenses = (activeShift.movements || [])
+        .filter((m) => m.type === 'EXPENSE')
+        .reduce((sum, m) => sum + m.amount, 0);
+
+      const liveExpectedCash = activeShift.openingFloat + cashSales + deposits - expenses - cashRefunds;
+      const enrichedShift = {
+        ...activeShift,
+        expectedCash: liveExpectedCash,
+        totalSalesCount: sessionTxns.length,
+        totalSalesRevenue: sessionTxns.reduce((sum, t) => sum + t.total, 0),
+        totalProfits: sessionTxns.reduce((sum, t) => sum + (t.profit || 0), 0),
+      };
+
+      const { directPrintXReport } = await import('../../utils/escpos');
+      const success = await directPrintXReport(enrichedShift, receiptSettings);
+      logSecurityAction(
+        'Impression Rapport X (Mid-Shift)',
+        `Session: ${activeShift.id} • Caissier: ${activeShift.cashierName} • Espèces Théoriques: ${liveExpectedCash} DA`,
+        activeShift.cashierName || 'Caissier Principal',
+        false
+      );
+      return success;
+    } catch (err) {
+      console.error('Failed to print X-Report:', err);
+      return false;
+    }
+  },
 });

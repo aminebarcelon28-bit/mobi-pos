@@ -1,12 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { APP_VERSION } from '../types/pos';
 import type { Update } from '@tauri-apps/plugin-updater';
+import { isMobileDevice, isAndroid, isIOS, isTauriEnvironment } from '../utils/platform';
 
 export interface UpdateInfo {
   version: string;
   body?: string;
   date?: string;
+  downloadUrl?: string;
+  isMobile?: boolean;
 }
+
+const UPDATE_MANIFEST_URL = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/latest.json';
+const GITHUB_LATEST_RELEASE_URL = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest';
 
 /**
  * SemVer comparison utility to verify if remoteVersion is strictly newer than currentVersion.
@@ -29,10 +35,6 @@ export function isNewerVersion(remoteVersionStr?: string, currentVersionStr?: st
   return false;
 }
 
-function isTauriEnvironment(): boolean {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-}
-
 export function useAppUpdater() {
   const [isUpdateAvailable, setIsUpdateAvailable] = useState<boolean>(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -46,42 +48,84 @@ export function useAppUpdater() {
   const pendingUpdateRef = useRef<Update | null>(null);
 
   const checkForUpdates = useCallback(async (isManual: boolean = false) => {
-    if (!isTauriEnvironment()) {
-      if (isManual) {
-        setCheckStatusMessage('Mise à jour non supportée en mode Web / Navigateur.');
-      }
-      return;
-    }
-
     try {
       setIsChecking(true);
       setError(null);
       setCheckStatusMessage(null);
 
-      const { check } = await import('@tauri-apps/plugin-updater');
-      const update = await check({
-        timeout: 10000, // 10s network timeout
+      const isMobile = isMobileDevice();
+
+      // On desktop Tauri, attempt native plugin updater first
+      if (!isMobile && isTauriEnvironment()) {
+        try {
+          const { check } = await import('@tauri-apps/plugin-updater');
+          const update = await check({
+            timeout: 10000,
+          });
+
+          const currentVer = update?.currentVersion || APP_VERSION;
+          const hasNewerVersion = update && update.version && isNewerVersion(update.version, currentVer);
+
+          if (hasNewerVersion && update) {
+            pendingUpdateRef.current = update;
+            setIsUpdateAvailable(true);
+            setUpdateInfo({
+              version: update.version,
+              body: update.body || 'Nouvelle version de MobiPOS disponible avec des améliorations et des correctifs de stabilité.',
+              date: update.date,
+              downloadUrl: GITHUB_LATEST_RELEASE_URL,
+              isMobile: false,
+            });
+            setCheckStatusMessage(`Mise à jour v${update.version} disponible !`);
+            return;
+          } else if (update) {
+            pendingUpdateRef.current = null;
+            setIsUpdateAvailable(false);
+            setCheckStatusMessage('Vous utilisez déjà la version la plus récente de MobiPOS.');
+            return;
+          }
+        } catch (pluginErr) {
+          console.warn('Tauri native updater check skipped or failed, falling back to manifest check:', pluginErr);
+        }
+      }
+
+      // Universal Manifest Check (Works on Mobile Android/iOS, Web, and desktop fallback)
+      const res = await fetch(UPDATE_MANIFEST_URL, {
+        cache: 'no-cache',
+        headers: { Accept: 'application/json' },
       });
 
-      const currentVer = update?.currentVersion || APP_VERSION;
-      const hasNewerVersion = update && update.version && isNewerVersion(update.version, currentVer);
+      if (!res.ok) {
+        throw new Error(`Le serveur de mise à jour a répondu avec le statut ${res.status}`);
+      }
 
-      if (hasNewerVersion && update) {
-        pendingUpdateRef.current = update;
+      const manifest = await res.json();
+      const remoteVer: string = manifest?.version || '';
+
+      if (remoteVer && isNewerVersion(remoteVer, APP_VERSION)) {
+        pendingUpdateRef.current = null; // Direct external download
+        const targetDownloadUrl = isAndroid()
+          ? 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-Android.apk'
+          : isIOS()
+          ? 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-iOS.ipa'
+          : GITHUB_LATEST_RELEASE_URL;
+
         setIsUpdateAvailable(true);
         setUpdateInfo({
-          version: update.version,
-          body: update.body || 'Nouvelle version de MobiPOS disponible avec des améliorations et des correctifs de stabilité.',
-          date: update.date,
+          version: remoteVer,
+          body: manifest.notes || 'Nouvelle version de MobiPOS disponible avec des améliorations et des correctifs de stabilité.',
+          date: manifest.pub_date,
+          downloadUrl: targetDownloadUrl,
+          isMobile: isMobile,
         });
-        setCheckStatusMessage(`Mise à jour v${update.version} disponible !`);
+        setCheckStatusMessage(`Mise à jour v${remoteVer} disponible !`);
       } else {
         pendingUpdateRef.current = null;
         setIsUpdateAvailable(false);
-        setCheckStatusMessage('Vous utilisez déjà la version la plus récente de MobiPOS.');
+        setCheckStatusMessage(`Vous utilisez déjà la version la plus récente (v${APP_VERSION}).`);
       }
     } catch (err: unknown) {
-      console.warn('Tauri Updater check skipped or failed:', err);
+      console.warn('Update check failed:', err);
       pendingUpdateRef.current = null;
       setIsUpdateAvailable(false);
       const msg = err instanceof Error ? err.message : 'Impossible de joindre le serveur de mise à jour GitHub.';
@@ -96,7 +140,11 @@ export function useAppUpdater() {
 
   const downloadAndInstall = useCallback(async () => {
     const update = pendingUpdateRef.current;
-    if (!update) return;
+    if (!update) {
+      // Direct external download fallback
+      window.open(updateInfo?.downloadUrl || GITHUB_LATEST_RELEASE_URL, '_blank');
+      return;
+    }
 
     try {
       setDownloading(true);
@@ -126,7 +174,7 @@ export function useAppUpdater() {
       setDownloading(false);
       setError(err instanceof Error ? err.message : 'Échec du téléchargement et de l\'installation de la mise à jour.');
     }
-  }, []);
+  }, [updateInfo]);
 
   const relaunchApp = useCallback(async () => {
     try {
@@ -134,8 +182,25 @@ export function useAppUpdater() {
       await relaunch();
     } catch (err: unknown) {
       console.error('Failed to relaunch application:', err);
+      window.location.reload();
     }
   }, []);
+
+  const openDownloadPage = useCallback((url?: string) => {
+    let target = url || updateInfo?.downloadUrl;
+    if (!target) {
+      if (isAndroid()) {
+        target = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-Android.apk';
+      } else if (isIOS()) {
+        target = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-iOS.ipa';
+      } else {
+        target = GITHUB_LATEST_RELEASE_URL;
+      }
+    }
+    if (typeof window !== 'undefined') {
+      window.open(target, '_blank');
+    }
+  }, [updateInfo]);
 
   useEffect(() => {
     // Initial check on startup
@@ -158,9 +223,14 @@ export function useAppUpdater() {
     error,
     isChecking,
     checkStatusMessage,
+    hasNativeInstaller: Boolean(pendingUpdateRef.current),
+    isMobile: isMobileDevice(),
+    isAndroidDevice: isAndroid(),
+    isIOSDevice: isIOS(),
     checkForUpdates: (isManual: boolean = true) => checkForUpdates(isManual),
     downloadAndInstall,
     relaunchApp,
+    openDownloadPage,
     dismissUpdate: () => setIsUpdateAvailable(false),
   };
 }

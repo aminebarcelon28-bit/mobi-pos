@@ -50,6 +50,7 @@ export const ACTIVE_MODAL_NAMES: readonly ActiveModalType[] = [
   'debt_ledger',
   'expense_manager',
   'db_maintenance',
+  'mobile_simulator',
 ] as const;
 
 /**

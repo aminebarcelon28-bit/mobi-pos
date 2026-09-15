@@ -5,7 +5,8 @@ import {
   XCircle, Clock, Play, Tag, QrCode, ScanLine, Cable,
   Bluetooth, Usb, ChevronDown, ChevronUp, Settings, HardDrive,
   Server, RotateCcw, Database, Shield, Radio, Sparkles,
-  Award, TrendingUp, Volume2, VolumeX, Music, Cloud
+  Award, TrendingUp, Volume2, VolumeX, Music, Cloud,
+  Sun, Moon, ChevronLeft, Store
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
@@ -24,7 +25,7 @@ type DeviceCategory = 'receipt_printer' | 'label_printer' | 'barcode_scanner' | 
 type ConnectionType = 'USB' | 'Bluetooth' | 'Wi-Fi' | 'Serial' | 'HID' | 'Network' | 'HDMI';
 type DeviceStatus = 'connected' | 'ready' | 'active' | 'testing' | 'error' | 'offline' | 'warning';
 type DiagnosticResult = 'pass' | 'fail' | 'warning' | 'pending' | 'running';
-type SettingsTab = 'hardware' | 'cloud_sync' | 'diagnostics' | 'loyalty' | 'backup' | 'updates';
+type SettingsTab = 'appearance' | 'hardware' | 'cloud_sync' | 'diagnostics' | 'loyalty' | 'backup' | 'updates';
 
 interface PeripheralDevice {
   id: string;
@@ -267,6 +268,9 @@ export const SettingsModal: React.FC = () => {
     receiptSettings,
     setReceiptSettings,
     setManagerPin,
+    verifyManagerPin,
+    themeMode,
+    toggleTheme,
   } = usePosStore();
   const { showToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -284,6 +288,7 @@ export const SettingsModal: React.FC = () => {
   const scannerInputRef = useRef<HTMLInputElement>(null);
 
   // ── Manager Security PIN State ──
+  const [currentPinInput, setCurrentPinInput] = useState('');
   const [newPinInput, setNewPinInput] = useState('');
   const [confirmPinInput, setConfirmPinInput] = useState('');
   const [isUpdatingPin, setIsUpdatingPin] = useState(false);
@@ -584,6 +589,7 @@ export const SettingsModal: React.FC = () => {
   const failedTests = diagnosticTests.filter(t => t.result === 'fail').length;
 
   const tabs: { key: SettingsTab; label: string; icon: React.ReactNode }[] = [
+    { key: 'appearance', label: 'Apparence & Thème', icon: <Sun className="w-4 h-4 text-amber-400" /> },
     { key: 'hardware', label: 'Matériel & Périphériques', icon: <Cpu className="w-4 h-4" /> },
     { key: 'cloud_sync', label: 'Synchronisation Cloud', icon: <Cloud className="w-4 h-4 text-sky-400" /> },
     { key: 'diagnostics', label: 'Diagnostique Avancé', icon: <Activity className="w-4 h-4" /> },
@@ -605,18 +611,27 @@ export const SettingsModal: React.FC = () => {
         {/* ═══ Header ═══ */}
         <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
           <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={closeModal}
+              className="p-1.5 -ml-1 rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center gap-1 font-bold text-xs"
+              title="Retour au logiciel"
+            >
+              <ChevronLeft className="w-5 h-5 text-cyan-400 stroke-[2.5]" />
+              <span className="hidden sm:inline">Retour</span>
+            </button>
             <div className="w-9 h-9 rounded-xl bg-cyan-500/20 flex items-center justify-center border border-cyan-500/30 shadow-lg">
               <Settings className="w-5 h-5 text-cyan-400 stroke-[2.5]" />
             </div>
             <div>
               <h2 className="text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2">
-                CENTRE DE COMMANDE MATÉRIEL
+                PARAMÈTRES DU SYSTÈME & MATÉRIEL
                 <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1">
-                  <Sparkles className="w-3 h-3" /> Auto-Plug & Play Active
+                  <Sparkles className="w-3 h-3" /> Auto-Plug & Play
                 </span>
               </h2>
               <p className="text-[10px] text-pos-muted">
-                Reconnaissance Automatique Plug & Play, Configuration & Compatibilité Universelle
+                Thème, Périphériques, Synchronisation Cloud & Maintenance
               </p>
             </div>
           </div>
@@ -697,7 +712,103 @@ export const SettingsModal: React.FC = () => {
         </div>
 
         {/* ═══ Content Body ═══ */}
-        <div className="flex-1 overflow-y-auto p-4 border-t border-pos-border bg-pos-bg">
+        <div className="flex-1 overflow-y-auto p-6">
+          {/* ══════ TAB: Appearance & Theme ══════ */}
+          {activeTab === 'appearance' && (
+            <div className="space-y-4 max-w-3xl">
+              {/* Theme Selector Card */}
+              <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3 shadow-md">
+                <div className="flex items-center gap-2">
+                  <Sun className="w-4 h-4 text-amber-400" />
+                  <h4 className="text-xs font-bold text-pos-text">Thème & Apparence de l'Application</h4>
+                </div>
+                <p className="text-xs text-pos-muted">
+                  Personnalisez l'ambiance visuelle du logiciel pour un confort optimal en caisse.
+                </p>
+
+                <div className="grid grid-cols-2 gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (themeMode !== 'dark') toggleTheme();
+                    }}
+                    className={`p-4 rounded-xl border-2 text-left transition cursor-pointer flex flex-col justify-between h-28 ${
+                      themeMode === 'dark'
+                        ? 'border-cyan-400 bg-slate-900 text-white shadow-md'
+                        : 'border-pos-border bg-slate-900/40 text-pos-muted hover:border-pos-border/80'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <div className="flex items-center gap-2">
+                        <Moon className="w-5 h-5 text-indigo-400" />
+                        <span className="font-bold text-sm">Mode Sombre (Dark)</span>
+                      </div>
+                      {themeMode === 'dark' && <CheckCircle2 className="w-4 h-4 text-cyan-400" />}
+                    </div>
+                    <p className="text-[11px] text-slate-400">Recommandé en caisse pour réduire la fatigue oculaire et sublimer les contrastes.</p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (themeMode !== 'light') toggleTheme();
+                    }}
+                    className={`p-4 rounded-xl border-2 text-left transition cursor-pointer flex flex-col justify-between h-28 ${
+                      themeMode === 'light'
+                        ? 'border-amber-400 bg-white text-slate-950 shadow-md'
+                        : 'border-pos-border bg-white/40 text-pos-muted hover:border-pos-border/80'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <div className="flex items-center gap-2">
+                        <Sun className="w-5 h-5 text-amber-500" />
+                        <span className="font-bold text-sm">Mode Clair (Light)</span>
+                      </div>
+                      {themeMode === 'light' && <CheckCircle2 className="w-4 h-4 text-amber-500" />}
+                    </div>
+                    <p className="text-[11px] text-slate-500">Contraste élevé pour les environnements de boutique très éclairés.</p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Store & Receipt Info Card */}
+              <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3 shadow-md">
+                <div className="flex items-center gap-2">
+                  <Store className="w-4 h-4 text-cyan-400" />
+                  <h4 className="text-xs font-bold text-pos-text">Profil du Magasin & En-têtes Tickets</h4>
+                </div>
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-[11px] font-bold text-pos-muted block mb-1">Nom de la Boutique / Enseigne :</label>
+                    <input
+                      type="text"
+                      value={receiptSettings.storeName}
+                      onChange={(e) => setReceiptSettings({ ...receiptSettings, storeName: e.target.value })}
+                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-pos-muted block mb-1">Adresse :</label>
+                    <input
+                      type="text"
+                      value={receiptSettings.address}
+                      onChange={(e) => setReceiptSettings({ ...receiptSettings, address: e.target.value })}
+                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-pos-muted block mb-1">Numéro de Téléphone :</label>
+                    <input
+                      type="text"
+                      value={receiptSettings.phone}
+                      onChange={(e) => setReceiptSettings({ ...receiptSettings, phone: e.target.value })}
+                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* ══════ TAB: Cloud Sync (Turso) ══════ */}
           {activeTab === 'cloud_sync' && <CloudSyncPanel />}
@@ -1562,9 +1673,20 @@ export const SettingsModal: React.FC = () => {
                   </span>
                 </div>
 
-                <div className="flex items-center gap-3">
-                  <div className="flex-1">
-                    <label className="text-[10px] text-pos-muted font-bold block mb-1">Nouveau PIN Manager (4 à 6 chiffres)</label>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-[10px] text-pos-muted font-bold block mb-1">PIN Actuel (Obligatoire)</label>
+                    <input
+                      type="password"
+                      maxLength={6}
+                      value={currentPinInput}
+                      onChange={(e) => setCurrentPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="PIN Actuel"
+                      className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-pos-muted font-bold block mb-1">Nouveau PIN (4 à 6 chiffres)</label>
                     <input
                       type="password"
                       maxLength={6}
@@ -1574,7 +1696,7 @@ export const SettingsModal: React.FC = () => {
                       className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
                     />
                   </div>
-                  <div className="flex-1">
+                  <div>
                     <label className="text-[10px] text-pos-muted font-bold block mb-1">Confirmer le Nouveau PIN</label>
                     <input
                       type="password"
@@ -1585,37 +1707,46 @@ export const SettingsModal: React.FC = () => {
                       className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
                     />
                   </div>
-                  <div className="pt-4">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (!newPinInput || newPinInput.length < 4) {
-                          showToast('Le code PIN doit comporter au moins 4 chiffres.', 'error');
-                          return;
-                        }
-                        if (newPinInput !== confirmPinInput) {
-                          showToast('Les deux codes PIN saisis ne correspondent pas.', 'error');
-                          return;
-                        }
-                        setIsUpdatingPin(true);
-                        try {
-                          await setManagerPin(newPinInput);
-                          setNewPinInput('');
-                          setConfirmPinInput('');
-                          showToast('Nouveau Code PIN Manager enregistré avec succès.', 'success');
-                        } catch (e: unknown) {
-                          const msg = e instanceof Error ? e.message : String(e);
-                          showToast(`Erreur : ${msg}`, 'error');
-                        } finally {
-                          setIsUpdatingPin(false);
-                        }
-                      }}
-                      disabled={isUpdatingPin || !newPinInput || !confirmPinInput}
-                      className="py-2 px-4 rounded-lg bg-purple-500 hover:bg-purple-400 text-slate-950 font-bold text-xs transition disabled:opacity-40 cursor-pointer shadow-md"
-                    >
-                      {isUpdatingPin ? 'Enregistrement...' : 'Modifier PIN'}
-                    </button>
-                  </div>
+                </div>
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!currentPinInput) {
+                        showToast('Veuillez saisir votre code PIN actuel.', 'error');
+                        return;
+                      }
+                      if (!verifyManagerPin(currentPinInput)) {
+                        showToast('Le code PIN actuel est incorrect.', 'error');
+                        return;
+                      }
+                      if (!newPinInput || newPinInput.length < 4) {
+                        showToast('Le nouveau code PIN doit comporter au moins 4 chiffres.', 'error');
+                        return;
+                      }
+                      if (newPinInput !== confirmPinInput) {
+                        showToast('Les deux nouveaux codes PIN saisis ne correspondent pas.', 'error');
+                        return;
+                      }
+                      setIsUpdatingPin(true);
+                      try {
+                        await setManagerPin(newPinInput);
+                        setCurrentPinInput('');
+                        setNewPinInput('');
+                        setConfirmPinInput('');
+                        showToast('Nouveau Code PIN Manager enregistré avec succès.', 'success');
+                      } catch (e: unknown) {
+                        const msg = e instanceof Error ? e.message : String(e);
+                        showToast(`Erreur : ${msg}`, 'error');
+                      } finally {
+                        setIsUpdatingPin(false);
+                      }
+                    }}
+                    disabled={isUpdatingPin || !currentPinInput || !newPinInput || !confirmPinInput}
+                    className="py-2 px-5 rounded-lg bg-purple-500 hover:bg-purple-400 text-slate-950 font-bold text-xs transition disabled:opacity-40 cursor-pointer shadow-md"
+                  >
+                    {isUpdatingPin ? 'Enregistrement...' : 'Modifier PIN Manager'}
+                  </button>
                 </div>
               </div>
 
@@ -1744,22 +1875,40 @@ export const SettingsModal: React.FC = () => {
                       </div>
                     </div>
 
-                    {!updater.readyToRelaunch ? (
+                    {updater.hasNativeInstaller ? (
+                      !updater.readyToRelaunch ? (
+                        <button
+                          onClick={updater.downloadAndInstall}
+                          disabled={updater.downloading}
+                          className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer disabled:opacity-50"
+                        >
+                          <Download className={`w-4 h-4 ${updater.downloading ? 'animate-bounce' : ''}`} />
+                          {updater.downloading ? `Téléchargement (${updater.progress}%)...` : 'Télécharger & Installer'}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={updater.relaunchApp}
+                          className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          Redémarrer l'App
+                        </button>
+                      )
+                    ) : updater.isAndroidDevice ? (
                       <button
-                        onClick={updater.downloadAndInstall}
-                        disabled={updater.downloading}
-                        className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer disabled:opacity-50"
+                        onClick={() => updater.openDownloadPage()}
+                        className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer"
                       >
-                        <Download className={`w-4 h-4 ${updater.downloading ? 'animate-bounce' : ''}`} />
-                        {updater.downloading ? `Téléchargement (${updater.progress}%)...` : 'Télécharger & Installer'}
+                        <Download className="w-4 h-4" />
+                        Télécharger l'APK v{updater.updateInfo.version}
                       </button>
                     ) : (
                       <button
-                        onClick={updater.relaunchApp}
-                        className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer"
+                        onClick={() => updater.openDownloadPage()}
+                        className="py-2.5 px-4 bg-purple-600 hover:bg-purple-500 text-white font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-purple-600/25 cursor-pointer"
                       >
-                        <RotateCcw className="w-4 h-4" />
-                        Redémarrer l'App
+                        <Download className="w-4 h-4" />
+                        Mettre à jour
                       </button>
                     )}
                   </div>

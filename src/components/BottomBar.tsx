@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import {
-  PlusCircle,
-  FileSearch,
   Users,
   Percent,
   PauseCircle,
@@ -13,6 +11,9 @@ import {
   Cloud,
   CloudOff,
   RefreshCw,
+  Banknote,
+  Printer,
+  Keyboard,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { useToast } from './ui/Toast';
@@ -20,7 +21,7 @@ import { useSyncStatus } from '../hooks/useSyncStatus';
 import { syncManager } from '../sync/SyncManager';
 
 export const BottomBar: React.FC = () => {
-  const { openModal, holdSale, clearCart, heldSales } = usePosStore();
+  const { openModal, holdSale, heldSales, cart, reprintReceipt, lastTransaction } = usePosStore();
   const { showToast } = useToast();
   const sync = useSyncStatus();
   const [timeStr, setTimeStr] = useState('');
@@ -70,79 +71,95 @@ export const BottomBar: React.FC = () => {
     }
   };
 
-  const handleClearCartClick = () => {
-    const currentCart = usePosStore.getState().cart;
-    if (currentCart.length === 0) return;
-    if (currentCart.length > 1) {
-      const ok = window.confirm(
-        `Voulez-vous vraiment vider les ${currentCart.reduce((a, i) => a + i.quantity, 0)} articles de la vente en cours ?`
-      );
-      if (!ok) return;
-    }
-    clearCart();
-    showToast('Panier réinitialisé.', 'info');
-  };
-
   return (
     <footer className="bg-pos-panel border-t border-pos-border px-3 py-1.5 select-none shrink-0 relative z-20 w-full">
       <div className="flex items-center justify-between gap-3 w-full">
         {/* Left Side: Shortcut Function Keys */}
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 min-w-0">
+          {/* Quick Cash Tender (F2) */}
           <button
-            onClick={handleClearCartClick}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
-            title="Nouveau Panier / Réinitialiser (F1)"
+            onClick={() => cart.length > 0 && openModal('payment')}
+            disabled={cart.length === 0}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap shrink-0 shadow-sm ${
+              cart.length > 0
+                ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20 cursor-pointer'
+                : 'bg-pos-card text-pos-muted border border-pos-border opacity-60 cursor-not-allowed'
+            }`}
+            title="Valider la Vente / Encaisser (F2 ou Espace)"
           >
-            <PlusCircle className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-            <span>Nouveau</span>
-            <span className="hotkey-badge">F1</span>
+            <Banknote className="w-3.5 h-3.5 shrink-0" />
+            <span>Encaisser</span>
+            <span className="bg-black/20 text-current px-1 py-0.2 rounded text-[10px] font-mono">F2</span>
           </button>
 
+          {/* Customer Directory (F3) */}
           <button
-            onClick={() => openModal('hold')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium relative cursor-pointer whitespace-nowrap shrink-0"
-            title="Reprendre les Ventes en Attente (F4)"
+            onClick={() => openModal('customers')}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
+            title="Fichier Clients & Dettes Kredy (F3)"
           >
-            <FileSearch className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-            <span>Reprendre</span>
+            <Users className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+            <span>Clients</span>
+            <span className="hotkey-badge">F3</span>
+          </button>
+
+          {/* Discount (F4) */}
+          <button
+            onClick={() => openModal('discount')}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
+            title="Appliquer une Remise Panier (F4)"
+          >
+            <Percent className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+            <span>Remise</span>
+            <span className="hotkey-badge">F4</span>
+          </button>
+
+          {/* Hold / Recall (F6) */}
+          <button
+            onClick={handleHoldSaleClick}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium relative cursor-pointer whitespace-nowrap shrink-0"
+            title="Mettre en Attente ou Reprendre (F6)"
+          >
+            <PauseCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span>Attente</span>
             {heldSales.length > 0 && (
               <span className="w-4 h-4 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black flex items-center justify-center">
                 {heldSales.length}
               </span>
             )}
-            <span className="hotkey-badge">F4</span>
-          </button>
-
-          <button
-            onClick={() => openModal('customers')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
-            title="Fichier Clients & Dettes Kredy (F5)"
-          >
-            <Users className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-            <span>Clients</span>
-            <span className="hotkey-badge">F5</span>
-          </button>
-
-          <button
-            onClick={() => openModal('discount')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
-            title="Appliquer une Remise Panier (F6)"
-          >
-            <Percent className="w-3.5 h-3.5 text-purple-500 shrink-0" />
-            <span>Remise</span>
             <span className="hotkey-badge">F6</span>
           </button>
 
+          {/* Instant Reprint (F7) */}
           <button
-            onClick={handleHoldSaleClick}
+            onClick={() => {
+              if (lastTransaction) {
+                reprintReceipt(lastTransaction);
+                showToast(`Réimpression du ticket #${lastTransaction.receiptNumber} envoyée.`, 'info');
+              } else {
+                showToast('Aucun ticket récent à réimprimer.', 'warning');
+              }
+            }}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
-            title="Mettre la Vente en Attente (F7)"
+            title="Réimprimer le Dernier Ticket (F7)"
           >
-            <PauseCircle className="w-3.5 h-3.5 text-teal-500 shrink-0" />
-            <span>En Attente</span>
+            <Printer className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <span>Réimprimer</span>
             <span className="hotkey-badge">F7</span>
           </button>
 
+          {/* Hotkey Guide (F8) */}
+          <button
+            onClick={() => openModal('hotkey_guide')}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
+            title="Guide des Raccourcis Clavier (F8)"
+          >
+            <Keyboard className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span>Guide</span>
+            <span className="hotkey-badge">F8</span>
+          </button>
+
+          {/* Reports (F9) */}
           <button
             onClick={() => openModal('reports')}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
@@ -153,6 +170,7 @@ export const BottomBar: React.FC = () => {
             <span className="hotkey-badge">F9</span>
           </button>
 
+          {/* Stock (F10) */}
           <button
             onClick={() => openModal('inventory_manager')}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
@@ -163,6 +181,7 @@ export const BottomBar: React.FC = () => {
             <span className="hotkey-badge">F10</span>
           </button>
 
+          {/* Refund (F11) */}
           <button
             onClick={() => openModal('refund')}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
@@ -173,6 +192,7 @@ export const BottomBar: React.FC = () => {
             <span className="hotkey-badge">F11</span>
           </button>
 
+          {/* Settings (F12) */}
           <button
             onClick={() => openModal('settings')}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"

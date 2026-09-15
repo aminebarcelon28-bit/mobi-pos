@@ -17,7 +17,6 @@ import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import type { PaymentTender, PaymentMethodType } from '../../types/pos';
 import { useToast } from '../../components/ui/Toast';
-import { printCoordinator } from '../../utils/printCoordinator';
 import { soundEngine } from '../../utils/audioFeedback';
 import { getProductPriceForTier } from '../../utils/pricingEngine';
 
@@ -93,7 +92,7 @@ export const PaymentModal: React.FC = () => {
   const resteAPayer = Math.max(0, netToPay - currentCashGiven);
   const changeDue = Math.max(0, currentCashGiven - netToPay);
 
-  const quickBillsDZD = [500, 1000, 2000, 5000, 10000];
+  const quickBillsDZD = [500, 1000, 2000, 3000, 4000, 5000];
 
   const serializedItems = cart.filter((item) => item.product.isSerialized);
   const hasMissingIMEI = serializedItems.some((item) => !item.imeiNumber || !item.imeiNumber.trim());
@@ -213,9 +212,6 @@ export const PaymentModal: React.FC = () => {
     } else {
       setIsProcessing(false);
       closeModal();
-
-      // Isolated thermal receipt print
-      printCoordinator.printReceipt(50);
 
       if (appliedCredit > 0 && netToPay === 0) {
         showToast(`🎁 Vente 100% réglée via Avoir Client (${formatDZD(appliedCredit)}) • Reçu imprimé`, 'success');
@@ -539,7 +535,7 @@ export const PaymentModal: React.FC = () => {
                       <span className="text-[10px] font-bold text-pos-muted uppercase tracking-wider block">
                         Coupures Rapides (1-Clic) :
                       </span>
-                      <div className="grid grid-cols-6 gap-1.5">
+                      <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
                         <button
                           type="button"
                           onClick={() => {

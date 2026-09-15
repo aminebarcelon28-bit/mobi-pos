@@ -25,6 +25,7 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
     transactions,
     products,
     repairOrders,
+    imeiRecords,
   } = usePosStore();
 
   const [inputImei, setInputImei] = useState('');
@@ -40,8 +41,9 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
       receiptNumber: string;
     }> = [];
 
-    // From sales transactions
+    // From valid sales transactions (excluding voided sales and refund credit notes)
     (transactions || []).forEach((sale: SaleTransaction) => {
+      if (sale.status === 'VOIDED' || sale.isRefund) return;
       (sale.items || []).forEach((item: CartItem) => {
         if (item.imeiNumber && item.imeiNumber.trim()) {
           list.push({
@@ -70,6 +72,20 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
       }
     });
 
+    // From IMEI records registry
+    (imeiRecords || []).forEach((rec) => {
+      if (rec.imei && !list.some((i) => i.imei === rec.imei)) {
+        const prod = (products || []).find((p) => p.id === rec.productId);
+        list.push({
+          imei: rec.imei,
+          productTitle: prod?.title || 'Appareil Enregistré',
+          customerName: rec.soldAt ? 'Appareil Vendu' : 'En Stock Magasin',
+          saleDate: rec.soldAt || rec.receivedAt,
+          receiptNumber: rec.saleTransactionId ? `TXN-${rec.saleTransactionId.slice(0, 8)}` : 'STOCK',
+        });
+      }
+    });
+
     // From products in stock
     (products || []).forEach((prod) => {
       if (prod.isSerialized && prod.barcode && prod.barcode.length >= 10) {
@@ -86,7 +102,7 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
     });
 
     return list;
-  }, [transactions, repairOrders, products]);
+  }, [transactions, repairOrders, products, imeiRecords]);
 
   if (activeModal !== 'imei_inspector') return null;
 
@@ -98,53 +114,69 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
 
     soundEngine.playKeyBeep?.();
 
-    // 1. Search in transactions
-    let foundSale: SaleTransaction | null = null;
-    let foundItem: CartItem | null = null;
+    // 1. Search in transactions (prioritize newest first)
+    const sortedSales = [...(transactions || [])].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
 
-    for (const sale of transactions || []) {
-      const itm = (sale.items || []).find(
+    const matchingTxns = sortedSales.filter((sale) =>
+      (sale.items || []).some(
+        (i: CartItem) => i.imeiNumber && i.imeiNumber.trim().toLowerCase() === q.toLowerCase()
+      )
+    );
+
+    if (matchingTxns.length > 0) {
+      const latestTxn = matchingTxns[0];
+      const isRefunded = matchingTxns.some((t) => t.isRefund) || latestTxn.status === 'REFUNDED';
+      const isVoided = latestTxn.status === 'VOIDED';
+
+      // Find original sale (non-refund, non-voided)
+      const originalSale = matchingTxns.find((t) => !t.isRefund && t.status !== 'VOIDED') || latestTxn;
+      const originalItem = originalSale.items?.find(
         (i: CartItem) => i.imeiNumber && i.imeiNumber.trim().toLowerCase() === q.toLowerCase()
       );
-      if (itm) {
-        foundSale = sale;
-        foundItem = itm;
-        break;
-      }
-    }
 
-    if (foundSale && foundItem) {
-      const saleDate = new Date(foundSale.createdAt);
-      const warrantyMonths = 12;
+      const matchedProduct = (products || []).find((p) => p.id === originalItem?.product?.id);
+      const warrantyMonths = matchedProduct?.warrantyMonths || originalItem?.product?.warrantyMonths || 12;
+
+      const saleDate = new Date(originalSale.createdAt);
       const warrantyExpiry = new Date(saleDate);
       warrantyExpiry.setMonth(warrantyExpiry.getMonth() + warrantyMonths);
 
       const now = new Date();
       const diffMs = warrantyExpiry.getTime() - now.getTime();
       const daysRemaining = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
-      const isWarrantyValid = daysRemaining > 0;
+      const isWarrantyValid = !isRefunded && !isVoided && daysRemaining > 0;
 
       const savCount = (repairOrders || []).filter(
         (r) => r.imei && r.imei.toLowerCase() === q.toLowerCase()
       ).length;
 
+      let statusSuffix = '';
+      if (isVoided) statusSuffix = ' (Vente Annulée)';
+      else if (isRefunded) statusSuffix = ' (Article Retourné / Remboursé)';
+
       const dossier: ImeiLifecycleDossier = {
         imei: q,
-        productTitle: foundItem.product?.title || 'Smartphone Vendu',
-        isSold: true,
-        originalReceiptNumber: foundSale.receiptNumber,
-        originalCustomerName: foundSale.customer?.name || 'Client Comptoir',
-        originalCustomerPhone: foundSale.customer?.phone || '-',
-        soldAt: foundSale.createdAt,
+        productTitle: (originalItem?.product?.title || matchedProduct?.title || 'Smartphone Vendu') + statusSuffix,
+        isSold: !isRefunded && !isVoided,
+        originalReceiptNumber: originalSale.receiptNumber,
+        originalCustomerName: originalSale.customer?.name || 'Client Comptoir',
+        originalCustomerPhone: originalSale.customer?.phone || '-',
+        soldAt: originalSale.createdAt,
         warrantyExpiresAt: warrantyExpiry.toISOString(),
         isWarrantyValid,
-        daysRemaining,
+        daysRemaining: isRefunded || isVoided ? 0 : daysRemaining,
         repairHistoryCount: savCount,
       };
 
       setSearchedDossier(dossier);
       setActiveImeiDossier(dossier);
-      soundEngine.playSuccess();
+      if (isWarrantyValid) {
+        soundEngine.playWarrantyActive();
+      } else {
+        soundEngine.playError();
+      }
       return;
     }
 
@@ -179,7 +211,49 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
       return;
     }
 
-    // 3. Search in inventory products
+    // 3. Search in IMEI records registry
+    const foundImeiRecord = (imeiRecords || []).find(
+      (r) => r.imei.trim().toLowerCase() === q.toLowerCase()
+    );
+
+    if (foundImeiRecord) {
+      const matchedProd = (products || []).find((p) => p.id === foundImeiRecord.productId);
+      const isSold = Boolean(foundImeiRecord.soldAt);
+      const now = new Date();
+      const warrantyMonths = matchedProd?.warrantyMonths || 12;
+      const baseDate = new Date(foundImeiRecord.soldAt || foundImeiRecord.receivedAt);
+      const warrantyExpiry = foundImeiRecord.warrantyExpiresAt
+        ? new Date(foundImeiRecord.warrantyExpiresAt)
+        : new Date(baseDate.setMonth(baseDate.getMonth() + warrantyMonths));
+      const diffMs = warrantyExpiry.getTime() - now.getTime();
+      const daysRemaining = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+      const isWarrantyValid = isSold && daysRemaining > 0;
+
+      const savCount = (repairOrders || []).filter(
+        (r) => r.imei && r.imei.toLowerCase() === q.toLowerCase()
+      ).length;
+
+      const dossier: ImeiLifecycleDossier = {
+        imei: q,
+        productTitle: matchedProd?.title || 'Appareil Enregistré',
+        isSold,
+        originalReceiptNumber: foundImeiRecord.saleTransactionId ? `TXN-${foundImeiRecord.saleTransactionId.slice(0, 8)}` : 'STOCK',
+        originalCustomerName: isSold ? 'Client Enregistré' : 'Article en Stock Magasin',
+        originalCustomerPhone: '-',
+        soldAt: foundImeiRecord.soldAt || foundImeiRecord.receivedAt,
+        warrantyExpiresAt: warrantyExpiry.toISOString(),
+        isWarrantyValid,
+        daysRemaining: isSold ? daysRemaining : 0,
+        repairHistoryCount: savCount,
+      };
+
+      setSearchedDossier(dossier);
+      setActiveImeiDossier(dossier);
+      soundEngine.playSuccess();
+      return;
+    }
+
+    // 4. Search in inventory products
     const foundProduct = (products || []).find(
       (p) =>
         p.barcode === q ||
@@ -189,20 +263,17 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
 
     if (foundProduct) {
       const now = new Date();
-      const warrantyExpiry = new Date(now);
-      warrantyExpiry.setMonth(warrantyExpiry.getMonth() + 12);
-
       const dossier: ImeiLifecycleDossier = {
         imei: q,
         productTitle: foundProduct.title,
         isSold: false,
         originalReceiptNumber: 'STOCK-' + foundProduct.sku,
-        originalCustomerName: 'Article en Stock Magasin',
+        originalCustomerName: 'Article en Stock Magasin (Non Vendu)',
         originalCustomerPhone: '-',
         soldAt: now.toISOString(),
-        warrantyExpiresAt: warrantyExpiry.toISOString(),
-        isWarrantyValid: true,
-        daysRemaining: 365,
+        warrantyExpiresAt: now.toISOString(),
+        isWarrantyValid: false,
+        daysRemaining: 0,
         repairHistoryCount: 0,
       };
 
@@ -212,28 +283,25 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
       return;
     }
 
-    // 4. Fallback calculation for any 15-digit IMEI
+    // 5. Fallback: Not found in database (Strictly Non-Registered / No Warranty)
     const now = new Date();
-    const warrantyExpiry = new Date(now);
-    warrantyExpiry.setMonth(warrantyExpiry.getMonth() + 12);
-
     const dossier: ImeiLifecycleDossier = {
       imei: q,
-      productTitle: `Smartphone / Appareil (IMEI ${q.slice(0, 8)}...)`,
+      productTitle: `Appareil Non Référencé (IMEI ${q.length >= 8 ? q.slice(0, 8) + '...' : q})`,
       isSold: false,
       originalReceiptNumber: 'NON ENREGISTRÉ',
-      originalCustomerName: 'Client Comptoir',
+      originalCustomerName: 'Appareil Inconnu / Hors Réseau',
       originalCustomerPhone: '-',
       soldAt: now.toISOString(),
-      warrantyExpiresAt: warrantyExpiry.toISOString(),
-      isWarrantyValid: true,
-      daysRemaining: 365,
+      warrantyExpiresAt: now.toISOString(),
+      isWarrantyValid: false,
+      daysRemaining: 0,
       repairHistoryCount: 0,
     };
 
     setSearchedDossier(dossier);
     setActiveImeiDossier(dossier);
-    soundEngine.playSuccess();
+    soundEngine.playError?.();
   };
 
   return (

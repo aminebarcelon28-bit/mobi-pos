@@ -182,6 +182,8 @@ export class RestoreManager {
             }
 
           } else if (table === 'transaction_items') {
+            const txnId = String(r.transaction_id || '');
+            const prodId = String(r.product_id || 'unknown');
             await local.execute(
               `INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price,
                 discount, imei_number, cost_price, json_payload, device_id, idempotency_key, sync_status,
@@ -189,23 +191,24 @@ export class RestoreManager {
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'synced',$12,$13,$14,$15)
                ON CONFLICT(id) DO NOTHING`,
               [
-                id, r.transaction_id, r.product_id, Number(r.quantity ?? 1), Number(r.applied_price ?? 0),
-                Number(r.discount ?? 0), r.imei_number ?? null, Number(r.cost_price ?? 0),
-                r.json_payload ?? '{}', r.device_id ?? 'remote', r.idempotency_key ?? id,
-                Number(r.version ?? 1), r.created_at ?? now, r.updated_at ?? now, Number(r.deleted ?? 0),
+                id, txnId, prodId, Number(r.quantity ?? 1), Number(r.applied_price ?? 0),
+                Number(r.discount ?? 0), r.imei_number ? String(r.imei_number) : null, Number(r.cost_price ?? 0),
+                String(r.json_payload ?? '{}'), String(r.device_id ?? 'remote'), String(r.idempotency_key ?? id),
+                Number(r.version ?? 1), String(r.created_at ?? now), String(r.updated_at ?? now), Number(r.deleted ?? 0),
               ]
             );
 
           } else if (table === 'inventory_ledger') {
+            const prodId = String(r.product_id || 'unknown');
             await local.execute(
               `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
                 idempotency_key, sync_status, version, created_at, updated_at, deleted)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'synced',$9,$10,$11,$12)
                ON CONFLICT(id) DO NOTHING`,
               [
-                id, r.product_id, Number(r.delta ?? 0), r.reason, r.ref_type ?? null, r.ref_id ?? null,
-                r.device_id ?? 'remote', r.idempotency_key ?? id, Number(r.version ?? 1),
-                r.created_at ?? now, r.updated_at ?? now, Number(r.deleted ?? 0),
+                id, prodId, Number(r.delta ?? 0), String(r.reason ?? 'SALE'), r.ref_type ? String(r.ref_type) : null, r.ref_id ? String(r.ref_id) : null,
+                String(r.device_id ?? 'remote'), String(r.idempotency_key ?? id), Number(r.version ?? 1),
+                String(r.created_at ?? now), String(r.updated_at ?? now), Number(r.deleted ?? 0),
               ]
             );
 

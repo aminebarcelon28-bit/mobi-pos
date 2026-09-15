@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "src-tauri",
+    "crates/pos-core",
+    "crates/pos-peripherals",
+]
+resolver = "2"

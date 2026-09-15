@@ -195,7 +195,8 @@ export const ReportsModal: React.FC = () => {
       .filter((t) => t.status !== 'VOIDED' && !t.isRefund)
       .reduce((acc, t) => {
         if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
-          return acc + t.tenders.filter((tender) => tender.method === 'Espèces').reduce((sum, tender) => sum + (tender.amount || 0), 0);
+          const cashTenderTotal = t.tenders.filter((tender) => tender.method === 'Espèces').reduce((sum, tender) => sum + (tender.amount || 0), 0);
+          return acc + Math.max(0, cashTenderTotal - (t.changeDue || 0));
         }
         return t.paymentMethod === 'Espèces' ? acc + (t.total || 0) : acc;
       }, 0);
@@ -516,7 +517,7 @@ export const ReportsModal: React.FC = () => {
             <div>
               <h3 className="text-lg font-black text-pos-text">Accès Sécurisé par PIN Administrateur</h3>
               <p className="text-xs text-pos-muted mt-1 max-w-sm">
-                Saisissez votre code PIN Manager (Par défaut : <strong>1234</strong>) pour consulter les chiffres financiers et exporter les données comptables.
+                Saisissez votre code PIN Manager pour consulter les chiffres financiers et exporter les données comptables.
               </p>
             </div>
 
@@ -526,7 +527,7 @@ export const ReportsModal: React.FC = () => {
                 <input
                   type="password"
                   autoFocus
-                  placeholder="PIN Administrateur (1234)"
+                  placeholder="Code PIN Administrateur"
                   value={pinInput}
                   onChange={(e) => setPinInput(e.target.value)}
                   className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-3 py-2 text-xs font-bold text-pos-text focus:border-amber-400 focus:outline-none"
@@ -1703,7 +1704,7 @@ export const ReportsModal: React.FC = () => {
                       <label className="text-[10px] font-bold text-pos-muted block mb-1">PIN Manager :</label>
                       <input
                         type="password"
-                        placeholder="PIN (1234)"
+                        placeholder="Code PIN Manager"
                         value={voidPin}
                         onChange={(e) => setVoidPin(e.target.value)}
                         className="w-full bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-xs text-pos-text focus:outline-none"

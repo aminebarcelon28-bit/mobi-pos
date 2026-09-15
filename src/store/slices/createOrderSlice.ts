@@ -8,7 +8,10 @@ import type {
   LoyaltyLedgerEntry,
   SecurityAuditLogEntry,
   Product,
+  PaymentTender,
+  IMEIRecord,
 } from '../../types/pos';
+import { db as dexieDb } from '../../db/database';
 import { sqliteAdapter } from '../../db/sqliteAdapter';
 import { customerRepository } from '../../db/repositories/customerRepository';
 import { writeCheckoutAtomic, appendInventoryDeltas } from '../../db/sqlPluginAdapter';
@@ -26,6 +29,9 @@ import {
   calculateProfit,
 } from '../../utils/pricingEngine';
 import { audioBus } from '../../utils/audioEvents';
+import { directPrintReceipt } from '../../utils/escpos';
+
+let isPaymentInFlight = false;
 
 export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set, get) => ({
   transactions: [],
@@ -38,373 +44,410 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
   setSelectedTransactionForRefund: (t) => set({ selectedTransactionForRefund: t }),
 
   reprintReceipt: (transaction) => {
-    set({
-      lastTransaction: transaction,
-      activeModal: 'receipt',
-    });
+    set({ lastTransaction: transaction });
+    const settings = get().receiptSettings;
+    void directPrintReceipt(transaction, settings);
   },
 
-  processPayment: async (tenders) => {
-    const {
-      cart,
-      currentCustomer,
-      cashTendered,
-      products,
-      transactions,
-      pricingTier,
-      storeCreditApplied,
-      logSecurityAction,
-      customers,
-      activeShift,
-    } = get();
-
-    if (cart.length === 0) return { success: false, reason: 'EMPTY_CART' };
-
-    // IMEI enforcement for serialized items
-    const missingIMEI = cart.find(
-      (item) => item.product.isSerialized && (!item.imeiNumber || item.imeiNumber.trim() === '')
-    );
-    if (missingIMEI) {
-      return { success: false, reason: `IMEI_REQUIRED:${missingIMEI.product.title}` };
+  processPayment: async (tenders?: PaymentTender[]) => {
+    if (isPaymentInFlight) {
+      return { success: false, reason: 'ALREADY_PROCESSING' };
     }
+    isPaymentInFlight = true;
 
-    // Guard against duplicate IMEI assignment in same sale
-    const serializedItems = cart.filter((item) => item.product.isSerialized && item.imeiNumber);
-    const seenImeis = new Set<string>();
-    for (const item of serializedItems) {
-      const imei = (item.imeiNumber || '').trim().toUpperCase();
-      if (seenImeis.has(imei)) {
-        return { success: false, reason: `DUPLICATE_IMEI:${imei}` };
-      }
-      seenImeis.add(imei);
-    }
+    try {
+      const {
+        cart,
+        currentCustomer,
+        cashTendered,
+        products,
+        transactions,
+        pricingTier,
+        storeCreditApplied,
+        customers,
+        activeShift,
+      } = get();
 
-    const grossSubtotal = cart.reduce((acc, item) => {
-      const itemPrice =
-        item.appliedPrice !== undefined
-          ? item.appliedPrice
-          : getProductPriceForTier(item.product, pricingTier);
-      return acc + itemPrice * item.quantity - (item.discount || 0);
-    }, 0);
+      if (cart.length === 0) return { success: false, reason: 'EMPTY_CART' };
 
-    const actualStoreCreditApplied = tenders
-      ? tenders.filter((t) => t.method === 'Avoir Client').reduce((acc, t) => acc + t.amount, 0)
-      : storeCreditApplied;
-
-    if (actualStoreCreditApplied > 0 && currentCustomer) {
-      if (actualStoreCreditApplied > currentCustomer.storeCredit) {
-        return { success: false, reason: 'INSUFFICIENT_STORE_CREDIT' };
-      }
-    }
-
-    const total = Math.max(0, grossSubtotal - actualStoreCreditApplied);
-
-    const creditTender = tenders?.find((t) => t.method === 'Crédit Client');
-    const creditDebtAmount = creditTender ? creditTender.amount : 0;
-
-    if (creditDebtAmount > 0 && !currentCustomer) {
-      return { success: false, reason: 'CUSTOMER_REQUIRED_FOR_CREDIT' };
-    }
-
-    // Validate cash is sufficient (excluding credit and store credit)
-    const directTendered = tenders
-      ? tenders
-          .filter((t) => t.method !== 'Avoir Client' && t.method !== 'Crédit Client')
-          .reduce((acc, t) => acc + t.amount, 0)
-      : cashTendered;
-
-    const remainingToPay = Math.max(0, total - creditDebtAmount);
-
-    if (directTendered < remainingToPay) {
-      return { success: false, reason: 'INSUFFICIENT_CASH' };
-    }
-
-    const changeDue = Math.max(0, directTendered - remainingToPay);
-
-    // Capture immutable unit cost price at exact checkout time to protect historical profit margins
-    const frozenCartItems: CartItem[] = cart.map((item) => ({
-      ...item,
-      unitCostPrice: item.unitCostPrice ?? getEffectiveCostPrice(item.product),
-    }));
-
-    const costTotal = frozenCartItems.reduce(
-      (acc, item) => acc + (item.unitCostPrice || 0) * item.quantity,
-      0
-    );
-
-    const { profit, profitMargin } = calculateProfit(total, costTotal);
-
-    const cartQtyMap = new Map<string, number>();
-    for (const item of cart) {
-      cartQtyMap.set(item.product.id, (cartQtyMap.get(item.product.id) || 0) + item.quantity);
-    }
-
-    let hasSyncConflict = false;
-    const modifiedProducts: Product[] = [];
-    const updatedProducts = products.map((p) => {
-      const cartQty = cartQtyMap.get(p.id);
-      if (cartQty !== undefined) {
-        const newStock = p.stock - cartQty;
-        if (newStock < 0) hasSyncConflict = true;
-        const updated = { ...p, stock: newStock };
-        modifiedProducts.push(updated);
-        return updated;
-      }
-      return p;
-    });
-
-    if (hasSyncConflict) {
-      logSecurityAction(
-        'Stock Négatif Synchronisé (Oversell)',
-        'Vente enregistrée avec stock négatif — régulariser par réception/ajustement.',
-        'Système Local',
-        false
+      // IMEI enforcement for serialized items
+      const missingIMEI = cart.find(
+        (item) => item.product.isSerialized && (!item.imeiNumber || item.imeiNumber.trim() === '')
       );
-    }
-
-    const transactionId = `TXN-${Math.floor(100000 + Math.random() * 900000)}`;
-    const receiptNumber = `REC-${Date.now().toString().slice(-6)}`;
-
-    const { customerDebts } = get();
-    let newCustomerDebts = customerDebts;
-
-    let updatedCustomer = currentCustomer;
-    let updatedCustomers = customers;
-    if (currentCustomer) {
-      const currentTotalSpent = currentCustomer.totalSpent || 0;
-      const currentTier = calculateCustomerTier(currentTotalSpent);
-
-      const earnedPoints =
-        remainingToPay > 0
-          ? calculateNetPaidEarnedPoints(cart, remainingToPay, grossSubtotal, currentTier.pointsMultiplier)
-          : 0;
-
-      const newTotalSpent = currentTotalSpent + remainingToPay;
-      const newTier = calculateCustomerTier(newTotalSpent);
-
-      const prev20kMilestones = Math.floor(currentTotalSpent / 20000);
-      const new20kMilestones = Math.floor(newTotalSpent / 20000);
-      const milestoneBonusUnlocked = Math.max(0, new20kMilestones - prev20kMilestones);
-      const earnedCreditBonus = milestoneBonusUnlocked * 1000;
-
-      const existingBuckets = currentCustomer.pointBuckets || [];
-      const pointsToRedeem = Math.floor(actualStoreCreditApplied / 10);
-      const { updatedBuckets } = depleteFifoPointBuckets(existingBuckets, pointsToRedeem);
-
-      const finalBuckets = [...updatedBuckets];
-      if (earnedPoints > 0) {
-        finalBuckets.push(
-          createDatedPointBucket(
-            currentCustomer.id,
-            receiptNumber,
-            earnedPoints,
-            remainingToPay,
-            newTier.name
-          )
-        );
+      if (missingIMEI) {
+        return { success: false, reason: `IMEI_REQUIRED:${missingIMEI.product.title}` };
       }
 
-      const newCredit = Math.max(0, currentCustomer.storeCredit - actualStoreCreditApplied) + earnedCreditBonus;
-      const newPoints = Math.max(0, currentCustomer.loyaltyPoints - pointsToRedeem) + earnedPoints;
-      const newDebt = (currentCustomer.currentDebt || 0) + creditDebtAmount;
-
-      const newEntries: LoyaltyLedgerEntry[] = [];
-      if (actualStoreCreditApplied > 0) {
-        newEntries.push(
-          createLedgerEntry(
-            currentCustomer.id,
-            'redeem',
-            -pointsToRedeem,
-            newPoints,
-            `Déduction Avoir Client sur Ticket ${receiptNumber} (-${actualStoreCreditApplied} DA)`,
-            transactionId,
-            -actualStoreCreditApplied
-          )
-        );
+      // Guard against duplicate IMEI assignment in same sale
+      const serializedItems = cart.filter((item) => item.product.isSerialized && item.imeiNumber);
+      const seenImeis = new Set<string>();
+      for (const item of serializedItems) {
+        const imei = (item.imeiNumber || '').trim().toUpperCase();
+        if (seenImeis.has(imei)) {
+          return { success: false, reason: `DUPLICATE_IMEI:${imei}` };
+        }
+        seenImeis.add(imei);
       }
 
-      if (earnedPoints > 0) {
-        newEntries.push(
-          createLedgerEntry(
-            currentCustomer.id,
-            'earn',
-            earnedPoints,
-            newPoints,
-            `Gain sur paiement net de ${remainingToPay} DA (Ticket ${receiptNumber} - ${newTier.name} ${newTier.pointsMultiplier}x)`,
-            transactionId,
-            earnedPoints * 10
-          )
-        );
-      }
+      // Accounting Invariant: Gross Subtotal before discounts
+      const grossSubtotal = cart.reduce((acc, item) => {
+        const itemPrice =
+          item.appliedPrice !== undefined
+            ? item.appliedPrice
+            : getProductPriceForTier(item.product, pricingTier);
+        return acc + itemPrice * item.quantity;
+      }, 0);
 
-      if (earnedCreditBonus > 0) {
-        newEntries.push(
-          createLedgerEntry(
-            currentCustomer.id,
-            'bonus',
-            0,
-            newPoints,
-            `🎁 Bonus Palier 20 000 DA Atteint : +${earnedCreditBonus} DA Crédit Avoir Client`,
-            transactionId,
-            earnedCreditBonus
-          )
-        );
-      }
+      const discountTotal = cart.reduce((acc, item) => acc + (item.discount || 0), 0);
+      const subtotalAfterDiscount = Math.max(0, grossSubtotal - discountTotal);
 
-      const existingLedger = currentCustomer.ledger || [];
-      updatedCustomer = {
-        ...currentCustomer,
-        totalSpent: newTotalSpent,
-        loyaltyTier: newTier.name,
-        loyaltyPoints: newPoints,
-        storeCredit: newCredit,
-        currentCreditBalanceDzd: newCredit,
-        totalLifetimeSpentDzd: newTotalSpent,
-        currentDebt: newDebt,
-        pointBuckets: finalBuckets,
-        ledger: [...newEntries, ...existingLedger],
-      };
+      const actualStoreCreditApplied = tenders
+        ? tenders.filter((t: PaymentTender) => t.method === 'Avoir Client').reduce((acc: number, t: PaymentTender) => acc + t.amount, 0)
+        : storeCreditApplied;
 
-      if (updatedCustomer) {
-        const savedCust: Customer = updatedCustomer;
-        updatedCustomers = customers.map((c) => (c.id === currentCustomer.id ? savedCust : c));
-      }
-      try {
-        await customerRepository.save(updatedCustomer);
-      } catch (err) {
-        console.error('Failed to save updated customer on payment:', err);
-      }
-
-      if (creditDebtAmount > 0) {
-        const debtEntry: CustomerDebtEntry = {
-          id: `DEBT-${Date.now()}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
-          customerId: currentCustomer.id,
-          customerName: currentCustomer.name,
-          type: 'DEBT_ACQUIRED',
-          amount: creditDebtAmount,
-          balanceAfter: newDebt,
-          receiptNumber: receiptNumber,
-          paymentMethod: 'Crédit Client',
-          notes: `Vente à crédit - Ticket N° ${receiptNumber}`,
-          createdAt: new Date().toISOString(),
-          recordedBy: activeShift?.cashierName ? `Caisse (${activeShift.cashierName})` : 'Caisse Principale',
-        };
-        try {
-          await sqliteAdapter.saveCustomerDebt(debtEntry);
-          newCustomerDebts = [debtEntry, ...customerDebts];
-        } catch (err) {
-          console.error('Failed to save customer debt entry:', err);
+      if (actualStoreCreditApplied > 0 && currentCustomer) {
+        if (actualStoreCreditApplied > currentCustomer.storeCredit) {
+          return { success: false, reason: 'INSUFFICIENT_STORE_CREDIT' };
         }
       }
-    }
 
-    const transaction: SaleTransaction = {
-      id: transactionId,
-      receiptNumber: receiptNumber,
-      customer: updatedCustomer,
-      items: frozenCartItems,
-      subtotal: grossSubtotal,
-      discountTotal: cart.reduce((acc, item) => acc + item.discount, 0),
-      total,
-      costTotal,
-      profit,
-      profitMargin,
-      pricingTier,
-      paymentMethod: tenders && tenders.length > 0 ? tenders[0].method : 'Espèces',
-      tenders,
-      cashTendered: tenders ? tenders.reduce((acc, t) => acc + t.amount, 0) : cashTendered,
-      changeDue,
-      createdAt: new Date().toISOString(),
-      cashierName: activeShift?.cashierName || 'Caisse Principale',
-      debtAdded: creditDebtAmount > 0 ? creditDebtAmount : undefined,
-      debtRemainingTotal: updatedCustomer?.currentDebt,
-    };
+      const total = Math.max(0, subtotalAfterDiscount - actualStoreCreditApplied);
 
-    const newTransactions = [transaction, ...transactions];
+      const creditTender = tenders?.find((t: PaymentTender) => t.method === 'Crédit Client');
+      const creditDebtAmount = creditTender ? creditTender.amount : 0;
 
-    try {
-      await sqliteAdapter.processSaleTransactionAtomic(
-        transaction,
-        modifiedProducts,
-        updatedCustomer || undefined,
-        undefined
+      if (creditDebtAmount > 0) {
+        if (!currentCustomer) {
+          return { success: false, reason: 'CUSTOMER_REQUIRED_FOR_CREDIT' };
+        }
+        const debtLimit = currentCustomer.debtLimit ?? 100000;
+        const projectedDebt = (currentCustomer.currentDebt || 0) + creditDebtAmount;
+        if (projectedDebt > debtLimit) {
+          return { success: false, reason: `CREDIT_LIMIT_EXCEEDED:${debtLimit}` };
+        }
+      }
+
+      // Validate cash is sufficient (excluding credit and store credit)
+      const directTendered = tenders
+        ? tenders
+            .filter((t: PaymentTender) => t.method !== 'Avoir Client' && t.method !== 'Crédit Client')
+            .reduce((acc: number, t: PaymentTender) => acc + t.amount, 0)
+        : cashTendered;
+
+      const remainingToPay = Math.max(0, total - creditDebtAmount);
+
+      if (directTendered < remainingToPay) {
+        return { success: false, reason: 'INSUFFICIENT_CASH' };
+      }
+
+      const changeDue = Math.max(0, directTendered - remainingToPay);
+
+      // Capture immutable unit cost price at exact checkout time to protect historical profit margins
+      const frozenCartItems: CartItem[] = cart.map((item) => ({
+        ...item,
+        unitCostPrice: getEffectiveCostPrice(item.product),
+      }));
+
+      // Cost & Profit calculations using immutable unit costs
+      const costTotal = frozenCartItems.reduce(
+        (acc, item) => acc + (item.unitCostPrice ?? 0) * item.quantity,
+        0
       );
-    } catch (e) {
-      console.error('Checkout atomic persistence failed:', e);
-      audioBus.emit('error');
-      return { success: false, reason: 'PERSISTENCE_FAILED' };
-    }
+      const { profit, profitMargin } = calculateProfit(total, costTotal);
 
-    try {
-      await writeCheckoutAtomic({
-        orderRow: {
-          id: transactionId,
-          receipt_number: receiptNumber,
-          customer_id: updatedCustomer?.id ?? null,
-          subtotal: grossSubtotal,
-          discount_total: transaction.discountTotal,
-          total,
-          cost_total: costTotal,
-          profit,
-          profit_margin: profitMargin,
-          pricing_tier: pricingTier,
-          payment_method: transaction.paymentMethod,
-          cash_tendered: transaction.cashTendered,
-          change_due: changeDue,
-          status: 'COMPLETED',
-          created_at: transaction.createdAt,
-        },
-        fullTx: transaction as unknown as Record<string, unknown>,
-        items: frozenCartItems.map((ci, idx) => ({
-          id: `${transactionId}-item-${idx}`,
-          product_id: ci.product.id,
-          quantity: ci.quantity,
-          applied_price: ci.appliedPrice ?? ci.product.price,
-          discount: ci.discount ?? 0,
-          imei_number: ci.imeiNumber ?? null,
-          cost_price: ci.unitCostPrice ?? 0,
-        })),
-        deltas: frozenCartItems.map((ci) => ({
-          productId: ci.product.id,
-          delta: -ci.quantity,
-          reason: 'SALE' as const,
-          refType: 'order',
-          refId: transactionId,
-        })),
-        productSnapshots: frozenCartItems.map((ci) => ({
-          id: ci.product.id,
-          sku: ci.product.sku,
-          barcode: ci.product.barcode,
-          title: ci.product.title,
-          brand: ci.product.brand,
-          category: ci.product.category,
-          price: ci.product.price,
-        })),
+      // Unique Relational Identifiers (UUID/ULID compliant)
+      const transactionId = `TXN-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const receiptNumber = `REC-${Date.now().toString().slice(-6)}`;
+
+      // Stock deduction map
+      const cartProductMap = new Map<string, number>();
+      for (const item of frozenCartItems) {
+        cartProductMap.set(
+          item.product.id,
+          (cartProductMap.get(item.product.id) || 0) + item.quantity
+        );
+      }
+
+      const modifiedProducts: Product[] = [];
+      const updatedProducts = products.map((product) => {
+        const cartQty = cartProductMap.get(product.id);
+        if (cartQty !== undefined) {
+          const updated = { ...product, stock: Math.max(0, product.stock - cartQty) };
+          modifiedProducts.push(updated);
+          return updated;
+        }
+        return product;
       });
-      const { syncManager } = await import('../../sync/SyncManager');
-      syncManager.notifyLocalWrite();
-    } catch (e) {
-      console.warn('Ledger/outbox write skipped (plugin-sql unavailable):', e);
+
+      // Customer update
+      let updatedCustomer = currentCustomer;
+      let updatedCustomers = customers;
+      let newCustomerDebts = get().customerDebts;
+      let debtEntry: CustomerDebtEntry | null = null;
+
+      if (currentCustomer) {
+        const currentTotalSpent = currentCustomer.totalSpent || 0;
+        const currentTier = calculateCustomerTier(currentTotalSpent);
+
+        const earnedPoints =
+          remainingToPay > 0
+            ? calculateNetPaidEarnedPoints(cart, remainingToPay, grossSubtotal, currentTier.pointsMultiplier)
+            : 0;
+
+        const newTotalSpent = currentTotalSpent + remainingToPay;
+        const newTier = calculateCustomerTier(newTotalSpent);
+
+        const prev20kMilestones = Math.floor(currentTotalSpent / 20000);
+        const new20kMilestones = Math.floor(newTotalSpent / 20000);
+        const milestoneBonusUnlocked = Math.max(0, new20kMilestones - prev20kMilestones);
+        const earnedCreditBonus = milestoneBonusUnlocked * 1000;
+
+        const existingBuckets = currentCustomer.pointBuckets || [];
+        const pointsToRedeem = Math.floor(actualStoreCreditApplied / 10);
+        const { updatedBuckets } = depleteFifoPointBuckets(existingBuckets, pointsToRedeem);
+
+        const finalBuckets = [...updatedBuckets];
+        if (earnedPoints > 0) {
+          finalBuckets.push(
+            createDatedPointBucket(
+              currentCustomer.id,
+              receiptNumber,
+              earnedPoints,
+              remainingToPay,
+              newTier.name
+            )
+          );
+        }
+
+        const newCredit = Math.max(0, currentCustomer.storeCredit - actualStoreCreditApplied) + earnedCreditBonus;
+        const newPoints = Math.max(0, currentCustomer.loyaltyPoints - pointsToRedeem) + earnedPoints;
+        const newDebt = (currentCustomer.currentDebt || 0) + creditDebtAmount;
+
+        const newEntries: LoyaltyLedgerEntry[] = [];
+        if (actualStoreCreditApplied > 0) {
+          newEntries.push(
+            createLedgerEntry(
+              currentCustomer.id,
+              'redeem',
+              -pointsToRedeem,
+              newPoints,
+              `Utilisation Avoir Client (${actualStoreCreditApplied} DA) sur Ticket #${receiptNumber}`,
+              transactionId
+            )
+          );
+        }
+        if (earnedPoints > 0) {
+          newEntries.push(
+            createLedgerEntry(
+              currentCustomer.id,
+              'earn',
+              earnedPoints,
+              newPoints,
+              `Gain points (${earnedPoints} pts) sur Ticket #${receiptNumber}`,
+              transactionId
+            )
+          );
+        }
+        if (earnedCreditBonus > 0) {
+          newEntries.push(
+            createLedgerEntry(
+              currentCustomer.id,
+              'bonus',
+              0,
+              newPoints,
+              `Bonus Palier 20k DZD (+${earnedCreditBonus} DA d'Avoir) débloqué sur Ticket #${receiptNumber}`,
+              transactionId
+            )
+          );
+        }
+
+        const existingLedger = currentCustomer.ledger || [];
+        updatedCustomer = {
+          ...currentCustomer,
+          totalSpent: newTotalSpent,
+          loyaltyTier: newTier.name,
+          loyaltyPoints: newPoints,
+          storeCredit: newCredit,
+          currentDebt: newDebt,
+          pointBuckets: finalBuckets,
+          ledger: [...newEntries, ...existingLedger],
+        };
+
+        if (creditDebtAmount > 0) {
+          debtEntry = {
+            id: `DEBT-${Date.now()}`,
+            customerId: currentCustomer.id,
+            customerName: currentCustomer.name,
+            type: 'DEBT_ACQUIRED',
+            amount: creditDebtAmount,
+            balanceAfter: newDebt,
+            receiptNumber,
+            paymentMethod: 'Crédit Client',
+            notes: `Vente à Crédit #${receiptNumber} - Transaction #${transactionId}`,
+            createdAt: new Date().toISOString(),
+            recordedBy: activeShift?.cashierName || 'Caisse Principale',
+          };
+          newCustomerDebts = [debtEntry, ...newCustomerDebts];
+        }
+
+        const finalCust = updatedCustomer;
+        updatedCustomers = customers.map((c) => (c.id === finalCust.id ? finalCust : c));
+      }
+
+      const transaction: SaleTransaction = {
+        id: transactionId,
+        receiptNumber: receiptNumber,
+        customer: updatedCustomer,
+        items: frozenCartItems,
+        subtotal: grossSubtotal,
+        discountTotal: discountTotal,
+        total,
+        costTotal,
+        profit,
+        profitMargin,
+        pricingTier,
+        paymentMethod: tenders && tenders.length > 0 ? tenders[0].method : 'Espèces',
+        tenders,
+        cashTendered: tenders ? tenders.reduce((acc: number, t: PaymentTender) => acc + t.amount, 0) : cashTendered,
+        changeDue,
+        createdAt: new Date().toISOString(),
+        cashierName: activeShift?.cashierName || 'Caisse Principale',
+        debtAdded: creditDebtAmount > 0 ? creditDebtAmount : undefined,
+        debtRemainingTotal: updatedCustomer?.currentDebt,
+      };
+
+      const newTransactions = [transaction, ...transactions];
+
+      // Synchronous Atomic Persistence (Contract C6: Zero Silent Data Loss)
+      try {
+        if (updatedCustomer) {
+          await customerRepository.save(updatedCustomer).catch(console.error);
+        }
+        if (debtEntry) {
+          await sqliteAdapter.saveCustomerDebt(debtEntry).catch(console.error);
+        }
+        await sqliteAdapter.processSaleTransactionAtomic(
+          transaction,
+          modifiedProducts,
+          updatedCustomer || undefined,
+          undefined
+        );
+        await writeCheckoutAtomic({
+          orderRow: {
+            id: transactionId,
+            receipt_number: receiptNumber,
+            customer_id: updatedCustomer?.id ?? null,
+            subtotal: grossSubtotal,
+            discount_total: discountTotal,
+            total,
+            cost_total: costTotal,
+            profit,
+            profit_margin: profitMargin,
+            pricing_tier: pricingTier,
+            payment_method: transaction.paymentMethod,
+            cash_tendered: transaction.cashTendered,
+            change_due: changeDue,
+            status: 'COMPLETED',
+            created_at: transaction.createdAt,
+          },
+          fullTx: transaction as unknown as Record<string, unknown>,
+          items: frozenCartItems.map((ci, idx) => {
+            const pId = ci.product?.id || `prod-${idx}`;
+            return {
+              id: `${transactionId}-item-${idx}`,
+              product_id: pId,
+              quantity: Number(ci.quantity || 1),
+              applied_price: Number(ci.appliedPrice ?? ci.product?.price ?? 0),
+              discount: Number(ci.discount ?? 0),
+              imei_number: ci.imeiNumber ?? null,
+              cost_price: Number(ci.unitCostPrice ?? ci.product?.costPrice ?? 0),
+            };
+          }),
+          deltas: frozenCartItems.map((ci, idx) => ({
+            productId: ci.product?.id || `prod-${idx}`,
+            delta: -Math.abs(ci.quantity || 1),
+            reason: 'SALE' as const,
+            refType: 'order',
+            refId: transactionId,
+          })),
+          productSnapshots: frozenCartItems.map((ci, idx) => ({
+            id: ci.product?.id || `prod-${idx}`,
+            sku: ci.product?.sku || '',
+            barcode: ci.product?.barcode || '',
+            title: ci.product?.title || 'Article',
+            brand: ci.product?.brand || 'Autre',
+            category: ci.product?.category || 'Tous les produits',
+            price: Number(ci.product?.price ?? 0),
+          })),
+        });
+        const { syncManager } = await import('../../sync/SyncManager');
+        syncManager.notifyLocalWrite();
+      } catch (e) {
+        console.error('Checkout persistence failed (SQLite/Dexie write error):', e);
+        return { success: false, reason: 'PERSISTENCE_FAILED' };
+      }
+
+      // Track sold serialized items in Dexie and store
+      const soldImeis = frozenCartItems
+        .filter((ci) => Boolean(ci.imeiNumber && ci.imeiNumber.trim()))
+        .map((ci) => ({
+          imei: ci.imeiNumber!.trim(),
+          productId: ci.product?.id || '',
+        }));
+
+      let nextImeiRecords = get().imeiRecords || [];
+      if (soldImeis.length > 0) {
+        try {
+          for (const si of soldImeis) {
+            const existing = await dexieDb.imeiRecords.get(si.imei);
+            const rec: IMEIRecord = existing || {
+              imei: si.imei,
+              productId: si.productId,
+              receivedAt: transaction.createdAt,
+            };
+            rec.saleTransactionId = transaction.id;
+            rec.soldAt = transaction.createdAt;
+            await dexieDb.imeiRecords.put(rec);
+          }
+          nextImeiRecords = nextImeiRecords.map((r) => {
+            const match = soldImeis.find((s) => s.imei === r.imei);
+            return match ? { ...r, saleTransactionId: transaction.id, soldAt: transaction.createdAt } : r;
+          });
+        } catch (e) {
+          console.warn('[completeSale] Failed to update imeiRecords in Dexie:', e);
+        }
+      }
+
+      // State Update on Success
+      set({
+        products: updatedProducts,
+        transactions: newTransactions,
+        customers: updatedCustomers,
+        currentCustomer: updatedCustomer,
+        customerDebts: newCustomerDebts,
+        imeiRecords: nextImeiRecords,
+        cart: [],
+        cashTendered: 0,
+        storeCreditApplied: 0,
+        activeModal: null,
+        lastTransaction: transaction,
+        hardwareStatus: { ...get().hardwareStatus, cashDrawerOpen: true },
+      });
+
+      // Audio Feedback
+      audioBus.emit('success');
+      audioBus.emit('cashDrawer');
+
+      // Direct Silent Hardware Printing
+      const settings = get().receiptSettings;
+      if (settings?.autoPrintEnabled !== false) {
+        void directPrintReceipt(transaction, settings);
+      }
+
+      return { success: true };
+    } finally {
+      isPaymentInFlight = false;
     }
-
-    audioBus.emit('success');
-    audioBus.emit('cashDrawer');
-
-    set({
-      products: updatedProducts,
-      transactions: newTransactions,
-      customers: updatedCustomers,
-      currentCustomer: updatedCustomer,
-      customerDebts: newCustomerDebts,
-      cart: [],
-      cashTendered: 0,
-      storeCreditApplied: 0,
-      activeModal: 'receipt',
-      lastTransaction: transaction,
-      hardwareStatus: { ...get().hardwareStatus, cashDrawerOpen: true },
-    });
-
-    return { success: true };
   },
 
   quickCashPayment: async () => {
@@ -416,10 +459,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         item.appliedPrice !== undefined
           ? item.appliedPrice
           : getProductPriceForTier(item.product, pricingTier);
-      return acc + itemPrice * item.quantity - (item.discount || 0);
+      return acc + itemPrice * item.quantity;
     }, 0);
+    const lineDiscounts = cart.reduce((acc, item) => acc + (item.discount || 0), 0);
+    const netTotal = Math.max(0, grossSubtotal - lineDiscounts);
 
-    return await processPayment([{ method: 'Espèces', amount: grossSubtotal }]);
+    return await processPayment([{ method: 'Espèces', amount: netTotal }]);
   },
 
   voidTransaction: async (transactionId, reason, cashierName) => {
@@ -592,11 +637,18 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
 
     audioBus.emit('success');
 
+    const nextImeiRecords = (get().imeiRecords || []).map((r) =>
+      restoredImeis.includes(r.imei)
+        ? { ...r, saleTransactionId: undefined, soldAt: undefined }
+        : r
+    );
+
     set({
       products: updatedProducts,
       transactions: updatedTransactions,
       customers: updatedCustomers,
       currentCustomer: updatedCustomer || get().currentCustomer,
+      imeiRecords: nextImeiRecords,
       lastTransaction: voidedTxn,
     });
 
@@ -848,16 +900,28 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       audioBus.emit('cashDrawer');
     }
 
+    const nextImeiRecords = (get().imeiRecords || []).map((r) =>
+      restoredImeis.includes(r.imei)
+        ? { ...r, saleTransactionId: undefined, soldAt: undefined }
+        : r
+    );
+
     set({
       products: updatedProducts,
       transactions: updatedTransactions,
       customers: updatedCustomers,
       currentCustomer: updatedCustomer || get().currentCustomer,
+      imeiRecords: nextImeiRecords,
       lastTransaction: refundTransaction,
-      activeModal: 'receipt',
+      activeModal: null,
       hardwareStatus:
         refundMethod === 'Espèces' ? { ...get().hardwareStatus, cashDrawerOpen: true } : get().hardwareStatus,
     });
+
+    const settings = get().receiptSettings;
+    if (settings?.autoPrintEnabled !== false) {
+      void directPrintReceipt(refundTransaction, settings);
+    }
 
     return { success: true, refundTransaction };
   },

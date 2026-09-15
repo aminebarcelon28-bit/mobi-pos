@@ -148,3 +148,87 @@ export function verifyPin(inputPin: string, storedHashOrPlain: string): boolean 
 export function isLegacyPlainPin(stored: string): boolean {
   return !stored.startsWith('v1$');
 }
+
+// ── BRUTE FORCE LOCKOUT PROTECTION ──
+const LOCKOUT_KEY = 'mobipos_pin_lockout_v1';
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+
+interface LockoutState {
+  failedAttempts: number;
+  lockedUntil: number | null;
+}
+
+function getStoredLockoutState(): LockoutState {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(LOCKOUT_KEY) : null;
+    if (raw) {
+      return JSON.parse(raw) as LockoutState;
+    }
+  } catch {
+    // Ignore parse errors, use clean state
+  }
+  return { failedAttempts: 0, lockedUntil: null };
+}
+
+function saveLockoutState(state: LockoutState): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(LOCKOUT_KEY, JSON.stringify(state));
+    }
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+/**
+ * Check if PIN input is currently locked due to too many failed attempts
+ */
+export function checkPinLockout(): { isLocked: boolean; remainingSeconds: number; attemptsLeft: number } {
+  const state = getStoredLockoutState();
+  const now = Date.now();
+
+  if (state.lockedUntil && state.lockedUntil > now) {
+    const remainingSeconds = Math.ceil((state.lockedUntil - now) / 1000);
+    return { isLocked: true, remainingSeconds, attemptsLeft: 0 };
+  }
+
+  // If lockout expired, reset state
+  if (state.lockedUntil && state.lockedUntil <= now) {
+    resetPinLockout();
+    return { isLocked: false, remainingSeconds: 0, attemptsLeft: MAX_ATTEMPTS };
+  }
+
+  const attemptsLeft = Math.max(0, MAX_ATTEMPTS - state.failedAttempts);
+  return { isLocked: false, remainingSeconds: 0, attemptsLeft };
+}
+
+/**
+ * Record a failed PIN attempt and apply lockout if threshold reached
+ */
+export function recordPinFailure(): { isLocked: boolean; remainingSeconds: number; attemptsLeft: number } {
+  const state = getStoredLockoutState();
+  const nextAttempts = state.failedAttempts + 1;
+
+  if (nextAttempts >= MAX_ATTEMPTS) {
+    const lockedUntil = Date.now() + LOCKOUT_DURATION_MS;
+    saveLockoutState({ failedAttempts: nextAttempts, lockedUntil });
+    return { isLocked: true, remainingSeconds: Math.ceil(LOCKOUT_DURATION_MS / 1000), attemptsLeft: 0 };
+  }
+
+  saveLockoutState({ failedAttempts: nextAttempts, lockedUntil: null });
+  return { isLocked: false, remainingSeconds: 0, attemptsLeft: MAX_ATTEMPTS - nextAttempts };
+}
+
+/**
+ * Reset failed attempts upon successful PIN authentication
+ */
+export function resetPinLockout(): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(LOCKOUT_KEY);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}

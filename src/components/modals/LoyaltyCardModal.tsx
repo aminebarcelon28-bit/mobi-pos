@@ -28,9 +28,11 @@ export const LoyaltyCardModal: React.FC = () => {
 
   const handlePrintCard = () => {
     showToast('Impression de la Carte PVC de Fidélité lancée...', 'info');
-    setTimeout(() => {
-      window.print();
-    }, 150);
+    if (typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window)) {
+      setTimeout(() => {
+        window.print();
+      }, 150);
+    }
   };
 
   return (

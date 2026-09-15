@@ -7,7 +7,7 @@ import { getLocalDb, getPendingOutbox, markOutbox, utcNowIso } from '../db/sqlPl
 import { getTursoClient, probeOnline } from './tursoClient';
 import { getCloudCredentials } from './keychain';
 import { db as dexieDb } from '../db/database';
-import { ALL_REMOTE_SYNC_TABLES, assertValidSyncTable } from './remoteSchema';
+import { ALL_REMOTE_SYNC_TABLES, assertValidSyncTable, ensureRemoteSchemaColumns } from './remoteSchema';
 import type { InValue } from '@libsql/client';
 import type Database from '@tauri-apps/plugin-sql';
 import type { OutboxRow, SyncStatus, SyncEventLog } from './types';
@@ -48,8 +48,8 @@ const GENERIC_PULL: Record<string, { dexie: string; ts: string[] }> = {
 const isMobileView = () =>
   typeof window !== 'undefined' && Math.min(window.innerWidth, window.innerHeight) < 640;
 
-const PUSH_MS = () => (isMobileView() ? 10_000 : 5_000);
-const PULL_MS = () => (isMobileView() ? 30_000 : 15_000);
+const PUSH_MS = () => (isMobileView() ? 3_000 : 2_000);
+const PULL_MS = () => (isMobileView() ? 6_000 : 4_000);
 
 function backoffMs(retry: number): number {
   return Math.min(300_000, 1000 * 2 ** Math.min(retry, 8) + Math.floor(Math.random() * 500));
@@ -69,6 +69,7 @@ class SyncManager {
   private lastPullAt: string | null = null;
   private lastError: string | null = null;
   private quotaExceeded = false;
+  private remoteSchemaEnsured = false;
   private deviceId = 'bootstrap';
   private listeners = new Set<Listener>();
   private postWriteDebounce: number | null = null;
@@ -148,7 +149,13 @@ class SyncManager {
 
     this.stop(); // Clean up any existing listeners/timers before starting
 
-    this.onOnlineHandler = () => { this.online = true; this.emit(); void this.kick(); };
+    this.onOnlineHandler = () => {
+      this.online = true;
+      this.emit();
+      // Jittered kick on reconnect (0-2000ms) to avoid thundering herd
+      const jitterMs = Math.floor(Math.random() * 2000);
+      window.setTimeout(() => { void this.kick(); }, jitterMs);
+    };
     this.onOfflineHandler = () => { this.online = false; this.emit(); };
     this.onVisibilityHandler = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
@@ -166,6 +173,21 @@ class SyncManager {
 
     this.pushTimer = window.setInterval(() => { void this.pushOnce(); }, PUSH_MS());
     this.pullTimer = window.setInterval(() => { void this.pullOnce(); }, PULL_MS());
+
+    let merchantRoom = 'default';
+    if (creds?.url) {
+      try {
+        const hostname = new URL(creds.url.replace(/^libsql:\/\//, 'https://')).hostname;
+        merchantRoom = hostname.replace(/\.turso\.io$/, '') || 'default';
+      } catch {
+        merchantRoom = 'default';
+      }
+    }
+
+    const relayWsUrl = (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_RELAY_WS_URL as string | undefined))
+      || `wss://relay.mobipos.app/room/${merchantRoom}`;
+    this.connectRelay(relayWsUrl);
+
     void this.kick();
   }
 
@@ -173,7 +195,12 @@ class SyncManager {
     if (this.pushTimer) window.clearInterval(this.pushTimer);
     if (this.pullTimer) window.clearInterval(this.pullTimer);
     if (this.postWriteDebounce) window.clearTimeout(this.postWriteDebounce);
-    this.pushTimer = this.pullTimer = this.postWriteDebounce = null;
+    if (this.relayReconnectTimeout) window.clearTimeout(this.relayReconnectTimeout);
+    if (this.relaySocket) {
+      try { this.relaySocket.close(); } catch { /* ignore */ }
+      this.relaySocket = null;
+    }
+    this.pushTimer = this.pullTimer = this.postWriteDebounce = this.relayReconnectTimeout = null;
 
     if (typeof window !== 'undefined') {
       if (this.onOnlineHandler) {
@@ -191,9 +218,85 @@ class SyncManager {
     }
   }
 
+  private relaySocket: WebSocket | null = null;
+  private relayEpoch = 0;
+  private savedRelayWsUrl: string | null = null;
+  private relayReconnectTimeout: number | null = null;
+  private relayReconnectAttempts = 0;
+
+  connectRelay(relayWsUrl: string) {
+    if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
+    this.savedRelayWsUrl = relayWsUrl;
+    if (
+      this.relaySocket &&
+      (this.relaySocket.readyState === WebSocket.OPEN ||
+        this.relaySocket.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+
+    try {
+      this.relaySocket = new WebSocket(relayWsUrl);
+      this.relaySocket.onopen = () => {
+        this.relayReconnectAttempts = 0;
+        this.logEvent('pull', 'Signal relay WebSocket connecté avec succès', 'info');
+      };
+
+      this.relaySocket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data as string);
+          if (data?.type === 'db:changed' && data?.deviceId !== this.deviceId) {
+            this.logEvent('pull', `Signal relay db:changed received (epoch ${data.epoch})`, 'info');
+            this.relayEpoch = Math.max(this.relayEpoch, Number(data.epoch || 0));
+            void this.pullOnce();
+          }
+        } catch {
+          // ignore
+        }
+      };
+
+      this.relaySocket.onclose = () => {
+        this.relaySocket = null;
+        if (this.savedRelayWsUrl) {
+          if (this.relayReconnectTimeout) window.clearTimeout(this.relayReconnectTimeout);
+          const backoff = Math.min(30000, 1000 * Math.pow(1.5, this.relayReconnectAttempts)) + Math.random() * 1000;
+          this.relayReconnectAttempts++;
+          this.relayReconnectTimeout = window.setTimeout(() => {
+            if (this.savedRelayWsUrl) {
+              void this.connectRelay(this.savedRelayWsUrl);
+            }
+          }, backoff);
+        }
+      };
+    } catch (e) {
+      console.warn('Relay connection error:', e);
+    }
+  }
+
+  broadcastRelayChange(table?: string) {
+    if (this.relaySocket && this.relaySocket.readyState === WebSocket.OPEN) {
+      try {
+        this.relayEpoch += 1;
+        this.relaySocket.send(
+          JSON.stringify({
+            type: 'db:changed',
+            epoch: this.relayEpoch,
+            deviceId: this.deviceId,
+            table,
+          })
+        );
+      } catch {
+        // ignore send error
+      }
+    }
+  }
+
   notifyLocalWrite() {
+    // Causality Invariant (Contract C1): broadcastRelayChange is intentionally NOT fired here.
+    // It is triggered inside pushOnce() ONLY after Turso cloud acknowledges the write,
+    // ensuring companion devices pull fresh, committed cloud state without racing.
     if (this.postWriteDebounce) window.clearTimeout(this.postWriteDebounce);
-    this.postWriteDebounce = window.setTimeout(() => { void this.kick(); }, 1500);
+    this.postWriteDebounce = window.setTimeout(() => { void this.pushOnce(); }, 100);
   }
 
   async kick() {
@@ -202,7 +305,12 @@ class SyncManager {
   }
 
   async initialPull() {
-    await this.pullOnce();
+    let rounds = 0;
+    let roundPulled = 0;
+    do {
+      roundPulled = await this.pullOnce();
+      rounds++;
+    } while (roundPulled > 0 && rounds < 100);
   }
 
   private async refreshPendingCount() {
@@ -247,6 +355,14 @@ class SyncManager {
       batch.sort((a, b) => (rank[a.entity_type] ?? 9) - (rank[b.entity_type] ?? 9));
 
       const remote = await getTursoClient();
+      if (!this.remoteSchemaEnsured) {
+        try {
+          await ensureRemoteSchemaColumns(remote);
+          this.remoteSchemaEnsured = true;
+        } catch (schemaErr) {
+          console.warn('[SyncManager] Remote schema check warning:', schemaErr);
+        }
+      }
       let okCount = 0;
 
       // Prepare statements
@@ -289,6 +405,14 @@ class SyncManager {
             }
             return;
           }
+          if (rawMsg.includes('has no column') || rawMsg.includes('no column named') || rawMsg.includes('no such column')) {
+            try {
+              await ensureRemoteSchemaColumns(remote);
+              this.remoteSchemaEnsured = true;
+            } catch {
+              // ignore
+            }
+          }
           console.warn('[SyncManager] Batch push failed, falling back to item-by-item write:', rawMsg);
         }
 
@@ -299,7 +423,20 @@ class SyncManager {
               await markOutbox(op.idempotency_key, { status: 'synced' });
               okCount++;
             } catch (e: unknown) {
-              const rawMsg = e instanceof Error ? e.message : String(e);
+              let rawMsg = e instanceof Error ? e.message : String(e);
+              if (rawMsg.includes('has no column') || rawMsg.includes('no column named') || rawMsg.includes('no such column')) {
+                try {
+                  await ensureRemoteSchemaColumns(remote);
+                  this.remoteSchemaEnsured = true;
+                  await remote.execute(stmt);
+                  await markOutbox(op.idempotency_key, { status: 'synced' });
+                  okCount++;
+                  continue;
+                } catch (retryErr) {
+                  rawMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+                }
+              }
+
               if (rawMsg.includes('QUOTA') || rawMsg.includes('usage limit') || rawMsg.includes('storage full')) {
                 this.quotaExceeded = true;
                 this.lastError = 'Quota cloud Turso dépassé. Synchronisation suspendue.';
@@ -324,6 +461,8 @@ class SyncManager {
       if (okCount > 0) {
         this.lastPushAt = utcNowIso();
         this.logEvent('push', `${okCount} modifications synchronisées avec succès`, 'success');
+        // Causality Resolution: Notify companion registers/phones ONLY after cloud write succeeds
+        this.broadcastRelayChange();
       }
       await this.refreshPendingCount();
     } catch (e) {
@@ -363,9 +502,9 @@ class SyncManager {
         return {
           sql: `INSERT INTO ${table} (id, device_id, idempotency_key, sync_status, version, updated_at, deleted)
             VALUES (?,?,?,'synced',?,?,1)
-            ON CONFLICT(id) DO UPDATE SET deleted=1, version=excluded.version, updated_at=excluded.updated_at,
-            sync_status='synced' WHERE excluded.version >= ${table}.version`,
-          args: [v(op.entity_id), v(this.deviceId), v(op.idempotency_key), v(version + 1), v(now)],
+            ON CONFLICT(id) DO UPDATE SET deleted=1, version=${table}.version + 1, updated_at=excluded.updated_at,
+            sync_status='synced'`,
+          args: [v(op.entity_id), v(this.deviceId || 'default'), v(op.idempotency_key || `del-${op.entity_id}`), v(version + 1), v(now)],
         };
       }
     }
@@ -373,29 +512,46 @@ class SyncManager {
     const genericTable = GENERIC_TABLES[op.entity_type];
     if (genericTable) {
       assertValidSyncTable(genericTable);
-      const deleted = op.operation === 'DELETE' ? 1 : Number(payload.deleted ?? 0);
+      const isDelete = op.operation === 'DELETE' || Number(payload.deleted ?? 0) === 1;
+      if (isDelete) {
+        return {
+          sql: `INSERT INTO ${genericTable} (id, data_json, device_id, idempotency_key, sync_status, version, updated_at, deleted)
+            VALUES (?,?,?,?,'synced',?,?,1)
+            ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, version=${genericTable}.version + 1,
+            updated_at=excluded.updated_at, sync_status='synced', deleted=1`,
+          args: [
+            v(op.entity_id), v(JSON.stringify(payload ?? {})), v(payload.device_id ?? this.deviceId ?? 'default'),
+            v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`), v(version + 1),
+            v(payload.updated_at ?? payload.updatedAt ?? now),
+          ],
+        };
+      }
       return {
         sql: `INSERT INTO ${genericTable} (id, data_json, device_id, idempotency_key, sync_status, version, updated_at, deleted)
-          VALUES (?,?,?,?,'synced',?,?,?)
+          VALUES (?,?,?,?,'synced',?,?,0)
           ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, version=excluded.version,
-          updated_at=excluded.updated_at, sync_status='synced', deleted=excluded.deleted
+          updated_at=excluded.updated_at, sync_status='synced', deleted=0
           WHERE excluded.version >= ${genericTable}.version`,
         args: [
-          v(op.entity_id), v(JSON.stringify(payload)), v(payload.device_id ?? this.deviceId),
-          v(op.idempotency_key), v(version), v(payload.updated_at ?? payload.updatedAt ?? now), v(deleted),
+          v(op.entity_id), v(JSON.stringify(payload ?? {})), v(payload.device_id ?? this.deviceId ?? 'default'),
+          v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`), v(version || 1),
+          v(payload.updated_at ?? payload.updatedAt ?? now),
         ],
       };
     }
 
     if (op.entity_type === 'ledger') {
+      const prodId = (payload.product_id as string) ?? (payload.productId as string) ?? 'unknown';
       return {
         sql: `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
           idempotency_key, sync_status, version, created_at, updated_at, deleted)
           VALUES (?,?,?,?,?,?,?,?,'synced',?,?,?,0) ON CONFLICT(id) DO NOTHING`,
         args: [
-          v(payload.id), v(payload.product_id), v(payload.delta), v(payload.reason),
-          v(payload.ref_type ?? null), v(payload.ref_id ?? null), v(payload.device_id ?? this.deviceId),
-          v(op.idempotency_key), v(version), v(payload.created_at ?? now), v(now),
+          v(payload.id ?? op.entity_id ?? `led-${Date.now()}`), v(prodId), v(Number(payload.delta ?? 0)),
+          v(String(payload.reason ?? 'SALE')), v(payload.ref_type ?? payload.refType ?? null),
+          v(payload.ref_id ?? payload.refId ?? null), v(payload.device_id ?? this.deviceId ?? 'default'),
+          v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`), v(version || 1),
+          v(payload.created_at ?? payload.createdAt ?? now), v(now),
         ],
       };
     }
@@ -411,34 +567,48 @@ class SyncManager {
             json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at, sync_status='synced'
             WHERE excluded.version >= transactions.version`,
         args: [
-          v(payload.id), v(payload.receipt_number ?? payload.receiptNumber ?? payload.id),
-          v(cust), v(payload.subtotal ?? 0), v(payload.tax ?? 0), v(payload.discount_total ?? payload.discountTotal ?? 0),
-          v(payload.total ?? 0), v(payload.cost_total ?? payload.costTotal ?? 0), v(payload.profit ?? 0),
-          v(payload.profit_margin ?? payload.profitMargin ?? 0), v(payload.pricing_tier ?? payload.pricingTier ?? 'Retail'),
-          v(payload.payment_method ?? payload.paymentMethod ?? 'Espèces'), v(payload.cash_tendered ?? payload.cashTendered ?? 0),
-          v(payload.change_due ?? payload.changeDue ?? 0), v(payload.status ?? 'COMPLETED'),
-          v((payload.created_at ?? payload.createdAt) ?? now), v(op.payload_json), v(payload.device_id ?? this.deviceId),
-          v(op.idempotency_key), v(version), v((payload.updated_at ?? payload.updatedAt) ?? now),
+          v(payload.id ?? op.entity_id),
+          v(payload.receipt_number ?? payload.receiptNumber ?? payload.id ?? op.entity_id),
+          v(cust), v(Number(payload.subtotal ?? 0)), v(Number(payload.tax ?? 0)),
+          v(Number(payload.discount_total ?? payload.discountTotal ?? 0)),
+          v(Number(payload.total ?? 0)), v(Number(payload.cost_total ?? payload.costTotal ?? 0)),
+          v(Number(payload.profit ?? 0)), v(Number(payload.profit_margin ?? payload.profitMargin ?? 0)),
+          v(String(payload.pricing_tier ?? payload.pricingTier ?? 'Retail')),
+          v(String(payload.payment_method ?? payload.paymentMethod ?? 'Espèces')),
+          v(Number(payload.cash_tendered ?? payload.cashTendered ?? 0)),
+          v(Number(payload.change_due ?? payload.changeDue ?? 0)),
+          v(String(payload.status ?? 'COMPLETED')),
+          v((payload.created_at ?? payload.createdAt) ?? now),
+          v(op.payload_json ?? '{}'),
+          v(payload.device_id ?? this.deviceId ?? 'default'),
+          v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`),
+          v(version || 1),
+          v((payload.updated_at ?? payload.updatedAt) ?? now),
         ],
       };
     }
 
     if (op.entity_type === 'order_item') {
-      const txnId = (payload.transaction_id as string) ?? String(op.entity_id).replace(/-item-\d+$/, '');
+      const txnId = (payload.transaction_id as string) ?? (payload.transactionId as string) ?? String(op.entity_id).replace(/-item-\d+$/, '');
+      const prodId = (payload.product_id as string) ?? (payload.productId as string) ?? ((payload.product as Record<string, unknown> | undefined)?.id as string) ?? 'unknown';
       return {
         sql: `INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price, discount,
           imei_number, cost_price, json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?,0) ON CONFLICT(id) DO NOTHING`,
         args: [
-          v(payload.id), v(txnId), v(payload.product_id), v(payload.quantity ?? 1),
-          v(payload.applied_price ?? 0), v(payload.discount ?? 0), v(payload.imei_number ?? null),
-          v(payload.cost_price ?? 0), v(op.payload_json), v(payload.device_id ?? this.deviceId),
-          v(op.idempotency_key), v(version), v(payload.created_at ?? now), v(now),
+          v(payload.id ?? op.entity_id), v(txnId), v(prodId), v(Number(payload.quantity ?? 1)),
+          v(Number(payload.applied_price ?? payload.appliedPrice ?? 0)), v(Number(payload.discount ?? 0)),
+          v(payload.imei_number ?? payload.imeiNumber ?? null),
+          v(Number(payload.cost_price ?? payload.costPrice ?? payload.unitCostPrice ?? 0)),
+          v(op.payload_json ?? '{}'), v(payload.device_id ?? this.deviceId ?? 'default'),
+          v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`),
+          v(version || 1), v(payload.created_at ?? payload.createdAt ?? now), v(now),
         ],
       };
     }
 
     if (op.entity_type === 'product') {
+      const pId = String(payload.id ?? op.entity_id ?? '');
       return {
         sql: `INSERT INTO products (id, sku, barcode, title, brand, category, price, wholesale_price,
           cost_price, stock, image_url, is_serialized, imei_number, vendor_name, json_payload,
@@ -450,13 +620,24 @@ class SyncManager {
           deleted=excluded.deleted, sync_status='synced'
           WHERE excluded.version >= products.version`,
         args: [
-          v(payload.id), v(payload.sku ?? ''), v(payload.barcode ?? ''), v(payload.title ?? payload.id),
-          v(payload.brand ?? ''), v(payload.category ?? ''), v(payload.price ?? 0),
-          v(payload.wholesale_price ?? 0), v(payload.cost_price ?? 0), v(payload.stock ?? 0),
-          v(payload.image_url ?? ''), v(payload.is_serialized ?? 0), v(payload.imei_number ?? null),
-          v(payload.vendor_name ?? null), v(op.payload_json), v(payload.device_id ?? this.deviceId),
-          v(op.idempotency_key), v(version), v(payload.created_at ?? now),
-          v(payload.updated_at ?? now), v(payload.deleted ?? 0),
+          v(pId), v(payload.sku ?? ''), v(payload.barcode ?? ''),
+          v(payload.title ?? payload.id ?? op.entity_id ?? 'Sans Titre'),
+          v(payload.brand ?? 'Autre'), v(payload.category ?? 'Tous les produits'),
+          v(Number(payload.price ?? 0)),
+          v(Number(payload.wholesale_price ?? payload.wholesalePrice ?? 0)),
+          v(Number(payload.cost_price ?? payload.costPrice ?? 0)),
+          v(Number(payload.stock ?? 0)),
+          v(payload.image_url ?? ''),
+          v(payload.is_serialized ? 1 : 0),
+          v(payload.imei_number ?? payload.imeiNumber ?? null),
+          v(payload.vendor_name ?? payload.vendorName ?? null),
+          v(op.payload_json ?? '{}'),
+          v(payload.device_id ?? this.deviceId ?? 'default'),
+          v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`),
+          v(version || 1),
+          v(payload.created_at ?? payload.createdAt ?? now),
+          v(payload.updated_at ?? payload.updatedAt ?? now),
+          v(Number(payload.deleted ?? 0)),
         ],
       };
     }
@@ -464,52 +645,64 @@ class SyncManager {
     return null;
   }
 
-  private async getTableCursor(db: Database, table: string): Promise<string> {
+  private async getTableCursor(db: Database, table: string): Promise<{ time: string; id: string }> {
     try {
       const rows = (await db.select(
         'SELECT value_json FROM app_settings WHERE key = ?',
         [`sync.cursor.${table}`],
       )) as Array<{ value_json: string }>;
       if (rows?.[0]?.value_json) {
-        return JSON.parse(rows[0].value_json) as string;
+        const parsed = JSON.parse(rows[0].value_json);
+        if (typeof parsed === 'string') {
+          return { time: parsed, id: '' };
+        }
+        if (parsed && typeof parsed === 'object') {
+          return {
+            time: String((parsed as { time?: string }).time || '1970-01-01T00:00:00.000Z'),
+            id: String((parsed as { id?: string }).id || ''),
+          };
+        }
       }
     } catch (err) {
       console.warn(`[sync:cursor] Error reading cursor for table ${table}:`, err);
     }
-    return '1970-01-01T00:00:00.000Z';
+    return { time: '1970-01-01T00:00:00.000Z', id: '' };
   }
 
-  private async setTableCursor(db: Database, table: string, cursor: string): Promise<void> {
+  private async setTableCursor(db: Database, table: string, cursor: { time: string; id: string } | string): Promise<void> {
+    const value = typeof cursor === 'string' ? { time: cursor, id: '' } : cursor;
     await db.execute(
       "INSERT OR REPLACE INTO app_settings (key, value_json, updated_at) VALUES (?, ?, ?)",
-      [`sync.cursor.${table}`, JSON.stringify(cursor), utcNowIso()],
+      [`sync.cursor.${table}`, JSON.stringify(value), utcNowIso()],
     );
   }
 
-  async pullOnce() {
-    if (this.pulling || !this.online) return;
+  async pullOnce(): Promise<number> {
+    if (this.pulling || !this.online) return 0;
 
     const creds = await getCloudCredentials();
-    if (!creds) return;
+    if (!creds) return 0;
 
     this.pulling = true;
     this.emit();
 
+    let totalPulled = 0;
     try {
       const remote = await getTursoClient();
       const db = await getLocalDb();
-      let totalPulled = 0;
 
       for (const table of ALL_REMOTE_SYNC_TABLES) {
         assertValidSyncTable(table);
         const cursor = await this.getTableCursor(db, table);
-        let maxSeen = cursor;
+        let maxSeenTime = cursor.time;
+        let maxSeenId = cursor.id;
 
         let rs;
         try {
+          // Compound keyset pagination: handles rows sharing exact same millisecond timestamps
           rs = await remote.execute({
-            sql: `SELECT * FROM ${table} WHERE updated_at > ? ORDER BY updated_at, id LIMIT 200`,
-            args: [cursor],
+            sql: `SELECT * FROM ${table} WHERE (updated_at > ?) OR (updated_at = ? AND id > ?) ORDER BY updated_at ASC, id ASC LIMIT 200`,
+            args: [cursor.time, cursor.time, cursor.id],
           });
         } catch (e) {
           console.warn(`[sync] pull query failed [${table}]:`, e);
@@ -519,7 +712,11 @@ class SyncManager {
         for (const row of rs.rows) {
           const r = row as unknown as Record<string, unknown>;
           const updated = (r.updated_at as string) ?? utcNowIso();
-          if (updated > maxSeen) maxSeen = updated;
+          const rowId = (r.id as string) ?? '';
+          if (updated > maxSeenTime || (updated === maxSeenTime && rowId > maxSeenId)) {
+            maxSeenTime = updated;
+            maxSeenId = rowId;
+          }
           try {
             await this.applyRemoteRow(db, table, r);
             totalPulled++;
@@ -528,8 +725,8 @@ class SyncManager {
           }
         }
 
-        if (maxSeen !== cursor) {
-          await this.setTableCursor(db, table, maxSeen);
+        if (maxSeenTime !== cursor.time || maxSeenId !== cursor.id) {
+          await this.setTableCursor(db, table, { time: maxSeenTime, id: maxSeenId });
         }
       }
 
@@ -557,6 +754,7 @@ class SyncManager {
       this.pulling = false;
       this.emit();
     }
+    return totalPulled;
   }
 
   private async applyRemoteRow(db: Database, table: string, r: Record<string, unknown>) {
@@ -582,6 +780,9 @@ class SyncManager {
       if (!store) return;
 
       if (Number(r.deleted ?? 0) === 1) {
+        if (table === 'customers') {
+          await db.execute('UPDATE customers SET deleted = 1 WHERE id = $1', [id]).catch(() => {});
+        }
         if (table === 'cash_drops') {
           await (dexieDb as unknown as { cashDrops: { delete: (k: string) => Promise<void> }; payouts: { delete: (k: string) => Promise<void> } }).cashDrops.delete(id).catch((err: unknown) => {
             console.warn('[sync:dexie] Failed to delete cashDrop:', err);
@@ -605,6 +806,33 @@ class SyncManager {
         return; // Local version is newer
       }
 
+      if (table === 'customers') {
+        const c = recordPayload as Record<string, unknown>;
+        const now = utcNowIso();
+        await db.execute(
+          `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11)
+           ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, email=excluded.email,
+             loyalty_points=excluded.loyalty_points, store_credit=excluded.store_credit,
+             pricing_tier=excluded.pricing_tier, total_spent=excluded.total_spent,
+             json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0, version=excluded.version
+             WHERE excluded.version >= customers.version`,
+          [
+            id,
+            (c.name as string) || 'Client',
+            (c.phone as string) || '',
+            (c.email as string) || null,
+            Number(c.loyaltyPoints ?? 0),
+            Number(c.storeCredit ?? 0),
+            (c.pricingTier as string) || 'Retail',
+            Number(c.totalSpent ?? 0),
+            JSON.stringify(c),
+            (c.updatedAt as string) ?? now,
+            version,
+          ],
+        ).catch(() => {});
+      }
+
       if (table === 'cash_drops') {
         const payouts = (dexieDb as unknown as { payouts: { put: (o: unknown) => Promise<unknown> } }).payouts;
         const cashDrops = (dexieDb as unknown as { cashDrops: { put: (o: unknown) => Promise<unknown> } }).cashDrops;
@@ -617,6 +845,8 @@ class SyncManager {
     }
 
     if (table === 'inventory_ledger') {
+      const ledId = String(r.id || `led-${Date.now()}`);
+      const prodId = String(r.product_id || 'unknown');
       await db.execute(
         `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
           idempotency_key, sync_status, version, created_at, updated_at, deleted)
@@ -624,15 +854,17 @@ class SyncManager {
            delta=excluded.delta, version=excluded.version, updated_at=excluded.updated_at, sync_status='synced'
            WHERE excluded.version >= inventory_ledger.version`,
         [
-          r.id, r.product_id, r.delta, r.reason, r.ref_type ?? null, r.ref_id ?? null,
-          r.device_id ?? 'remote', r.idempotency_key ?? r.id, version,
-          r.created_at ?? utcNowIso(), (r.updated_at as string) ?? utcNowIso(), (r.deleted as number) ?? 0,
+          ledId, prodId, Number(r.delta ?? 0), String(r.reason ?? 'SALE'), r.ref_type ? String(r.ref_type) : null,
+          r.ref_id ? String(r.ref_id) : null, String(r.device_id ?? 'remote'), String(r.idempotency_key ?? ledId),
+          version, String(r.created_at ?? utcNowIso()), String(r.updated_at ?? utcNowIso()), Number(r.deleted ?? 0),
         ],
       );
       return;
     }
 
     if (table === 'transactions') {
+      const txId = String(r.id || `txn-${Date.now()}`);
+      const receiptNo = String(r.receipt_number || txId);
       await db.execute(
         `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
           cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
@@ -642,13 +874,13 @@ class SyncManager {
            json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at, sync_status='synced'
            WHERE excluded.version >= transactions.version`,
         [
-          r.id, r.receipt_number, r.customer_id ?? null, r.subtotal ?? 0, r.tax ?? 0,
-          r.discount_total ?? 0, r.total ?? 0, r.cost_total ?? 0, r.profit ?? 0,
-          r.profit_margin ?? 0, r.pricing_tier ?? 'Retail', r.payment_method ?? 'Espèces',
-          r.cash_tendered ?? 0, r.change_due ?? 0, r.status ?? 'COMPLETED',
-          (r.created_at as string) ?? utcNowIso(), r.json_payload ?? '{}',
-          r.device_id ?? 'remote', r.idempotency_key ?? r.id, version,
-          (r.updated_at as string) ?? utcNowIso(), (r.deleted as number) ?? 0,
+          txId, receiptNo, r.customer_id ? String(r.customer_id) : null, Number(r.subtotal ?? 0), Number(r.tax ?? 0),
+          Number(r.discount_total ?? 0), Number(r.total ?? 0), Number(r.cost_total ?? 0), Number(r.profit ?? 0),
+          Number(r.profit_margin ?? 0), String(r.pricing_tier ?? 'Retail'), String(r.payment_method ?? 'Espèces'),
+          Number(r.cash_tendered ?? 0), Number(r.change_due ?? 0), String(r.status ?? 'COMPLETED'),
+          String(r.created_at ?? utcNowIso()), String(r.json_payload ?? '{}'),
+          String(r.device_id ?? 'remote'), String(r.idempotency_key ?? txId), version,
+          String(r.updated_at ?? utcNowIso()), Number(r.deleted ?? 0),
         ],
       );
 
@@ -657,12 +889,19 @@ class SyncManager {
         const txns = (dexieDb as unknown as { transactions: {
           put: (o: unknown) => Promise<unknown>;
           update: (k: string, p: unknown) => Promise<unknown>;
+          delete: (k: string) => Promise<void>;
         } }).transactions;
+
+        if (Number(r.deleted ?? 0) === 1) {
+          await txns.delete(txId);
+          return;
+        }
+
         const rawPayload = JSON.parse((r.json_payload as string) ?? '{}') as Record<string, unknown>;
         const parsedTxn = {
           ...rawPayload,
-          id: rawPayload.id || r.id,
-          receiptNumber: rawPayload.receiptNumber || rawPayload.receipt_number || r.receipt_number || r.id,
+          id: rawPayload.id || txId,
+          receiptNumber: rawPayload.receiptNumber || rawPayload.receipt_number || receiptNo,
           total: rawPayload.total ?? Number(r.total ?? 0),
           status: rawPayload.status || r.status || 'COMPLETED',
           paymentMethod: rawPayload.paymentMethod || r.payment_method || 'Espèces',
@@ -675,22 +914,48 @@ class SyncManager {
       return;
     }
 
+    if (table === 'transaction_items') {
+      const itemId = String(r.id || `item-${Date.now()}`);
+      const txnId = String(r.transaction_id || '');
+      const prodId = String(r.product_id || 'unknown');
+      await db.execute(
+        `INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price, discount,
+          imei_number, cost_price, json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET quantity=excluded.quantity, applied_price=excluded.applied_price,
+           discount=excluded.discount, imei_number=excluded.imei_number, cost_price=excluded.cost_price,
+           json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at,
+           deleted=excluded.deleted, sync_status='synced'
+           WHERE excluded.version >= transaction_items.version`,
+        [
+          itemId, txnId, prodId, Number(r.quantity ?? 1), Number(r.applied_price ?? 0),
+          Number(r.discount ?? 0), r.imei_number ? String(r.imei_number) : null,
+          Number(r.cost_price ?? 0), String(r.json_payload ?? '{}'),
+          String(r.device_id ?? 'remote'), String(r.idempotency_key ?? itemId),
+          version, String(r.created_at ?? utcNowIso()), String(r.updated_at ?? utcNowIso()),
+          Number(r.deleted ?? 0),
+        ],
+      );
+      return;
+    }
+
     if (table === 'products') {
+      const pId = String(r.id || `prod-${Date.now()}`);
       // Fix: include deleted=excluded.deleted so product deletions don't resurrect
       await db.execute(
         `INSERT INTO products (id, sku, barcode, title, brand, category, price, wholesale_price, cost_price,
           stock, json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?,?)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?,?)
          ON CONFLICT(id) DO UPDATE SET title=excluded.title, price=excluded.price,
            json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at,
            deleted=excluded.deleted, sync_status='synced'
            WHERE excluded.version >= products.version`,
         [
-          r.id, r.sku ?? '', r.barcode ?? '', r.title ?? '', r.brand ?? '', r.category ?? '',
-          r.price ?? 0, r.wholesale_price ?? 0, r.cost_price ?? 0, r.stock ?? 0,
-          r.json_payload ?? '{}', r.device_id ?? 'remote', r.idempotency_key ?? r.id,
-          version, (r.created_at as string) ?? utcNowIso(), (r.updated_at as string) ?? utcNowIso(),
-          (r.deleted as number) ?? 0,
+          pId, String(r.sku ?? ''), String(r.barcode ?? ''), String(r.title || pId), String(r.brand ?? 'Autre'), String(r.category ?? 'Tous les produits'),
+          Number(r.price ?? 0), Number(r.wholesale_price ?? 0), Number(r.cost_price ?? 0), Number(r.stock ?? 0),
+          String(r.json_payload ?? '{}'), String(r.device_id ?? 'remote'), String(r.idempotency_key ?? pId),
+          version, String(r.created_at ?? utcNowIso()), String(r.updated_at ?? utcNowIso()),
+          Number(r.deleted ?? 0),
         ],
       );
 

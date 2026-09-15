@@ -118,8 +118,10 @@ export const Header: React.FC = () => {
     let lastKeyTime = Date.now();
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Hotkey F2 to focus search input
-      if (e.key === 'F2') {
+      const activeTag = document.activeElement?.tagName.toLowerCase();
+
+      // Hotkey F1 or / to focus search input
+      if (e.key === 'F1' || (e.key === '/' && activeTag !== 'input' && activeTag !== 'textarea')) {
         e.preventDefault();
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
@@ -127,7 +129,6 @@ export const Header: React.FC = () => {
       }
 
       // Ignore keys inside standard inputs to allow normal typing
-      const activeTag = document.activeElement?.tagName.toLowerCase();
       if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
         return;
       }
@@ -248,7 +249,7 @@ export const Header: React.FC = () => {
                 setSearchQuery(localSearch);
               }
             }}
-            placeholder="Scanner code-barres ou rechercher Réf/SKU (F2)..."
+            placeholder="Scanner code-barres ou rechercher (F1 ou /)..."
             className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-14 py-1.5 text-xs text-pos-text placeholder-pos-muted focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-medium"
           />
           {localSearch ? (
@@ -262,7 +263,7 @@ export const Header: React.FC = () => {
               <X className="w-3 h-3" />
             </button>
           ) : null}
-          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 hotkey-badge text-[10px]">F2</span>
+          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 hotkey-badge text-[10px]">F1</span>
         </div>
 
         {/* ══════════════════════════════════════════════════════════════ */}
@@ -351,6 +352,16 @@ export const Header: React.FC = () => {
             title="Gestionnaire des Dépenses & Sorties de Caisse (EBITDA)"
           >
             <DollarSign className="w-4 h-4" />
+          </button>
+
+          {/* Mobile App & Companion Simulator */}
+          <button
+            onClick={() => openModal('mobile_simulator')}
+            className="p-1.5 px-3 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400 text-cyan-200 hover:text-white transition cursor-pointer flex items-center gap-2 text-xs font-black shadow-sm ring-1 ring-cyan-500/30"
+            title="Ouvrir l'Émulateur Mobile MobiPOS (Android / iOS)"
+          >
+            <Smartphone className="w-4 h-4 text-cyan-400 animate-pulse" />
+            <span className="text-[11px] font-black tracking-wide">App Mobile</span>
           </button>
 
           {/* ── Secondary Tools & Modules Dropdown Menu ── */}
@@ -593,7 +604,7 @@ export const Header: React.FC = () => {
             <div
               onClick={() => openModal('customers')}
               className="flex items-center gap-2 bg-pos-card hover:bg-pos-hover border border-pos-border hover:border-emerald-500/40 p-1.5 rounded-xl shadow-sm transition cursor-pointer"
-              title="Cliquez pour changer ou modifier le client (F5)"
+              title="Cliquez pour changer ou modifier le client (F3)"
             >
               {currentCustomer.avatarUrl ? (
                 <img
@@ -628,10 +639,10 @@ export const Header: React.FC = () => {
             <button
               onClick={() => openModal('customers')}
               className="flex items-center gap-1.5 bg-pos-card hover:bg-pos-hover border border-pos-border hover:border-emerald-500/40 px-3 py-1.5 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text transition cursor-pointer"
-              title="Sélectionner ou Créer un Client (F5)"
+              title="Sélectionner ou Créer un Client (F3)"
             >
               <UserCheck className="w-4 h-4 text-emerald-400" />
-              <span>+ Client (F5)</span>
+              <span>+ Client (F3)</span>
             </button>
           )}
         </div>

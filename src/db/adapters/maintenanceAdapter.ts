@@ -34,6 +34,31 @@ export const maintenanceAdapter = {
   },
 
   async runIntegrityCheck(): Promise<IntegrityReport> {
+    if (isTauriEnv()) {
+      try {
+        const { getLocalDb } = await import('../sqlPluginAdapter');
+        const db = await getLocalDb();
+        const integrityRows = (await db.select('PRAGMA integrity_check')) as Array<Record<string, unknown>>;
+        const fkRows = (await db.select('PRAGMA foreign_key_check')) as Array<Record<string, unknown>>;
+
+        const messages = integrityRows.map((r) => Object.values(r)[0] as string);
+        const isHealthy = messages.length === 1 && messages[0] === 'ok' && fkRows.length === 0;
+
+        return {
+          is_healthy: isHealthy,
+          integrity_messages: messages,
+          foreign_key_violations: fkRows.map((r) => JSON.stringify(r)),
+          checked_at: new Date().toISOString(),
+        };
+      } catch (err) {
+        return {
+          is_healthy: false,
+          integrity_messages: [err instanceof Error ? err.message : String(err)],
+          foreign_key_violations: [],
+          checked_at: new Date().toISOString(),
+        };
+      }
+    }
 
     return {
       is_healthy: true,
@@ -44,10 +69,30 @@ export const maintenanceAdapter = {
   },
 
   async checkpointWal(): Promise<string> {
+    if (isTauriEnv()) {
+      try {
+        const { getLocalDb } = await import('../sqlPluginAdapter');
+        const db = await getLocalDb();
+        await db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+        return 'Point de contrôle SQLite WAL (TRUNCATE) exécuté avec succès.';
+      } catch (err) {
+        return `Échec du point de contrôle WAL: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
     return 'Mode SQLite WAL : Gestion automatique du WAL par le moteur de base de données.';
   },
 
   async vacuum(): Promise<string> {
+    if (isTauriEnv()) {
+      try {
+        const { getLocalDb } = await import('../sqlPluginAdapter');
+        const db = await getLocalDb();
+        await db.execute('VACUUM');
+        return 'Base de données SQLite défragmentée et optimisée avec succès (VACUUM).';
+      } catch (err) {
+        return `Échec du VACUUM: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
     return 'Mode SQLite WAL : Maintenance et défragmentation gérées automatiquement.';
   },
 

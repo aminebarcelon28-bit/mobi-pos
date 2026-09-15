@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   X, User, Star, Phone, Mail, Check, Plus, Edit2, Trash2, Search,
   CheckCircle2, TrendingUp, ShoppingBag, CreditCard, Award,
@@ -47,6 +47,21 @@ export const CustomersModal: React.FC = () => {
   const [email, setEmail] = useState('');
   const [registeredDevice, setRegisteredDevice] = useState('');
   const [pricingTier, setPricingTier] = useState<PricingTier>('Retail');
+
+  // Input ref for auto-focusing search on F3
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (activeModal === 'customers' && viewMode === 'list') {
+      const timer = setTimeout(() => {
+        if (searchInputRef.current) {
+          searchInputRef.current.focus();
+          searchInputRef.current.select();
+        }
+      }, 60);
+      return () => clearTimeout(timer);
+    }
+  }, [activeModal, viewMode]);
 
   // Pre-calculate customer metrics lookup map once to avoid O(N * M) recalculation during render
   const customerMetricsMap = useMemo(() => {
@@ -292,15 +307,32 @@ export const CustomersModal: React.FC = () => {
           </div>
           <div className="flex items-center gap-2">
             {viewMode === 'list' && (
-              <div className="relative">
+              <div className="relative flex items-center">
                 <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
                 <input
+                  ref={searchInputRef}
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Rechercher nom, tél, email, appareil..."
-                  className="bg-pos-bg border border-pos-border rounded-full pl-9 pr-4 py-1.5 text-xs text-pos-text focus:border-blue-400 focus:outline-none w-72 transition-all"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && filteredCustomers.length > 0) {
+                      e.preventDefault();
+                      const target = filteredCustomers[0];
+                      if (target) {
+                        setCurrentCustomer(target);
+                        showSuccess(`${target.name} sélectionné pour la vente.`);
+                        closeModal();
+                      }
+                    }
+                  }}
+                  placeholder="Rechercher nom, tél, appareil (Entrée pour assigner)..."
+                  className="bg-pos-bg border border-pos-border rounded-full pl-9 pr-24 py-1.5 text-xs text-pos-text focus:border-blue-400 focus:outline-none w-80 transition-all shadow-inner"
                 />
+                {filteredCustomers.length > 0 && searchQuery && (
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 pointer-events-none">
+                    Entrée ↵
+                  </span>
+                )}
               </div>
             )}
             <button onClick={closeModal} className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition">
@@ -807,7 +839,14 @@ export const CustomersModal: React.FC = () => {
                                 : 'bg-pos-hover text-pos-text hover:bg-pos-border'
                             }`}
                           >
-                            {isSelected ? <><Check className="w-3.5 h-3.5" /> Actif</> : 'Sélectionner'}
+                            {isSelected ? (
+                              <><Check className="w-3.5 h-3.5" /> Actif</>
+                            ) : (
+                              <span className="flex items-center gap-1">
+                                Sélectionner
+                                <kbd className="text-[9px] font-mono bg-black/20 px-1 py-0.5 rounded opacity-75">F3</kbd>
+                              </span>
+                            )}
                           </button>
                         </div>
                       </div>

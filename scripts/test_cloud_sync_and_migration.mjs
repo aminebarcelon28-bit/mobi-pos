@@ -506,7 +506,7 @@ async function runTests() {
   const key2 = recordOfflineSale({ id: 'tx-offline-2', total: 12000 });
 
   assert(outbox.length === 2, `Offline transactions queued safely in sync_outbox (${outbox.length} pending)`);
-  assert(outbox[0].status === 'pending' && outbox[0].idempotency_key === key1, 'Outbox item has valid idempotency key and pending status');
+  assert(outbox[0].status === 'pending' && outbox[0].idempotency_key === key1 && outbox[1].idempotency_key === key2, 'Outbox item has valid idempotency key and pending status');
 
   console.log('\n--- TEST 5: Reconnection & Outbox Draining ---');
   // Simulate draining outbox when connection is restored

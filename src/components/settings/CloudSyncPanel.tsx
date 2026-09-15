@@ -18,6 +18,7 @@ import {
   Key,
   Unplug,
   Activity,
+  Smartphone,
 } from 'lucide-react';
 import { getCloudCredentials, setCloudCredentials, deleteCloudCredentials } from '../../sync/keychain';
 import { testTursoConnection, type ConnectionTestResult } from '../../sync/tursoClient';
@@ -32,6 +33,7 @@ import { useToast } from '../ui/Toast';
 export const CloudSyncPanel: React.FC = () => {
   const sync = useSyncStatus();
   const { showToast } = useToast();
+  const openModal = usePosStore((s) => s.openModal);
 
   const [dbUrl, setDbUrl] = useState('');
   const [authToken, setAuthToken] = useState('');
@@ -265,15 +267,27 @@ export const CloudSyncPanel: React.FC = () => {
             </div>
           </div>
 
-          {hasStoredCreds && (
+          <div className="flex items-center gap-2">
             <button
-              onClick={handleDisconnect}
-              className="px-3 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-xs font-bold text-red-400 flex items-center gap-1.5 transition cursor-pointer"
+              type="button"
+              onClick={() => openModal('cloud_pairing')}
+              className="px-3.5 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-xs font-bold text-cyan-300 flex items-center gap-1.5 transition cursor-pointer shadow-sm"
+              title="Télécharger l'application mobile Android / iOS ou appairer un smartphone"
             >
-              <Unplug className="w-3.5 h-3.5" />
-              Déconnecter
+              <Smartphone className="w-3.5 h-3.5 text-cyan-400" />
+              App Mobile & Appairage
             </button>
-          )}
+            {hasStoredCreds && (
+              <button
+                type="button"
+                onClick={handleDisconnect}
+                className="px-3 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-xs font-bold text-red-400 flex items-center gap-1.5 transition cursor-pointer"
+              >
+                <Unplug className="w-3.5 h-3.5" />
+                Déconnecter
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

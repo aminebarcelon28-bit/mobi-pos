@@ -128,7 +128,9 @@ export const DebtLedgerModal: React.FC = () => {
   };
 
   const handlePrintStatement = (customer: Customer) => {
-    window.print();
+    if (typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window)) {
+      window.print();
+    }
     showToast(`Impression du relevé de compte lancée pour ${customer.name}.`, 'info');
   };
 

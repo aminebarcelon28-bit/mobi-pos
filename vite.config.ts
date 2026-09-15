@@ -16,8 +16,7 @@ export default defineConfig({
     },
     watch: {
       // Rust build output churns constantly during `tauri dev` — watching it
-      // crashes Vite (EBUSY) and burns CPU. Ignore it plus other heavy dirs.
-      ignored: ['**/src-tauri/target/**', '**/src-tauri/gen/**', '**/node_modules/**', '**/dist/**'],
+      ignored: ['**/target/**', '**/src-tauri/target/**', '**/src-tauri/gen/**', '**/node_modules/**', '**/dist/**'],
     },
   },
   build: {

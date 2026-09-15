@@ -38,13 +38,26 @@ export async function getCloudCredentials(): Promise<CloudCredentials | null> {
     }
   }
 
-  // 2. Clear any legacy insecure local storage keys
+  // 2. In browser dev preview: read from sessionStorage if present
+  if (!isTauri() && typeof sessionStorage !== 'undefined') {
+    try {
+      const raw = sessionStorage.getItem('mobi_pos_web_turso_creds');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.url && parsed.token) {
+          memoryCache = parsed;
+          return parsed;
+        }
+      }
+    } catch {
+      // Storage restricted
+    }
+  }
+
+  // 3. Clear any legacy insecure local storage keys
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.removeItem(LEGACY_STORAGE_KEY);
-    }
-    if (typeof sessionStorage !== 'undefined') {
-      sessionStorage.removeItem('mobi_pos_web_turso_creds');
     }
   } catch {
     // Storage access restricted in some sandboxed environments
@@ -67,9 +80,14 @@ export async function setCloudCredentials(url: string, token: string): Promise<v
 
   if (isTauri()) {
     await apiSetCloudCredentials(trimmedUrl, trimmedToken);
+  } else if (typeof sessionStorage !== 'undefined') {
+    try {
+      sessionStorage.setItem('mobi_pos_web_turso_creds', JSON.stringify(payload));
+    } catch {
+      // Storage restricted
+    }
   }
 
-  // Complying with rules.md S4.1: token lives strictly in memoryCache, NEVER in localStorage
   memoryCache = payload;
 }
 

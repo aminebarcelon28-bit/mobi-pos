@@ -1,18 +1,26 @@
 {
   "name": "phone3",
   "private": true,
-  "version": "1.6.3",
+  "version": "1.6.4",
   "type": "module",
   "scripts": {
     "tauri": "tauri",
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node scripts/test_pos_math.js && node scripts/test_cloud_sync_and_migration.mjs",
+    "test": "node scripts/test_pos_math.js && node scripts/test_cloud_sync_and_migration.mjs && node scripts/test_sync_contract.mjs && node scripts/test_offline_chaos.mjs && node scripts/test_mobile_invariants.mjs && node scripts/test_mobile_release_pipeline.mjs",
     "test:math": "node scripts/test_pos_math.js",
     "test:cloud": "node scripts/test_cloud_sync_and_migration.mjs",
+    "test:sync": "node scripts/test_sync_contract.mjs",
+    "test:chaos": "node scripts/test_offline_chaos.mjs",
+    "test:mobile": "node scripts/test_mobile_invariants.mjs",
+    "test:release": "node scripts/release_check.mjs",
+    "test:release:mobile": "node scripts/test_mobile_release_pipeline.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
-    "release": "node scripts/release.js"
+    "release": "node scripts/release.js",
+    "android:init": "tauri android init",
+    "android:dev": "tauri android dev",
+    "android:build": "tauri android build --debug"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
@@ -20,7 +28,7 @@
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-process": "^2.0.0",
     "@tauri-apps/plugin-sql": "^2.4.1",
-    "@tauri-apps/plugin-updater": "^2.0.0",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "autoprefixer": "^10.5.4",
     "clsx": "^2.1.1",
     "dexie": "^4.4.4",

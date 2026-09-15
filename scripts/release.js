@@ -31,19 +31,35 @@ try {
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
   console.log(`  ✓ Updated package.json to ${targetVersion}`);
 
-  // 3. Update tauri.conf.json
+  // 3. Update tauri.conf.json (version, Android versionCode, iOS bundleVersion)
   const tauriPath = resolve('src-tauri/tauri.conf.json');
   const tauriConf = JSON.parse(readFileSync(tauriPath, 'utf-8'));
   tauriConf.version = targetVersion;
+  if (tauriConf.bundle?.android) {
+    tauriConf.bundle.android.versionCode = (tauriConf.bundle.android.versionCode || 1) + 1;
+  }
+  if (tauriConf.bundle?.iOS) {
+    tauriConf.bundle.iOS.bundleVersion = targetVersion;
+  }
   writeFileSync(tauriPath, JSON.stringify(tauriConf, null, 2) + '\n');
-  console.log(`  ✓ Updated src-tauri/tauri.conf.json to ${targetVersion}`);
+  console.log(`  ✓ Updated src-tauri/tauri.conf.json to ${targetVersion} (Android versionCode: ${tauriConf.bundle?.android?.versionCode})`);
 
-  // 4. Update Cargo.toml
-  const cargoPath = resolve('src-tauri/Cargo.toml');
-  let cargoContent = readFileSync(cargoPath, 'utf-8');
-  cargoContent = cargoContent.replace(/^version = ".*?"/m, `version = "${targetVersion}"`);
-  writeFileSync(cargoPath, cargoContent);
-  console.log(`  ✓ Updated src-tauri/Cargo.toml to ${targetVersion}`);
+  // 4. Update Cargo.toml across workspace
+  const cargoPaths = [
+    resolve('src-tauri/Cargo.toml'),
+    resolve('crates/pos-core/Cargo.toml'),
+    resolve('crates/pos-peripherals/Cargo.toml'),
+  ];
+  for (const cargoPath of cargoPaths) {
+    try {
+      let cargoContent = readFileSync(cargoPath, 'utf-8');
+      cargoContent = cargoContent.replace(/^version = ".*?"/m, `version = "${targetVersion}"`);
+      writeFileSync(cargoPath, cargoContent);
+      console.log(`  ✓ Updated ${cargoPath} to ${targetVersion}`);
+    } catch {
+      // ignore if path not found
+    }
+  }
 
   // 5. Update src/types/pos.ts APP_VERSION
   const posTypesPath = resolve('src/types/pos.ts');
@@ -58,6 +74,19 @@ try {
   constantsContent = constantsContent.replace(/APP_VERSION:\s*'.*?',/, `APP_VERSION: '${targetVersion}',`);
   writeFileSync(constantsPath, constantsContent);
   console.log(`  ✓ Updated src/constants/index.ts to ${targetVersion}`);
+
+  // 5c. Update latest.json metadata
+  const latestJsonPath = resolve('latest.json');
+  try {
+    const latestConf = JSON.parse(readFileSync(latestJsonPath, 'utf-8'));
+    latestConf.version = targetVersion;
+    latestConf.pub_date = new Date().toISOString();
+    latestConf.notes = `v${targetVersion} - Mise à jour multi-plateforme (Windows, Android, iOS) avec synchronisation cloud et sécurité des données.`;
+    writeFileSync(latestJsonPath, JSON.stringify(latestConf, null, 2) + '\n');
+    console.log(`  ✓ Updated latest.json to ${targetVersion}`);
+  } catch (e) {
+    console.warn('  ⚠️ Skipping latest.json update:', e.message);
+  }
 
   // 5. Git Commit
   console.log('📌 Creating release commit...');

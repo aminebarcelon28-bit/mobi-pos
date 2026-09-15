@@ -9,18 +9,21 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
   storeCreditApplied: 0,
   heldSales: [],
 
-  addToCart: (product, overridePin = false) => {
+  addToCart: (product, overridePin = false, quantity = 1) => {
     const { cart, pricingTier, logSecurityAction } = get();
+
+    // Serialized products are locked to 1 per item row
+    const addQty = product.isSerialized ? 1 : Math.max(1, isNaN(quantity) ? 1 : Math.floor(quantity));
 
     const existingIndex = cart.findIndex((item) => item.product.id === product.id);
     const currentQtyInCart = existingIndex >= 0 ? cart[existingIndex].quantity : 0;
 
     // Block zero-stock or exceeding stock unless overridden by PIN
-    if (currentQtyInCart + 1 > product.stock && !overridePin) {
+    if (currentQtyInCart + addQty > product.stock && !overridePin) {
       audioBus.emit('error');
       logSecurityAction(
         'Tentative Vente Dépassement Stock',
-        `Produit: ${product.title} (Demandé: ${currentQtyInCart + 1}, Stock: ${product.stock})`,
+        `Produit: ${product.title} (Demandé: ${currentQtyInCart + addQty}, Stock: ${product.stock})`,
         'Caissier',
         true
       );
@@ -30,8 +33,13 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
     const activePrice = getProductPriceForTier(product, pricingTier);
 
     if (existingIndex >= 0) {
+      if (product.isSerialized) {
+        // Serialized product already in cart
+        audioBus.emit('scan');
+        return { success: true };
+      }
       const updated = [...cart];
-      updated[existingIndex] = { ...updated[existingIndex], quantity: updated[existingIndex].quantity + 1 };
+      updated[existingIndex] = { ...updated[existingIndex], quantity: updated[existingIndex].quantity + addQty };
       set({ cart: updated });
     } else {
       set({
@@ -39,7 +47,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
           ...cart,
           {
             product,
-            quantity: 1,
+            quantity: addQty,
             discount: 0,
             appliedPrice: activePrice,
             imeiNumber: product.isSerialized ? '' : undefined,

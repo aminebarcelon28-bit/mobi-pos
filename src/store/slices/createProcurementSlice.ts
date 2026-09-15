@@ -7,6 +7,7 @@ import { productRepository } from '../../db/repositories/productRepository';
 import { calculateStockAlerts } from '../../utils/alertEngine';
 import { audioBus } from '../../utils/audioEvents';
 import { getEffectiveCostPrice } from '../../utils/pricingEngine';
+import { appendInventoryDeltas, type LedgerDeltaInput } from '../../db/sqlPluginAdapter';
 
 export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementSlice> = (set, get) => ({
   purchaseOrders: [],
@@ -250,12 +251,31 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
 
     const updatedPOs = purchaseOrders.map((p) => (p.id === poId ? updatedPO : p));
 
-    // Save to Database
+    // Build Inventory Ledger deltas for incoming stock
+    const deltas: LedgerDeltaInput[] = [];
+    for (const vi of verifiedItems) {
+      if (vi.receivedQty > 0) {
+        deltas.push({
+          productId: vi.productId,
+          delta: Math.max(0, vi.receivedQty),
+          reason: 'RECEIVE',
+          refType: 'PURCHASE_ORDER',
+          refId: targetPO.id,
+        });
+      }
+    }
+
+    // Save to Database & SQLite Inventory Ledger (Atomic)
     try {
+      if (deltas.length > 0) {
+        await appendInventoryDeltas(deltas);
+        const { syncManager } = await import('../../sync/SyncManager');
+        syncManager.notifyLocalWrite();
+      }
       await productRepository.bulkSave(updatedProducts);
       await sqliteAdapter.savePurchaseOrder(updatedPO);
     } catch (err) {
-      console.error('Failed to save validated PO:', err);
+      console.error('Failed to save validated PO & inventory deltas:', err);
     }
 
     // 3. Automated Financial Expense Recording (Linked to EBITDA Reports & Cash Movements)

@@ -17,8 +17,9 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
   setSelectedCategory: (category) => set({ selectedCategory: category }),
   setEditingProduct: (product) => set({ editingProduct: product, activeModal: 'product_editor' }),
 
-  saveProduct: async (input) => {
+  saveProduct: async (input, options) => {
     const { products, logSecurityAction } = get();
+    const previousProducts = products;
 
     // 1. Mandatory Title Validation
     if (!input.title || !input.title.trim()) {
@@ -79,17 +80,27 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
       );
     }
 
-    try {
-      await productRepository.save(targetProduct);
-      audioBus.emit('success');
-      set({ products: updatedProducts, activeModal: null, editingProduct: null });
-      return { success: true };
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Erreur lors de la sauvegarde en base de données';
-      console.error('Save product failed:', err);
-      audioBus.emit('error');
-      return { success: false, reason: msg };
-    }
+    // 4. Instant optimistic state update & audio feedback (<1ms)
+    audioBus.emit('success');
+    set({
+      products: updatedProducts,
+      editingProduct: null,
+      ...(options?.keepModalOpen ? {} : { activeModal: null }),
+    });
+
+    // 5. Background asynchronous persistence (Dexie + SQLite + Outbox)
+    void (async () => {
+      try {
+        await productRepository.save(targetProduct);
+      } catch (err: unknown) {
+        console.error('Background product persistence failed:', err);
+        audioBus.emit('error');
+        // Rollback state in case of catastrophic storage failure
+        set({ products: previousProducts });
+      }
+    })();
+
+    return { success: true };
   },
 
   deleteProduct: async (id) => {

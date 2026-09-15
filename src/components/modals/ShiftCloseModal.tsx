@@ -24,6 +24,7 @@ export const ShiftCloseModal: React.FC = () => {
     activeShift,
     closeShift,
     transactions,
+    printXReport,
   } = usePosStore();
   const { showToast } = useToast();
 
@@ -76,15 +77,32 @@ export const ShiftCloseModal: React.FC = () => {
     });
   }, [transactions, openedAt]);
 
+  const sessionRefunds = useMemo(() => {
+    return transactions.filter((t) => {
+      return (
+        t.status !== 'VOIDED' &&
+        t.isRefund &&
+        (!openedAt || t.createdAt >= openedAt)
+      );
+    });
+  }, [transactions, openedAt]);
+
+  const totalCashRefunds = useMemo(() => {
+    return sessionRefunds.reduce((sum, t) => {
+      return (t.refundMethod === 'Espèces' || t.paymentMethod === 'Espèces') ? sum + t.total : sum;
+    }, 0);
+  }, [sessionRefunds]);
+
   const totalCashSales = useMemo(() => {
     return sessionTxns.reduce((sum, t) => {
       if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
         const cashTenderTotal = t.tenders
           .filter((tender) => tender.method === 'Espèces')
           .reduce((acc, tender) => acc + tender.amount, 0);
-        return sum + cashTenderTotal;
+        const netCash = Math.max(0, cashTenderTotal - (t.changeDue || 0));
+        return sum + netCash;
       }
-      return t.paymentMethod === 'Espèces' ? sum + t.total : sum;
+      return t.paymentMethod === 'Espèces' ? sum + Math.max(0, t.total) : sum;
     }, 0);
   }, [sessionTxns]);
 
@@ -104,8 +122,8 @@ export const ShiftCloseModal: React.FC = () => {
       .reduce((sum, m) => sum + m.amount, 0);
   }, [activeShift?.movements]);
 
-  // Formula: opening_float + cash_sales + manual_deposits - expenses
-  const expectedCash = openingFloat + totalCashSales + manualDeposits - expenses;
+  // Formula: opening_float + cash_sales + manual_deposits - expenses - cash_refunds
+  const expectedCash = openingFloat + totalCashSales + manualDeposits - expenses - totalCashRefunds;
   const variance = physicalCount - expectedCash;
   const dailyNetProfit = totalSaleMargins - expenses;
 
@@ -488,17 +506,35 @@ export const ShiftCloseModal: React.FC = () => {
         <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between">
           {step === 'BLIND_COUNT' ? (
             <>
-              <button
-                type="button"
-                onClick={closeModal}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition"
-              >
-                Annuler
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const success = await printXReport();
+                    if (success) {
+                      showToast('Rapport X (Mid-Shift) envoyé à l\'imprimante', 'success');
+                    } else {
+                      showToast("Impossible d'imprimer le Rapport X (aucune session active ou imprimante déconnectée)", 'error');
+                    }
+                  }}
+                  className="px-3.5 py-2 rounded-xl border border-pos-border hover:bg-pos-hover text-xs font-bold text-pos-text flex items-center gap-1.5 transition cursor-pointer"
+                  title="Imprimer un snapshot financier intermédiaire sans clôturer la caisse"
+                >
+                  <Printer className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Imprimer Rapport X</span>
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={handleRevealReconciliation}
-                className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98]"
+                className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98] cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4" /> Valider le Comptage & Voir l'Audit
               </button>

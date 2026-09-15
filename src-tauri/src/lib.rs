@@ -51,40 +51,82 @@ impl std::fmt::Debug for CloudCredentials {
     }
 }
 
-#[tauri::command]
-fn get_cloud_credentials() -> Result<Option<CloudCredentials>, String> {
-    let entry = keyring::Entry::new("mobi-pos-cloud-sync", "credentials")
-        .map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(secret) => {
-            let creds: CloudCredentials = serde_json::from_str(&secret)
-                .map_err(|e| format!("Invalid credentials format: {}", e))?;
-            Ok(Some(creds))
-        }
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
+fn get_vault_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(".cloud_credentials.vault"))
 }
 
-#[tauri::command]
-fn set_cloud_credentials(url: String, token: String) -> Result<(), String> {
-    let creds = CloudCredentials { url, token };
-    let json = serde_json::to_string(&creds).map_err(|e| e.to_string())?;
-    let entry = keyring::Entry::new("mobi-pos-cloud-sync", "credentials")
-        .map_err(|e| e.to_string())?;
-    entry.set_password(&json).map_err(|e| e.to_string())?;
+fn read_vault_file(app: &tauri::AppHandle) -> Result<Option<CloudCredentials>, String> {
+    let vault_path = get_vault_path(app)?;
+    if !vault_path.exists() {
+        return Ok(None);
+    }
+    let data = std::fs::read_to_string(&vault_path).map_err(|e| e.to_string())?;
+    if data.trim().is_empty() {
+        return Ok(None);
+    }
+    let creds: CloudCredentials = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    Ok(Some(creds))
+}
+
+fn save_vault_file(app: &tauri::AppHandle, creds: &CloudCredentials) -> Result<(), String> {
+    let vault_path = get_vault_path(app)?;
+    let json = serde_json::to_string(creds).map_err(|e| e.to_string())?;
+    std::fs::write(&vault_path, json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn delete_vault_file(app: &tauri::AppHandle) -> Result<(), String> {
+    let vault_path = get_vault_path(app)?;
+    if vault_path.exists() {
+        let _ = std::fs::remove_file(vault_path);
+    }
     Ok(())
 }
 
 #[tauri::command]
-fn delete_cloud_credentials() -> Result<(), String> {
-    let entry = keyring::Entry::new("mobi-pos-cloud-sync", "credentials")
-        .map_err(|e| e.to_string())?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
+fn get_cloud_credentials(app_handle: tauri::AppHandle) -> Result<Option<CloudCredentials>, String> {
+    #[cfg(not(mobile))]
+    {
+        if let Ok(entry) = keyring::Entry::new("mobi-pos-cloud-sync", "credentials") {
+            if let Ok(secret) = entry.get_password() {
+                if let Ok(creds) = serde_json::from_str::<CloudCredentials>(&secret) {
+                    return Ok(Some(creds));
+                }
+            }
+        }
     }
+
+    read_vault_file(&app_handle)
+}
+
+#[tauri::command]
+fn set_cloud_credentials(app_handle: tauri::AppHandle, url: String, token: String) -> Result<(), String> {
+    let creds = CloudCredentials { url, token };
+    let json = serde_json::to_string(&creds).map_err(|e| e.to_string())?;
+
+    #[cfg(not(mobile))]
+    {
+        if let Ok(entry) = keyring::Entry::new("mobi-pos-cloud-sync", "credentials") {
+            let _ = entry.set_password(&json);
+        }
+    }
+
+    save_vault_file(&app_handle, &creds)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(not(mobile))]
+    {
+        if let Ok(entry) = keyring::Entry::new("mobi-pos-cloud-sync", "credentials") {
+            let _ = entry.delete_credential();
+        }
+    }
+    delete_vault_file(&app_handle)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -104,16 +146,11 @@ fn create_database_backup(app_handle: tauri::AppHandle) -> Result<String, String
     let backup_path = backups_dir.join(&backup_filename);
     std::fs::copy(&db_path, &backup_path).map_err(|e| e.to_string())?;
 
-    // Also snapshot WAL and SHM companion files (rules.md R3.12 / Section 10 Blocker prevention)
+    // Also snapshot WAL companion file if non-empty (never copy volatile .db-shm shared memory)
     let wal_path = app_dir.join("mobi_pos.db-wal");
-    if wal_path.exists() {
+    if wal_path.exists() && std::fs::metadata(&wal_path).map(|m| m.len() > 0).unwrap_or(false) {
         let backup_wal = backups_dir.join(format!("mobi_pos_backup_{}.db-wal", timestamp));
         let _ = std::fs::copy(&wal_path, &backup_wal);
-    }
-    let shm_path = app_dir.join("mobi_pos.db-shm");
-    if shm_path.exists() {
-        let backup_shm = backups_dir.join(format!("mobi_pos_backup_{}.db-shm", timestamp));
-        let _ = std::fs::copy(&shm_path, &backup_shm);
     }
 
     Ok(backup_path.to_string_lossy().into_owned())
@@ -140,23 +177,20 @@ fn restore_database_backup(app_handle: tauri::AppHandle, backup_path: String) ->
     }
 
     let db_path = app_dir.join("mobi_pos.db");
+    let target_wal = app_dir.join("mobi_pos.db-wal");
+    let target_shm = app_dir.join("mobi_pos.db-shm");
+
+    // Remove active shared memory to avoid stale index pointers
+    let _ = std::fs::remove_file(&target_shm);
+
     std::fs::copy(&canonical_path, &db_path).map_err(|e| e.to_string())?;
 
-    // Cleanly restore or clean up companion WAL and SHM files
+    // Cleanly restore or clean up companion WAL file
     let companion_wal = canonical_path.with_extension("db-wal");
-    let target_wal = app_dir.join("mobi_pos.db-wal");
     if companion_wal.exists() {
         let _ = std::fs::copy(&companion_wal, &target_wal);
     } else if target_wal.exists() {
         let _ = std::fs::remove_file(&target_wal);
-    }
-
-    let companion_shm = canonical_path.with_extension("db-shm");
-    let target_shm = app_dir.join("mobi_pos.db-shm");
-    if companion_shm.exists() {
-        let _ = std::fs::copy(&companion_shm, &target_shm);
-    } else if target_shm.exists() {
-        let _ = std::fs::remove_file(&target_shm);
     }
 
     Ok(())
@@ -199,6 +233,15 @@ fn swap_staging_database(app_handle: tauri::AppHandle, staging_file: String) -> 
         return Err("Fichier de staging introuvable".into());
     }
     let db_path = app_dir.join("mobi_pos.db");
+    let wal_path = app_dir.join("mobi_pos.db-wal");
+    let shm_path = app_dir.join("mobi_pos.db-shm");
+
+    // CRITICAL (Contract C6): Delete active WAL and SHM files before swapping in staging DB!
+    // If old WAL frames remain, SQLite will replay stale WAL pages into the new DB,
+    // causing B-Tree header mismatch and irrecoverable corruption (Code 1299 / SQLite Error 26).
+    let _ = std::fs::remove_file(&wal_path);
+    let _ = std::fs::remove_file(&shm_path);
+
     std::fs::copy(&staging_path, &db_path).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&staging_path);
     Ok(())
@@ -549,6 +592,90 @@ fn base_schema_migrations() -> Vec<Migration> {
             ALTER TABLE transaction_items ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
             ALTER TABLE inventory_ledger ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
             ALTER TABLE customers ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 6,
+            description: "Phase 2: FTS5 virtual table for sub-millisecond product search",
+            sql: r#"
+            CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(
+                id UNINDEXED,
+                title,
+                brand,
+                sku,
+                barcode,
+                category,
+                tokenize = 'unicode61'
+            );
+            INSERT OR IGNORE INTO products_fts (id, title, brand, sku, barcode, category)
+            SELECT id, title, brand, sku, barcode, category FROM products;
+            
+            CREATE TRIGGER IF NOT EXISTS trg_products_fts_insert AFTER INSERT ON products
+            BEGIN
+                INSERT INTO products_fts (id, title, brand, sku, barcode, category)
+                VALUES (new.id, new.title, new.brand, new.sku, new.barcode, new.category);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_products_fts_update AFTER UPDATE ON products
+            BEGIN
+                UPDATE products_fts SET
+                    title = new.title,
+                    brand = new.brand,
+                    sku = new.sku,
+                    barcode = new.barcode,
+                    category = new.category
+                WHERE id = new.id;
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_products_fts_delete AFTER DELETE ON products
+            BEGIN
+                DELETE FROM products_fts WHERE id = old.id;
+            END;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 7,
+            description: "Optimization: foreign keys, search indexes and covering stock calculation index",
+            sql: r#"
+            CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
+            CREATE INDEX IF NOT EXISTS idx_customers_updated ON customers(updated_at, id);
+            CREATE INDEX IF NOT EXISTS idx_customers_sync ON customers(sync_status, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_customers_created ON customers(created_at);
+
+            CREATE INDEX IF NOT EXISTS idx_products_created ON products(created_at);
+
+            CREATE INDEX IF NOT EXISTS idx_txn_items_imei ON transaction_items(imei_number) WHERE imei_number IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_transactions_deleted ON transactions(deleted, id);
+
+            CREATE INDEX IF NOT EXISTS idx_imei_sale_txn ON imei_records(sale_transaction_id);
+            CREATE INDEX IF NOT EXISTS idx_imei_po ON imei_records(purchase_order_id);
+
+            CREATE INDEX IF NOT EXISTS idx_repair_status ON repair_orders(status, created_at);
+            CREATE INDEX IF NOT EXISTS idx_po_status ON purchase_orders(status, created_at);
+
+            -- Covering index: enables index-only SUM(delta) scans without reading table pages
+            CREATE INDEX IF NOT EXISTS idx_ledger_stock_calc ON inventory_ledger(product_id, deleted, delta);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 8,
+            description: "Add version column to all generic tables in local SQLite",
+            sql: r#"
+            ALTER TABLE security_audit_logs ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE repair_orders ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE purchase_orders ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE trade_ins ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE imei_records ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE cash_drops ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE product_bundles ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE customer_debts ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE store_expenses ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE cash_sessions ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE cash_movements ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+            ALTER TABLE app_settings ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
             "#,
             kind: MigrationKind::Up,
         },

@@ -7,7 +7,8 @@ import type {
   ProductBundle,
 } from '../../types/pos';
 import { db as dexieDb } from '../database';
-import { fireSync, fireSyncDelete } from './base';
+import { fireSync, fireSyncDelete, isTauriEnv } from './base';
+import { getLocalDb } from '../sqlPluginAdapter';
 
 export const operationsAdapter = {
   // ── REPAIRS ──
@@ -57,11 +58,58 @@ export const operationsAdapter = {
 
   // ── AUDIT LOGS ──
   async saveAuditLog(entry: SecurityAuditLogEntry): Promise<void> {
-    await dexieDb.securityAuditLogs.put(entry);
-    void fireSync('audit_log', entry.id, entry);
+    const safeEntry: SecurityAuditLogEntry = {
+      id: entry.id || `audit-${Date.now()}`,
+      timestamp: entry.timestamp || new Date().toISOString(),
+      user: entry.user || 'Yacine (Admin)',
+      action: entry.action || 'ACTION',
+      details: entry.details || '',
+      requiresPin: Boolean(entry.requiresPin),
+    };
+    await dexieDb.securityAuditLogs.put(safeEntry);
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        await db.execute(
+          `INSERT OR REPLACE INTO security_audit_logs (id, timestamp, user, action, details, requires_pin)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [safeEntry.id, safeEntry.timestamp, safeEntry.user, safeEntry.action, safeEntry.details, safeEntry.requiresPin ? 1 : 0],
+        );
+      } catch (err) {
+        console.warn('[db:audit] Failed to persist audit log to SQLite:', err);
+      }
+    }
+    void fireSync('audit_log', safeEntry.id, safeEntry);
   },
 
   async getAllAuditLogs(): Promise<SecurityAuditLogEntry[]> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const rows = (await db.select(
+          'SELECT id, timestamp, user, action, details, requires_pin FROM security_audit_logs ORDER BY timestamp DESC LIMIT 300'
+        )) as Array<{
+          id: string;
+          timestamp: string;
+          user: string;
+          action: string;
+          details: string;
+          requires_pin: number;
+        }>;
+        if (rows && rows.length > 0) {
+          return rows.map((r) => ({
+            id: r.id,
+            timestamp: r.timestamp,
+            user: r.user,
+            action: r.action,
+            details: r.details,
+            requiresPin: Boolean(r.requires_pin),
+          }));
+        }
+      } catch (err) {
+        console.warn('[db:audit] SQLite query failed, falling back to Dexie:', err);
+      }
+    }
     return await dexieDb.securityAuditLogs.toArray();
   },
 

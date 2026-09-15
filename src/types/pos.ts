@@ -54,6 +54,7 @@ export interface Product {
   warrantyMonths?: number;
   shelfLocation?: string;
   minPrice?: number;
+  isActive?: boolean;
 }
 
 export type ProductInput = Omit<Product, 'id'> & { id?: string };
@@ -555,6 +556,7 @@ export interface ReceiptSettings {
   customFooterMsg: string;
   showBarcode: boolean;
   autoPrintEnabled?: boolean;
+  kickCashDrawerOnCash?: boolean;
   printerRouting?: PrinterRoutingConfig;
   loyaltyConfig?: LoyaltyProgramConfig;
   paperWidth?: '80mm' | '58mm';
@@ -676,7 +678,7 @@ export interface HardwareStatus {
   customerDisplayConnected: boolean;
 }
 
-export const APP_VERSION = '1.6.3';
+export const APP_VERSION = '1.6.4';
 
 export const formatDZD = (amount: number): string => {
   return new Intl.NumberFormat('fr-DZ', {

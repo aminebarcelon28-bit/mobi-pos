@@ -169,6 +169,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       requiresPin,
     };
     set({ securityAuditLog: [newEntry, ...securityAuditLog] });
+    void sqliteAdapter.saveAuditLog(newEntry);
   },
 
   verifyManagerPin: (pin) => {
@@ -346,11 +347,12 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       const updated = [newExpense, ...storeExpenses];
       await sqliteAdapter.saveStoreExpense(newExpense);
 
-      if (get().activeShift) {
+      // Deduct from drawer balance ONLY if paid in physical cash
+      if (get().activeShift && newExpense.paymentMethod === 'Espèces') {
         await get().logCashMovement(
           validAmount,
           'EXPENSE',
-          `Dépense d'exploitation (${newExpense.category}): ${newExpense.title}`
+          `Dépense d'exploitation espèces (${newExpense.category}): ${newExpense.title}`
         );
       }
 
@@ -422,6 +424,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       const activeShift = await sqliteAdapter.getActiveShift();
       const allShifts = await sqliteAdapter.getAllShifts();
       const inventoryValuation = await sqliteAdapter.getInventoryValuation();
+      const auditLogs = await sqliteAdapter.getAllAuditLogs();
 
       const legacyProducts =
         typeof localStorage !== 'undefined' ? localStorage.getItem('mobi_pos_products') : null;
@@ -496,6 +499,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         activeShift,
         allShifts,
         inventoryValuation,
+        securityAuditLog: auditLogs && auditLogs.length > 0 ? auditLogs : get().securityAuditLog,
         managerPin: typeof managerPin === 'string' && managerPin.length >= 4 ? managerPin : '1234',
         shiftFloat: activeShift?.openingFloat || 20000,
         isDbInitialized: true,
@@ -540,6 +544,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         activeShift,
         allShifts,
         inventoryValuation,
+        auditLogs,
       ] = await Promise.all([
         sqliteAdapter.getAllProducts(),
         sqliteAdapter.getAllCustomers(),
@@ -556,6 +561,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         sqliteAdapter.getActiveShift(),
         sqliteAdapter.getAllShifts(),
         sqliteAdapter.getInventoryValuation(),
+        sqliteAdapter.getAllAuditLogs(),
       ]);
       set({
         products,
@@ -573,6 +579,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         activeShift,
         allShifts,
         inventoryValuation,
+        securityAuditLog: auditLogs && auditLogs.length > 0 ? auditLogs : get().securityAuditLog,
       });
     } catch (e) {
       console.warn('Post-pull refresh skipped:', e);

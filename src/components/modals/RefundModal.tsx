@@ -506,7 +506,7 @@ export const RefundModal: React.FC = () => {
                       )}
 
                       <div className="pt-1">
-                        <label className="text-[10px] text-pos-muted font-bold block mb-1">PIN Manager (Défaut : 1234) :</label>
+                        <label className="text-[10px] text-pos-muted font-bold block mb-1">PIN Manager d'Autorisation :</label>
                         <div className="relative">
                           <Key className="w-3.5 h-3.5 text-pos-muted absolute left-3 top-1/2 -translate-y-1/2" />
                           <input

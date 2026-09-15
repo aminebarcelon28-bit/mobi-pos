@@ -28,18 +28,22 @@ export const ShiftZReportModal: React.FC = () => {
   // Financial Shift Auditing (Strict zero-variance accounting)
   const safeTransactions = transactions || [];
   const validCashSales = safeTransactions.filter(
-    (t) => t.status !== 'VOIDED' && !t.isRefund && t.paymentMethod === 'Espèces'
+    (t) => t.status !== 'VOIDED' && !t.isRefund
   );
   const totalCashSales = validCashSales.reduce(
-    (acc, t) =>
-      acc +
-      (t.tenders && Array.isArray(t.tenders)
-        ? t.tenders.filter((td) => td.method === 'Espèces').reduce((sum, td) => sum + (td.amount || 0), 0)
-        : (t.total || 0)),
+    (acc, t) => {
+      if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
+        const cashTenderTotal = t.tenders
+          .filter((td) => td.method === 'Espèces')
+          .reduce((sum, td) => sum + (td.amount || 0), 0);
+        return acc + Math.max(0, cashTenderTotal - (t.changeDue || 0));
+      }
+      return t.paymentMethod === 'Espèces' ? acc + (t.total || 0) : acc;
+    },
     0
   );
   const totalCashRefunds = safeTransactions
-    .filter((t) => t.isRefund && t.paymentMethod === 'Espèces')
+    .filter((t) => t.isRefund && (t.paymentMethod === 'Espèces' || t.refundMethod === 'Espèces'))
     .reduce((acc, t) => acc + (t.total || 0), 0);
 
   const todayDebtSettlements = (customerDebts || [])

@@ -111,18 +111,28 @@ export const shiftAdapter = {
     const sessionTxns = txns.filter(
       (t) => (!openSession?.openedAt || t.createdAt >= openSession.openedAt) && t.status !== 'VOIDED' && !t.isRefund
     );
+    const sessionRefunds = txns.filter(
+      (t) => (!openSession?.openedAt || t.createdAt >= openSession.openedAt) && t.status !== 'VOIDED' && t.isRefund
+    );
+
     const cashSales = sessionTxns.reduce((sum, t) => {
       if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
         const cashTenderTotal = t.tenders
           .filter((tender) => tender.method === 'Espèces')
           .reduce((acc, tender) => acc + tender.amount, 0);
-        return sum + cashTenderTotal;
+        const netCash = Math.max(0, cashTenderTotal - (t.changeDue || 0));
+        return sum + netCash;
       }
-      return t.paymentMethod === 'Espèces' ? sum + t.total : sum;
+      return t.paymentMethod === 'Espèces' ? sum + Math.max(0, t.total) : sum;
     }, 0);
+
+    const cashRefunds = sessionRefunds.reduce((sum, t) => {
+      return (t.refundMethod === 'Espèces' || t.paymentMethod === 'Espèces') ? sum + t.total : sum;
+    }, 0);
+
     const totalProfits = sessionTxns.reduce((sum, t) => sum + (t.profit || 0), 0);
 
-    const expectedCash = openingFloat + cashSales + deposits - expenses;
+    const expectedCash = openingFloat + cashSales + deposits - expenses - cashRefunds;
     const actualCash = Math.round(blindCount);
     const discrepancy = actualCash - expectedCash;
 

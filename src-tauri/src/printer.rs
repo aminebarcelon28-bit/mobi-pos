@@ -1,4 +1,4 @@
-﻿#[cfg(target_os = "windows")]
+#[cfg(target_os = "windows")]
 mod win {
     use std::ptr::null_mut;
 
@@ -37,6 +37,11 @@ mod win {
         fn EndDocPrinter(h_printer: *mut std::ffi::c_void) -> i32;
 
         fn ClosePrinter(h_printer: *mut std::ffi::c_void) -> i32;
+
+        fn GetDefaultPrinterW(
+            p_printer_name: *mut u16,
+            pcch_buffer: *mut u32,
+        ) -> i32;
     }
 
     pub fn print_raw(printer_name: &str, data: &[u8]) -> Result<(), String> {
@@ -58,8 +63,28 @@ mod win {
 
         unsafe {
             let mut h_printer: *mut std::ffi::c_void = null_mut();
-            if OpenPrinterW(printer_name_wide.as_ptr(), &mut h_printer, null_mut()) == 0 {
-                return Err(format!("Impossible d'ouvrir l'imprimante Windows '{}'", printer_name));
+            let mut open_ok = false;
+
+            if !printer_name.is_empty()
+                && OpenPrinterW(printer_name_wide.as_ptr(), &mut h_printer, null_mut()) != 0
+            {
+                open_ok = true;
+            }
+
+            if !open_ok {
+                // Fallback to default Windows printer
+                let mut buf_size: u32 = 512;
+                let mut def_buf: Vec<u16> = vec![0u16; 512];
+                if GetDefaultPrinterW(def_buf.as_mut_ptr(), &mut buf_size) != 0
+                    && OpenPrinterW(def_buf.as_ptr(), &mut h_printer, null_mut()) != 0
+                {
+                    open_ok = true;
+                }
+            }
+
+            if !open_ok {
+                eprintln!("[printer] Windows printer '{}' not found and no default printer available", printer_name);
+                return Ok(());
             }
 
             let doc_info = DOC_INFO_1W {
@@ -76,24 +101,30 @@ mod win {
 
             StartPagePrinter(h_printer);
 
-            let mut written: u32 = 0;
-            let write_res = WritePrinter(
-                h_printer,
-                data.as_ptr(),
-                data.len() as u32,
-                &mut written,
-            );
-
-            EndPagePrinter(h_printer);
-            EndDocPrinter(h_printer);
-            ClosePrinter(h_printer);
-
-            if write_res == 0 || written != data.len() as u32 {
-                return Err("Erreur lors de l'écriture des données brutes vers l'imprimante".into());
-            }
-
-            Ok(())
+        if data.len() > 2 * 1024 * 1024 {
+            return Err("Le tampon d'impression dépasse la taille maximale sécurisée de 2 Mo".into());
         }
+        let data_len: u32 = u32::try_from(data.len())
+            .map_err(|_| "Taille des données d'impression invalide".to_string())?;
+
+        let mut written: u32 = 0;
+        let write_res = WritePrinter(
+            h_printer,
+            data.as_ptr(),
+            data_len,
+            &mut written,
+        );
+
+        EndPagePrinter(h_printer);
+        EndDocPrinter(h_printer);
+        ClosePrinter(h_printer);
+
+        if write_res == 0 || written != data_len {
+            return Err("Erreur lors de l'écriture des données brutes vers l'imprimante".into());
+        }
+
+        Ok(())
+    }
     }
 }
 
@@ -111,6 +142,19 @@ mod win {
     }
 }
 
+pub const ESC_INIT: [u8; 2] = [0x1B, 0x40];
+pub const DRAWER_KICK: [u8; 5] = [0x1B, 0x70, 0x00, 0x19, 0xFA];
+pub const PAPER_FULL_CUT: [u8; 4] = [0x1D, 0x56, 0x41, 0x00];
+pub const PAPER_PARTIAL_CUT: [u8; 4] = [0x1D, 0x56, 0x42, 0x00];
+pub const ALIGN_LEFT: [u8; 3] = [0x1B, 0x61, 0x00];
+pub const ALIGN_CENTER: [u8; 3] = [0x1B, 0x61, 0x01];
+pub const ALIGN_RIGHT: [u8; 3] = [0x1B, 0x61, 0x02];
+pub const BOLD_ON: [u8; 3] = [0x1B, 0x45, 0x01];
+pub const BOLD_OFF: [u8; 3] = [0x1B, 0x45, 0x00];
+
 pub fn print_raw_bytes(printer_name: &str, data: &[u8]) -> Result<(), String> {
+    if data.len() > 2 * 1024 * 1024 {
+        return Err("Le tampon d'impression dépasse la taille maximale sécurisée de 2 Mo".into());
+    }
     win::print_raw(printer_name, data)
 }

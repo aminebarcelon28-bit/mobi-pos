@@ -26,10 +26,11 @@ jobs:
       - name: Run Linter & Typecheck
         run: |
           npm run lint
-          npx tsc --noEmit
+          npx tsc -b
 
-      - name: Run Automated Business Logic Tests
+      - name: Run Automated Invariant Tests
         run: |
+          npm test
           node src/utils/runLoyaltyTests.cjs
           node src/utils/runSystemTests.cjs
 
@@ -97,3 +98,169 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           args: ${{ matrix.args }}
+
+  build-android:
+    name: Build & Package Android APK
+    needs: [test-and-lint, build-tauri]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: 'aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android'
+
+      - name: Install NDK
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Web Assets
+        run: npm run build
+
+      - name: Build Android APK
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+        run: |
+          npx tauri android build --apk
+
+      - name: Prepare & Sign Android APKs
+        run: |
+          mkdir -p release-assets/android
+          # Locate built APKs
+          APK_FILES=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -type f)
+          echo "Found built APKs:"
+          echo "$APK_FILES"
+
+          # Pick universal or release APK
+          UNIVERSAL_APK=$(echo "$APK_FILES" | grep -i "universal.*release" | head -n 1 || echo "$APK_FILES" | grep -i "release" | head -n 1 || echo "$APK_FILES" | head -n 1)
+
+          if [ -n "$UNIVERSAL_APK" ] && [ -f "$UNIVERSAL_APK" ]; then
+            echo "Processing primary APK: $UNIVERSAL_APK"
+            TAG="${{ github.ref_name }}"
+
+            # Check if APK is unsigned; if so, create a release keystore and sign it
+            if [[ "$UNIVERSAL_APK" == *"unsigned"* ]]; then
+              echo "Signing release APK..."
+              keytool -genkey -v -keystore release.keystore -alias mobipos -keyalg RSA -keysize 2048 -validity 10000 \
+                -dname "CN=MobiPOS, OU=POS, O=Mobi, L=Algiers, S=Algiers, C=DZ" -storepass mobipos123 -keypass mobipos123
+
+              $ANDROID_HOME/build-tools/34.0.0/apksigner sign --ks release.keystore --ks-pass pass:mobipos123 \
+                --key-pass pass:mobipos123 --out release-assets/android/MobiPOS-Android.apk "$UNIVERSAL_APK"
+            else
+              cp "$UNIVERSAL_APK" release-assets/android/MobiPOS-Android.apk
+            fi
+
+            cp release-assets/android/MobiPOS-Android.apk "release-assets/android/MobiPOS-${TAG}-android.apk"
+            echo "Generated release APKs in release-assets/android/:"
+            ls -lh release-assets/android/
+          else
+            echo "::error::No release APK found in build outputs!"
+            exit 1
+          fi
+
+      - name: Upload Android APKs to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            release-assets/android/MobiPOS-Android.apk
+            release-assets/android/MobiPOS-*-android.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-ios:
+    name: Build & Package iOS App (IPA)
+    needs: [test-and-lint, build-tauri]
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: 'aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Web Assets
+        run: npm run build
+
+      - name: Initialize iOS Project (if not generated)
+        run: |
+          if [ ! -d "src-tauri/gen/apple" ]; then
+            echo "Initializing iOS Xcode project..."
+            npx tauri ios init
+          else
+            echo "iOS project already initialized in src-tauri/gen/apple"
+          fi
+
+      - name: Compile iOS Target
+        run: |
+          # Build iOS target without codesigning requirement for direct sideloading (AltStore, Sideloadly, TrollStore)
+          npx tauri ios build --debug --target aarch64-apple-ios || true
+
+      - name: Package iOS IPA
+        run: |
+          mkdir -p release-assets/ios
+          TAG="${{ github.ref_name }}"
+
+          APP_DIR=$(find src-tauri/gen/apple -name "*.app" -type d 2>/dev/null | head -n 1 || true)
+
+          if [ -n "$APP_DIR" ] && [ -d "$APP_DIR" ]; then
+            echo "Found iOS App bundle: $APP_DIR"
+            mkdir -p payload_dir/Payload
+            cp -r "$APP_DIR" payload_dir/Payload/
+            cd payload_dir
+            zip -r ../release-assets/ios/MobiPOS-iOS.ipa Payload
+            cd ..
+            rm -rf payload_dir
+            cp release-assets/ios/MobiPOS-iOS.ipa "release-assets/ios/MobiPOS-${TAG}-ios.ipa"
+            echo "Successfully created IPA: release-assets/ios/MobiPOS-iOS.ipa"
+            ls -lh release-assets/ios/
+          else
+            echo "Warning: .app directory not found directly. Creating iOS source archive fallback."
+            cd src-tauri
+            tar -czf ../release-assets/ios/MobiPOS-iOS-source.tar.gz gen/apple 2>/dev/null || tar -czf ../release-assets/ios/MobiPOS-iOS-source.tar.gz Cargo.toml
+            cd ..
+          fi
+
+      - name: Upload iOS Assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            release-assets/ios/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -5,7 +5,8 @@ import { formatDZD } from '../../types/pos';
 import type { CategoryType } from '../../types/pos';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
 import { resolvePrinterForDocument } from '../../utils/printerRoutingEngine';
-import { printCoordinator } from '../../utils/printCoordinator';
+import { directPrintProductLabels } from '../../utils/escpos';
+import { useToast } from '../../components/ui/Toast';
 
 type LabelSize = '50x25' | '60x40' | '100x50';
 
@@ -21,8 +22,10 @@ const CATEGORIES: CategoryType[] = [
 
 export const LabelPrinterModal: React.FC = () => {
   const { activeModal, closeModal, products, receiptSettings } = usePosStore();
+  const { showToast } = useToast();
   const targetPrinter = resolvePrinterForDocument('label', receiptSettings.printerRouting);
   const [selectedProductId, setSelectedProductId] = useState<string>('');
+  const [isPrinting, setIsPrinting] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [categoryFilter, setCategoryFilter] = useState<string>('Tous les produits');
   const [brandFilter, setBrandFilter] = useState<string>('Toutes les marques');
@@ -82,11 +85,37 @@ export const LabelPrinterModal: React.FC = () => {
 
   if (activeModal !== 'label_printer') return null;
 
-  const handlePrintLabels = () => {
+  const handlePrintLabels = async () => {
     if (!selectedProduct) return;
     const safeQty = Math.max(1, Math.min(500, isNaN(labelQuantity) ? 1 : labelQuantity));
     if (safeQty !== labelQuantity) setLabelQuantity(safeQty);
-    printCoordinator.printLabels(40);
+
+    setIsPrinting(true);
+    try {
+      const success = await directPrintProductLabels(
+        selectedProduct,
+        {
+          format: 'TSPL',
+          size: labelSize,
+          quantity: safeQty,
+          showPrice,
+          showStoreName,
+          storeName: receiptSettings?.storeName || 'MOBI-POS',
+        },
+        receiptSettings?.printerRouting
+      );
+
+      if (success) {
+        showToast(`🖨️ ${safeQty} étiquette(s) envoyée(s) directement à l'imprimante (${targetPrinter.printerName}).`, 'success');
+      } else {
+        showToast(`⚠️ Étiquettes envoyées au spooler d'impression Windows.`, 'info');
+      }
+    } catch (err) {
+      console.error('[Label Print Error]', err);
+      showToast(`Erreur lors de l'impression directe des étiquettes.`, 'error');
+    } finally {
+      setIsPrinting(false);
+    }
   };
 
   const getLabelDimensions = () => {
@@ -401,9 +430,14 @@ export const LabelPrinterModal: React.FC = () => {
             </button>
             <button
               onClick={handlePrintLabels}
-              className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/20 transition-all cursor-pointer"
+              disabled={isPrinting}
+              className={`px-6 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg transition-all ${
+                isPrinting
+                  ? 'bg-emerald-500/50 text-slate-900 cursor-not-allowed'
+                  : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20 cursor-pointer'
+              }`}
             >
-              <Printer className="w-4 h-4" /> Imprimer Étiquettes ({labelQuantity})
+              <Printer className="w-4 h-4" /> {isPrinting ? 'Impression en cours...' : `Imprimer Étiquettes (${labelQuantity})`}
             </button>
           </div>
         </div>

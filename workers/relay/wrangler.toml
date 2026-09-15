@@ -1,0 +1,12 @@
+name = "mobi-pos-relay"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+[durable_objects]
+bindings = [
+  { name = "MERCHANT_ROOM", class_name = "MerchantRoom" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["MerchantRoom"]

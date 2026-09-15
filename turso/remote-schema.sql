@@ -63,72 +63,72 @@ CREATE INDEX IF NOT EXISTS idx_customers_updated ON customers(updated_at, id);
 CREATE TABLE IF NOT EXISTS repair_orders (
   id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+  version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_repair_orders_updated ON repair_orders(updated_at, id);
 CREATE TABLE IF NOT EXISTS purchase_orders (
   id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+  version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_purchase_orders_updated ON purchase_orders(updated_at, id);
 CREATE TABLE IF NOT EXISTS trade_ins (
   id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+  version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_trade_ins_updated ON trade_ins(updated_at, id);
 CREATE TABLE IF NOT EXISTS imei_records (
   id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+  version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_imei_records_updated ON imei_records(updated_at, id);
 CREATE TABLE IF NOT EXISTS security_audit_logs (
   id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+  version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_audit_logs_updated ON security_audit_logs(updated_at, id);
 CREATE TABLE IF NOT EXISTS cash_drops (
   id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+  version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_cash_drops_updated ON cash_drops(updated_at, id);
 CREATE TABLE IF NOT EXISTS product_bundles (
   id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+  version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_bundles_updated ON product_bundles(updated_at, id);
 CREATE TABLE IF NOT EXISTS customer_debts (
   id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+  version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_customer_debts_updated ON customer_debts(updated_at, id);
 CREATE TABLE IF NOT EXISTS store_expenses (
   id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+  version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_store_expenses_updated ON store_expenses(updated_at, id);
 CREATE TABLE IF NOT EXISTS cash_sessions (
   id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+  version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_cash_sessions_updated ON cash_sessions(updated_at, id);
 CREATE TABLE IF NOT EXISTS cash_movements (
   id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+  version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_cash_movements_updated ON cash_movements(updated_at, id);
 CREATE TABLE IF NOT EXISTS app_settings (
   id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
+  version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_app_settings_updated ON app_settings(updated_at, id);

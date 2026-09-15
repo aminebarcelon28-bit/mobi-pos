@@ -1,4 +1,4 @@
-import type { SaleTransaction, ReceiptSettings } from '../types/pos';
+import type { SaleTransaction, ReceiptSettings, CashSession } from '../types/pos';
 import { formatDZD } from '../types/pos';
 
 const ESC = 0x1B;
@@ -79,18 +79,27 @@ export class EscPosBuilder {
   }
 
   /**
-   * Imprime un code-barres avec les commandes GS k.
+   * Imprime un code-barres avec les commandes standard GS k.
    */
   barcode(barcodeValue: string, type: 'CODE128' | 'EAN13' = 'CODE128'): this {
+    // 1. Configuration géométrie code-barres standard
+    this.buffer.push(GS, 0x68, 64);    // Hauteur = 64 dots (8mm)
+    this.buffer.push(GS, 0x77, 2);     // Largeur de module = 2 dots
+    this.buffer.push(GS, 0x48, 0x02);  // Texte HRI sous le code-barres
+    this.buffer.push(GS, 0x66, 0x00);  // Police standard Font A pour HRI
+
     if (type === 'CODE128') {
-      this.buffer.push(GS, 0x6B, 0x49, barcodeValue.length);
+      // Norme ESC/POS Function B: sélection de jeu de caractères {B (0x7B, 0x42)
+      const dataBytes = [0x7B, 0x42];
       for (let i = 0; i < barcodeValue.length; i++) {
-        this.buffer.push(barcodeValue.charCodeAt(i));
+        dataBytes.push(barcodeValue.charCodeAt(i));
       }
+      this.buffer.push(GS, 0x6B, 0x49, dataBytes.length, ...dataBytes);
     } else {
-      this.buffer.push(GS, 0x6B, 0x43, barcodeValue.length);
-      for (let i = 0; i < barcodeValue.length; i++) {
-        this.buffer.push(barcodeValue.charCodeAt(i));
+      const cleanEan = barcodeValue.replace(/\D/g, '').slice(0, 13);
+      this.buffer.push(GS, 0x6B, 0x43, cleanEan.length);
+      for (let i = 0; i < cleanEan.length; i++) {
+        this.buffer.push(cleanEan.charCodeAt(i));
       }
     }
     return this;
@@ -106,10 +115,11 @@ export class EscPosBuilder {
   }
 
   /**
-   * Avance le papier et effectue une coupe partielle.
+   * Avance le papier de 5 lignes pour dégager la tête d'impression et effectue une coupe partielle.
    */
   feedCut(): this {
-    this.buffer.push(GS, 0x56, 0x41, 0x03);
+    this.buffer.push(0x0A, 0x0A, 0x0A, 0x0A, 0x0A);
+    this.buffer.push(GS, 0x56, 0x01);
     return this;
   }
 
@@ -263,3 +273,127 @@ export async function openCashDrawerViaSpooler(printerName: string): Promise<boo
 export async function printViaSerialPort(portName: string, buffer: Uint8Array): Promise<boolean> {
   return await printViaWindowsSpooler(portName, buffer);
 }
+
+import { resolvePrinterForDocument } from './printerRoutingEngine';
+import { ProductLabelBuilder, type LabelPrintOptions } from './productLabelBuilder';
+import type { Product, PrinterRoutingConfig } from '../types/pos';
+
+/**
+ * Pousse directement le reçu de vente vers l'imprimante matérielle sans aucune boîte de dialogue popup.
+ */
+export async function directPrintReceipt(
+  transaction: SaleTransaction,
+  settings: ReceiptSettings
+): Promise<boolean> {
+  const targetPrinter = resolvePrinterForDocument('receipt', settings?.printerRouting);
+  const buffer = buildReceiptBuffer(transaction, settings);
+  const success = await printViaWindowsSpooler(targetPrinter.printerName, buffer);
+  if (settings?.kickCashDrawerOnCash !== false) {
+    void openCashDrawerViaSpooler(targetPrinter.printerName);
+  }
+  return success;
+}
+
+/**
+ * Pousse directement les étiquettes code-barres vers l'imprimante thermique sans popup browser.
+ */
+export async function directPrintProductLabels(
+  product: Product,
+  options: LabelPrintOptions,
+  printerRouting?: PrinterRoutingConfig
+): Promise<boolean> {
+  const targetPrinter = resolvePrinterForDocument('label', printerRouting);
+  const buffer = ProductLabelBuilder.build(product, options);
+  return await printViaWindowsSpooler(targetPrinter.printerName, buffer);
+}
+
+/**
+ * Construit un tampon ESC/POS pour un Rapport X (snapshot financier intermédiaire de session de caisse).
+ */
+export function buildXReportBuffer(session: CashSession, settings: ReceiptSettings): Uint8Array {
+  const b = new EscPosBuilder();
+  const width = settings?.paperWidth === '58mm' ? 32 : 42;
+
+  b.init()
+    .align('center')
+    .bold(true)
+    .doubleHeight(true)
+    .text(settings?.storeName || 'MobiPOS')
+    .newline(2)
+    .doubleHeight(false)
+    .text('*** RAPPORT X (POINT MID-SHIFT) ***')
+    .newline()
+    .bold(false)
+    .text(`Date & Heure : ${new Date().toLocaleString('fr-FR')}`)
+    .newline()
+    .text(`Session : ${session.id}`)
+    .newline()
+    .text(`Caissier : ${session.cashierName}`)
+    .newline()
+    .text(`Ouvert le : ${new Date(session.openedAt).toLocaleString('fr-FR')}`)
+    .newline()
+    .separator('=', width);
+
+  const padLine = (label: string, value: string): string => {
+    const spaceCount = Math.max(1, width - label.length - value.length);
+    return `${label}${' '.repeat(spaceCount)}${value}`;
+  };
+
+  b.align('left')
+    .bold(true)
+    .text('SITUATION DU TIROIR-CAISSE')
+    .newline()
+    .bold(false)
+    .text(padLine('Fond Initial (Ouverture) :', formatDZD(session.openingFloat)))
+    .newline()
+    .text(padLine('Total Ventes Espèces :', `+${formatDZD(session.cashSales || 0)}`))
+    .newline()
+    .text(padLine('Apports / Dépôts Manuels :', `+${formatDZD(session.manualDeposits || 0)}`))
+    .newline()
+    .text(padLine('Dépenses / Sorties Caisse :', `-${formatDZD(session.expenses || 0)}`))
+    .newline()
+    .separator('-', width);
+
+  const theoreticalCash =
+    session.expectedCash !== undefined && session.expectedCash !== null
+      ? session.expectedCash
+      : session.openingFloat + (session.cashSales || 0) + (session.manualDeposits || 0) - (session.expenses || 0);
+
+  b.bold(true)
+    .doubleHeight(true)
+    .text(padLine('ESPECES THEORIQUES :', formatDZD(theoreticalCash)))
+    .newline()
+    .doubleHeight(false)
+    .separator('=', width);
+
+  b.bold(true)
+    .text('ACTIVITE COMMERCIALE')
+    .newline()
+    .bold(false)
+    .text(padLine('Nombre de Ventes :', `${session.totalSalesCount || 0} transaction(s)`))
+    .newline()
+    .text(padLine('Chiffre d\'Affaires Total :', formatDZD(session.totalSalesRevenue || 0)))
+    .newline()
+    .separator('-', width)
+    .align('center')
+    .text('Document Intermédiaire Non Clôturant')
+    .newline()
+    .text('La caisse reste active')
+    .newline(2)
+    .feedCut();
+
+  return b.build();
+}
+
+/**
+ * Pousse directement le Rapport X vers l'imprimante thermique sans popup.
+ */
+export async function directPrintXReport(
+  session: CashSession,
+  settings: ReceiptSettings
+): Promise<boolean> {
+  const targetPrinter = resolvePrinterForDocument('receipt', settings?.printerRouting);
+  const buffer = buildXReportBuffer(session, settings);
+  return await printViaWindowsSpooler(targetPrinter.printerName, buffer);
+}
+
