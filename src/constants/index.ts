@@ -5,7 +5,7 @@
 
 export const APP_CONFIG = {
   APP_NAME: 'MobiPOS',
-  APP_VERSION: '1.6.5',
+  APP_VERSION: '1.6.6',
   DEFAULT_CURRENCY: 'DA',
   DEFAULT_LOCALE: 'fr-DZ',
   TIMEZONE: 'Africa/Algiers',
