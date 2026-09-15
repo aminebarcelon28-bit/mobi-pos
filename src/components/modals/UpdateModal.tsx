@@ -1,8 +1,11 @@
 import React from 'react';
 import { Sparkles, DownloadCloud, RotateCcw, X, CheckCircle2, AlertCircle, Smartphone, ExternalLink, ShieldCheck } from 'lucide-react';
 import { useAppUpdater } from '../../hooks/useAppUpdater';
+import { soundEngine } from '../../utils/audioFeedback';
+import { useToast } from '../ui/Toast';
 
 export const UpdateModal: React.FC = () => {
+  const { showToast } = useToast();
   const {
     isUpdateAvailable,
     updateInfo,
@@ -137,34 +140,60 @@ export const UpdateModal: React.FC = () => {
 
               {hasNativeInstaller ? (
                 <button
-                  onClick={downloadAndInstall}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer"
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playKeyBeep?.();
+                    showToast("Téléchargement et installation en cours...", "info");
+                    downloadAndInstall();
+                  }}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer active:scale-95"
                 >
                   <DownloadCloud className="w-4 h-4" /> Mettre à jour maintenant
                 </button>
               ) : isAndroidDevice ? (
-                <button
-                  onClick={() => openDownloadPage()}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer"
+                <a
+                  href={updateInfo?.downloadUrl || 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-Android.apk'}
+                  download="MobiPOS-Android.apk"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => {
+                    soundEngine.playKeyBeep?.();
+                    showToast("Téléchargement de l'APK Android démarré...", 'info');
+                    openDownloadPage();
+                  }}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer no-underline active:scale-95"
                 >
                   <DownloadCloud className="w-4 h-4" /> Télécharger l'APK v{updateInfo?.version}
                   <ExternalLink className="w-3.5 h-3.5 opacity-75" />
-                </button>
+                </a>
               ) : isIOSDevice ? (
-                <button
-                  onClick={() => openDownloadPage('https://apps.apple.com')}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer"
+                <a
+                  href="https://apps.apple.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => {
+                    soundEngine.playKeyBeep?.();
+                    openDownloadPage('https://apps.apple.com');
+                  }}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer no-underline active:scale-95"
                 >
                   <ExternalLink className="w-4 h-4" /> Ouvrir l'App Store
-                </button>
+                </a>
               ) : (
-                <button
-                  onClick={() => openDownloadPage()}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer"
+                <a
+                  href={updateInfo?.downloadUrl || 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => {
+                    soundEngine.playKeyBeep?.();
+                    showToast("Ouverture de la page de mise à jour...", 'info');
+                    openDownloadPage();
+                  }}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer no-underline active:scale-95"
                 >
                   <DownloadCloud className="w-4 h-4" /> Télécharger la Mise à Jour
                   <ExternalLink className="w-3.5 h-3.5 opacity-75" />
-                </button>
+                </a>
               )}
             </>
           )}

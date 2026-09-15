@@ -6,14 +6,14 @@ import {
   Bluetooth, Usb, ChevronDown, ChevronUp, Settings, HardDrive,
   Server, RotateCcw, Database, Shield, Radio, Sparkles,
   Award, TrendingUp, Volume2, VolumeX, Music, Cloud,
-  Sun, Moon, ChevronLeft, Store
+  Sun, Moon, ChevronLeft, Store, Smartphone, ExternalLink
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
 import { formatDZD, APP_VERSION } from '../../types/pos';
 import { DEFAULT_LOYALTY_CONFIG, calculateFinancialProfitImpact } from '../../utils/loyaltyEngine';
 import { maintenanceService, type DbStats, type IntegrityReport } from '../../services/maintenanceService';
-import { useAppUpdater } from '../../hooks/useAppUpdater';
+import { useAppUpdater, openExternalUrl } from '../../hooks/useAppUpdater';
 import { soundEngine } from '../../utils/audioFeedback';
 import { CloudSyncPanel } from '../settings/CloudSyncPanel';
 
@@ -275,6 +275,22 @@ export const SettingsModal: React.FC = () => {
   const { showToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const updater = useAppUpdater();
+
+  const handleCheckUpdates = async () => {
+    soundEngine.playKeyBeep?.();
+    showToast('Recherche des mises à jour en cours...', 'info', 2000);
+    const res = await updater.checkForUpdates(true);
+    if (res.hasUpdate) {
+      soundEngine.playSuccess?.();
+      showToast(`🚀 Mise à jour v${res.version} disponible au téléchargement !`, 'info', 5000);
+    } else if (res.success) {
+      soundEngine.playSuccess?.();
+      showToast(`✅ Votre système est parfaitement à jour (Version v${APP_VERSION}).`, 'success', 4000);
+    } else {
+      soundEngine.playError?.();
+      showToast(`Vérification : ${res.message}`, 'warning', 5000);
+    }
+  };
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('hardware');
   const [devices, setDevices] = useState<PeripheralDevice[]>(INITIAL_DEVICE_REGISTRY);
@@ -1843,18 +1859,19 @@ export const SettingsModal: React.FC = () => {
 
                   {/* Check Updates Button */}
                   <button
-                    onClick={() => updater.checkForUpdates(true)}
+                    type="button"
+                    onClick={handleCheckUpdates}
                     disabled={updater.isChecking || updater.downloading}
-                    className="py-2.5 px-4 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-black flex items-center justify-center gap-2 transition shadow-lg shadow-purple-600/30 cursor-pointer disabled:opacity-50"
+                    className="py-2.5 px-4 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-black flex items-center justify-center gap-2 transition shadow-lg shadow-purple-600/30 cursor-pointer disabled:opacity-50 active:scale-95"
                   >
                     <RefreshCcw className={`w-4 h-4 ${updater.isChecking ? 'animate-spin' : ''}`} />
-                    {updater.isChecking ? 'Vérification en cours...' : 'Vérifier Mises à Jour'}
+                    <span>{updater.isChecking ? 'Vérification en cours...' : 'Vérifier Mises à Jour'}</span>
                   </button>
                 </div>
 
                 {/* Status Indicator Banner */}
                 <div className="mt-4 pt-4 border-t border-pos-border/60 flex items-center gap-3">
-                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                  <div className={`w-2.5 h-2.5 rounded-full ${updater.isUpdateAvailable ? 'bg-purple-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`} />
                   <p className="text-xs font-semibold text-pos-text">
                     {updater.checkStatusMessage ||
                       (updater.isUpdateAvailable
@@ -1881,39 +1898,76 @@ export const SettingsModal: React.FC = () => {
                     {updater.hasNativeInstaller ? (
                       !updater.readyToRelaunch ? (
                         <button
-                          onClick={updater.downloadAndInstall}
+                          type="button"
+                          onClick={() => {
+                            soundEngine.playKeyBeep?.();
+                            showToast("Téléchargement et installation en cours...", "info");
+                            updater.downloadAndInstall();
+                          }}
                           disabled={updater.downloading}
-                          className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer disabled:opacity-50"
+                          className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer disabled:opacity-50 active:scale-95"
                         >
                           <Download className={`w-4 h-4 ${updater.downloading ? 'animate-bounce' : ''}`} />
-                          {updater.downloading ? `Téléchargement (${updater.progress}%)...` : 'Télécharger & Installer'}
+                          <span>{updater.downloading ? `Téléchargement (${updater.progress}%)...` : 'Télécharger & Installer'}</span>
                         </button>
                       ) : (
                         <button
-                          onClick={updater.relaunchApp}
-                          className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer"
+                          type="button"
+                          onClick={() => {
+                            soundEngine.playKeyBeep?.();
+                            updater.relaunchApp();
+                          }}
+                          className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer active:scale-95"
                         >
                           <RotateCcw className="w-4 h-4" />
-                          Redémarrer l'App
+                          <span>Redémarrer l'App</span>
                         </button>
                       )
                     ) : updater.isAndroidDevice ? (
-                      <button
-                        onClick={() => updater.openDownloadPage()}
-                        className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer"
+                      <a
+                        href={updater.updateInfo.downloadUrl || 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-Android.apk'}
+                        download="MobiPOS-Android.apk"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => {
+                          soundEngine.playKeyBeep?.();
+                          showToast("Téléchargement de l'APK Android démarré...", 'info');
+                          updater.openDownloadPage();
+                        }}
+                        className="py-2.5 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-emerald-500/25 cursor-pointer no-underline active:scale-95"
                       >
                         <Download className="w-4 h-4" />
-                        Télécharger l'APK v{updater.updateInfo.version}
-                      </button>
+                        <span>Télécharger l'APK v{updater.updateInfo.version}</span>
+                      </a>
                     ) : (
-                      <button
-                        onClick={() => updater.openDownloadPage()}
-                        className="py-2.5 px-4 bg-purple-600 hover:bg-purple-500 text-white font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-purple-600/25 cursor-pointer"
+                      <a
+                        href={updater.updateInfo.downloadUrl || 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => {
+                          soundEngine.playKeyBeep?.();
+                          showToast("Ouverture de la page de téléchargement...", 'info');
+                          updater.openDownloadPage();
+                        }}
+                        className="py-2.5 px-4 bg-purple-600 hover:bg-purple-500 text-white font-black text-xs rounded-xl flex items-center gap-2 transition shadow-lg shadow-purple-600/25 cursor-pointer no-underline active:scale-95"
                       >
                         <Download className="w-4 h-4" />
-                        Mettre à jour
-                      </button>
+                        <span>Télécharger la Version</span>
+                      </a>
                     )}
+                  </div>
+
+                  {/* Manual Reinstall Option */}
+                  <div className="pt-2 border-t border-pos-border/40 flex items-center justify-between text-xs text-pos-muted">
+                    <span>Problème de téléchargement direct ?</span>
+                    <button
+                      type="button"
+                      onClick={() => openExternalUrl('https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest')}
+                      className="text-cyan-400 hover:underline flex items-center gap-1 font-semibold cursor-pointer"
+                    >
+                      <span>Ouvrir les Releases GitHub</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </button>
                   </div>
 
                   {updater.downloading && (
@@ -1955,6 +2009,50 @@ export const SettingsModal: React.FC = () => {
                   <p className="text-[11px] text-pos-muted leading-relaxed">
                     Lorsqu'une nouvelle version est publiée, le serveur GitHub CI/CD compile et génère automatiquement le paquet exécutable Windows et le fichier <code className="font-mono text-cyan-300">latest.json</code> (délai de 3 à 5 minutes).
                   </p>
+                </div>
+              </div>
+
+              {/* Manual Direct Download & Reinstall Card */}
+              <div className="bg-pos-card border border-pos-border rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-sm">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
+                    <Download className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-bold text-pos-text block">Installation Manuelle & Téléchargement Direct</span>
+                    <span className="text-[10px] text-pos-muted block">Télécharger l'APK mobile ou le paquet PC de la version v{APP_VERSION}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <a
+                    href="https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-Android.apk"
+                    download="MobiPOS-Android.apk"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => {
+                      soundEngine.playKeyBeep?.();
+                      showToast("Téléchargement de l'APK Android démarré...", 'info');
+                    }}
+                    className="flex-1 sm:flex-none py-2 px-3 rounded-xl bg-pos-panel border border-pos-border hover:border-emerald-500/40 text-pos-text text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 no-underline cursor-pointer"
+                  >
+                    <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>APK Android</span>
+                  </a>
+
+                  <a
+                    href="https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => {
+                      soundEngine.playKeyBeep?.();
+                      showToast('Ouverture des releases GitHub...', 'info');
+                    }}
+                    className="flex-1 sm:flex-none py-2 px-3 rounded-xl bg-pos-panel border border-pos-border hover:border-purple-500/40 text-pos-text text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 no-underline cursor-pointer"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Releases GitHub</span>
+                  </a>
                 </div>
               </div>
             </div>

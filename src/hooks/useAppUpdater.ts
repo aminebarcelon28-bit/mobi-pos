@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { APP_VERSION } from '../types/pos';
 import type { Update } from '@tauri-apps/plugin-updater';
 import { isMobileDevice, isAndroid, isIOS, isTauriEnvironment } from '../utils/platform';
@@ -11,8 +11,50 @@ export interface UpdateInfo {
   isMobile?: boolean;
 }
 
-const GITHUB_LATEST_RELEASE_URL = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest';
-const GITHUB_API_LATEST_RELEASE_URL = 'https://api.github.com/repos/aminebarcelon28-bit/mobi-pos/releases/latest';
+export interface CheckUpdateResult {
+  success: boolean;
+  hasUpdate: boolean;
+  version?: string;
+  message: string;
+}
+
+export const GITHUB_LATEST_RELEASE_URL = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest';
+export const GITHUB_API_LATEST_RELEASE_URL = 'https://api.github.com/repos/aminebarcelon28-bit/mobi-pos/releases/latest';
+
+/**
+ * Universal safe external URL opener and file downloader.
+ * Supports desktop Tauri, mobile Android WebViews, iOS WKWebView, and standard web browsers.
+ */
+export function openExternalUrl(url: string): void {
+  if (!url || typeof window === 'undefined') return;
+
+  try {
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    if (url.endsWith('.apk') || url.endsWith('.ipa') || url.endsWith('.exe')) {
+      const name = url.split('/').pop() || 'download';
+      link.setAttribute('download', name);
+    }
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } catch {
+    // fallback
+  }
+
+  // Secondary fallback for Android WebView or environments where synthetic click is blocked
+  try {
+    if (url.endsWith('.apk') || url.endsWith('.ipa')) {
+      window.location.href = url;
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  } catch {
+    window.location.href = url;
+  }
+}
 
 /**
  * SemVer comparison utility to verify if remoteVersion is strictly newer than currentVersion.
@@ -35,23 +77,64 @@ export function isNewerVersion(remoteVersionStr?: string, currentVersionStr?: st
   return false;
 }
 
+interface SharedUpdaterState {
+  isUpdateAvailable: boolean;
+  updateInfo: UpdateInfo | null;
+  downloading: boolean;
+  progress: number;
+  readyToRelaunch: boolean;
+  error: string | null;
+  isChecking: boolean;
+  checkStatusMessage: string | null;
+}
+
+let sharedState: SharedUpdaterState = {
+  isUpdateAvailable: false,
+  updateInfo: null,
+  downloading: false,
+  progress: 0,
+  readyToRelaunch: false,
+  error: null,
+  isChecking: false,
+  checkStatusMessage: null,
+};
+
+let pendingUpdate: Update | null = null;
+const listeners = new Set<() => void>();
+
+function setSharedState(partial: Partial<SharedUpdaterState>) {
+  sharedState = { ...sharedState, ...partial };
+  listeners.forEach((l) => l());
+}
+
 export function useAppUpdater() {
-  const [isUpdateAvailable, setIsUpdateAvailable] = useState<boolean>(false);
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
-  const [downloading, setDownloading] = useState<boolean>(false);
-  const [progress, setProgress] = useState<number>(0);
-  const [readyToRelaunch, setReadyToRelaunch] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [isChecking, setIsChecking] = useState<boolean>(false);
-  const [checkStatusMessage, setCheckStatusMessage] = useState<string | null>(null);
+  const [state, setState] = useState<SharedUpdaterState>(sharedState);
 
-  const pendingUpdateRef = useRef<Update | null>(null);
+  useEffect(() => {
+    const listener = () => setState(sharedState);
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  }, []);
 
-  const checkForUpdates = useCallback(async (isManual: boolean = false) => {
+  const openDownloadPage = useCallback((url?: string) => {
+    let target = url || sharedState.updateInfo?.downloadUrl;
+    if (!target) {
+      if (isAndroid()) {
+        target = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-Android.apk';
+      } else if (isIOS()) {
+        target = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-iOS.ipa';
+      } else {
+        target = GITHUB_LATEST_RELEASE_URL;
+      }
+    }
+    openExternalUrl(target);
+  }, []);
+
+  const checkForUpdates = useCallback(async (isManual: boolean = false): Promise<CheckUpdateResult> => {
     try {
-      setIsChecking(true);
-      setError(null);
-      setCheckStatusMessage(null);
+      setSharedState({ isChecking: true, error: null, checkStatusMessage: null });
 
       const isMobile = isMobileDevice();
 
@@ -68,29 +151,51 @@ export function useAppUpdater() {
             const hasNewerVersion = update.version && isNewerVersion(update.version, currentVer);
 
             if (hasNewerVersion) {
-              pendingUpdateRef.current = update;
-              setIsUpdateAvailable(true);
-              setUpdateInfo({
+              pendingUpdate = update;
+              const info: UpdateInfo = {
                 version: update.version,
                 body: update.body || 'Nouvelle version de MobiPOS disponible avec des améliorations et des correctifs de stabilité.',
                 date: update.date,
                 downloadUrl: GITHUB_LATEST_RELEASE_URL,
                 isMobile: false,
+              };
+              setSharedState({
+                isUpdateAvailable: true,
+                updateInfo: info,
+                checkStatusMessage: `Mise à jour v${update.version} disponible !`,
               });
-              setCheckStatusMessage(`Mise à jour v${update.version} disponible !`);
-              return;
+              return {
+                success: true,
+                hasUpdate: true,
+                version: update.version,
+                message: `Mise à jour v${update.version} disponible !`,
+              };
             } else {
-              pendingUpdateRef.current = null;
-              setIsUpdateAvailable(false);
-              setCheckStatusMessage(`✅ Vous utilisez déjà la version de production la plus récente (v${APP_VERSION}).`);
-              return;
+              pendingUpdate = null;
+              setSharedState({
+                isUpdateAvailable: false,
+                checkStatusMessage: `✅ Vous utilisez déjà la version de production la plus récente (v${APP_VERSION}).`,
+              });
+              return {
+                success: true,
+                hasUpdate: false,
+                version: APP_VERSION,
+                message: `Votre application est parfaitement à jour (Version v${APP_VERSION}).`,
+              };
             }
           } else {
             // Native updater returned null -> perfectly up to date!
-            pendingUpdateRef.current = null;
-            setIsUpdateAvailable(false);
-            setCheckStatusMessage(`✅ Votre système est à jour. Version installée : v${APP_VERSION}.`);
-            return;
+            pendingUpdate = null;
+            setSharedState({
+              isUpdateAvailable: false,
+              checkStatusMessage: `✅ Votre système est à jour. Version installée : v${APP_VERSION}.`,
+            });
+            return {
+              success: true,
+              hasUpdate: false,
+              version: APP_VERSION,
+              message: `Votre application est parfaitement à jour (Version v${APP_VERSION}).`,
+            };
           }
         } catch (pluginErr) {
           console.warn('Tauri native updater check skipped or failed, falling back to GitHub API check:', pluginErr);
@@ -115,53 +220,74 @@ export function useAppUpdater() {
       const remoteVer = rawTag.replace(/^v/i, '').trim();
 
       if (remoteVer && isNewerVersion(remoteVer, APP_VERSION)) {
-        pendingUpdateRef.current = null; // Direct download
+        pendingUpdate = null; // Direct download
         const targetDownloadUrl = isAndroid()
           ? 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-Android.apk'
           : isIOS()
           ? 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-iOS.ipa'
           : GITHUB_LATEST_RELEASE_URL;
 
-        setIsUpdateAvailable(true);
-        setUpdateInfo({
+        const info: UpdateInfo = {
           version: remoteVer,
           body: releaseData.body || 'Nouvelle version de MobiPOS disponible avec des améliorations et des correctifs de stabilité.',
           date: releaseData.published_at,
           downloadUrl: targetDownloadUrl,
           isMobile: isMobile,
+        };
+
+        setSharedState({
+          isUpdateAvailable: true,
+          updateInfo: info,
+          checkStatusMessage: `🚀 Nouvelle mise à jour v${remoteVer} disponible !`,
         });
-        setCheckStatusMessage(`🚀 Nouvelle mise à jour v${remoteVer} disponible !`);
+        return {
+          success: true,
+          hasUpdate: true,
+          version: remoteVer,
+          message: `Nouvelle mise à jour v${remoteVer} disponible !`,
+        };
       } else {
-        pendingUpdateRef.current = null;
-        setIsUpdateAvailable(false);
-        setCheckStatusMessage(`✅ Votre système est synchronisé avec la version la plus récente (v${APP_VERSION}).`);
+        pendingUpdate = null;
+        setSharedState({
+          isUpdateAvailable: false,
+          checkStatusMessage: `✅ Votre système est synchronisé avec la version la plus récente (v${APP_VERSION}).`,
+        });
+        return {
+          success: true,
+          hasUpdate: false,
+          version: APP_VERSION,
+          message: `Votre application est parfaitement à jour (Version v${APP_VERSION}).`,
+        };
       }
     } catch (err: unknown) {
       console.warn('Update check failed:', err);
-      pendingUpdateRef.current = null;
-      setIsUpdateAvailable(false);
+      pendingUpdate = null;
       const msg = err instanceof Error ? err.message : 'Impossible de joindre le serveur de mise à jour GitHub.';
-      if (isManual) {
-        setError(msg);
-        setCheckStatusMessage(`Vérification : ${msg}`);
-      }
+      setSharedState({
+        isUpdateAvailable: false,
+        error: isManual ? msg : null,
+        checkStatusMessage: isManual ? `Vérification : ${msg}` : null,
+      });
+      return {
+        success: false,
+        hasUpdate: false,
+        message: msg,
+      };
     } finally {
-      setIsChecking(false);
+      setSharedState({ isChecking: false });
     }
   }, []);
 
   const downloadAndInstall = useCallback(async () => {
-    const update = pendingUpdateRef.current;
+    const update = pendingUpdate;
     if (!update) {
       // Direct external download fallback
-      window.open(updateInfo?.downloadUrl || GITHUB_LATEST_RELEASE_URL, '_blank');
+      openDownloadPage();
       return;
     }
 
     try {
-      setDownloading(true);
-      setError(null);
-      setProgress(0);
+      setSharedState({ downloading: true, error: null, progress: 0 });
 
       let downloadedBytes = 0;
       let totalBytes = 0;
@@ -173,20 +299,21 @@ export function useAppUpdater() {
           downloadedBytes += event.data.chunkLength || 0;
           if (totalBytes > 0) {
             const pct = Math.min(100, Math.round((downloadedBytes / totalBytes) * 100));
-            setProgress(pct);
+            setSharedState({ progress: pct });
           }
         } else if (event.event === 'Finished') {
-          setProgress(100);
+          setSharedState({ progress: 100 });
         }
       });
 
-      setDownloading(false);
-      setReadyToRelaunch(true);
+      setSharedState({ downloading: false, readyToRelaunch: true });
     } catch (err: unknown) {
-      setDownloading(false);
-      setError(err instanceof Error ? err.message : 'Échec du téléchargement et de l\'installation de la mise à jour.');
+      setSharedState({
+        downloading: false,
+        error: err instanceof Error ? err.message : "Échec du téléchargement et de l'installation de la mise à jour.",
+      });
     }
-  }, [updateInfo]);
+  }, [openDownloadPage]);
 
   const relaunchApp = useCallback(async () => {
     try {
@@ -197,22 +324,6 @@ export function useAppUpdater() {
       window.location.reload();
     }
   }, []);
-
-  const openDownloadPage = useCallback((url?: string) => {
-    let target = url || updateInfo?.downloadUrl;
-    if (!target) {
-      if (isAndroid()) {
-        target = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-Android.apk';
-      } else if (isIOS()) {
-        target = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-iOS.ipa';
-      } else {
-        target = GITHUB_LATEST_RELEASE_URL;
-      }
-    }
-    if (typeof window !== 'undefined') {
-      window.open(target, '_blank');
-    }
-  }, [updateInfo]);
 
   useEffect(() => {
     // Initial check on startup
@@ -227,15 +338,15 @@ export function useAppUpdater() {
   }, [checkForUpdates]);
 
   return {
-    isUpdateAvailable,
-    updateInfo,
-    downloading,
-    progress,
-    readyToRelaunch,
-    error,
-    isChecking,
-    checkStatusMessage,
-    hasNativeInstaller: Boolean(pendingUpdateRef.current),
+    isUpdateAvailable: state.isUpdateAvailable,
+    updateInfo: state.updateInfo,
+    downloading: state.downloading,
+    progress: state.progress,
+    readyToRelaunch: state.readyToRelaunch,
+    error: state.error,
+    isChecking: state.isChecking,
+    checkStatusMessage: state.checkStatusMessage,
+    hasNativeInstaller: Boolean(pendingUpdate),
     isMobile: isMobileDevice(),
     isAndroidDevice: isAndroid(),
     isIOSDevice: isIOS(),
@@ -243,6 +354,6 @@ export function useAppUpdater() {
     downloadAndInstall,
     relaunchApp,
     openDownloadPage,
-    dismissUpdate: () => setIsUpdateAvailable(false),
+    dismissUpdate: () => setSharedState({ isUpdateAvailable: false }),
   };
 }

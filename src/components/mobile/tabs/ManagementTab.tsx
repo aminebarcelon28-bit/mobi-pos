@@ -21,6 +21,7 @@ import {
   Sparkles,
   Camera,
   QrCode,
+  Download,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
 import { useDeviceMode } from '../../../hooks/useDeviceMode';
@@ -29,6 +30,8 @@ import type { SyncStatus } from '../../../sync/types';
 import { soundEngine } from '../../../utils/audioFeedback';
 import { useToast } from '../../ui/Toast';
 import { MoneyDisplay } from '../../ui/MoneyDisplay';
+import { useAppUpdater } from '../../../hooks/useAppUpdater';
+import { APP_VERSION } from '../../../types/pos';
 
 interface ManagementTabProps {
   onOpenPairingWizard?: () => void;
@@ -46,6 +49,23 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
   } = usePosStore();
   const { setRoleMode } = useDeviceMode();
   const { showToast } = useToast();
+  const updater = useAppUpdater();
+
+  const handleCheckUpdatesMobile = async () => {
+    soundEngine.playKeyBeep?.();
+    showToast('Recherche des mises à jour...', 'info', 2000);
+    const res = await updater.checkForUpdates(true);
+    if (res.hasUpdate) {
+      soundEngine.playSuccess?.();
+      showToast(`🚀 Mise à jour v${res.version} disponible !`, 'info', 5000);
+    } else if (res.success) {
+      soundEngine.playSuccess?.();
+      showToast(`✅ Votre application est à jour (Version v${APP_VERSION}).`, 'success', 4000);
+    } else {
+      soundEngine.playError?.();
+      showToast(`Vérification : ${res.message}`, 'warning', 5000);
+    }
+  };
 
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(() => soundEngine.getProfile().isMuted);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({
@@ -393,7 +413,59 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
         </button>
       </div>
 
-      {/* 6. Switch to PC View Banner (Smart Dynamic Orientation Guidance) */}
+      {/* 6. Mobile Software Updates */}
+      <div className="bg-pos-card border border-pos-border rounded-2xl p-4 shadow-sm space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="font-bold text-pos-text text-xs block">Mise à Jour MobiPOS</span>
+              <span className="text-[10px] text-pos-muted block font-mono">Version installée : v{APP_VERSION}</span>
+            </div>
+          </div>
+          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+            Canal Stable
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={updater.isChecking}
+            onClick={handleCheckUpdatesMobile}
+            className="flex-1 h-10 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 active:scale-98 font-bold text-xs text-white flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-purple-600/20 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-white ${updater.isChecking ? 'animate-spin' : ''}`} />
+            <span>{updater.isChecking ? 'Vérification...' : 'Vérifier Mises à Jour'}</span>
+          </button>
+
+          <a
+            href="https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-Android.apk"
+            download="MobiPOS-Android.apk"
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => {
+              soundEngine.playKeyBeep?.();
+              showToast("Téléchargement de l'APK Android démarré...", 'info');
+            }}
+            className="h-10 px-3 rounded-xl bg-emerald-500/15 border border-emerald-500/40 hover:bg-emerald-500/25 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-98 no-underline shrink-0 cursor-pointer"
+            title="Télécharger directement le fichier APK"
+          >
+            <Download className="w-3.5 h-3.5 text-emerald-400" />
+            <span>APK Direct</span>
+          </a>
+        </div>
+
+        {updater.checkStatusMessage && (
+          <p className="text-[10px] text-pos-muted font-medium bg-pos-panel/60 p-2 rounded-lg border border-pos-border/40 text-center">
+            {updater.checkStatusMessage}
+          </p>
+        )}
+      </div>
+
+      {/* 7. Switch to PC View Banner (Smart Dynamic Orientation Guidance) */}
       <div className="bg-gradient-to-br from-indigo-500/10 via-purple-500/10 to-cyan-500/10 border border-indigo-500/20 rounded-2xl p-4 text-center space-y-2">
         <div className="flex items-center justify-center gap-1.5 text-indigo-300 font-black text-xs">
           <Sparkles className="w-4 h-4 text-cyan-400" />
