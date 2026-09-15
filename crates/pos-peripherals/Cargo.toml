@@ -1,6 +1,6 @@
 [package]
 name = "pos-peripherals"
-version = "1.6.4"
+version = "1.6.5"
 edition = "2021"
 description = "Hardware peripherals abstraction (Receipt printing, drawer kick, scale integration)"
 
