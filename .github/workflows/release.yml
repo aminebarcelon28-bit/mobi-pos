@@ -121,17 +121,22 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Android Environment & NDK
+        run: |
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          if [ -d "$ANDROID_HOME/ndk/26.1.10909125" ]; then
+            echo "NDK 26.1.10909125 already available."
+          else
+            echo "Installing NDK 26.1.10909125..."
+            yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125"
+          fi
+          echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
 
       - name: Setup Rust Stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: 'aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android'
-
-      - name: Install NDK
-        run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125"
 
       - name: Install frontend dependencies
         run: npm ci
@@ -141,7 +146,7 @@ jobs:
 
       - name: Build Android APK
         env:
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+          NDK_HOME: /usr/local/lib/android/sdk/ndk/26.1.10909125
         run: |
           npx tauri android build --apk
 
@@ -236,7 +241,7 @@ jobs:
           mkdir -p release-assets/ios
           TAG="${{ github.ref_name }}"
 
-          APP_DIR=$(find src-tauri/gen/apple -name "*.app" -type d 2>/dev/null | head -n 1 || true)
+          APP_DIR=$(find ~/Library/Developer/Xcode/DerivedData src-tauri -name "*.app" -type d 2>/dev/null | head -n 1 || true)
 
           if [ -n "$APP_DIR" ] && [ -d "$APP_DIR" ]; then
             echo "Found iOS App bundle: $APP_DIR"
