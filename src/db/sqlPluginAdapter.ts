@@ -31,6 +31,8 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     'ALTER TABLE app_settings ADD COLUMN key TEXT;',
     'ALTER TABLE app_settings ADD COLUMN value_json TEXT;',
     'ALTER TABLE app_settings ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE sync_outbox ADD COLUMN last_error TEXT;',
+    'ALTER TABLE sync_outbox ADD COLUMN error TEXT;',
     'UPDATE app_settings SET key = id WHERE key IS NULL AND id IS NOT NULL;',
     'UPDATE app_settings SET value_json = data_json WHERE value_json IS NULL AND data_json IS NOT NULL;',
   ];
@@ -224,18 +226,42 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
 
       const imeiNum = String((it.imei_number as string) ?? (it.imeiNumber as string) ?? '').trim();
       if (imeiNum) {
-        await db.execute(
-          `INSERT INTO imei_records (imei, product_id, sale_transaction_id, sold_at, received_at, version)
-           VALUES ($1, $2, $3, $4, $4, 1)
-           ON CONFLICT(imei) DO UPDATE SET sale_transaction_id=excluded.sale_transaction_id, sold_at=excluded.sold_at,
-             product_id=excluded.product_id, version=imei_records.version + 1`,
-          [imeiNum, prodId, txId, now],
-        );
-        const imeiKey = `imei-${imeiNum}-${Date.now()}`;
+        const imeiData = {
+          imei: imeiNum,
+          product_id: prodId,
+          sale_transaction_id: txId,
+          sold_at: now,
+          received_at: now,
+          version: 1,
+        };
+        const imeiKey = `imei-${imeiNum}`;
+        try {
+          // Document-lane schema (migration v4+)
+          await db.execute(
+            `INSERT INTO imei_records (id, data_json, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
+             VALUES ($1, $2, $3, $4, 'pending', 1, $5, $5, 0)
+             ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at, sync_status='pending'`,
+            [imeiNum, JSON.stringify(imeiData), deviceId, imeiKey, now],
+          );
+        } catch {
+          // Relational schema fallback (migration v1-v3)
+          try {
+            await db.execute(
+              `INSERT INTO imei_records (imei, product_id, sale_transaction_id, sold_at, received_at, version)
+               VALUES ($1, $2, $3, $4, $4, 1)
+               ON CONFLICT(imei) DO UPDATE SET sale_transaction_id=excluded.sale_transaction_id, sold_at=excluded.sold_at,
+                 product_id=excluded.product_id, version=imei_records.version + 1`,
+              [imeiNum, prodId, txId, now],
+            );
+          } catch (e: unknown) {
+            console.warn('[db:imei] IMEI table record write skipped:', e);
+          }
+        }
         await db.execute(
           `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-           VALUES ($1,'imei',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
-          [imeiKey, imeiNum, JSON.stringify({ imei: imeiNum, product_id: prodId, sale_transaction_id: txId, sold_at: now, received_at: now, version: 1 })],
+           VALUES ($1,'imei',$2,'UPSERT',$3,'pending')
+           ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
+          [imeiKey, imeiNum, JSON.stringify(imeiData), now],
         );
       }
     }
@@ -281,7 +307,7 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
       await db.execute(
         `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
          VALUES ($1,'product',$2,'UPSERT',$3,'pending')
-         ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, error=NULL, updated_at=$4`,
+         ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
         [pkey, pid, JSON.stringify(prow), now],
       );
     }
@@ -610,7 +636,7 @@ export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promi
           await db.execute(
             `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
              VALUES ($1,'product',$2,'UPSERT',$3,'pending')
-             ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, error=NULL, updated_at=$4`,
+             ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
             [pkey, pId, JSON.stringify(rows[0]), now],
           );
         }
@@ -641,7 +667,7 @@ export async function syncProductDelete(id: string): Promise<void> {
   await db.execute(
     `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
      VALUES ($1,'product',$2,'DELETE',$3,'pending')
-     ON CONFLICT(idempotency_key) DO UPDATE SET operation='DELETE', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, error=NULL, updated_at=$4`,
+     ON CONFLICT(idempotency_key) DO UPDATE SET operation='DELETE', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
     [pkey, safeId, JSON.stringify(snapshot), now],
   );
 }
@@ -697,7 +723,7 @@ export async function enqueueGenericSync(
   await db.execute(
     `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
      VALUES ($1,$2,$3,'UPSERT',$4,'pending')
-     ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, error=NULL, updated_at=$5`,
+     ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$5`,
     [key, entity, safeId, JSON.stringify(entityPayload ?? {}), now],
   );
 }
@@ -711,7 +737,7 @@ export async function enqueueGenericDelete(entity: GenericEntity, id: string): P
   await db.execute(
     `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
      VALUES ($1,$2,$3,'DELETE',$4,'pending')
-     ON CONFLICT(idempotency_key) DO UPDATE SET operation='DELETE', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, error=NULL, updated_at=$5`,
+     ON CONFLICT(idempotency_key) DO UPDATE SET operation='DELETE', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$5`,
     [key, entity, safeId, JSON.stringify({ id: safeId, deleted: 1 }), now],
   );
 }
@@ -743,7 +769,7 @@ export async function enqueueOrderSync(
   await db.execute(
     `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
      VALUES ($1,'order',$2,'UPSERT',$3,'pending')
-     ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, error=NULL, updated_at=$4`,
+     ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
     [key, orderId, JSON.stringify({ ...payload, idempotency_key: key, updated_at: now }), now],
   );
 }
