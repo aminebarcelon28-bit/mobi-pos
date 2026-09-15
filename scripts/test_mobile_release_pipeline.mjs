@@ -92,7 +92,7 @@ const pairingModalContent = readFileSync(pairingModalPath, 'utf-8');
 assert(pairingModalContent.includes('activeTab') && pairingModalContent.includes('download') && pairingModalContent.includes('pair'), 'CloudPairingModal provides tabbed download and pairing interface');
 assert(pairingModalContent.includes('MobiPOS-Android.apk') || pairingModalContent.includes('ANDROID_APK_URL'), 'CloudPairingModal includes Android APK download');
 assert(pairingModalContent.includes('MobiPOS-iOS.ipa') || pairingModalContent.includes('IOS_IPA_URL'), 'CloudPairingModal includes iOS IPA download');
-assert(pairingModalContent.includes('create-qr-code'), 'CloudPairingModal renders scannable QR codes for phone camera');
+assert(pairingModalContent.includes('create-qr-code') || pairingModalContent.includes('QRCodeImage'), 'CloudPairingModal renders scannable QR codes for phone camera');
 
 // ── 5. Zero Data Loss Invariant (Playbook C6) ──
 console.log('\n[TEST GROUP 5] Zero Data Loss Invariant across Mobile Updates (Playbook C6)');

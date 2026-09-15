@@ -11,8 +11,8 @@ export interface UpdateInfo {
   isMobile?: boolean;
 }
 
-const UPDATE_MANIFEST_URL = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/latest.json';
 const GITHUB_LATEST_RELEASE_URL = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest';
+const GITHUB_API_LATEST_RELEASE_URL = 'https://api.github.com/repos/aminebarcelon28-bit/mobi-pos/releases/latest';
 
 /**
  * SemVer comparison utility to verify if remoteVersion is strictly newer than currentVersion.
@@ -55,7 +55,7 @@ export function useAppUpdater() {
 
       const isMobile = isMobileDevice();
 
-      // On desktop Tauri, attempt native plugin updater first
+      // 1. On desktop Tauri, attempt native plugin updater first
       if (!isMobile && isTauriEnvironment()) {
         try {
           const { check } = await import('@tauri-apps/plugin-updater');
@@ -63,47 +63,59 @@ export function useAppUpdater() {
             timeout: 10000,
           });
 
-          const currentVer = update?.currentVersion || APP_VERSION;
-          const hasNewerVersion = update && update.version && isNewerVersion(update.version, currentVer);
+          if (update) {
+            const currentVer = update.currentVersion || APP_VERSION;
+            const hasNewerVersion = update.version && isNewerVersion(update.version, currentVer);
 
-          if (hasNewerVersion && update) {
-            pendingUpdateRef.current = update;
-            setIsUpdateAvailable(true);
-            setUpdateInfo({
-              version: update.version,
-              body: update.body || 'Nouvelle version de MobiPOS disponible avec des améliorations et des correctifs de stabilité.',
-              date: update.date,
-              downloadUrl: GITHUB_LATEST_RELEASE_URL,
-              isMobile: false,
-            });
-            setCheckStatusMessage(`Mise à jour v${update.version} disponible !`);
-            return;
-          } else if (update) {
+            if (hasNewerVersion) {
+              pendingUpdateRef.current = update;
+              setIsUpdateAvailable(true);
+              setUpdateInfo({
+                version: update.version,
+                body: update.body || 'Nouvelle version de MobiPOS disponible avec des améliorations et des correctifs de stabilité.',
+                date: update.date,
+                downloadUrl: GITHUB_LATEST_RELEASE_URL,
+                isMobile: false,
+              });
+              setCheckStatusMessage(`Mise à jour v${update.version} disponible !`);
+              return;
+            } else {
+              pendingUpdateRef.current = null;
+              setIsUpdateAvailable(false);
+              setCheckStatusMessage(`✅ Vous utilisez déjà la version de production la plus récente (v${APP_VERSION}).`);
+              return;
+            }
+          } else {
+            // Native updater returned null -> perfectly up to date!
             pendingUpdateRef.current = null;
             setIsUpdateAvailable(false);
-            setCheckStatusMessage('Vous utilisez déjà la version la plus récente de MobiPOS.');
+            setCheckStatusMessage(`✅ Votre système est à jour. Version installée : v${APP_VERSION}.`);
             return;
           }
         } catch (pluginErr) {
-          console.warn('Tauri native updater check skipped or failed, falling back to manifest check:', pluginErr);
+          console.warn('Tauri native updater check skipped or failed, falling back to GitHub API check:', pluginErr);
         }
       }
 
-      // Universal Manifest Check (Works on Mobile Android/iOS, Web, and desktop fallback)
-      const res = await fetch(UPDATE_MANIFEST_URL, {
+      // 2. CORS-compliant GitHub REST API check (Works on Mobile Android/iOS, Web, and desktop fallback)
+      const res = await fetch(GITHUB_API_LATEST_RELEASE_URL, {
         cache: 'no-cache',
-        headers: { Accept: 'application/json' },
+        headers: { Accept: 'application/vnd.github.v3+json' },
       });
 
       if (!res.ok) {
-        throw new Error(`Le serveur de mise à jour a répondu avec le statut ${res.status}`);
+        if (res.status === 403 || res.status === 429) {
+          throw new Error('Limite de requêtes GitHub atteinte. Réessayez dans un instant.');
+        }
+        throw new Error(`Serveur GitHub indisponible (statut ${res.status})`);
       }
 
-      const manifest = await res.json();
-      const remoteVer: string = manifest?.version || '';
+      const releaseData = await res.json();
+      const rawTag: string = releaseData?.tag_name || '';
+      const remoteVer = rawTag.replace(/^v/i, '').trim();
 
       if (remoteVer && isNewerVersion(remoteVer, APP_VERSION)) {
-        pendingUpdateRef.current = null; // Direct external download
+        pendingUpdateRef.current = null; // Direct download
         const targetDownloadUrl = isAndroid()
           ? 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-Android.apk'
           : isIOS()
@@ -113,16 +125,16 @@ export function useAppUpdater() {
         setIsUpdateAvailable(true);
         setUpdateInfo({
           version: remoteVer,
-          body: manifest.notes || 'Nouvelle version de MobiPOS disponible avec des améliorations et des correctifs de stabilité.',
-          date: manifest.pub_date,
+          body: releaseData.body || 'Nouvelle version de MobiPOS disponible avec des améliorations et des correctifs de stabilité.',
+          date: releaseData.published_at,
           downloadUrl: targetDownloadUrl,
           isMobile: isMobile,
         });
-        setCheckStatusMessage(`Mise à jour v${remoteVer} disponible !`);
+        setCheckStatusMessage(`🚀 Nouvelle mise à jour v${remoteVer} disponible !`);
       } else {
         pendingUpdateRef.current = null;
         setIsUpdateAvailable(false);
-        setCheckStatusMessage(`Vous utilisez déjà la version la plus récente (v${APP_VERSION}).`);
+        setCheckStatusMessage(`✅ Votre système est synchronisé avec la version la plus récente (v${APP_VERSION}).`);
       }
     } catch (err: unknown) {
       console.warn('Update check failed:', err);
@@ -131,7 +143,7 @@ export function useAppUpdater() {
       const msg = err instanceof Error ? err.message : 'Impossible de joindre le serveur de mise à jour GitHub.';
       if (isManual) {
         setError(msg);
-        setCheckStatusMessage(`Vérification échouée : ${msg}`);
+        setCheckStatusMessage(`Vérification : ${msg}`);
       }
     } finally {
       setIsChecking(false);

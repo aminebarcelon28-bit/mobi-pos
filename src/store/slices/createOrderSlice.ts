@@ -380,8 +380,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             price: Number(ci.product?.price ?? 0),
           })),
         });
-        const { syncManager } = await import('../../sync/SyncManager');
-        syncManager.notifyLocalWrite();
+        try {
+          const { syncManager } = await import('../../sync/SyncManager');
+          syncManager.notifyLocalWrite();
+        } catch (syncErr) {
+          console.warn('[checkout] SyncManager local write notification deferred:', syncErr);
+        }
       } catch (e) {
         console.error('Checkout persistence failed (SQLite/Dexie write error):', e);
         return { success: false, reason: 'PERSISTENCE_FAILED' };

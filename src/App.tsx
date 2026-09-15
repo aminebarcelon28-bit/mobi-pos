@@ -15,12 +15,32 @@ import { CompanionShell } from './components/mobile/CompanionShell';
 import { MobilePairingWizard } from './components/mobile/MobilePairingWizard';
 import { getCloudCredentials } from './sync/keychain';
 
+import { isMobileDevice } from './utils/platform';
+import { Smartphone, RotateCw } from 'lucide-react';
+
 export const App: React.FC = () => {
-  const { isMobile } = useDeviceMode();
+  const { isMobile, setRoleMode } = useDeviceMode();
   useKeyboardHotkeys();
   const { scannerActive } = useBarcodeScanner();
   const initDatabase = usePosStore((state) => state.initDatabase);
   const cart = usePosStore((state) => state.cart);
+
+  const [isLandscape, setIsLandscape] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    return window.innerWidth > window.innerHeight;
+  });
+
+  useEffect(() => {
+    const handleOrientation = () => {
+      setIsLandscape(window.innerWidth > window.innerHeight);
+    };
+    window.addEventListener('resize', handleOrientation);
+    window.addEventListener('orientationchange', handleOrientation);
+    return () => {
+      window.removeEventListener('resize', handleOrientation);
+      window.removeEventListener('orientationchange', handleOrientation);
+    };
+  }, []);
 
   const [showPairingWizard, setShowPairingWizard] = useState(false);
   const [checkedCredentials, setCheckedCredentials] = useState(false);
@@ -46,7 +66,18 @@ export const App: React.FC = () => {
     let cancelled = false;
     let unsubPull: (() => void) | undefined;
     let refreshTimer: number | undefined;
+    // 1. Instant Local Boot (Contract C3: <= 900ms desktop, local-first interactive)
     (async () => {
+      try {
+        await initDatabase();
+        if (!cancelled) {
+          await usePosStore.getState().refreshAfterPull();
+        }
+      } catch (dbErr) {
+        console.warn('[boot] Local DB init error:', dbErr);
+      }
+
+      // 2. Non-blocking Background Sync & Cloud Replicas
       try {
         const { getDeviceId } = await import('./sync/device');
         const { syncManager } = await import('./sync/SyncManager');
@@ -63,40 +94,31 @@ export const App: React.FC = () => {
         await syncManager.start(getDeviceId());
         if (!cancelled) await syncManager.initialPull();
       } catch (e) {
-        console.warn('SyncManager start skipped:', e);
-      } finally {
-        if (!cancelled) {
-          await initDatabase();
-          if (!cancelled) {
-            usePosStore.getState().refreshAfterPull().catch((err: unknown) => {
-              console.warn('[sync] Post-boot UI refresh error:', err);
-            });
+        console.warn('[boot] SyncManager background start skipped:', e);
+      }
+
+      if (!cancelled) {
+        try {
+          const { remirrorToDexie } = await import('./db/backfill');
+          const mirrorResult = await remirrorToDexie();
+          if (mirrorResult.mirrored > 0 && !cancelled) {
+            usePosStore.getState().refreshAfterPull().catch(console.warn);
           }
-          if (!cancelled) {
-            try {
-              const { remirrorToDexie } = await import('./db/backfill');
-              const mirrorResult = await remirrorToDexie();
-              if (mirrorResult.mirrored > 0) {
-                usePosStore.getState().refreshAfterPull().catch((err: unknown) => {
-                  console.warn('[sync] Post-remirror UI refresh error:', err);
-                });
-              }
-            } catch (e) {
-              console.warn('Remirror skipped:', e);
-            }
+        } catch (e) {
+          console.warn('[boot] Remirror skipped:', e);
+        }
+      }
+
+      if (!cancelled) {
+        try {
+          const { backfillAllToOutbox } = await import('./db/backfill');
+          const { syncManager } = await import('./sync/SyncManager');
+          const backfillResult = await backfillAllToOutbox();
+          if (backfillResult.enqueued > 0 && !cancelled) {
+            syncManager.notifyLocalWrite();
           }
-          if (!cancelled) {
-            try {
-              const { backfillAllToOutbox } = await import('./db/backfill');
-              const { syncManager } = await import('./sync/SyncManager');
-              const backfillResult = await backfillAllToOutbox();
-              if (backfillResult.enqueued > 0) {
-                syncManager.notifyLocalWrite();
-              }
-            } catch (e) {
-              console.warn('Backfill skipped:', e);
-            }
-          }
+        } catch (e) {
+          console.warn('[boot] Backfill skipped:', e);
         }
       }
     })();
@@ -151,6 +173,23 @@ export const App: React.FC = () => {
     <ErrorBoundary fallbackTitle="Erreur Système POS Interceptée">
       <ToastProvider>
         <div className={`h-screen w-screen flex flex-col bg-pos-bg text-pos-text overflow-hidden font-sans transition-all duration-200 ${scannerActive ? 'ring-4 ring-inset ring-emerald-500' : ''}`}>
+          {/* Orientation Guidance on Mobile PC View */}
+          {isMobileDevice() && !isLandscape && (
+            <div className="bg-gradient-to-r from-indigo-950 via-purple-950 to-slate-900 border-b border-indigo-500/30 px-3 py-1.5 flex items-center justify-between text-[11px] text-indigo-200 shrink-0 select-none z-40">
+              <div className="flex items-center gap-2 min-w-0">
+                <RotateCw className="w-3.5 h-3.5 text-cyan-400 shrink-0 animate-spin" />
+                <span className="truncate font-medium">Pivotez l'écran en paysage pour une vue caisse optimale</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRoleMode('companion_mobile')}
+                className="px-2 py-0.5 rounded-lg bg-indigo-500/30 hover:bg-indigo-500/40 text-cyan-300 font-bold text-[10px] shrink-0 ml-2 cursor-pointer transition active:scale-95"
+              >
+                Retour Mobile
+              </button>
+            </div>
+          )}
+
           {/* Top Header */}
           <Header />
 
@@ -165,6 +204,19 @@ export const App: React.FC = () => {
 
           {/* Bottom Bar with Hotkeys & Status */}
           <BottomBar />
+
+          {/* Floating Mobile Return Button on Touch Devices in PC view */}
+          {isMobileDevice() && (
+            <button
+              type="button"
+              onClick={() => setRoleMode('companion_mobile')}
+              className="fixed bottom-12 right-3 z-50 px-3 py-1.5 rounded-xl bg-cyan-600/95 hover:bg-cyan-500 text-white font-bold text-xs shadow-xl shadow-cyan-950/60 border border-cyan-400/40 flex items-center gap-1.5 active:scale-95 transition cursor-pointer"
+              title="Revenir au mode compagnon mobile"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              <span>Mode Mobile</span>
+            </button>
+          )}
 
           {/* Hidden Silent Thermal Receipt Printer (Direct window.print) */}
           <SilentReceiptPrinter />

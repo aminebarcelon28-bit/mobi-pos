@@ -2198,7 +2198,7 @@ dependencies = [
 
 [[package]]
 name = "mobi-pos"
-version = "1.6.3"
+version = "1.6.7"
 dependencies = [
  "keyring",
  "parking_lot",
@@ -2792,7 +2792,7 @@ dependencies = [
 
 [[package]]
 name = "pos-core"
-version = "1.6.3"
+version = "1.6.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -2801,7 +2801,7 @@ dependencies = [
 
 [[package]]
 name = "pos-peripherals"
-version = "1.6.3"
+version = "1.6.7"
 dependencies = [
  "pos-core",
 ]

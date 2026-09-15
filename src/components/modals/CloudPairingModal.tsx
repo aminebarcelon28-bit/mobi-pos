@@ -6,6 +6,7 @@ import {
 import { usePosStore } from '../../store/usePosStore';
 import { getCloudCredentials } from '../../sync/keychain';
 import { useToast } from '../ui/Toast';
+import { QRCodeImage } from '../ui/QRCodeImage';
 
 const ANDROID_APK_URL = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-Android.apk';
 const IOS_IPA_URL = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-iOS.ipa';
@@ -142,13 +143,11 @@ export const CloudPairingModal: React.FC = () => {
 
               {/* QR Code & Scan Instructions */}
               <div className="bg-pos-panel border border-pos-border rounded-2xl p-4 flex flex-col sm:flex-row items-center gap-4">
-                <div className="shrink-0 bg-white p-2 rounded-xl border border-slate-700 shadow-md">
-                  <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(
-                      selectedMobilePlatform === 'android' ? ANDROID_APK_URL : IOS_IPA_URL
-                    )}`}
+                <div className="shrink-0 bg-white p-2 rounded-xl border border-slate-700 shadow-md flex items-center justify-center">
+                  <QRCodeImage
+                    value={selectedMobilePlatform === 'android' ? ANDROID_APK_URL : IOS_IPA_URL}
+                    size={140}
                     alt="QR Code Mobile"
-                    className="w-32 h-32"
                   />
                 </div>
                 <div className="space-y-2 text-center sm:text-left flex-1">
@@ -168,11 +167,15 @@ export const CloudPairingModal: React.FC = () => {
 
               {/* Action Buttons */}
               <div className="space-y-2">
-                <a
-                  href={selectedMobilePlatform === 'android' ? ANDROID_APK_URL : IOS_IPA_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={`w-full py-2.5 px-4 rounded-xl text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition cursor-pointer ${
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = selectedMobilePlatform === 'android' ? ANDROID_APK_URL : IOS_IPA_URL;
+                    if (typeof window !== 'undefined') {
+                      window.open(target, '_blank');
+                    }
+                  }}
+                  className={`w-full py-3 px-4 rounded-xl text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition cursor-pointer active:scale-98 ${
                     selectedMobilePlatform === 'android'
                       ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-emerald-500/20'
                       : 'bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 shadow-cyan-500/20'
@@ -183,7 +186,7 @@ export const CloudPairingModal: React.FC = () => {
                     Télécharger {selectedMobilePlatform === 'android' ? 'MobiPOS-Android.apk' : 'MobiPOS-iOS.ipa'}
                   </span>
                   <ExternalLink className="w-3.5 h-3.5 opacity-70" />
-                </a>
+                </button>
 
                 <div className="flex gap-2">
                   <button
@@ -241,11 +244,11 @@ export const CloudPairingModal: React.FC = () => {
 
                   {/* QR code of pairing payload */}
                   <div className="bg-pos-panel border border-pos-border rounded-xl p-3 flex items-center gap-3">
-                    <div className="shrink-0 bg-white p-1.5 rounded-lg border border-slate-700">
-                      <img
-                        src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(pairingPayload)}`}
+                    <div className="shrink-0 bg-white p-1.5 rounded-lg border border-slate-700 flex items-center justify-center">
+                      <QRCodeImage
+                        value={pairingPayload}
+                        size={90}
                         alt="QR Code Pairing"
-                        className="w-20 h-20"
                       />
                     </div>
                     <div className="space-y-1">

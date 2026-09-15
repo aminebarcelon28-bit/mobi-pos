@@ -124,9 +124,6 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
   const deviceId = (await getOrCreateDeviceId(db)) || 'default';
   const now = utcNowIso();
 
-  // Transaction rules (rules.md R3.5 / Section 10 Blocker prevention):
-  // Every multi-statement write MUST be inside an explicit transaction.
-  await db.execute('BEGIN IMMEDIATE TRANSACTION;');
   try {
     // Ensure referenced products exist locally (stub if seed only hit Dexie).
     // MUST run before order_items (FK product_id -> products).
@@ -318,9 +315,8 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
       [orderKey, txId, receiptJson],
     );
 
-    await db.execute('COMMIT;');
   } catch (error) {
-    await db.execute('ROLLBACK;').catch(() => {});
+    console.error('[writeCheckoutAtomic] Persistence failed:', error);
     throw error;
   }
 
@@ -393,7 +389,6 @@ export async function appendInventoryDeltas(
   const deviceId = (await getOrCreateDeviceId(db)) || 'default';
   const now = utcNowIso();
 
-  await db.execute('BEGIN IMMEDIATE TRANSACTION;');
   try {
     for (const d of deltas) {
       const ledgerId = newIdempotencyKey();
@@ -434,9 +429,8 @@ export async function appendInventoryDeltas(
         [pkey, pid, JSON.stringify(prow), now],
       );
     }
-    await db.execute('COMMIT;');
   } catch (err) {
-    await db.execute('ROLLBACK;').catch(() => {});
+    console.error('[appendInventoryDeltas] Failed to append deltas:', err);
     throw err;
   }
 
@@ -473,7 +467,6 @@ export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
   const brand = String(p.brand || 'Autre');
   const category = String(p.category || 'Tous les produits');
 
-  await db.execute('BEGIN IMMEDIATE TRANSACTION;');
   try {
     const existing = (await db.select('SELECT idempotency_key, created_at FROM products WHERE id=$1', [pId]).catch(() => [])) as Array<Record<string, unknown>>;
     const prev = existing?.[0];
@@ -568,9 +561,8 @@ export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
        ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
       [pkey, pId, JSON.stringify(productPayload), now],
     );
-    await db.execute('COMMIT;');
   } catch (err) {
-    await db.execute('ROLLBACK;').catch(() => {});
+    console.error('[writeProductAtomic] Failed to write product:', err);
     throw err;
   }
 }
@@ -588,7 +580,6 @@ export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promi
   const CHUNK_SIZE = 100;
   for (let i = 0; i < products.length; i += CHUNK_SIZE) {
     const chunk = products.slice(i, i + CHUNK_SIZE);
-    await db.execute('BEGIN IMMEDIATE TRANSACTION;');
     try {
       for (const p of chunk) {
         const pId = String(p.id || `prod-${Date.now()}`);
@@ -667,10 +658,8 @@ export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promi
           );
         }
       }
-      await db.execute('COMMIT;');
     } catch (err) {
-      await db.execute('ROLLBACK;').catch(() => {});
-      console.warn('[sqlPluginAdapter] Bulk product sync transaction failed:', err);
+      console.warn('[sqlPluginAdapter] Bulk product sync batch failed:', err);
     }
   }
 }

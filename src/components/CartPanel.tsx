@@ -155,7 +155,7 @@ export const CartPanel: React.FC = () => {
   };
 
   return (
-    <div className="w-[390px] bg-pos-panel border-r border-pos-border flex flex-col h-full select-none transition-colors duration-200">
+    <div className="w-[340px] sm:w-[380px] md:w-[390px] max-w-[48vw] shrink-0 bg-pos-panel border-r border-pos-border flex flex-col h-full select-none transition-colors duration-200">
       {/* Cart Header & Pricing Tier Selector */}
       <div className="p-3 border-b border-pos-border space-y-2 shrink-0">
         <div className="flex items-center justify-between">

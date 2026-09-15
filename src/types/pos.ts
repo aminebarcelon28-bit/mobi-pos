@@ -678,16 +678,18 @@ export interface HardwareStatus {
   customerDisplayConnected: boolean;
 }
 
-export const APP_VERSION = '1.6.6';
+export const APP_VERSION = '1.6.7';
 
 export const formatDZD = (amount: number): string => {
+  const safeAmount = Number.isFinite(amount) ? amount : 0;
+  const isWhole = safeAmount % 1 === 0;
   return new Intl.NumberFormat('fr-DZ', {
     style: 'currency',
     currency: 'DZD',
-    maximumFractionDigits: 2,
-    minimumFractionDigits: 2,
+    maximumFractionDigits: isWhole ? 0 : 2,
+    minimumFractionDigits: isWhole ? 0 : 2,
   })
-    .format(amount)
+    .format(safeAmount)
     .replace('DZD', 'DA');
 };
 
