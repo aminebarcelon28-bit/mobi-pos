@@ -678,7 +678,7 @@ export interface HardwareStatus {
   customerDisplayConnected: boolean;
 }
 
-export const APP_VERSION = '1.6.7';
+export const APP_VERSION = '1.6.8';
 
 export const formatDZD = (amount: number): string => {
   const safeAmount = Number.isFinite(amount) ? amount : 0;
