@@ -3,7 +3,7 @@
 // Pull: Per-table cursors -> Local SQLite + Dexie UI store updates.
 // Zero data loss, zero silent drops, zero dependency on vendor servers.
 
-import { getLocalDb, getPendingOutbox, markOutbox, utcNowIso, getFailedOutboxCount, retryQuarantinedOutbox } from '../db/sqlPluginAdapter';
+import { getLocalDb, getPendingOutbox, markOutbox, utcNowIso, getFailedOutboxCount, retryQuarantinedOutbox, syncProductsFromSqlToDexie } from '../db/sqlPluginAdapter';
 import { getTursoClient, probeOnline } from './tursoClient';
 import { getCloudCredentials } from './keychain';
 import { db as dexieDb } from '../db/database';
@@ -48,8 +48,9 @@ const GENERIC_PULL: Record<string, { dexie: string; ts: string[] }> = {
 const isMobileView = () =>
   typeof window !== 'undefined' && Math.min(window.innerWidth, window.innerHeight) < 640;
 
-const PUSH_MS = () => (isMobileView() ? 3_000 : 2_000);
-const PULL_MS = () => (isMobileView() ? 6_000 : 4_000);
+// High-frequency foreground polling: satisfies Contract C1 (<= 1.5s p95 latency)
+const PUSH_MS = () => 1_000;
+const PULL_MS = () => (isMobileView() ? 2_000 : 1_500);
 
 function backoffMs(retry: number): number {
   return Math.min(300_000, 1000 * 2 ** Math.min(retry, 8) + Math.floor(Math.random() * 500));
@@ -78,6 +79,8 @@ class SyncManager {
   private onOnlineHandler: (() => void) | null = null;
   private onOfflineHandler: (() => void) | null = null;
   private onVisibilityHandler: (() => void) | null = null;
+  private remoteSaleListeners = new Set<(sale: Record<string, unknown>) => void>();
+  private broadcastChannel: BroadcastChannel | null = null;
 
   subscribe(fn: Listener): () => void {
     this.listeners.add(fn);
@@ -87,6 +90,17 @@ class SyncManager {
   onPullApplied(fn: () => void): () => void {
     this.pullApplied.add(fn);
     return () => { this.pullApplied.delete(fn); };
+  }
+
+  onRemoteSaleReceived(fn: (sale: Record<string, unknown>) => void): () => void {
+    this.remoteSaleListeners.add(fn);
+    return () => { this.remoteSaleListeners.delete(fn); };
+  }
+
+  private emitRemoteSale(sale: Record<string, unknown>) {
+    this.remoteSaleListeners.forEach((fn) => {
+      try { fn(sale); } catch { /* ignore */ }
+    });
   }
 
   private emitPulled() {
@@ -179,6 +193,19 @@ class SyncManager {
       document.addEventListener('visibilitychange', this.onVisibilityHandler);
     }
 
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        this.broadcastChannel = new BroadcastChannel('mobipos-sync-bus');
+        this.broadcastChannel.onmessage = (event) => {
+          if (event.data?.type === 'db:changed' && event.data?.deviceId !== this.deviceId) {
+            void this.pullOnce();
+          }
+        };
+      } catch {
+        // ignore
+      }
+    }
+
     this.pushTimer = window.setInterval(() => { void this.pushOnce(); }, PUSH_MS());
     this.pullTimer = window.setInterval(() => { void this.pullOnce(); }, PULL_MS());
 
@@ -204,6 +231,10 @@ class SyncManager {
     if (this.pullTimer) window.clearInterval(this.pullTimer);
     if (this.postWriteDebounce) window.clearTimeout(this.postWriteDebounce);
     if (this.relayReconnectTimeout) window.clearTimeout(this.relayReconnectTimeout);
+    if (this.broadcastChannel) {
+      try { this.broadcastChannel.close(); } catch { /* ignore */ }
+      this.broadcastChannel = null;
+    }
     if (this.relaySocket) {
       try { this.relaySocket.close(); } catch { /* ignore */ }
       this.relaySocket = null;
@@ -282,6 +313,18 @@ class SyncManager {
   }
 
   broadcastRelayChange(table?: string) {
+    if (this.broadcastChannel) {
+      try {
+        this.broadcastChannel.postMessage({
+          type: 'db:changed',
+          epoch: this.relayEpoch,
+          deviceId: this.deviceId,
+          table,
+        });
+      } catch {
+        // ignore
+      }
+    }
     if (this.relaySocket && this.relaySocket.readyState === WebSocket.OPEN) {
       try {
         this.relayEpoch += 1;
@@ -728,25 +771,47 @@ class SyncManager {
       const remote = await getTursoClient();
       const db = await getLocalDb();
 
+      const cursorQueries: Array<{ sql: string; args: InValue[] }> = [];
+      const tableCursors: Array<{ table: string; cursor: { time: string; id: string } }> = [];
+
       for (const table of ALL_REMOTE_SYNC_TABLES) {
         assertValidSyncTable(table);
         const cursor = await this.getTableCursor(db, table);
+        tableCursors.push({ table, cursor });
+        cursorQueries.push({
+          sql: `SELECT * FROM ${table} WHERE (updated_at > ?) OR (updated_at = ? AND id > ?) ORDER BY updated_at ASC, id ASC LIMIT 200`,
+          args: [cursor.time, cursor.time, cursor.id],
+        });
+      }
+
+      // Fast single-roundtrip batch pull across all 17 tables
+      let batchResults: Array<{ rows: unknown[] }> | null = null;
+      try {
+        batchResults = (await remote.batch(cursorQueries, 'read')) as Array<{ rows: unknown[] }>;
+      } catch {
+        // Graceful fallback to sequential queries if batch read is unsupported
+        batchResults = null;
+      }
+
+      for (let i = 0; i < tableCursors.length; i++) {
+        const { table, cursor } = tableCursors[i];
         let maxSeenTime = cursor.time;
         let maxSeenId = cursor.id;
 
-        let rs;
-        try {
-          // Compound keyset pagination: handles rows sharing exact same millisecond timestamps
-          rs = await remote.execute({
-            sql: `SELECT * FROM ${table} WHERE (updated_at > ?) OR (updated_at = ? AND id > ?) ORDER BY updated_at ASC, id ASC LIMIT 200`,
-            args: [cursor.time, cursor.time, cursor.id],
-          });
-        } catch (e) {
-          console.warn(`[sync] pull query failed [${table}]:`, e);
-          continue;
+        let rsRows: unknown[] = [];
+        if (batchResults && batchResults[i]) {
+          rsRows = batchResults[i].rows;
+        } else {
+          try {
+            const rs = await remote.execute(cursorQueries[i]);
+            rsRows = rs.rows;
+          } catch (e) {
+            console.warn(`[sync] pull query failed [${table}]:`, e);
+            continue;
+          }
         }
 
-        for (const row of rs.rows) {
+        for (const row of rsRows) {
           const r = row as unknown as Record<string, unknown>;
           const updated = (r.updated_at as string) ?? utcNowIso();
           const rowId = (r.id as string) ?? '';
@@ -769,12 +834,18 @@ class SyncManager {
 
       if (totalPulled > 0) {
         this.lastPullAt = utcNowIso();
-        // Recompute products stock from ledger deltas
+        // 1. Recompute products stock from ledger deltas in SQLite
         await db.execute(
           `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger
             WHERE inventory_ledger.product_id = products.id AND deleted=0), stock)`,
         );
-        // Reconstruct Dexie transactions with their line items & customers
+        // 2. CRITICAL: Mirror recomputed stock from SQLite to Dexie so desktop UI gets updated immediately!
+        try {
+          await syncProductsFromSqlToDexie();
+        } catch (stockErr) {
+          console.warn('[sync:pull] syncProductsFromSqlToDexie error:', stockErr);
+        }
+        // 3. Reconstruct Dexie transactions with their line items & customers
         try {
           const { reconstructDexieTransactionsFromSql } = await import('../db/backfill');
           await reconstructDexieTransactionsFromSql(db);
@@ -945,6 +1016,12 @@ class SyncManager {
           createdAt: rawPayload.createdAt || r.created_at || utcNowIso(),
         };
         await txns.put(parsedTxn);
+
+        // Notify UI subscribers if this transaction was made on another device (e.g. mobile sale arriving on desktop)
+        const incomingDeviceId = String(r.device_id || '');
+        if (incomingDeviceId && incomingDeviceId !== this.deviceId && Number(r.deleted ?? 0) === 0) {
+          this.emitRemoteSale(parsedTxn);
+        }
       } catch (err) {
         console.warn(`[sync:pull] Failed to parse or mirror transaction ${r.id} into Dexie:`, err);
       }

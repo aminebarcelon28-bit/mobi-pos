@@ -3,7 +3,7 @@ import { Header } from './components/Header';
 import { CartPanel } from './components/CartPanel';
 import { ProductCatalog } from './components/ProductCatalog';
 import { BottomBar } from './components/BottomBar';
-import { ToastProvider } from './components/ui/Toast';
+import { ToastProvider, useToast } from './components/ui/Toast';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { SilentReceiptPrinter } from './components/SilentReceiptPrinter';
 import { useKeyboardHotkeys } from './hooks/useKeyboardHotkeys';
@@ -14,9 +14,37 @@ import { useDeviceMode } from './hooks/useDeviceMode';
 import { CompanionShell } from './components/mobile/CompanionShell';
 import { MobilePairingWizard } from './components/mobile/MobilePairingWizard';
 import { getCloudCredentials } from './sync/keychain';
+import { soundEngine } from './utils/audioFeedback';
 
 import { isMobileDevice } from './utils/platform';
 import { Smartphone, RotateCw } from 'lucide-react';
+
+const SyncNotificationListener: React.FC = () => {
+  const { showToast } = useToast();
+
+  useEffect(() => {
+    let unsub: (() => void) | undefined;
+    import('./sync/SyncManager').then(({ syncManager }) => {
+      unsub = syncManager.onRemoteSaleReceived((sale) => {
+        try {
+          soundEngine.playSuccess();
+        } catch {
+          // ignore sound error
+        }
+        const total = typeof sale.total === 'number' ? sale.total : 0;
+        const receipt = (sale.receiptNumber as string) || (sale.id as string) || '';
+        showToast(
+          `Vente synchronisée du mobile : #${receipt} (${Math.round(total).toLocaleString('fr-DZ')} DZD)`,
+          'success',
+          5000
+        );
+      });
+    }).catch(console.warn);
+    return () => unsub?.();
+  }, [showToast]);
+
+  return null;
+};
 
 export const App: React.FC = () => {
   const { isMobile, setRoleMode } = useDeviceMode();
@@ -160,6 +188,7 @@ export const App: React.FC = () => {
     return (
       <ErrorBoundary fallbackTitle="Erreur Mobile POS Interceptée">
         <ToastProvider>
+          <SyncNotificationListener />
           <div className="h-[100dvh] w-full flex flex-col bg-pos-bg text-pos-text overflow-hidden font-sans">
             <CompanionShell onOpenPairingWizard={() => setShowPairingWizard(true)} />
             <GlobalModalHost />
@@ -172,6 +201,7 @@ export const App: React.FC = () => {
   return (
     <ErrorBoundary fallbackTitle="Erreur Système POS Interceptée">
       <ToastProvider>
+        <SyncNotificationListener />
         <div className={`h-screen w-screen flex flex-col bg-pos-bg text-pos-text overflow-hidden font-sans transition-all duration-200 ${scannerActive ? 'ring-4 ring-inset ring-emerald-500' : ''}`}>
           {/* Orientation Guidance on Mobile PC View */}
           {isMobileDevice() && !isLandscape && (

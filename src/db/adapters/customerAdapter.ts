@@ -4,18 +4,21 @@ import { fireSync, fireSyncDelete } from './base';
 
 export const customerAdapter = {
   async saveCustomer(customer: Customer): Promise<void> {
-    await dexieDb.customers.put(customer);
+    const nextVersion = Number((customer as unknown as { version?: number }).version || 1) + 1;
+    const customerWithVersion = { ...customer, version: nextVersion };
+    await dexieDb.customers.put(customerWithVersion);
     try {
       const { getLocalDb, utcNowIso } = await import('../sqlPluginAdapter');
       const db = await getLocalDb();
       const now = utcNowIso();
       await db.execute(
-        `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0)
+        `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11)
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, email=excluded.email,
            loyalty_points=excluded.loyalty_points, store_credit=excluded.store_credit,
            pricing_tier=excluded.pricing_tier, total_spent=excluded.total_spent,
-           json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0`,
+           json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
+           version = COALESCE(customers.version, 1) + 1`,
         [
           customer.id,
           customer.name,
@@ -25,14 +28,15 @@ export const customerAdapter = {
           customer.storeCredit || 0,
           customer.pricingTier || 'Retail',
           customer.totalSpent || 0,
-          JSON.stringify(customer),
+          JSON.stringify(customerWithVersion),
           now,
+          nextVersion,
         ],
       ).catch(() => {});
     } catch {
       // ignore web mode fallback
     }
-    void fireSync('customer', customer.id, customer);
+    void fireSync('customer', customer.id, customerWithVersion);
   },
 
   async bulkSaveCustomers(customers: Customer[]): Promise<void> {

@@ -190,6 +190,51 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
       ],
     );
 
+    // 1. Recompute cached stock for touched products (allow-negative + alert policy).
+    const touched = [...new Set(input.deltas.map((d) => String(d.productId || '')).filter(Boolean))];
+    for (const pid of touched) {
+      await db.execute(
+        `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0),0),
+          updated_at=$2, sync_status='pending' WHERE id=$1`,
+        [pid, now],
+      );
+    }
+
+    // 2. Enqueue customer UPSERT if present in transaction (Strict Parent-First)
+    const attachedCustomer = (input.fullTx as Record<string, unknown> | undefined)?.customer as Record<string, unknown> | undefined;
+    if (attachedCustomer && attachedCustomer.id) {
+      const custId = String(attachedCustomer.id);
+      const custKey = `cust-${custId}`;
+      await db.execute(
+        `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+         VALUES ($1,'customer',$2,'UPSERT',$3,'pending')
+         ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
+        [custKey, custId, JSON.stringify(attachedCustomer), now],
+      );
+    }
+
+    // 3. Enqueue product UPSERTs with post-sale stock (Parent-First)
+    for (const pid of touchedIds) {
+      const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pid]).catch(() => [])) as Array<Record<string, unknown>>;
+      const prow = rows?.[0];
+      if (!prow) continue;
+      const pkey = (prow.idempotency_key as string) || `stub-${pid}`;
+      await db.execute(
+        `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+         VALUES ($1,'product',$2,'UPSERT',$3,'pending')
+         ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
+        [pkey, pid, JSON.stringify(prow), now],
+      );
+    }
+
+    // 4. Enqueue order (Parent of items & ledger)
+    await db.execute(
+      `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+       VALUES ($1,'order',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
+      [orderKey, txId, receiptJson],
+    );
+
+    // 5. Enqueue order items
     for (const [idx, it] of input.items.entries()) {
       const itemId = String(it.id || `${txId}-item-${idx}`);
       const prodId = String(it.product_id || it.productId || 'unknown');
@@ -233,7 +278,6 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
         };
         const imeiKey = `imei-${imeiNum}`;
         try {
-          // Document-lane schema (migration v4+)
           await db.execute(
             `INSERT INTO imei_records (id, data_json, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
              VALUES ($1, $2, $3, $4, 'pending', 1, $5, $5, 0)
@@ -241,7 +285,6 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
             [imeiNum, JSON.stringify(imeiData), deviceId, imeiKey, now],
           );
         } catch {
-          // Relational schema fallback (migration v1-v3)
           try {
             await db.execute(
               `INSERT INTO imei_records (imei, product_id, sale_transaction_id, sold_at, received_at, version)
@@ -263,6 +306,7 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
       }
     }
 
+    // 6. Enqueue inventory ledger deltas
     for (const [idx, d] of input.deltas.entries()) {
       const ledgerId = newIdempotencyKey();
       const ledgerKey = newIdempotencyKey();
@@ -283,44 +327,38 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
       );
     }
 
-    // Recompute cached stock for touched products (allow-negative + alert policy).
-    const touched = [...new Set(input.deltas.map((d) => String(d.productId || '')).filter(Boolean))];
-    for (const pid of touched) {
-      await db.execute(
-        `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0),0),
-          updated_at=$2, sync_status='pending' WHERE id=$1`,
-        [pid, now],
-      );
-    }
-
-    // Enqueue product UPSERTs with post-sale stock. Rowids stay parent-first
-    // (products before order/items/ledger) so remote FKs resolve in batch order.
-    // DO UPDATE (not NOTHING): the same product may sell twice before a push.
-    for (const pid of touchedIds) {
-      const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pid]).catch(() => [])) as Array<Record<string, unknown>>;
-      const prow = rows?.[0];
-      if (!prow) continue;
-      const pkey = (prow.idempotency_key as string) || `stub-${pid}`;
-      await db.execute(
-        `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-         VALUES ($1,'product',$2,'UPSERT',$3,'pending')
-         ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
-        [pkey, pid, JSON.stringify(prow), now],
-      );
-    }
-
-    await db.execute(
-      `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-       VALUES ($1,'order',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
-      [orderKey, txId, receiptJson],
-    );
-
   } catch (error) {
     console.error('[writeCheckoutAtomic] Persistence failed:', error);
     throw error;
   }
 
   return { deviceId };
+}
+
+/**
+ * Synchronizes recomputed product stock from SQLite products table to Dexie products table.
+ * Ensures that UI components reading from Dexie immediately reflect stock changes made by remote sales.
+ */
+export async function syncProductsFromSqlToDexie(): Promise<number> {
+  try {
+    const db = await getLocalDb();
+    const rows = (await db.select('SELECT id, stock FROM products WHERE deleted=0').catch(() => [])) as Array<{ id: string; stock: number }>;
+    if (!rows || rows.length === 0) return 0;
+
+    const { db: dexieDb } = await import('./database');
+    await dexieDb.transaction('rw', dexieDb.products, async () => {
+      for (const r of rows) {
+        const existing = await dexieDb.products.get(r.id);
+        if (existing && existing.stock !== r.stock) {
+          await dexieDb.products.update(r.id, { stock: r.stock });
+        }
+      }
+    });
+    return rows.length;
+  } catch (err) {
+    console.warn('[syncProductsFromSqlToDexie] Failed to mirror stock to Dexie:', err);
+    return 0;
+  }
 }
 
 export async function getPendingOutbox(limit = 50): Promise<Array<Record<string, unknown>>> {
