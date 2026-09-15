@@ -601,36 +601,36 @@ export const SettingsModal: React.FC = () => {
   return (
     <div
       onClick={closeModal}
-      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none cursor-pointer"
+      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-0 sm:p-4 select-none cursor-pointer"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-[90vh] flex flex-col cursor-default"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[90vh] flex flex-col cursor-default font-sans"
       >
 
         {/* ═══ Header ═══ */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-2.5">
+        <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
             <button
               type="button"
               onClick={closeModal}
-              className="p-1.5 px-2.5 sm:px-3 bg-cyan-500/10 hover:bg-cyan-500/20 active:scale-95 border border-cyan-500/30 text-cyan-400 rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shrink-0"
+              className="p-1.5 px-2 sm:px-3 bg-cyan-500/10 hover:bg-cyan-500/20 active:scale-95 border border-cyan-500/30 text-cyan-400 rounded-xl font-bold text-xs flex items-center gap-1 transition cursor-pointer shrink-0"
               title="Retour au logiciel (Échap)"
             >
               <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
               <span>Retour</span>
             </button>
-            <div className="w-9 h-9 rounded-xl bg-cyan-500/20 flex items-center justify-center border border-cyan-500/30 shadow-lg">
-              <Settings className="w-5 h-5 text-cyan-400 stroke-[2.5]" />
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-cyan-500/20 flex items-center justify-center border border-cyan-500/30 shadow-md shrink-0">
+              <Settings className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 stroke-[2.5]" />
             </div>
-            <div>
-              <h2 className="text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2">
-                PARAMÈTRES DU SYSTÈME & MATÉRIEL
-                <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1">
+            <div className="min-w-0">
+              <h2 className="text-xs sm:text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2 truncate">
+                <span>PARAMÈTRES DU SYSTÈME</span>
+                <span className="hidden sm:inline-flex bg-emerald-500/20 text-emerald-400 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-500/30 items-center gap-1 shrink-0">
                   <Sparkles className="w-3 h-3" /> Auto-Plug & Play
                 </span>
               </h2>
-              <p className="text-[10px] text-pos-muted">
+              <p className="text-[10px] text-pos-muted truncate hidden sm:block">
                 Thème, Périphériques, Synchronisation Cloud & Maintenance
               </p>
             </div>
@@ -645,74 +645,74 @@ export const SettingsModal: React.FC = () => {
           </button>
         </div>
 
-        {/* ═══ KPI Bar ═══ */}
-        <div className="grid grid-cols-5 gap-2.5 px-4 py-3 border-b border-pos-border bg-pos-card/50 shrink-0">
-          <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0">
-              <HardDrive className="w-4 h-4 stroke-[2.5]" />
+        {/* ═══ KPI Bar (3 cols on mobile, 5 cols on desktop) ═══ */}
+        <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 sm:gap-2.5 p-2 sm:px-4 sm:py-3 border-b border-pos-border bg-pos-card/50 shrink-0">
+          <div className="bg-pos-card p-2 sm:p-2.5 rounded-xl border border-pos-border flex items-center gap-2 min-w-0">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0">
+              <HardDrive className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5]" />
             </div>
-            <div>
-              <span className="text-[9px] text-pos-muted uppercase font-bold block">Périphériques</span>
-              <span className="text-sm font-black text-pos-text">{devices.length}</span>
-            </div>
-          </div>
-          <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
-              <ShieldCheck className="w-4 h-4 stroke-[2.5]" />
-            </div>
-            <div>
-              <span className="text-[9px] text-pos-muted uppercase font-bold block">Connectés / Prêts</span>
-              <span className="text-sm font-black text-emerald-400">{connectedCount}/{devices.length}</span>
+            <div className="min-w-0">
+              <span className="text-[8px] sm:text-[9px] text-pos-muted uppercase font-bold block truncate">Périphériques</span>
+              <span className="text-xs sm:text-sm font-black text-pos-text font-mono">{devices.length}</span>
             </div>
           </div>
-          <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-slate-500/20 text-slate-400 flex items-center justify-center shrink-0">
-              <WifiOff className="w-4 h-4 stroke-[2.5]" />
+          <div className="bg-pos-card p-2 sm:p-2.5 rounded-xl border border-pos-border flex items-center gap-2 min-w-0">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+              <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5]" />
             </div>
-            <div>
-              <span className="text-[9px] text-pos-muted uppercase font-bold block">Hors Ligne</span>
-              <span className="text-sm font-black text-slate-400">{offlineCount}</span>
+            <div className="min-w-0">
+              <span className="text-[8px] sm:text-[9px] text-pos-muted uppercase font-bold block truncate">Prêts</span>
+              <span className="text-xs sm:text-sm font-black text-emerald-400 font-mono">{connectedCount}/{devices.length}</span>
             </div>
           </div>
-          <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border flex items-center gap-2.5">
+          <div className="bg-pos-card p-2 sm:p-2.5 rounded-xl border border-pos-border flex items-center gap-2 min-w-0">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-slate-500/20 text-slate-400 flex items-center justify-center shrink-0">
+              <WifiOff className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5]" />
+            </div>
+            <div className="min-w-0">
+              <span className="text-[8px] sm:text-[9px] text-pos-muted uppercase font-bold block truncate">Hors Ligne</span>
+              <span className="text-xs sm:text-sm font-black text-slate-400 font-mono">{offlineCount}</span>
+            </div>
+          </div>
+          <div className="hidden sm:flex bg-pos-card p-2.5 rounded-xl border border-pos-border items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
               <Activity className="w-4 h-4 stroke-[2.5]" />
             </div>
-            <div>
-              <span className="text-[9px] text-pos-muted uppercase font-bold block">Tests Réussis</span>
-              <span className="text-sm font-black text-amber-400">{totalTests > 0 ? `${passedTests}/${totalTests}` : '—'}</span>
+            <div className="min-w-0">
+              <span className="text-[9px] text-pos-muted uppercase font-bold block truncate">Tests Réussis</span>
+              <span className="text-sm font-black text-amber-400 font-mono">{totalTests > 0 ? `${passedTests}/${totalTests}` : '—'}</span>
             </div>
           </div>
-          <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border flex items-center gap-2.5">
+          <div className="hidden sm:flex bg-pos-card p-2.5 rounded-xl border border-pos-border items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0">
               <Shield className="w-4 h-4 stroke-[2.5]" />
             </div>
-            <div>
-              <span className="text-[9px] text-pos-muted uppercase font-bold block">Protocoles</span>
-              <span className="text-sm font-black text-purple-400">{new Set((devices || []).map(d => d.protocol)).size}</span>
+            <div className="min-w-0">
+              <span className="text-[9px] text-pos-muted uppercase font-bold block truncate">Protocoles</span>
+              <span className="text-sm font-black text-purple-400 font-mono">{new Set((devices || []).map(d => d.protocol)).size}</span>
             </div>
           </div>
         </div>
 
-        {/* ═══ Tab Navigation ═══ */}
-        <div className="flex gap-1 px-4 pt-3 pb-0 shrink-0">
+        {/* ═══ Tab Navigation (horizontally scrollable on mobile) ═══ */}
+        <div className="flex gap-1 px-2.5 sm:px-4 pt-2 sm:pt-3 pb-0 shrink-0 overflow-x-auto no-scrollbar whitespace-nowrap border-b border-pos-border/40">
           {tabs.map(tab => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`px-4 py-2 rounded-t-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+              className={`px-3 sm:px-4 py-2 rounded-t-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === tab.key
                   ? 'bg-pos-bg border border-pos-border border-b-transparent text-cyan-400 shadow-sm'
                   : 'text-pos-muted hover:text-pos-text hover:bg-pos-hover/50'
               }`}
             >
-              {tab.icon} {tab.label}
+              {tab.icon} <span>{tab.label}</span>
             </button>
           ))}
         </div>
 
         {/* ═══ Content Body ═══ */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
           {/* ══════ TAB: Appearance & Theme ══════ */}
           {activeTab === 'appearance' && (
             <div className="space-y-4 max-w-3xl">
@@ -868,8 +868,8 @@ export const SettingsModal: React.FC = () => {
                   Le moteur d'impression analyse la nature de chaque document et l'achemine automatiquement vers l'imprimante dédiée sans demander d'intervention manuelle :
                 </p>
 
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-pos-bg border border-emerald-500/30 rounded-lg p-3 space-y-1.5 shadow-sm">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                  <div className="bg-pos-bg border border-emerald-500/30 rounded-xl p-3 space-y-1.5 shadow-sm">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
                         <Printer className="w-3.5 h-3.5" /> Reçus & Tickets
@@ -883,7 +883,7 @@ export const SettingsModal: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="bg-pos-bg border border-amber-500/30 rounded-lg p-3 space-y-1.5 shadow-sm">
+                  <div className="bg-pos-bg border border-amber-500/30 rounded-xl p-3 space-y-1.5 shadow-sm">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
                         <Tag className="w-3.5 h-3.5" /> Étiquettes & Prix
@@ -897,7 +897,7 @@ export const SettingsModal: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="bg-pos-bg border border-cyan-500/30 rounded-lg p-3 space-y-1.5 shadow-sm">
+                  <div className="bg-pos-bg border border-cyan-500/30 rounded-xl p-3 space-y-1.5 shadow-sm">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-cyan-400 flex items-center gap-1.5">
                         <Monitor className="w-3.5 h-3.5" /> Rapports Z & Fiches
@@ -914,23 +914,26 @@ export const SettingsModal: React.FC = () => {
               </div>
 
               {/* Toolbar */}
-              <div className="flex justify-between items-center">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
                 <h3 className="text-xs font-bold text-pos-muted uppercase tracking-wider">Équipements & Statut Détecté</h3>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2 w-full sm:w-auto">
                   <button
+                    type="button"
                     onClick={() => runAutoDetection(false)}
                     disabled={isAutoDetecting}
-                    className="px-3.5 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 hover:bg-emerald-500/30 transition cursor-pointer disabled:opacity-50"
+                    className="flex-1 sm:flex-initial px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center justify-center gap-1.5 hover:bg-emerald-500/30 transition cursor-pointer disabled:opacity-50"
                   >
                     <RefreshCcw className={`w-3.5 h-3.5 ${isAutoDetecting ? 'animate-spin' : ''}`} />
-                    {isAutoDetecting ? 'Reconnaissance en cours...' : 'Auto-Détecter les Équipements'}
+                    <span>{isAutoDetecting ? 'Détection...' : 'Auto-Détecter'}</span>
                   </button>
                   <button
+                    type="button"
                     onClick={runFullDiagnostics}
                     disabled={isRunningAllDiag}
-                    className="px-3 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-cyan-500/20 transition cursor-pointer disabled:opacity-50"
+                    className="flex-1 sm:flex-initial px-3 py-1.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-cyan-500/20 transition cursor-pointer disabled:opacity-50"
                   >
-                    <Zap className="w-3.5 h-3.5" /> {isRunningAllDiag ? 'Diagnostic en Cours...' : 'Diagnostic Complet'}
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>{isRunningAllDiag ? 'Diagnostic...' : 'Diagnostic Complet'}</span>
                   </button>
                 </div>
               </div>
@@ -1959,16 +1962,23 @@ export const SettingsModal: React.FC = () => {
         </div>
 
         {/* ═══ Footer ═══ */}
-        <div className="p-3 border-t border-pos-border bg-pos-card flex justify-between items-center text-xs text-pos-muted shrink-0">
-          <span>Centre de Commande Matériel • {connectedCount}/{devices.length} prêts • Plug & Play Auto-Reconnaissance actif</span>
+        <div className="p-2.5 sm:p-3 border-t border-pos-border bg-pos-card flex justify-between items-center text-xs text-pos-muted shrink-0">
+          <span className="text-[11px] truncate hidden sm:block">
+            Centre de Commande Matériel • {connectedCount}/{devices.length} prêts • Plug & Play Auto-Reconnaissance actif
+          </span>
+          <span className="text-[11px] truncate sm:hidden font-mono text-cyan-400 font-bold">
+            {connectedCount}/{devices.length} Périphériques Prêts
+          </span>
           <button
             type="button"
             onClick={closeModal}
-            className="px-5 py-2 rounded-xl bg-pos-hover hover:bg-pos-border text-pos-text font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+            className="px-4 py-1.5 sm:px-5 sm:py-2 rounded-xl bg-pos-hover hover:bg-pos-border text-pos-text font-bold text-xs flex items-center gap-1.5 transition cursor-pointer active:scale-95"
             title="Quitter les paramètres"
           >
-            <span>Fermer les Paramètres</span>
-            <span className="text-[10px] bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border text-pos-muted">Échap / F12</span>
+            <span>Fermer</span>
+            <span className="hidden sm:inline text-[10px] bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border text-pos-muted">
+              Échap / F12
+            </span>
           </button>
         </div>
       </div>

@@ -14,6 +14,7 @@ import {
   Wrench,
   ShoppingBag,
   FileSpreadsheet,
+  ChevronLeft,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
@@ -173,33 +174,44 @@ export const ExpenseManagerModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-6xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[90vh]">
+    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-0 sm:p-4 select-none">
+      <div className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-6xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-full sm:h-[90vh] font-sans">
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* HEADER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-yellow-600 flex items-center justify-center text-slate-950 font-black shadow-lg shadow-amber-500/20">
-              <DollarSign className="w-6 h-6 stroke-[2.5]" />
+        <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={closeModal}
+              className="sm:hidden p-1.5 rounded-lg bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text active:scale-95 transition"
+              title="Retour"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-amber-500 to-yellow-600 flex items-center justify-center text-slate-950 font-black shadow-md shrink-0">
+              <DollarSign className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-pos-text uppercase tracking-wider">
-                  Gestionnaire des Dépenses & Charges (EBITDA)
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <h2 className="text-xs sm:text-base font-black text-pos-text uppercase tracking-wider truncate">
+                  Dépenses & Charges
                 </h2>
-                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-xs">
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-[10px] sm:text-xs shrink-0 font-mono">
                   {filteredExpenses.length} Écritures
                 </span>
               </div>
-              <p className="text-xs text-pos-muted">
-                Enregistrement des sorties de caisse, charges fixes, factures et suivi de la trésorerie nette
+              <p className="text-[10px] sm:text-xs text-pos-muted truncate hidden sm:block">
+                Enregistrement des sorties de caisse, charges fixes, factures et trésorerie
               </p>
             </div>
           </div>
           <button
+            type="button"
             onClick={closeModal}
-            className="p-2 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+            title="Fermer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -208,52 +220,60 @@ export const ExpenseManagerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* TOP KPI SUMMARY CARDS */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-4 border-b border-pos-border bg-pos-bg grid grid-cols-2 sm:grid-cols-4 gap-3 shrink-0">
-          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
+        <div className="p-2 sm:p-4 border-b border-pos-border bg-pos-bg grid grid-cols-2 lg:grid-cols-4 gap-2 shrink-0">
+          <div className="bg-pos-card border border-pos-border rounded-xl p-2 sm:p-3 flex items-center justify-between">
+            <div className="min-w-0">
+              <span className="text-[8px] sm:text-[10px] uppercase font-bold text-pos-muted tracking-wider block truncate">
                 Total Mois En Cours
               </span>
-              <span className="text-xl font-black text-amber-400 font-mono">{formatDZD(totalMonthAmount)}</span>
+              <span className="text-xs sm:text-lg font-black text-amber-400 font-mono truncate block">
+                {formatDZD(totalMonthAmount)}
+              </span>
             </div>
-            <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
-              <Calendar className="w-5 h-5" />
+            <div className="w-7 h-7 sm:w-9 sm:h-9 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0">
+              <Calendar className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
           </div>
 
-          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
+          <div className="bg-pos-card border border-pos-border rounded-xl p-2 sm:p-3 flex items-center justify-between">
+            <div className="min-w-0">
+              <span className="text-[8px] sm:text-[10px] uppercase font-bold text-pos-muted tracking-wider block truncate">
                 Dépenses Aujourd'hui
               </span>
-              <span className="text-xl font-black text-rose-400 font-mono">{formatDZD(totalTodayAmount)}</span>
+              <span className="text-xs sm:text-lg font-black text-rose-400 font-mono truncate block">
+                {formatDZD(totalTodayAmount)}
+              </span>
             </div>
-            <div className="w-9 h-9 rounded-xl bg-rose-500/10 text-rose-400 flex items-center justify-center">
-              <DollarSign className="w-5 h-5" />
+            <div className="w-7 h-7 sm:w-9 sm:h-9 rounded-xl bg-rose-500/10 text-rose-400 flex items-center justify-center shrink-0">
+              <DollarSign className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
           </div>
 
-          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
+          <div className="bg-pos-card border border-pos-border rounded-xl p-2 sm:p-3 flex items-center justify-between">
+            <div className="min-w-0">
+              <span className="text-[8px] sm:text-[10px] uppercase font-bold text-pos-muted tracking-wider block truncate">
                 Charges Fournisseurs
               </span>
-              <span className="text-xl font-black text-blue-400 font-mono">{formatDZD(totalSupplierAmount)}</span>
+              <span className="text-xs sm:text-lg font-black text-blue-400 font-mono truncate block">
+                {formatDZD(totalSupplierAmount)}
+              </span>
             </div>
-            <div className="w-9 h-9 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center">
-              <ShoppingBag className="w-5 h-5" />
+            <div className="w-7 h-7 sm:w-9 sm:h-9 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center shrink-0">
+              <ShoppingBag className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
           </div>
 
-          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
-                Charges d'Exploitation
+          <div className="bg-pos-card border border-pos-border rounded-xl p-2 sm:p-3 flex items-center justify-between">
+            <div className="min-w-0">
+              <span className="text-[8px] sm:text-[10px] uppercase font-bold text-pos-muted tracking-wider block truncate">
+                Charges Exploitation
               </span>
-              <span className="text-xl font-black text-emerald-400 font-mono">{formatDZD(totalOperatingAmount)}</span>
+              <span className="text-xs sm:text-lg font-black text-emerald-400 font-mono truncate block">
+                {formatDZD(totalOperatingAmount)}
+              </span>
             </div>
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
-              <Building className="w-5 h-5" />
+            <div className="w-7 h-7 sm:w-9 sm:h-9 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center shrink-0">
+              <Building className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
           </div>
         </div>
@@ -261,13 +281,14 @@ export const ExpenseManagerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* TOOLBAR CONTROLS */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-3 border-b border-pos-border bg-pos-panel flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs w-full sm:w-auto">
+        <div className="p-2 sm:p-3 border-b border-pos-border bg-pos-panel flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 text-xs w-full sm:w-auto">
             {(['month', 'today', 'all'] as const).map((df) => (
               <button
                 key={df}
+                type="button"
                 onClick={() => setDateFilter(df)}
-                className={`px-3 py-1.5 rounded-xl font-bold border transition cursor-pointer ${
+                className={`px-2.5 py-1.5 rounded-xl font-bold border transition whitespace-nowrap cursor-pointer text-xs ${
                   dateFilter === df
                     ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-sm'
                     : 'bg-pos-card text-pos-muted hover:text-pos-text border-pos-border'
@@ -280,46 +301,49 @@ export const ExpenseManagerModal: React.FC = () => {
             <select
               value={selectedCategoryFilter}
               onChange={(e) => setSelectedCategoryFilter(e.target.value)}
-              className="bg-pos-card border border-pos-border text-pos-text font-bold text-xs rounded-xl px-3 py-1.5 focus:outline-none focus:border-amber-400 cursor-pointer"
+              className="bg-pos-card border border-pos-border text-pos-text font-bold text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-amber-400 cursor-pointer whitespace-nowrap"
             >
               <option value="Tous">Toutes Catégories</option>
               <option value="Loyer">Loyer</option>
               <option value="Électricité">Électricité</option>
               <option value="Internet / Téléphone">Internet / Téléphone</option>
               <option value="Salaires">Salaires & Primes</option>
-              <option value="Achat Marchandises / Fournisseur">Fournisseurs & Marchandises</option>
-              <option value="Transport / Livraison">Transport & Livraison</option>
-              <option value="Maintenance">Maintenance & Réparations</option>
-              <option value="Autre">Autre Charge</option>
+              <option value="Achat Marchandises / Fournisseur">Fournisseurs</option>
+              <option value="Transport / Livraison">Transport</option>
+              <option value="Maintenance">Maintenance</option>
+              <option value="Autre">Autre</option>
             </select>
           </div>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-            <div className="relative w-full sm:w-60">
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="relative flex-1 sm:w-56">
               <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Rechercher dépense, bénéficiaire..."
-                className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-3 py-1.5 text-xs text-pos-text focus:outline-none focus:border-amber-400"
+                placeholder="Rechercher..."
+                className="w-full bg-pos-bg border border-pos-border rounded-xl pl-8 pr-3 py-1.5 text-xs text-pos-text focus:outline-none focus:border-amber-400"
               />
             </div>
 
             <button
+              type="button"
               onClick={handleExportCsv}
-              className="p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+              className="p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer shrink-0"
               title="Exporter en CSV"
             >
               <Download className="w-4 h-4" />
             </button>
 
             <button
+              type="button"
               onClick={() => setShowAddForm(true)}
-              className="px-3.5 py-1.5 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-400 hover:to-yellow-500 text-slate-950 font-black text-xs rounded-xl flex items-center gap-1.5 shadow-md transition cursor-pointer shrink-0"
+              className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-400 hover:to-yellow-500 text-slate-950 font-black text-xs rounded-xl flex items-center gap-1 shadow-md active:scale-95 transition cursor-pointer shrink-0"
             >
               <Plus className="w-4 h-4" />
-              <span>+ Nouvelle Dépense</span>
+              <span className="hidden sm:inline">+ Nouvelle Dépense</span>
+              <span className="sm:hidden">Ajouter</span>
             </button>
           </div>
         </div>
@@ -384,19 +408,27 @@ export const ExpenseManagerModal: React.FC = () => {
         {/* ADD EXPENSE SUB-MODAL */}
         {/* ══════════════════════════════════════════════════════════════ */}
         {showAddForm && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-60 flex items-center justify-center p-4">
-            <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col">
-              <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-60 flex items-center justify-center p-0 sm:p-4">
+            <div className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-lg overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col h-full sm:h-auto font-sans">
+              <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddForm(false)}
+                    className="sm:hidden p-1.5 rounded-lg bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text"
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold shrink-0">
                     <Plus className="w-5 h-5" />
                   </div>
                   <div>
-                    <h3 className="font-black text-sm text-pos-text">Nouvelle Dépense / Sortie de Caisse</h3>
-                    <p className="text-[10px] text-pos-muted">Imputation automatique dans le calcul de marge nette EBITDA</p>
+                    <h3 className="font-black text-xs sm:text-sm text-pos-text">Nouvelle Dépense</h3>
+                    <p className="text-[10px] text-pos-muted hidden sm:block">Sortie de caisse ou charge déductible</p>
                   </div>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setShowAddForm(false)}
                   className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
                 >
@@ -404,7 +436,7 @@ export const ExpenseManagerModal: React.FC = () => {
                 </button>
               </div>
 
-              <form onSubmit={handleSaveExpense} className="p-4 space-y-3 text-xs">
+              <form onSubmit={handleSaveExpense} className="p-3 sm:p-4 space-y-3 text-xs flex-1 overflow-y-auto">
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">Catégorie :</label>
