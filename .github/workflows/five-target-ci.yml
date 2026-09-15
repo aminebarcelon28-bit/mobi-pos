@@ -109,5 +109,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Setup Android NDK
+        if: matrix.target == 'aarch64-linux-android'
+        run: |
+          ANDROID_HOME=/usr/local/lib/android/sdk
+          NDK_VERSION=$(ls -1 $ANDROID_HOME/ndk 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$NDK_VERSION" ]; then
+            echo "Installing NDK..."
+            yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125"
+            NDK_VERSION="26.1.10909125"
+          fi
+          NDK_PATH="$ANDROID_HOME/ndk/$NDK_VERSION"
+          echo "Found Android NDK at: $NDK_PATH"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "NDK_HOME=$NDK_PATH" >> $GITHUB_ENV
+          echo "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+          echo "CC_aarch64_linux_android=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
+          echo "AR_aarch64_linux_android=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> $GITHUB_ENV
+
       - name: Compile Mobile Target (Cargo Check)
-        run: cargo check --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
+        run: cargo check --manifest-path src-tauri/Cargo.toml --lib --target ${{ matrix.target }}
