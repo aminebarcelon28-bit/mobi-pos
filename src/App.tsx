@@ -138,8 +138,10 @@ export const App: React.FC = () => {
     return (
       <ErrorBoundary fallbackTitle="Erreur Mobile POS Interceptée">
         <ToastProvider>
-          <CompanionShell onOpenPairingWizard={() => setShowPairingWizard(true)} />
-          <GlobalModalHost />
+          <div className="h-[100dvh] w-full flex flex-col bg-pos-bg text-pos-text overflow-hidden font-sans">
+            <CompanionShell onOpenPairingWizard={() => setShowPairingWizard(true)} />
+            <GlobalModalHost />
+          </div>
         </ToastProvider>
       </ErrorBoundary>
     );

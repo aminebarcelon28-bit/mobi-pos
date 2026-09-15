@@ -477,22 +477,35 @@ export const ReportsModal: React.FC = () => {
       >
         
         {/* Modal Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-cyan-500/20">
+        <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={() => {
+                setPinVerified(false);
+                setPinInput('');
+                closeModal();
+              }}
+              className="p-1.5 px-2.5 sm:px-3 bg-cyan-500/10 hover:bg-cyan-500/20 active:scale-95 border border-cyan-500/30 text-cyan-400 rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shrink-0"
+              title="Retour (Échap)"
+            >
+              <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
+              <span>Retour</span>
+            </button>
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-cyan-500/20 shrink-0">
               <BarChart3 className="w-5 h-5 stroke-[2.5]" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-pos-text tracking-wide">
-                  RAPPORTS FINANCIERS & INSPECTEUR DE VENTES
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-sm sm:text-base font-black text-pos-text tracking-wide truncate">
+                  RAPPORTS FINANCIERS
                 </h2>
-                <span className="text-[10px] bg-cyan-500/10 text-cyan-400 font-black px-2 py-0.5 rounded border border-cyan-500/30 uppercase">
+                <span className="text-[9px] sm:text-[10px] bg-cyan-500/10 text-cyan-400 font-black px-1.5 py-0.5 rounded border border-cyan-500/30 uppercase">
                   ENTERPRISE
                 </span>
               </div>
-              <p className="text-[11px] text-pos-muted">
-                Analytics de performance, audit comptable, export Excel formaté et réimpression de reçus
+              <p className="text-[10px] sm:text-[11px] text-pos-muted truncate">
+                Analytics de performance, audit comptable & exports
               </p>
             </div>
           </div>
@@ -502,7 +515,8 @@ export const ReportsModal: React.FC = () => {
               setPinInput('');
               closeModal();
             }}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition shrink-0"
+            title="Fermer (Échap)"
           >
             <X className="w-5 h-5" />
           </button>

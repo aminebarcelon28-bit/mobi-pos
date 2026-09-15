@@ -352,6 +352,32 @@ export async function markOutbox(
   );
 }
 
+export async function getFailedOutboxCount(): Promise<number> {
+  try {
+    const db = await getLocalDb();
+    const rows = (await db.select("SELECT COUNT(*) as n FROM sync_outbox WHERE status='failed'")) as Array<{ n: number }>;
+    return rows?.[0]?.n ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+export async function retryQuarantinedOutbox(): Promise<number> {
+  try {
+    const db = await getLocalDb();
+    const count = await getFailedOutboxCount();
+    if (count > 0) {
+      await db.execute(
+        "UPDATE sync_outbox SET status='pending', retry_count=0, next_retry_at=NULL, updated_at=$1 WHERE status='failed'",
+        [utcNowIso()],
+      );
+    }
+    return count;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Append compensating ledger deltas (VOID / REFUND / RECEIVE / ADJUST) without
  * creating a new order. Used by void/refund/receive paths. Recomputes cached

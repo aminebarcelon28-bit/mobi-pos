@@ -7,6 +7,9 @@ import {
   Cloud,
   ShieldCheck,
   Layers,
+  Radio,
+  AlertTriangle,
+  RotateCcw,
 } from 'lucide-react';
 import { syncManager } from '../../../sync/SyncManager';
 import type { SyncStatus } from '../../../sync/types';
@@ -20,6 +23,8 @@ export const SyncDiagnosticsTab: React.FC = () => {
     pushing: false,
     pulling: false,
     pendingCount: 0,
+    failedCount: 0,
+    relayConnected: false,
     lastPushAt: null,
     lastPullAt: null,
     lastError: null,
@@ -27,6 +32,7 @@ export const SyncDiagnosticsTab: React.FC = () => {
   });
 
   const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const [isRetryingQuarantined, setIsRetryingQuarantined] = useState(false);
   const [manualSyncMsg, setManualSyncMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -35,6 +41,23 @@ export const SyncDiagnosticsTab: React.FC = () => {
     });
     return unsub;
   }, []);
+
+  const handleRetryQuarantined = async () => {
+    soundEngine.playKeyBeep?.();
+    setIsRetryingQuarantined(true);
+    try {
+      const count = await syncManager.retryQuarantinedOutbox();
+      soundEngine.playSuccess?.();
+      setManualSyncMsg(`${count} mutation(s) réactivée(s) et en cours d'envoi.`);
+      setTimeout(() => setManualSyncMsg(null), 4000);
+    } catch {
+      soundEngine.playError?.();
+      setManualSyncMsg('Erreur lors de la réactivation des éléments.');
+      setTimeout(() => setManualSyncMsg(null), 4000);
+    } finally {
+      setIsRetryingQuarantined(false);
+    }
+  };
 
   const handleManualSync = async () => {
     soundEngine.playKeyBeep?.();
@@ -149,7 +172,16 @@ export const SyncDiagnosticsTab: React.FC = () => {
             </span>
           </div>
 
-          <div className="flex justify-between items-center py-1">
+          <div className="flex justify-between items-center py-1 border-b border-pos-border/40">
+            <span className="text-pos-muted flex items-center gap-1.5">
+              <Radio className="w-3.5 h-3.5 text-cyan-400" /> Relais Temps Réel (Relay DO) :
+            </span>
+            <span className={`font-mono text-xs font-bold ${syncStatus.relayConnected ? 'text-emerald-400' : 'text-amber-400'}`}>
+              {syncStatus.relayConnected ? 'Connecté (WebSocket)' : 'Mode Polling Adaptatif'}
+            </span>
+          </div>
+
+          <div className="flex justify-between items-center py-1 border-b border-pos-border/40">
             <span className="text-pos-muted flex items-center gap-1.5">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Contrat C1 Latence :
             </span>
@@ -159,6 +191,33 @@ export const SyncDiagnosticsTab: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Quarantined Outbox Mutations Card (Edge Case 6) */}
+      {(syncStatus.failedCount ?? 0) > 0 && (
+        <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4 space-y-3 text-xs">
+          <div className="flex items-center gap-2 text-rose-400 font-bold">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{syncStatus.failedCount} mutation(s) en quarantaine (Échecs répétés)</span>
+          </div>
+          <p className="text-[11px] text-pos-muted">
+            Ces opérations ont échoué après 10 tentatives et ont été isolées pour ne pas bloquer les ventes en cours (Protection anti-blocage).
+          </p>
+          {syncStatus.lastError && (
+            <p className="text-[10px] font-mono bg-pos-panel/60 p-2 rounded-lg text-rose-300 break-all border border-rose-500/20">
+              {syncStatus.lastError}
+            </p>
+          )}
+          <button
+            type="button"
+            disabled={isRetryingQuarantined || isSyncing}
+            onClick={handleRetryQuarantined}
+            className="w-full py-2 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 active:scale-95 border border-rose-500/40 text-rose-300 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+          >
+            <RotateCcw className={`w-3.5 h-3.5 ${isRetryingQuarantined ? 'animate-spin' : ''}`} />
+            <span>{isRetryingQuarantined ? 'Réactivation en cours...' : 'Réessayer les éléments en quarantaine'}</span>
+          </button>
+        </div>
+      )}
 
       {/* Local Storage Records Count */}
       <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 text-xs">

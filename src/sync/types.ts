@@ -43,6 +43,8 @@ export interface SyncStatus {
   pushing: boolean;
   pulling: boolean;
   pendingCount: number;
+  failedCount?: number;
+  relayConnected?: boolean;
   lastPushAt: string | null;
   lastPullAt: string | null;
   lastError: string | null;

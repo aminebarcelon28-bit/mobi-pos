@@ -3,7 +3,7 @@
 // Pull: Per-table cursors -> Local SQLite + Dexie UI store updates.
 // Zero data loss, zero silent drops, zero dependency on vendor servers.
 
-import { getLocalDb, getPendingOutbox, markOutbox, utcNowIso } from '../db/sqlPluginAdapter';
+import { getLocalDb, getPendingOutbox, markOutbox, utcNowIso, getFailedOutboxCount, retryQuarantinedOutbox } from '../db/sqlPluginAdapter';
 import { getTursoClient, probeOnline } from './tursoClient';
 import { getCloudCredentials } from './keychain';
 import { db as dexieDb } from '../db/database';
@@ -65,6 +65,7 @@ class SyncManager {
   private pullApplied = new Set<() => void>();
   private online = typeof navigator === 'undefined' ? true : navigator.onLine;
   private pendingCount = 0;
+  private failedCount = 0;
   private lastPushAt: string | null = null;
   private lastPullAt: string | null = null;
   private lastError: string | null = null;
@@ -93,11 +94,18 @@ class SyncManager {
   }
 
   private emit() {
+    const isRelayOpen = Boolean(
+      typeof WebSocket !== 'undefined' &&
+      this.relaySocket &&
+      this.relaySocket.readyState === WebSocket.OPEN
+    );
     const s: SyncStatus = {
       online: this.online,
       pushing: this.pushing,
       pulling: this.pulling,
       pendingCount: this.pendingCount,
+      failedCount: this.failedCount,
+      relayConnected: isRelayOpen,
       lastPushAt: this.lastPushAt,
       lastPullAt: this.lastPullAt,
       lastError: this.lastError,
@@ -320,10 +328,22 @@ class SyncManager {
         "SELECT COUNT(*) as n FROM sync_outbox WHERE status='pending'"
       )) as Array<{ n: number }>;
       this.pendingCount = rows?.[0]?.n ?? 0;
+      this.failedCount = await getFailedOutboxCount();
     } catch {
       this.pendingCount = 0;
+      this.failedCount = 0;
     }
     this.emit();
+  }
+
+  async retryQuarantinedOutbox(): Promise<number> {
+    const count = await retryQuarantinedOutbox();
+    if (count > 0) {
+      this.logEvent('info', `${count} mutation(s) en quarantaine réactivée(s)`, 'info');
+      await this.refreshPendingCount();
+      void this.kick();
+    }
+    return count;
   }
 
   async pushOnce() {
@@ -445,14 +465,26 @@ class SyncManager {
                 break;
               }
 
-              await markOutbox(op.idempotency_key, {
-                status: 'pending',
-                retryCount: (op.retry_count ?? 0) + 1,
-                nextRetryAt: new Date(Date.now() + backoffMs(op.retry_count ?? 0)).toISOString(),
-                error: rawMsg,
-              });
-              this.lastError = `${op.entity_type}/${op.entity_id}: ${rawMsg}`;
-              this.logEvent('error', `Échec d'envoi [${op.entity_type}]: ${rawMsg}`, 'warn');
+              const nextRetry = (op.retry_count ?? 0) + 1;
+              if (nextRetry >= 10) {
+                await markOutbox(op.idempotency_key, {
+                  status: 'failed',
+                  retryCount: nextRetry,
+                  nextRetryAt: null,
+                  error: `[QUARANTINE - MAX RETRIES] ${rawMsg}`,
+                });
+                this.lastError = `[QUARANTINE] ${op.entity_type}/${op.entity_id}: ${rawMsg}`;
+                this.logEvent('error', `Mutation mise en quarantaine après 10 échecs [${op.entity_type}/${op.entity_id}]: ${rawMsg}`, 'error');
+              } else {
+                await markOutbox(op.idempotency_key, {
+                  status: 'pending',
+                  retryCount: nextRetry,
+                  nextRetryAt: new Date(Date.now() + backoffMs(op.retry_count ?? 0)).toISOString(),
+                  error: rawMsg,
+                });
+                this.lastError = `${op.entity_type}/${op.entity_id}: ${rawMsg}`;
+                this.logEvent('error', `Échec d'envoi [${op.entity_type}]: ${rawMsg}`, 'warn');
+              }
             }
           }
         }
@@ -486,9 +518,14 @@ class SyncManager {
     const v = (x: unknown): InValue => (x === undefined ? null : x) as InValue;
     const version = Number(payload.version ?? 1);
 
-    // Product image processing decommissioned: ensure image fields are purged
+    // Image/media payload stripping: ensure large binary/base64 fields are purged before pushing to Turso
     payload.imageUrl = '';
     payload.image_url = '';
+    if ('photos' in payload) delete payload.photos;
+    if ('photo' in payload) delete payload.photo;
+    if ('receipt_image' in payload) delete payload.receipt_image;
+    if ('scan_image' in payload) delete payload.scan_image;
+    if ('avatar' in payload && typeof payload.avatar === 'string' && payload.avatar.length > 500) delete payload.avatar;
 
     if (op.operation === 'DELETE') {
       const table = op.entity_type === 'order' ? 'transactions'

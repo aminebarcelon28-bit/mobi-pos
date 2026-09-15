@@ -614,11 +614,11 @@ export const SettingsModal: React.FC = () => {
             <button
               type="button"
               onClick={closeModal}
-              className="p-1.5 -ml-1 rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center gap-1 font-bold text-xs"
-              title="Retour au logiciel"
+              className="p-1.5 px-2.5 sm:px-3 bg-cyan-500/10 hover:bg-cyan-500/20 active:scale-95 border border-cyan-500/30 text-cyan-400 rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shrink-0"
+              title="Retour au logiciel (Échap)"
             >
-              <ChevronLeft className="w-5 h-5 text-cyan-400 stroke-[2.5]" />
-              <span className="hidden sm:inline">Retour</span>
+              <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
+              <span>Retour</span>
             </button>
             <div className="w-9 h-9 rounded-xl bg-cyan-500/20 flex items-center justify-center border border-cyan-500/30 shadow-lg">
               <Settings className="w-5 h-5 text-cyan-400 stroke-[2.5]" />
