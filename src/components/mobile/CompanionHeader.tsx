@@ -28,6 +28,14 @@ export const CompanionHeader: React.FC = () => {
 
   const isSyncing = syncStatus.pushing || syncStatus.pulling;
 
+  const handleSyncClick = () => {
+    if (!syncStatus.online) {
+      openModal('settings');
+      return;
+    }
+    void syncManager.kick();
+  };
+
   return (
     <header className="min-h-12 h-[calc(3rem+env(safe-area-inset-top,0px))] pt-[env(safe-area-inset-top,0px)] bg-pos-panel border-b border-pos-border px-3 flex items-center justify-between select-none shrink-0 z-20">
       {/* Brand & Companion Mode Badge */}
@@ -49,9 +57,9 @@ export const CompanionHeader: React.FC = () => {
       <div className="flex items-center gap-1.5">
         <button
           type="button"
-          onClick={() => openModal('settings')}
-          className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-pos-card border border-pos-border text-pos-text text-[10px] font-bold cursor-pointer hover:border-emerald-500/40 transition"
-          title="Paramètres de synchronisation Cloud"
+          onClick={handleSyncClick}
+          className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-pos-card border border-pos-border text-pos-text text-[10px] font-bold cursor-pointer hover:border-emerald-500/40 transition active:scale-95"
+          title={syncStatus.online ? "Synchronisation Turso — appuyez pour forcer" : "Hors ligne — appuyez pour les paramètres"}
         >
           {isSyncing ? (
             <RefreshCw className="w-3 h-3 text-amber-400 animate-spin" />

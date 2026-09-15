@@ -25,7 +25,7 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
     setIsSyncing(true);
     try {
       const { syncManager } = await import('../../../sync/SyncManager');
-      await syncManager.pullOnce();
+      await syncManager.kick();
       await usePosStore.getState().refreshAfterPull();
     } catch (err) {
       console.warn('Manual pull failed:', err);

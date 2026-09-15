@@ -220,7 +220,7 @@ export const BottomBar: React.FC = () => {
             title={
               !sync.online
                 ? 'Hors ligne — file locale active, sync auto à la reconnexion'
-                : sync.lastError ?? `Turso sync — cliquez pour forcer. Dernier pull: ${sync.lastPullAt ?? '—'}`
+                : sync.lastError ?? `Turso Sync (${sync.relayConnected ? 'Relay Temps Réel Actif' : 'Polling Rapide 1.5s'}). Dernier pull: ${sync.lastPullAt ? new Date(sync.lastPullAt).toLocaleTimeString('fr-FR') : '—'}. Cliquez pour forcer.`
             }
           >
             {!sync.online ? (
@@ -237,11 +237,19 @@ export const BottomBar: React.FC = () => {
                   ? 'Sync…'
                   : sync.pendingCount > 0
                     ? `${sync.pendingCount} en attente`
-                    : 'Sync Turso'}
+                    : sync.relayConnected
+                      ? 'Relay Actif'
+                      : 'Sync Turso'}
             </span>
             <span
               className={`w-1.5 h-1.5 rounded-full ${
-                !sync.online ? 'bg-slate-400' : sync.pendingCount > 0 ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'
+                !sync.online
+                  ? 'bg-slate-400'
+                  : sync.pendingCount > 0
+                    ? 'bg-amber-400 animate-pulse'
+                    : sync.relayConnected
+                      ? 'bg-emerald-400 animate-pulse'
+                      : 'bg-emerald-400'
               }`}
             />
           </button>
