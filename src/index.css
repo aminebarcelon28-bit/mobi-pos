@@ -258,3 +258,24 @@ html.dark .hotkey-badge {
     height: auto !important;
   }
 }
+
+/* Mobile QR Scanner Laser Beam Animation */
+@keyframes scan-beam {
+  0% {
+    top: 5%;
+    opacity: 0.3;
+  }
+  50% {
+    top: 92%;
+    opacity: 1;
+  }
+  100% {
+    top: 5%;
+    opacity: 0.3;
+  }
+}
+
+.animate-scan-beam {
+  animation: scan-beam 2s ease-in-out infinite;
+}
+

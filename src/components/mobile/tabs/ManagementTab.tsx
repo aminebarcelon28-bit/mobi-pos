@@ -16,10 +16,11 @@ import {
   ChevronRight,
   Monitor,
   Layers,
-  Key,
   ShoppingBag,
   Clock,
   Sparkles,
+  Camera,
+  QrCode,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
 import { useDeviceMode } from '../../../hooks/useDeviceMode';
@@ -340,19 +341,20 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           </button>
         </div>
 
-        {/* Cloud Credentials Shortcut */}
+        {/* Cloud Credentials / QR Scan Shortcut */}
         {onOpenPairingWizard && (
           <div className="flex items-center justify-between py-1">
             <span className="font-medium text-pos-text flex items-center gap-2.5">
-              <Key className="w-4 h-4 text-cyan-400" />
-              <span>Liaison Cloud Turso</span>
+              <QrCode className="w-4 h-4 text-cyan-400" />
+              <span>Lier une Caisse (Scanner QR)</span>
             </span>
             <button
               type="button"
               onClick={onOpenPairingWizard}
-              className="h-8 px-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 font-bold text-xs hover:bg-cyan-500/20 active:scale-95 transition cursor-pointer"
+              className="h-8 px-3 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-slate-950 font-bold text-xs active:scale-95 transition cursor-pointer flex items-center gap-1.5 shadow-sm shadow-emerald-500/20"
             >
-              Configurer
+              <Camera className="w-3.5 h-3.5" />
+              <span>Scanner</span>
             </button>
           </div>
         )}

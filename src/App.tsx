@@ -179,6 +179,7 @@ export const App: React.FC = () => {
             <MobilePairingWizard
               onPaired={() => setShowPairingWizard(false)}
               onSkipDemo={() => setShowPairingWizard(false)}
+              onClose={() => setShowPairingWizard(false)}
             />
           </ToastProvider>
         </ErrorBoundary>

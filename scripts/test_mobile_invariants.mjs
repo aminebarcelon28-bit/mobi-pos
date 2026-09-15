@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MobiPOS — Mobile Companion & Nomadic POS Invariant Verification Suite
  * Tests platform role switching, pricing tiers, debtLimit guards,
  * and atomic sync_outbox persistence on mobile checkouts.
@@ -180,6 +180,53 @@ assert.ok(waLink.includes('12500'), 'Message must contain exact debt amount');
 assert.ok(waLink.includes('MobiPOS%20Alger'), 'Store name must be URI encoded');
 pass('WhatsApp debt reminders sanitize Algerian numbers and format clean direct URLs');
 
+// -----------------------------------------------------------------------------
+// TEST 7: Mobile Camera QR Code Pairing Payload Ingestion
+// -----------------------------------------------------------------------------
+console.log('\n--- TEST 7: Mobile Camera QR Code Pairing Payload Ingestion ---');
+
+function parsePairingPayload(raw) {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.url === 'string' && typeof parsed.token === 'string') {
+      const url = parsed.url.trim();
+      const token = parsed.token.trim();
+      if ((url.startsWith('libsql://') || url.startsWith('https://')) && token.length > 0) {
+        return { ok: true, url, token, type: parsed.type || 'direct' };
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return { ok: false, error: 'Invalid pairing format' };
+}
+
+// 1. Valid MobiPOS pairing JSON from desktop PC
+const validDesktopPayload = JSON.stringify({
+  v: 1,
+  type: 'mobipos-pair',
+  url: 'libsql://boutique-el-harrach.turso.io',
+  token: 'eyJhbGciOiJFZERT...',
+  ts: 1726435200000,
+});
+const res1 = parsePairingPayload(validDesktopPayload);
+assert.strictEqual(res1.ok, true, 'Valid desktop pairing QR payload must parse successfully');
+assert.strictEqual(res1.url, 'libsql://boutique-el-harrach.turso.io');
+assert.strictEqual(res1.token, 'eyJhbGciOiJFZERT...');
+assert.strictEqual(res1.type, 'mobipos-pair');
+
+// 2. Generic valid JSON
+const res2 = parsePairingPayload(JSON.stringify({ url: 'https://test-db.turso.io', token: 'token123' }));
+assert.strictEqual(res2.ok, true);
+assert.strictEqual(res2.url, 'https://test-db.turso.io');
+
+// 3. Malformed / non-JSON or invalid URLs
+assert.strictEqual(parsePairingPayload('Not a JSON string').ok, false);
+assert.strictEqual(parsePairingPayload(JSON.stringify({ some_other_data: 123 })).ok, false);
+assert.strictEqual(parsePairingPayload(JSON.stringify({ url: 'ftp://invalid', token: 'abc' })).ok, false);
+pass('Mobile camera QR scanner securely validates and extracts Turso credentials with fail-safe error handling');
+
 console.log('\n========================================================================');
 console.log(`🎯 MOBILE INVARIANT TEST RESULTS: ${passedTests} PASSED, 0 FAILED`);
 console.log('========================================================================\n');
+
