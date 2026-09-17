@@ -7,7 +7,11 @@
     "tauri": "tauri",
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node scripts/test_pos_math.js && node scripts/test_cloud_sync_and_migration.mjs && node scripts/test_sync_contract.mjs && node scripts/test_offline_chaos.mjs && node scripts/test_mobile_invariants.mjs && node scripts/test_mobile_release_pipeline.mjs",
+    "test": "node scripts/test_pos_math.js && node scripts/test_cloud_sync_and_migration.mjs && node scripts/test_sync_contract.mjs && node scripts/test_offline_chaos.mjs && node scripts/test_mobile_invariants.mjs && node scripts/test_mobile_release_pipeline.mjs && node scripts/verify-bidirectional-fix.mjs && node scripts/test_mobile_desktop_bidirectional_sync.mjs && node --experimental-strip-types scripts/test_bindings_and_hlc.mjs && node --experimental-strip-types scripts/test_p1_replay_equality.mjs && node --experimental-strip-types scripts/test_full_es_lfp_lifecycle.mjs && node --experimental-strip-types scripts/test_sync_hygiene.mjs",
+    "test:p0": "node --experimental-strip-types scripts/test_bindings_and_hlc.mjs",
+    "test:p1": "node --experimental-strip-types scripts/test_p1_replay_equality.mjs",
+    "test:lifecycle": "node --experimental-strip-types scripts/test_full_es_lfp_lifecycle.mjs",
+    "test:hygiene": "node --experimental-strip-types scripts/test_sync_hygiene.mjs",
     "test:math": "node scripts/test_pos_math.js",
     "test:cloud": "node scripts/test_cloud_sync_and_migration.mjs",
     "test:sync": "node scripts/test_sync_contract.mjs",
@@ -20,12 +24,14 @@
     "release": "node scripts/release.js",
     "android:init": "tauri android init",
     "android:dev": "tauri android dev",
-    "android:build": "tauri android build --debug"
+    "android:build": "tauri android build --debug",
+    "android:apk": "tauri android build --apk --debug -t aarch64 armv7"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
     "@tailwindcss/postcss": "^4.3.3",
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-opener": "^2.0.0",
     "@tauri-apps/plugin-process": "^2.0.0",
     "@tauri-apps/plugin-sql": "^2.4.1",
     "@tauri-apps/plugin-updater": "^2.11.0",
