@@ -14,6 +14,7 @@ import {
 import { syncManager } from '../../../sync/SyncManager';
 import type { SyncStatus } from '../../../sync/types';
 import { usePosStore } from '../../../store/usePosStore';
+import { AppTabContent } from '../AppScreenLayout';
 import { soundEngine } from '../../../utils/audioFeedback';
 
 export const SyncDiagnosticsTab: React.FC = () => {
@@ -35,10 +36,35 @@ export const SyncDiagnosticsTab: React.FC = () => {
   const [isRetryingQuarantined, setIsRetryingQuarantined] = useState(false);
   const [manualSyncMsg, setManualSyncMsg] = useState<string | null>(null);
 
+  // P2 crash telemetry: ring buffer written by main.tsx global handlers
+  // (window.onerror / unhandledrejection). Read-only here; clearing is
+  // explicit and local-only.
+  interface CrashReport {
+    kind: 'error' | 'unhandledrejection';
+    message: string;
+    stack: string;
+    at: string;
+  }
+
+  const readCrashReports = (): CrashReport[] => {
+    try {
+      const w = window as unknown as Record<string, unknown>;
+      const getter = w.__mobipos_getCrashReports as unknown as (() => CrashReport[]) | undefined;
+      const reports = typeof getter === 'function' ? getter() : [];
+      return Array.isArray(reports) ? reports : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const [crashReports, setCrashReports] = useState<CrashReport[]>([]);
+  const [crashMsg, setCrashMsg] = useState<string | null>(null);
+
   useEffect(() => {
     const unsub = syncManager.subscribe((s) => {
       setSyncStatus(s);
     });
+    setCrashReports(readCrashReports());
     return unsub;
   }, []);
 
@@ -80,10 +106,49 @@ export const SyncDiagnosticsTab: React.FC = () => {
     }
   };
 
+  const handleCopyCrashReports = async () => {
+    soundEngine.playKeyBeep?.();
+    try {
+      const payload = JSON.stringify(crashReports, null, 2);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(payload);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = payload;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      soundEngine.playSuccess?.();
+      setCrashMsg('Rapports copiés — collez-les dans votre message de support.');
+      setTimeout(() => setCrashMsg(null), 4000);
+    } catch {
+      soundEngine.playError?.();
+      setCrashMsg('Copie impossible sur cet appareil.');
+      setTimeout(() => setCrashMsg(null), 4000);
+    }
+  };
+
+  const handleClearCrashReports = () => {
+    soundEngine.playKeyBeep?.();
+    try {
+      const w = window as unknown as Record<string, unknown>;
+      (w.__mobipos_clearCrashReports as unknown as (() => void) | undefined)?.();
+      setCrashReports([]);
+      setCrashMsg('Journal des incidents vidé.');
+      setTimeout(() => setCrashMsg(null), 4000);
+    } catch {
+      setCrashMsg('Effacement impossible.');
+      setTimeout(() => setCrashMsg(null), 4000);
+    }
+  };
+
   const isSyncing = syncStatus.pushing || syncStatus.pulling || isManualSyncing;
 
   return (
-    <div className="flex-1 overflow-y-auto p-3.5 space-y-3.5 pb-24 select-none">
+    <AppTabContent contentClassName="p-3.5 select-none">
+      <div className="space-y-3.5 pb-2">
       {/* Cloud Status Card */}
       <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 shadow-sm">
         <div className="flex items-center justify-between">
@@ -219,6 +284,58 @@ export const SyncDiagnosticsTab: React.FC = () => {
         </div>
       )}
 
+      {/* Crash & Freeze Reports (P2 telemetry — global error/unhandledrejection ring buffer) */}
+      <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 text-xs">
+        <div className="flex items-center justify-between">
+          <h4 className="text-[11px] font-black uppercase text-pos-muted tracking-wider flex items-center gap-1.5">
+            <AlertTriangle className={`w-3.5 h-3.5 ${crashReports.length > 0 ? 'text-amber-400' : 'text-emerald-400'}`} />
+            Incidents Appareil ({crashReports.length})
+          </h4>
+          {crashReports.length > 0 && (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleCopyCrashReports}
+                className="py-1.5 px-2.5 rounded-lg bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 font-bold text-[11px] active:scale-95 transition cursor-pointer"
+              >
+                Copier
+              </button>
+              <button
+                type="button"
+                onClick={handleClearCrashReports}
+                className="py-1.5 px-2.5 rounded-lg bg-pos-panel border border-pos-border text-pos-muted font-bold text-[11px] active:scale-95 transition cursor-pointer"
+              >
+                Effacer
+              </button>
+            </div>
+          )}
+        </div>
+        {crashReports.length === 0 ? (
+          <p className="text-[11px] text-pos-muted">
+            Aucun incident capturé sur cet appareil. Les gels et plantages futurs seront enregistrés ici automatiquement.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {crashReports.slice(0, 5).map((report, idx) => (
+              <div key={`${report.at}-${idx}`} className="bg-pos-panel/60 p-2 rounded-lg border border-pos-border/60">
+                <div className="flex justify-between items-center gap-2">
+                  <span className={`font-mono text-[10px] font-bold ${report.kind === 'unhandledrejection' ? 'text-amber-300' : 'text-rose-300'}`}>
+                    {report.kind === 'unhandledrejection' ? 'Promesse rejetée' : 'Erreur'}
+                  </span>
+                  <span className="font-mono text-[10px] text-pos-muted">
+                    {new Date(report.at).toLocaleString('fr-FR')}
+                  </span>
+                </div>
+                <p className="text-[10px] font-mono text-pos-text break-all mt-1">{report.message}</p>
+              </div>
+            ))}
+            {crashMsg && (
+              <p className="text-[11px] font-bold text-center text-cyan-300">{crashMsg}</p>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Local Storage Records Count */}
       <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 text-xs">
         <h4 className="text-[11px] font-black uppercase text-pos-muted tracking-wider flex items-center gap-1.5">
@@ -249,6 +366,7 @@ export const SyncDiagnosticsTab: React.FC = () => {
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </AppTabContent>
   );
 };

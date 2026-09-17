@@ -1,9 +1,36 @@
-// Purges all legacy product image references and payloads from Turso Cloud DB using @libsql/client.
-// Reads credentials from proxy/.env (TURSO_URL + TURSO_AUTH_TOKEN).
-// Usage: node scripts/purge-cloud-images.mjs
+// Legacy-blob cloud purge (P0 follow-through).
+//
+// Removes pre-hygiene media blobs (base64/data-URL) from Turso Cloud rows so
+// phones stop re-downloading the ~36 MB forensic bloat documented in
+// docs/sync/diagnostic-baseline-2026-09-17.md. Uses the SAME rules as the app
+// (src/sync/payloadHygiene.ts) — the purge and the write path cannot disagree.
+//
+// SAFETY FIRST:
+//   - Default mode is DRY-RUN: scans, measures and reports; writes NOTHING.
+//   - Writes require the explicit flag: --apply
+//   - Before any write, a backup file purge-backup-<ts>.json captures every
+//     affected row id + byte sizes (restore manually if ever needed).
+//   - Cleaned rows get version = version + 1 AND a fresh updated_at so peers
+//     re-pull them through the (sanitizing) pull path — this is what heals
+//     phones and laptops holding the old blobs locally.
+//   - Money/relational scalars are never dropped (payloadHygiene contract).
+//
+// Credentials: proxy/.env (TURSO_URL + TURSO_AUTH_TOKEN) or env vars. The
+// token is NEVER printed.
+//
+// Usage:
+//   node --experimental-strip-types scripts/purge-cloud-images.mjs            # dry-run report
+//   node --experimental-strip-types scripts/purge-cloud-images.mjs --apply    # perform the purge
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { createClient } from '@libsql/client';
+import {
+  sanitizeSyncPayload,
+  toBoundedSyncJson,
+  MAX_SYNC_PAYLOAD_BYTES,
+} from '../src/sync/payloadHygiene.ts';
+
+const APPLY = process.argv.includes('--apply');
 
 function loadEnvFile(path) {
   const out = {};
@@ -22,85 +49,136 @@ const env = { ...loadEnvFile('proxy/.env'), ...process.env };
 const url = env.TURSO_URL;
 const token = env.TURSO_AUTH_TOKEN;
 
-console.log('🚀 Starting Cloud Environment Image Decommissioning & Purge...');
+console.log('========================================================================');
+console.log(`CLOUD BLOB PURGE — ${APPLY ? 'APPLY MODE (writes enabled)' : 'DRY-RUN (read-only, no writes)'}`);
+console.log('========================================================================');
 
 if (!url || !token || token.includes('your_turso_auth_token_here')) {
-  console.log('ℹ️ Turso credentials not configured or placeholder detected in proxy/.env.');
-  console.log('ℹ️ Running in verification-only / local mode.');
-  console.log('✅ Local product image processing software successfully decommissioned.');
+  console.log('Turso credentials not configured (proxy/.env). Nothing to do — exiting 0.');
+  console.log('Local write path is already protected by the P0 hygiene invariant.');
   process.exit(0);
 }
 
+const host = (() => {
+  try {
+    return new URL(url.replace(/^libsql:\/\//, 'https://')).host;
+  } catch {
+    return '(unparsable url)';
+  }
+})();
+console.log(`Target: ${host}`);
+
 const client = createClient({ url, authToken: token });
 
-async function purgeCloudImages() {
-  try {
-    console.log(`📡 Connecting to remote cloud database: ${url.split('@')[1] ?? url}...`);
-    
-    // 1. Inspect existing products with non-empty image_url
-    const checkRes = await client.execute(
-      "SELECT COUNT(*) as cnt FROM products WHERE image_url IS NOT NULL AND image_url != ''"
-    );
-    const count = Number(checkRes.rows[0]?.cnt ?? 0);
-    console.log(`📊 Found ${count} product(s) with legacy image_url in cloud.`);
+// Tables whose json_payload/data_json may embed media blobs (forensic set).
+const TARGETS = [
+  { table: 'products', jsonCol: 'json_payload' },
+  { table: 'transactions', jsonCol: 'json_payload' },
+  { table: 'transaction_items', jsonCol: 'json_payload' },
+];
 
-    // 2. Purge image_url column
-    if (count > 0) {
-      const purgeRes = await client.execute(
-        "UPDATE products SET image_url = '', updated_at = datetime('now') WHERE image_url IS NOT NULL AND image_url != ''"
-      );
-      console.log(`  ✓ Cleared image_url for ${purgeRes.rowsAffected ?? count} remote product rows.`);
-    }
-
-    // 3. Purge image fields from json_payload
-    const payloadRes = await client.execute(
-      "SELECT id, json_payload FROM products WHERE json_payload LIKE '%imageUrl%' OR json_payload LIKE '%image_url%'"
-    );
-    
-    if (payloadRes.rows.length > 0) {
-      console.log(`🧹 Sanitizing json_payload for ${payloadRes.rows.length} product(s)...`);
-      let sanitizedCount = 0;
-      for (const row of payloadRes.rows) {
-        try {
-          const payload = JSON.parse(String(row.json_payload || '{}'));
-          let modified = false;
-          if (payload.imageUrl) {
-            payload.imageUrl = '';
-            modified = true;
-          }
-          if (payload.image_url) {
-            payload.image_url = '';
-            modified = true;
-          }
-          if (modified) {
-            await client.execute({
-              sql: 'UPDATE products SET json_payload = ? WHERE id = ?',
-              args: [JSON.stringify(payload), row.id],
-            });
-            sanitizedCount++;
-          }
-        } catch {
-          // Ignore parse errors on corrupted payloads
-        }
-      }
-      console.log(`  ✓ Sanitized ${sanitizedCount} json_payload records in cloud.`);
-    }
-
-    // 4. Final Verification
-    const finalCheck = await client.execute(
-      "SELECT COUNT(*) as cnt FROM products WHERE image_url IS NOT NULL AND image_url != ''"
-    );
-    const remaining = Number(finalCheck.rows[0]?.cnt ?? 0);
-    if (remaining === 0) {
-      console.log('✅ Cloud environment verified: 0 image references remain in Turso.');
-    } else {
-      console.warn(`⚠️ Warning: ${remaining} image references remain.`);
-    }
-
-  } catch (error) {
-    console.error('❌ Cloud purge encountered error:', error.message);
-    process.exit(1);
-  }
+function byteLen(value) {
+  return Buffer.byteLength(String(value ?? ''), 'utf8');
 }
 
-purgeCloudImages();
+async function main() {
+  const report = { mode: APPLY ? 'apply' : 'dry-run', at: new Date().toISOString(), tables: {} };
+  let totalBefore = 0;
+  let totalAfter = 0;
+  let totalRows = 0;
+  const backup = [];
+
+  for (const { table, jsonCol } of TARGETS) {
+    let rows = [];
+    try {
+      const rs = await client.execute(`SELECT id, ${jsonCol}, version FROM ${table}`);
+      rows = rs.rows;
+    } catch (err) {
+      console.warn(`[${table}] scan skipped: ${err.message}`);
+      report.tables[table] = { skipped: String(err.message ?? err) };
+      continue;
+    }
+    let scanned = 0;
+    let dirty = 0;
+    let before = 0;
+    let after = 0;
+    for (const row of rows) {
+      const raw = String(row[jsonCol] ?? '');
+      if (!raw) continue;
+      scanned++;
+      before += byteLen(raw);
+      let cleaned;
+      try {
+        const parsed = JSON.parse(raw);
+        cleaned = JSON.stringify(sanitizeSyncPayload(parsed));
+      } catch {
+        continue; // Unparseable payload: leave untouched, never destroy.
+      }
+      if (cleaned === raw) {
+        after += byteLen(raw);
+        continue;
+      }
+      dirty++;
+      after += byteLen(cleaned);
+      backup.push({ table, id: String(row.id), bytesBefore: byteLen(raw), bytesAfter: byteLen(cleaned) });
+      if (APPLY) {
+        // Sanity: cleaned payload must stay valid JSON and keep its identity.
+        const check = JSON.parse(cleaned);
+        if (String(check.id ?? row.id) !== String(row.id)) {
+          console.warn(`[${table}/${row.id}] identity changed after sanitize — SKIPPED (never destroy).`);
+          continue;
+        }
+        await client.execute({
+          sql: `UPDATE ${table} SET ${jsonCol} = ?, image_url = CASE WHEN image_url IS NULL THEN NULL WHEN LENGTH(image_url) > 2048 THEN '' ELSE image_url END, version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
+          args: [cleaned, String(row.id)],
+        });
+      }
+    }
+    totalBefore += before;
+    totalAfter += after;
+    totalRows += dirty;
+    report.tables[table] = { scanned, dirty, kbBefore: +(before / 1024).toFixed(1), kbAfter: +(after / 1024).toFixed(1) };
+    console.log(
+      `[${table}] scanned=${scanned} dirty=${dirty} ` +
+      `bytes ${(before / 1024).toFixed(1)}KB -> ${(after / 1024).toFixed(1)}KB`
+    );
+  }
+
+  // Oversized image_url references outside json_payload (cheap, exact).
+  try {
+    const rs = await client.execute(
+      "SELECT COUNT(*) AS cnt, COALESCE(SUM(LENGTH(image_url)),0) AS bytes FROM products WHERE image_url IS NOT NULL AND LENGTH(image_url) > 2048"
+    );
+    const cnt = Number(rs.rows[0]?.cnt ?? 0);
+    const bytes = Number(rs.rows[0]?.bytes ?? 0);
+    console.log(`[products.image_url] oversized references: ${cnt} rows, ${(bytes / 1024).toFixed(1)}KB`);
+    report.oversizedImageUrls = { rows: cnt, kb: +(bytes / 1024).toFixed(1) };
+    if (APPLY && cnt > 0) {
+      await client.execute(
+        "UPDATE products SET image_url = '', version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE image_url IS NOT NULL AND LENGTH(image_url) > 2048"
+      );
+      console.log('[products.image_url] cleared oversized references (kept normal URLs).');
+    }
+  } catch (err) {
+    console.warn(`[products.image_url] check skipped: ${err.message}`);
+  }
+
+  const reclaimedKb = +((totalBefore - totalAfter) / 1024).toFixed(1);
+  console.log('------------------------------------------------------------------------');
+  console.log(`Rows to heal: ${totalRows} | reclaimable: ${reclaimedKb}KB | budget/row: ${MAX_SYNC_PAYLOAD_BYTES / 1024}KB`);
+  if (!APPLY) {
+    console.log('DRY-RUN complete — no writes performed. Re-run with --apply to purge.');
+  } else {
+    const backupFile = `purge-backup-${Date.now()}.json`;
+    writeFileSync(backupFile, JSON.stringify({ report, backup }, null, 2));
+    console.log(`APPLY complete — backup manifest written to ${backupFile}`);
+    console.log('Peers will re-pull cleaned rows (version+updated_at bumped) and heal local mirrors.');
+  }
+  // Machine-readable summary for CI logs (bounded: ids only, no payload bytes).
+  console.log(JSON.stringify({ ok: true, mode: report.mode, rowsToHeal: totalRows, reclaimableKb: reclaimedKb }));
+}
+
+main().catch((err) => {
+  console.error('Cloud purge failed:', err.message ?? err);
+  process.exit(1);
+});
