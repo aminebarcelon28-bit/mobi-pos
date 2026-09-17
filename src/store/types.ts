@@ -30,6 +30,7 @@ import type {
   InventoryValuation,
   ImeiLifecycleDossier,
 } from '../types/pos';
+import type { PullTouchSummary } from '../sync/types';
 
 export type ActiveModalType =
   | 'payment'
@@ -268,6 +269,7 @@ export interface UISlice {
   initDatabase: () => Promise<void>;
   seedDemoData: () => Promise<void>;
   refreshAfterPull: () => Promise<void>;
+  refreshPullTargets: (summary: PullTouchSummary) => Promise<void>;
   exportDatabase: () => void;
   importDatabase: (jsonString: string) => Promise<{ success: boolean; reason?: string }>;
 }

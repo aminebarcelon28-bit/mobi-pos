@@ -11,7 +11,7 @@ import { ALL_REMOTE_SYNC_TABLES, assertValidSyncTable, ensureRemoteSchemaColumns
 import { pushEventBatch, pullRemoteEventBatch } from './eventSyncEngine.ts';
 import type { InValue } from '@libsql/client';
 import type Database from '@tauri-apps/plugin-sql';
-import type { OutboxRow, SyncStatus, SyncEventLog } from './types';
+import type { OutboxRow, SyncStatus, SyncEventLog, PullTouchSummary } from './types';
 import type { Product } from '../types/pos';
 
 const GENERIC_TABLES: Record<string, string> = {
@@ -136,6 +136,8 @@ class SyncManager {
   private postWriteDebounce: number | null = null;
   private eventLogs: SyncEventLog[] = [];
   private onOnlineHandler: (() => void) | null = null;
+  // P1 targeted refresh: summary of what the last pullOnce() touched.
+  private lastPullTouched: PullTouchSummary = { productIds: [], transactions: false, tables: [] };
   private onOfflineHandler: (() => void) | null = null;
   private onVisibilityHandler: (() => void) | null = null;
   private remoteSaleListeners = new Set<(sale: Record<string, unknown>) => void>();
@@ -149,6 +151,19 @@ class SyncManager {
   onPullApplied(fn: () => void): () => void {
     this.pullApplied.add(fn);
     return () => { this.pullApplied.delete(fn); };
+  }
+
+  /**
+   * P1 targeted refresh: what the last pullOnce() applied (tables + product
+   * ids + txn flag). Read inside onPullApplied handlers to reload only the
+   * affected slices instead of all 16 tables.
+   */
+  getLastPullTouched(): PullTouchSummary {
+    return {
+      productIds: [...this.lastPullTouched.productIds],
+      transactions: this.lastPullTouched.transactions,
+      tables: [...this.lastPullTouched.tables],
+    };
   }
 
   onRemoteSaleReceived(fn: (sale: Record<string, unknown>) => void): () => void {
@@ -1047,6 +1062,7 @@ class SyncManager {
       const cursorQueries: Array<{ sql: string; args: InValue[] }> = [];
       const tableCursors: Array<{ table: string; cursor: { time: string; id: string } }> = [];
       const touchedProductIds = new Set<string>();
+      const touchedTables = new Set<string>();
       let transactionsNeedReconstruction = false;
 
       for (const table of ALL_REMOTE_SYNC_TABLES) {
@@ -1079,6 +1095,7 @@ class SyncManager {
         const { table, cursor } = tableCursors[i];
         let maxSeenTime = cursor.time;
         let maxSeenId = cursor.id;
+        let tablePulled = 0;
 
         let rsRows: unknown[] = [];
         if (batchResults && batchResults[i]) {
@@ -1105,6 +1122,7 @@ class SyncManager {
           try {
             await this.applyRemoteRow(db, table, r);
             totalPulled++;
+            tablePulled++;
             // Contract C6: advance the cursor ONLY past rows that applied
             // cleanly. A failed row keeps the cursor behind it so the next
             // pull retries it instead of silently skipping it forever.
@@ -1121,6 +1139,7 @@ class SyncManager {
         if (maxSeenTime !== cursor.time || maxSeenId !== cursor.id) {
           await this.setTableCursor(db, table, { time: maxSeenTime, id: maxSeenId });
         }
+        if (tablePulled > 0) touchedTables.add(table);
       }
 
       if (totalPulled > 0) {
@@ -1153,6 +1172,13 @@ class SyncManager {
           }
         }
         this.logEvent('pull', `${totalPulled} enregistrements reçus du cloud`, 'info');
+        // P1: record what this pull touched so UI handlers can refresh only
+        // the affected slices (products subset / txns / fallback full reload).
+        this.lastPullTouched = {
+          productIds: [...touchedProductIds],
+          transactions: transactionsNeedReconstruction,
+          tables: [...touchedTables],
+        };
         this.emitPulled();
       }
     } catch (e) {
@@ -1531,3 +1557,5 @@ class SyncManager {
 }
 
 export const syncManager = new SyncManager();
+
+export type { PullTouchSummary };

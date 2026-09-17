@@ -33,11 +33,18 @@ const SyncNotificationListener: React.FC = () => {
         }
         const total = typeof sale.total === 'number' ? sale.total : 0;
         const receipt = (sale.receiptNumber as string) || (sale.id as string) || '';
-        showToast(
-          `Vente synchronisée du mobile : #${receipt} (${Math.round(total).toLocaleString('fr-DZ')} DZD)`,
-          'success',
-          5000
-        );
+        const status = (sale.status as string) || 'COMPLETED';
+        if (status === 'VOIDED') {
+          showToast(`Vente annulée sur un autre appareil : #${receipt}`, 'info', 5000);
+        } else if (status === 'REFUNDED' || status === 'PARTIALLY_REFUNDED') {
+          showToast(`Avoir émis sur un autre appareil : #${receipt}`, 'info', 5000);
+        } else {
+          showToast(
+            `Vente synchronisée du mobile : #${receipt} (${Math.round(total).toLocaleString('fr-DZ')} DZD)`,
+            'success',
+            5000
+          );
+        }
       });
     }).catch(console.warn);
     return () => unsub?.();
@@ -107,19 +114,26 @@ export const App: React.FC = () => {
 
       // 2. Non-blocking Background Sync & Cloud Replicas
       try {
-        const { getDeviceId } = await import('./sync/device');
+        const { getStableDeviceId } = await import('./sync/device');
         const { syncManager } = await import('./sync/SyncManager');
         if (cancelled) return;
         unsubPull = syncManager.onPullApplied(() => {
           if (cancelled) return;
           if (refreshTimer) window.clearTimeout(refreshTimer);
           refreshTimer = window.setTimeout(() => {
-            usePosStore.getState().refreshAfterPull().catch((err: unknown) => {
+            // P1: reload only slices the pull touched (products subset / txns);
+            // falls back to the full reload when the touch summary is empty.
+            const touched = syncManager.getLastPullTouched();
+            const hasTouch = touched.productIds.length > 0 || touched.transactions || touched.tables.length > 0;
+            const refresh = hasTouch
+              ? usePosStore.getState().refreshPullTargets(touched)
+              : usePosStore.getState().refreshAfterPull();
+            refresh.catch((err: unknown) => {
               console.warn('[sync] Instant UI refresh error:', err);
             });
           }, 50);
         });
-        await syncManager.start(getDeviceId());
+        await syncManager.start(await getStableDeviceId());
         if (!cancelled) await syncManager.initialPull();
       } catch (e) {
         console.warn('[boot] SyncManager background start skipped:', e);
@@ -203,7 +217,7 @@ export const App: React.FC = () => {
     <ErrorBoundary fallbackTitle="Erreur Système POS Interceptée">
       <ToastProvider>
         <SyncNotificationListener />
-        <div className={`h-screen w-screen flex flex-col bg-pos-bg text-pos-text overflow-hidden font-sans transition-all duration-200 ${scannerActive ? 'ring-4 ring-inset ring-emerald-500' : ''}`}>
+        <div className={`h-[100dvh] w-full flex flex-col bg-pos-bg text-pos-text overflow-hidden font-sans transition-all duration-200 ${scannerActive ? 'ring-4 ring-inset ring-emerald-500' : ''}`}>
           {/* Orientation Guidance on Mobile PC View */}
           {isMobileDevice() && !isLandscape && (
             <div className="bg-gradient-to-r from-indigo-950 via-purple-950 to-slate-900 border-b border-indigo-500/30 px-3 py-1.5 flex items-center justify-between text-[11px] text-indigo-200 shrink-0 select-none z-40">
@@ -241,7 +255,7 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => setRoleMode('companion_mobile')}
-              className="fixed bottom-12 right-3 z-50 px-3 py-1.5 rounded-xl bg-cyan-600/95 hover:bg-cyan-500 text-white font-bold text-xs shadow-xl shadow-cyan-950/60 border border-cyan-400/40 flex items-center gap-1.5 active:scale-95 transition cursor-pointer"
+              className="fixed right-3 z-50 px-3 py-1.5 rounded-xl bg-cyan-600/95 hover:bg-cyan-500 text-white font-bold text-xs shadow-xl shadow-cyan-950/60 border border-cyan-400/40 flex items-center gap-1.5 active:scale-95 transition cursor-pointer bottom-[calc(var(--safe-bottom)+3rem)]"
               title="Revenir au mode compagnon mobile"
             >
               <Smartphone className="w-3.5 h-3.5" />

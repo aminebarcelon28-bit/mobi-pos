@@ -50,3 +50,16 @@ export interface SyncStatus {
   lastError: string | null;
   quotaExceeded?: boolean;
 }
+
+/**
+ * P1 targeted-refresh summary: what the last pullOnce() actually touched.
+ * Lets the UI reload only affected slices instead of all 16 tables.
+ */
+export interface PullTouchSummary {
+  /** Product ids whose rows/ledger deltas changed (subset-refreshable). */
+  productIds: string[];
+  /** Transactions/items/customers changed (needs txn + customer reload). */
+  transactions: boolean;
+  /** Remote table names that applied ≥1 row this pull. */
+  tables: string[];
+}

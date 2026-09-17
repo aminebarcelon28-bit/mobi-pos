@@ -426,59 +426,10 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       const inventoryValuation = await sqliteAdapter.getInventoryValuation();
       const auditLogs = await sqliteAdapter.getAllAuditLogs();
 
-      const legacyProducts =
-        typeof localStorage !== 'undefined' ? localStorage.getItem('mobi_pos_products') : null;
-      const legacyCustomers =
-        typeof localStorage !== 'undefined' ? localStorage.getItem('mobi_pos_customers') : null;
-      const legacyTxns =
-        typeof localStorage !== 'undefined' ? localStorage.getItem('mobi_pos_transactions') : null;
-
-      if (products.length === 0) {
-        if (legacyProducts) {
-          try {
-            const parsed = JSON.parse(legacyProducts);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              products = parsed;
-              await sqliteAdapter.bulkSaveProducts(products);
-            }
-          } catch (migrationError: unknown) {
-            console.error('[db:init] Failed to migrate legacy products from localStorage:', migrationError);
-          }
-        } else {
-          products = INITIAL_PRODUCTS;
-          await sqliteAdapter.bulkSaveProducts(products);
-        }
-      }
-
-      if (customers.length === 0) {
-        if (legacyCustomers) {
-          try {
-            const parsed = JSON.parse(legacyCustomers);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              customers = parsed;
-              await sqliteAdapter.bulkSaveCustomers(customers);
-            }
-          } catch (migrationError: unknown) {
-            console.error('[db:init] Failed to migrate legacy customers from localStorage:', migrationError);
-          }
-        } else {
-          customers = INITIAL_CUSTOMERS;
-          await sqliteAdapter.bulkSaveCustomers(customers);
-        }
-      }
-
-      if (transactions.length === 0 && legacyTxns) {
-        try {
-          const parsed = JSON.parse(legacyTxns);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            transactions = parsed;
-            for (const t of transactions) {
-              await sqliteAdapter.processSaleTransactionAtomic(t, [], undefined);
-            }
-          }
-        } catch (migrationError: unknown) {
-          console.error('[db:init] Failed to migrate legacy transactions from localStorage:', migrationError);
-        }
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('mobi_pos_products');
+        localStorage.removeItem('mobi_pos_customers');
+        localStorage.removeItem('mobi_pos_transactions');
       }
 
       const managerPin = await settingsRepository.get('manager_pin', '1234');
@@ -508,8 +459,8 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       console.error('Failed to initialize SQLite Database:', e);
       const { products, customers } = get();
       set({
-        products: products.length > 0 ? products : INITIAL_PRODUCTS,
-        customers: customers.length > 0 ? customers : INITIAL_CUSTOMERS,
+        products: products.length > 0 ? products : [],
+        customers: customers.length > 0 ? customers : [],
         isDbInitialized: true,
       });
     }
@@ -583,6 +534,53 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       });
     } catch (e) {
       console.warn('Post-pull refresh skipped:', e);
+    }
+  },
+
+  refreshPullTargets: async (summary) => {
+    // P1 targeted refresh: reload only slices the last pull touched.
+    // Falls back to the full 16-table reload for anything unmapped so the UI
+    // can never go stale — correctness first, speed second.
+    try {
+      const tables = new Set(summary.tables ?? []);
+      const productIds = [...new Set((summary.productIds ?? []).map((id) => String(id || '')).filter(Boolean))];
+      const wantsProducts = productIds.length > 0 || tables.has('products') || tables.has('inventory_ledger');
+      const wantsTransactions = summary.transactions || tables.has('transactions')
+        || tables.has('transaction_items') || tables.has('customers');
+      const handledTables = new Set(['products', 'inventory_ledger', 'transactions', 'transaction_items', 'customers']);
+      const hasUnmapped = [...tables].some((t) => !handledTables.has(t));
+      if (hasUnmapped || (!wantsProducts && !wantsTransactions && tables.size > 0)) {
+        await get().refreshAfterPull();
+        return;
+      }
+      if (!wantsProducts && !wantsTransactions) return;
+      const next: { products?: Product[]; transactions?: Awaited<ReturnType<typeof sqliteAdapter.getAllTransactions>>; customers?: Awaited<ReturnType<typeof sqliteAdapter.getAllCustomers>> } = {};
+      if (wantsProducts) {
+        if (productIds.length > 0 && productIds.length <= 200) {
+          const subset = await sqliteAdapter.getProductsByIds(productIds);
+          const merged = new Map(get().products.map((p) => [p.id, p]));
+          for (const p of subset) merged.set(p.id, p);
+          next.products = [...merged.values()];
+        } else {
+          next.products = await sqliteAdapter.getAllProducts();
+        }
+      }
+      if (wantsTransactions) {
+        const [transactions, customers] = await Promise.all([
+          sqliteAdapter.getAllTransactions(),
+          sqliteAdapter.getAllCustomers(),
+        ]);
+        next.transactions = transactions;
+        next.customers = customers;
+      }
+      if (Object.keys(next).length > 0) set(next as Partial<PosState>);
+    } catch (e) {
+      console.warn('Targeted post-pull refresh failed, falling back to full reload:', e);
+      try {
+        await get().refreshAfterPull();
+      } catch (fallbackErr) {
+        console.warn('Post-pull refresh skipped:', fallbackErr);
+      }
     }
   },
 
