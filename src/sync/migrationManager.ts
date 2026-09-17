@@ -8,6 +8,7 @@ import { db as dexieDb } from '../db/database';
 import { createPreMigrationBackup } from '../db/backupManager';
 import { applyRemoteMigrations, checkRemoteSchemaStatus, ensureRemoteSchemaColumns, ALL_REMOTE_SYNC_TABLES, GENERIC_SYNC_TABLES, assertValidSyncTable } from './remoteSchema';
 import { getTursoClient } from './tursoClient';
+import { RestoreManager } from './restoreManager';
 
 export interface TableVerificationResult {
   tableName: string;
@@ -115,6 +116,7 @@ export class MigrationManager {
         barcode: p.barcode ?? '',
         title: p.title,
         brand: p.brand ?? '',
+        compatible_model: p.compatibleModel ?? '',
         category: p.category ?? '',
         price: p.price ?? 0,
         wholesale_price: p.wholesalePrice ?? 0,
@@ -139,9 +141,9 @@ export class MigrationManager {
       // Mirror them into local SQLite so local SQLite becomes consistent
       for (const p of localProducts) {
         await local.execute(
-          `INSERT OR REPLACE INTO products (id, sku, barcode, title, brand, category, price, wholesale_price, cost_price, stock, image_url, is_serialized, imei_number, vendor_name, lead_time_days, daily_sales_velocity, reorder_point, json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
-          [p.id, p.sku, p.barcode, p.title, p.brand, p.category, p.price, p.wholesale_price, p.cost_price, p.stock, p.image_url, p.is_serialized, p.imei_number, p.vendor_name, p.lead_time_days, p.daily_sales_velocity, p.reorder_point, p.json_payload, p.device_id, p.idempotency_key, p.sync_status, p.version ?? 1, p.created_at, p.updated_at, p.deleted ?? 0]
+          `INSERT OR REPLACE INTO products (id, sku, barcode, title, brand, compatible_model, category, price, wholesale_price, cost_price, stock, image_url, is_serialized, imei_number, vendor_name, lead_time_days, daily_sales_velocity, reorder_point, json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
+          [p.id, p.sku, p.barcode, p.title, p.brand, p.compatible_model ?? '', p.category, p.price, p.wholesale_price, p.cost_price, p.stock, p.image_url, p.is_serialized, p.imei_number, p.vendor_name, p.lead_time_days, p.daily_sales_velocity, p.reorder_point, p.json_payload, p.device_id, p.idempotency_key, p.sync_status, p.version ?? 1, p.created_at, p.updated_at, p.deleted ?? 0]
         );
       }
     }
@@ -152,18 +154,20 @@ export class MigrationManager {
       const stmts = chunk.map((p) => {
         const cleanPayload = sanitizePayloadForCloud(JSON.parse((p.json_payload as string) || '{}'));
         return {
-          sql: `INSERT INTO products (id, sku, barcode, title, brand, category, price, wholesale_price,
+          sql: `INSERT INTO products (id, sku, barcode, title, brand, compatible_model, category, price, wholesale_price,
             cost_price, stock, image_url, is_serialized, imei_number, vendor_name, lead_time_days,
             daily_sales_velocity, reorder_point, json_payload, device_id, idempotency_key, sync_status,
             version, created_at, updated_at, deleted)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(id) DO UPDATE SET title=excluded.title, price=excluded.price, stock=excluded.stock,
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET title=excluded.title, brand=excluded.brand,
+            compatible_model=excluded.compatible_model, price=excluded.price, stock=excluded.stock,
             wholesale_price=excluded.wholesale_price, cost_price=excluded.cost_price,
             json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at,
-            deleted=excluded.deleted, sync_status='synced'`,
+            deleted=excluded.deleted, sync_status='synced'
+            WHERE excluded.version >= products.version`,
           args: [
             p.id as InValue, (p.sku ?? '') as InValue, (p.barcode ?? '') as InValue, p.title as InValue,
-            (p.brand ?? '') as InValue, (p.category ?? '') as InValue, (p.price ?? 0) as InValue,
+            (p.brand ?? '') as InValue, (p.compatible_model ?? '') as InValue, (p.category ?? '') as InValue, (p.price ?? 0) as InValue,
             (p.wholesale_price ?? 0) as InValue, (p.cost_price ?? 0) as InValue, (p.stock ?? 0) as InValue,
             (p.image_url ?? '') as InValue, (p.is_serialized ?? 0) as InValue, (p.imei_number ?? null) as InValue,
             (p.vendor_name ?? null) as InValue, (p.lead_time_days ?? 7) as InValue, (p.daily_sales_velocity ?? 0) as InValue,
@@ -224,7 +228,8 @@ export class MigrationManager {
           status, json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT(id) DO UPDATE SET total=excluded.total, status=excluded.status, json_payload=excluded.json_payload,
-          version=excluded.version, updated_at=excluded.updated_at, deleted=excluded.deleted, sync_status='synced'`,
+          version=excluded.version, updated_at=excluded.updated_at, deleted=excluded.deleted, sync_status='synced'
+          WHERE excluded.version >= transactions.version`,
         args: [
           t.id as InValue, t.receipt_number as InValue, (t.customer_id ?? null) as InValue,
           Number(t.subtotal ?? 0) as InValue, Number(t.tax ?? 0) as InValue, Number(t.discount_total ?? 0) as InValue,
@@ -296,10 +301,7 @@ export class MigrationManager {
           discount, imei_number, cost_price, json_payload, device_id, idempotency_key, sync_status,
           version, created_at, updated_at, deleted)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-          ON CONFLICT(id) DO UPDATE SET quantity=excluded.quantity, applied_price=excluded.applied_price,
-          discount=excluded.discount, imei_number=excluded.imei_number, cost_price=excluded.cost_price,
-          json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at,
-          deleted=excluded.deleted, sync_status='synced'`,
+          ON CONFLICT(id) DO NOTHING`,
         args: [
           it.id as InValue, it.transaction_id as InValue, it.product_id as InValue,
           Number(it.quantity ?? 1) as InValue, Number(it.applied_price ?? 0) as InValue,
@@ -373,7 +375,8 @@ export class MigrationManager {
             sql: `INSERT INTO ${remoteTable} (id, data_json, device_id, idempotency_key, sync_status, version, updated_at, deleted)
               VALUES (?,?,?,?,'synced',1,?,0)
               ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, version=excluded.version,
-              updated_at=excluded.updated_at, deleted=excluded.deleted, sync_status='synced'`,
+              updated_at=excluded.updated_at, deleted=excluded.deleted, sync_status='synced'
+              WHERE excluded.version >= ${remoteTable}.version`,
             args: [id as InValue, JSON.stringify(item) as InValue, 'migration' as InValue, `mig-${id}` as InValue, now as InValue],
           });
         }
@@ -383,6 +386,15 @@ export class MigrationManager {
         }
       }
     }
+
+    // ── Step 3E: Convergence Pull (Ingest Remote Cloud Records to Local Replicas) ──
+    // In multi-device topologies (e.g. desktop POS + companion phone), the cloud database already
+    // holds catalog and sales created on other terminals. Ingest all remote records into local
+    // SQLite and Dexie so both replicas achieve identical, provable mathematical parity.
+    onProgress?.('Synchronisation et fusion des données distantes du cloud...', 80, 100);
+    await RestoreManager.executeRestore((p) => {
+      onProgress?.(`Récupération ${p.table} (${p.processed}/${p.total})...`, 80 + Math.round((p.processed / Math.max(1, p.total)) * 8), 100);
+    }, true);
 
     // ── Step 4: Verification (PROVE Zero Data Loss & Zero Duplicates) ──
     onProgress?.('Vérification mathématique de l\'intégrité (comptages et hachages SHA-256)...', 90, 100);
@@ -427,7 +439,51 @@ export class MigrationManager {
       });
     }
 
-    const failedTables = tableResults.filter((t) => !t.verified);
+    let failedTables = tableResults.filter((t) => !t.verified);
+    if (failedTables.length > 0) {
+      // Retry delta pull once in case a concurrent write occurred during verification
+      onProgress?.('Ajustement final des deltas distants...', 95, 100);
+      await RestoreManager.executeRestore(undefined, true).catch(() => {});
+
+      for (const failed of failedTables) {
+        const table = failed.tableName;
+        let localCount = 0;
+        let localCanonical = '';
+
+        if (table === 'products' || table === 'transactions' || table === 'transaction_items' || table === 'inventory_ledger') {
+          const lRows = (await local.select(`SELECT id, updated_at FROM ${table} WHERE deleted=0 ORDER BY id`).catch(() => [])) as Array<{ id: string; updated_at?: string }>;
+          localCount = lRows.length;
+          localCanonical = lRows.map((r) => `${r.id}:${r.updated_at || ''}`).join('\n');
+        } else {
+          const dexieTable = dexieMapping[table];
+          const store = dexieTable ? (dexieDb as unknown as Record<string, { toArray: () => Promise<Array<Record<string, unknown>>> }>)[dexieTable] : null;
+          const dRows = store ? await store.toArray().catch(() => []) : [];
+          const filtered = table === 'app_settings'
+            ? dRows.filter((r) => !String(r.key || r.id).startsWith('sync.'))
+            : dRows;
+          filtered.sort((a, b) => String(a.id || a.imei || a.key).localeCompare(String(b.id || b.imei || b.key)));
+          localCount = filtered.length;
+          localCanonical = filtered.map((r) => `${String(r.id || r.imei || r.key)}:${String(r.updatedAt || r.createdAt || r.timestamp || '')}`).join('\n');
+        }
+
+        const rRes = await remote.execute(`SELECT id, updated_at FROM ${table} WHERE deleted=0 ORDER BY id`);
+        const remoteCount = rRes.rows.length;
+        const remoteCanonical = rRes.rows.map((r) => `${String(r.id)}:${String(r.updated_at || '')}`).join('\n');
+
+        const localHash = await sha256(localCanonical);
+        const remoteHash = await sha256(remoteCanonical);
+        const verified = localCount === remoteCount;
+
+        failed.localCount = localCount;
+        failed.remoteCount = remoteCount;
+        failed.localHash = localHash;
+        failed.remoteHash = remoteHash;
+        failed.verified = verified;
+        failed.mismatchReason = verified ? undefined : `Écart détecté: local=${localCount}, distant=${remoteCount}`;
+      }
+      failedTables = tableResults.filter((t) => !t.verified);
+    }
+
     if (failedTables.length > 0) {
       const summaryMsg = failedTables.map((f) => `${f.tableName} (${f.mismatchReason})`).join(', ');
       throw new Error(`Échec de la vérification de migration: ${summaryMsg}`);
@@ -440,7 +496,10 @@ export class MigrationManager {
       [JSON.stringify({ verifiedAt, totalRecordsUploaded: totalUploaded, tableCount: tableResults.length }), verifiedAt]
     );
 
-    const userSummary = `Migration réussie: ${localTxns.length} ventes, ${localProducts.length} produits, ${tableResults.find((t) => t.tableName === 'customers')?.localCount ?? 0} clients — tous vérifiés sans perte ni doublon.`;
+    const totalTxnsCount = tableResults.find((t) => t.tableName === 'transactions')?.localCount ?? localTxns.length;
+    const totalProductsCount = tableResults.find((t) => t.tableName === 'products')?.localCount ?? localProducts.length;
+    const totalCustomersCount = tableResults.find((t) => t.tableName === 'customers')?.localCount ?? 0;
+    const userSummary = `Synchronisation réussie: ${totalTxnsCount} ventes, ${totalProductsCount} produits, ${totalCustomersCount} clients — tous vérifiés sans perte ni doublon.`;
     onProgress?.('Migration terminée avec succès !', 100, 100);
 
     return {

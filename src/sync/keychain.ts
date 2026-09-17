@@ -25,7 +25,7 @@ const LEGACY_STORAGE_KEY = 'mobi_pos_cloud_creds_fallback';
 export async function getCloudCredentials(): Promise<CloudCredentials | null> {
   if (memoryCache) return memoryCache;
 
-  // 1. In Tauri environment: read from native Windows Credential Manager via IPC
+  // 1. In Tauri environment: read from native OS Keychain / vault file via IPC
   if (isTauri()) {
     try {
       const creds = await apiGetCloudCredentials();
@@ -38,29 +38,19 @@ export async function getCloudCredentials(): Promise<CloudCredentials | null> {
     }
   }
 
-  // 2. In browser dev preview: read from sessionStorage if present
-  if (!isTauri() && typeof sessionStorage !== 'undefined') {
-    try {
-      const raw = sessionStorage.getItem('mobi_pos_web_turso_creds');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed.url && parsed.token) {
-          memoryCache = parsed;
-          return parsed;
-        }
-      }
-    } catch {
-      // Storage restricted
-    }
-  }
-
-  // 3. Clear any legacy insecure local storage keys
+  // 2. Always check sessionStorage or persistent localStorage as fallback (mobile web or vault uninitialized)
   try {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem(LEGACY_STORAGE_KEY);
+    const raw = (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('mobi_pos_web_turso_creds') : null) ||
+                (typeof localStorage !== 'undefined' ? localStorage.getItem('mobi_pos_web_turso_creds') : null);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.url && parsed.token) {
+        memoryCache = parsed;
+        return parsed;
+      }
     }
   } catch {
-    // Storage access restricted in some sandboxed environments
+    // Storage restricted
   }
 
   return null;
@@ -79,13 +69,23 @@ export async function setCloudCredentials(url: string, token: string): Promise<v
   const payload: CloudCredentials = { url: trimmedUrl, token: trimmedToken };
 
   if (isTauri()) {
-    await apiSetCloudCredentials(trimmedUrl, trimmedToken);
-  } else if (typeof sessionStorage !== 'undefined') {
     try {
-      sessionStorage.setItem('mobi_pos_web_turso_creds', JSON.stringify(payload));
-    } catch {
-      // Storage restricted
+      await apiSetCloudCredentials(trimmedUrl, trimmedToken);
+    } catch (err) {
+      console.warn('Failed to save cloud credentials via IPC:', err);
     }
+  }
+
+  // Always mirror to Web Storage as resilient mobile fallback
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem('mobi_pos_web_turso_creds', JSON.stringify(payload));
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('mobi_pos_web_turso_creds', JSON.stringify(payload));
+    }
+  } catch {
+    // Storage restricted
   }
 
   memoryCache = payload;
@@ -103,11 +103,12 @@ export async function deleteCloudCredentials(): Promise<void> {
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.removeItem(LEGACY_STORAGE_KEY);
+      localStorage.removeItem('mobi_pos_web_turso_creds');
     }
     if (typeof sessionStorage !== 'undefined') {
       sessionStorage.removeItem('mobi_pos_web_turso_creds');
     }
   } catch {
-    // Storage access restricted
+    // Storage restricted
   }
 }

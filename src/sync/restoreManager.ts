@@ -75,13 +75,16 @@ export class RestoreManager {
       assertValidSyncTable(table);
       onProgress?.({ phase: 'Téléchargement', table, processed: tIdx, total: ALL_REMOTE_SYNC_TABLES.length });
 
-      let offset = 0;
+      let lastId = '';
       let hasMore = true;
+
+      let maxSeenTime = '1970-01-01T00:00:00.000Z';
+      let maxSeenId = '';
 
       while (hasMore) {
         const queryResult = await remote.execute({
-          sql: `SELECT * FROM ${table} ORDER BY id LIMIT 200 OFFSET ?`,
-          args: [offset],
+          sql: `SELECT * FROM ${table} WHERE id > ? ORDER BY id ASC LIMIT 500`,
+          args: [lastId],
         });
 
         if (queryResult.rows.length === 0) {
@@ -92,22 +95,30 @@ export class RestoreManager {
         for (const row of queryResult.rows) {
           const r = row as Record<string, unknown>;
           const id = String(r.id);
+          const isDeleted = Number(r.deleted ?? 0) === 1;
+          const rowUpdated = String(r.updated_at ?? '');
+          if (rowUpdated > maxSeenTime || (rowUpdated === maxSeenTime && id > maxSeenId)) {
+            maxSeenTime = rowUpdated;
+            maxSeenId = id;
+          }
+          lastId = id;
 
           if (table === 'products') {
             await local.execute(
-              `INSERT INTO products (id, sku, barcode, title, brand, category, price, wholesale_price,
+              `INSERT INTO products (id, sku, barcode, title, brand, compatible_model, category, price, wholesale_price,
                 cost_price, stock, image_url, is_serialized, imei_number, vendor_name, lead_time_days,
                 daily_sales_velocity, reorder_point, json_payload, device_id, idempotency_key, sync_status,
                 version, created_at, updated_at, deleted)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'synced',$21,$22,$23,$24)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,'synced',$22,$23,$24,$25)
                ON CONFLICT(id) DO UPDATE SET
-                 title=excluded.title, price=excluded.price, stock=excluded.stock,
+                 title=excluded.title, brand=excluded.brand, compatible_model=excluded.compatible_model,
+                 price=excluded.price, stock=excluded.stock,
                  wholesale_price=excluded.wholesale_price, cost_price=excluded.cost_price,
                  json_payload=excluded.json_payload, version=excluded.version,
                  updated_at=excluded.updated_at, deleted=excluded.deleted, sync_status='synced'
                  WHERE excluded.version >= products.version`,
               [
-                id, r.sku ?? '', r.barcode ?? '', r.title, r.brand ?? '', r.category ?? '',
+                id, r.sku ?? '', r.barcode ?? '', r.title, r.brand ?? '', r.compatible_model ?? '', r.category ?? '',
                 r.price ?? 0, r.wholesale_price ?? 0, r.cost_price ?? 0, r.stock ?? 0,
                 r.image_url ?? '', r.is_serialized ?? 0, r.imei_number ?? null, r.vendor_name ?? null,
                 r.lead_time_days ?? 7, r.daily_sales_velocity ?? 0, r.reorder_point ?? 5,
@@ -117,34 +128,40 @@ export class RestoreManager {
             );
 
             // Mirror into Dexie
-            let base: Record<string, unknown> = {};
-            try {
-              base = JSON.parse((r.json_payload as string) ?? '{}') as Record<string, unknown>;
-            } catch (err) {
-              console.warn(`[restoreManager] Failed parsing product json_payload for ${id}:`, err);
+            if (isDeleted) {
+              await dexieDb.products.delete(id).catch(() => {});
+            } else {
+              let base: Record<string, unknown> = {};
+              try {
+                base = JSON.parse((r.json_payload as string) ?? '{}') as Record<string, unknown>;
+              } catch (err) {
+                console.warn(`[restoreManager] Failed parsing product json_payload for ${id}:`, err);
+              }
+              // Remote row wins over the embedded json blob (same rule as the
+              // live pull mirror): the blob may hold a pre-sale snapshot.
+              const productToPut: Product = {
+                ...base,
+                sku: String(r.sku ?? base.sku ?? ''),
+                barcode: String(r.barcode ?? base.barcode ?? ''),
+                title: String(r.title ?? base.title ?? ''),
+                brand: (r.brand as Product['brand']) || (base.brand as Product['brand']) || 'Autre',
+                category: (r.category as Product['category']) || (base.category as Product['category']) || 'Tous les produits',
+                price: Number(r.price ?? base.price ?? 0),
+                wholesalePrice: Number(r.wholesale_price ?? base.wholesalePrice ?? 0),
+                costPrice: Number(r.cost_price ?? base.costPrice ?? 0),
+                stock: Number(r.stock ?? base.stock ?? 0),
+                imageUrl: String(r.image_url ?? base.imageUrl ?? ''),
+                isSerialized: Boolean(r.is_serialized ?? base.isSerialized),
+                imeiNumber: r.imei_number ? String(r.imei_number) : (base.imeiNumber as string | undefined),
+                vendorName: String(r.vendor_name ?? base.vendorName ?? 'Fournisseur Général'),
+                leadTimeDays: Number(r.lead_time_days ?? base.leadTimeDays ?? 7),
+                dailySalesVelocity: Number(r.daily_sales_velocity ?? base.dailySalesVelocity ?? 0),
+                reorderPoint: Number(r.reorder_point ?? base.reorderPoint ?? 5),
+                compatibleModel: String((r.compatible_model as string) ?? base.compatibleModel ?? ''),
+                id,
+              };
+              await dexieDb.products.put(productToPut);
             }
-            const productToPut: Product = {
-              sku: String(r.sku ?? ''),
-              barcode: String(r.barcode ?? ''),
-              title: String(r.title ?? ''),
-              brand: (r.brand as Product['brand']) || 'Autre',
-              category: (r.category as Product['category']) || 'Tous les produits',
-              price: Number(r.price ?? 0),
-              wholesalePrice: Number(r.wholesale_price ?? 0),
-              costPrice: Number(r.cost_price ?? 0),
-              stock: Number(r.stock ?? 0),
-              imageUrl: String(r.image_url ?? ''),
-              isSerialized: Boolean(r.is_serialized),
-              imeiNumber: r.imei_number ? String(r.imei_number) : undefined,
-              vendorName: String(r.vendor_name ?? 'Fournisseur Général'),
-              leadTimeDays: Number(r.lead_time_days ?? 7),
-              dailySalesVelocity: Number(r.daily_sales_velocity ?? 0),
-              reorderPoint: Number(r.reorder_point ?? 5),
-              compatibleModel: String(r.compatible_model ?? ''),
-              ...base,
-              id,
-            };
-            await dexieDb.products.put(productToPut);
 
           } else if (table === 'transactions') {
             await local.execute(
@@ -168,17 +185,21 @@ export class RestoreManager {
             );
 
             // Mirror transaction receipt into Dexie with receiptNumber
-            try {
-              const fullTx = JSON.parse((r.json_payload as string) ?? '{}') as Partial<SaleTransaction>;
-              fullTx.id = fullTx.id || id;
-              fullTx.receiptNumber = fullTx.receiptNumber || (r.receipt_number as string) || id;
-              fullTx.total = fullTx.total ?? Number(r.total ?? 0);
-              fullTx.status = fullTx.status || (r.status as SaleTransaction['status']) || 'COMPLETED';
-              fullTx.paymentMethod = fullTx.paymentMethod || (r.payment_method as SaleTransaction['paymentMethod']) || 'Espèces';
-              fullTx.createdAt = fullTx.createdAt || (r.created_at as string) || now;
-              await dexieDb.transactions.put(fullTx as SaleTransaction);
-            } catch (err) {
-              console.warn(`[restoreManager] Failed mirroring transaction into Dexie for ${id}:`, err);
+            if (isDeleted) {
+              await dexieDb.transactions.delete(id).catch(() => {});
+            } else {
+              try {
+                const fullTx = JSON.parse((r.json_payload as string) ?? '{}') as Partial<SaleTransaction>;
+                fullTx.id = fullTx.id || id;
+                fullTx.receiptNumber = fullTx.receiptNumber || (r.receipt_number as string) || id;
+                fullTx.total = fullTx.total ?? Number(r.total ?? 0);
+                fullTx.status = fullTx.status || (r.status as SaleTransaction['status']) || 'COMPLETED';
+                fullTx.paymentMethod = fullTx.paymentMethod || (r.payment_method as SaleTransaction['paymentMethod']) || 'Espèces';
+                fullTx.createdAt = fullTx.createdAt || (r.created_at as string) || now;
+                await dexieDb.transactions.put(fullTx as SaleTransaction);
+              } catch (err) {
+                console.warn(`[restoreManager] Failed mirroring transaction into Dexie for ${id}:`, err);
+              }
             }
 
           } else if (table === 'transaction_items') {
@@ -214,7 +235,7 @@ export class RestoreManager {
 
           } else {
             // Generic tables
-            const dexieStore = (dexieDb as unknown as Record<string, { put: (o: unknown) => Promise<unknown> }>)[
+            const dexieStore = (dexieDb as unknown as Record<string, { put: (o: unknown) => Promise<unknown>; delete?: (k: string) => Promise<unknown> }>)[
               table === 'repair_orders' ? 'repairOrders'
               : table === 'purchase_orders' ? 'purchaseOrders'
               : table === 'trade_ins' ? 'tradeIns'
@@ -234,7 +255,13 @@ export class RestoreManager {
               const parsedRowPayload = JSON.parse((r.data_json as string) ?? '{}');
               if (parsedRowPayload && typeof parsedRowPayload === 'object') {
                 if (table === 'app_settings' && String(parsedRowPayload.key || id).startsWith('sync.')) continue;
-                if (dexieStore) await dexieStore.put(parsedRowPayload);
+                if (isDeleted) {
+                  if (dexieStore && typeof dexieStore.delete === 'function') {
+                    await dexieStore.delete(id).catch(() => {});
+                  }
+                } else {
+                  if (dexieStore) await dexieStore.put(parsedRowPayload);
+                }
               }
             } catch (err) {
               console.warn(`[restoreManager] Failed parsing generic payload for table ${table}:`, err);
@@ -243,9 +270,17 @@ export class RestoreManager {
           totalRestored++;
         }
 
-        offset += queryResult.rows.length;
-        if (queryResult.rows.length < 200) hasMore = false;
+        if (queryResult.rows.length < 500) hasMore = false;
       }
+
+      // Advance table sync cursor to the latest timestamp & ID seen
+      if (maxSeenTime !== '1970-01-01T00:00:00.000Z') {
+        await local.execute(
+          "INSERT OR REPLACE INTO app_settings (key, value_json, updated_at) VALUES (?, ?, ?)",
+          [`sync.cursor.${table}`, JSON.stringify({ time: maxSeenTime, id: maxSeenId }), now]
+        ).catch(() => {});
+      }
+
       tablesVerified++;
     }
 
@@ -253,6 +288,14 @@ export class RestoreManager {
     await local.execute(
       `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=products.id AND deleted=0), stock)`
     );
+
+    // Sync recomputed product stock to Dexie immediately
+    try {
+      const { syncProductsFromSqlToDexie } = await import('../db/sqlPluginAdapter');
+      await syncProductsFromSqlToDexie();
+    } catch (stockErr) {
+      console.warn('[restore] syncProductsFromSqlToDexie error:', stockErr);
+    }
 
     // Reconstruct all Dexie transactions with their line items & customers
     try {

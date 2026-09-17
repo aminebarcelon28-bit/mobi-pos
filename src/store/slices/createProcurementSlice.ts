@@ -272,7 +272,11 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
         const { syncManager } = await import('../../sync/SyncManager');
         syncManager.notifyLocalWrite();
       }
-      await productRepository.bulkSave(updatedProducts);
+      const changedProductIds = new Set(
+        verifiedItems.filter((item) => item.receivedQty > 0).map((item) => item.productId)
+      );
+      const changedProducts = updatedProducts.filter((product) => changedProductIds.has(product.id));
+      await productRepository.bulkSave(changedProducts);
       await sqliteAdapter.savePurchaseOrder(updatedPO);
     } catch (err) {
       console.error('Failed to save validated PO & inventory deltas:', err);
@@ -363,7 +367,9 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
     });
 
     try {
-      await productRepository.bulkSave(updatedProducts);
+      const changedProductIds = new Set(items.map((item) => item.productId));
+      const changedProducts = updatedProducts.filter((product) => changedProductIds.has(product.id));
+      await productRepository.bulkSave(changedProducts);
       audioBus.emit('success');
       logSecurityAction(
         'Réception Directe Fournisseur (JIT Restock)',

@@ -242,17 +242,22 @@ export const CloudPairingModal: React.FC = () => {
                     Ouvrez l'application mobile <strong className="text-pos-text">MobiPOS</strong> sur votre smartphone, puis collez ce code d'appairage ou renseignez vos accès :
                   </p>
 
-                  {/* QR code of pairing payload */}
-                  <div className="bg-pos-panel border border-pos-border rounded-xl p-3 flex items-center gap-3">
-                    <div className="shrink-0 bg-white p-1.5 rounded-lg border border-slate-700 flex items-center justify-center">
+                  {/* QR code of pairing payload.
+                      Dense JSON payload (~450 chars, version 16): needs min.
+                      ~2.7 px/module at 240px display + spec quiet zone
+                      to stay phone-scannable. */}
+                  <div className="bg-pos-panel border border-pos-border rounded-xl p-3 flex flex-col sm:flex-row items-center gap-3">
+                    <div className="shrink-0 bg-white p-2.5 rounded-lg border border-slate-700 flex items-center justify-center">
                       <QRCodeImage
                         value={pairingPayload}
-                        size={90}
+                        size={240}
+                        margin={3}
+                        errorCorrectionLevel="L"
                         alt="QR Code Pairing"
                       />
                     </div>
-                    <div className="space-y-1">
-                      <span className="text-[10px] font-black uppercase text-cyan-400 tracking-wider flex items-center gap-1">
+                    <div className="space-y-1 text-center sm:text-left">
+                      <span className="text-[10px] font-black uppercase text-cyan-400 tracking-wider flex items-center justify-center sm:justify-start gap-1">
                         <Sparkles className="w-3 h-3" />
                         Scannable depuis MobiPOS
                       </span>

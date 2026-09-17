@@ -19,13 +19,19 @@ import {
   Unplug,
   Activity,
   Smartphone,
+  QrCode,
+  Copy,
+  Check,
+  Sparkles,
 } from 'lucide-react';
+import { QRCodeImage } from '../ui/QRCodeImage';
 import { getCloudCredentials, setCloudCredentials, deleteCloudCredentials } from '../../sync/keychain';
 import { testTursoConnection, type ConnectionTestResult } from '../../sync/tursoClient';
 import { MigrationManager, type MigrationSummary } from '../../sync/migrationManager';
 import { RestoreManager, type RestoreProgress } from '../../sync/restoreManager';
 import { QuotaManager, type StorageUsageReport } from '../../sync/quotaManager';
 import { syncManager } from '../../sync/SyncManager';
+import { getStableDeviceId } from '../../sync/device';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
@@ -39,6 +45,7 @@ export const CloudSyncPanel: React.FC = () => {
   const [authToken, setAuthToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [hasStoredCreds, setHasStoredCreds] = useState(false);
+  const [copiedPairing, setCopiedPairing] = useState(false);
 
   // Testing & Migration State
   const [isTesting, setIsTesting] = useState(false);
@@ -124,11 +131,13 @@ export const CloudSyncPanel: React.FC = () => {
       });
 
       setMigrationSummary(summary);
-      showToast('Migration vers le cloud réussie avec intégrité validée !', 'success');
+      showToast('Synchronisation cloud validée sans perte ni écart !', 'success');
 
-      // 3. Start sync engine
-      await syncManager.start('pos-main');
+      // 3. Start sync engine with the single stable device identity
+      await syncManager.start(await getStableDeviceId());
+      await syncManager.kick();
       await loadStorageReport();
+      await usePosStore.getState().refreshAfterPull();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       showToast(`Erreur lors de la migration: ${msg}`, 'error');
@@ -159,7 +168,7 @@ export const CloudSyncPanel: React.FC = () => {
       });
       showToast(restoreResult.userSummary, 'success');
       await usePosStore.getState().refreshAfterPull();
-      await syncManager.start('pos-main');
+      await syncManager.start(await getStableDeviceId());
       await loadStorageReport();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -416,6 +425,74 @@ export const CloudSyncPanel: React.FC = () => {
                 ? `Connexion validée en ${testResult.latencyMs} ms. ${testResult.isSchemaReady ? 'Schéma cloud prêt (v' + testResult.appliedVersion + ').' : 'Schéma cloud vierge — la migration appliquera les tables.'}`
                 : testResult.error}
             </span>
+          </div>
+        )}
+
+        {/* Dynamic Multi-Customer Pairing QR Code Section */}
+        {dbUrl && authToken && (
+          <div className="mt-3 p-4 rounded-xl bg-cyan-950/20 border border-cyan-500/30 flex flex-col md:flex-row items-center gap-4 animate-in fade-in">
+            <div className="shrink-0 bg-white p-2.5 rounded-xl border border-cyan-700/50 shadow-md flex items-center justify-center">
+              <QRCodeImage
+                value={JSON.stringify({
+                  v: 1,
+                  type: 'mobipos-pair',
+                  url: dbUrl.trim(),
+                  token: authToken.trim(),
+                  ts: Date.now(),
+                })}
+                size={140}
+                margin={3}
+                errorCorrectionLevel="L"
+                alt="QR Code d'appairage mobile"
+              />
+            </div>
+            <div className="flex-1 space-y-2 text-center md:text-left">
+              <div className="flex flex-wrap items-center justify-center md:justify-start gap-2">
+                <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 text-[10px] font-black uppercase tracking-wider flex items-center gap-1">
+                  <Sparkles className="w-3 h-3" />
+                  Appairage Mobile Immédiat
+                </span>
+                <span className="px-2 py-0.5 rounded-full bg-pos-card border border-pos-border text-pos-muted text-[10px] font-mono">
+                  Boutique : {dbUrl.replace(/^libsql:\/\//, '').replace(/\.turso\.io.*$/, '')}
+                </span>
+              </div>
+              <p className="text-xs font-bold text-pos-text">
+                Scannez ce QR code depuis l'application mobile pour lier ce smartphone à cette boutique
+              </p>
+              <p className="text-[11px] text-pos-muted leading-relaxed">
+                Généré en temps réel pour votre base dédiée. Chaque boutique possède ses identifiants exclusifs avec isolation totale des données.
+              </p>
+              <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const payload = JSON.stringify({
+                      v: 1,
+                      type: 'mobipos-pair',
+                      url: dbUrl.trim(),
+                      token: authToken.trim(),
+                      ts: Date.now(),
+                    });
+                    navigator.clipboard.writeText(payload);
+                    setCopiedPairing(true);
+                    showToast('Code d\'appairage copié dans le presse-papier !', 'success');
+                    setTimeout(() => setCopiedPairing(false), 2500);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-pos-panel border border-pos-border hover:bg-pos-hover text-pos-text text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  {copiedPairing ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedPairing ? 'Copié !' : 'Copier le code'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openModal('cloud_pairing')}
+                  className="px-3 py-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <QrCode className="w-3 h-3" />
+                  <span>Afficher en grand / Télécharger l'App</span>
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

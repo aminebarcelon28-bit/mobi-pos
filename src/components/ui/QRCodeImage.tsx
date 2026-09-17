@@ -4,9 +4,13 @@ import { QrCode as QrIcon } from 'lucide-react';
 
 interface QRCodeImageProps {
   value: string;
+  /** Display size in CSS px (backing image is rendered at integer scale for crisp modules). */
   size?: number;
   className?: string;
   alt?: string;
+  /** Quiet-zone width in modules. QR spec requires 4; anything less hurts camera scanning. */
+  margin?: number;
+  errorCorrectionLevel?: 'L' | 'M' | 'Q' | 'H';
 }
 
 export const QRCodeImage: React.FC<QRCodeImageProps> = ({
@@ -14,6 +18,8 @@ export const QRCodeImage: React.FC<QRCodeImageProps> = ({
   size = 160,
   className = '',
   alt = 'Code QR',
+  margin = 4,
+  errorCorrectionLevel = 'M',
 }) => {
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<boolean>(false);
@@ -25,14 +31,16 @@ export const QRCodeImage: React.FC<QRCodeImageProps> = ({
       return;
     }
 
+    // Integer scale (not `width: size`) keeps module edges razor-sharp:
+    // a 1:1 render turns dense payloads into an unscannable blur.
     QRCode.toDataURL(value, {
-      width: size,
-      margin: 1,
+      scale: 8,
+      margin,
       color: {
         dark: '#0f172a',
         light: '#ffffff',
       },
-      errorCorrectionLevel: 'M',
+      errorCorrectionLevel,
     })
       .then((url) => {
         if (!isCancelled) {
@@ -50,7 +58,7 @@ export const QRCodeImage: React.FC<QRCodeImageProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [value, size]);
+  }, [value, size, margin, errorCorrectionLevel]);
 
   if (error || !value) {
     return (
@@ -81,6 +89,7 @@ export const QRCodeImage: React.FC<QRCodeImageProps> = ({
       alt={alt}
       width={size}
       height={size}
+      style={{ width: size, height: size, imageRendering: 'pixelated' }}
       className={`rounded-lg select-none ${className}`}
     />
   );

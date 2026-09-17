@@ -10,6 +10,7 @@ import {
 import { usePosStore } from '../../store/usePosStore';
 import { RepairNotificationEngine } from '../../utils/repairNotificationEngine';
 import { useToast } from '../ui/Toast';
+import { openUrl } from '../../utils/phoneUtils';
 
 export const WhatsAppDispatchModal: React.FC = () => {
   const {
@@ -60,8 +61,11 @@ export const WhatsAppDispatchModal: React.FC = () => {
     }
   };
 
-  const handleOpenDirect = () => {
-    window.open(whatsAppUrl, '_blank', 'noopener,noreferrer');
+  const handleOpenDirect = async () => {
+    const ok = await openUrl(whatsAppUrl);
+    if (!ok) {
+      showToast("Impossible d'ouvrir WhatsApp", 'error');
+    }
   };
 
   return (

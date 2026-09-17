@@ -12,10 +12,11 @@ import { getPendingOutbox, markOutbox } from '../db/sqlPluginAdapter';
 import type { OutboxRow } from './types';
 
 export function calculateBackoffMs(retryCount: number): number {
-  const maxBackoff = 300_000; // 5 minutes max
-  const base = 1000 * 2 ** Math.min(retryCount, 8);
-  const jitter = Math.floor(Math.random() * 500);
-  return Math.min(maxBackoff, base + jitter);
+  // Doc ② §7.4 verbatim: base 1s, factor 2, cap 60s, FULL JITTER (anti-thundering-herd)
+  const base = 1_000;
+  const cap = 60_000;
+  const slot = Math.min(cap, base * (1 << Math.min(retryCount, 6)));
+  return Math.floor(Math.random() * slot); // full jitter: uniform in [0, slot)
 }
 
 export class OutboxFlusher {

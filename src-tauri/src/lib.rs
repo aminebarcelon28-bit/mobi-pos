@@ -2,6 +2,10 @@
 // main.rs stays a thin passthrough calling mobi_pos_lib::run().
 
 pub mod printer;
+pub mod hlc;
+pub mod contract;
+pub mod reducers;
+pub mod intents;
 
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
@@ -104,10 +108,10 @@ fn get_cloud_credentials(app_handle: tauri::AppHandle) -> Result<Option<CloudCre
 #[tauri::command]
 fn set_cloud_credentials(app_handle: tauri::AppHandle, url: String, token: String) -> Result<(), String> {
     let creds = CloudCredentials { url, token };
-    let json = serde_json::to_string(&creds).map_err(|e| e.to_string())?;
 
     #[cfg(not(mobile))]
     {
+        let json = serde_json::to_string(&creds).map_err(|e| e.to_string())?;
         if let Ok(entry) = keyring::Entry::new("mobi-pos-cloud-sync", "credentials") {
             let _ = entry.set_password(&json);
         }
@@ -245,6 +249,12 @@ fn swap_staging_database(app_handle: tauri::AppHandle, staging_file: String) -> 
     std::fs::copy(&staging_path, &db_path).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&staging_path);
     Ok(())
+}
+
+#[tauri::command]
+fn sqlite_db_maintenance() -> Result<String, String> {
+    // Maintenance command — exposed as `invoke('sqlite_db_maintenance')`
+    Ok("ok".to_string())
 }
 
 /// Windows-only legacy cleanup (duplicate v1.4.5 install). Dead code on mobile.
@@ -679,6 +689,68 @@ fn base_schema_migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 100,
+            description: "Event-sourced local-first platform: event_log, projection_cursor, sync_state",
+            sql: r#"
+            CREATE TABLE IF NOT EXISTS event_log (
+                event_id    TEXT PRIMARY KEY,
+                seq         INTEGER,
+                aggregate   TEXT NOT NULL,
+                hlc         TEXT NOT NULL,
+                device_id   TEXT NOT NULL,
+                schema_v    INTEGER NOT NULL DEFAULT 1,
+                event       TEXT NOT NULL,
+                ts          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                origin      TEXT NOT NULL DEFAULT 'local'
+            );
+            CREATE INDEX IF NOT EXISTS ix_log_hlc      ON event_log(hlc);
+            CREATE INDEX IF NOT EXISTS ix_log_agg      ON event_log(aggregate, hlc);
+            CREATE INDEX IF NOT EXISTS ix_log_unsynced ON event_log(origin) WHERE origin = 'local';
+
+            CREATE TABLE IF NOT EXISTS projection_cursor (
+                projection  TEXT PRIMARY KEY,
+                last_hlc    TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS sync_state (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 101,
+            description: "ES-LFP core disposable projections: p_products, p_transactions, p_transaction_items",
+            sql: r#"
+            CREATE TABLE IF NOT EXISTS p_products (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                price_cents INTEGER NOT NULL,
+                sku         TEXT,
+                stock       INTEGER NOT NULL DEFAULT 0,
+                deleted     INTEGER NOT NULL DEFAULT 0,
+                row_hlc     TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS p_transactions (
+                id          TEXT PRIMARY KEY,
+                total_cents INTEGER NOT NULL,
+                ts          TEXT NOT NULL,
+                row_hlc     TEXT NOT NULL,
+                device_id   TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS p_transaction_items (
+                tx_id       TEXT NOT NULL,
+                product_id  TEXT NOT NULL,
+                qty         INTEGER NOT NULL,
+                unit_cents  INTEGER NOT NULL,
+                PRIMARY KEY (tx_id, product_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_p_stock ON p_products(deleted, stock);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -686,11 +758,14 @@ fn base_schema_migrations() -> Vec<Migration> {
 pub fn run() {
     let migrations = base_schema_migrations();
 
-    let mut builder = tauri::Builder::default().plugin(
-        tauri_plugin_sql::Builder::default()
-            .add_migrations("sqlite:mobi_pos.db", migrations)
-            .build(),
-    );
+    let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(intents::plugin())
+        .plugin(
+            tauri_plugin_sql::Builder::default()
+                .add_migrations("sqlite:mobi_pos.db", migrations)
+                .build(),
+        );
 
     #[cfg(desktop)]
     {
@@ -717,7 +792,13 @@ pub fn run() {
             create_database_backup,
             restore_database_backup,
             list_database_backups,
-            swap_staging_database
+            swap_staging_database,
+            sqlite_db_maintenance,
+            intents::launch_dialer,
+            intents::launch_call,
+            intents::launch_whatsapp,
+            intents::launch_print,
+            intents::launch_url
         ]);
 
     if let Err(err) = builder.run(tauri::generate_context!()) {

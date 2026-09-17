@@ -24,7 +24,7 @@ export const InventoryManagerModal: React.FC = () => {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[85vh] flex flex-col cursor-default font-sans"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[85vh] flex flex-col cursor-default font-sans pt-[var(--safe-top)] sm:pt-0 pb-[var(--safe-bottom)] sm:pb-0"
       >
         {/* Header */}
         <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
@@ -141,7 +141,7 @@ export const InventoryManagerModal: React.FC = () => {
         </div>
 
         {/* Product Items: Mobile Cards View (md:hidden) */}
-        <div className="md:hidden flex-1 overflow-y-auto p-2.5 space-y-2 bg-pos-bg">
+        <div className="md:hidden flex-1 overflow-y-auto overscroll-contain p-2.5 space-y-2 bg-pos-bg">
           {filtered.length === 0 ? (
             <div className="p-8 text-center text-pos-muted space-y-2">
               <Package className="w-10 h-10 mx-auto opacity-30" />
@@ -221,7 +221,7 @@ export const InventoryManagerModal: React.FC = () => {
         </div>
 
         {/* Product Items: Desktop Table View (hidden md:block) */}
-        <div className="hidden md:block flex-1 overflow-y-auto">
+        <div className="hidden md:block flex-1 overflow-y-auto overscroll-contain">
           <table className="w-full text-left text-xs border-collapse">
             <thead className="bg-pos-card border-b border-pos-border text-pos-muted sticky top-0 uppercase tracking-wider text-[10px]">
               <tr>

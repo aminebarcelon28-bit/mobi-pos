@@ -175,7 +175,7 @@ export const ExpenseManagerModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-6xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-full sm:h-[90vh] font-sans">
+      <div className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-6xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-full sm:h-[90vh] font-sans pt-[var(--safe-top)] sm:pt-0 pb-[var(--safe-bottom)] sm:pb-0">
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* HEADER */}
         {/* ══════════════════════════════════════════════════════════════ */}
@@ -351,7 +351,7 @@ export const ExpenseManagerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* EXPENSES LIST TABLE */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+        <div className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-2">
           {(filteredExpenses || []).length === 0 ? (
             <div className="p-12 text-center bg-pos-card border border-pos-border rounded-2xl space-y-3">
               <FileSpreadsheet className="w-12 h-12 text-pos-muted mx-auto opacity-40" />
@@ -409,7 +409,7 @@ export const ExpenseManagerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {showAddForm && (
           <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-60 flex items-center justify-center p-0 sm:p-4">
-            <div className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-lg overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col h-full sm:h-auto font-sans">
+            <div className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-lg overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col h-full sm:h-auto font-sans pt-[var(--safe-top)] sm:pt-0 pb-[var(--safe-bottom)] sm:pb-0">
               <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
                 <div className="flex items-center gap-2">
                   <button

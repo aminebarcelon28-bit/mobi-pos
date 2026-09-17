@@ -8,10 +8,11 @@ import {
   CreditCard,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
+import { AppTabContent } from '../AppScreenLayout';
 import type { Customer } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
 import { soundEngine } from '../../../utils/audioFeedback';
-import { normalizeAlgerianPhone, buildWhatsAppUrl } from '../../../utils/phoneUtils';
+import { normalizeAlgerianPhone, openDialer, openWhatsApp } from '../../../utils/phoneUtils';
 import { useToast } from '../../ui/Toast';
 
 export const KredyTab: React.FC = () => {
@@ -42,7 +43,7 @@ export const KredyTab: React.FC = () => {
     });
   }, [customers, search, filterDebtorsOnly]);
 
-  const handleWhatsApp = (customer: Customer, e?: React.MouseEvent) => {
+  const handleWhatsApp = async (customer: Customer, e?: React.MouseEvent) => {
     e?.stopPropagation();
     soundEngine.playKeyBeep?.();
     if (!customer.phone) {
@@ -55,48 +56,29 @@ export const KredyTab: React.FC = () => {
       customer.currentDebt || 0
     )}.\nMerci pour votre fidélité !`;
 
-    const waUrl = buildWhatsAppUrl(customer.phone, message);
-    try {
-      const a = document.createElement('a');
-      a.href = waUrl;
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    } catch {
-      window.open(waUrl, '_blank', 'noopener,noreferrer');
+    const ok = await openWhatsApp(customer.phone, message);
+    if (!ok) {
+      showToast("Impossible d'ouvrir WhatsApp", 'error');
     }
   };
 
-  const handleCall = (phone?: string, e?: React.MouseEvent) => {
+  const handleCall = async (phone?: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     soundEngine.playKeyBeep?.();
     if (!phone) {
       showToast('Aucun numéro de téléphone disponible', 'warning');
       return;
     }
-    const norm = normalizeAlgerianPhone(phone);
-    const dialDigits = norm.local || norm.digitsOnly || phone.replace(/\D/g, '');
-    if (!dialDigits) {
-      showToast('Format de numéro non valide', 'error');
-      return;
-    }
-    const telUrl = `tel:${dialDigits}`;
-    try {
-      const a = document.createElement('a');
-      a.href = telUrl;
-      a.target = '_self';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    } catch {
-      window.location.href = telUrl;
+    const ok = await openDialer(phone);
+    if (!ok) {
+      showToast("Impossible d'ouvrir le composeur téléphonique", 'error');
     }
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-3.5 space-y-3 pb-24 select-none">
+    <AppTabContent
+      pinnedTop={
+        <div className="px-3.5 pt-3 pb-2 space-y-2.5 bg-pos-bg">
       {/* Total Debt Hero Banner */}
       <div className="bg-gradient-to-br from-amber-500/10 to-pos-panel border border-amber-500/30 rounded-2xl p-4 shadow-sm">
         <div className="flex items-center justify-between">
@@ -167,9 +149,12 @@ export const KredyTab: React.FC = () => {
           </button>
         </div>
       </div>
-
-      {/* Customer Cards List */}
-      <div className="space-y-2">
+        </div>
+      }
+      contentClassName="px-3.5 pb-4 select-none"
+    >
+      {/* Customer Cards List — confined scroll region */}
+      <div className="space-y-2 pt-1">
         {filteredCustomers.length === 0 ? (
           <div className="p-8 text-center bg-pos-panel border border-pos-border rounded-2xl">
             <Users className="w-8 h-8 text-pos-muted mx-auto mb-2 opacity-50" />
@@ -225,52 +210,29 @@ export const KredyTab: React.FC = () => {
                 {/* Communication Actions */}
                 <div className="flex items-center gap-2 pt-1 border-t border-pos-border/50">
                   {c.phone ? (
-                    (() => {
-                      const norm = normalizeAlgerianPhone(c.phone);
-                      const dialDigits = norm.local || norm.digitsOnly || c.phone.replace(/\D/g, '');
-                      const telUrl = `tel:${dialDigits}`;
-                      const storeName = receiptSettings?.storeName || 'MobiPOS';
-                      const message = `Bonjour ${c.name},\nNous vous rappelons que votre solde de créance auprès de ${storeName} est de ${formatDZD(
-                        debt
-                      )}.\nMerci pour votre fidélité !`;
-                      const waUrl = buildWhatsAppUrl(c.phone, message);
+                    <>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          handleCall(c.phone, e);
+                        }}
+                        className="flex-1 py-2 rounded-xl bg-pos-panel border border-cyan-500/40 hover:bg-cyan-500/10 text-cyan-400 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer shadow-sm"
+                      >
+                        <Phone className="w-3.5 h-3.5" />
+                        <span>Appeler</span>
+                      </button>
 
-                      return (
-                        <>
-                          <a
-                            href={telUrl}
-                            onClick={(e) => {
-                              soundEngine.playKeyBeep?.();
-                              if (!dialDigits) {
-                                e.preventDefault();
-                                handleCall(c.phone, e);
-                              }
-                            }}
-                            className="flex-1 py-2 rounded-xl bg-pos-panel border border-cyan-500/40 hover:bg-cyan-500/10 text-cyan-400 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 no-underline cursor-pointer shadow-sm"
-                          >
-                            <Phone className="w-3.5 h-3.5" />
-                            <span>Appeler</span>
-                          </a>
-
-                          <a
-                            href={waUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => {
-                              soundEngine.playKeyBeep?.();
-                              if (!c.phone) {
-                                e.preventDefault();
-                                handleWhatsApp(c, e);
-                              }
-                            }}
-                            className="flex-1 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/40 hover:bg-emerald-500/25 text-emerald-300 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 no-underline cursor-pointer shadow-sm"
-                          >
-                            <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>WhatsApp</span>
-                          </a>
-                        </>
-                      );
-                    })()
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          handleWhatsApp(c, e);
+                        }}
+                        className="flex-1 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/40 hover:bg-emerald-500/25 text-emerald-300 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer shadow-sm"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>WhatsApp</span>
+                      </button>
+                    </>
                   ) : (
                     <span className="text-[10px] text-pos-muted italic py-1">
                       Ajoutez un numéro de téléphone pour activer les appels et rappels WhatsApp.
@@ -282,6 +244,6 @@ export const KredyTab: React.FC = () => {
           })
         )}
       </div>
-    </div>
+    </AppTabContent>
   );
 };

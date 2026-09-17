@@ -9,7 +9,8 @@ import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
 import type { Customer, PricingTier, SaleTransaction, PaymentMethodType } from '../../types/pos';
 import { calculateNextTierProgress, calculateCustomerTier } from '../../utils/loyaltyEngine';
-import { buildWhatsAppUrl } from '../../utils/phoneUtils';
+import { openWhatsApp } from '../../utils/phoneUtils';
+import { useToast } from '../ui/Toast';
 
 type SortField = 'name' | 'loyaltyPoints' | 'storeCredit' | 'totalSpent';
 type SortDir = 'asc' | 'desc';
@@ -17,6 +18,7 @@ type ViewMode = 'list' | 'form' | 'profile';
 type TierFilter = 'Tous' | PricingTier;
 
 export const CustomersModal: React.FC = () => {
+  const { showToast } = useToast();
   const {
     activeModal, closeModal, openModal, customers, currentCustomer, setCurrentCustomer,
     addCustomer, updateCustomer, deleteCustomer, transactions,
@@ -1228,14 +1230,21 @@ export const CustomersModal: React.FC = () => {
                 >
                   <Copy className="w-4 h-4" /> {whatsappCopied ? 'Copié !' : 'Copier le Texte'}
                 </button>
-                <a
-                  href={buildWhatsAppUrl(whatsappDebtCustomer.phone, getWhatsAppDebtMessage(whatsappDebtCustomer))}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ok = await openWhatsApp(
+                      whatsappDebtCustomer.phone,
+                      getWhatsAppDebtMessage(whatsappDebtCustomer)
+                    );
+                    if (!ok) {
+                      showToast("Impossible d'ouvrir WhatsApp", 'error');
+                    }
+                  }}
                   className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition flex items-center gap-1.5 cursor-pointer"
                 >
                   <ExternalLink className="w-4 h-4" /> Ouvrir WhatsApp
-                </a>
+                </button>
               </div>
             </div>
           </div>

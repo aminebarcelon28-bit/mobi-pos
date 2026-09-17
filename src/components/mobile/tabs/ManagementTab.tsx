@@ -24,6 +24,7 @@ import {
   Download,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
+import { AppTabContent } from '../AppScreenLayout';
 import { useDeviceMode } from '../../../hooks/useDeviceMode';
 import { syncManager } from '../../../sync/SyncManager';
 import type { SyncStatus } from '../../../sync/types';
@@ -131,7 +132,8 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
   };
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3.5 pb-28 select-none font-sans text-xs">
+    <AppTabContent contentClassName="px-4 py-3 select-none font-sans text-xs">
+      <div className="space-y-3.5 pb-2">
       {/* 1. Store Header & Shift Banner */}
       <div className="bg-pos-card border border-pos-border rounded-2xl p-4 shadow-sm space-y-3">
         <div className="flex items-center justify-between gap-3">
@@ -483,6 +485,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           <span>Basculer vers le Mode Bureau (PC)</span>
         </button>
       </div>
-    </div>
+      </div>
+    </AppTabContent>
   );
 };

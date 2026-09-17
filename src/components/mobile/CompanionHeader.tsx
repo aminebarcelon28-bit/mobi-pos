@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Smartphone, RefreshCw, Wifi, WifiOff, ShieldCheck } from 'lucide-react';
+import { Smartphone, RefreshCw, Wifi, WifiOff, ShieldCheck, Truck } from 'lucide-react';
 import { syncManager } from '../../sync/SyncManager';
 import type { SyncStatus } from '../../sync/types';
 import { usePosStore } from '../../store/usePosStore';
@@ -37,28 +37,39 @@ export const CompanionHeader: React.FC = () => {
   };
 
   return (
-    <header className="min-h-12 h-[calc(3rem+env(safe-area-inset-top,0px))] pt-[env(safe-area-inset-top,0px)] bg-pos-panel border-b border-pos-border px-3 flex items-center justify-between select-none shrink-0 z-20">
+    <header className="min-h-[48px] h-12 bg-pos-panel border-b border-pos-border px-3 flex items-center justify-between select-none shrink-0 z-20">
       {/* Brand & Companion Mode Badge */}
-      <div className="flex items-center gap-2">
-        <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
           <Smartphone className="w-4 h-4" />
         </div>
-        <div>
-          <span className="text-xs font-black text-pos-text tracking-wide block leading-tight">
+        <div className="min-w-0">
+          <span className="text-xs font-black text-pos-text tracking-wide block leading-tight truncate">
             MobiPOS
           </span>
-          <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-wider block leading-none">
+          <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-wider block leading-none truncate">
             Mobile Companion
           </span>
         </div>
       </div>
 
-      {/* Right side: Honest Sync Badge, ThemeToggle & Shield */}
-      <div className="flex items-center gap-1.5">
+      {/* Right side: high-frequency mobile actions, sync, theme and security */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        <button
+          type="button"
+          onClick={() => openModal('vendor_procurement')}
+          className="relative flex items-center justify-center min-h-[44px] min-w-[44px] rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500 hover:text-slate-950 active:scale-95 transition"
+          title="Ouvrir le tableau JIT de réapprovisionnement par fournisseur"
+          aria-label="Réapprovisionnement JIT par fournisseur"
+        >
+          <Truck className="w-4 h-4" />
+          <span className="absolute -right-0.5 -top-0.5 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-pos-panel" />
+        </button>
+
         <button
           type="button"
           onClick={handleSyncClick}
-          className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-pos-card border border-pos-border text-pos-text text-[10px] font-bold cursor-pointer hover:border-emerald-500/40 transition active:scale-95"
+          className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-pos-card border border-pos-border text-pos-text text-[10px] font-bold cursor-pointer hover:border-emerald-500/40 transition active:scale-95 min-h-[44px] min-w-[44px] justify-center"
           title={syncStatus.online ? "Synchronisation Turso — appuyez pour forcer" : "Hors ligne — appuyez pour les paramètres"}
         >
           {isSyncing ? (

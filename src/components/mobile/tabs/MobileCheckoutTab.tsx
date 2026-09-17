@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
+import { AppTabContent } from '../AppScreenLayout';
 import type { CartItem, Customer, PricingTier } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
 import { soundEngine } from '../../../utils/audioFeedback';
@@ -125,67 +126,122 @@ export const MobileCheckoutTab: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-3.5 space-y-3 pb-24 select-none">
+    <>
+    <AppTabContent
+      pinnedTop={
+        <div className="px-3.5 pt-3 pb-2 space-y-2.5 bg-pos-bg">
+          {/* Pricing Tier Selector */}
+          <div className="flex items-center gap-1 bg-pos-panel p-1 rounded-xl border border-pos-border">
+            {(['Retail', 'VIP', 'Wholesale'] as PricingTier[]).map((tier) => (
+              <button
+                key={tier}
+                type="button"
+                onClick={() => setPricingTier(tier)}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer min-h-[44px] ${
+                  pricingTier === tier
+                    ? 'bg-cyan-500 text-slate-950 font-black shadow-sm'
+                    : 'text-pos-muted hover:text-pos-text'
+                }`}
+              >
+                {tier === 'Retail' ? 'Détail' : tier === 'VIP' ? 'Demi-Gros' : 'Gros'}
+              </button>
+            ))}
+          </div>
+
+          {/* Customer Selector Card */}
+          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center shrink-0">
+                <User className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <span className="text-[10px] font-bold text-pos-muted uppercase block leading-none">
+                  Client Assigné
+                </span>
+                <span className="text-xs font-black text-pos-text mt-0.5 block leading-tight truncate">
+                  {currentCustomer ? currentCustomer.name : 'Client Comptoir'}
+                </span>
+                {currentCustomer && currentCustomer.currentDebt ? (
+                  <span className="text-[10px] font-bold text-amber-400">
+                    Créance actuelle : {formatDZD(currentCustomer.currentDebt)}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setCustomerModalOpen(true)}
+              className="text-xs font-bold px-2.5 py-1 rounded-lg bg-pos-panel border border-pos-border text-cyan-400 hover:border-cyan-500 cursor-pointer min-h-[44px] shrink-0"
+            >
+              {currentCustomer ? 'Changer' : 'Sélectionner'}
+            </button>
+          </div>
+        </div>
+      }
+      pinnedBottom={
+        cart.length > 0 ? (
+          <div className="px-3.5 pb-3 pt-2 bg-pos-bg">
+            <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 shadow-md">
+              <div className="space-y-1.5 text-xs">
+                <div className="flex justify-between text-pos-muted">
+                  <span>Sous-total Brut</span>
+                  <span className="font-mono">{formatDZD(grossSubtotal)}</span>
+                </div>
+                {totalDiscount > 0 && (
+                  <div className="flex justify-between text-cyan-400 font-medium">
+                    <span>Remise Accordée</span>
+                    <span className="font-mono">-{formatDZD(totalDiscount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between items-baseline pt-2 border-t border-pos-border text-pos-text">
+                  <span className="text-xs font-black uppercase tracking-wider">Total Net</span>
+                  <span className="text-2xl font-black font-mono text-emerald-400">
+                    {formatDZD(netTotal)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Checkout Buttons — pinned above the tab bar, clear of the home indicator */}
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={handleCheckoutCash}
+                  className="py-3 px-3 min-h-[48px] rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-md transition cursor-pointer disabled:opacity-50"
+                >
+                  <Coins className="w-4 h-4" />
+                  <span>Espèces</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={handleCheckoutCredit}
+                  className="py-3 px-3 min-h-[48px] rounded-xl bg-pos-panel border border-pos-border hover:border-amber-400 active:scale-95 text-amber-400 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                >
+                  <CreditCard className="w-4 h-4" />
+                  <span>Crédit Kredy</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : undefined
+      }
+      contentClassName="px-3.5 pb-4 select-none"
+    >
       {/* Success Notification Banner */}
       {successSaleNumber && (
-        <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-2xl p-3.5 flex items-center gap-3 animate-in fade-in slide-in-from-top-2 text-emerald-300">
+        <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-2xl p-3.5 my-2 flex items-center gap-3 animate-in fade-in slide-in-from-top-2 text-emerald-300">
           <CheckCircle2 className="w-7 h-7 text-emerald-400 shrink-0" />
-          <div>
-            <h4 className="text-xs font-black uppercase">Vente Encaissée avec Succès !</h4>
+          <div className="min-w-0">
+            <h4 className="text-xs font-black uppercase truncate">Vente Encaissée avec Succès !</h4>
             <p className="text-[11px] font-medium text-emerald-200">
               Ticket #{successSaleNumber} validé et synchronisé avec la caisse principale.
             </p>
           </div>
         </div>
       )}
-
-      {/* Pricing Tier Selector */}
-      <div className="flex items-center gap-1 bg-pos-panel p-1 rounded-xl border border-pos-border">
-        {(['Retail', 'VIP', 'Wholesale'] as PricingTier[]).map((tier) => (
-          <button
-            key={tier}
-            type="button"
-            onClick={() => setPricingTier(tier)}
-            className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-              pricingTier === tier
-                ? 'bg-cyan-500 text-slate-950 font-black shadow-sm'
-                : 'text-pos-muted hover:text-pos-text'
-            }`}
-          >
-            {tier === 'Retail' ? 'Détail' : tier === 'VIP' ? 'Demi-Gros' : 'Gros'}
-          </button>
-        ))}
-      </div>
-
-      {/* Customer Selector Card */}
-      <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center">
-            <User className="w-4 h-4" />
-          </div>
-          <div>
-            <span className="text-[10px] font-bold text-pos-muted uppercase block leading-none">
-              Client Assigné
-            </span>
-            <span className="text-xs font-black text-pos-text mt-0.5 block leading-tight">
-              {currentCustomer ? currentCustomer.name : 'Client Comptoir'}
-            </span>
-            {currentCustomer && currentCustomer.currentDebt ? (
-              <span className="text-[10px] font-bold text-amber-400">
-                Créance actuelle : {formatDZD(currentCustomer.currentDebt)}
-              </span>
-            ) : null}
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setCustomerModalOpen(true)}
-          className="text-xs font-bold px-2.5 py-1 rounded-lg bg-pos-panel border border-pos-border text-cyan-400 hover:border-cyan-500 cursor-pointer"
-        >
-          {currentCustomer ? 'Changer' : 'Sélectionner'}
-        </button>
-      </div>
 
       {/* Cart Items List */}
       <div className="space-y-2">
@@ -276,69 +332,24 @@ export const MobileCheckoutTab: React.FC = () => {
         )}
       </div>
 
-      {/* Totals Summary & Tenders Footer */}
-      {cart.length > 0 && (
-        <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 shadow-md">
-          <div className="space-y-1.5 text-xs">
-            <div className="flex justify-between text-pos-muted">
-              <span>Sous-total Brut</span>
-              <span className="font-mono">{formatDZD(grossSubtotal)}</span>
-            </div>
-            {totalDiscount > 0 && (
-              <div className="flex justify-between text-cyan-400 font-medium">
-                <span>Remise Accordée</span>
-                <span className="font-mono">-{formatDZD(totalDiscount)}</span>
-              </div>
-            )}
-            <div className="flex justify-between items-baseline pt-2 border-t border-pos-border text-pos-text">
-              <span className="text-xs font-black uppercase tracking-wider">Total Net</span>
-              <span className="text-2xl font-black font-mono text-emerald-400">
-                {formatDZD(netTotal)}
-              </span>
-            </div>
-          </div>
-
-          {/* Checkout Buttons */}
-          <div className="grid grid-cols-2 gap-2 pt-1">
-            <button
-              type="button"
-              disabled={isSubmitting}
-              onClick={handleCheckoutCash}
-              className="py-3 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-md transition cursor-pointer disabled:opacity-50"
-            >
-              <Coins className="w-4 h-4" />
-              <span>Espèces</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={isSubmitting}
-              onClick={handleCheckoutCredit}
-              className="py-3 px-3 rounded-xl bg-pos-panel border border-pos-border hover:border-amber-400 active:scale-95 text-amber-400 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-50"
-            >
-              <CreditCard className="w-4 h-4" />
-              <span>Crédit Kredy</span>
-            </button>
-          </div>
-        </div>
-      )}
+    </AppTabContent>
 
       {/* Inline Customer Selection Modal */}
       {customerModalOpen && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 pt-[max(1rem,var(--safe-top))] pb-[max(1rem,var(--safe-bottom))]">
           <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-sm overflow-hidden flex flex-col max-h-[80vh]">
-            <div className="p-3.5 border-b border-pos-border flex items-center justify-between">
-              <h3 className="text-xs font-black text-pos-text">Sélectionner un Client</h3>
+            <div className="p-3.5 border-b border-pos-border flex items-center justify-between gap-2">
+              <h3 className="text-xs font-black text-pos-text truncate min-w-0">Sélectionner un Client</h3>
               <button
                 type="button"
                 onClick={() => setCustomerModalOpen(false)}
-                className="p-1 text-pos-muted hover:text-pos-text"
+                className="p-1 text-pos-muted hover:text-pos-text min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="p-3 overflow-y-auto space-y-1.5 flex-1">
+            <div className="p-3 overflow-y-auto overscroll-contain space-y-1.5 flex-1">
               <button
                 type="button"
                 onClick={() => {
@@ -375,6 +386,6 @@ export const MobileCheckoutTab: React.FC = () => {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 };

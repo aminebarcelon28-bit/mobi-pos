@@ -32,7 +32,15 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
   const [hasTorch, setHasTorch] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [isScanningActive, setIsScanningActive] = useState(false);
-  const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
+
+  // Refs (not state/deps): re-creating startCamera tears down getUserMedia
+  // and blinds the scanner for ~1s — the main cause of flaky screen-QR reads.
+  const onScanRef = useRef(onScan);
+  onScanRef.current = onScan;
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+  const busyRef = useRef(false);
+  const lastScanRef = useRef<{ data: string; at: number } | null>(null);
 
   // Stop camera tracks cleanly
   const stopCamera = useCallback(() => {
@@ -67,16 +75,18 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
       const err = 'La caméra n\'est pas supportée sur cet appareil ou ce navigateur.';
       setErrorMessage(err);
       setHasPermission(false);
-      onError?.(err);
+      onErrorRef.current?.(err);
       return;
     }
 
     try {
+      // 1080p ideal (graceful fallback on low-end): dense screen QR codes
+      // need pixels — 720p often can't resolve a version-16 code at distance.
       const constraints: MediaStreamConstraints = {
         video: {
           facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
         },
         audio: false,
       };
@@ -105,6 +115,9 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
 
       // Begin QR scanning loop
       const interval = window.setInterval(() => {
+        // Skip while a frame is still decoding: overlapping jsQR runs jank
+        // mid-range phones and delay the very detection we wait for.
+        if (busyRef.current) return;
         const video = videoRef.current;
         const canvas = canvasRef.current;
         if (!video || !canvas || video.readyState !== video.HAVE_ENOUGH_DATA) {
@@ -115,36 +128,44 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
         const height = video.videoHeight;
         if (width === 0 || height === 0) return;
 
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        if (!ctx) return;
+        busyRef.current = true;
+        try {
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          if (!ctx) return;
 
-        ctx.drawImage(video, 0, 0, width, height);
-        const imageData = ctx.getImageData(0, 0, width, height);
+          ctx.drawImage(video, 0, 0, width, height);
+          const imageData = ctx.getImageData(0, 0, width, height);
 
-        const code = jsQR(imageData.data, imageData.width, imageData.height, {
-          inversionAttempts: 'dontInvert',
-        });
+          // attemptBoth: glossy screens / harsh exposure often need inversion.
+          const code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: 'attemptBoth',
+          });
 
-        if (code && code.data && code.data.trim().length > 0) {
-          const content = code.data.trim();
-          // Avoid duplicate triggers within 1 second
-          if (content !== lastScannedCode) {
-            setLastScannedCode(content);
+          if (code && code.data && code.data.trim().length > 0) {
+            const content = code.data.trim();
+            // Time-based duplicate suppression (ref, no re-render, no restart).
+            const now = Date.now();
+            const last = lastScanRef.current;
+            if (!last || last.data !== content || now - last.at > 2000) {
+              lastScanRef.current = { data: content, at: now };
 
-            // Audio & Haptic feedback
-            soundEngine.playScan();
-            if (typeof navigator !== 'undefined' && navigator.vibrate) {
-              try {
-                navigator.vibrate([40, 30, 80]);
-              } catch {
-                // Ignore vibration failure
+              // Audio & Haptic feedback
+              soundEngine.playScan();
+              if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                try {
+                  navigator.vibrate([40, 30, 80]);
+                } catch {
+                  // Ignore vibration failure
+                }
               }
-            }
 
-            onScan(content);
+              onScanRef.current(content);
+            }
           }
+        } finally {
+          busyRef.current = false;
         }
       }, 90); // ~11 FPS scanning rate: optimal balance between instantaneous recognition and battery efficiency
 
@@ -163,9 +184,9 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
       }
       setErrorMessage(message);
       setHasPermission(false);
-      onError?.(message);
+      onErrorRef.current?.(message);
     }
-  }, [facingMode, lastScannedCode, onError, onScan, stopCamera]);
+  }, [facingMode, stopCamera]);
 
   // Torch Toggle
   const toggleTorch = async () => {

@@ -18,7 +18,7 @@ import {
 import { setCloudCredentials } from '../../sync/keychain';
 import { testTursoConnection, type ConnectionTestResult } from '../../sync/tursoClient';
 import { syncManager } from '../../sync/SyncManager';
-import { getDeviceId } from '../../sync/device';
+import { getStableDeviceId } from '../../sync/device';
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
 import { soundEngine } from '../../utils/audioFeedback';
@@ -71,9 +71,10 @@ export const MobilePairingWizard: React.FC<MobilePairingWizardProps> = ({
       await setCloudCredentials(trimmedUrl, trimmedToken);
 
       setConnectionStep('Synchronisation des données de la boutique...');
-      await syncManager.start(getDeviceId());
+      await syncManager.start(await getStableDeviceId());
       await syncManager.initialPull();
       await usePosStore.getState().initDatabase();
+      await usePosStore.getState().refreshAfterPull();
 
       soundEngine.playSuccess();
       showToast('Synchronisation réussie ! Votre boutique est prête.', 'success');
@@ -175,7 +176,7 @@ export const MobilePairingWizard: React.FC<MobilePairingWizardProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-pos-bg text-pos-text flex flex-col justify-between p-4 overflow-y-auto font-sans">
+    <div className="fixed inset-0 z-50 bg-pos-bg text-pos-text flex flex-col justify-between px-4 overflow-y-auto overscroll-contain font-sans pt-[var(--safe-top)] pb-[var(--safe-bottom)]">
       {/* Top Header */}
       <div className="space-y-3 pt-2 text-center relative max-w-sm mx-auto w-full">
         {onClose && (
@@ -282,6 +283,11 @@ export const MobilePairingWizard: React.FC<MobilePairingWizardProps> = ({
                 Coller le code &rarr;
               </button>
             </div>
+
+            <p className="text-[10px] text-pos-muted leading-relaxed px-1">
+              Si la lecture échoue : tenez le téléphone à 15–20 cm de l'écran, montez la
+              luminosité du PC au maximum et évitez les reflets sur l'écran.
+            </p>
           </div>
         ) : mode === 'paste' ? (
           /* 2. Clipboard Paste Mode */

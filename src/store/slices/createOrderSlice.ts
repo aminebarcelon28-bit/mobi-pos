@@ -15,6 +15,7 @@ import { db as dexieDb } from '../../db/database';
 import { sqliteAdapter } from '../../db/sqliteAdapter';
 import { customerRepository } from '../../db/repositories/customerRepository';
 import { writeCheckoutAtomic, appendInventoryDeltas } from '../../db/sqlPluginAdapter';
+import { getStableDeviceId } from '../../sync/device';
 import {
   calculateCustomerTier,
   calculateEarnedPoints,
@@ -294,6 +295,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         updatedCustomers = customers.map((c) => (c.id === finalCust.id ? finalCust : c));
       }
 
+      const currentDeviceId = await getStableDeviceId().catch(() => 'default');
       const transaction: SaleTransaction = {
         id: transactionId,
         receiptNumber: receiptNumber,
@@ -314,6 +316,8 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         cashierName: activeShift?.cashierName || 'Caisse Principale',
         debtAdded: creditDebtAmount > 0 ? creditDebtAmount : undefined,
         debtRemainingTotal: updatedCustomer?.currentDebt,
+        deviceId: currentDeviceId,
+        device_id: currentDeviceId,
       };
 
       const newTransactions = [transaction, ...transactions];
@@ -349,6 +353,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             change_due: changeDue,
             status: 'COMPLETED',
             created_at: transaction.createdAt,
+            device_id: currentDeviceId,
           },
           fullTx: transaction as unknown as Record<string, unknown>,
           items: frozenCartItems.map((ci, idx) => {
@@ -619,13 +624,13 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         }))
       );
       const { enqueueOrderSync } = await import('../../db/sqlPluginAdapter');
+      // Push the FULL voided transaction: a minimal payload would overwrite the
+      // cloud receipt and wipe line items on peer devices at pull time.
       await enqueueOrderSync(transactionId, {
-        id: transactionId,
+        ...voidedTxn,
         receipt_number: voidedTxn.receiptNumber,
-        total: voidedTxn.total,
-        status: 'VOIDED',
         created_at: voidedTxn.createdAt,
-      });
+      } as unknown as Record<string, unknown>);
       const { syncManager } = await import('../../sync/SyncManager');
       syncManager.notifyLocalWrite();
     } catch (e) {
@@ -849,13 +854,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         );
       }
       const { enqueueOrderSync } = await import('../../db/sqlPluginAdapter');
+      // Full object for the same reason as void: preserve receipt detail in cloud + peers.
       await enqueueOrderSync(originalTransaction.id, {
-        id: originalTransaction.id,
+        ...updatedOriginalTransaction,
         receipt_number: originalTransaction.receiptNumber,
-        total: originalTransaction.total,
-        status: updatedOriginalTransaction.status,
         created_at: originalTransaction.createdAt,
-      });
+      } as unknown as Record<string, unknown>);
       await writeCheckoutAtomic({
         orderRow: {
           id: refundTxnId,

@@ -20,6 +20,9 @@ export default defineConfig({
     },
   },
   build: {
-    target: 'es2021',
+    // es2020 = Chrome 80+: parses on old-but-updated Android WebViews.
+    // (CSS floor stays Chrome 111 per Tailwind v4 — enforced by the
+    // webviewCompat boot gate, which routes to the Play Store update.)
+    target: 'es2020',
   },
 })

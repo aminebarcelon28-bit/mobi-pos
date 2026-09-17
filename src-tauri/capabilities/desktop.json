@@ -4,5 +4,11 @@
   "description": "Desktop-only: auto-updater + process (gated #[cfg(desktop)] in lib.rs)",
   "platforms": ["linux", "macOS", "windows"],
   "windows": ["main"],
-  "permissions": ["updater:default", "process:default", "core:default"]
+  "permissions": [
+    "updater:default",
+    "process:default",
+    "core:default",
+    "opener:default",
+    "opener:allow-open-url"
+  ]
 }

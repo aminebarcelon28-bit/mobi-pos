@@ -1,6 +1,8 @@
 # ADR-0009: Rust-Owned Turso Native Sync (Engine A) as the Sole Synced-Table Engine
 
-- **Status:** Proposed (L3 — blocked on human approval per AGENTS.md §4.1; do NOT implement before approval)
+- **Status:** Approved for SPIKE ONLY (migration-plan step 1) on 2026-09-17 by merchant owner ("yes").
+  Steps 2+ (dual-write shadow, staged cutover, JS transport retirement) each require
+  separate sign-off after the spike's target-matrix evidence lands. Do NOT cut over traffic on this approval.
 - **Date:** 2026-09-17
 - **Decision-Makers:** Merchant owner (approver), Autonomous Engineering Agent (author)
 - **Consulted:** `AGENTS.md` (§1–§2 Rule ZERO, §5.7 radar), `docs/adr/0001-turso-sync-engine.md`,

@@ -55,7 +55,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   ];
 
   return (
-    <nav className="min-h-16 h-[calc(4rem+env(safe-area-inset-bottom,0px))] bg-pos-panel border-t border-pos-border px-2 flex items-center justify-around select-none shrink-0 pb-[env(safe-area-inset-bottom,0px)] z-20">
+    <nav className="min-h-16 bg-pos-panel border-t border-pos-border px-2 flex items-center justify-around select-none shrink-0 z-20">
       {navItems.map((item) => {
         const Icon = item.icon;
         const isActive = activeTab === item.id;

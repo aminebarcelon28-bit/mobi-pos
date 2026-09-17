@@ -621,7 +621,7 @@ export const SettingsModal: React.FC = () => {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[90vh] flex flex-col cursor-default font-sans"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[90vh] flex flex-col cursor-default font-sans pt-[var(--safe-top)] sm:pt-0 pb-[var(--safe-bottom)] sm:pb-0"
       >
 
         {/* ═══ Header ═══ */}
@@ -728,7 +728,7 @@ export const SettingsModal: React.FC = () => {
         </div>
 
         {/* ═══ Content Body ═══ */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
+        <div className="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-6">
           {/* ══════ TAB: Appearance & Theme ══════ */}
           {activeTab === 'appearance' && (
             <div className="space-y-4 max-w-3xl">

@@ -327,6 +327,8 @@ export interface SaleTransaction {
   refundedItems?: RefundItem[];
   debtAdded?: number;
   debtRemainingTotal?: number;
+  deviceId?: string;
+  device_id?: string;
 }
 
 export interface StockAlert {

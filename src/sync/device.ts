@@ -22,3 +22,20 @@ export function getDeviceId(): string {
   }
   return id;
 }
+
+/**
+ * Single stable device identity for the whole sync protocol (ADR-0008).
+ * Prefers the SQLite authorship id — the same value stamped on every row
+ * this device writes — and falls back to the localStorage transport id when
+ * SQLite is unavailable (plain web preview). Never throws.
+ */
+export async function getStableDeviceId(): Promise<string> {
+  try {
+    const { getSyncDeviceId } = await import('../db/sqlPluginAdapter');
+    const id = await getSyncDeviceId();
+    if (id) return id;
+  } catch {
+    // Fall through to the transport id.
+  }
+  return getDeviceId();
+}

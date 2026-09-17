@@ -10,6 +10,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
+import { AppTabContent } from '../AppScreenLayout';
 import type { SaleTransaction } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
 
@@ -74,7 +75,9 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
   }, [transactions]);
 
   return (
-    <div className="flex-1 overflow-y-auto p-3.5 space-y-4 pb-20">
+    <AppTabContent
+      pinnedTop={
+        <div className="px-3.5 pt-3 pb-2 bg-pos-bg">
       {/* Shift Snapshot Header Banner */}
       <div className="bg-gradient-to-br from-pos-card to-pos-panel border border-pos-border rounded-2xl p-4 shadow-sm relative overflow-hidden">
         <div className="flex items-center justify-between">
@@ -147,18 +150,21 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
 
         {/* Drawer Cash Indicator */}
         <div className="mt-3 bg-pos-panel/80 p-2.5 rounded-xl border border-pos-border flex items-center justify-between text-xs">
-          <span className="text-pos-muted flex items-center gap-1.5 font-medium">
-            <DollarSign className="w-3.5 h-3.5 text-amber-400" />
-            Espèces en Tiroir :
+          <span className="text-pos-muted flex items-center gap-1.5 font-medium min-w-0">
+            <DollarSign className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span className="truncate">Espèces en Tiroir :</span>
           </span>
-          <span className="font-mono font-black text-amber-400">
+          <span className="font-mono font-black text-amber-400 shrink-0">
             {formatDZD(estimatedCashInDrawer)}
           </span>
         </div>
       </div>
-
-      {/* Live Sales Stream Header */}
-      <div className="flex items-center justify-between pt-1">
+        </div>
+      }
+      contentClassName="px-3.5 pb-4"
+    >
+      {/* Live Sales Stream Header — sticky above the confined feed */}
+      <div className="flex items-center justify-between py-2 sticky top-0 z-10 bg-pos-bg">
         <h3 className="text-xs font-black uppercase tracking-wider text-pos-muted flex items-center gap-1.5">
           <Clock className="w-3.5 h-3.5 text-cyan-400" />
           Flux des Ventes en Direct ({recentFeed.length})
@@ -257,6 +263,6 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
           })
         )}
       </div>
-    </div>
+    </AppTabContent>
   );
 };

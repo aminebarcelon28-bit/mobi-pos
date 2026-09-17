@@ -5,6 +5,12 @@
  */
 
 import assert from 'node:assert';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const readRepo = (rel) => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
 
 console.log('========================================================================');
 console.log('⚡ MOBI POS — MOBILE COMPANION & NOMADIC POS INVARIANT TEST SUITE');
@@ -273,6 +279,57 @@ assert.strictEqual(parsePairingPayload('Not a JSON string').ok, false);
 assert.strictEqual(parsePairingPayload(JSON.stringify({ some_other_data: 123 })).ok, false);
 assert.strictEqual(parsePairingPayload(JSON.stringify({ url: 'ftp://invalid', token: 'abc' })).ok, false);
 pass('Mobile camera QR scanner securely validates and extracts Turso credentials with fail-safe error handling');
+
+// -----------------------------------------------------------------------------
+// TEST 8: Old-Android WebView Gate + Legacy Build Floor + One-Click APK Build
+// -----------------------------------------------------------------------------
+console.log('\n--- TEST 8: Old-Android Compat Gate & PC Build Chain ---');
+
+// 7a. WebView gate module pins the Tailwind v4 floor (Chrome 111, Mar 2023).
+const webviewCompat = readRepo('src/utils/webviewCompat.ts');
+assert.match(webviewCompat, /MIN_WEBVIEW_CHROME_MAJOR\s*=\s*111/, 'WebView floor must be Chrome 111 (Tailwind v4 requirement)');
+assert.match(webviewCompat, /shouldBlockForWebViewUpdate/, 'Gate decision function must exist');
+assert.match(webviewCompat, /renderWebViewUpdateScreen/, 'Blocking update screen must exist');
+assert.match(webviewCompat, /play\.google\.com\/store\/apps\/details\?id=com\.google\.android\.webview/, 'Gate must link the WebView Play Store update');
+pass('WebView compat gate pins Chrome 111 floor with Play Store update path');
+
+// 7b. Gate is wired at boot, before React renders.
+const mainTsx = readRepo('src/main.tsx');
+assert.match(mainTsx, /shouldBlockForWebViewUpdate/, 'main.tsx must consult the WebView gate');
+assert.match(mainTsx, /renderWebViewUpdateScreen\(boot\)/, 'main.tsx must intercept boot on outdated WebViews');
+pass('WebView gate is wired into application boot');
+
+// 7c. JS build floor stays parseable by old-but-updated WebViews (Chrome 80+).
+const viteConfig = readRepo('vite.config.ts');
+assert.match(viteConfig, /target:\s*['"]es2020['"]/, 'Vite build target must be es2020 (Chrome 80+)');
+pass('JS build floor is es2020 — no white-screen syntax on updated old WebViews');
+
+// 7d. Gate logic: old Android WebView blocks, modern/desktop never blocks.
+function gateDecision(ua, dismissed) {
+  const isAndroid = /android/i.test(ua);
+  if (!isAndroid || dismissed) return false;
+  const m = /Chrome\/(\d+)/i.exec(ua);
+  if (!m) return false;
+  return parseInt(m[1], 10) < 111;
+}
+const oldWebViewUA = 'Mozilla/5.0 (Linux; Android 8.0.0; Nexus 5X) AppleWebKit/537.36 Chrome/87.0.4280.141 Mobile Safari/537.36';
+const newWebViewUA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36';
+assert.strictEqual(gateDecision(oldWebViewUA, false), true, 'Chrome 87 WebView must be intercepted');
+assert.strictEqual(gateDecision(newWebViewUA, false), false, 'Chrome 120 WebView must boot straight through');
+assert.strictEqual(gateDecision(oldWebViewUA, true), false, 'Dismissed gate must not block again');
+assert.strictEqual(gateDecision(desktopUA, false), false, 'Desktop Chrome must never be gated');
+pass('Gate decision matrix: old WebView blocked, modern/desktop/dismissed pass through');
+
+// 7e. One-click PC build chain exists and is self-repairing.
+const buildBat = readRepo('build-android.bat');
+assert.match(buildBat, /tauri android build --apk --debug -t aarch64 armv7/, 'One-click build must target device ABIs only (emulator ABIs break the C toolchain)');
+assert.match(buildBat, /rustup target add/, 'One-click build must auto-install Rust Android targets');
+assert.match(buildBat, /sdkmanager/, 'One-click build must auto-install missing SDK packages');
+assert.match(buildBat, /NDK_HOME/, 'One-click build must resolve NDK_HOME automatically');
+assert.match(buildBat, /check-disk\.mjs/, 'One-click build must gate on free disk space');
+assert.ok(fs.existsSync(path.join(repoRoot, 'scripts', 'check-java.mjs')), 'Java gate script must exist');
+assert.ok(fs.existsSync(path.join(repoRoot, 'scripts', 'check-disk.mjs')), 'Disk gate script must exist');
+pass('One-click PC APK build chain present with auto-repair (SDK, NDK, Rust, Java, disk)');
 
 console.log('\n========================================================================');
 console.log(`🎯 MOBILE INVARIANT TEST RESULTS: ${passedTests} PASSED, 0 FAILED`);

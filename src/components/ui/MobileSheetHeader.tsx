@@ -20,7 +20,7 @@ export const MobileSheetHeader: React.FC<MobileSheetHeaderProps> = ({
         <button
           type="button"
           onClick={onBack}
-          className="p-2 -ml-1 rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center gap-1 font-bold text-xs"
+          className="p-2 -ml-1 rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center gap-1 font-bold text-xs min-h-[44px] min-w-[44px]"
           title="Revenir en arrière"
         >
           <ChevronLeft className="w-5 h-5 text-cyan-400 stroke-[2.5]" />
@@ -38,7 +38,7 @@ export const MobileSheetHeader: React.FC<MobileSheetHeaderProps> = ({
         <button
           type="button"
           onClick={onBack}
-          className="p-2 rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer"
+          className="p-2 rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
           title="Fermer la fenêtre"
         >
           <X className="w-4 h-4" />

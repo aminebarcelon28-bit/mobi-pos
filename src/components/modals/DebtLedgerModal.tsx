@@ -20,7 +20,7 @@ import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
 import type { Customer, PaymentMethodType } from '../../types/pos';
 import { useToast } from '../ui/Toast';
-import { buildWhatsAppUrl } from '../../utils/phoneUtils';
+import { openWhatsApp } from '../../utils/phoneUtils';
 import { soundEngine } from '../../utils/audioFeedback';
 
 export const DebtLedgerModal: React.FC = () => {
@@ -120,11 +120,13 @@ export const DebtLedgerModal: React.FC = () => {
     }
   };
 
-  const handleSendWhatsAppReminder = (customer: Customer) => {
+  const handleSendWhatsAppReminder = async (customer: Customer) => {
     const debt = customer.currentDebt || 0;
     const msg = `*RELEVÉ DE COMPTE CLIENT - MOBI POS*\n*Client :* ${customer.name}\n*Date :* ${new Date().toLocaleDateString('fr-DZ')}\n\nBonjour, nous vous informons que le solde de votre compte présente un encours de *${formatDZD(debt)}*.\n\nMerci de bien vouloir passer en boutique pour régulariser votre situation.\nCordialement,\n*L'Équipe MobiPOS*`;
-    const url = buildWhatsAppUrl(customer.phone, msg);
-    window.open(url, '_blank');
+    const ok = await openWhatsApp(customer.phone, msg);
+    if (!ok) {
+      showToast("Impossible d'ouvrir WhatsApp", 'error');
+    }
   };
 
   const handlePrintStatement = (customer: Customer) => {

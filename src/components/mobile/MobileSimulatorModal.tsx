@@ -37,8 +37,8 @@ export const MobileSimulatorModal: React.FC = () => {
           </div>
 
           {/* Internal Mobile Screen View */}
-          <div className="flex-1 w-full rounded-[38px] overflow-hidden flex flex-col bg-pos-bg pt-2 relative">
-            <CompanionShell />
+          <div className="flex-1 w-full rounded-[38px] overflow-hidden flex flex-col bg-pos-bg pt-9 relative">
+            <CompanionShell fill="parent" />
           </div>
 
           {/* Bottom Home Indicator Bar */}

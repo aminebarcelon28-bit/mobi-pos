@@ -69,6 +69,7 @@ export const REMOTE_MIGRATIONS: RemoteMigration[] = [
         barcode TEXT,
         title TEXT NOT NULL,
         brand TEXT,
+        compatible_model TEXT,
         category TEXT,
         price REAL NOT NULL DEFAULT 0,
         wholesale_price REAL DEFAULT 0,
@@ -194,14 +195,22 @@ export const REMOTE_MIGRATIONS: RemoteMigration[] = [
       (table) => `ALTER TABLE ${table} ADD COLUMN version INTEGER NOT NULL DEFAULT 1;`
     ),
   },
+  {
+    version: 4,
+    description: 'Add compatible_model column to products table for hardware retail and phone repair shops',
+    statements: [
+      'ALTER TABLE products ADD COLUMN compatible_model TEXT;',
+    ],
+  },
 ];
 
-export const LATEST_REMOTE_VERSION = 3;
+export const LATEST_REMOTE_VERSION = 4;
 
 export async function ensureRemoteSchemaColumns(client: Client): Promise<void> {
   const alterStatements = ALL_REMOTE_SYNC_TABLES.map(
     (table) => `ALTER TABLE ${table} ADD COLUMN version INTEGER NOT NULL DEFAULT 1`
   );
+  alterStatements.push('ALTER TABLE products ADD COLUMN compatible_model TEXT');
   for (const stmt of alterStatements) {
     try {
       await client.execute(stmt);

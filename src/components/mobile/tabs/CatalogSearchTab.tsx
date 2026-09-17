@@ -8,6 +8,7 @@ import {
   X,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
+import { AppTabContent } from '../AppScreenLayout';
 import type { Product } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
 import { getProductPriceForTier } from '../../../utils/pricingEngine';
@@ -57,54 +58,60 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-3.5 space-y-3 pb-20 select-none">
-      {/* Search Bar with Camera Barcode Trigger */}
-      <div className="relative flex items-center gap-2">
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Rechercher nom, code-barres, référence..."
-            className="w-full bg-pos-panel border border-pos-border focus:border-cyan-500 rounded-xl pl-9 pr-8 py-2.5 text-xs text-pos-text placeholder-pos-muted focus:outline-none transition-all"
-            autoFocus
-          />
-          {searchTerm && (
-            <button
-              type="button"
-              onClick={() => setSearchTerm('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-pos-muted hover:text-pos-text"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
+    <AppTabContent
+      pinnedTop={
+        <div className="px-3.5 pt-3 pb-2 space-y-2.5 bg-pos-bg">
+          {/* Search Bar with Camera Barcode Trigger */}
+          <div className="relative flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Rechercher nom, code-barres, référence..."
+                className="w-full bg-pos-panel border border-pos-border focus:border-cyan-500 rounded-xl pl-9 pr-8 py-2.5 text-xs text-pos-text placeholder-pos-muted focus:outline-none transition-all"
+                autoFocus
+              />
+              {searchTerm && (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-pos-muted hover:text-pos-text"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
 
-      {/* Categories Horizontal Scroll */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-[11px] font-bold">
-        {categories.map((cat) => (
-          <button
-            key={cat}
-            type="button"
-            onClick={() => setSelectedCategory(cat)}
-            className={`px-3 py-1.5 rounded-lg whitespace-nowrap transition cursor-pointer ${
-              selectedCategory === cat
-                ? 'bg-cyan-500 text-slate-950 font-black shadow-sm'
-                : 'bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text'
-            }`}
-          >
-            {cat === 'all' ? 'Tous les articles' : cat}
-          </button>
-        ))}
-      </div>
+          {/* Categories Horizontal Scroll */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-[11px] font-bold">
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setSelectedCategory(cat)}
+                className={`px-3 py-1.5 rounded-lg whitespace-nowrap transition cursor-pointer ${
+                  selectedCategory === cat
+                    ? 'bg-cyan-500 text-slate-950 font-black shadow-sm'
+                    : 'bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text'
+                }`}
+              >
+                {cat === 'all' ? 'Tous les articles' : cat}
+              </button>
+            ))}
+          </div>
 
-      {/* Product List */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between text-[11px] font-bold text-pos-muted px-1">
-          <span>{filteredProducts.length} articles répertoriés</span>
+          <div className="flex items-center justify-between text-[11px] font-bold text-pos-muted px-1">
+            <span>{filteredProducts.length} articles répertoriés</span>
+          </div>
         </div>
+      }
+      contentClassName="px-3.5 pb-4 select-none"
+    >
+      {/* Product List — confined scroll region */}
+      <div className="space-y-2 pt-1">
 
         {filteredProducts.length === 0 ? (
           <div className="p-8 text-center bg-pos-panel border border-pos-border rounded-2xl">
@@ -224,6 +231,6 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
           })
         )}
       </div>
-    </div>
+    </AppTabContent>
   );
 };

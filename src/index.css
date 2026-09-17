@@ -9,6 +9,12 @@
   --pos-text: #0f172a;
   --pos-muted: #64748b;
   --pos-input-bg: #f8fafc;
+
+  /* Universal safe-area tokens (enterprise App Shell).
+     Guaranteed minimums keep headers/footers clear of the status bar,
+     notch, and iOS home indicator even when env() reports 0px (desktop). */
+  --safe-top: max(env(safe-area-inset-top, 0px), 16px);
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
 }
 
 html.dark {
@@ -52,6 +58,42 @@ html.dark {
 .border-pos-border { border-color: var(--pos-border); }
 .text-pos-muted { color: var(--pos-muted); }
 .text-pos-text { color: var(--pos-text); }
+
+/* Universal App Shell safe-area utilities */
+@layer utilities {
+  .pt-safe { padding-top: var(--safe-top); }
+  .pb-safe { padding-bottom: var(--safe-bottom); }
+  .pl-safe { padding-left: max(env(safe-area-inset-left, 0px), 0px); }
+  .pr-safe { padding-right: max(env(safe-area-inset-right, 0px), 0px); }
+  .px-safe {
+    padding-left: max(env(safe-area-inset-left, 0px), 0px);
+    padding-right: max(env(safe-area-inset-right, 0px), 0px);
+  }
+  .py-safe {
+    padding-top: var(--safe-top);
+    padding-bottom: var(--safe-bottom);
+  }
+  .mt-safe-top { margin-top: var(--safe-top); }
+  .mb-safe-bottom { margin-bottom: var(--safe-bottom); }
+  /* Dynamic viewport height (keyboard / browser-chrome resilient) */
+  .h-dvh-shell { height: 100dvh; }
+  .min-h-dvh-shell { min-height: 100dvh; }
+  /* Floating action buttons: clear the home indicator by safe-bottom + 8px */
+  .fab-safe-bottom { bottom: calc(var(--safe-bottom) + 8px); }
+  /* Designated scroll containers: confined scrolling, no rubber-banding */
+  .scroll-contained {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
 
 /* Custom Scrollbar for POS */
 ::-webkit-scrollbar {
