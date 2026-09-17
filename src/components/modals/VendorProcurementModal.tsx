@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   X,
   Truck,
@@ -26,13 +26,14 @@ import {
   ExternalLink,
   Edit2,
   Trash2,
+  Printer,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { calculateStockAlerts } from '../../utils/alertEngine';
 import { formatDZD } from '../../types/pos';
 import type { Product, StockAlert } from '../../types/pos';
 import { useToast } from '../ui/Toast';
-import { buildWhatsAppUrl } from '../../utils/phoneUtils';
+import { openNativePrint, openWhatsApp } from '../../utils/phoneUtils';
 
 export const VendorProcurementModal: React.FC = () => {
   const {
@@ -70,46 +71,57 @@ export const VendorProcurementModal: React.FC = () => {
 
   // Add Item Dropdown State per Vendor
   const [activeAddVendor, setActiveAddVendor] = useState<string | null>(null);
+  // Progressive disclosure keeps large supplier catalogs from mounting hundreds
+  // of editable rows at once on low-memory phones.
+  const [expandedVendors, setExpandedVendors] = useState<Set<string>>(new Set());
 
-  if (activeModal !== 'vendor_procurement') return null;
-
-  const allAlerts = calculateStockAlerts(products);
-  const baseAlerts = allAlerts.filter(
-    (alert) => !dismissedProcurementIds || !dismissedProcurementIds.includes(alert.productId)
+  const allAlerts = useMemo(() => calculateStockAlerts(products), [products]);
+  const productsById = useMemo(
+    () => new Map(products.map((product) => [product.id, product])),
+    [products]
+  );
+  const baseAlerts = useMemo(
+    () => allAlerts.filter(
+      (alert) => !dismissedProcurementIds || !dismissedProcurementIds.includes(alert.productId)
+    ),
+    [allAlerts, dismissedProcurementIds]
   );
 
   // Group low stock alerts + extra added items by Wholesale Vendor
-  const vendorGroups: Record<string, StockAlert[]> = {};
-
-  baseAlerts.forEach((alert) => {
-    const vendor = alert.vendorName || 'Fournisseur Général';
-    if (!vendorGroups[vendor]) vendorGroups[vendor] = [];
-    vendorGroups[vendor].push(alert);
-  });
-
-  // Inject extra added products into vendor groups
-  Object.entries(extraVendorProducts).forEach(([vendor, prodIds]) => {
-    if (!vendorGroups[vendor]) vendorGroups[vendor] = [];
-    prodIds.forEach((pid) => {
-      if (!vendorGroups[vendor].some((a) => a.productId === pid)) {
-        const prod = products.find((p) => p.id === pid);
-        if (prod) {
-          vendorGroups[vendor].push({
-            id: `extra-${prod.id}`,
-            productId: prod.id,
-            sku: prod.sku,
-            title: prod.title,
-            brand: prod.brand,
-            currentStock: prod.stock,
-            reorderPoint: prod.reorderPoint || 10,
-            severity: prod.stock <= 0 ? 'critical' : 'warning',
-            vendorName: vendor,
-            dailyVelocity: prod.dailySalesVelocity || 1.5,
-          });
-        }
-      }
+  const vendorGroups = useMemo(() => {
+    const groups: Record<string, StockAlert[]> = {};
+    baseAlerts.forEach((alert) => {
+      const vendor = alert.vendorName || 'Fournisseur Général';
+      (groups[vendor] ||= []).push(alert);
     });
-  });
+
+    Object.entries(extraVendorProducts).forEach(([vendor, productIds]) => {
+      const group = (groups[vendor] ||= []);
+      productIds.forEach((productId) => {
+        if (group.some((alert) => alert.productId === productId)) return;
+        const product = productsById.get(productId);
+        if (!product) return;
+        group.push({
+          id: `extra-${product.id}`,
+          productId: product.id,
+          sku: product.sku,
+          title: product.title,
+          brand: product.brand,
+          currentStock: product.stock,
+          reorderPoint: product.reorderPoint || 10,
+          severity: product.stock <= 0 ? 'critical' : 'warning',
+          vendorName: vendor,
+          dailyVelocity: product.dailySalesVelocity || 1.5,
+        });
+      });
+    });
+
+    return groups;
+  }, [baseAlerts, extraVendorProducts, productsById]);
+
+  // Early return AFTER all hooks: returning before the useMemos above changed
+  // the hook order between renders and crashed React when opening/closing.
+  if (activeModal !== 'vendor_procurement') return null;
 
   // Calculate Global Procurement KPIs
   const totalVendors = Object.keys(vendorGroups).length;
@@ -122,7 +134,7 @@ export const VendorProcurementModal: React.FC = () => {
       vendorAlerts.reduce((acc, a) => {
         const isSelected = selectedItemsMap[a.productId] !== false;
         if (!isSelected) return acc;
-        const prod = products.find((p) => p.id === a.productId);
+        const prod = productsById.get(a.productId);
         const cost = prod ? prod.costPrice : 1500;
         const defaultQty = Math.max(1, (a.reorderPoint * 2) - a.currentStock);
         const qty = customQtyMap[a.productId] !== undefined ? customQtyMap[a.productId] : defaultQty;
@@ -192,7 +204,7 @@ export const VendorProcurementModal: React.FC = () => {
     if (strategy === 'moq') {
       let currentCost = 0;
       vendorAlerts.forEach((a) => {
-        const prod = products.find((p) => p.id === a.productId);
+        const prod = productsById.get(a.productId);
         const cost = prod ? prod.costPrice : 1500;
         const defaultQty = Math.max(1, a.reorderPoint * 2 - a.currentStock);
         const qty = nextQtyMap[a.productId] !== undefined ? nextQtyMap[a.productId] : defaultQty;
@@ -217,7 +229,7 @@ export const VendorProcurementModal: React.FC = () => {
     const selectedLineItems = vendorAlerts
       .filter((a) => selectedItemsMap[a.productId] !== false)
       .map((a) => {
-        const prod = products.find((p) => p.id === a.productId);
+        const prod = productsById.get(a.productId);
         const unitCost = prod ? prod.costPrice : 1500;
         const defaultQty = Math.max(1, a.reorderPoint * 2 - a.currentStock);
         const qty = customQtyMap[a.productId] !== undefined ? customQtyMap[a.productId] : defaultQty;
@@ -277,7 +289,7 @@ export const VendorProcurementModal: React.FC = () => {
     vendorAlerts
       .filter((a) => selectedItemsMap[a.productId] !== false)
       .forEach((a) => {
-        const prod = products.find((p) => p.id === a.productId);
+        const prod = productsById.get(a.productId);
         const unitCost = prod ? prod.costPrice : 1500;
         const defaultQty = Math.max(1, a.reorderPoint * 2 - a.currentStock);
         const qty = customQtyMap[a.productId] !== undefined ? customQtyMap[a.productId] : defaultQty;
@@ -308,7 +320,7 @@ export const VendorProcurementModal: React.FC = () => {
     let itemsText = '';
 
     selected.forEach((a, idx) => {
-      const prod = products.find((p) => p.id === a.productId);
+      const prod = productsById.get(a.productId);
       const unitCost = prod ? prod.costPrice : 1500;
       const defaultQty = Math.max(1, a.reorderPoint * 2 - a.currentStock);
       const qty = customQtyMap[a.productId] !== undefined ? customQtyMap[a.productId] : defaultQty;
@@ -329,10 +341,42 @@ export const VendorProcurementModal: React.FC = () => {
     setTimeout(() => setWhatsappCopied(false), 2500);
   };
 
-  const handleOpenWhatsAppWeb = (vendorName: string, vendorAlerts: StockAlert[], phone: string) => {
+  const handleOpenWhatsAppWeb = async (vendorName: string, vendorAlerts: StockAlert[], phone: string) => {
     const text = generateWhatsAppMessage(vendorName, vendorAlerts);
-    const url = buildWhatsAppUrl(phone, text);
-    window.open(url, '_blank');
+    const ok = await openWhatsApp(phone, text);
+    if (!ok) {
+      showToast("Impossible d'ouvrir WhatsApp", 'error');
+    }
+  };
+
+  const buildVendorOrderText = (vendorName: string, vendorAlerts: StockAlert[]) => {
+    const selected = vendorAlerts.filter((alert) => selectedItemsMap[alert.productId] !== false);
+    const lines = selected.map((alert, index) => {
+      const product = products.find((item) => item.id === alert.productId);
+      const unitCost = product ? product.costPrice : 1500;
+      const defaultQty = Math.max(1, alert.reorderPoint * 2 - alert.currentStock);
+      const qty = customQtyMap[alert.productId] ?? defaultQty;
+      return `${index + 1}. ${alert.title} | SKU ${alert.sku} | ${qty} pcs | ${formatDZD(unitCost * qty)}`;
+    });
+    return [
+      'MOBIPOS - BON DE REAPPROVISIONNEMENT JIT',
+      `Fournisseur: ${vendorName}`,
+      `Date: ${new Date().toLocaleDateString('fr-DZ')}`,
+      '',
+      ...lines,
+      '',
+      'Merci de confirmer la disponibilite et le delai de livraison.',
+    ].join('\n');
+  };
+
+  const handlePrintVendorOrder = async (vendorName: string, vendorAlerts: StockAlert[]) => {
+    const selected = vendorAlerts.filter((alert) => selectedItemsMap[alert.productId] !== false);
+    if (selected.length === 0) {
+      showToast('Sélectionnez au moins un article avant impression.', 'error');
+      return;
+    }
+    const printed = await openNativePrint(`MobiPOS - ${vendorName}`, buildVendorOrderText(vendorName, vendorAlerts));
+    showToast(printed ? 'Bon fournisseur envoyé à l’impression.' : 'Impossible d’ouvrir l’impression.', printed ? 'success' : 'error');
   };
 
   const handleAddExtraProductToVendor = (vendorName: string, prod: Product) => {
@@ -360,55 +404,56 @@ export const VendorProcurementModal: React.FC = () => {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-6xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-[92vh] flex flex-col relative cursor-default"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full max-w-6xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[92vh] flex flex-col relative cursor-default pt-[var(--safe-top)] pb-[var(--safe-bottom)] sm:pt-0 sm:pb-0"
       >
         
         {/* Modal Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+        <div className="px-3 py-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-emerald-500/20">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-emerald-500/20 shrink-0">
               <Truck className="w-5 h-5 stroke-[2.5]" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-pos-text tracking-wide">
+              <div className="flex items-center gap-2 min-w-0">
+                <h2 className="text-sm sm:text-base font-black text-pos-text tracking-wide truncate">
                   TABLEAU DE RÉAPPROVISIONNEMENT JIT PAR FOURNISSEUR
                 </h2>
-                <span className="text-[10px] bg-emerald-500/10 text-emerald-400 font-black px-2 py-0.5 rounded border border-emerald-500/30 uppercase">
+                <span className="hidden sm:inline text-[10px] bg-emerald-500/10 text-emerald-400 font-black px-2 py-0.5 rounded border border-emerald-500/30 uppercase shrink-0">
                   ENTERPRISE v2
                 </span>
               </div>
-              <p className="text-[11px] text-pos-muted">
+              <p className="hidden sm:block text-[11px] text-pos-muted truncate">
                 Algorithme Just-In-Time (JIT) basé sur la vélocité des ventes, seuils de sécurité et optimisation Franco/MOQ
               </p>
             </div>
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition shrink-0"
+            aria-label="Fermer le tableau de réapprovisionnement"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Executive KPI Summary Bar */}
-        <div className="bg-pos-bg border-b border-pos-border px-4 py-2.5 grid grid-cols-2 sm:grid-cols-4 gap-3 shrink-0 text-center select-none">
-          <div className="bg-pos-card border border-pos-border rounded-xl p-2.5">
+        <div className="bg-pos-bg border-b border-pos-border px-3 py-2.5 grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 shrink-0 text-center select-none">
+          <div className="bg-pos-card border border-pos-border rounded-xl p-2 sm:p-2.5">
             <span className="text-[9px] uppercase font-bold text-pos-muted block">Grossistes en Alerte</span>
             <span className="text-base font-black text-pos-text">{totalVendors}</span>
           </div>
 
-          <div className="bg-pos-card border border-amber-500/30 rounded-xl p-2.5">
+          <div className="bg-pos-card border border-amber-500/30 rounded-xl p-2 sm:p-2.5">
             <span className="text-[9px] uppercase font-bold text-amber-400 block">Références sous Seuil</span>
             <span className="text-base font-black text-amber-300">{totalAlertItems}</span>
           </div>
 
-          <div className="bg-pos-card border border-rose-500/30 rounded-xl p-2.5">
+          <div className="bg-pos-card border border-rose-500/30 rounded-xl p-2 sm:p-2.5">
             <span className="text-[9px] uppercase font-bold text-rose-400 block">Ruptures Totales (Stock 0)</span>
             <span className="text-base font-black text-rose-300">{criticalItemsCount}</span>
           </div>
 
-          <div className="bg-pos-card border border-emerald-500/30 rounded-xl p-2.5">
+          <div className="bg-pos-card border border-emerald-500/30 rounded-xl p-2 sm:p-2.5">
             <span className="text-[9px] uppercase font-bold text-emerald-400 block">Budget d'Achat Global Estimé</span>
             <span className="text-base font-black text-emerald-400">{formatDZD(globalEstimatedBudget)}</span>
           </div>
@@ -416,7 +461,7 @@ export const VendorProcurementModal: React.FC = () => {
 
         {/* Toolbar Filter & Global Actions */}
         <div className="bg-pos-card border-b border-pos-border p-3 flex flex-wrap items-center justify-between gap-3 shrink-0">
-          <div className="relative flex-1 min-w-[280px] max-w-md">
+          <div className="relative flex-1 min-w-[min(100%,220px)] max-w-md">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
             <input
               type="text"
@@ -427,7 +472,7 @@ export const VendorProcurementModal: React.FC = () => {
             />
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 w-full overflow-x-auto no-scrollbar pb-0.5">
             <button
               onClick={() => setSeverityFilter('all')}
               className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
@@ -491,7 +536,7 @@ export const VendorProcurementModal: React.FC = () => {
         )}
 
         {/* Content Body: Grouped by Vendor */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-6 bg-pos-bg">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4 sm:space-y-6 bg-pos-bg overscroll-contain">
           {Object.keys(vendorGroups).length === 0 ? (
             <div className="text-center py-20 text-pos-muted bg-pos-card border border-pos-border rounded-2xl max-w-lg mx-auto">
               <PackageCheck className="w-14 h-14 mx-auto mb-3 opacity-40 text-emerald-400" />
@@ -523,7 +568,7 @@ export const VendorProcurementModal: React.FC = () => {
                 // Estimated order value for selected items of this vendor
                 const selectedAlerts = vendorAlerts.filter((a) => selectedItemsMap[a.productId] !== false);
                 const vendorEstimatedOrderValue = selectedAlerts.reduce((acc, a) => {
-                  const prod = products.find((p) => p.id === a.productId);
+                  const prod = productsById.get(a.productId);
                   const cost = prod ? prod.costPrice : 1500;
                   const suggestedQty = Math.max(1, a.reorderPoint * 2 - a.currentStock);
                   const qty = customQtyMap[a.productId] !== undefined ? customQtyMap[a.productId] : suggestedQty;
@@ -546,18 +591,19 @@ export const VendorProcurementModal: React.FC = () => {
                     (p.vendorName || 'Fournisseur Général') === vendorName &&
                     !vendorAlerts.some((a) => a.productId === p.id)
                 );
+                  const isExpanded = expandedVendors.has(vendorName);
 
                 return (
                   <div
                     key={vendorName}
-                    className="bg-pos-card border border-pos-border rounded-2xl p-5 space-y-4 shadow-sm hover:border-emerald-500/40 transition"
+                    className="bg-pos-card border border-pos-border rounded-2xl p-3 sm:p-5 space-y-4 shadow-sm hover:border-emerald-500/40 transition"
                   >
                     {/* Vendor Header & Contact Toolbar */}
-                    <div className="flex flex-wrap justify-between items-start gap-3 pb-3 border-b border-pos-border">
+                    <div className="flex flex-col sm:flex-row sm:flex-wrap justify-between items-start gap-3 pb-3 border-b border-pos-border">
                       <div>
-                        <div className="flex items-center gap-2 mb-1.5">
+                        <div className="flex items-center gap-2 mb-1.5 min-w-0 flex-wrap">
                           <Truck className="w-4 h-4 text-emerald-400" />
-                          <h3 className="text-base font-black text-pos-text">{vendorName}</h3>
+                          <h3 className="text-sm sm:text-base font-black text-pos-text truncate max-w-[16rem]">{vendorName}</h3>
                           <span className="bg-pos-bg text-pos-muted text-[10px] font-bold px-2 py-0.5 rounded-md border border-pos-border">
                             {totalItems} Références
                           </span>
@@ -569,7 +615,7 @@ export const VendorProcurementModal: React.FC = () => {
                         </div>
 
                         {/* Vendor Contacts */}
-                        <div className="flex items-center gap-4 text-xs text-pos-muted">
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-pos-muted">
                           <div className="flex items-center gap-1 font-mono">
                             <Phone className="w-3.5 h-3.5 text-emerald-400" /> {contactPhone}
                           </div>
@@ -580,50 +626,75 @@ export const VendorProcurementModal: React.FC = () => {
                       </div>
 
                       {/* Vendor Quick Actions: WhatsApp, Direct Restock, PO */}
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full sm:w-auto">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedVendors((current) => {
+                            const next = new Set(current);
+                            if (next.has(vendorName)) next.delete(vendorName);
+                            else next.add(vendorName);
+                            return next;
+                          })}
+                          className="col-span-2 min-h-[44px] px-2.5 sm:px-3.5 py-2 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border text-pos-text font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                          aria-expanded={isExpanded}
+                        >
+                          {isExpanded ? <Minus className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                          {isExpanded ? 'Masquer les articles' : `Voir les ${totalItems} articles`}
+                        </button>
                         
                         {/* WhatsApp Generator Button */}
                         <button
                           type="button"
                           onClick={() => setWhatsappModalVendor(vendorName)}
-                          className="px-3.5 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 font-bold text-xs flex items-center gap-1.5 border border-emerald-500/30 transition cursor-pointer shadow-sm"
+                          className="min-h-[44px] px-2.5 sm:px-3.5 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1.5 border border-emerald-500/30 transition cursor-pointer shadow-sm"
                           title="Générer et envoyer la commande par WhatsApp"
                         >
-                          <MessageSquare className="w-3.5 h-3.5" /> Commande WhatsApp
+                          <MessageSquare className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">WhatsApp</span>
                         </button>
 
                         {/* CSV Export Button */}
                         <button
                           type="button"
                           onClick={() => handleExportCsv(vendorName, vendorAlerts)}
-                          className="p-2 rounded-xl bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
+                          className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center justify-center"
                           title="Télécharger Bon de Commande en CSV (Excel)"
                         >
                           <Download className="w-3.5 h-3.5" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => void handlePrintVendorOrder(vendorName, vendorAlerts)}
+                          className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-cyan-500/10 hover:bg-cyan-500 hover:text-slate-950 border border-cyan-500/30 text-cyan-400 transition cursor-pointer flex items-center justify-center"
+                          title="Imprimer le bon fournisseur"
+                          aria-label={`Imprimer la commande de ${vendorName}`}
+                        >
+                          <Printer className="w-3.5 h-3.5" />
                         </button>
 
                         {/* Direct Restock Button */}
                         <button
                           type="button"
                           onClick={() => handleDirectRestock(vendorName, vendorAlerts)}
-                          className="px-3.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500 text-amber-400 hover:text-slate-950 font-bold text-xs flex items-center gap-1.5 border border-amber-500/30 transition cursor-pointer shadow-sm"
+                          className="min-h-[44px] px-2.5 sm:px-3.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500 text-amber-400 hover:text-slate-950 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1.5 border border-amber-500/30 transition cursor-pointer shadow-sm"
                           title="Réception directe en caisse sans passer par un bon de commande brouillon"
                         >
-                          <Zap className="w-3.5 h-3.5" /> Réception Directe Stock
+                          <Zap className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">Réception</span>
                         </button>
 
                         {/* Official PO Button */}
                         <button
                           type="button"
                           onClick={() => handleCreatePO(vendorName, vendorAlerts)}
-                          className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition cursor-pointer"
+                          className="min-h-[44px] px-2.5 sm:px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] sm:text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 transition cursor-pointer"
                         >
-                          <FileText className="w-3.5 h-3.5" /> Créer Bon PO <ArrowRight className="w-3.5 h-3.5" />
+                          <FileText className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">Créer PO</span> <ArrowRight className="w-3.5 h-3.5 shrink-0" />
                         </button>
 
                       </div>
                     </div>
 
+                    {isExpanded && <>
                     {/* Replenishment Strategy Presets Toolbar */}
                     <div className="bg-pos-bg p-3 rounded-xl border border-pos-border flex flex-wrap items-center justify-between gap-3 text-xs">
                       
@@ -760,7 +831,7 @@ export const VendorProcurementModal: React.FC = () => {
                           customQtyMap[alert.productId] !== undefined
                             ? customQtyMap[alert.productId]
                             : defaultSuggestedQty;
-                        const prod = products.find((p) => p.id === alert.productId);
+                        const prod = productsById.get(alert.productId);
                         const unitCost = prod ? prod.costPrice : 1500;
                         const itemSubtotal = unitCost * currentQty;
 
@@ -924,6 +995,7 @@ export const VendorProcurementModal: React.FC = () => {
                         )}
                       </div>
                     )}
+                    </>}
 
                   </div>
                 );
