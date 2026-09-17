@@ -1145,14 +1145,20 @@ class SyncManager {
       if (totalPulled > 0) {
         this.lastPullAt = utcNowIso();
         // 1. Recompute products stock from ledger deltas in SQLite
+        // P2: chunk the IN() list — up to 8.5k ids in one statement risks
+        // SQLITE_ERROR (too many variables) on older SQLite builds.
         if (touchedProductIds.size > 0) {
           const productIds = [...touchedProductIds];
-          await db.execute(
-            `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger
-              WHERE inventory_ledger.product_id = products.id AND deleted=0), stock)
-             WHERE id IN (${productIds.map(() => '?').join(',')})`,
-            productIds,
-          );
+          const IN_CHUNK = 500;
+          for (let i = 0; i < productIds.length; i += IN_CHUNK) {
+            const chunk = productIds.slice(i, i + IN_CHUNK);
+            await db.execute(
+              `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger
+                WHERE inventory_ledger.product_id = products.id AND deleted=0), stock)
+               WHERE id IN (${chunk.map(() => '?').join(',')})`,
+              chunk,
+            );
+          }
         }
         // 2. CRITICAL: Mirror recomputed stock from SQLite to Dexie so desktop UI gets updated immediately!
         try {

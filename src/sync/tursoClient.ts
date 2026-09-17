@@ -28,14 +28,36 @@ export function withNetworkTimeout<T>(
   operationName = 'Opération Cloud Turso'
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
+  // Swallow late settlement: after a timeout the abandoned upload's rejection
+  // must never surface as an unhandled rejection (it now feeds crash telemetry).
+  promise.catch(() => {});
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
+      // P2: abandon AND invalidate — a wedged multi-MB upload must not keep
+      // holding the radio/heap after we gave up on it.
+      closeTursoClient();
       reject(new Error(`[Délai d'attente R5.5] ${operationName} a expiré après ${timeoutMs}ms. Vérifiez la connexion.`));
     }, timeoutMs);
   });
   return Promise.race([promise, timeoutPromise]).finally(() => {
     clearTimeout(timer);
   });
+}
+
+const NETWORK_ERROR_HINTS = [
+  'timeout', 'délai', "d'attente", 'failed to fetch', 'networkerror', 'network error',
+  'load failed', 'econn', 'enotfound', 'eai_again', 'epipe', 'esocket', 'socket',
+  'abort', 'connection', 'offline', 'unreachable', 'reset by peer',
+];
+
+/**
+ * P2: distinguish transport failures from SQL errors. The shared client used
+ * to be torn down on ANY error — including constraint/version rejections —
+ * killing the concurrent push/pull loop for nothing (freeze + retry storm).
+ */
+export function isNetworkError(err: unknown): boolean {
+  const msg = String(err instanceof Error ? (err.message ?? '') : err).toLowerCase();
+  return NETWORK_ERROR_HINTS.some((hint) => msg.includes(hint));
 }
 
 function wrapClientWithTimeout(client: Client, timeoutMs = 10000): Client {
@@ -48,7 +70,13 @@ function wrapClientWithTimeout(client: Client, timeoutMs = 10000): Client {
             original.apply(target, args),
             timeoutMs,
             'Requête SQL Turso'
-          );
+          ).catch((err: unknown) => {
+            // Auto-heal socket on network break so mobile reconnects cleanly.
+            // Never on plain SQL errors (constraint/version rejections) — those
+            // must not tear down the peer operation sharing this client.
+            if (isNetworkError(err)) closeTursoClient();
+            throw err;
+          });
         };
       }
       if (prop === 'batch' && typeof original === 'function') {
@@ -57,7 +85,11 @@ function wrapClientWithTimeout(client: Client, timeoutMs = 10000): Client {
             original.apply(target, args),
             timeoutMs,
             'Lot de requêtes Turso (batch)'
-          );
+          ).catch((err: unknown) => {
+            // Auto-heal socket on network break only (see above).
+            if (isNetworkError(err)) closeTursoClient();
+            throw err;
+          });
         };
       }
       return original;
@@ -174,14 +206,25 @@ export async function testTursoConnection(url: string, token: string): Promise<C
 /**
  * Lightweight ping to verify network and remote database availability.
  */
-export async function probeOnline(timeoutMs = 5000): Promise<boolean> {
+export async function probeOnline(timeoutMs = 4000): Promise<boolean> {
   try {
     const client = await getTursoClient();
-    await Promise.race([
-      client.execute('SELECT 1'),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs)),
-    ]);
-    return true;
+    try {
+      await Promise.race([
+        client.execute('SELECT 1'),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs)),
+      ]);
+      return true;
+    } catch {
+      // Socket / connection might be dead on mobile: close cached client and retry once with fresh client
+      closeTursoClient();
+      const freshClient = await getTursoClient();
+      await Promise.race([
+        freshClient.execute('SELECT 1'),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs)),
+      ]);
+      return true;
+    }
   } catch {
     return false;
   }
