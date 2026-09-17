@@ -4,6 +4,8 @@
 //   order + items + ledger deltas + outbox rows + cached stock update.
 
 import Database from '@tauri-apps/plugin-sql';
+import { recordShadowEvent, initClock } from '../sync/eventInterceptor.ts';
+import { backfillExistingProducts } from '../sync/snapshotBackfill.ts';
 
 const DB_PATH = 'sqlite:mobi_pos.db';
 
@@ -53,12 +55,65 @@ export async function getLocalDb(): Promise<Database> {
     await cached.execute('PRAGMA synchronous = NORMAL;');
     await cached.execute('PRAGMA busy_timeout = 5000;');
     await cached.execute('PRAGMA foreign_keys = ON;');
+    // ES-LFP §18.1: auto_vacuum = INCREMENTAL allows returning freed pages to the OS
+    await cached.execute('PRAGMA auto_vacuum = INCREMENTAL;').catch(() => {});
+    // P-½ bleed-stop: purge historical acked outbox rows on boot
+    await cached.execute("DELETE FROM sync_outbox WHERE status = 'synced';").catch(() => {});
   }
   if (!columnsEnsured) {
     columnsEnsured = true;
     await ensureLocalSyncColumns(cached);
+    await checkAndRunScheduledDbMaintenance(cached).catch(() => {});
+    const devId = (await getOrCreateDeviceId(cached)) || 'default';
+    initClock(devId);
+    await backfillExistingProducts(cached, devId).catch(() => {});
   }
   return cached;
+}
+
+/**
+ * Executes database hygiene: WAL truncation checkpoint + incremental vacuum.
+ * Reclaims disk space and bounds SQLite file growth (ES-LFP §18.1).
+ */
+export async function runDbMaintenance(db?: Database): Promise<{ checkpoint: unknown; vacuum: unknown }> {
+  const targetDb = db || (await getLocalDb());
+  const checkpoint = await targetDb.execute('PRAGMA wal_checkpoint(TRUNCATE);').catch((e: unknown) => {
+    console.warn('[DB Maintenance] WAL checkpoint warning:', e);
+    return null;
+  });
+  const vacuum = await targetDb.execute('PRAGMA incremental_vacuum(256);').catch((e: unknown) => {
+    console.warn('[DB Maintenance] Incremental vacuum warning:', e);
+    return null;
+  });
+  return { checkpoint, vacuum };
+}
+
+export async function checkAndRunScheduledDbMaintenance(db: Database): Promise<void> {
+  try {
+    const currentMonth = new Date().toISOString().slice(0, 7); // e.g. "2026-09"
+    const rows = (await db.select(
+      "SELECT value_json FROM app_settings WHERE key = 'sync.maintenance.last_month'"
+    ).catch(() => [])) as Array<{ value_json: string }>;
+
+    let lastMonth = '';
+    if (rows?.[0]?.value_json) {
+      try {
+        lastMonth = JSON.parse(rows[0].value_json);
+      } catch {
+        lastMonth = rows[0].value_json;
+      }
+    }
+
+    if (lastMonth !== currentMonth) {
+      await runDbMaintenance(db);
+      await db.execute(
+        "INSERT INTO app_settings (key, value_json, version, updated_at) VALUES ('sync.maintenance.last_month', ?, 1, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at;",
+        [JSON.stringify(currentMonth), utcNowIso()]
+      ).catch(() => {});
+    }
+  } catch (err) {
+    console.warn('[DB Maintenance] Scheduled check non-fatal error:', err);
+  }
 }
 
 export function utcNowIso(): string {
@@ -70,12 +125,176 @@ export function newIdempotencyKey(): string {
   return `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
 }
 
+/**
+ * P0 payload-hygiene invariant (mobile freeze/crash fix, 2026-09-17).
+ *
+ * Forensics (`docs/sync/diagnostic-baseline-2026-09-17.md`): one product row
+ * carried 20,260,360 bytes of base64 image data in `json_payload` (56% of the
+ * cloud DB) and 26 transaction receipts embedding it added 14.6 MB more.
+ * Those blobs rode every push batch, pull page, boot scan and UI reload on
+ * the webview main thread → GC thrash, ANR (Android) / jetsam (iOS).
+ *
+ * Rule: synced payloads carry REFERENCES (url, hash), never BLOB bytes.
+ * - Known media keys are dropped; oversized image references are blanked.
+ * - Nested `json_payload`/`data_json` strings are parsed and cleaned
+ *   recursively (the 20 MB blob lived inside such a nested JSON string).
+ * - Money/relational scalars are NEVER dropped: the byte cap only removes
+ *   non-protected large fields, and residual oversize passes through rather
+ *   than corrupt financial data (push-side quarantine handles the rest).
+ */
+export const MAX_SYNC_IMAGE_FIELD_BYTES = 2048;
+export const MAX_SYNC_BLOB_STRING_BYTES = 16 * 1024;
+export const MAX_SYNC_PAYLOAD_BYTES = 64 * 1024;
+
+const SYNC_BLOB_KEYS = new Set([
+  'photos', 'photo', 'receipt_image', 'scan_image', 'images', 'attachments',
+  'image_data', 'imageData', 'thumbnail_data', 'thumbnailData',
+]);
+
+const SYNC_IMAGE_URL_KEYS = new Set([
+  'imageUrl', 'image_url', 'imageurl', 'photo_url', 'photoUrl',
+]);
+
+const SYNC_NESTED_JSON_KEYS = new Set([
+  'json_payload', 'data_json', 'payload_json', 'value_json', 'dataJson', 'jsonPayload',
+]);
+
+const SYNC_PROTECTED_KEYS = new Set([
+  'id', 'transaction_id', 'product_id', 'customer_id', 'items', 'lines',
+  'tenders', 'payments', 'subtotal', 'tax', 'discount_total', 'total',
+  'cost_total', 'profit', 'quantity', 'applied_price', 'status',
+  'idempotency_key', 'device_id', 'version',
+]);
+
+function isBlobLikeString(value: string): boolean {
+  if (value.length < 1024) return false;
+  const head = value.slice(0, 64);
+  if (head.startsWith('data:image/') || head.startsWith('data:application/') || head.startsWith('data:video/')) return true;
+  const sample = value.slice(0, 256).replace(/\s+/g, '');
+  return sample.length > 0 && /^[A-Za-z0-9+/=]+$/.test(sample);
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value ?? {});
+  } catch {
+    return '{}';
+  }
+}
+
+export function sanitizeSyncPayload<T>(value: T, depth = 0): T {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') {
+    if (value.length > MAX_SYNC_BLOB_STRING_BYTES && isBlobLikeString(value)) return '' as unknown as T;
+    return value;
+  }
+  if (typeof value !== 'object') return value;
+  if (depth > 6) return (Array.isArray(value) ? [] : {}) as unknown as T;
+  if (Array.isArray(value)) {
+    return value.map((v) => sanitizeSyncPayload(v, depth + 1)) as unknown as T;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (SYNC_BLOB_KEYS.has(k)) continue;
+    if (SYNC_IMAGE_URL_KEYS.has(k) && typeof v === 'string' && v.length > MAX_SYNC_IMAGE_FIELD_BYTES) {
+      out[k] = '';
+      continue;
+    }
+    if (typeof v === 'string' && SYNC_NESTED_JSON_KEYS.has(k) && v.length > 1024) {
+      try {
+        out[k] = JSON.stringify(sanitizeSyncPayload(JSON.parse(v) as unknown, depth + 1));
+        continue;
+      } catch {
+        // Not JSON after all — fall through to the generic string rule.
+      }
+    }
+    out[k] = sanitizeSyncPayload(v, depth + 1);
+  }
+  return out as unknown as T;
+}
+
+/** Image references must stay references: anything bigger than a URL is blanked. */
+export function sanitizeImageField(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length === 0) return (value as string | null) ?? null;
+  if (value.length > MAX_SYNC_IMAGE_FIELD_BYTES) return '';
+  return value;
+}
+
+/** Serialize a sync payload with the hygiene invariant applied + byte budget. */
+export function toBoundedSyncJson(payload: unknown, maxBytes = MAX_SYNC_PAYLOAD_BYTES): string {
+  const clean = sanitizeSyncPayload(payload) as Record<string, unknown>;
+  let json = safeJsonStringify(clean);
+  if (json.length <= maxBytes) return json;
+  if (clean === null || typeof clean !== 'object' || Array.isArray(clean)) return json;
+  // Second pass: shed the largest non-protected large fields (never money keys).
+  const obj: Record<string, unknown> = { ...(clean as Record<string, unknown>) };
+  for (let i = 0; i < 25 && json.length > maxBytes; i++) {
+    let biggest = '';
+    let biggestLen = 0;
+    for (const [k, v] of Object.entries(obj)) {
+      if (SYNC_PROTECTED_KEYS.has(k)) continue;
+      const len = typeof v === 'string' ? v.length : safeJsonStringify(v).length;
+      if (len > biggestLen) {
+        biggest = k;
+        biggestLen = len;
+      }
+    }
+    if (!biggest || biggestLen < 1024) break;
+    delete obj[biggest];
+    json = safeJsonStringify(obj);
+  }
+  if (json.length > maxBytes) {
+    console.warn(`[sync:hygiene] payload still ${(json.length / 1024).toFixed(1)}KB after stripping; syncing intact (money fields protected).`);
+  }
+  return json;
+}
+
+/**
+ * Stable per-device authorship id for the sync protocol (single identity,
+ * ADR-0008). Never throws — returns null when SQLite is unavailable (plain
+ * web preview), letting callers fall back to the transport id.
+ */
+export async function getSyncDeviceId(): Promise<string | null> {
+  try {
+    const db = await getLocalDb();
+    return (await getOrCreateDeviceId(db)) || null;
+  } catch {
+    return null;
+  }
+}
+
 async function getOrCreateDeviceId(db: Database): Promise<string> {
   const rows = (await db.select('SELECT value_json FROM app_settings WHERE key = \'sync.device_id\'')
     .catch(() => [])) as Array<{ value_json: string }>;
   if (rows?.[0]?.value_json) {
     try {
-      return JSON.parse(rows[0].value_json as string) as string;
+      const parsed: unknown = JSON.parse(rows[0].value_json as string);
+      if (typeof parsed === 'string' && parsed.length > 0) return parsed;
+      // Legacy Dexie-port envelope ({_ported_from, value_json_text}) was stored
+      // raw by older builds; unwrapping keeps the stable UUID instead of
+      // coercing the object into a "[object Object]"/JSON blob device_id.
+      const inner = (parsed as { value_json_text?: unknown } | null)?.value_json_text;
+      const repair = async (clean: string) => {
+        await db.execute(
+          "INSERT OR REPLACE INTO app_settings (key, value_json, updated_at) VALUES ('sync.device_id', ?, ?)",
+          [JSON.stringify(clean), utcNowIso()],
+        ).catch(() => {});
+        return clean;
+      };
+      if (typeof inner === 'string') {
+        try {
+          const innerParsed: unknown = JSON.parse(inner);
+          if (typeof innerParsed === 'string' && innerParsed.length > 0) {
+            return await repair(innerParsed);
+          }
+        } catch {
+          // inner is a bare id, handled below
+        }
+        if (inner.length > 0 && inner.length < 100 && !inner.startsWith('{')) {
+          return await repair(inner);
+        }
+      }
+      console.warn('[db:deviceId] Unrecognized device ID shape, regenerating');
     } catch (err) {
       console.warn('[db:deviceId] Malformed device ID JSON, regenerating:', err);
     }
@@ -142,8 +361,8 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
       );
     }
 
-    // (Product UPSERTs are enqueued after the stock recompute below, so the
-    // payload carries post-sale stock and rowids stay parent-first.)
+    // (Product snapshots are refreshed in step 7 after the ledger inserts, so the
+    // outbox payload carries post-sale stock and rowids stay parent-first.)
     const touchedIds = [...new Set([
       ...(input.productSnapshots ?? []).map((p) => String(p.id || '')).filter(Boolean),
       ...input.deltas.map((d) => String(d.productId || '')).filter(Boolean),
@@ -154,8 +373,18 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
     const orderKey = String(input.orderRow.idempotency_key || newIdempotencyKey());
     const orderSync = 'pending';
     // Canonical receipt JSON: full transaction when available (restorable),
-    // otherwise the partial order row.
-    const receiptJson = JSON.stringify(input.fullTx ?? input.orderRow ?? { id: txId });
+    // otherwise the partial order row. Explicitly embed device authorship.
+    const rawTx = (input.fullTx ?? input.orderRow ?? { id: txId }) as Record<string, unknown>;
+    // P0 hygiene: receipts embed product snapshots — strip media blobs so one
+    // 20 MB image cannot inflate 26 receipts again (diagnostic 2026-09-17).
+    const receiptJson = toBoundedSyncJson({
+      ...rawTx,
+      id: txId,
+      receiptNumber: receiptNo,
+      receipt_number: receiptNo,
+      deviceId,
+      device_id: deviceId,
+    });
 
     await db.execute(
       `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
@@ -190,16 +419,6 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
       ],
     );
 
-    // 1. Recompute cached stock for touched products (allow-negative + alert policy).
-    const touched = [...new Set(input.deltas.map((d) => String(d.productId || '')).filter(Boolean))];
-    for (const pid of touched) {
-      await db.execute(
-        `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0),0),
-          updated_at=$2, sync_status='pending' WHERE id=$1`,
-        [pid, now],
-      );
-    }
-
     // 2. Enqueue customer UPSERT if present in transaction (Strict Parent-First)
     const attachedCustomer = (input.fullTx as Record<string, unknown> | undefined)?.customer as Record<string, unknown> | undefined;
     if (attachedCustomer && attachedCustomer.id) {
@@ -209,11 +428,11 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
         `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
          VALUES ($1,'customer',$2,'UPSERT',$3,'pending')
          ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
-        [custKey, custId, JSON.stringify(attachedCustomer), now],
+        [custKey, custId, toBoundedSyncJson(attachedCustomer), now],
       );
     }
 
-    // 3. Enqueue product UPSERTs with post-sale stock (Parent-First)
+    // 3. Enqueue product UPSERTs (stock snapshot refreshed in step 7 after ledger inserts)
     for (const pid of touchedIds) {
       const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pid]).catch(() => [])) as Array<Record<string, unknown>>;
       const prow = rows?.[0];
@@ -223,7 +442,7 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
         `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
          VALUES ($1,'product',$2,'UPSERT',$3,'pending')
          ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
-        [pkey, pid, JSON.stringify(prow), now],
+        [pkey, pid, toBoundedSyncJson(prow), now],
       );
     }
 
@@ -254,7 +473,8 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
           Number(it.discount ?? 0),
           (it.imei_number as string) ?? (it.imeiNumber as string) ?? null,
           Number(it.cost_price ?? it.costPrice ?? 0),
-          JSON.stringify({ ...it, id: itemId, transaction_id: txId, product_id: prodId }),
+          // P0 hygiene: line items may embed full product objects (with blobs).
+          toBoundedSyncJson({ ...it, id: itemId, transaction_id: txId, product_id: prodId }),
           deviceId,
           itemKey,
           now,
@@ -263,7 +483,7 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
       await db.execute(
         `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
          VALUES ($1,'order_item',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
-        [itemKey, itemId, JSON.stringify({ ...it, id: itemId, transaction_id: txId, product_id: prodId })],
+        [itemKey, itemId, toBoundedSyncJson({ ...it, id: itemId, transaction_id: txId, product_id: prodId })],
       );
 
       const imeiNum = String((it.imei_number as string) ?? (it.imeiNumber as string) ?? '').trim();
@@ -327,6 +547,79 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
       );
     }
 
+    // 7. Recompute cached stock AFTER ledger inserts (allow-negative policy).
+    // Must run after step 6: the ledger deltas of THIS sale are part of the SUM.
+    // Product outbox rows enqueued in step 3 carry the pre-sale snapshot, so
+    // refresh them here with the post-sale row (idempotent DO UPDATE).
+    const touched = [...new Set(input.deltas.map((d) => String(d.productId || '')).filter(Boolean))];
+    for (const pid of touched) {
+      await db.execute(
+        `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0),stock),
+          version = version + 1, updated_at=$2, sync_status='pending' WHERE id=$1`,
+        [pid, now],
+      );
+    }
+    for (const pid of touchedIds) {
+      const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pid]).catch(() => [])) as Array<Record<string, unknown>>;
+      const prow = rows?.[0];
+      if (!prow) continue;
+      const pkey = (prow.idempotency_key as string) || `stub-${pid}`;
+      await db.execute(
+        `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+         VALUES ($1,'product',$2,'UPSERT',$3,'pending')
+         ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
+        [pkey, pid, toBoundedSyncJson(prow), now],
+      );
+    }
+
+    // 8. Phase P1 Shadow Event Interceptor: Record checkout and sold stock into event_log & p_*
+    try {
+      const checkoutLines = (input.items ?? []).map((it) => ({
+        product_id: String(it.product_id || it.productId || ''),
+        qty: Math.abs(Number(it.quantity || 1)),
+        unit_cents: Math.round(Number(it.applied_price ?? it.appliedPrice ?? 0) * 100),
+      }));
+
+      await recordShadowEvent(
+        db,
+        {
+          type: 'checkout_completed',
+          data: {
+            transaction_id: txId,
+            lines: checkoutLines,
+            total_cents: Math.round(Number(input.orderRow.total ?? 0) * 100),
+            payment: {
+              method: String(input.orderRow.payment_method ?? 'cash'),
+              tendered_cents: Math.round(Number(input.orderRow.cash_tendered ?? 0) * 100),
+              change_cents: Math.round(Number(input.orderRow.change_due ?? 0) * 100),
+            },
+          },
+        },
+        `tx:${txId}`,
+        deviceId
+      );
+
+      for (const line of checkoutLines) {
+        if (line.product_id && line.qty > 0) {
+          await recordShadowEvent(
+            db,
+            {
+              type: 'stock_sold',
+              data: {
+                product_id: line.product_id,
+                qty: line.qty,
+                transaction_id: txId,
+              },
+            },
+            `product:${line.product_id}`,
+            deviceId
+          );
+        }
+      }
+    } catch (shadowErr) {
+      console.warn('[writeCheckoutAtomic] Shadow event recording non-fatal error:', shadowErr);
+    }
+
   } catch (error) {
     console.error('[writeCheckoutAtomic] Persistence failed:', error);
     throw error;
@@ -338,19 +631,75 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
 /**
  * Synchronizes recomputed product stock from SQLite products table to Dexie products table.
  * Ensures that UI components reading from Dexie immediately reflect stock changes made by remote sales.
+ * Upserts missing rows (new peer products) instead of only patching existing ones.
  */
-export async function syncProductsFromSqlToDexie(): Promise<number> {
+export async function syncProductsFromSqlToDexie(productIds?: Iterable<string>): Promise<number> {
   try {
     const db = await getLocalDb();
-    const rows = (await db.select('SELECT id, stock FROM products WHERE deleted=0').catch(() => [])) as Array<{ id: string; stock: number }>;
-    if (!rows || rows.length === 0) return 0;
-
+    const ids = productIds ? [...new Set([...productIds].filter(Boolean))] : [];
+    const rows = (await db.select(
+      ids.length > 0
+        ? `SELECT * FROM products WHERE deleted=0 AND id IN (${ids.map(() => '?').join(',')})`
+        : 'SELECT * FROM products WHERE deleted=0',
+      ids.length > 0 ? ids : undefined,
+    ).catch(() => [])) as Array<Record<string, unknown>>;
     const { db: dexieDb } = await import('./database');
+
+    if (!rows || rows.length === 0) {
+      if (ids.length === 0) await dexieDb.products.clear();
+      return 0;
+    }
+
+    const validIds = new Set<string>();
     await dexieDb.transaction('rw', dexieDb.products, async () => {
       for (const r of rows) {
-        const existing = await dexieDb.products.get(r.id);
-        if (existing && existing.stock !== r.stock) {
-          await dexieDb.products.update(r.id, { stock: r.stock });
+        const id = String(r.id ?? '');
+        if (!id) continue;
+        validIds.add(id);
+        const existing = await dexieDb.products.get(id);
+        if (existing) {
+          if (existing.stock !== Number(r.stock ?? existing.stock)) {
+            await dexieDb.products.update(id, { stock: Number(r.stock ?? 0) });
+          }
+        } else {
+          let base: Record<string, unknown> = {};
+          try {
+            base = JSON.parse(String(r.json_payload ?? '{}')) as Record<string, unknown>;
+          } catch {
+            // keep base empty; row columns remain authoritative
+          }
+          await dexieDb.products.put({
+            ...base,
+            id,
+            sku: String(r.sku ?? base.sku ?? ''),
+            barcode: String(r.barcode ?? base.barcode ?? ''),
+            title: String(r.title ?? base.title ?? id),
+            brand: (r.brand as never) ?? base.brand ?? 'Autre',
+            category: (r.category as never) ?? base.category ?? 'Tous les produits',
+            price: Number(r.price ?? base.price ?? 0),
+            wholesalePrice: Number(r.wholesale_price ?? base.wholesalePrice ?? 0),
+            costPrice: Number(r.cost_price ?? base.costPrice ?? 0),
+            stock: Number(r.stock ?? base.stock ?? 0),
+            imageUrl: String(r.image_url ?? base.imageUrl ?? ''),
+            isSerialized: Boolean(r.is_serialized ?? base.isSerialized),
+            imeiNumber: (r.imei_number as string | undefined) ?? (base.imeiNumber as string | undefined),
+            vendorName: String(r.vendor_name ?? base.vendorName ?? 'Fournisseur Général'),
+            leadTimeDays: Number(r.lead_time_days ?? base.leadTimeDays ?? 7),
+            dailySalesVelocity: Number(r.daily_sales_velocity ?? base.dailySalesVelocity ?? 0),
+            reorderPoint: Number(r.reorder_point ?? base.reorderPoint ?? 5),
+            compatibleModel: String(r.compatible_model ?? base.compatibleModel ?? ''),
+          } as never);
+        }
+      }
+
+      // Full reconciliation is only needed during the explicit full-sync path.
+      // Pulls with a touched-ID set must stay bounded to the changed products.
+      if (ids.length === 0) {
+        const allDexie = await dexieDb.products.toArray();
+        for (const dp of allDexie) {
+          if (!validIds.has(dp.id)) {
+            await dexieDb.products.delete(dp.id);
+          }
         }
       }
     });
@@ -464,8 +813,50 @@ export async function appendInventoryDeltas(
         `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
          VALUES ($1,'product',$2,'UPSERT',$3,'pending')
          ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
-        [pkey, pid, JSON.stringify(prow), now],
+        [pkey, pid, toBoundedSyncJson(prow), now],
       );
+    }
+
+    // Phase P1 Shadow Event Interceptor: Record stock deltas into event_log & p_*
+    try {
+      for (const d of deltas) {
+        const prodId = String(d.productId || 'unknown');
+        const deltaNum = Number(d.delta ?? 0);
+        const reasonStr = String(d.reason ?? 'ADJUST');
+        if (prodId !== 'unknown' && deltaNum !== 0) {
+          if (reasonStr === 'RECEIVE' || reasonStr === 'PURCHASE') {
+            await recordShadowEvent(
+              db,
+              {
+                type: 'stock_received',
+                data: {
+                  product_id: prodId,
+                  qty: deltaNum,
+                  supplier: d.refType ? String(d.refType) : null,
+                },
+              },
+              `product:${prodId}`,
+              deviceId
+            );
+          } else {
+            await recordShadowEvent(
+              db,
+              {
+                type: 'stock_adjusted',
+                data: {
+                  product_id: prodId,
+                  delta: deltaNum,
+                  reason: reasonStr,
+                },
+              },
+              `product:${prodId}`,
+              deviceId
+            );
+          }
+        }
+      }
+    } catch (shadowErr) {
+      console.warn('[appendInventoryDeltas] Shadow event recording non-fatal error:', shadowErr);
     }
   } catch (err) {
     console.error('[appendInventoryDeltas] Failed to append deltas:', err);
@@ -533,9 +924,11 @@ export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
       [
         pId, p.sku ?? '', p.barcode ?? '', title, brand, category,
         Number(p.price ?? 0), Number(p.wholesalePrice ?? 0), Number(p.costPrice ?? 0), wantStock,
-        p.imageUrl ?? null, p.isSerialized ? 1 : 0, p.imeiNumber ?? null, p.vendorName ?? null,
+        // P0 hygiene: image_url column must stay a reference; the raw object
+        // (possibly 20 MB of base64) is bounded before persisting locally.
+        sanitizeImageField(p.imageUrl) ?? null, p.isSerialized ? 1 : 0, p.imeiNumber ?? null, p.vendorName ?? null,
         p.leadTimeDays ?? 7, p.dailySalesVelocity ?? 0, p.reorderPoint ?? 5,
-        JSON.stringify(p.raw ?? p), deviceId, pkey, (prev?.created_at as string) ?? now, now,
+        toBoundedSyncJson(p.raw ?? p), deviceId, pkey, (prev?.created_at as string) ?? now, now,
       ],
     );
 
@@ -577,14 +970,14 @@ export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
       wholesale_price: Number(p.wholesalePrice ?? 0),
       cost_price: Number(p.costPrice ?? 0),
       stock: wantStock,
-      image_url: p.imageUrl ?? null,
+      image_url: sanitizeImageField(p.imageUrl) ?? null,
       is_serialized: p.isSerialized ? 1 : 0,
       imei_number: p.imeiNumber ?? null,
       vendor_name: p.vendorName ?? null,
       lead_time_days: p.leadTimeDays ?? 7,
       daily_sales_velocity: p.dailySalesVelocity ?? 0,
       reorder_point: p.reorderPoint ?? 5,
-      json_payload: JSON.stringify(p.raw ?? p),
+      json_payload: toBoundedSyncJson(p.raw ?? p),
       device_id: deviceId,
       idempotency_key: pkey,
       sync_status: 'pending',
@@ -597,8 +990,72 @@ export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
       `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
        VALUES ($1,'product',$2,'UPSERT',$3,'pending')
        ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
-      [pkey, pId, JSON.stringify(productPayload), now],
+      [pkey, pId, toBoundedSyncJson(productPayload), now],
     );
+
+    // Phase P1 Shadow Event Interceptor: Record product event and stock adjust
+    try {
+      const priceCents = Math.round(Number(p.price ?? 0) * 100);
+      if (!prev) {
+        await recordShadowEvent(
+          db,
+          {
+            type: 'product_created',
+            data: {
+              id: pId,
+              name: title,
+              price_cents: priceCents,
+              sku: p.sku ?? null,
+            },
+          },
+          `product:${pId}`,
+          deviceId
+        );
+      } else {
+        const prevTitle = String(prev.title || '');
+        const prevPriceCents = Math.round(Number(prev.price ?? 0) * 100);
+        if (prevTitle && prevTitle !== title) {
+          await recordShadowEvent(
+            db,
+            {
+              type: 'product_renamed',
+              data: { id: pId, new_name: title },
+            },
+            `product:${pId}`,
+            deviceId
+          );
+        }
+        if (prevPriceCents !== priceCents) {
+          await recordShadowEvent(
+            db,
+            {
+              type: 'price_changed',
+              data: { id: pId, old_cents: prevPriceCents, new_cents: priceCents },
+            },
+            `product:${pId}`,
+            deviceId
+          );
+        }
+      }
+
+      if (adjust !== 0) {
+        await recordShadowEvent(
+          db,
+          {
+            type: 'stock_adjusted',
+            data: {
+              product_id: pId,
+              delta: adjust,
+              reason: 'Ajustement manuel de stock',
+            },
+          },
+          `product:${pId}`,
+          deviceId
+        );
+      }
+    } catch (shadowErr) {
+      console.warn('[syncProductUpsert] Shadow event recording non-fatal error:', shadowErr);
+    }
   } catch (err) {
     console.error('[writeProductAtomic] Failed to write product:', err);
     throw err;
@@ -654,9 +1111,9 @@ export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promi
           [
             pId, p.sku ?? '', p.barcode ?? '', title, brand, category,
             Number(p.price ?? 0), Number(p.wholesalePrice ?? 0), Number(p.costPrice ?? 0), wantStock,
-            p.imageUrl ?? null, p.isSerialized ? 1 : 0, p.imeiNumber ?? null, p.vendorName ?? null,
+            sanitizeImageField(p.imageUrl) ?? null, p.isSerialized ? 1 : 0, p.imeiNumber ?? null, p.vendorName ?? null,
             p.leadTimeDays ?? 7, p.dailySalesVelocity ?? 0, p.reorderPoint ?? 5,
-            JSON.stringify(p.raw ?? p), deviceId, pkey, (prev?.created_at as string) ?? now, now,
+            toBoundedSyncJson(p.raw ?? p), deviceId, pkey, (prev?.created_at as string) ?? now, now,
           ],
         );
 
@@ -692,7 +1149,7 @@ export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promi
             `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
              VALUES ($1,'product',$2,'UPSERT',$3,'pending')
              ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
-            [pkey, pId, JSON.stringify(rows[0]), now],
+            [pkey, pId, toBoundedSyncJson(rows[0]), now],
           );
         }
       }
@@ -721,8 +1178,24 @@ export async function syncProductDelete(id: string): Promise<void> {
     `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
      VALUES ($1,'product',$2,'DELETE',$3,'pending')
      ON CONFLICT(idempotency_key) DO UPDATE SET operation='DELETE', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
-    [pkey, safeId, JSON.stringify(snapshot), now],
+    [pkey, safeId, toBoundedSyncJson(snapshot), now],
   );
+
+  // Phase P1 Shadow Event Interceptor: Record product deletion
+  try {
+    const deviceId = (await getOrCreateDeviceId(db)) || 'default';
+    await recordShadowEvent(
+      db,
+      {
+        type: 'product_deleted',
+        data: { id: safeId },
+      },
+      `product:${safeId}`,
+      deviceId
+    );
+  } catch (shadowErr) {
+    console.warn('[syncProductDelete] Shadow event recording non-fatal error:', shadowErr);
+  }
 }
 
 /** Generic document-lane entities: full JSON in outbox payload, KV tables remotely. */
@@ -777,7 +1250,7 @@ export async function enqueueGenericSync(
     `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
      VALUES ($1,$2,$3,'UPSERT',$4,'pending')
      ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$5`,
-    [key, entity, safeId, JSON.stringify(entityPayload ?? {}), now],
+    [key, entity, safeId, toBoundedSyncJson(entityPayload ?? {}), now],
   );
 }
 
@@ -823,7 +1296,7 @@ export async function enqueueOrderSync(
     `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
      VALUES ($1,'order',$2,'UPSERT',$3,'pending')
      ON CONFLICT(idempotency_key) DO UPDATE SET operation='UPSERT', payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
-    [key, orderId, JSON.stringify({ ...payload, idempotency_key: key, updated_at: now }), now],
+    [key, orderId, toBoundedSyncJson({ ...payload, idempotency_key: key, updated_at: now }), now],
   );
 }
 

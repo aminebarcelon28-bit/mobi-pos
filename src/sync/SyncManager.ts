@@ -3,11 +3,12 @@
 // Pull: Per-table cursors -> Local SQLite + Dexie UI store updates.
 // Zero data loss, zero silent drops, zero dependency on vendor servers.
 
-import { getLocalDb, getPendingOutbox, markOutbox, utcNowIso, getFailedOutboxCount, retryQuarantinedOutbox, syncProductsFromSqlToDexie } from '../db/sqlPluginAdapter';
+import { getLocalDb, getPendingOutbox, markOutbox, utcNowIso, getFailedOutboxCount, retryQuarantinedOutbox, syncProductsFromSqlToDexie, getSyncDeviceId, sanitizeSyncPayload, sanitizeImageField, toBoundedSyncJson } from '../db/sqlPluginAdapter';
 import { getTursoClient, probeOnline } from './tursoClient';
 import { getCloudCredentials } from './keychain';
 import { db as dexieDb } from '../db/database';
 import { ALL_REMOTE_SYNC_TABLES, assertValidSyncTable, ensureRemoteSchemaColumns } from './remoteSchema';
+import { pushEventBatch, pullRemoteEventBatch } from './eventSyncEngine.ts';
 import type { InValue } from '@libsql/client';
 import type Database from '@tauri-apps/plugin-sql';
 import type { OutboxRow, SyncStatus, SyncEventLog } from './types';
@@ -45,15 +46,59 @@ const GENERIC_PULL: Record<string, { dexie: string; ts: string[] }> = {
   app_settings: { dexie: 'appSettings', ts: [] },
 };
 
+// P-½ bleed-stop: explicit pull projections (drop SELECT *). Column lists mirror
+// remoteSchema.ts v1; only columns read by applyRemoteRow are fetched.
+// Dropped everywhere: sync_status (apply hardcodes 'synced', never reads it).
+// Dropped on generic KV tables: device_id + idempotency_key (apply reads the
+// payload + version only). Cursor keys (updated_at, id) always included.
+const PULL_COLUMNS: Record<string, string> = {
+  products: 'id, sku, barcode, title, brand, compatible_model, category, price, wholesale_price, cost_price, stock, image_url, is_serialized, imei_number, vendor_name, lead_time_days, daily_sales_velocity, reorder_point, json_payload, device_id, idempotency_key, version, created_at, updated_at, deleted',
+  transactions: 'id, receipt_number, customer_id, subtotal, tax, discount_total, total, cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due, status, json_payload, device_id, idempotency_key, version, created_at, updated_at, deleted',
+  transaction_items: 'id, transaction_id, product_id, quantity, applied_price, discount, imei_number, cost_price, json_payload, device_id, idempotency_key, version, created_at, updated_at, deleted',
+  inventory_ledger: 'id, product_id, delta, reason, ref_type, ref_id, device_id, idempotency_key, version, created_at, updated_at, deleted',
+};
+
+const GENERIC_PULL_COLUMNS = 'id, data_json, version, updated_at, deleted';
+
+// P0 hygiene: a single oversized outbox row (e.g. a 20 MB base64 image) must
+// never ride the 50-row batch forever — every cycle would time out, retry and
+// re-send the same megabytes (freeze + quota burn). Rows past this budget are
+// quarantined with an actionable error instead of poison-looping. Local data
+// is untouched (no loss); the failed queue stays reviewable/retryable.
+const MAX_PUSH_ROW_BYTES = 512 * 1024;
+
+function pullColumns(table: string): string {
+  return PULL_COLUMNS[table] ?? GENERIC_PULL_COLUMNS;
+}
+
+// P0 hygiene (pull side): cloud rows written before the hygiene invariant may
+// still carry 20 MB blobs. Clean them BEFORE the local SQLite + Dexie writes
+// so one legacy row cannot OOM the phone on every pull cycle. Money scalars
+// pass through untouched (see sanitizeSyncPayload contract).
+function cleanRemoteJson(raw: unknown): string {
+  const s = String((raw as string) ?? '{}');
+  try {
+    return JSON.stringify(sanitizeSyncPayload(JSON.parse(s) as unknown));
+  } catch {
+    return s;
+  }
+}
+
 const isMobileView = () =>
   typeof window !== 'undefined' && Math.min(window.innerWidth, window.innerHeight) < 640;
 
-// High-frequency foreground polling: satisfies Contract C1 (<= 1.5s p95 latency)
-const PUSH_MS = () => 1_000;
-const PULL_MS = () => (isMobileView() ? 2_000 : 1_500);
+// P-½ bleed-stop: slow safety-net polling to cut Turso row reads (~3-5x).
+// Contract C1 is preserved via relay-triggered pullOnce + notifyLocalWrite/kick,
+// not via poll frequency — poll is only the fallback when signals are missed.
+const PUSH_MS = () => 5_000;
+const PULL_MS = () => (isMobileView() ? 6_000 : 5_000);
 
 function backoffMs(retry: number): number {
-  return Math.min(300_000, 1000 * 2 ** Math.min(retry, 8) + Math.floor(Math.random() * 500));
+  // Doc ② §7.4 verbatim: base 1s, factor 2, cap 60s, FULL JITTER (anti-thundering-herd)
+  const base = 1_000;
+  const cap = 60_000;
+  const slot = Math.min(cap, base * (1 << Math.min(retry, 6)));
+  return Math.floor(Math.random() * slot);
 }
 
 type Listener = (s: SyncStatus) => void;
@@ -71,8 +116,22 @@ class SyncManager {
   private lastPullAt: string | null = null;
   private lastError: string | null = null;
   private quotaExceeded = false;
+  // No permanent wedges (ADR-0008): both flags below auto-recover. A latch
+  // that never clears turns one transient blip into eternal one-way sync.
+  private quotaBlockedAt = 0;
+  private lastProbeAt = 0;
+  private consecutiveProbeFailures = 0;
+  private clockSkewMs = 0;
+  private backfillRoundsRemaining = 0;
   private remoteSchemaEnsured = false;
   private deviceId = 'bootstrap';
+  // Per-instance nonce: two windows on the SAME device share deviceId (and
+  // SQLite), so self-suppression must key on the instance, not the device —
+  // otherwise the second window never pulls on local broadcasts.
+  private instanceId: string =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `inst-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
   private listeners = new Set<Listener>();
   private postWriteDebounce: number | null = null;
   private eventLogs: SyncEventLog[] = [];
@@ -153,6 +212,10 @@ class SyncManager {
 
   async start(deviceId: string) {
     this.deviceId = deviceId;
+    this.instanceId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `inst-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    this.clockSkewChecked = false;
     this.stop();
 
     // Check if cloud credentials exist
@@ -173,12 +236,35 @@ class SyncManager {
 
     this.onOnlineHandler = () => {
       this.online = true;
+      this.consecutiveProbeFailures = 0;
       this.emit();
       // Jittered kick on reconnect (0-2000ms) to avoid thundering herd
       const jitterMs = Math.floor(Math.random() * 2000);
       window.setTimeout(() => { void this.kick(); }, jitterMs);
     };
-    this.onOfflineHandler = () => { this.online = false; this.emit(); };
+    this.onOfflineHandler = () => {
+      // Android WebView frequently fires spurious offline events on screen dim or backgrounding.
+      // Verify with an active probe before marking offline to avoid false "Hors ligne" state.
+      probeOnline(2500).then((isUp) => {
+        if (isUp) {
+          this.consecutiveProbeFailures = 0;
+          this.online = true;
+          this.emit();
+        } else {
+          this.consecutiveProbeFailures += 1;
+        }
+        if (!isUp && this.consecutiveProbeFailures >= 2) {
+          this.online = false;
+          this.emit();
+        }
+      }).catch(() => {
+        this.consecutiveProbeFailures += 1;
+        if (this.consecutiveProbeFailures >= 2) {
+          this.online = false;
+          this.emit();
+        }
+      });
+    };
     this.onVisibilityHandler = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         void this.kick();
@@ -197,7 +283,7 @@ class SyncManager {
       try {
         this.broadcastChannel = new BroadcastChannel('mobipos-sync-bus');
         this.broadcastChannel.onmessage = (event) => {
-          if (event.data?.type === 'db:changed' && event.data?.deviceId !== this.deviceId) {
+          if (event.data?.type === 'db:changed' && event.data?.instanceId !== this.instanceId) {
             void this.pullOnce();
           }
         };
@@ -224,6 +310,44 @@ class SyncManager {
     this.connectRelay(relayWsUrl);
 
     void this.kick();
+    // One-shot clock-skew probe: cursor sync keys on updated_at wall clocks,
+    // so a device >10s off its peer can permanently miss the peer's rows.
+    void this.checkClockSkewOnce();
+  }
+
+  private clockSkewChecked = false;
+  private async checkClockSkewOnce(): Promise<void> {
+    if (this.clockSkewChecked) return;
+    this.clockSkewChecked = true;
+    try {
+      const remote = await getTursoClient();
+      const rs = await remote.execute(`SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now') as srv`);
+      const srvRaw = rs.rows[0]?.srv ?? rs.rows[0]?.['srv'];
+      const srvMs = Date.parse(String(srvRaw));
+      if (Number.isFinite(srvMs)) {
+        const skewMs = Date.now() - srvMs;
+        this.clockSkewMs = skewMs;
+        if (Math.abs(skewMs) > 10_000) {
+          const msg = `Horloge locale décalée de ${Math.round(skewMs / 1000)}s vs cloud — risque de ventes manquées. Activez l'heure automatique.`;
+          this.lastError = msg;
+          this.logEvent('error', msg, 'warn', { skewMs });
+          this.logEvent('info', 'Backfill pull — récupération des lignes datées pendant le skew', 'info');
+          this.backfillRoundsRemaining = 3;
+        }
+      }
+    } catch {
+      // offline or unsupported — pull/push polling remains the fallback
+    }
+  }
+
+  private async probeQuotaReset(): Promise<boolean> {
+    try {
+      const remote = await getTursoClient();
+      const rs = await remote.execute('SELECT 1 as alive');
+      return Boolean(rs.rows && rs.rows.length > 0);
+    } catch {
+      return false;
+    }
   }
 
   stop() {
@@ -284,7 +408,15 @@ class SyncManager {
       this.relaySocket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data as string);
-          if (data?.type === 'db:changed' && data?.deviceId !== this.deviceId) {
+          if (data?.type === 'ping') return;
+          // Self-suppression keys on the instance nonce when present (same
+          // device can hold several relay sessions, e.g. installed + dev
+          // builds); legacy senders without a nonce fall back to deviceId.
+          const senderInstance = (data as { instanceId?: string })?.instanceId;
+          const isSelf = senderInstance
+            ? senderInstance === this.instanceId
+            : String(data?.deviceId || '') !== '' && data.deviceId === this.deviceId;
+          if (data?.type === 'db:changed' && !isSelf) {
             this.logEvent('pull', `Signal relay db:changed received (epoch ${data.epoch})`, 'info');
             this.relayEpoch = Math.max(this.relayEpoch, Number(data.epoch || 0));
             void this.pullOnce();
@@ -298,8 +430,10 @@ class SyncManager {
         this.relaySocket = null;
         if (this.savedRelayWsUrl) {
           if (this.relayReconnectTimeout) window.clearTimeout(this.relayReconnectTimeout);
-          const backoff = Math.min(30000, 1000 * Math.pow(1.5, this.relayReconnectAttempts)) + Math.random() * 1000;
-          this.relayReconnectAttempts++;
+          this.relayReconnectAttempts = Math.min(this.relayReconnectAttempts + 1, 16);
+          const baseMs = Math.min(30_000, 1_000 * Math.pow(1.5, this.relayReconnectAttempts));
+          const jitterMs = Math.random() * 1_000;
+          const backoff = baseMs + jitterMs;
           this.relayReconnectTimeout = window.setTimeout(() => {
             if (this.savedRelayWsUrl) {
               void this.connectRelay(this.savedRelayWsUrl);
@@ -319,6 +453,7 @@ class SyncManager {
           type: 'db:changed',
           epoch: this.relayEpoch,
           deviceId: this.deviceId,
+          instanceId: this.instanceId,
           table,
         });
       } catch {
@@ -333,6 +468,7 @@ class SyncManager {
             type: 'db:changed',
             epoch: this.relayEpoch,
             deviceId: this.deviceId,
+            instanceId: this.instanceId,
             table,
           })
         );
@@ -343,23 +479,35 @@ class SyncManager {
   }
 
   notifyLocalWrite() {
+    if (!this.pushTimer) {
+      import('./device').then(({ getStableDeviceId }) => {
+        getStableDeviceId().then((devId) => { void this.start(devId); }).catch(() => {});
+      }).catch(() => {});
+    }
     // Causality Invariant (Contract C1): broadcastRelayChange is intentionally NOT fired here.
     // It is triggered inside pushOnce() ONLY after Turso cloud acknowledges the write,
     // ensuring companion devices pull fresh, committed cloud state without racing.
+    // P-½ bleed-stop: 500 ms coalesce window (was 100 ms) — bursts of local
+    // writes (stocktake, rapid sales) collapse into fewer cloud batches.
+    // Deliberately NOT the doc's 5 s: this debounce sits on the Contract C1
+    // critical path (sale → push → relay → peer pull ≈ 0.5–1.3 s p95 transport),
+    // so a 5 s window would by itself breach C1 (≤ 1.5 s p95). Revisit toward 5 s
+    // only with real two-device p95 numbers proving headroom (charter §8.2 note).
     if (this.postWriteDebounce) window.clearTimeout(this.postWriteDebounce);
-    this.postWriteDebounce = window.setTimeout(() => { void this.pushOnce(); }, 100);
+    this.postWriteDebounce = window.setTimeout(() => { void this.pushOnce(true); }, 500);
   }
 
   async kick() {
-    await this.pushOnce();
-    await this.pullOnce();
+    await this.ensureOnline(true);
+    await this.pushOnce(true);
+    await this.pullOnce(true);
   }
 
   async initialPull() {
     let rounds = 0;
     let roundPulled = 0;
     do {
-      roundPulled = await this.pullOnce();
+      roundPulled = await this.pullOnce(true);
       rounds++;
     } while (roundPulled > 0 && rounds < 100);
   }
@@ -389,8 +537,48 @@ class SyncManager {
     return count;
   }
 
-  async pushOnce() {
-    if (this.pushing || !this.online || this.quotaExceeded) return;
+  /** Re-probe connectivity when flagged offline, throttled so an offline
+   *  phone isn't burning battery every second — but never wedged forever. */
+  private async ensureOnline(forceProbe = false): Promise<boolean> {
+    if (this.online && !forceProbe) return true;
+    const nowMs = Date.now();
+    if (!forceProbe && nowMs - this.lastProbeAt < 3_000) return this.online;
+    this.lastProbeAt = nowMs;
+    try {
+      if (await probeOnline(3000)) {
+        this.consecutiveProbeFailures = 0;
+        this.online = true;
+        this.emit();
+        return true;
+      }
+    } catch {
+      // Stay offline; the next throttled probe retries.
+    }
+    this.consecutiveProbeFailures += 1;
+    if (this.consecutiveProbeFailures >= 2) {
+      this.online = false;
+      this.emit();
+    }
+    return false;
+  }
+
+  /** Quota blocks uploads, but the block must expire: Turso quotas reset and
+   *  transient 429/usage scares must not wedge uploads until app restart. */
+  private quotaRetryDue(): boolean {
+    return Date.now() - this.quotaBlockedAt > 5 * 60_000;
+  }
+
+  async pushOnce(forceOnline = false) {
+    if (this.pushing) return;
+    if (this.quotaExceeded) {
+      if (!this.quotaRetryDue()) return;
+      const quotaProbablyReset = await this.probeQuotaReset();
+      if (!quotaProbablyReset) return;
+      this.quotaExceeded = false;
+      this.quotaBlockedAt = 0;
+      this.logEvent('quota', 'Quota cloud probablement réinitialisé — reprise des envois', 'info');
+    }
+    if (!(await this.ensureOnline(forceOnline))) return;
 
     const creds = await getCloudCredentials();
     if (!creds) return;
@@ -399,12 +587,6 @@ class SyncManager {
     this.emit();
 
     try {
-      if (!(await probeOnline())) {
-        this.online = false;
-        return;
-      }
-      this.online = true;
-
       const batch = (await getPendingOutbox(50)) as unknown as OutboxRow[];
       if (batch.length === 0) {
         await this.refreshPendingCount();
@@ -418,6 +600,39 @@ class SyncManager {
       batch.sort((a, b) => (rank[a.entity_type] ?? 9) - (rank[b.entity_type] ?? 9));
 
       const remote = await getTursoClient();
+
+      // ES-LFP Phase P4: Push unsynced canonical events from event_log
+      try {
+        const localDb = await getLocalDb();
+        await pushEventBatch(localDb, remote);
+      } catch (evtPushErr) {
+        console.warn('[SyncManager] Event push warning (non-fatal):', evtPushErr);
+      }
+
+      // Server clock authority (ADR-0008): stamp every pushed row with the
+      // cloud clock so pull cursors order on ONE clock and a drifting device
+      // can never hide its rows from peers. Fetched only when there is work
+      // to push — idle cycles stay at a single probe read.
+      let serverNow = utcNowIso();
+      let srvClockValid = false;
+      try {
+        const srv = await remote.execute(`SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now') AS now`);
+        const srvRaw = srv.rows[0]?.now ?? srv.rows[0]?.['now'];
+        if (srvRaw && Number.isFinite(Date.parse(String(srvRaw)))) {
+          serverNow = String(srvRaw);
+          srvClockValid = true;
+        }
+      } catch {
+        // Fall back to the local clock; skew probe reports drift separately.
+      }
+
+      if (!srvClockValid) {
+        if (Math.abs(this.clockSkewMs) > 10_000) {
+          this.lastError = 'Horloge locale décalée et horloge cloud injoignable — push suspendu.';
+          this.logEvent('error', this.lastError, 'error');
+          return;
+        }
+      }
       if (!this.remoteSchemaEnsured) {
         try {
           await ensureRemoteSchemaColumns(remote);
@@ -431,7 +646,18 @@ class SyncManager {
       // Prepare statements
       const validOps: Array<{ op: OutboxRow; stmt: { sql: string; args: InValue[] } }> = [];
       for (const op of batch) {
-        const stmt = this.toRemoteUpsert(op);
+        // P0 hygiene gate: never let one giant row wedge the batch loop.
+        const rawLen = typeof op.payload_json === 'string' ? op.payload_json.length : 0;
+        if (rawLen > MAX_PUSH_ROW_BYTES) {
+          await markOutbox(op.idempotency_key, {
+            status: 'failed',
+            error: `[HYGIENE] payload ${(rawLen / 1024).toFixed(0)}KB > budget ${MAX_PUSH_ROW_BYTES / 1024}KB (probable embedded image/base64). `
+              + `Local data kept. Clean the row (remove base64 media, keep URL references), then retry from Sync Diagnostics.`,
+          });
+          this.logEvent('error', `[Hygiène] ${op.entity_type}/${op.entity_id} mis en quarantaine (${(rawLen / 1024).toFixed(0)}KB)`, 'error');
+          continue;
+        }
+        const stmt = this.toRemoteUpsert(op, serverNow);
         if (!stmt) {
           // If statement cannot be mapped, mark it failed — NEVER silently mark as synced!
           await markOutbox(op.idempotency_key, {
@@ -461,6 +687,7 @@ class SyncManager {
           const rawMsg = batchErr instanceof Error ? batchErr.message : String(batchErr);
           if (rawMsg.includes('QUOTA') || rawMsg.includes('usage limit') || rawMsg.includes('storage full')) {
             this.quotaExceeded = true;
+            this.quotaBlockedAt = Date.now();
             this.lastError = 'Quota cloud Turso dépassé. Synchronisation suspendue.';
             this.logEvent('quota', this.lastError, 'error');
             for (const { op } of validOps) {
@@ -502,6 +729,7 @@ class SyncManager {
 
               if (rawMsg.includes('QUOTA') || rawMsg.includes('usage limit') || rawMsg.includes('storage full')) {
                 this.quotaExceeded = true;
+                this.quotaBlockedAt = Date.now();
                 this.lastError = 'Quota cloud Turso dépassé. Synchronisation suspendue.';
                 this.logEvent('quota', this.lastError, 'error');
                 await markOutbox(op.idempotency_key, { status: 'pending', error: rawMsg });
@@ -535,6 +763,16 @@ class SyncManager {
 
       if (okCount > 0) {
         this.lastPushAt = utcNowIso();
+        // Any successful cloud write proves the path is alive: clear quota
+        // and offline wedges instead of latching them until app restart.
+        if (this.quotaExceeded) {
+          this.quotaExceeded = false;
+          this.logEvent('push', 'Blocage quota levé — écriture cloud confirmée', 'success');
+        }
+        if (!this.online) {
+          this.online = true;
+        }
+        this.lastError = null;
         this.logEvent('push', `${okCount} modifications synchronisées avec succès`, 'success');
         // Causality Resolution: Notify companion registers/phones ONLY after cloud write succeeds
         this.broadcastRelayChange();
@@ -549,7 +787,7 @@ class SyncManager {
     }
   }
 
-  private toRemoteUpsert(op: OutboxRow): { sql: string; args: InValue[] } | null {
+  private toRemoteUpsert(op: OutboxRow, serverNow: string = utcNowIso()): { sql: string; args: InValue[] } | null {
     let payload: Record<string, unknown> = {};
     try {
       payload = JSON.parse(op.payload_json) as Record<string, unknown>;
@@ -557,7 +795,9 @@ class SyncManager {
       return null;
     }
 
-    const now = utcNowIso();
+    // Cursor ordering key: ALWAYS the server clock (ADR-0008). created_at
+    // keeps origin truth; updated_at is the pull-cursor authority.
+    const now = serverNow;
     const v = (x: unknown): InValue => (x === undefined ? null : x) as InValue;
     const version = Number(payload.version ?? 1);
 
@@ -569,6 +809,10 @@ class SyncManager {
     if ('receipt_image' in payload) delete payload.receipt_image;
     if ('scan_image' in payload) delete payload.scan_image;
     if ('avatar' in payload && typeof payload.avatar === 'string' && payload.avatar.length > 500) delete payload.avatar;
+    // P0 fix: the strip above used to mutate a parsed copy while the wire args
+    // below sent the ORIGINAL op.payload_json string (dead code for the
+    // order/order_item/product lanes). Deep-sanitize nested blobs too.
+    payload = sanitizeSyncPayload(payload);
 
     if (op.operation === 'DELETE') {
       const table = op.entity_type === 'order' ? 'transactions'
@@ -582,8 +826,9 @@ class SyncManager {
         return {
           sql: `INSERT INTO ${table} (id, device_id, idempotency_key, sync_status, version, updated_at, deleted)
             VALUES (?,?,?,'synced',?,?,1)
-            ON CONFLICT(id) DO UPDATE SET deleted=1, version=${table}.version + 1, updated_at=excluded.updated_at,
-            sync_status='synced'`,
+            ON CONFLICT(id) DO UPDATE SET deleted=1, version=excluded.version, updated_at=excluded.updated_at,
+            sync_status='synced'
+            WHERE excluded.version >= ${table}.version`,
           args: [v(op.entity_id), v(this.deviceId || 'default'), v(op.idempotency_key || `del-${op.entity_id}`), v(version + 1), v(now)],
         };
       }
@@ -597,12 +842,13 @@ class SyncManager {
         return {
           sql: `INSERT INTO ${genericTable} (id, data_json, device_id, idempotency_key, sync_status, version, updated_at, deleted)
             VALUES (?,?,?,?,'synced',?,?,1)
-            ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, version=${genericTable}.version + 1,
-            updated_at=excluded.updated_at, sync_status='synced', deleted=1`,
+            ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, version=excluded.version,
+            updated_at=excluded.updated_at, sync_status='synced', deleted=1
+            WHERE excluded.version >= ${genericTable}.version`,
           args: [
-            v(op.entity_id), v(JSON.stringify(payload ?? {})), v(payload.device_id ?? this.deviceId ?? 'default'),
+            v(op.entity_id), v(toBoundedSyncJson(payload ?? {})), v(payload.device_id ?? this.deviceId ?? 'default'),
             v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`), v(version + 1),
-            v(payload.updated_at ?? payload.updatedAt ?? now),
+            v(now),
           ],
         };
       }
@@ -613,9 +859,9 @@ class SyncManager {
           updated_at=excluded.updated_at, sync_status='synced', deleted=0
           WHERE excluded.version >= ${genericTable}.version`,
         args: [
-          v(op.entity_id), v(JSON.stringify(payload ?? {})), v(payload.device_id ?? this.deviceId ?? 'default'),
+          v(op.entity_id), v(toBoundedSyncJson(payload ?? {})), v(payload.device_id ?? this.deviceId ?? 'default'),
           v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`), v(version || 1),
-          v(payload.updated_at ?? payload.updatedAt ?? now),
+          v(now),
         ],
       };
     }
@@ -659,11 +905,11 @@ class SyncManager {
           v(Number(payload.change_due ?? payload.changeDue ?? 0)),
           v(String(payload.status ?? 'COMPLETED')),
           v((payload.created_at ?? payload.createdAt) ?? now),
-          v(op.payload_json ?? '{}'),
+          v(JSON.stringify(payload)),
           v(payload.device_id ?? this.deviceId ?? 'default'),
           v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`),
           v(version || 1),
-          v((payload.updated_at ?? payload.updatedAt) ?? now),
+          v(now),
         ],
       };
     }
@@ -680,7 +926,7 @@ class SyncManager {
           v(Number(payload.applied_price ?? payload.appliedPrice ?? 0)), v(Number(payload.discount ?? 0)),
           v(payload.imei_number ?? payload.imeiNumber ?? null),
           v(Number(payload.cost_price ?? payload.costPrice ?? payload.unitCostPrice ?? 0)),
-          v(op.payload_json ?? '{}'), v(payload.device_id ?? this.deviceId ?? 'default'),
+          v(JSON.stringify(payload)), v(payload.device_id ?? this.deviceId ?? 'default'),
           v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`),
           v(version || 1), v(payload.created_at ?? payload.createdAt ?? now), v(now),
         ],
@@ -690,33 +936,43 @@ class SyncManager {
     if (op.entity_type === 'product') {
       const pId = String(payload.id ?? op.entity_id ?? '');
       return {
-        sql: `INSERT INTO products (id, sku, barcode, title, brand, category, price, wholesale_price,
-          cost_price, stock, image_url, is_serialized, imei_number, vendor_name, json_payload,
-          device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?,?)
-          ON CONFLICT(id) DO UPDATE SET title=excluded.title, price=excluded.price, stock=excluded.stock,
+        sql: `INSERT INTO products (id, sku, barcode, title, brand, compatible_model, category, price, wholesale_price,
+          cost_price, stock, image_url, is_serialized, imei_number, vendor_name, lead_time_days,
+          daily_sales_velocity, reorder_point, json_payload, device_id, idempotency_key, sync_status,
+          version, created_at, updated_at, deleted)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?,?)
+          ON CONFLICT(id) DO UPDATE SET title=excluded.title, brand=excluded.brand,
+          compatible_model=excluded.compatible_model, price=excluded.price, stock=excluded.stock,
           wholesale_price=excluded.wholesale_price, cost_price=excluded.cost_price,
-          json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at,
+          image_url=excluded.image_url, is_serialized=excluded.is_serialized,
+          imei_number=excluded.imei_number, vendor_name=excluded.vendor_name,
+          lead_time_days=excluded.lead_time_days, daily_sales_velocity=excluded.daily_sales_velocity,
+          reorder_point=excluded.reorder_point, json_payload=excluded.json_payload,
+          version=excluded.version, updated_at=excluded.updated_at,
           deleted=excluded.deleted, sync_status='synced'
           WHERE excluded.version >= products.version`,
         args: [
           v(pId), v(payload.sku ?? ''), v(payload.barcode ?? ''),
           v(payload.title ?? payload.id ?? op.entity_id ?? 'Sans Titre'),
-          v(payload.brand ?? 'Autre'), v(payload.category ?? 'Tous les produits'),
+          v(payload.brand ?? 'Autre'), v(payload.compatible_model ?? payload.compatibleModel ?? ''),
+          v(payload.category ?? 'Tous les produits'),
           v(Number(payload.price ?? 0)),
           v(Number(payload.wholesale_price ?? payload.wholesalePrice ?? 0)),
           v(Number(payload.cost_price ?? payload.costPrice ?? 0)),
           v(Number(payload.stock ?? 0)),
-          v(payload.image_url ?? ''),
-          v(payload.is_serialized ? 1 : 0),
+          v(payload.image_url ?? null),
+          v(Number(payload.is_serialized ?? 0)),
           v(payload.imei_number ?? payload.imeiNumber ?? null),
           v(payload.vendor_name ?? payload.vendorName ?? null),
-          v(op.payload_json ?? '{}'),
+          v(Number(payload.lead_time_days ?? payload.leadTimeDays ?? 7)),
+          v(Number(payload.daily_sales_velocity ?? payload.dailySalesVelocity ?? 0)),
+          v(Number(payload.reorder_point ?? payload.reorderPoint ?? 5)),
+          v(JSON.stringify(payload)),
           v(payload.device_id ?? this.deviceId ?? 'default'),
           v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`),
           v(version || 1),
           v(payload.created_at ?? payload.createdAt ?? now),
-          v(payload.updated_at ?? payload.updatedAt ?? now),
+          v(now),
           v(Number(payload.deleted ?? 0)),
         ],
       };
@@ -757,8 +1013,9 @@ class SyncManager {
     );
   }
 
-  async pullOnce(): Promise<number> {
-    if (this.pulling || !this.online) return 0;
+  async pullOnce(forceOnline = false): Promise<number> {
+    if (this.pulling) return 0;
+    if (!(await this.ensureOnline(forceOnline))) return 0;
 
     const creds = await getCloudCredentials();
     if (!creds) return 0;
@@ -771,17 +1028,42 @@ class SyncManager {
       const remote = await getTursoClient();
       const db = await getLocalDb();
 
+      // ES-LFP Phase P4: Pull remote canonical events into event_log & p_*
+      try {
+        const deviceId = (await getSyncDeviceId()) || 'default';
+        const pulledEvents = await pullRemoteEventBatch(db, remote, deviceId);
+        totalPulled += pulledEvents;
+      } catch (evtPullErr) {
+        console.warn('[SyncManager] Event pull warning (non-fatal):', evtPullErr);
+      }
+
+      const isBackfill = this.backfillRoundsRemaining > 0;
+      if (isBackfill) {
+        this.backfillRoundsRemaining--;
+        this.logEvent('info', `Backfill pull en cours (tours restants: ${this.backfillRoundsRemaining})`, 'info');
+      }
+      const backfillCutoff = isBackfill ? new Date(Date.now() - 24 * 3600 * 1000).toISOString() : null;
+
       const cursorQueries: Array<{ sql: string; args: InValue[] }> = [];
       const tableCursors: Array<{ table: string; cursor: { time: string; id: string } }> = [];
+      const touchedProductIds = new Set<string>();
+      let transactionsNeedReconstruction = false;
 
       for (const table of ALL_REMOTE_SYNC_TABLES) {
         assertValidSyncTable(table);
         const cursor = await this.getTableCursor(db, table);
         tableCursors.push({ table, cursor });
-        cursorQueries.push({
-          sql: `SELECT * FROM ${table} WHERE (updated_at > ?) OR (updated_at = ? AND id > ?) ORDER BY updated_at ASC, id ASC LIMIT 200`,
-          args: [cursor.time, cursor.time, cursor.id],
-        });
+        if (isBackfill && backfillCutoff) {
+          cursorQueries.push({
+            sql: `SELECT ${pullColumns(table)} FROM ${table} WHERE updated_at > ? ORDER BY updated_at ASC, id ASC LIMIT 500`,
+            args: [backfillCutoff],
+          });
+        } else {
+          cursorQueries.push({
+            sql: `SELECT ${pullColumns(table)} FROM ${table} WHERE (updated_at > ?) OR (updated_at = ? AND id > ?) ORDER BY updated_at ASC, id ASC LIMIT 500`,
+            args: [cursor.time, cursor.time, cursor.id],
+          });
+        }
       }
 
       // Fast single-roundtrip batch pull across all 17 tables
@@ -815,15 +1097,24 @@ class SyncManager {
           const r = row as unknown as Record<string, unknown>;
           const updated = (r.updated_at as string) ?? utcNowIso();
           const rowId = (r.id as string) ?? '';
-          if (updated > maxSeenTime || (updated === maxSeenTime && rowId > maxSeenId)) {
-            maxSeenTime = updated;
-            maxSeenId = rowId;
+          if (table === 'products' && rowId) touchedProductIds.add(rowId);
+          if (table === 'inventory_ledger' && r.product_id) touchedProductIds.add(String(r.product_id));
+          if (table === 'transactions' || table === 'transaction_items' || table === 'customers') {
+            transactionsNeedReconstruction = true;
           }
           try {
             await this.applyRemoteRow(db, table, r);
             totalPulled++;
+            // Contract C6: advance the cursor ONLY past rows that applied
+            // cleanly. A failed row keeps the cursor behind it so the next
+            // pull retries it instead of silently skipping it forever.
+            if (updated > maxSeenTime || (updated === maxSeenTime && rowId > maxSeenId)) {
+              maxSeenTime = updated;
+              maxSeenId = rowId;
+            }
           } catch (e) {
             console.warn(`[sync] pull apply failed [${table}]:`, e);
+            this.logEvent('error', `Échec d'application pull [${table}]: ${e instanceof Error ? e.message : String(e)}`, 'warn');
           }
         }
 
@@ -835,22 +1126,31 @@ class SyncManager {
       if (totalPulled > 0) {
         this.lastPullAt = utcNowIso();
         // 1. Recompute products stock from ledger deltas in SQLite
-        await db.execute(
-          `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger
-            WHERE inventory_ledger.product_id = products.id AND deleted=0), stock)`,
-        );
+        if (touchedProductIds.size > 0) {
+          const productIds = [...touchedProductIds];
+          await db.execute(
+            `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger
+              WHERE inventory_ledger.product_id = products.id AND deleted=0), stock)
+             WHERE id IN (${productIds.map(() => '?').join(',')})`,
+            productIds,
+          );
+        }
         // 2. CRITICAL: Mirror recomputed stock from SQLite to Dexie so desktop UI gets updated immediately!
         try {
-          await syncProductsFromSqlToDexie();
+          if (touchedProductIds.size > 0) {
+            await syncProductsFromSqlToDexie(touchedProductIds);
+          }
         } catch (stockErr) {
           console.warn('[sync:pull] syncProductsFromSqlToDexie error:', stockErr);
         }
         // 3. Reconstruct Dexie transactions with their line items & customers
-        try {
-          const { reconstructDexieTransactionsFromSql } = await import('../db/backfill');
-          await reconstructDexieTransactionsFromSql(db);
-        } catch (err) {
-          console.warn('[sync:pull] reconstructDexieTransactionsFromSql error:', err);
+        if (transactionsNeedReconstruction) {
+          try {
+            const { reconstructDexieTransactionsFromSql } = await import('../db/backfill');
+            await reconstructDexieTransactionsFromSql(db);
+          } catch (err) {
+            console.warn('[sync:pull] reconstructDexieTransactionsFromSql error:', err);
+          }
         }
         this.logEvent('pull', `${totalPulled} enregistrements reçus du cloud`, 'info');
         this.emitPulled();
@@ -872,7 +1172,9 @@ class SyncManager {
     if (generic) {
       let recordPayload: Record<string, unknown>;
       try {
-        recordPayload = JSON.parse((r.data_json as string) ?? '{}') as Record<string, unknown>;
+        recordPayload = sanitizeSyncPayload(
+          JSON.parse((r.data_json as string) ?? '{}') as Record<string, unknown>,
+        );
       } catch {
         return;
       }
@@ -973,6 +1275,20 @@ class SyncManager {
     if (table === 'transactions') {
       const txId = String(r.id || `txn-${Date.now()}`);
       const receiptNo = String(r.receipt_number || txId);
+      // New-row detection BEFORE upsert: own sales already exist locally, so a
+      // pre-existing id means "echo of my own write" while a missing id means
+      // "genuinely new sale from another device". This is robust to the two
+      // device-id namespaces (localStorage transport id vs SQLite authorship
+      // id) ever diverging.
+      let isNewSale = false;
+      try {
+        const existing = (await db.select('SELECT id FROM transactions WHERE id = $1', [txId]).catch(() => [])) as Array<{ id: string }>;
+        const txnsCheck = (dexieDb as unknown as { transactions: { get: (k: string) => Promise<Record<string, unknown> | undefined> } }).transactions;
+        const existingDexieCheck = await txnsCheck.get(txId).catch(() => undefined);
+        isNewSale = (!existing || existing.length === 0) && !existingDexieCheck;
+      } catch {
+        isNewSale = true;
+      }
       await db.execute(
         `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
           cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
@@ -986,7 +1302,7 @@ class SyncManager {
           Number(r.discount_total ?? 0), Number(r.total ?? 0), Number(r.cost_total ?? 0), Number(r.profit ?? 0),
           Number(r.profit_margin ?? 0), String(r.pricing_tier ?? 'Retail'), String(r.payment_method ?? 'Espèces'),
           Number(r.cash_tendered ?? 0), Number(r.change_due ?? 0), String(r.status ?? 'COMPLETED'),
-          String(r.created_at ?? utcNowIso()), String(r.json_payload ?? '{}'),
+          String(r.created_at ?? utcNowIso()), cleanRemoteJson(r.json_payload),
           String(r.device_id ?? 'remote'), String(r.idempotency_key ?? txId), version,
           String(r.updated_at ?? utcNowIso()), Number(r.deleted ?? 0),
         ],
@@ -995,6 +1311,7 @@ class SyncManager {
       // Mirror transaction receipt into Dexie with receiptNumber
       try {
         const txns = (dexieDb as unknown as { transactions: {
+          get: (k: string) => Promise<Record<string, unknown> | undefined>;
           put: (o: unknown) => Promise<unknown>;
           update: (k: string, p: unknown) => Promise<unknown>;
           delete: (k: string) => Promise<void>;
@@ -1005,7 +1322,10 @@ class SyncManager {
           return;
         }
 
-        const rawPayload = JSON.parse((r.json_payload as string) ?? '{}') as Record<string, unknown>;
+        const existingDexie = await txns.get(txId).catch(() => undefined);
+        const rawPayload = sanitizeSyncPayload(
+          JSON.parse(cleanRemoteJson(r.json_payload)) as Record<string, unknown>,
+        );
         const parsedTxn = {
           ...rawPayload,
           id: rawPayload.id || txId,
@@ -1015,12 +1335,38 @@ class SyncManager {
           paymentMethod: rawPayload.paymentMethod || r.payment_method || 'Espèces',
           createdAt: rawPayload.createdAt || r.created_at || utcNowIso(),
         };
-        await txns.put(parsedTxn);
+        // Defense in depth: a status-only payload (void/refund echo, legacy
+        // backfill) must never wipe the receipt's line items or customer.
+        const incomingItems = (parsedTxn as Record<string, unknown>).items;
+        const mergedTxn = {
+          ...existingDexie,
+          ...parsedTxn,
+          items: Array.isArray(incomingItems) && incomingItems.length > 0
+            ? incomingItems
+            : existingDexie?.items ?? (parsedTxn as Record<string, unknown>).items,
+          customer: (parsedTxn as Record<string, unknown>).customer ?? existingDexie?.customer ?? null,
+        };
+        await txns.put(mergedTxn);
 
-        // Notify UI subscribers if this transaction was made on another device (e.g. mobile sale arriving on desktop)
-        const incomingDeviceId = String(r.device_id || '');
-        if (incomingDeviceId && incomingDeviceId !== this.deviceId && Number(r.deleted ?? 0) === 0) {
-          this.emitRemoteSale(parsedTxn);
+        // Notify UI subscribers for genuinely new sales from other devices
+        // (e.g. mobile sale arriving on desktop). Own-write echoes (id already
+        // present) never notify; when authorship is known, a deviceId match
+        // also suppresses. Deleted tombstones never notify. A status flip to
+        // VOIDED/REFUNDED on a known sale notifies too (a cancel is news).
+        const incomingDeviceId = String(
+          r.device_id ||
+          (parsedTxn as Record<string, unknown>).device_id ||
+          (parsedTxn as Record<string, unknown>).deviceId ||
+          ''
+        );
+        const isOwnDevice = incomingDeviceId !== '' && incomingDeviceId === this.deviceId;
+        const mergedStatus = String((mergedTxn as Record<string, unknown>).status ?? 'COMPLETED');
+        const prevStatus = String(existingDexie?.status ?? '');
+        const isVoidTransition = !isNewSale && prevStatus !== '' && prevStatus !== mergedStatus &&
+          ['VOIDED', 'REFUNDED', 'PARTIALLY_REFUNDED'].includes(mergedStatus);
+        if ((isNewSale && !isOwnDevice && Number(r.deleted ?? 0) === 0) ||
+          (isVoidTransition && Number(r.deleted ?? 0) === 0)) {
+          this.emitRemoteSale(mergedTxn as Record<string, unknown>);
         }
       } catch (err) {
         console.warn(`[sync:pull] Failed to parse or mirror transaction ${r.id} into Dexie:`, err);
@@ -1044,7 +1390,7 @@ class SyncManager {
         [
           itemId, txnId, prodId, Number(r.quantity ?? 1), Number(r.applied_price ?? 0),
           Number(r.discount ?? 0), r.imei_number ? String(r.imei_number) : null,
-          Number(r.cost_price ?? 0), String(r.json_payload ?? '{}'),
+          Number(r.cost_price ?? 0), cleanRemoteJson(r.json_payload),
           String(r.device_id ?? 'remote'), String(r.idempotency_key ?? itemId),
           version, String(r.created_at ?? utcNowIso()), String(r.updated_at ?? utcNowIso()),
           Number(r.deleted ?? 0),
@@ -1055,19 +1401,34 @@ class SyncManager {
 
     if (table === 'products') {
       const pId = String(r.id || `prod-${Date.now()}`);
-      // Fix: include deleted=excluded.deleted so product deletions don't resurrect
+      // Fix: include deleted=excluded.deleted so product deletions don't resurrect.
+      // stock + price/catalog columns ARE updated on conflict (LWW): the ledger
+      // recompute after pull remains the stock authority, but the row must not
+      // pin a stale cache when ledger history is incomplete on this device.
       await db.execute(
-        `INSERT INTO products (id, sku, barcode, title, brand, category, price, wholesale_price, cost_price,
-          stock, json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?,?)
-         ON CONFLICT(id) DO UPDATE SET title=excluded.title, price=excluded.price,
-           json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at,
+        `INSERT INTO products (id, sku, barcode, title, brand, compatible_model, category, price, wholesale_price,
+          cost_price, stock, image_url, is_serialized, imei_number, vendor_name, lead_time_days,
+          daily_sales_velocity, reorder_point, json_payload, device_id, idempotency_key, sync_status,
+          version, created_at, updated_at, deleted)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET sku=excluded.sku, barcode=excluded.barcode, title=excluded.title,
+           brand=excluded.brand, compatible_model=excluded.compatible_model, category=excluded.category,
+           price=excluded.price, wholesale_price=excluded.wholesale_price, cost_price=excluded.cost_price,
+           stock=excluded.stock, image_url=excluded.image_url, is_serialized=excluded.is_serialized,
+           imei_number=excluded.imei_number, vendor_name=excluded.vendor_name,
+           lead_time_days=excluded.lead_time_days, daily_sales_velocity=excluded.daily_sales_velocity,
+           reorder_point=excluded.reorder_point, json_payload=excluded.json_payload,
+           version=excluded.version, updated_at=excluded.updated_at,
            deleted=excluded.deleted, sync_status='synced'
            WHERE excluded.version >= products.version`,
         [
-          pId, String(r.sku ?? ''), String(r.barcode ?? ''), String(r.title || pId), String(r.brand ?? 'Autre'), String(r.category ?? 'Tous les produits'),
+          pId, String(r.sku ?? ''), String(r.barcode ?? ''), String(r.title || pId), String(r.brand ?? 'Autre'),
+          String(r.compatible_model ?? ''), String(r.category ?? 'Tous les produits'),
           Number(r.price ?? 0), Number(r.wholesale_price ?? 0), Number(r.cost_price ?? 0), Number(r.stock ?? 0),
-          String(r.json_payload ?? '{}'), String(r.device_id ?? 'remote'), String(r.idempotency_key ?? pId),
+          sanitizeImageField(r.image_url) ?? null, Number(r.is_serialized ?? 0),
+          (r.imei_number as string) ?? null, (r.vendor_name as string) ?? null,
+          Number(r.lead_time_days ?? 7), Number(r.daily_sales_velocity ?? 0), Number(r.reorder_point ?? 5),
+          cleanRemoteJson(r.json_payload), String(r.device_id ?? 'remote'), String(r.idempotency_key ?? pId),
           version, String(r.created_at ?? utcNowIso()), String(r.updated_at ?? utcNowIso()),
           Number(r.deleted ?? 0),
         ],
@@ -1089,25 +1450,28 @@ class SyncManager {
           } catch (jsonErr: unknown) {
             console.warn('[sync:dexie] Failed to parse product payload:', jsonErr);
           }
+          // Remote row wins over the embedded json blob: base carries
+          // legacy/camelCase extras, explicit columns carry sync authority
+          // (esp. stock — the blob may hold a pre-sale snapshot).
           const productToPut: Product = {
-            sku: (r.sku as string) ?? '',
-            barcode: (r.barcode as string) ?? '',
-            title: (r.title as string) ?? '',
-            brand: (r.brand as Product['brand']) || 'Autre',
-            category: (r.category as Product['category']) || 'Tous les produits',
-            price: Number(r.price ?? 0),
-            wholesalePrice: Number(r.wholesale_price ?? 0),
-            costPrice: Number(r.cost_price ?? 0),
-            stock: Number(r.stock ?? 0),
-            imageUrl: String(r.image_url ?? ''),
-            isSerialized: Boolean(r.is_serialized),
-            imeiNumber: r.imei_number ? String(r.imei_number) : undefined,
-            vendorName: String(r.vendor_name ?? 'Fournisseur Général'),
-            leadTimeDays: Number(r.lead_time_days ?? 7),
-            dailySalesVelocity: Number(r.daily_sales_velocity ?? 0),
-            reorderPoint: Number(r.reorder_point ?? 5),
-            compatibleModel: String(r.compatible_model ?? ''),
             ...base,
+            sku: (r.sku as string) ?? (base.sku as string) ?? '',
+            barcode: (r.barcode as string) ?? (base.barcode as string) ?? '',
+            title: (r.title as string) ?? (base.title as string) ?? '',
+            brand: (r.brand as Product['brand']) || (base.brand as Product['brand']) || 'Autre',
+            category: (r.category as Product['category']) || (base.category as Product['category']) || 'Tous les produits',
+            price: Number(r.price ?? base.price ?? 0),
+            wholesalePrice: Number(r.wholesale_price ?? base.wholesalePrice ?? 0),
+            costPrice: Number(r.cost_price ?? base.costPrice ?? 0),
+            stock: Number(r.stock ?? base.stock ?? 0),
+            imageUrl: String(r.image_url ?? base.imageUrl ?? ''),
+            isSerialized: Boolean(r.is_serialized ?? base.isSerialized),
+            imeiNumber: r.imei_number ? String(r.imei_number) : (base.imeiNumber as string | undefined),
+            vendorName: String(r.vendor_name ?? base.vendorName ?? 'Fournisseur Général'),
+            leadTimeDays: Number(r.lead_time_days ?? base.leadTimeDays ?? 7),
+            dailySalesVelocity: Number(r.daily_sales_velocity ?? base.dailySalesVelocity ?? 0),
+            reorderPoint: Number(r.reorder_point ?? base.reorderPoint ?? 5),
+            compatibleModel: String((r.compatible_model as string) ?? base.compatibleModel ?? ''),
             id: r.id as string,
           };
           await products.put(productToPut);
