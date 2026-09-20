@@ -132,24 +132,29 @@ export const InvoiceIngestionModal: React.FC = () => {
   const unmatchedCount = parsedLines.length - matchedCount;
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col max-h-[92vh] sm:max-h-[90vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-2 text-emerald-400">
-            <FileText className="w-5 h-5" />
-            <h2 className="text-sm font-bold text-pos-text">
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+          <div className="flex items-center gap-2 text-emerald-400 min-w-0">
+            <FileText className="w-5 h-5 shrink-0" />
+            <h2 className="text-sm font-bold text-pos-text truncate">
               Ingestion Automatique de Facture Fournisseur
             </h2>
           </div>
-          <button onClick={closeModal} className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg">
+          <button
+            onClick={closeModal}
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Form Body */}
-        <div className="p-5 space-y-4 overflow-y-auto">
-          <div className="flex justify-between items-start">
+        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
             <p className="text-xs text-pos-muted max-w-md">
               Collez le texte ou importez un fichier CSV/TXT (Format: <code className="text-emerald-400">SKU, Quantité, PrixAchat, IMEI (optionnel)</code>) pour incrémenter directement les stocks.
             </p>
@@ -162,7 +167,7 @@ export const InvoiceIngestionModal: React.FC = () => {
             />
             <button
               onClick={triggerFileInput}
-              className="px-3 py-1.5 rounded-lg bg-pos-card border border-pos-border hover:border-emerald-500 text-pos-text text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              className="w-full sm:w-auto px-3.5 py-2.5 rounded-xl bg-pos-card border border-pos-border hover:border-emerald-500 text-pos-text text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors min-h-[44px] active-press"
             >
               <Upload className="w-4 h-4" /> Importer Fichier
             </button>
@@ -240,14 +245,17 @@ export const InvoiceIngestionModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex justify-end gap-2 shrink-0">
-          <button onClick={closeModal} className="px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition-colors">
+        <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-end gap-2 shrink-0">
+          <button
+            onClick={closeModal}
+            className="px-4 py-2.5 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition-colors min-h-[44px] flex items-center justify-center active-press"
+          >
             Fermer
           </button>
           <button
             onClick={handleProcessIngestion}
             disabled={!rawText.trim()}
-            className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition-all"
+            className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 transition-all min-h-[44px] active-press"
           >
             <CheckCircle2 className="w-4 h-4" /> Ingestion & Mise à Jour
           </button>

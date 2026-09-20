@@ -43,13 +43,20 @@ export const PaymentModal: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const amountInputRef = useRef<HTMLInputElement>(null);
 
+  // grossSubtotal = catalog value before discounts (what the ticket labels
+  // "SOUS-TOTAL BRUT"). The old accumulator subtracted each item.discount,
+  // making this variable the net total under a gross name: the "Sous-total"
+  // pill understated the real gross and change was computed against the
+  // post-discount base by accident (harmless for change, wrong on display).
   const grossSubtotal = cart.reduce((acc, item) => {
     const itemPrice =
       item.appliedPrice !== undefined
         ? item.appliedPrice
         : getProductPriceForTier(item.product, pricingTier);
-    return acc + itemPrice * item.quantity - (item.discount || 0);
+    return acc + itemPrice * item.quantity;
   }, 0);
+  const cartDiscount = cart.reduce((acc, item) => acc + (item.discount || 0), 0);
+  const netSubtotal = Math.max(0, grossSubtotal - cartDiscount);
 
   useEffect(() => {
     if (activeModal === 'payment') {
@@ -66,11 +73,11 @@ export const PaymentModal: React.FC = () => {
       const initialCredit = Math.min(
         currentCustomer?.storeCredit || 0,
         storeCreditApplied || 0,
-        grossSubtotal
+          netSubtotal
       );
       setAppliedCredit(initialCredit);
 
-      const initialNet = Math.max(0, grossSubtotal - initialCredit);
+        const initialNet = Math.max(0, netSubtotal - initialCredit);
       setCashTenderAmount(initialNet > 0 ? initialNet.toString() : '0');
 
       setTimeout(() => {
@@ -80,13 +87,15 @@ export const PaymentModal: React.FC = () => {
         }
       }, 50);
     }
-  }, [activeModal, cart.length, grossSubtotal, currentCustomer, storeCreditApplied, closeModal, showToast]);
+  }, [activeModal, cart.length, grossSubtotal, netSubtotal, currentCustomer, storeCreditApplied, closeModal, showToast]);
 
   if (activeModal !== 'payment') return null;
 
   // Real-time net calculations
-  const maxAvailableCredit = currentCustomer ? Math.min(currentCustomer.storeCredit || 0, grossSubtotal) : 0;
-  const netToPay = Math.max(0, grossSubtotal - appliedCredit);
+    // Store credit can never exceed the net due (gross - discounts already
+    // granted), otherwise a discounted sale would over-apply customer credit.
+    const maxAvailableCredit = currentCustomer ? Math.min(currentCustomer.storeCredit || 0, netSubtotal) : 0;
+    const netToPay = Math.max(0, netSubtotal - appliedCredit);
   const currentCashGiven = parseFloat(cashTenderAmount) || 0;
 
   const resteAPayer = Math.max(0, netToPay - currentCashGiven);
@@ -108,7 +117,7 @@ export const PaymentModal: React.FC = () => {
     if (!currentCustomer || maxAvailableCredit <= 0) return;
     setAppliedCredit(maxAvailableCredit);
     setStoreCreditApplied(maxAvailableCredit);
-    const newNet = Math.max(0, grossSubtotal - maxAvailableCredit);
+      const newNet = Math.max(0, netSubtotal - maxAvailableCredit);
     setCashTenderAmount(newNet > 0 ? newNet.toString() : '0');
     soundEngine.playSuccess();
     showToast(`🎁 Avoir Client appliqué : -${formatDZD(maxAvailableCredit)}`, 'success');
@@ -116,10 +125,10 @@ export const PaymentModal: React.FC = () => {
 
   const handleApplyCustomCredit = (amount: number) => {
     if (!currentCustomer) return;
-    const clamped = Math.max(0, Math.min(amount, currentCustomer.storeCredit || 0, grossSubtotal));
+    const clamped = Math.max(0, Math.min(amount, currentCustomer.storeCredit || 0, netSubtotal));
     setAppliedCredit(clamped);
     setStoreCreditApplied(clamped);
-    const newNet = Math.max(0, grossSubtotal - clamped);
+    const newNet = Math.max(0, netSubtotal - clamped);
     setCashTenderAmount(newNet > 0 ? newNet.toString() : '0');
     setIsCustomCreditOpen(false);
     soundEngine.playKeyBeep?.();
@@ -133,7 +142,7 @@ export const PaymentModal: React.FC = () => {
   const handleRemoveCredit = () => {
     setAppliedCredit(0);
     setStoreCreditApplied(0);
-    setCashTenderAmount(grossSubtotal > 0 ? grossSubtotal.toString() : '0');
+      setCashTenderAmount(netSubtotal > 0 ? netSubtotal.toString() : '0');
     soundEngine.playKeyBeep?.();
     showToast('Avoir Client retiré de la vente.', 'info');
   };
@@ -195,7 +204,7 @@ export const PaymentModal: React.FC = () => {
     }
 
     const totalTendered = finalTenders.reduce((acc, t) => acc + t.amount, 0);
-    const calculatedChange = Math.max(0, totalTendered - grossSubtotal);
+      const calculatedChange = Math.max(0, totalTendered - netToPay);
 
     const result = await processPayment(finalTenders);
     if (result && !result.success) {
@@ -227,7 +236,7 @@ export const PaymentModal: React.FC = () => {
 
   return (
     <div 
-      className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none"
+      className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none"
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
@@ -235,35 +244,39 @@ export const PaymentModal: React.FC = () => {
         }
       }}
     >
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col max-h-[92vh]">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[92vh]">
+        {/* Mobile Pull Handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold shrink-0">
               <Banknote className="w-5 h-5" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-pos-text">
+                <h2 className="text-sm sm:text-base font-black text-pos-text truncate">
                   Encaissement & Règlement
                 </h2>
-                <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-[10px]">
+                <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-[10px] shrink-0">
                   Caisse Active
                 </span>
               </div>
-              <p className="text-[10px] text-pos-muted">Encaissement Espèces & Gestion Rigoureuse des Dettes Clients</p>
+              <p className="text-[10px] text-pos-muted truncate">Encaissement Espèces & Gestion Rigoureuse des Dettes Clients</p>
             </div>
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center shrink-0"
+            aria-label="Fermer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-5 overflow-y-auto space-y-4">
+        <div className="p-3.5 sm:p-5 overflow-y-auto space-y-3.5 sm:space-y-4 flex-1">
           {/* Total Net Banner & Breakdown */}
           <div className="bg-pos-card border border-pos-border rounded-2xl p-4 shadow-sm space-y-2">
             <div className="flex items-center justify-between">
@@ -284,10 +297,13 @@ export const PaymentModal: React.FC = () => {
             </div>
 
             {/* Subtotal & Store Credit breakdown pill */}
-            {appliedCredit > 0 && (
+              {(cartDiscount > 0 || appliedCredit > 0) && (
               <div className="pt-2 border-t border-pos-border/60 flex items-center justify-between text-xs font-mono">
                 <div className="flex items-center gap-2 text-pos-muted">
                   <span>Sous-total: {formatDZD(grossSubtotal)}</span>
+                    {cartDiscount > 0 && (
+                      <span className="text-purple-400 font-bold">Remise: -{formatDZD(cartDiscount)}</span>
+                    )}
                   <span className="text-purple-400 font-bold flex items-center gap-1">
                     <Gift className="w-3.5 h-3.5" /> Avoir Déduit: -{formatDZD(appliedCredit)}
                   </span>
@@ -362,6 +378,7 @@ export const PaymentModal: React.FC = () => {
                   <span className="text-[10px] text-purple-300 font-bold uppercase tracking-wider">Montants Rapides :</span>
                   {[500, 1000, 2000, 5000].map((amt) => {
                     if (amt > (currentCustomer.storeCredit || 0) || amt > grossSubtotal) return null;
+                      if (amt > (currentCustomer.storeCredit || 0) || amt > netSubtotal) return null;
                     const isSelected = appliedCredit === amt;
                     return (
                       <button
@@ -439,7 +456,7 @@ export const PaymentModal: React.FC = () => {
                 <span>Panier 100% Couvert par l'Avoir Client !</span>
               </div>
               <p className="text-xs text-emerald-200/80">
-                Le montant total de {formatDZD(grossSubtotal)} est intégralement déduit du solde de {currentCustomer?.name}. Aucun encaissement en espèces n'est requis.
+                Le montant total de {formatDZD(netSubtotal)} est intégralement déduit du solde de {currentCustomer?.name}. Aucun encaissement en espèces n'est requis.
               </p>
             </div>
           ) : (
@@ -519,6 +536,7 @@ export const PaymentModal: React.FC = () => {
                       <input
                         ref={amountInputRef}
                         type="number"
+                        inputMode="decimal"
                         value={cashTenderAmount}
                         onChange={(e) => setCashTenderAmount(e.target.value)}
                         onWheel={(e) => (e.target as HTMLElement).blur()}
@@ -698,10 +716,10 @@ export const PaymentModal: React.FC = () => {
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between shrink-0">
+        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col-reverse sm:flex-row items-center justify-between gap-2 shrink-0">
           <button
             onClick={closeModal}
-            className="px-4 py-2.5 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text hover:bg-pos-hover transition cursor-pointer"
+            className="w-full sm:w-auto min-h-[42px] px-4 py-2.5 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text hover:bg-pos-hover transition cursor-pointer text-center"
           >
             Annuler (Échap)
           </button>
@@ -709,7 +727,7 @@ export const PaymentModal: React.FC = () => {
             type="button"
             onClick={() => handleProcessPayment(false)}
             disabled={selectedMethod === 'Crédit Client' && !currentCustomer && netToPay > 0}
-            className={`glow-btn px-8 py-3.5 rounded-xl text-white font-black text-sm shadow-xl flex items-center gap-2 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+            className={`w-full sm:w-auto min-h-[48px] glow-btn px-6 sm:px-8 py-3 rounded-xl text-white font-black text-sm shadow-xl flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 ${
               netToPay === 0 && appliedCredit > 0
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 shadow-purple-600/25'
                 : selectedMethod === 'Crédit Client'
@@ -717,15 +735,15 @@ export const PaymentModal: React.FC = () => {
                 : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-emerald-600/25'
             }`}
           >
-            <CheckCircle2 className="w-5 h-5" />
-            <span>
+            <CheckCircle2 className="w-5 h-5 shrink-0 stroke-[2.5]" />
+            <span className="truncate">
               {netToPay === 0 && appliedCredit > 0
                 ? 'Valider Paiement Avoir (100%)'
                 : selectedMethod === 'Crédit Client'
                 ? 'Valider Vente à Crédit'
                 : 'Valider & Imprimer Reçu'}
             </span>
-            <span className="bg-black/40 text-emerald-200 border border-white/20 px-2 py-0.5 rounded text-xs font-mono">
+            <span className="hidden sm:inline bg-black/40 text-emerald-200 border border-white/20 px-2 py-0.5 rounded text-xs font-mono">
               Entrée ↵
             </span>
           </button>

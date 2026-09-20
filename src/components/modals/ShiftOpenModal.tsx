@@ -114,24 +114,28 @@ export const ShiftOpenModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 max-h-[92vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94vh] sm:max-h-[92vh] flex flex-col">
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
-          <div className="flex items-center gap-2 text-emerald-400">
-            <Play className="w-5 h-5" />
-            <div>
-              <h2 className="text-sm font-bold text-pos-text">
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
+          <div className="flex items-center gap-2 text-emerald-400 min-w-0">
+            <Play className="w-5 h-5 shrink-0" />
+            <div className="min-w-0">
+              <h2 className="text-xs sm:text-sm font-bold text-pos-text truncate">
                 Ouverture de Session Caisse (Start Shift)
               </h2>
-              <p className="text-[11px] text-pos-muted">
+              <p className="text-[10px] sm:text-[11px] text-pos-muted truncate">
                 Décompte du fond de caisse initial et attribution du caissier
               </p>
             </div>
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            aria-label="Fermer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -335,8 +339,8 @@ export const ShiftOpenModal: React.FC = () => {
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between">
-          <div>
+        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center justify-between sm:block">
             <span className="text-[10px] uppercase font-bold text-pos-muted block">
               Fond de Caisse Validé
             </span>
@@ -345,20 +349,21 @@ export const ShiftOpenModal: React.FC = () => {
             </span>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={closeModal}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text hover:bg-pos-hover transition"
+              className="flex-1 sm:flex-none min-h-[42px] px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text bg-pos-hover/50 sm:bg-transparent transition cursor-pointer"
             >
               Annuler
             </button>
             <button
               type="button"
               onClick={handleOpenShift}
-              className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98]"
+              className="flex-2 sm:flex-none min-h-[44px] px-4 sm:px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98] cursor-pointer"
             >
-              <CheckCircle2 className="w-4 h-4" /> Valider & Ouvrir la Session Caisse
+              <CheckCircle2 className="w-4 h-4" />
+              <span>Valider & Ouvrir la Session Caisse</span>
             </button>
           </div>
         </div>

@@ -1,6 +1,5 @@
 ﻿// Cloud credentials API wrappers (rules.md R6.2)
-import { invoke } from '@tauri-apps/api/core';
-import { toApiError } from './error';
+import { invokeCommand } from '../platform/invoke';
 
 export interface CloudCredentials {
   url: string;
@@ -8,25 +7,13 @@ export interface CloudCredentials {
 }
 
 export async function getCloudCredentials(): Promise<CloudCredentials | null> {
-  try {
-    return await invoke<CloudCredentials | null>('get_cloud_credentials');
-  } catch (error) {
-    throw toApiError(error, 'INTERNAL_ERROR');
-  }
+  return invokeCommand<CloudCredentials | null>('get_cloud_credentials');
 }
 
 export async function setCloudCredentials(url: string, token: string): Promise<void> {
-  try {
-    await invoke('set_cloud_credentials', { url, token });
-  } catch (error) {
-    throw toApiError(error, 'INTERNAL_ERROR');
-  }
+  await invokeCommand('set_cloud_credentials', { url, token });
 }
 
 export async function deleteCloudCredentials(): Promise<void> {
-  try {
-    await invoke('delete_cloud_credentials');
-  } catch (error) {
-    throw toApiError(error, 'INTERNAL_ERROR');
-  }
+  await invokeCommand('delete_cloud_credentials');
 }

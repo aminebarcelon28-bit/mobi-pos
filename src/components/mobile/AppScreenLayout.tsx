@@ -43,15 +43,37 @@ export const AppScreenLayout: React.FC<AppScreenLayoutProps> = ({
       className={`${fill === 'viewport' ? 'h-[100dvh]' : 'h-full'} w-full flex flex-col overflow-hidden bg-pos-bg text-pos-text select-none font-sans ${className}`}
     >
       {header && (
-        <div className="shrink-0 z-20" style={{ paddingTop: 'var(--safe-top)' }}>
+        <div
+          className="shrink-0 z-20 bg-pos-panel/95 backdrop-blur-md border-b border-pos-border shadow-xs"
+          style={{
+            paddingTop: 'var(--safe-top)',
+            paddingLeft: 'var(--safe-left, 0px)',
+            paddingRight: 'var(--safe-right, 0px)',
+          }}
+        >
           <div className="min-h-[48px] flex flex-col justify-center">{header}</div>
         </div>
       )}
 
-      <main className="flex-1 min-h-0 overflow-hidden flex flex-col relative">{children}</main>
+      <main
+        className="flex-1 min-h-0 overflow-hidden flex flex-col relative"
+        style={{
+          paddingLeft: 'var(--safe-left, 0px)',
+          paddingRight: 'var(--safe-right, 0px)',
+        }}
+      >
+        {children}
+      </main>
 
       {footer && (
-        <div className="shrink-0 z-20" style={{ paddingBottom: 'var(--safe-bottom)' }}>
+        <div
+          className="shrink-0 z-20 bg-pos-panel/95 backdrop-blur-lg border-t border-pos-border shadow-lg"
+          style={{
+            paddingBottom: 'var(--safe-bottom)',
+            paddingLeft: 'var(--safe-left, 0px)',
+            paddingRight: 'var(--safe-right, 0px)',
+          }}
+        >
           {footer}
         </div>
       )}

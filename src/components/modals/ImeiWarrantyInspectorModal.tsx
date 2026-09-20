@@ -305,26 +305,30 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none animate-in fade-in">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none animate-in fade-in">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 flex flex-col max-h-[94vh] sm:max-h-[90vh]">
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* Header */}
-        <div className="p-4 border-b border-pos-border bg-pos-card flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
-              <Smartphone className="w-5 h-5" />
+        <div className="p-3.5 sm:p-4 border-b border-pos-border bg-pos-card flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
+              <Smartphone className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <div>
-              <h2 className="text-sm font-black text-pos-text flex items-center gap-2">
-                Inspecteur IMEI & Traçabilité Garantie
+            <div className="min-w-0">
+              <h2 className="text-xs sm:text-sm font-black text-pos-text flex items-center gap-2 truncate">
+                Inspecteur IMEI & Garantie
               </h2>
-              <p className="text-[11px] text-pos-muted">
-                Contrôle instantané de validité de garantie et historique SAV
+              <p className="text-[10px] sm:text-[11px] text-pos-muted truncate">
+                Validité de garantie et historique SAV
               </p>
             </div>
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            aria-label="Fermer"
           >
             <X className="w-5 h-5" />
           </button>

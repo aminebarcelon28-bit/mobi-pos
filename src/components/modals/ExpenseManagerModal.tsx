@@ -21,6 +21,7 @@ import { formatDZD, formatDateTime } from '../../types/pos';
 import type { ExpenseCategory, PaymentMethodType, StoreExpense } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { soundEngine } from '../../utils/audioFeedback';
+import { newId } from '../../utils/ids';
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
   'Loyer': <Building className="w-4 h-4 text-amber-400" />,
@@ -118,7 +119,7 @@ export const ExpenseManagerModal: React.FC = () => {
     }
 
     const newExpense: StoreExpense = {
-      id: `EXP-${Date.now()}`,
+      id: newId('EXP'),
       category,
       title: title.trim() || category,
       amount: val,
@@ -175,7 +176,7 @@ export const ExpenseManagerModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-6xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-full sm:h-[90vh] font-sans pt-[var(--safe-top)] sm:pt-0 pb-[var(--safe-bottom)] sm:pb-0">
+      <div className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-6xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-full sm:h-[90vh] font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(0.5rem,var(--safe-bottom))] sm:pb-0">
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* HEADER */}
         {/* ══════════════════════════════════════════════════════════════ */}

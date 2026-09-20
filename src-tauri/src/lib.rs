@@ -6,6 +6,7 @@ pub mod hlc;
 pub mod contract;
 pub mod reducers;
 pub mod intents;
+pub mod hardware;
 
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
@@ -798,7 +799,9 @@ pub fn run() {
             intents::launch_call,
             intents::launch_whatsapp,
             intents::launch_print,
-            intents::launch_url
+            intents::launch_url,
+            hardware::hardware_scan_devices,
+            hardware::hardware_update_vfd
         ]);
 
     if let Err(err) = builder.run(tauri::generate_context!()) {

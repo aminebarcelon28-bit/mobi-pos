@@ -1,0 +1,107 @@
+{
+  "report": {
+    "mode": "apply",
+    "at": "2026-09-18T01:19:08.507Z",
+    "tables": {
+      "products": {
+        "scanned": 8,
+        "dirty": 0,
+        "kbBefore": 125,
+        "kbAfter": 125,
+        "repull": "updated_at touch (+version)"
+      },
+      "transactions": {
+        "scanned": 30,
+        "dirty": 12,
+        "kbBefore": 12761.2,
+        "kbAfter": 108.5,
+        "repull": "updated_at touch (+version)"
+      },
+      "transaction_items": {
+        "scanned": 30,
+        "dirty": 0,
+        "kbBefore": 5.5,
+        "kbAfter": 5.5,
+        "repull": "updated_at touch (+version)"
+      }
+    },
+    "oversizedImageUrls": {
+      "rows": 0,
+      "kb": 0
+    }
+  },
+  "backup": [
+    {
+      "table": "transactions",
+      "id": "TXN-1789599857746-1364",
+      "bytesBefore": 5071762,
+      "bytesAfter": 3995
+    },
+    {
+      "table": "transactions",
+      "id": "TXN-1789599875039-8611",
+      "bytesBefore": 5071762,
+      "bytesAfter": 3995
+    },
+    {
+      "table": "transactions",
+      "id": "TXN-1789657131301-9118",
+      "bytesBefore": 8261,
+      "bytesAfter": 4128
+    },
+    {
+      "table": "transactions",
+      "id": "TXN-1789657242565-6232",
+      "bytesBefore": 13308,
+      "bytesAfter": 4128
+    },
+    {
+      "table": "transactions",
+      "id": "TXN-1789657281069-7701",
+      "bytesBefore": 23227,
+      "bytesAfter": 4520
+    },
+    {
+      "table": "transactions",
+      "id": "TXN-1789658782303-3359",
+      "bytesBefore": 41322,
+      "bytesAfter": 4128
+    },
+    {
+      "table": "transactions",
+      "id": "TXN-1789660913229-7958",
+      "bytesBefore": 8192,
+      "bytesAfter": 4327
+    },
+    {
+      "table": "transactions",
+      "id": "TXN-1789661056708-1045",
+      "bytesBefore": 12996,
+      "bytesAfter": 4326
+    },
+    {
+      "table": "transactions",
+      "id": "TXN-1789662436616-6979",
+      "bytesBefore": 22029,
+      "bytesAfter": 4330
+    },
+    {
+      "table": "transactions",
+      "id": "TXN-1789664822114-2034",
+      "bytesBefore": 278997,
+      "bytesAfter": 5204
+    },
+    {
+      "table": "transactions",
+      "id": "TXN-1789664828664-4490",
+      "bytesBefore": 278997,
+      "bytesAfter": 5204
+    },
+    {
+      "table": "transactions",
+      "id": "TXN-1789665012960-3871",
+      "bytesBefore": 2178386,
+      "bytesAfter": 4606
+    }
+  ]
+}

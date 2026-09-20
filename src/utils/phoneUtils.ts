@@ -1,8 +1,11 @@
 /**
  * Normalisation & Validation des Numéros de Téléphone Algériens (Mobilis, Djezzy, Ooredoo, Fixe)
  * Supports Arabic-Indic digits, full-width digits, RFC 3966 tel: URIs, and native WebView launchers.
- * Implements Bug Fix F-01 (v1.7.0).
+ * Implements Bug Fix F-01 (v1.7.0). All native calls route through the src/platform seam.
  */
+
+import { invokeCommand } from '../platform/invoke';
+import { openExternalUrl } from '../platform/opener';
 
 export interface NormalizedPhoneResult {
   raw: string;
@@ -165,8 +168,7 @@ export async function openDialer(phoneNumber: string): Promise<boolean> {
 
   if (isTauriEnvironment()) {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('launch_call', { phone: normalized.international });
+      await invokeCommand('launch_call', { phone: normalized.international });
       return true;
     } catch (error) {
       console.warn('[phoneUtils] Native call failed:', error);
@@ -200,8 +202,7 @@ export async function openWhatsApp(phoneNumber: string, message: string): Promis
 
   if (isTauriEnvironment()) {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('launch_whatsapp', { url: waUrl });
+      await invokeCommand('launch_whatsapp', { url: waUrl });
       return true;
     } catch (error) {
       console.warn('[phoneUtils] Native WhatsApp launch failed:', error);
@@ -233,13 +234,11 @@ export async function openUrl(url: string): Promise<boolean> {
 
   if (isTauriEnvironment()) {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('launch_url', { url });
+      await invokeCommand('launch_url', { url });
       return true;
     } catch {
       try {
-        const opener = await import('@tauri-apps/plugin-opener');
-        await opener.openUrl(url);
+        await openExternalUrl(url);
         return true;
       } catch (e) {
         console.warn('[phoneUtils] Tauri opener openUrl failed, falling back:', e);
@@ -258,8 +257,7 @@ export async function openNativePrint(title: string, content: string): Promise<b
 
   if (isTauriEnvironment()) {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('launch_print', { title, content });
+      await invokeCommand('launch_print', { title, content });
       return true;
     } catch (error) {
       console.warn('[phoneUtils] Native print launch failed:', error);

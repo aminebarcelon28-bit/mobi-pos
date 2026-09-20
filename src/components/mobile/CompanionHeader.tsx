@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Smartphone, RefreshCw, Wifi, WifiOff, ShieldCheck, Truck } from 'lucide-react';
-import { syncManager } from '../../sync/SyncManager';
+import { Smartphone, RefreshCw, WifiOff, Truck, Monitor } from 'lucide-react';
+// P11.3: sync engine is loaded on demand — importing it statically here would
+// drag ~267 kB (turso client + sql adapter) into the entry chunk.
 import type { SyncStatus } from '../../sync/types';
 import { usePosStore } from '../../store/usePosStore';
-
+import { useDeviceMode } from '../../hooks/useDeviceMode';
 import { ThemeToggle } from '../ThemeToggle';
 
 export const CompanionHeader: React.FC = () => {
   const { openModal } = usePosStore();
+  const { setRoleMode } = useDeviceMode();
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({
     online: typeof navigator === 'undefined' ? true : navigator.onLine,
     pushing: false,
@@ -20,10 +22,15 @@ export const CompanionHeader: React.FC = () => {
   });
 
   useEffect(() => {
-    const unsubscribe = syncManager.subscribe((s) => {
-      setSyncStatus(s);
-    });
-    return unsubscribe;
+    let unsubscribe: (() => void) | undefined;
+    import('../../sync/SyncManager')
+      .then(({ syncManager }) => {
+        unsubscribe = syncManager.subscribe((s) => {
+          setSyncStatus(s);
+        });
+      })
+      .catch((err: unknown) => console.warn('[header] sync engine unavailable:', err));
+    return () => unsubscribe?.();
   }, []);
 
   const isSyncing = syncStatus.pushing || syncStatus.pulling;
@@ -33,74 +40,90 @@ export const CompanionHeader: React.FC = () => {
       openModal('settings');
       return;
     }
-    void syncManager.kick();
+    import('../../sync/SyncManager')
+      .then(({ syncManager }) => void syncManager.kick())
+      .catch((err: unknown) => console.warn('[header] sync kick failed:', err));
   };
 
   return (
-    <header className="min-h-[48px] h-12 bg-pos-panel border-b border-pos-border px-3 flex items-center justify-between select-none shrink-0 z-20">
+    <header className="min-h-[52px] h-[52px] px-3.5 flex items-center justify-between select-none shrink-0">
       {/* Brand & Companion Mode Badge */}
-      <div className="flex items-center gap-2 min-w-0">
-        <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-emerald-500/25 to-teal-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0 shadow-xs">
           <Smartphone className="w-4 h-4" />
         </div>
         <div className="min-w-0">
-          <span className="text-xs font-black text-pos-text tracking-wide block leading-tight truncate">
-            MobiPOS
-          </span>
-          <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-wider block leading-none truncate">
-            Mobile Companion
+          <div className="flex items-center gap-1.5">
+            <span className="text-sm font-black text-pos-text tracking-tight block leading-tight">
+              MobiPOS
+            </span>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" title="En service" />
+          </div>
+          <span className="text-[9px] font-extrabold text-emerald-400 uppercase tracking-widest block leading-none truncate">
+            Companion
           </span>
         </div>
       </div>
 
-      {/* Right side: high-frequency mobile actions, sync, theme and security */}
-      <div className="flex items-center gap-1.5 shrink-0">
-        <button
-          type="button"
-          onClick={() => openModal('vendor_procurement')}
-          className="relative flex items-center justify-center min-h-[44px] min-w-[44px] rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500 hover:text-slate-950 active:scale-95 transition"
-          title="Ouvrir le tableau JIT de réapprovisionnement par fournisseur"
-          aria-label="Réapprovisionnement JIT par fournisseur"
-        >
-          <Truck className="w-4 h-4" />
-          <span className="absolute -right-0.5 -top-0.5 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-pos-panel" />
-        </button>
-
+      {/* Right side: sync status pill, quick procurement, theme toggle & desktop switcher */}
+      <div className="flex items-center gap-2 shrink-0">
+        {/* Sync Status Interactive Pill */}
         <button
           type="button"
           onClick={handleSyncClick}
-          className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-pos-card border border-pos-border text-pos-text text-[10px] font-bold cursor-pointer hover:border-emerald-500/40 transition active:scale-95 min-h-[44px] min-w-[44px] justify-center"
-          title={syncStatus.online ? "Synchronisation Turso — appuyez pour forcer" : "Hors ligne — appuyez pour les paramètres"}
+          className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-bold transition active-press min-h-[40px] cursor-pointer shadow-xs ${
+            syncStatus.online
+              ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20'
+              : 'bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20'
+          }`}
+          title={syncStatus.online ? "Synchronisation Turso Cloud — toucher pour forcer" : "Hors ligne — toucher pour les paramètres"}
+          aria-label="Statut de synchronisation"
         >
           {isSyncing ? (
-            <RefreshCw className="w-3 h-3 text-amber-400 animate-spin" />
+            <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
           ) : syncStatus.online ? (
-            <Wifi className="w-3 h-3 text-emerald-400" />
+            <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_#34d399]" />
           ) : (
-            <WifiOff className="w-3 h-3 text-rose-400" />
+            <WifiOff className="w-3.5 h-3.5 text-rose-400" />
           )}
 
-          <span>
+          <span className="text-[10px] font-mono font-bold tracking-tight">
             {isSyncing
-              ? 'Sync...'
+              ? 'Sync…'
+              : syncStatus.pendingCount > 0
+              ? `${syncStatus.pendingCount} attente`
               : syncStatus.online
-              ? syncStatus.pendingCount > 0
-                ? `${syncStatus.pendingCount}`
-                : 'En ligne'
+              ? 'En ligne'
               : 'Hors ligne'}
           </span>
         </button>
 
-        {/* Instant Theme Toggle (Dark / Light) */}
+        {/* Quick Supplier Procurement Button */}
+        <button
+          type="button"
+          onClick={() => openModal('vendor_procurement')}
+          className="relative flex items-center justify-center min-h-[40px] min-w-[40px] rounded-xl bg-pos-card border border-pos-border text-pos-muted hover:text-emerald-400 hover:border-emerald-500/30 active-press transition cursor-pointer"
+          title="Réapprovisionnement Fournisseurs JIT"
+          aria-label="Réapprovisionnement Fournisseurs JIT"
+        >
+          <Truck className="w-4 h-4" />
+          <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-pos-panel" />
+        </button>
+
+        {/* PC Mode Switcher button (discreet, accessible) */}
+        <button
+          type="button"
+          onClick={() => setRoleMode('pos_primary')}
+          className="hidden sm:flex items-center justify-center min-h-[40px] min-w-[40px] rounded-xl bg-pos-card border border-pos-border text-pos-muted hover:text-cyan-400 hover:border-cyan-500/30 active-press transition cursor-pointer"
+          title="Passer en Mode Caisse PC"
+          aria-label="Passer en Mode Caisse PC"
+        >
+          <Monitor className="w-4 h-4" />
+        </button>
+
+        {/* Instant Theme Toggle */}
         <div className="shrink-0 scale-90 origin-right">
           <ThemeToggle />
-        </div>
-
-        <div
-          className="w-7 h-7 rounded-lg bg-pos-card border border-pos-border flex items-center justify-center text-emerald-400"
-          title="Sécurité SQLite WAL & Signature Active"
-        >
-          <ShieldCheck className="w-4 h-4" />
         </div>
       </div>
     </header>

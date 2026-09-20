@@ -245,33 +245,39 @@ export const RepairWorkOrderModal: React.FC = () => {
   if (activeModal !== 'repair_work_order') return null;
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-[92vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94vh] sm:h-[92vh] flex flex-col">
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-emerald-500/20">
-              <Wrench className="w-5 h-5 stroke-[2.5]" />
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-emerald-500/20 shrink-0">
+              <Wrench className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
             </div>
-            <div>
-              <h2 className="text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2">
-                GESTION DES RÉPARATIONS & TICKETS SAV
-                <span className="text-[10px] bg-emerald-500/10 text-emerald-400 font-bold px-2 py-0.5 rounded border border-emerald-500/30">
+            <div className="min-w-0">
+              <h2 className="text-xs sm:text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2 truncate">
+                <span>RÉPARATIONS & TICKETS SAV</span>
+                <span className="text-[9px] sm:text-[10px] bg-emerald-500/10 text-emerald-400 font-bold px-1.5 sm:px-2 py-0.5 rounded border border-emerald-500/30 shrink-0">
                   ENTERPRISE
                 </span>
               </h2>
-              <p className="text-[11px] text-pos-muted">Prise en charge atelier, checklist d'état matériel et suivi SAV</p>
+              <p className="text-[10px] sm:text-[11px] text-pos-muted truncate">Prise en charge atelier, checklist et suivi SAV</p>
             </div>
           </div>
 
-          <button onClick={closeModal} className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition">
+          <button
+            onClick={closeModal}
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition min-h-[38px] min-w-[38px] flex items-center justify-center cursor-pointer shrink-0"
+            aria-label="Fermer"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Executive KPI Summary Bar */}
-        <div className="bg-pos-bg border-b border-pos-border px-4 py-2.5 grid grid-cols-6 gap-3 shrink-0 text-center select-none">
+        <div className="bg-pos-bg border-b border-pos-border px-3 sm:px-4 py-2 sm:py-2.5 grid grid-cols-3 sm:grid-cols-6 gap-2 sm:gap-3 shrink-0 text-center select-none">
           <div className="bg-pos-card border border-pos-border rounded-lg p-2">
             <span className="text-[9px] uppercase font-bold text-pos-muted block">Total Dossiers</span>
             <span className="text-sm font-black text-pos-text">{totalOrders}</span>
@@ -304,21 +310,21 @@ export const RepairWorkOrderModal: React.FC = () => {
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-pos-border bg-pos-panel px-4 shrink-0">
+        <div className="flex border-b border-pos-border bg-pos-panel px-2.5 sm:px-4 shrink-0 overflow-x-auto no-scrollbar whitespace-nowrap">
           <button
             onClick={() => { setActiveTab('Nouveau'); if (!editingId) resetForm(); }}
-            className={`px-4 py-3 text-xs font-bold border-b-2 transition-colors ${activeTab === 'Nouveau' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-pos-muted hover:text-pos-text'}`}
+            className={`min-h-[44px] px-3.5 sm:px-4 py-2.5 text-xs font-bold border-b-2 transition-colors shrink-0 active:scale-95 ${activeTab === 'Nouveau' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-pos-muted hover:text-pos-text'}`}
           >
             <div className="flex items-center gap-2">
-              <Plus className="w-4 h-4" /> {editingId ? 'Modifier Fiche Ticket' : 'Créer Nouveau Ticket SAV'}
+              <Plus className="w-4 h-4" /> <span>{editingId ? 'Modifier Fiche' : 'Nouveau Ticket SAV'}</span>
             </div>
           </button>
           <button
             onClick={() => setActiveTab('Historique')}
-            className={`px-4 py-3 text-xs font-bold border-b-2 transition-colors ${activeTab === 'Historique' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-pos-muted hover:text-pos-text'}`}
+            className={`min-h-[44px] px-3.5 sm:px-4 py-2.5 text-xs font-bold border-b-2 transition-colors shrink-0 active:scale-95 ${activeTab === 'Historique' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-pos-muted hover:text-pos-text'}`}
           >
             <div className="flex items-center gap-2">
-              <History className="w-4 h-4" /> Historique Atelier & Statuts ({repairOrders.length})
+              <History className="w-4 h-4" /> <span>Historique Atelier ({repairOrders.length})</span>
             </div>
           </button>
         </div>

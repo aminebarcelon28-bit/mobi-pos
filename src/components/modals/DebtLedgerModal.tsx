@@ -159,33 +159,37 @@ export const DebtLedgerModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-6xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[90vh]">
+    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-6xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 flex flex-col h-[94vh] sm:h-[90vh]">
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* HEADER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-red-500 to-rose-600 flex items-center justify-center text-white shadow-lg shadow-rose-500/20">
-              <CreditCard className="w-6 h-6 stroke-[2.5]" />
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-red-500 to-rose-600 flex items-center justify-center text-white shadow-lg shadow-rose-500/20 shrink-0">
+              <CreditCard className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-pos-text uppercase tracking-wider">
-                  Registre des Dettes & Crédits Clients (Kredy)
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <h2 className="text-xs sm:text-base font-black text-pos-text uppercase tracking-wider truncate">
+                  Grand Livre Dettes Clients (Kredy)
                 </h2>
-                <span className="px-2.5 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold text-xs">
+                <span className="px-2 py-0.2 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold text-[10px] sm:text-xs shrink-0">
                   {allIndebted.length} Débiteurs
                 </span>
               </div>
-              <p className="text-xs text-pos-muted">
+              <p className="text-[11px] text-pos-muted hidden sm:block">
                 Suivi des encours, règlements, relances WhatsApp et gestion des plafonds autorisés
               </p>
             </div>
           </div>
           <button
             onClick={closeModal}
-            className="p-2 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            aria-label="Fermer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -372,10 +376,10 @@ export const DebtLedgerModal: React.FC = () => {
                       </div>
 
                       {/* Action Buttons */}
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5 w-full sm:w-auto justify-end">
                         <button
                           onClick={() => handleOpenPayment(customer)}
-                          className="px-3 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black rounded-xl flex items-center gap-1 shadow-md transition cursor-pointer"
+                          className="min-h-[38px] px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black rounded-xl flex items-center justify-center gap-1 shadow-md transition cursor-pointer active:scale-95 flex-1 sm:flex-none"
                           title="Enregistrer un versement / remboursement"
                         >
                           <DollarSign className="w-3.5 h-3.5" />
@@ -384,7 +388,7 @@ export const DebtLedgerModal: React.FC = () => {
 
                         <button
                           onClick={() => handleSendWhatsAppReminder(customer)}
-                          className="p-2 bg-pos-bg hover:bg-emerald-500/20 border border-pos-border hover:border-emerald-500/40 text-emerald-400 rounded-xl transition cursor-pointer"
+                          className="min-h-[38px] min-w-[38px] p-2 bg-pos-bg hover:bg-emerald-500/20 border border-pos-border hover:border-emerald-500/40 text-emerald-400 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95"
                           title="Envoyer un rappel de solde via WhatsApp"
                         >
                           <MessageSquare className="w-4 h-4" />
@@ -392,7 +396,7 @@ export const DebtLedgerModal: React.FC = () => {
 
                         <button
                           onClick={() => handlePrintStatement(customer)}
-                          className="p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+                          className="min-h-[38px] min-w-[38px] p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95"
                           title="Imprimer le relevé de compte 80mm"
                         >
                           <Printer className="w-4 h-4" />
@@ -403,7 +407,7 @@ export const DebtLedgerModal: React.FC = () => {
                             setAdjustingCustomer(customer);
                             setNewLimitInput(String(customer.debtLimit || 50000));
                           }}
-                          className="p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+                          className="min-h-[38px] min-w-[38px] p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95"
                           title="Ajuster le plafond de crédit autorisé (PIN Manager)"
                         >
                           <Lock className="w-4 h-4 text-cyan-400" />
@@ -411,7 +415,7 @@ export const DebtLedgerModal: React.FC = () => {
 
                         <button
                           onClick={() => setExpandedCustomerId(isExpanded ? null : customer.id)}
-                          className="p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+                          className="min-h-[38px] min-w-[38px] p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95"
                           title="Voir l'historique des opérations"
                         >
                           {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}

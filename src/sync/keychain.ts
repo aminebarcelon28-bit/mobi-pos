@@ -21,6 +21,27 @@ const isTauri = (): boolean => {
 let memoryCache: CloudCredentials | null = null;
 
 const LEGACY_STORAGE_KEY = 'mobi_pos_cloud_creds_fallback';
+const WEB_CREDS_KEY = 'mobi_pos_web_turso_creds';
+
+/**
+ * Removes any credential copies from Web Storage.
+ * The Turso auth token must never rest in plaintext localStorage/sessionStorage
+ * inside a Tauri build (rules.md S4.1) — the OS keychain / vault file is the
+ * only store there. Runs as a migration wipe after a successful keychain read.
+ */
+function purgeWebMirror(): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(WEB_CREDS_KEY);
+      localStorage.removeItem(LEGACY_STORAGE_KEY);
+    }
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(WEB_CREDS_KEY);
+    }
+  } catch {
+    // Storage restricted
+  }
+}
 
 export async function getCloudCredentials(): Promise<CloudCredentials | null> {
   if (memoryCache) return memoryCache;
@@ -31,6 +52,8 @@ export async function getCloudCredentials(): Promise<CloudCredentials | null> {
       const creds = await apiGetCloudCredentials();
       if (creds && creds.url && creds.token) {
         memoryCache = creds;
+        // Migration wipe: tokens mirrored by older builds must not linger in Web Storage.
+        purgeWebMirror();
         return creds;
       }
     } catch (err) {
@@ -38,10 +61,10 @@ export async function getCloudCredentials(): Promise<CloudCredentials | null> {
     }
   }
 
-  // 2. Always check sessionStorage or persistent localStorage as fallback (mobile web or vault uninitialized)
+  // 2. Web fallback (pure browser / mobile-web only): never consulted first in Tauri.
   try {
-    const raw = (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('mobi_pos_web_turso_creds') : null) ||
-                (typeof localStorage !== 'undefined' ? localStorage.getItem('mobi_pos_web_turso_creds') : null);
+    const raw = (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(WEB_CREDS_KEY) : null) ||
+                (typeof localStorage !== 'undefined' ? localStorage.getItem(WEB_CREDS_KEY) : null);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed.url && parsed.token) {
@@ -76,16 +99,20 @@ export async function setCloudCredentials(url: string, token: string): Promise<v
     }
   }
 
-  // Always mirror to Web Storage as resilient mobile fallback
-  try {
-    if (typeof sessionStorage !== 'undefined') {
-      sessionStorage.setItem('mobi_pos_web_turso_creds', JSON.stringify(payload));
+  // Mirror to Web Storage ONLY outside Tauri (pure mobile-web fallback).
+  // Inside Tauri the token lives in the OS keychain / vault file exclusively —
+  // never in plaintext browser storage (rules.md S4.1).
+  if (!isTauri()) {
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem(WEB_CREDS_KEY, JSON.stringify(payload));
+      }
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(WEB_CREDS_KEY, JSON.stringify(payload));
+      }
+    } catch {
+      // Storage restricted
     }
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem('mobi_pos_web_turso_creds', JSON.stringify(payload));
-    }
-  } catch {
-    // Storage restricted
   }
 
   memoryCache = payload;
@@ -103,10 +130,10 @@ export async function deleteCloudCredentials(): Promise<void> {
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.removeItem(LEGACY_STORAGE_KEY);
-      localStorage.removeItem('mobi_pos_web_turso_creds');
+      localStorage.removeItem(WEB_CREDS_KEY);
     }
     if (typeof sessionStorage !== 'undefined') {
-      sessionStorage.removeItem('mobi_pos_web_turso_creds');
+      sessionStorage.removeItem(WEB_CREDS_KEY);
     }
   } catch {
     // Storage restricted

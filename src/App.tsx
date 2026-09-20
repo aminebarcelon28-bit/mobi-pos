@@ -140,28 +140,59 @@ export const App: React.FC = () => {
       }
 
       if (!cancelled) {
-        try {
-          const { remirrorToDexie } = await import('./db/backfill');
-          const mirrorResult = await remirrorToDexie();
-          if (mirrorResult.mirrored > 0 && !cancelled) {
-            usePosStore.getState().refreshAfterPull().catch(console.warn);
+        // P3.2: post-first-frame work — the mirror rebuild and outbox backfill
+        // must not hold the boot critical path. requestIdleCallback with a
+        // timeout fallback; the cancelled flag still guards every step.
+        const scheduleDeferred = (fn: () => void) => {
+          const w = window as unknown as {
+            requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+          };
+          if (typeof w.requestIdleCallback === 'function') {
+            w.requestIdleCallback(() => fn(), { timeout: 3000 });
+          } else {
+            window.setTimeout(fn, 1500);
           }
-        } catch (e) {
-          console.warn('[boot] Remirror skipped:', e);
-        }
+        };
+        scheduleDeferred(() => {
+          (async () => {
+            try {
+              const { remirrorToDexie } = await import('./db/backfill');
+              const mirrorResult = await remirrorToDexie();
+              if (mirrorResult.mirrored > 0 && !cancelled) {
+                usePosStore.getState().refreshAfterPull().catch(console.warn);
+              }
+            } catch (e) {
+              console.warn('[boot] Remirror skipped:', e);
+            }
+          })().catch((e: unknown) => console.warn('[boot] Deferred remirror failed:', e));
+        });
       }
 
       if (!cancelled) {
-        try {
-          const { backfillAllToOutbox } = await import('./db/backfill');
-          const { syncManager } = await import('./sync/SyncManager');
-          const backfillResult = await backfillAllToOutbox();
-          if (backfillResult.enqueued > 0 && !cancelled) {
-            syncManager.notifyLocalWrite();
+        const scheduleDeferredBackfill = (fn: () => void) => {
+          const w = window as unknown as {
+            requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+          };
+          if (typeof w.requestIdleCallback === 'function') {
+            w.requestIdleCallback(() => fn(), { timeout: 5000 });
+          } else {
+            window.setTimeout(fn, 2500);
           }
-        } catch (e) {
-          console.warn('[boot] Backfill skipped:', e);
-        }
+        };
+        scheduleDeferredBackfill(() => {
+          (async () => {
+            try {
+              const { backfillAllToOutbox } = await import('./db/backfill');
+              const { syncManager } = await import('./sync/SyncManager');
+              const backfillResult = await backfillAllToOutbox();
+              if (backfillResult.enqueued > 0 && !cancelled) {
+                syncManager.notifyLocalWrite();
+              }
+            } catch (e) {
+              console.warn('[boot] Backfill skipped:', e);
+            }
+          })().catch((e: unknown) => console.warn('[boot] Deferred backfill failed:', e));
+        });
       }
     })();
     return () => {

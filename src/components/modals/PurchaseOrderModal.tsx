@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   X,
   FileText,
@@ -14,12 +14,28 @@ import {
   Ban,
   ShieldCheck,
   Truck,
+  Search,
+  Trash2,
+  ShoppingCart,
+  Calendar,
+  Building2,
+  Sparkles,
+  Layers,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
-import type { PurchaseOrder, PaymentMethodType } from '../../types/pos';
+import type { PurchaseOrder, PaymentMethodType, Product } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { printCoordinator } from '../../utils/printCoordinator';
+
+interface DraftPOLineItem {
+  productId: string;
+  title: string;
+  sku: string;
+  currentStock: number;
+  qty: number;
+  unitCost: number;
+}
 
 export const PurchaseOrderModal: React.FC = () => {
   const {
@@ -30,11 +46,22 @@ export const PurchaseOrderModal: React.FC = () => {
     validateAndReceivePO,
     cancelPO,
     receiptSettings,
+    products,
+    createManualPurchaseOrder,
   } = usePosStore();
   const { showToast } = useToast();
 
-  const [activeTab, setActiveTab] = useState<'waiting_list' | 'active_po' | 'completed'>('waiting_list');
+  const [activeTab, setActiveTab] = useState<'waiting_list' | 'new_po' | 'active_po' | 'completed'>('waiting_list');
   const [inspectingPO, setInspectingPO] = useState<PurchaseOrder | null>(null);
+
+  // New Flexible PO Draft State
+  const [newVendorName, setNewVendorName] = useState('');
+  const [newOrderDate, setNewOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [newOrderNotes, setNewOrderNotes] = useState('');
+  const [newPoItems, setNewPoItems] = useState<DraftPOLineItem[]>([]);
+  const [catalogSearchTerm, setCatalogSearchTerm] = useState('');
+  const [catalogFilterMode, setCatalogFilterMode] = useState<'all' | 'suggested'>('all');
+  const [isSubmittingPO, setIsSubmittingPO] = useState(false);
 
   const [verifiedQtyMap, setVerifiedQtyMap] = useState<Record<string, number>>({});
   const [verifiedCostMap, setVerifiedCostMap] = useState<Record<string, number>>({});
@@ -157,89 +184,230 @@ export const PurchaseOrderModal: React.FC = () => {
       }, 0)
     : 0;
 
+  const existingVendors = useMemo(() => {
+    return Array.from(
+      new Set([
+        ...(products || []).map((p) => p.vendorName).filter(Boolean),
+        ...(purchaseOrders || []).map((po) => po.vendorName).filter(Boolean),
+      ])
+    ) as string[];
+  }, [products, purchaseOrders]);
+
+  const lowStockProducts = useMemo(() => {
+    return (products || []).filter((p) => (p.stock || 0) <= (p.reorderPoint || 5));
+  }, [products]);
+
+  const filteredCatalogProducts = useMemo(() => {
+    const q = catalogSearchTerm.trim().toLowerCase();
+    let base = catalogFilterMode === 'suggested' ? lowStockProducts : (products || []);
+    if (!q) return base.slice(0, 24);
+    return base
+      .filter(
+        (p) =>
+          p.title.toLowerCase().includes(q) ||
+          (p.sku && p.sku.toLowerCase().includes(q)) ||
+          (p.barcode && p.barcode.toLowerCase().includes(q)) ||
+          (p.brand && p.brand.toLowerCase().includes(q)) ||
+          (p.category && p.category.toLowerCase().includes(q))
+      )
+      .slice(0, 30);
+  }, [products, catalogSearchTerm, catalogFilterMode, lowStockProducts]);
+
+  const handleAddProductToDraft = (product: Product, customQty?: number) => {
+    setNewPoItems((prev) => {
+      const existing = prev.find((i) => i.productId === product.id);
+      const cost = product.costPrice || 0;
+      if (existing) {
+        return prev.map((i) =>
+          i.productId === product.id ? { ...i, qty: i.qty + (customQty || 1) } : i
+        );
+      }
+      const initialQty =
+        customQty ||
+        (product.reorderPoint
+          ? Math.max(1, product.reorderPoint * 2 - (product.stock || 0))
+          : 1);
+      return [
+        ...prev,
+        {
+          productId: product.id,
+          title: product.title,
+          sku: product.sku || 'SKU-N/A',
+          currentStock: product.stock || 0,
+          qty: initialQty,
+          unitCost: cost,
+        },
+      ];
+    });
+  };
+
+  const handleRemoveItemFromDraft = (productId: string) => {
+    setNewPoItems((prev) => prev.filter((i) => i.productId !== productId));
+  };
+
+  const handleUpdateDraftQty = (productId: string, qty: number) => {
+    setNewPoItems((prev) =>
+      prev.map((i) => (i.productId === productId ? { ...i, qty: Math.max(1, qty) } : i))
+    );
+  };
+
+  const handleUpdateDraftCost = (productId: string, cost: number) => {
+    setNewPoItems((prev) =>
+      prev.map((i) => (i.productId === productId ? { ...i, unitCost: Math.max(0, cost) } : i))
+    );
+  };
+
+  const handleQuickAddAllSuggested = () => {
+    lowStockProducts.forEach((p) => {
+      handleAddProductToDraft(p);
+    });
+    showToast(`${lowStockProducts.length} articles suggérés ajoutés au bon.`, 'info');
+  };
+
+  const handleCreateManualPO = async () => {
+    const vendor = newVendorName.trim() || 'Fournisseur Général';
+    if (newPoItems.length === 0) {
+      showToast('Veuillez ajouter au moins un produit au bon de commande.', 'error');
+      return;
+    }
+    setIsSubmittingPO(true);
+    try {
+      const fullNotes = newOrderNotes.trim()
+        ? `${newOrderNotes.trim()} (Date: ${newOrderDate})`
+        : `Date: ${newOrderDate}`;
+
+      const created = await createManualPurchaseOrder(
+        vendor,
+        newPoItems.map((item) => ({
+          productId: item.productId,
+          qty: item.qty,
+          unitCost: item.unitCost,
+        })),
+        fullNotes
+      );
+
+      showToast(
+        `✅ Bon de commande #${created.poNumber} créé (${newPoItems.length} réf.). Mis en attente sur la Liste d'Attente.`,
+        'success'
+      );
+
+      setNewPoItems([]);
+      setNewVendorName('');
+      setNewOrderNotes('');
+      setCatalogSearchTerm('');
+      setActiveTab('waiting_list');
+    } catch (err) {
+      console.error('Failed to create purchase order:', err);
+      showToast('Erreur lors de la création du bon de commande.', 'error');
+    } finally {
+      setIsSubmittingPO(false);
+    }
+  };
+
+  const totalDraftUnits = newPoItems.reduce((acc, i) => acc + i.qty, 0);
+  const totalDraftCostAmount = newPoItems.reduce((acc, i) => acc + i.qty * i.unitCost, 0);
+
   return (
     <div
       onClick={closeModal}
-      className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 select-none cursor-pointer"
+      className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-0 sm:p-4 select-none cursor-pointer pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:pt-0 sm:pb-0"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-[90vh] flex flex-col cursor-default"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[90vh] flex flex-col cursor-default"
       >
         
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
-              <Truck className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-pos-text">
-                  Approvisionnement & Réceptions Fournisseurs
-                </h2>
-                <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-[10px]">
-                  Staged Procurement V2
-                </span>
+        <div className="p-3 sm:p-4 border-b border-pos-border bg-pos-card shrink-0 flex flex-col gap-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold shrink-0">
+                <Truck className="w-4 h-4 sm:w-5 sm:h-5" />
               </div>
-              <p className="text-[11px] text-pos-muted">
-                Liste d'attente, contrôle qualité à la livraison et imputation automatique des dépenses
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <div className="flex items-center bg-pos-bg p-1 rounded-xl border border-pos-border text-xs">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab('waiting_list');
-                  setInspectingPO(null);
-                }}
-                className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer ${
-                  activeTab === 'waiting_list'
-                    ? 'bg-amber-500 text-slate-950 shadow-md'
-                    : 'text-pos-muted hover:text-pos-text'
-                }`}
-              >
-                <Clock className="w-3.5 h-3.5" />
-                Liste d'Attente ({waitingListOrders.length})
-              </button>
-
-              {selectedPO && (
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('active_po')}
-                  className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer ${
-                    activeTab === 'active_po'
-                      ? 'bg-emerald-500 text-slate-950 shadow-md'
-                      : 'text-pos-muted hover:text-pos-text'
-                  }`}
-                >
-                  <PackageCheck className="w-3.5 h-3.5" />
-                  Contrôle & Réception
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => setActiveTab('completed')}
-                className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer ${
-                  activeTab === 'completed'
-                    ? 'bg-cyan-500 text-slate-950 shadow-md'
-                    : 'text-pos-muted hover:text-pos-text'
-                }`}
-              >
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                Historique ({completedOrders.length})
-              </button>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm sm:text-base font-black text-pos-text truncate">
+                    Approvisionnement & Réceptions
+                  </h2>
+                  <span className="hidden sm:inline-block px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-[10px]">
+                    Staged Procurement V2
+                  </span>
+                </div>
+                <p className="text-[10px] sm:text-[11px] text-pos-muted truncate">
+                  Contrôle qualité à la livraison et imputation des dépenses
+                </p>
+              </div>
             </div>
 
             <button
               onClick={closeModal}
-              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition-colors cursor-pointer"
+              className="min-h-[40px] min-w-[40px] flex items-center justify-center hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition-colors cursor-pointer shrink-0"
+              aria-label="Fermer"
             >
               <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Navigation Tabs Bar */}
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar bg-pos-bg p-1 rounded-xl border border-pos-border text-xs">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('waiting_list');
+                setInspectingPO(null);
+              }}
+              className={`min-h-[36px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
+                activeTab === 'waiting_list'
+                  ? 'bg-amber-500 text-slate-950 shadow-md'
+                  : 'text-pos-muted hover:text-pos-text'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              En Attente ({waitingListOrders.length})
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('new_po');
+                setInspectingPO(null);
+              }}
+              className={`min-h-[36px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
+                activeTab === 'new_po'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md'
+                  : 'text-pos-muted hover:text-pos-text'
+              }`}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              + Nouveau Bon {newPoItems.length > 0 && `(${newPoItems.length})`}
+            </button>
+
+            {selectedPO && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('active_po')}
+                className={`min-h-[36px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
+                  activeTab === 'active_po'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md'
+                    : 'text-pos-muted hover:text-pos-text'
+                }`}
+              >
+                <PackageCheck className="w-3.5 h-3.5" />
+                Contrôle & Réception
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('completed')}
+              className={`min-h-[36px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
+                activeTab === 'completed'
+                  ? 'bg-cyan-500 text-slate-950 shadow-md'
+                  : 'text-pos-muted hover:text-pos-text'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Historique ({completedOrders.length})
             </button>
           </div>
         </div>
@@ -258,15 +426,31 @@ export const PurchaseOrderModal: React.FC = () => {
                     Les articles commandés restent en attente jusqu'à leur vérification physique et validation en magasin.
                   </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('new_po')}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md shadow-emerald-500/20 transition cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  + Nouveau Bon
+                </button>
               </div>
 
               {waitingListOrders.length === 0 ? (
-                <div className="text-center py-20 text-pos-muted bg-pos-card border border-pos-border rounded-2xl max-w-md mx-auto">
-                  <CheckCircle2 className="w-12 h-12 mx-auto mb-3 opacity-40 text-emerald-400" />
+                <div className="text-center py-16 text-pos-muted bg-pos-card border border-pos-border rounded-2xl max-w-md mx-auto p-6 space-y-3">
+                  <CheckCircle2 className="w-12 h-12 mx-auto mb-1 opacity-40 text-emerald-400" />
                   <p className="text-sm font-bold text-pos-text">Aucun bon de commande en attente</p>
-                  <p className="text-xs text-pos-muted mt-1">
+                  <p className="text-xs text-pos-muted">
                     Toutes les commandes fournisseurs passées ont été réceptionnées et intégrées au stock.
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('new_po')}
+                    className="mt-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs inline-flex items-center gap-1.5 shadow-md shadow-emerald-500/20 transition cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Créer un Nouveau Bon
+                  </button>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -347,6 +531,359 @@ export const PurchaseOrderModal: React.FC = () => {
                   })}
                 </div>
               )}
+            </div>
+          )}
+
+          {activeTab === 'new_po' && (
+            <div className="space-y-4">
+              {/* Header & Vendor Details */}
+              <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between border-b border-pos-border/50 pb-3">
+                  <div>
+                    <h3 className="text-sm font-black text-pos-text flex items-center gap-2">
+                      <Plus className="w-4 h-4 text-emerald-400" />
+                      Créer un Bon de Commande Fournisseur Flexible
+                    </h3>
+                    <p className="text-xs text-pos-muted">
+                      Commandez n'importe quel article du catalogue ou suivez les alertes de réapprovisionnement. Le stock et les lots FIFO ne sont pas impactés avant la réception physique.
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                    Statut : En Attente (Waiting List)
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1 flex items-center gap-1">
+                      <Building2 className="w-3 h-3 text-emerald-400" /> Fournisseur
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Nom du fournisseur (ex: Grossiste Centre)..."
+                      value={newVendorName}
+                      onChange={(e) => setNewVendorName(e.target.value)}
+                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:outline-none focus:border-emerald-400"
+                    />
+                    {existingVendors.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {existingVendors.slice(0, 4).map((v) => (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() => setNewVendorName(v)}
+                            className="text-[9px] px-1.5 py-0.5 rounded bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-emerald-400 transition cursor-pointer"
+                          >
+                            + {v}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1 flex items-center gap-1">
+                      <Calendar className="w-3 h-3 text-cyan-400" /> Date Prévue de Livraison
+                    </label>
+                    <input
+                      type="date"
+                      value={newOrderDate}
+                      onChange={(e) => setNewOrderDate(e.target.value)}
+                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:outline-none focus:border-cyan-400"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1 flex items-center gap-1">
+                      <FileText className="w-3 h-3 text-amber-400" /> Notes / Référence Fournisseur (Optionnel)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Instructions, N° devis..."
+                      value={newOrderNotes}
+                      onChange={(e) => setNewOrderNotes(e.target.value)}
+                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Product Catalog Search & Selection */}
+              <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 flex-1 min-w-[260px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 focus-within:border-emerald-400">
+                    <Search className="w-4 h-4 text-pos-muted shrink-0" />
+                    <input
+                      type="text"
+                      placeholder="Rechercher TOUS les produits du catalogue (nom, SKU, code-barres, marque)..."
+                      value={catalogSearchTerm}
+                      onChange={(e) => setCatalogSearchTerm(e.target.value)}
+                      className="w-full bg-transparent border-none outline-none text-xs text-pos-text placeholder-pos-muted/60"
+                    />
+                    {catalogSearchTerm && (
+                      <button
+                        type="button"
+                        onClick={() => setCatalogSearchTerm('')}
+                        className="text-pos-muted hover:text-pos-text text-xs p-0.5"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCatalogFilterMode('all')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                        catalogFilterMode === 'all'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                          : 'bg-pos-bg text-pos-muted hover:text-pos-text border border-pos-border'
+                      }`}
+                    >
+                      Catalogue Entier ({(products || []).length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCatalogFilterMode('suggested')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                        catalogFilterMode === 'suggested'
+                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                          : 'bg-pos-bg text-pos-muted hover:text-pos-text border border-pos-border'
+                      }`}
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                      Articles Suggérés ({lowStockProducts.length})
+                    </button>
+                    {lowStockProducts.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleQuickAddAllSuggested}
+                        className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 text-xs font-bold transition cursor-pointer flex items-center gap-1"
+                        title="Ajouter tous les articles en stock bas en 1 clic"
+                      >
+                        <Sparkles className="w-3 h-3" /> Tout Ajouter
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Quick Add Product Carousel / Grid */}
+                <div className="max-h-48 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 p-1">
+                  {filteredCatalogProducts.length === 0 ? (
+                    <div className="col-span-full text-center py-6 text-xs text-pos-muted">
+                      Aucun produit trouvé pour "{catalogSearchTerm}".
+                    </div>
+                  ) : (
+                    filteredCatalogProducts.map((p) => {
+                      const alreadyInDraft = newPoItems.find((i) => i.productId === p.id);
+                      const isLowStock = (p.stock || 0) <= (p.reorderPoint || 5);
+                      return (
+                        <div
+                          key={p.id}
+                          className="bg-pos-bg border border-pos-border/70 hover:border-emerald-500/50 p-2.5 rounded-xl flex items-center justify-between gap-2 transition shadow-sm"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="font-bold text-pos-text text-xs truncate">{p.title}</p>
+                            <div className="flex items-center gap-2 text-[10px] text-pos-muted font-mono mt-0.5">
+                              <span>SKU: {p.sku || 'N/A'}</span>
+                              <span>•</span>
+                              <span className={isLowStock ? 'text-amber-400 font-bold' : 'text-pos-muted'}>
+                                Stock: {p.stock || 0}
+                              </span>
+                              <span>•</span>
+                              <span className="text-emerald-400 font-bold">{formatDZD(p.costPrice || 0)}</span>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleAddProductToDraft(p)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-bold shrink-0 transition flex items-center gap-1 cursor-pointer ${
+                              alreadyInDraft
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                                : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-sm'
+                            }`}
+                          >
+                            {alreadyInDraft ? (
+                              <>
+                                <Check className="w-3 h-3" />
+                                <span>{alreadyInDraft.qty}</span>
+                              </>
+                            ) : (
+                              <>
+                                <Plus className="w-3 h-3" />
+                                <span>Ajouter</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Staged PO Items Table */}
+              <div className="bg-pos-card border border-pos-border rounded-2xl overflow-hidden shadow-sm">
+                <div className="p-3 bg-pos-bg border-b border-pos-border flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ShoppingCart className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-black uppercase text-pos-text tracking-wider">
+                      Articles du Bon de Commande ({newPoItems.length})
+                    </span>
+                  </div>
+                  {newPoItems.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setNewPoItems([])}
+                      className="text-[11px] text-rose-400 hover:text-rose-300 font-bold flex items-center gap-1 transition cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" /> Vider la sélection
+                    </button>
+                  )}
+                </div>
+
+                {newPoItems.length === 0 ? (
+                  <div className="text-center py-12 text-pos-muted p-4 space-y-2">
+                    <Layers className="w-10 h-10 mx-auto opacity-30 text-pos-muted" />
+                    <p className="text-xs font-bold text-pos-text">Aucun article dans ce bon de commande</p>
+                    <p className="text-[11px] text-pos-muted max-w-sm mx-auto">
+                      Recherchez et sélectionnez des articles ci-dessus ou cliquez sur "Tout Ajouter" pour réapprovisionner les stocks critiques.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-pos-bg/60 text-pos-muted text-[10px] uppercase font-bold border-b border-pos-border">
+                        <tr>
+                          <th className="p-3">Produit & SKU</th>
+                          <th className="p-3 text-center">Stock Actuel</th>
+                          <th className="p-3 text-center">Quantité à Commander</th>
+                          <th className="p-3 text-right">Coût Unitaire Estimé (DA)</th>
+                          <th className="p-3 text-right">Total Ligne (DA)</th>
+                          <th className="p-3 text-center w-12">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-pos-border/40">
+                        {newPoItems.map((item) => {
+                          const lineTotal = item.qty * item.unitCost;
+                          return (
+                            <tr key={item.productId} className="hover:bg-pos-hover/30 transition">
+                              <td className="p-3">
+                                <p className="font-bold text-pos-text">{item.title}</p>
+                                <span className="font-mono text-[10px] text-pos-muted">SKU: {item.sku}</span>
+                              </td>
+
+                              <td className="p-3 text-center font-bold text-pos-muted font-mono">
+                                {item.currentStock} un.
+                              </td>
+
+                              <td className="p-3">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateDraftQty(item.productId, item.qty - 1)}
+                                    className="p-1 hover:bg-pos-hover rounded text-pos-text transition cursor-pointer"
+                                  >
+                                    <Minus className="w-3 h-3" />
+                                  </button>
+
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    value={item.qty}
+                                    onChange={(e) =>
+                                      handleUpdateDraftQty(item.productId, parseInt(e.target.value) || 1)
+                                    }
+                                    className="w-14 text-center bg-pos-bg border border-pos-border rounded-lg text-emerald-400 font-bold font-mono py-1 focus:outline-none focus:border-emerald-400"
+                                  />
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateDraftQty(item.productId, item.qty + 1)}
+                                    className="p-1 hover:bg-pos-hover rounded text-pos-text transition cursor-pointer"
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              </td>
+
+                              <td className="p-3 text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <input
+                                    type="number"
+                                    step="50"
+                                    min="0"
+                                    value={item.unitCost}
+                                    onChange={(e) =>
+                                      handleUpdateDraftCost(item.productId, parseInt(e.target.value) || 0)
+                                    }
+                                    className="w-24 text-right bg-pos-bg border border-pos-border rounded-lg text-pos-text font-bold font-mono py-1 px-1.5 focus:outline-none focus:border-emerald-400"
+                                  />
+                                  <span className="text-[10px] text-pos-muted">DA</span>
+                                </div>
+                              </td>
+
+                              <td className="p-3 text-right font-black text-pos-text font-mono">
+                                {formatDZD(lineTotal)}
+                              </td>
+
+                              <td className="p-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveItemFromDraft(item.productId)}
+                                  className="p-1.5 rounded-lg hover:bg-rose-500/10 text-pos-muted hover:text-rose-400 transition cursor-pointer"
+                                  title="Retirer de la commande"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Order Summary & Placement Footer */}
+              <div className="bg-pos-card border border-pos-border rounded-2xl p-4 flex flex-wrap items-center justify-between gap-4 shadow-sm">
+                <div>
+                  <span className="text-xs uppercase font-bold text-pos-muted block">Bilan du Bon à Placer</span>
+                  <div className="flex items-center gap-3 mt-0.5">
+                    <span className="text-xs text-pos-text font-bold">
+                      Références : <span className="font-mono text-emerald-400">{newPoItems.length}</span>
+                    </span>
+                    <span className="text-xs text-pos-text font-bold">
+                      Volume : <span className="font-mono text-emerald-400">{totalDraftUnits} pièces</span>
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-pos-muted mt-1">
+                    ℹ️ Statut "En Attente". Les stocks réels et lots d'inventaire FIFO restent inchangés jusqu'à la réception.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <div className="text-right">
+                    <span className="text-xs uppercase font-bold text-pos-muted block">Budget Estimé Total</span>
+                    <span className="text-2xl font-black text-emerald-400 font-mono">
+                      {formatDZD(totalDraftCostAmount)}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleCreateManualPO}
+                    disabled={isSubmittingPO || newPoItems.length === 0}
+                    className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/20 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    Créer le Bon de Commande (En Attente)
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

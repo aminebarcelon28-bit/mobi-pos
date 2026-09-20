@@ -7,7 +7,7 @@
     "tauri": "tauri",
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node scripts/test_pos_math.js && node scripts/test_cloud_sync_and_migration.mjs && node scripts/test_sync_contract.mjs && node scripts/test_offline_chaos.mjs && node scripts/test_mobile_invariants.mjs && node scripts/test_mobile_release_pipeline.mjs && node scripts/verify-bidirectional-fix.mjs && node scripts/test_mobile_desktop_bidirectional_sync.mjs && node --experimental-strip-types scripts/test_bindings_and_hlc.mjs && node --experimental-strip-types scripts/test_p1_replay_equality.mjs && node --experimental-strip-types scripts/test_full_es_lfp_lifecycle.mjs && node --experimental-strip-types scripts/test_sync_hygiene.mjs",
+    "test": "node scripts/test_pos_math.js && node scripts/test_cloud_sync_and_migration.mjs && node scripts/test_sync_contract.mjs && node scripts/test_offline_chaos.mjs && node scripts/test_mobile_invariants.mjs && node scripts/test_mobile_release_pipeline.mjs && node scripts/verify-bidirectional-fix.mjs && node scripts/test_mobile_desktop_bidirectional_sync.mjs && node --experimental-strip-types scripts/test_bindings_and_hlc.mjs && node --experimental-strip-types scripts/test_p1_replay_equality.mjs && node --experimental-strip-types scripts/test_full_es_lfp_lifecycle.mjs && node --experimental-strip-types scripts/test_sync_hygiene.mjs && node --experimental-strip-types scripts/test_quota_storage.mjs",
     "test:p0": "node --experimental-strip-types scripts/test_bindings_and_hlc.mjs",
     "test:p1": "node --experimental-strip-types scripts/test_p1_replay_equality.mjs",
     "test:lifecycle": "node --experimental-strip-types scripts/test_full_es_lfp_lifecycle.mjs",

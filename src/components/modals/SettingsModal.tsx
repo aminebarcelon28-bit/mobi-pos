@@ -12,10 +12,15 @@ import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
 import { formatDZD, APP_VERSION } from '../../types/pos';
 import { DEFAULT_LOYALTY_CONFIG, calculateFinancialProfitImpact } from '../../utils/loyaltyEngine';
-import { maintenanceService, type DbStats, type IntegrityReport } from '../../services/maintenanceService';
+// P11.3: maintenanceService -> maintenanceAdapter -> backupSchema pulls the whole
+// zod runtime into the entry chunk. These only run from settings actions.
+import type { DbStats, IntegrityReport } from '../../services/maintenanceService';
 import { useAppUpdater, openExternalUrl } from '../../hooks/useAppUpdater';
 import { soundEngine } from '../../utils/audioFeedback';
-import { CloudSyncPanel } from '../settings/CloudSyncPanel';
+// P11.3: the cloud-sync tab pulls in the sync engine (~267 kB) — load on open.
+const CloudSyncPanel = React.lazy(() =>
+  import('../settings/CloudSyncPanel').then((m) => ({ default: m.CloudSyncPanel })),
+);
 
 // ══════════════════════════════════════════════════════════════
 // TYPES
@@ -326,6 +331,7 @@ export const SettingsModal: React.FC = () => {
 
   const loadDbStats = useCallback(async () => {
     try {
+        const { maintenanceService } = await import('../../services/maintenanceService');
       const stats = await maintenanceService.getDatabaseStats();
       setDbStats(stats);
     } catch (e) {
@@ -336,6 +342,7 @@ export const SettingsModal: React.FC = () => {
   const handleRunIntegrityCheck = async () => {
     setIsCheckingIntegrity(true);
     try {
+        const { maintenanceService } = await import('../../services/maintenanceService');
       const report = await maintenanceService.runDatabaseIntegrityCheck();
       setIntegrityReport(report);
       if (report.is_healthy) {
@@ -355,6 +362,7 @@ export const SettingsModal: React.FC = () => {
   const handleCheckpointWal = async () => {
     setIsCheckpointing(true);
     try {
+        const { maintenanceService } = await import('../../services/maintenanceService');
       const msg = await maintenanceService.checkpointDatabaseWal();
       showToast(`⚡ WAL Checkpoint : ${msg}`, 'success');
       await loadDbStats();
@@ -369,6 +377,7 @@ export const SettingsModal: React.FC = () => {
   const handleVacuum = async () => {
     setIsVacuuming(true);
     try {
+        const { maintenanceService } = await import('../../services/maintenanceService');
       const msg = await maintenanceService.vacuumDatabase();
       showToast(`🧹 Défragmentation VACUUM : ${msg}`, 'success');
       await loadDbStats();
@@ -621,7 +630,7 @@ export const SettingsModal: React.FC = () => {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[90vh] flex flex-col cursor-default font-sans pt-[var(--safe-top)] sm:pt-0 pb-[var(--safe-bottom)] sm:pb-0"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[90vh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(0.5rem,var(--safe-bottom))] sm:pb-0"
       >
 
         {/* ═══ Header ═══ */}
@@ -827,7 +836,11 @@ export const SettingsModal: React.FC = () => {
           )}
 
           {/* ══════ TAB: Cloud Sync (Turso) ══════ */}
-          {activeTab === 'cloud_sync' && <CloudSyncPanel />}
+          {activeTab === 'cloud_sync' && (
+            <React.Suspense fallback={<div className="flex items-center justify-center py-8 text-pos-muted text-sm">Chargement…</div>}>
+              <CloudSyncPanel />
+            </React.Suspense>
+          )}
 
           {/* ══════ TAB: Hardware & Peripherals ══════ */}
           {activeTab === 'hardware' && (

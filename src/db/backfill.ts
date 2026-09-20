@@ -187,10 +187,35 @@ export async function backfillAllToOutbox(): Promise<{ enqueued: number; skipped
  */
 // Reconstructs all Dexie transactions from local SQLite transactions and transaction_items.
 // Always populates receiptNumber, items, customer, and financials accurately.
-export async function reconstructDexieTransactionsFromSql(db: { select: (s: string, a?: unknown[]) => Promise<unknown> }): Promise<number> {
+export async function reconstructDexieTransactionsFromSql(
+  db: { select: (s: string, a?: unknown[]) => Promise<unknown> },
+  opts?: { onlyTransactionIds?: Iterable<string> },
+): Promise<number> {
   let mirrored = 0;
   try {
-    const rows = (await db.select("SELECT * FROM transactions WHERE deleted=0 OR deleted IS NULL").catch(() => [])) as Array<Record<string, unknown>>;
+    // Incremental path (F2): when the pull already knows which transactions
+    // were touched, rebuild only those instead of the whole history.
+    // No opts (explicit full-rebuild entries) keeps the legacy full scan.
+    const onlyIds = opts?.onlyTransactionIds
+      ? [...new Set([...opts.onlyTransactionIds].map((v) => String(v ?? '')).filter(Boolean))]
+      : null;
+    const scoped = !!onlyIds && onlyIds.length > 0;
+
+    let rows: Array<Record<string, unknown>>;
+    if (scoped) {
+      rows = [];
+      const ids = onlyIds as string[];
+      for (let i = 0; i < ids.length; i += 500) {
+        const chunk = ids.slice(i, i + 500);
+        const part = (await db.select(
+          `SELECT * FROM transactions WHERE id IN (${chunk.map(() => '?').join(',')}) AND (deleted=0 OR deleted IS NULL)`,
+          chunk,
+        ).catch(() => [])) as Array<Record<string, unknown>>;
+        rows.push(...part);
+      }
+    } else {
+      rows = (await db.select("SELECT * FROM transactions WHERE deleted=0 OR deleted IS NULL").catch(() => [])) as Array<Record<string, unknown>>;
+    }
     if (rows.length === 0) return 0;
 
     // Check if any transactions require reading transaction_items
@@ -204,9 +229,23 @@ export async function reconstructDexieTransactionsFromSql(db: { select: (s: stri
 
     const itemsByTxnId = new Map<string, Array<Record<string, unknown>>>();
     if (needsItemsQuery) {
-      const allItems = (await db.select(
-        "SELECT * FROM transaction_items WHERE deleted=0 OR deleted IS NULL"
-      ).catch(() => [])) as Array<Record<string, unknown>>;
+      let allItems: Array<Record<string, unknown>>;
+      if (scoped) {
+        allItems = [];
+        const ids = rows.map((r) => String(r.id));
+        for (let i = 0; i < ids.length; i += 500) {
+          const chunk = ids.slice(i, i + 500);
+          const part = (await db.select(
+            `SELECT * FROM transaction_items WHERE transaction_id IN (${chunk.map(() => '?').join(',')}) AND (deleted=0 OR deleted IS NULL)`,
+            chunk,
+          ).catch(() => [])) as Array<Record<string, unknown>>;
+          allItems.push(...part);
+        }
+      } else {
+        allItems = (await db.select(
+          "SELECT * FROM transaction_items WHERE deleted=0 OR deleted IS NULL"
+        ).catch(() => [])) as Array<Record<string, unknown>>;
+      }
       for (const it of allItems) {
         const txnId = it.transaction_id as string;
         if (!txnId) continue;
@@ -216,13 +255,50 @@ export async function reconstructDexieTransactionsFromSql(db: { select: (s: stri
       }
     }
 
-    // Pre-cache Dexie products and customers in memory once
-    const [allProducts, allCustomers] = await Promise.all([
-      dexieDb.products.toArray().catch(() => []),
-      dexieDb.customers.toArray().catch(() => []),
-    ]);
-    const productMap = new Map(allProducts.map((p) => [p.id, p]));
-    const customerMap = new Map(allCustomers.map((c) => [c.id, c]));
+    // Product/customer lookup: scoped bulkGet for the touched slice, full
+    // in-memory precache only for explicit full rebuilds.
+    const productMap = new Map<string, Product>();
+    const customerMap = new Map<string, Customer>();
+    if (scoped) {
+      const prodIds = new Set<string>();
+      const custIds = new Set<string>();
+      for (const r of rows) {
+        if (r.customer_id) custIds.add(String(r.customer_id));
+        // Embedded items reference products outside itemsByTxnId — collect
+        // them too so scoped mirrors never fall back to stub products.
+        try {
+          const parsed = JSON.parse((r.json_payload as string) ?? '{}') as { items?: Array<{ product?: { id?: unknown } }> };
+          for (const it of parsed.items ?? []) {
+            if (it?.product?.id) prodIds.add(String(it.product.id));
+          }
+        } catch {
+          // Unparseable here; the build loop below warns per row.
+        }
+      }
+      for (const list of itemsByTxnId.values()) {
+        for (const it of list) {
+          if (it.product_id) prodIds.add(String(it.product_id));
+        }
+      }
+      const [prods, custs] = await Promise.all([
+        prodIds.size > 0 ? dexieDb.products.bulkGet([...prodIds]).catch(() => []) : [],
+        custIds.size > 0 ? dexieDb.customers.bulkGet([...custIds]).catch(() => []) : [],
+      ]);
+      for (const p of prods) {
+        if (p) productMap.set((p as Product).id, p as Product);
+      }
+      for (const c of custs) {
+        if (c) customerMap.set((c as Customer).id, c as Customer);
+      }
+    } else {
+      // Pre-cache Dexie products and customers in memory once
+      const [allProducts, allCustomers] = await Promise.all([
+        dexieDb.products.toArray().catch(() => []),
+        dexieDb.customers.toArray().catch(() => []),
+      ]);
+      for (const p of allProducts) productMap.set(p.id, p);
+      for (const c of allCustomers) customerMap.set(c.id, c);
+    }
 
     const transactionsToPut: SaleTransaction[] = [];
 

@@ -65,10 +65,22 @@ export const RefundModal: React.FC = () => {
     const initialQty: Record<string, number> = {};
     const initialRestock: Record<string, boolean> = {};
 
+      // Quantities must be bounded by what is STILL refundable: a ticket that was
+      // already partially refunded would otherwise offer the original purchased
+      // quantity again and the write path would have to refuse it at submit time.
+      const alreadyRefunded = new Map<string, number>();
+      for (const t of transactions) {
+        if (t.isRefund && t.originalTransactionId === txn.id) {
+          for (const ri of t.refundedItems || []) {
+            alreadyRefunded.set(ri.productId, (alreadyRefunded.get(ri.productId) || 0) + ri.quantity);
+          }
+        }
+      }
     txn.items.forEach((item) => {
-      initialSelected[item.product.id] = true;
-      initialQty[item.product.id] = item.quantity;
-      initialRestock[item.product.id] = true;
+        const remaining = Math.max(0, item.quantity - (alreadyRefunded.get(item.product.id) || 0));
+        initialSelected[item.product.id] = remaining > 0;
+        initialQty[item.product.id] = remaining;
+        initialRestock[item.product.id] = true;
     });
 
     setSelectedItemIds(initialSelected);
@@ -182,6 +194,8 @@ export const RefundModal: React.FC = () => {
         );
         setSelectedTxn(null);
         setSelectedTransactionForRefund(null);
+        } else if (refundResult.reason === 'REFUND_EXCEEDS_PURCHASED') {
+          showToast('Quantité à rembourser supérieure à la quantité restante non remboursée.', 'error');
       } else {
         showToast(`Erreur lors du remboursement: ${refundResult.reason}`, 'error');
       }
@@ -194,23 +208,25 @@ export const RefundModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-[90vh] flex flex-col relative">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94vh] sm:h-[90vh] flex flex-col relative">
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-2.5 text-purple-400">
-            <div className="w-9 h-9 rounded-xl bg-purple-500/20 flex items-center justify-center border border-purple-500/30 shadow-inner">
-              <RotateCcw className="w-5 h-5 stroke-[2.5]" />
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
+          <div className="flex items-center gap-2.5 text-purple-400 min-w-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-purple-500/20 flex items-center justify-center border border-purple-500/30 shadow-inner shrink-0">
+              <RotateCcw className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
             </div>
-            <div>
-              <h2 className="text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2">
-                RETOURS MARCHANDISE & REMBOURSEMENTS
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/30 uppercase font-black">
-                  Module Avoirs
+            <div className="min-w-0">
+              <h2 className="text-xs sm:text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2 truncate">
+                <span>RETOURS MARCHANDISE & AVOIRS</span>
+                <span className="text-[9px] sm:text-[10px] px-1.5 sm:px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/30 uppercase font-black shrink-0">
+                  F11
                 </span>
               </h2>
-              <p className="text-[10px] text-pos-muted">Gestion des retours articles, remise en stock et émission de tickets d'avoirs</p>
+              <p className="text-[10px] text-pos-muted truncate">Gestion des retours articles et émission d'avoirs</p>
             </div>
           </div>
           <button
@@ -219,7 +235,8 @@ export const RefundModal: React.FC = () => {
               setSelectedTransactionForRefund(null);
               closeModal();
             }}
-            className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            aria-label="Fermer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -229,7 +246,7 @@ export const RefundModal: React.FC = () => {
         <div className="flex-1 flex overflow-hidden">
           
           {/* Left Column: Transaction Selector / Search */}
-          <div className="w-80 border-r border-pos-border flex flex-col bg-pos-card shrink-0">
+          <div className={`border-r border-pos-border flex flex-col bg-pos-card shrink-0 ${selectedTxn ? 'hidden sm:flex sm:w-80' : 'w-full sm:w-80'}`}>
             <div className="p-3 border-b border-pos-border">
               <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
@@ -281,7 +298,7 @@ export const RefundModal: React.FC = () => {
           </div>
 
           {/* Right Column: Refund Configuration & Form */}
-          <div className="flex-1 flex flex-col overflow-y-auto p-5 bg-pos-bg space-y-4">
+          <div className={`flex-1 flex flex-col overflow-y-auto p-3.5 sm:p-5 bg-pos-bg space-y-4 ${!selectedTxn ? 'hidden sm:flex' : 'flex'}`}>
             {!selectedTxn ? (
               <div className="flex-1 flex flex-col items-center justify-center text-center p-8 space-y-3">
                 <div className="w-16 h-16 rounded-2xl bg-purple-500/10 text-purple-400 flex items-center justify-center border border-purple-500/20">
@@ -299,20 +316,27 @@ export const RefundModal: React.FC = () => {
                 
                 <div className="space-y-4">
                   {/* Selected Transaction Summary Banner */}
-                  <div className="bg-pos-card border border-pos-border p-3.5 rounded-2xl flex items-center justify-between">
-                    <div>
+                  <div className="bg-pos-card border border-pos-border p-3.5 rounded-2xl flex items-center justify-between gap-2">
+                    <div className="min-w-0">
                       <span className="text-[10px] text-pos-muted uppercase font-bold block">Ticket Source Sélectionné</span>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="font-mono font-black text-sm text-purple-400">{selectedTxn.receiptNumber}</span>
+                      <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5 flex-wrap">
+                        <span className="font-mono font-black text-xs sm:text-sm text-purple-400">{selectedTxn.receiptNumber}</span>
                         <span className="text-xs text-pos-muted">•</span>
-                        <span className="text-xs font-bold text-pos-text">{selectedTxn.customer?.name || 'Client de passage'}</span>
-                        <span className="text-xs text-pos-muted">•</span>
-                        <span className="text-[11px] font-mono text-pos-muted">{selectedTxn.createdAt}</span>
+                        <span className="text-xs font-bold text-pos-text truncate">{selectedTxn.customer?.name || 'Client de passage'}</span>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <span className="text-[10px] text-pos-muted uppercase font-bold block">Total Initial Payé</span>
-                      <span className="text-sm font-black text-emerald-400">{formatDZD(selectedTxn.total)}</span>
+                    <div className="text-right flex items-center gap-2 shrink-0">
+                      <div>
+                        <span className="text-[10px] text-pos-muted uppercase font-bold block">Total Payé</span>
+                        <span className="text-xs sm:text-sm font-black text-emerald-400">{formatDZD(selectedTxn.total)}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTxn(null)}
+                        className="sm:hidden min-h-[36px] px-2.5 rounded-xl bg-pos-panel border border-pos-border text-xs font-bold text-cyan-400 active:scale-95 cursor-pointer"
+                      >
+                        Changer
+                      </button>
                     </div>
                   </div>
 

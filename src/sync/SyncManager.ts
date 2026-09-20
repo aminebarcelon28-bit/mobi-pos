@@ -3,12 +3,11 @@
 // Pull: Per-table cursors -> Local SQLite + Dexie UI store updates.
 // Zero data loss, zero silent drops, zero dependency on vendor servers.
 
-import { getLocalDb, getPendingOutbox, markOutbox, utcNowIso, getFailedOutboxCount, retryQuarantinedOutbox, syncProductsFromSqlToDexie, getSyncDeviceId, sanitizeSyncPayload, sanitizeImageField, toBoundedSyncJson } from '../db/sqlPluginAdapter';
+import { getLocalDb, getPendingOutbox, markOutbox, markOutboxMany, utcNowIso, getFailedOutboxCount, retryQuarantinedOutbox, syncProductsFromSqlToDexie, sanitizeSyncPayload, sanitizeImageField, toBoundedSyncJson } from '../db/sqlPluginAdapter';
 import { getTursoClient, probeOnline } from './tursoClient';
 import { getCloudCredentials } from './keychain';
 import { db as dexieDb } from '../db/database';
 import { ALL_REMOTE_SYNC_TABLES, assertValidSyncTable, ensureRemoteSchemaColumns } from './remoteSchema';
-import { pushEventBatch, pullRemoteEventBatch } from './eventSyncEngine.ts';
 import type { InValue } from '@libsql/client';
 import type Database from '@tauri-apps/plugin-sql';
 import type { OutboxRow, SyncStatus, SyncEventLog, PullTouchSummary } from './types';
@@ -616,14 +615,6 @@ class SyncManager {
 
       const remote = await getTursoClient();
 
-      // ES-LFP Phase P4: Push unsynced canonical events from event_log
-      try {
-        const localDb = await getLocalDb();
-        await pushEventBatch(localDb, remote);
-      } catch (evtPushErr) {
-        console.warn('[SyncManager] Event push warning (non-fatal):', evtPushErr);
-      }
-
       // Server clock authority (ADR-0008): stamp every pushed row with the
       // cloud clock so pull cursors order on ONE clock and a drifting device
       // can never hide its rows from peers. Fetched only when there is work
@@ -689,13 +680,11 @@ class SyncManager {
         // Attempt fast batch write in a single network roundtrip
         let batchSucceeded = false;
         try {
-          for (const { op } of validOps) {
-            await markOutbox(op.idempotency_key, { status: 'inflight' });
-          }
+          // Set-based bookkeeping: 2 IPC for the whole batch instead of 2 per row.
+          const batchKeys = validOps.map(({ op }) => op.idempotency_key);
+          await markOutboxMany(batchKeys, { status: 'inflight' });
           await remote.batch(validOps.map((v) => v.stmt), 'write');
-          for (const { op } of validOps) {
-            await markOutbox(op.idempotency_key, { status: 'synced' });
-          }
+          await markOutboxMany(batchKeys, { status: 'synced' });
           okCount = validOps.length;
           batchSucceeded = true;
         } catch (batchErr: unknown) {
@@ -705,9 +694,7 @@ class SyncManager {
             this.quotaBlockedAt = Date.now();
             this.lastError = 'Quota cloud Turso dépassé. Synchronisation suspendue.';
             this.logEvent('quota', this.lastError, 'error');
-            for (const { op } of validOps) {
-              await markOutbox(op.idempotency_key, { status: 'pending', error: rawMsg });
-            }
+            await markOutboxMany(validOps.map(({ op }) => op.idempotency_key), { status: 'pending', error: rawMsg });
             return;
           }
           if (rawMsg.includes('has no column') || rawMsg.includes('no column named') || rawMsg.includes('no such column')) {
@@ -995,29 +982,38 @@ class SyncManager {
 
     return null;
   }
-
-  private async getTableCursor(db: Database, table: string): Promise<{ time: string; id: string }> {
+  /**
+   * Batched cursor read: one SELECT replaces N per-table roundtrips.
+   * Same parse/fallback semantics as getTableCursor per table; tables without
+   * a stored cursor are simply absent (callers default to epoch).
+   */
+  private async getAllTableCursors(db: Database): Promise<Map<string, { time: string; id: string }>> {
+    const out = new Map<string, { time: string; id: string }>();
     try {
       const rows = (await db.select(
-        'SELECT value_json FROM app_settings WHERE key = ?',
-        [`sync.cursor.${table}`],
-      )) as Array<{ value_json: string }>;
-      if (rows?.[0]?.value_json) {
-        const parsed = JSON.parse(rows[0].value_json);
-        if (typeof parsed === 'string') {
-          return { time: parsed, id: '' };
-        }
-        if (parsed && typeof parsed === 'object') {
-          return {
-            time: String((parsed as { time?: string }).time || '1970-01-01T00:00:00.000Z'),
-            id: String((parsed as { id?: string }).id || ''),
-          };
+        "SELECT key, value_json FROM app_settings WHERE key LIKE 'sync.cursor.%'",
+      )) as Array<{ key: string; value_json: string }>;
+      for (const row of rows ?? []) {
+        const table = String(row?.key ?? '').slice('sync.cursor.'.length);
+        if (!table) continue;
+        try {
+          const parsed: unknown = JSON.parse(row.value_json);
+          if (typeof parsed === 'string') {
+            out.set(table, { time: parsed, id: '' });
+          } else if (parsed && typeof parsed === 'object') {
+            out.set(table, {
+              time: String((parsed as { time?: string }).time || '1970-01-01T00:00:00.000Z'),
+              id: String((parsed as { id?: string }).id || ''),
+            });
+          }
+        } catch {
+          // Malformed cursor value → epoch default via absence.
         }
       }
     } catch (err) {
-      console.warn(`[sync:cursor] Error reading cursor for table ${table}:`, err);
+      console.warn('[sync:cursor] Error reading cursors batch:', err);
     }
-    return { time: '1970-01-01T00:00:00.000Z', id: '' };
+    return out;
   }
 
   private async setTableCursor(db: Database, table: string, cursor: { time: string; id: string } | string): Promise<void> {
@@ -1043,15 +1039,6 @@ class SyncManager {
       const remote = await getTursoClient();
       const db = await getLocalDb();
 
-      // ES-LFP Phase P4: Pull remote canonical events into event_log & p_*
-      try {
-        const deviceId = (await getSyncDeviceId()) || 'default';
-        const pulledEvents = await pullRemoteEventBatch(db, remote, deviceId);
-        totalPulled += pulledEvents;
-      } catch (evtPullErr) {
-        console.warn('[SyncManager] Event pull warning (non-fatal):', evtPullErr);
-      }
-
       const isBackfill = this.backfillRoundsRemaining > 0;
       if (isBackfill) {
         this.backfillRoundsRemaining--;
@@ -1063,11 +1050,18 @@ class SyncManager {
       const tableCursors: Array<{ table: string; cursor: { time: string; id: string } }> = [];
       const touchedProductIds = new Set<string>();
       const touchedTables = new Set<string>();
+      // Incremental reconstruct (F2): transaction rows carry their own IDs so
+      // the mirror rebuild touches only them; customer-only changes still take
+      // the full path (rare + needs customer→txn fan-out).
+      const touchedTxnIds = new Set<string>();
       let transactionsNeedReconstruction = false;
 
+      // One batched cursor read replaces 17 sequential per-table SELECTs.
+      const cursorsByTable = await this.getAllTableCursors(db);
+      const epoch = { time: '1970-01-01T00:00:00.000Z', id: '' };
       for (const table of ALL_REMOTE_SYNC_TABLES) {
         assertValidSyncTable(table);
-        const cursor = await this.getTableCursor(db, table);
+        const cursor = cursorsByTable.get(table) ?? epoch;
         tableCursors.push({ table, cursor });
         if (isBackfill && backfillCutoff) {
           cursorQueries.push({
@@ -1110,35 +1104,50 @@ class SyncManager {
           }
         }
 
-        for (const row of rsRows) {
-          const r = row as unknown as Record<string, unknown>;
-          const updated = (r.updated_at as string) ?? utcNowIso();
-          const rowId = (r.id as string) ?? '';
-          if (table === 'products' && rowId) touchedProductIds.add(rowId);
-          if (table === 'inventory_ledger' && r.product_id) touchedProductIds.add(String(r.product_id));
-          if (table === 'transactions' || table === 'transaction_items' || table === 'customers') {
-            transactionsNeedReconstruction = true;
-          }
-          try {
-            await this.applyRemoteRow(db, table, r);
-            totalPulled++;
-            tablePulled++;
-            // Contract C6: advance the cursor ONLY past rows that applied
-            // cleanly. A failed row keeps the cursor behind it so the next
-            // pull retries it instead of silently skipping it forever.
-            if (updated > maxSeenTime || (updated === maxSeenTime && rowId > maxSeenId)) {
-              maxSeenTime = updated;
-              maxSeenId = rowId;
+        // Chunked apply (F4): commit the cursor per chunk instead of once per
+        // page. A kill between chunks resumes after the last fully applied row
+        // (C6) instead of re-applying the whole page. plugin-sql v2 exposes no
+        // local batch API, so per-row writes are retained deliberately.
+        const APPLY_CHUNK = 100;
+        let committedTime = cursor.time;
+        let committedId = cursor.id;
+        for (let c = 0; c < rsRows.length; c += APPLY_CHUNK) {
+          for (const row of rsRows.slice(c, c + APPLY_CHUNK)) {
+            const r = row as unknown as Record<string, unknown>;
+            const updated = (r.updated_at as string) ?? utcNowIso();
+            const rowId = (r.id as string) ?? '';
+            if (table === 'products' && rowId) touchedProductIds.add(rowId);
+            if (table === 'inventory_ledger' && r.product_id) touchedProductIds.add(String(r.product_id));
+            if (table === 'transactions' || table === 'transaction_items' || table === 'customers') {
+              transactionsNeedReconstruction = true;
             }
-          } catch (e) {
-            console.warn(`[sync] pull apply failed [${table}]:`, e);
-            this.logEvent('error', `Échec d'application pull [${table}]: ${e instanceof Error ? e.message : String(e)}`, 'warn');
+            if (table === 'transactions' && rowId) touchedTxnIds.add(rowId);
+            if (table === 'transaction_items' && r.transaction_id) {
+              touchedTxnIds.add(String(r.transaction_id));
+            }
+            try {
+              await this.applyRemoteRow(db, table, r);
+              totalPulled++;
+              tablePulled++;
+              // Contract C6: advance the cursor ONLY past rows that applied
+              // cleanly. A failed row keeps the cursor behind it so the next
+              // pull retries it instead of silently skipping it forever.
+              if (updated > maxSeenTime || (updated === maxSeenTime && rowId > maxSeenId)) {
+                maxSeenTime = updated;
+                maxSeenId = rowId;
+              }
+            } catch (e) {
+              console.warn(`[sync] pull apply failed [${table}]:`, e);
+              this.logEvent('error', `Échec d'application pull [${table}]: ${e instanceof Error ? e.message : String(e)}`, 'warn');
+            }
+          }
+          if (maxSeenTime !== committedTime || maxSeenId !== committedId) {
+            await this.setTableCursor(db, table, { time: maxSeenTime, id: maxSeenId });
+            committedTime = maxSeenTime;
+            committedId = maxSeenId;
           }
         }
 
-        if (maxSeenTime !== cursor.time || maxSeenId !== cursor.id) {
-          await this.setTableCursor(db, table, { time: maxSeenTime, id: maxSeenId });
-        }
         if (tablePulled > 0) touchedTables.add(table);
       }
 
@@ -1172,7 +1181,10 @@ class SyncManager {
         if (transactionsNeedReconstruction) {
           try {
             const { reconstructDexieTransactionsFromSql } = await import('../db/backfill');
-            await reconstructDexieTransactionsFromSql(db);
+            await reconstructDexieTransactionsFromSql(
+              db,
+              touchedTxnIds.size > 0 ? { onlyTransactionIds: touchedTxnIds } : undefined,
+            );
           } catch (err) {
             console.warn('[sync:pull] reconstructDexieTransactionsFromSql error:', err);
           }
@@ -1355,9 +1367,9 @@ class SyncManager {
         }
 
         const existingDexie = await txns.get(txId).catch(() => undefined);
-        const rawPayload = sanitizeSyncPayload(
-          JSON.parse(cleanRemoteJson(r.json_payload)) as Record<string, unknown>,
-        );
+        // cleanRemoteJson already parses + sanitizes + stringifies: parse the
+        // cleaned string once instead of paying a second sanitize pass (F6).
+        const rawPayload = JSON.parse(cleanRemoteJson(r.json_payload)) as Record<string, unknown>;
         const parsedTxn = {
           ...rawPayload,
           id: rawPayload.id || txId,
@@ -1476,9 +1488,12 @@ class SyncManager {
             });
           }
         } else {
+          // F1: mirror the SANITIZED payload (same string SQLite stores), never
+          // the raw remote blob — a poisoned json_payload used to land its full
+          // base64 bytes in IndexedDB via this spread.
           let base: Record<string, unknown> = {};
           try {
-            base = JSON.parse((r.json_payload as string) ?? '{}');
+            base = JSON.parse(cleanRemoteJson(r.json_payload));
           } catch (jsonErr: unknown) {
             console.warn('[sync:dexie] Failed to parse product payload:', jsonErr);
           }

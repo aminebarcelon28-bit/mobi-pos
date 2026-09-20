@@ -13,6 +13,8 @@ import {
 } from 'lucide-react';
 import { syncManager } from '../../../sync/SyncManager';
 import type { SyncStatus } from '../../../sync/types';
+import { QuotaManager } from '../../../sync/quotaManager';
+import { formatBytes, type StorageUsageReport } from '../../../sync/storageReport';
 import { usePosStore } from '../../../store/usePosStore';
 import { AppTabContent } from '../AppScreenLayout';
 import { soundEngine } from '../../../utils/audioFeedback';
@@ -35,6 +37,22 @@ export const SyncDiagnosticsTab: React.FC = () => {
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const [isRetryingQuarantined, setIsRetryingQuarantined] = useState(false);
   const [manualSyncMsg, setManualSyncMsg] = useState<string | null>(null);
+
+  // Cloud storage meter (same QuotaManager as desktop settings; read-only).
+  const [storageReport, setStorageReport] = useState<StorageUsageReport | null>(null);
+  const [isLoadingStorage, setIsLoadingStorage] = useState(false);
+
+  const loadStorageReport = async () => {
+    setIsLoadingStorage(true);
+    try {
+      const rep = await QuotaManager.getStorageUsage();
+      setStorageReport(rep);
+    } catch {
+      setStorageReport(null);
+    } finally {
+      setIsLoadingStorage(false);
+    }
+  };
 
   // P2 crash telemetry: ring buffer written by main.tsx global handlers
   // (window.onerror / unhandledrejection). Read-only here; clearing is
@@ -65,7 +83,9 @@ export const SyncDiagnosticsTab: React.FC = () => {
       setSyncStatus(s);
     });
     setCrashReports(readCrashReports());
+    void loadStorageReport();
     return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleRetryQuarantined = async () => {
@@ -255,6 +275,69 @@ export const SyncDiagnosticsTab: React.FC = () => {
             </span>
           </div>
         </div>
+      </div>
+
+      {/* Cloud Storage Meter (Turso quota — read-only, same source as desktop) */}
+      <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 text-xs">
+        <div className="flex items-center justify-between">
+          <h4 className="text-[11px] font-black uppercase text-pos-muted tracking-wider flex items-center gap-1.5">
+            <Database className="w-3.5 h-3.5 text-indigo-400" />
+            Stockage Cloud Turso
+          </h4>
+          <button
+            type="button"
+            onClick={() => void loadStorageReport()}
+            disabled={isLoadingStorage}
+            className="py-1 px-2 rounded-lg bg-pos-panel border border-pos-border text-pos-muted font-bold text-[11px] flex items-center gap-1 active:scale-95 transition cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3 h-3 ${isLoadingStorage ? 'animate-spin' : ''}`} />
+            Actualiser
+          </button>
+        </div>
+
+        {!storageReport || (storageReport.totalBytes === 0 && storageReport.isEstimated) ? (
+          <p className="text-[11px] text-pos-muted">
+            {isLoadingStorage
+              ? 'Mesure en cours…'
+              : 'Non disponible hors-ligne — actualisez après connexion.'}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex justify-between font-bold text-pos-text">
+              <span>
+                {formatBytes(storageReport.totalBytes)} utilisés{' '}
+                {storageReport.isEstimated && '(estimé)'}
+              </span>
+              <span className="text-pos-muted font-mono">
+                {storageReport.usedPercentage}% / {formatBytes(storageReport.quotaBytes)}
+              </span>
+            </div>
+            <div className="w-full bg-pos-bg rounded-full h-2.5 overflow-hidden border border-pos-border">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${
+                  storageReport.usedPercentage > 90
+                    ? 'bg-red-500'
+                    : storageReport.usedPercentage > 70
+                      ? 'bg-amber-500'
+                      : 'bg-emerald-500'
+                }`}
+                style={{ width: `${Math.max(2, storageReport.usedPercentage)}%` }}
+              />
+            </div>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-pos-muted font-mono">
+              <span>Fichier : <span className="text-pos-text font-bold">{formatBytes(storageReport.fileBytes)}</span></span>
+              <span>Données : <span className="text-pos-text font-bold">{formatBytes(storageReport.liveBytes)}</span></span>
+              <span>Réutilisable : <span className="text-emerald-400 font-bold">{formatBytes(storageReport.freelistBytes)}</span></span>
+            </div>
+            {(storageReport.thresholdLevel === 'WARNING' ||
+              storageReport.thresholdLevel === 'CRITICAL' ||
+              storageReport.thresholdLevel === 'EXCEEDED') && (
+              <p className="text-[11px] font-bold text-amber-300">
+                {storageReport.alertMessage} {storageReport.actionRequired}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Quarantined Outbox Mutations Card (Edge Case 6) */}

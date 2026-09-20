@@ -10,11 +10,24 @@
   --pos-muted: #64748b;
   --pos-input-bg: #f8fafc;
 
+  /* Material Design 3 Tonal Surface Tokens */
+  --md-surface: #f8fafc;
+  --md-surface-container-low: #f1f5f9;
+  --md-surface-container: #ffffff;
+  --md-surface-container-high: #e2e8f0;
+  --md-surface-container-highest: #cbd5e1;
+
+  /* iOS 18 Frosted Glass Tokens */
+  --ios-glass-bg: rgba(255, 255, 255, 0.85);
+  --ios-glass-border: rgba(0, 0, 0, 0.08);
+
   /* Universal safe-area tokens (enterprise App Shell).
      Guaranteed minimums keep headers/footers clear of the status bar,
      notch, and iOS home indicator even when env() reports 0px (desktop). */
   --safe-top: max(env(safe-area-inset-top, 0px), 16px);
   --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  --safe-left: max(env(safe-area-inset-left, 0px), 0px);
+  --safe-right: max(env(safe-area-inset-right, 0px), 0px);
 }
 
 html.dark {
@@ -26,6 +39,17 @@ html.dark {
   --pos-text: #e2e8f0;
   --pos-muted: #8e9bb0;
   --pos-input-bg: #0b0f19;
+
+  /* Material Design 3 Dark Tonal Surface Tokens */
+  --md-surface: #0b0f19;
+  --md-surface-container-low: #0f1420;
+  --md-surface-container: #121824;
+  --md-surface-container-high: #1a2234;
+  --md-surface-container-highest: #243046;
+
+  /* iOS 18 Dark Frosted Glass Tokens */
+  --ios-glass-bg: rgba(18, 24, 36, 0.85);
+  --ios-glass-border: rgba(255, 255, 255, 0.08);
 }
 
 @layer base {
@@ -40,12 +64,33 @@ html.dark {
   body {
     background-color: var(--pos-bg);
     color: var(--pos-text);
-    font-family: Inter, system-ui, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Inter, Roboto, system-ui, sans-serif;
     user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
     transition: background-color 0.2s ease, color 0.2s ease;
     overscroll-behavior: none;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Allow text selection in inputs and textareas */
+  input, textarea {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* Prevent iOS Safari / WKWebView auto-zoom on input focus */
+  @media (max-width: 640px) {
+    input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+      font-size: 16px;
+    }
+  }
+
+  /* Tabular figures for financial numbers */
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
   }
 }
 
@@ -92,6 +137,50 @@ html.dark {
   }
   .no-scrollbar::-webkit-scrollbar {
     display: none;
+  }
+  /* Financial tabular numbers */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+  /* Standard M3 32x4dp bottom sheet drag handle */
+  .sheet-handle {
+    width: 32px;
+    height: 4px;
+    border-radius: 9999px;
+    background-color: var(--pos-muted);
+    opacity: 0.35;
+    margin: 8px auto;
+  }
+  /* Tactile button press feedback */
+  .active-press {
+    transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .active-press:active {
+    transform: scale(0.96);
+  }
+  /* M3 28dp sheet corner radius */
+  .rounded-t-m3 {
+    border-top-left-radius: 28px;
+    border-top-right-radius: 28px;
+  }
+  @media (max-width: 640px) {
+    .rounded-t-3xl {
+      border-top-left-radius: 28px !important;
+      border-top-right-radius: 28px !important;
+    }
+  }
+  /* iOS 18 Frosted Glass Material */
+  .ios-glass {
+    background-color: var(--ios-glass-bg);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-color: var(--ios-glass-border);
+  }
+  /* Strict 48x48dp mobile touch hitbox floor */
+  .touch-target {
+    min-width: 48px;
+    min-height: 48px;
   }
 }
 

@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { Monitor, Smartphone } from 'lucide-react';
 import { CompanionHeader } from './CompanionHeader';
 import { AppScreenLayout } from './AppScreenLayout';
 import { MobileBottomNav, type MobileTab } from './MobileBottomNav';
@@ -8,12 +7,16 @@ import { CatalogSearchTab } from './tabs/CatalogSearchTab';
 import { MobileCheckoutTab } from './tabs/MobileCheckoutTab';
 import { KredyTab } from './tabs/KredyTab';
 import { ManagementTab } from './tabs/ManagementTab';
-import { SyncDiagnosticsTab } from './tabs/SyncDiagnosticsTab';
+// P11.3: diagnostics pulls in the sync engine (~267 kB) — load on first open.
+const SyncDiagnosticsTab = React.lazy(() =>
+  import('./tabs/SyncDiagnosticsTab').then((m) => ({ default: m.SyncDiagnosticsTab })),
+);
 import { usePosStore } from '../../store/usePosStore';
-import { syncManager } from '../../sync/SyncManager';
-import { useDeviceMode } from '../../hooks/useDeviceMode';
+// P11.3: sync engine loads on demand (static import pulls ~267 kB into entry).
 import { useMobileBackNavigation } from '../../hooks/useMobileBackNavigation';
 import type { SaleTransaction } from '../../types/pos';
+import { M3CartProtectionModal } from './M3CartProtectionModal';
+import { useToast } from '../ui/Toast';
 
 interface CompanionShellProps {
   onOpenPairingWizard?: () => void;
@@ -24,21 +27,49 @@ interface CompanionShellProps {
 export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWizard, fill = 'viewport' }) => {
   const [activeTab, setActiveTab] = useState<MobileTab>('activity');
   const cart = usePosStore((state) => state.cart);
-  const { setRoleMode } = useDeviceMode();
+  const holdSale = usePosStore((state) => state.holdSale);
+  const clearCart = usePosStore((state) => state.clearCart);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [isCartProtectionOpen, setIsCartProtectionOpen] = useState(false);
+  const { showToast } = useToast();
 
-  // Android hardware back button and escape listener
+  // Android hardware back button and escape listener with cart protection
   useMobileBackNavigation({
     activeTab,
     setActiveTab,
     isMobile: true,
+    onRequestCartProtection: () => {
+      setIsCartProtectionOpen(true);
+      return true;
+    },
   });
 
+  const handleHoldAndExit = () => {
+    const res = holdSale();
+    if (res && res.success) {
+      showToast('Vente mise en attente avec succès !', 'success');
+    }
+    setIsCartProtectionOpen(false);
+    setActiveTab('activity');
+  };
+
+  const handleDiscardAndExit = () => {
+    clearCart();
+    showToast('Panier vidé', 'info');
+    setIsCartProtectionOpen(false);
+    setActiveTab('activity');
+  };
+
   useEffect(() => {
-    const unsub = syncManager.subscribe((s) => {
-      setPendingSyncCount(s.pendingCount);
-    });
-    return unsub;
+    let unsub: (() => void) | undefined;
+    import('../../sync/SyncManager')
+      .then(({ syncManager }) => {
+        unsub = syncManager.subscribe((s) => {
+          setPendingSyncCount(s.pendingCount);
+        });
+      })
+      .catch((err: unknown) => console.warn('[shell] sync engine unavailable:', err));
+    return () => unsub?.();
   }, []);
 
   const handleSelectSale = (sale: SaleTransaction) => {
@@ -49,29 +80,7 @@ export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWiz
   return (
     <AppScreenLayout
       fill={fill}
-      header={
-        <>
-          {/* Top Mobile Header */}
-          <CompanionHeader />
-
-          {/* Switch to Desktop Button bar (helpful for desktop preview and store owner testing) */}
-          <div className="bg-pos-panel/80 border-b border-pos-border px-3 py-1 flex items-center justify-between text-[11px] shrink-0">
-            <span className="text-pos-muted flex items-center gap-1 min-w-0">
-              <Smartphone className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              <span className="truncate">Mode Mobile Actif</span>
-            </span>
-
-            <button
-              type="button"
-              onClick={() => setRoleMode('pos_primary')}
-              className="text-cyan-400 hover:text-cyan-300 font-bold flex items-center gap-1 px-2 py-0.5 rounded bg-pos-card border border-pos-border hover:border-cyan-400 transition cursor-pointer min-h-[44px] shrink-0"
-            >
-              <Monitor className="w-3 h-3" />
-              <span>Passer en Mode Caisse PC</span>
-            </button>
-          </div>
-        </>
-      }
+      header={<CompanionHeader />}
       footer={
         <MobileBottomNav
           activeTab={activeTab}
@@ -86,10 +95,24 @@ export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWiz
       {activeTab === 'catalog' && (
         <CatalogSearchTab onAddToCart={() => setActiveTab('checkout')} />
       )}
-      {activeTab === 'checkout' && <MobileCheckoutTab />}
+      {activeTab === 'checkout' && (
+        <MobileCheckoutTab onNavigateToCatalog={() => setActiveTab('catalog')} />
+      )}
       {activeTab === 'kredy' && <KredyTab />}
       {activeTab === 'management' && <ManagementTab onOpenPairingWizard={onOpenPairingWizard} />}
-      {activeTab === 'diagnostics' && <SyncDiagnosticsTab />}
+      {activeTab === 'diagnostics' && (
+        <React.Suspense fallback={<div className="flex-1 flex items-center justify-center text-pos-muted text-sm">Chargement…</div>}>
+          <SyncDiagnosticsTab />
+        </React.Suspense>
+      )}
+
+      {/* Cart Back Navigation Protection Modal */}
+      <M3CartProtectionModal
+        isOpen={isCartProtectionOpen}
+        onContinueSale={() => setIsCartProtectionOpen(false)}
+        onHoldAndExit={handleHoldAndExit}
+        onDiscardAndExit={handleDiscardAndExit}
+      />
     </AppScreenLayout>
   );
 };

@@ -169,34 +169,36 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[90vh]">
+    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[94vh] sm:h-[90vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* HEADER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-cyan-500/20">
-              <Database className="w-6 h-6 stroke-[2.5]" />
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-cyan-500/20 shrink-0">
+              <Database className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-pos-text uppercase tracking-wider">
-                  Centre de Maintenance & Intégrité SQLite WAL
+                <h2 className="text-xs sm:text-base font-black text-pos-text uppercase tracking-wider truncate">
+                  Maintenance SQLite WAL
                 </h2>
-                <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center gap-1">
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-[10px] sm:text-xs flex items-center gap-1 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  Mode WAL Actif
+                  Mode WAL
                 </span>
               </div>
-              <p className="text-xs text-pos-muted">
-                Télémétrie bas-niveau, compactage VACUUM, synchronisation du journal et snapshots de sécurité
+              <p className="text-[11px] text-pos-muted hidden sm:block truncate">
+                Télémétrie bas-niveau, compactage VACUUM, synchronisation du journal et snapshots
               </p>
             </div>
           </div>
           <button
             onClick={closeModal}
-            className="p-2 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+            className="p-2 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
@@ -419,20 +421,18 @@ export const DatabaseMaintenanceModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* FOOTER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleExportFullJson}
-              className="px-4 py-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text text-xs font-bold rounded-xl flex items-center gap-1.5 transition cursor-pointer"
-            >
-              <Upload className="w-4 h-4 text-emerald-400" />
-              <span>Export JSON Intégral</span>
-            </button>
-          </div>
+        <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2 shrink-0">
+          <button
+            onClick={handleExportFullJson}
+            className="px-4 py-2.5 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer min-h-[44px] active-press"
+          >
+            <Upload className="w-4 h-4 text-emerald-400" />
+            <span>Export JSON Intégral</span>
+          </button>
 
           <button
             onClick={closeModal}
-            className="px-5 py-2 rounded-xl text-xs font-bold bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text transition cursor-pointer"
+            className="px-5 py-2.5 rounded-xl text-xs font-bold bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text transition cursor-pointer min-h-[44px] active-press flex items-center justify-center"
           >
             Fermer (Échap)
           </button>

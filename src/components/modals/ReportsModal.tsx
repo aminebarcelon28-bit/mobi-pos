@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   BarChart3,
@@ -38,6 +38,7 @@ import { SalesAnalyticsCharts } from '../reports/SalesAnalyticsCharts';
 import { useToast } from '../ui/Toast';
 import { generateProfessionalExcelXml } from '../../utils/excelExporter';
 import { getEffectiveCostPrice } from '../../utils/pricingEngine';
+import { grossFromTransaction } from '../../utils/receiptMath';
 
 export const ReportsModal: React.FC = () => {
   const {
@@ -97,6 +98,21 @@ export const ReportsModal: React.FC = () => {
   const [exportSuccess, setExportSuccess] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
 
+  // FIFO Inventory Valuation
+  const [fifoValuation, setFifoValuation] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (activeModal === 'reports') {
+      void import('../../db/sqlPluginAdapter').then(({ calculateInventoryValuation }) => {
+        calculateInventoryValuation().then((res) => {
+          if (typeof res === 'number' && res > 0) {
+            setFifoValuation(res);
+          }
+        }).catch(() => {});
+      });
+    }
+  }, [activeModal, products]);
+
   const handleVerifyPin = (e: React.FormEvent) => {
     e.preventDefault();
     if (verifyManagerPin(pinInput)) {
@@ -139,7 +155,10 @@ export const ReportsModal: React.FC = () => {
   }, [transactions, dateRangeFilter]);
 
   const validSales = (dateFilteredTransactions || []).filter((t) => t.status !== 'VOIDED' && !t.isRefund);
-  const totalGrossRevenue = validSales.reduce((acc, t) => acc + (t.total || 0), 0);
+    // Gross revenue = catalog value before discounts (t.subtotal). The previous
+    // code summed t.total (net), which understated "Chiffre d'Affaires Brut" by
+    // exactly the discounts granted and broke the waterfall reconciliation.
+    const totalGrossRevenue = validSales.reduce((acc, t) => acc + grossFromTransaction(t), 0);
   const totalRefundsValue = (dateFilteredTransactions || []).filter((t) => t.isRefund).reduce((acc, t) => acc + (t.total || 0), 0);
   const totalRevenue = Math.max(0, totalGrossRevenue - totalRefundsValue);
   const totalCost = validSales.reduce((acc, t) => acc + (t.costTotal || getEffectiveCostPrice({ price: t.total || 0 })), 0);
@@ -268,7 +287,7 @@ export const ReportsModal: React.FC = () => {
   const totalStoreCreditLiability = useMemo(() => (customers || []).reduce((acc, c) => acc + (c.storeCredit || 0), 0), [customers]);
 
   // ── Waterfall P&L Breakdown Metrics ──
-  const grossSalesRevenue = (validSales || []).reduce((acc, t) => acc + (t.subtotal || t.total || 0), 0);
+  const grossSalesRevenue = (validSales || []).reduce((acc, t) => acc + grossFromTransaction(t), 0);
   const totalDiscountsGiven = (validSales || []).reduce((acc, t) => acc + (t.discountTotal || 0), 0);
   const totalRefunds = totalRefundsValue;
 
@@ -417,7 +436,7 @@ export const ReportsModal: React.FC = () => {
         const dateStr = (t.createdAt || '').replace(/;/g, ' ');
         const payment = (t.paymentMethod || 'Espèces').replace(/;/g, ' ');
         const itemCount = (t.items || []).reduce((acc, i) => acc + i.quantity, 0);
-        const subtotal = t.subtotal || t.total;
+          const subtotal = grossFromTransaction(t);
         const discount = t.discountTotal || 0;
         const cost = t.status === 'VOIDED' ? 0 : t.costTotal || 0;
         const netTotal = t.status === 'VOIDED' ? 0 : t.isRefund ? -t.total : t.total;
@@ -469,12 +488,14 @@ export const ReportsModal: React.FC = () => {
   return (
     <div
       onClick={closeModal}
-      className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 select-none cursor-pointer"
+      className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none cursor-pointer"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-[90vh] flex flex-col relative cursor-default"
+        className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 h-[94vh] sm:h-[90vh] flex flex-col relative cursor-default"
       >
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
         {/* Modal Header */}
         <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
@@ -486,7 +507,7 @@ export const ReportsModal: React.FC = () => {
                 setPinInput('');
                 closeModal();
               }}
-              className="p-1.5 px-2.5 sm:px-3 bg-cyan-500/10 hover:bg-cyan-500/20 active:scale-95 border border-cyan-500/30 text-cyan-400 rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shrink-0"
+              className="p-1.5 px-2.5 sm:px-3 bg-cyan-500/10 hover:bg-cyan-500/20 active:scale-95 border border-cyan-500/30 text-cyan-400 rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer min-h-[38px] shrink-0"
               title="Retour (Échap)"
             >
               <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
@@ -515,7 +536,7 @@ export const ReportsModal: React.FC = () => {
               setPinInput('');
               closeModal();
             }}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition shrink-0"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0 cursor-pointer"
             title="Fermer (Échap)"
           >
             <X className="w-5 h-5" />
@@ -524,12 +545,12 @@ export const ReportsModal: React.FC = () => {
 
         {/* Security PIN Gate */}
         {!pinVerified ? (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 space-y-4 text-center">
+          <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-8 space-y-4 text-center">
             <div className="w-16 h-16 rounded-2xl bg-amber-500/15 text-amber-400 flex items-center justify-center border border-amber-500/30 shadow-xl">
               <Lock className="w-8 h-8 stroke-[2.5]" />
             </div>
             <div>
-              <h3 className="text-lg font-black text-pos-text">Accès Sécurisé par PIN Administrateur</h3>
+              <h3 className="text-base sm:text-lg font-black text-pos-text">Accès Sécurisé par PIN Administrateur</h3>
               <p className="text-xs text-pos-muted mt-1 max-w-sm">
                 Saisissez votre code PIN Manager pour consulter les chiffres financiers et exporter les données comptables.
               </p>
@@ -544,12 +565,12 @@ export const ReportsModal: React.FC = () => {
                   placeholder="Code PIN Administrateur"
                   value={pinInput}
                   onChange={(e) => setPinInput(e.target.value)}
-                  className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-3 py-2 text-xs font-bold text-pos-text focus:border-amber-400 focus:outline-none"
+                  className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-3 py-2 text-xs font-bold text-pos-text focus:border-amber-400 focus:outline-none min-h-[42px]"
                 />
               </div>
               <button
                 type="submit"
-                className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-xl transition shadow-md cursor-pointer"
+                className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-xl transition shadow-md cursor-pointer min-h-[42px] active:scale-95"
               >
                 Déverrouiller
               </button>
@@ -560,66 +581,66 @@ export const ReportsModal: React.FC = () => {
           <div className="flex-1 flex flex-col overflow-hidden">
             
             {/* Top Navigation Tabs */}
-            <div className="flex border-b border-pos-border bg-pos-card px-4 shrink-0 justify-between items-center overflow-x-auto">
+            <div className="flex border-b border-pos-border bg-pos-card px-2.5 sm:px-4 shrink-0 justify-between items-center overflow-x-auto no-scrollbar">
               <div className="flex shrink-0">
                 <button
                   onClick={() => setActiveTab('summary')}
-                  className={`py-3 px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
+                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
                     activeTab === 'summary'
                       ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5'
                       : 'border-transparent text-pos-muted hover:text-pos-text'
                   }`}
                 >
-                  <LayoutDashboard className="w-3.5 h-3.5 text-emerald-400" />
-                  Synthèse Financière & Bilan
+                  <LayoutDashboard className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>Synthèse<span className="hidden sm:inline"> Financière & Bilan</span></span>
                 </button>
 
                 <button
                   onClick={() => setActiveTab('history')}
-                  className={`py-3 px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
+                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
                     activeTab === 'history'
                       ? 'border-emerald-500 text-emerald-400'
                       : 'border-transparent text-pos-muted hover:text-pos-text'
                   }`}
                 >
-                  <ShoppingBag className="w-3.5 h-3.5" />
-                  Historique Transactions & Inspection ({(transactions || []).length})
+                  <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
+                  <span>Historique<span className="hidden sm:inline"> Transactions</span> ({(transactions || []).length})</span>
                 </button>
 
                 <button
                   onClick={() => setActiveTab('analytics')}
-                  className={`py-3 px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
+                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
                     activeTab === 'analytics'
                       ? 'border-emerald-500 text-emerald-400'
                       : 'border-transparent text-pos-muted hover:text-pos-text'
                   }`}
                 >
-                  <BarChart3 className="w-3.5 h-3.5" />
-                  Vue Graphique & Performance
+                  <BarChart3 className="w-3.5 h-3.5 shrink-0" />
+                  <span>Graphiques<span className="hidden sm:inline"> & Performance</span></span>
                 </button>
 
                 <button
                   onClick={() => setActiveTab('expenses')}
-                  className={`py-3 px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
+                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
                     activeTab === 'expenses'
                       ? 'border-amber-500 text-amber-400'
                       : 'border-transparent text-pos-muted hover:text-pos-text'
                   }`}
                 >
-                  <DollarSign className="w-3.5 h-3.5 text-amber-400" />
-                  Dépenses & Résultat Net (EBITDA)
+                  <DollarSign className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>Dépenses<span className="hidden sm:inline"> & EBITDA</span></span>
                 </button>
 
                 <button
                   onClick={() => setActiveTab('export')}
-                  className={`py-3 px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-2 cursor-pointer ${
+                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
                     activeTab === 'export'
                       ? 'border-emerald-500 text-emerald-400'
                       : 'border-transparent text-pos-muted hover:text-pos-text'
                   }`}
                 >
-                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                  Export Comptable & Tableaux Excel (PRO)
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>Exports<span className="hidden sm:inline"> Excel (PRO)</span></span>
                 </button>
               </div>
 
@@ -754,9 +775,22 @@ export const ReportsModal: React.FC = () => {
 
                       <div className="grid grid-cols-2 gap-2.5">
                         <div className="bg-pos-bg border border-pos-border/80 p-3 rounded-xl">
-                          <span className="text-[9.5px] font-bold text-pos-muted uppercase block">Valeur au Coût d'Achat (Actif)</span>
-                          <span className="text-base font-black font-mono text-pos-text mt-1 block">{formatDZD(totalStockCostValue)}</span>
-                          <span className="text-[9px] text-pos-muted">Capital investi dans le stock</span>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[9.5px] font-bold text-pos-muted uppercase block">Valeur au Coût d'Achat (Actif)</span>
+                            {fifoValuation !== null && fifoValuation > 0 && (
+                              <span className="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono">
+                                FIFO Actif
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-base font-black font-mono text-pos-text mt-1 block">
+                            {formatDZD(fifoValuation !== null && fifoValuation > 0 ? fifoValuation : totalStockCostValue)}
+                          </span>
+                          <span className="text-[9px] text-pos-muted">
+                            {fifoValuation !== null && fifoValuation > 0
+                              ? "Valorisation FIFO exacte sur les lots restants"
+                              : "Capital investi dans le stock"}
+                          </span>
                         </div>
                         <div className="bg-pos-bg border border-pos-border/80 p-3 rounded-xl">
                           <span className="text-[9.5px] font-bold text-pos-muted uppercase block">Valeur Marchande (Prix Vente)</span>
@@ -1664,16 +1698,46 @@ export const ReportsModal: React.FC = () => {
                   <span className="text-[10px] uppercase font-bold text-pos-muted block">Articles du Ticket :</span>
                   <div className="bg-pos-card border border-pos-border rounded-xl overflow-hidden divide-y divide-pos-border">
                     {(inspectingTransaction?.items || []).map((item, idx) => {
-                      const itemPrice = item.appliedPrice || item.product?.price || 0;
+                      const itemPrice = item.unitPriceCharged || item.appliedPrice || item.product?.price || 0;
+                      const defaultPrice = item.defaultPrice || item.product?.price || 0;
+                      const unitCost = item.unitCostAtSale ?? item.product?.costPrice ?? 0;
+                      const lineProfit = item.lineProfit !== undefined
+                        ? item.lineProfit
+                        : (itemPrice - unitCost) * item.quantity;
+                      const lineTotal = itemPrice * item.quantity;
+                      const discountAmount = item.discountAmount ?? (defaultPrice > itemPrice ? defaultPrice - itemPrice : 0);
+                      const marginPct = lineTotal > 0 ? ((lineProfit / lineTotal) * 100).toFixed(1) : '0';
+
                       return (
-                        <div key={idx} className="p-2.5 flex justify-between items-center text-xs">
-                          <div>
+                        <div key={idx} className="p-3 flex justify-between items-center text-xs hover:bg-pos-hover/30 transition">
+                          <div className="space-y-1">
                             <p className="font-bold text-pos-text">{item.product?.title || 'Article'}</p>
-                            <span className="text-[10px] text-pos-muted font-mono">
-                              SKU: {item.product?.sku} • {item.quantity} x {formatDZD(itemPrice)}
+                            <div className="flex flex-wrap items-center gap-2 text-[10px] text-pos-muted font-mono">
+                              <span>SKU: {item.product?.sku || 'N/A'}</span>
+                              <span>•</span>
+                              <span>{item.quantity} x {formatDZD(itemPrice)}</span>
+                              {defaultPrice !== itemPrice && (
+                                <span className="line-through text-pos-muted/60">{formatDZD(defaultPrice)}</span>
+                              )}
+                              {unitCost > 0 && (
+                                <>
+                                  <span>•</span>
+                                  <span className="text-pos-muted">Coût FIFO: {formatDZD(unitCost)}/u</span>
+                                </>
+                              )}
+                              {discountAmount > 0 && (
+                                <span className="text-amber-400 font-semibold">
+                                  (Remise: -{formatDZD(discountAmount)}/u)
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className="font-black text-pos-text block">{formatDZD(lineTotal)}</span>
+                            <span className={`text-[10px] font-bold font-mono ${lineProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              Marge: {formatDZD(lineProfit)} ({marginPct}%)
                             </span>
                           </div>
-                          <span className="font-black text-pos-text">{formatDZD(itemPrice * item.quantity)}</span>
                         </div>
                       );
                     })}
@@ -1696,6 +1760,22 @@ export const ReportsModal: React.FC = () => {
                     <span>Total Net Payé :</span>
                     <span>{formatDZD(inspectingTransaction.total)}</span>
                   </div>
+                  {inspectingTransaction.status !== 'VOIDED' && !inspectingTransaction.isRefund && (
+                    <div className="flex justify-between text-xs font-bold text-cyan-400 pt-1 border-t border-dashed border-pos-border">
+                      <span>Marge Commerciale Nette (FIFO) :</span>
+                      <span className="font-mono">
+                        {formatDZD(
+                          inspectingTransaction.profit !== undefined
+                            ? inspectingTransaction.profit
+                            : (inspectingTransaction.items || []).reduce((acc, it) => {
+                                const uCost = it.unitCostAtSale ?? it.product?.costPrice ?? 0;
+                                const uCharged = it.unitPriceCharged ?? it.appliedPrice ?? it.product?.price ?? 0;
+                                return acc + (it.lineProfit ?? ((uCharged - uCost) * it.quantity));
+                              }, 0)
+                        )}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Voiding Form */}

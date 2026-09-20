@@ -284,44 +284,57 @@ export const HotkeyGuideModal: React.FC = () => {
   return (
     <div
       onClick={closeModal}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4 select-none cursor-pointer animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-0 sm:p-4 select-none cursor-pointer animate-in fade-in duration-150"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-4xl bg-pos-panel border border-pos-border rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] cursor-default animate-in zoom-in-95 duration-150"
+        className="w-full max-w-4xl bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[94vh] sm:max-h-[90vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0 cursor-default animate-in zoom-in-95 duration-150"
       >
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* ═══ Header ═══ */}
-        <div className="p-4 border-b border-pos-border bg-pos-card flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-md">
-              <Keyboard className="w-6 h-6 stroke-[2.2]" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-extrabold text-pos-text tracking-wide uppercase">
-                  Guide Complet des Raccourcis Clavier
-                </h2>
-                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-[10px] font-black uppercase">
-                  F8 Actif
-                </span>
+        <div className="p-3.5 sm:p-4 border-b border-pos-border bg-pos-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center justify-between min-w-0">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-md shrink-0">
+                <Keyboard className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.2]" />
               </div>
-              <p className="text-[11px] text-pos-muted">
-                Opérez 100% de la caisse au clavier sans souris • Ventes express en moins de 5 secondes
-              </p>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm sm:text-base font-extrabold text-pos-text tracking-wide uppercase truncate">
+                    Guide des Raccourcis Clavier
+                  </h2>
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-[10px] font-black uppercase shrink-0">
+                    F8
+                  </span>
+                </div>
+                <p className="text-[11px] text-pos-muted hidden sm:block truncate">
+                  Opérez 100% de la caisse au clavier sans souris • Ventes express en moins de 5 secondes
+                </p>
+              </div>
             </div>
+
+            <button
+              onClick={closeModal}
+              className="p-1.5 rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition-colors sm:hidden min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+              title="Fermer le guide"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
           <div className="flex items-center gap-3">
             {/* Search Box */}
-            <div className="relative">
+            <div className="relative flex-1 sm:flex-initial">
               <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted pointer-events-none" />
               <input
                 ref={searchInputRef}
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Filtrer (ex: F3, client, remise, scan)..."
-                className="bg-pos-bg border border-pos-border rounded-xl pl-8 pr-3 py-1.5 text-xs text-pos-text focus:outline-none focus:border-emerald-400 w-64 transition"
+                placeholder="Filtrer (ex: F3, client, remise)..."
+                className="w-full sm:w-64 bg-pos-bg border border-pos-border rounded-xl pl-8 pr-3 py-2 text-xs text-pos-text focus:outline-none focus:border-emerald-400 transition"
               />
               {searchQuery && (
                 <button
@@ -336,7 +349,7 @@ export const HotkeyGuideModal: React.FC = () => {
 
             <button
               onClick={closeModal}
-              className="p-1.5 rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition-colors"
+              className="hidden sm:flex p-1.5 rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition-colors min-h-[44px] min-w-[44px] items-center justify-center"
               title="Fermer le guide (Échap)"
             >
               <X className="w-5 h-5" />
@@ -425,31 +438,31 @@ export const HotkeyGuideModal: React.FC = () => {
         </div>
 
         {/* ═══ Pro-Cashier Tip Banner & Footer ═══ */}
-        <div className="p-3 bg-pos-card border-t border-pos-border flex items-center justify-between text-xs shrink-0">
+        <div className="p-3 sm:p-4 bg-pos-card border-t border-pos-border flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 text-xs shrink-0">
           <div className="flex items-center gap-2 text-pos-muted">
-            <span className="text-amber-400 text-sm">💡</span>
-            <span className="text-[11px]">
-              <strong className="text-pos-text font-bold">Astuce Pro Caissier :</strong> Tapez{' '}
+            <span className="text-amber-400 text-sm shrink-0">💡</span>
+            <span className="text-[11px] truncate">
+              <strong className="text-pos-text font-bold">Astuce Caissier :</strong> Tapez{' '}
               <code className="text-amber-300 font-mono font-bold bg-pos-bg px-1 py-0.5 rounded border border-pos-border">
                 5*CODE
               </code>{' '}
-              pour scanner 5 pièces, appuyez sur{' '}
+              pour 5 pièces,{' '}
               <code className="text-emerald-300 font-mono font-bold bg-pos-bg px-1 py-0.5 rounded border border-pos-border">
                 F3
               </code>{' '}
-              pour assigner le client et{' '}
+              client,{' '}
               <code className="text-emerald-300 font-mono font-bold bg-pos-bg px-1 py-0.5 rounded border border-pos-border">
                 F2
               </code>{' '}
-              pour encaisser en espèces.
+              espèces.
             </span>
           </div>
 
           <button
             onClick={closeModal}
-            className="px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-bold transition shadow-sm cursor-pointer shrink-0 ml-4"
+            className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-bold transition shadow-sm cursor-pointer shrink-0 min-h-[44px] flex items-center justify-center active-press"
           >
-            Compris (Échap)
+            Compris
           </button>
         </div>
       </div>

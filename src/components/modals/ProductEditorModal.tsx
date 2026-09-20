@@ -482,17 +482,19 @@ export const ProductEditorModal: React.FC = () => {
   const totalExpectedGain = Math.max(0, totalRetailValuation - totalCostInvestment);
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[92vh] h-[700px] overflow-hidden animate-in fade-in zoom-in-95">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-3 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[95vh] h-[94vh] sm:h-[700px] overflow-hidden animate-in slide-in-from-bottom-5 sm:zoom-in-95">
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
         {/* ========================================================================= */}
         {/* 1. STICKY HEADER (Top Bar)                                               */}
         {/* ========================================================================= */}
-        <div className="px-5 py-3 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-4">
+        <div className="px-3.5 sm:px-5 py-2.5 sm:py-3 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2 sm:gap-4">
           
           {/* Header Left: Title + Enterprise V2 Badge + Actif/Inactif Toggle */}
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-bold shadow-md shadow-emerald-500/20 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-bold shadow-md shadow-emerald-500/20 shrink-0">
               <Sparkles className="w-4 h-4 stroke-[2.5]" />
             </div>
             <div className="flex items-center gap-2.5 flex-wrap">
@@ -1116,8 +1118,8 @@ export const ProductEditorModal: React.FC = () => {
           {/* ======================================================================= */}
           <div className="px-5 py-3 border-t border-pos-border bg-pos-card flex items-center justify-between shrink-0 gap-3">
             
-            {/* Footer Left: Keyboard Shortcut Hints */}
-            <div className="flex items-center gap-3 text-[11px] text-pos-muted font-medium">
+            {/* Footer Left: Keyboard Shortcut Hints (Hidden on mobile) */}
+            <div className="hidden sm:flex items-center gap-3 text-[11px] text-pos-muted font-medium">
               <span className="inline-flex items-center gap-1">
                 <kbd className="px-1.5 py-0.5 rounded bg-pos-bg border border-pos-border font-mono text-[10px] font-bold text-pos-text shadow-xs">
                   Échap
@@ -1133,7 +1135,7 @@ export const ProductEditorModal: React.FC = () => {
             </div>
 
             {/* Footer Right: Action Buttons */}
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap sm:flex-nowrap items-center justify-end gap-2 w-full sm:w-auto">
               {editingProduct && (
                 <button
                   type="button"
@@ -1148,10 +1150,10 @@ export const ProductEditorModal: React.FC = () => {
                       closeModal();
                     }
                   }}
-                  className="h-9 px-3 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold flex items-center gap-1.5 transition border border-rose-500/30 cursor-pointer"
+                  className="min-h-[40px] px-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold flex items-center justify-center gap-1.5 transition border border-rose-500/30 cursor-pointer active:scale-95"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  Supprimer
+                  <span>Supprimer</span>
                 </button>
               )}
 
@@ -1159,7 +1161,7 @@ export const ProductEditorModal: React.FC = () => {
               <button
                 type="button"
                 onClick={closeModal}
-                className="h-9 px-4 rounded-lg text-xs font-bold text-pos-muted hover:text-pos-text hover:bg-pos-hover transition cursor-pointer"
+                className="min-h-[40px] px-4 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text hover:bg-pos-hover transition cursor-pointer active:scale-95 flex items-center justify-center"
               >
                 Annuler
               </button>
@@ -1174,10 +1176,10 @@ export const ProductEditorModal: React.FC = () => {
                     Boolean(duplicateSkuProduct)
                   }
                   onClick={handleSaveAndNew}
-                  className="h-9 px-4 rounded-lg bg-pos-card hover:bg-pos-hover text-pos-text border border-pos-border hover:border-emerald-500/50 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="min-h-[40px] px-4 rounded-xl bg-pos-card hover:bg-pos-hover text-pos-text border border-pos-border hover:border-emerald-500/50 text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
                 >
                   <Package className="w-3.5 h-3.5 text-emerald-400" />
-                  Enregistrer & Nouveau
+                  <span>Enregistrer & Nouveau</span>
                 </button>
               )}
 
@@ -1189,18 +1191,20 @@ export const ProductEditorModal: React.FC = () => {
                   Boolean(duplicateBarcodeProduct) ||
                   Boolean(duplicateSkuProduct)
                 }
-                className={`h-9 px-5 rounded-lg text-slate-950 font-black text-xs shadow-md flex items-center gap-1.5 transition cursor-pointer focus:ring-2 focus:ring-emerald-400 focus:outline-none ${
+                className={`min-h-[40px] px-5 rounded-xl text-slate-950 font-black text-xs shadow-md flex items-center justify-center gap-1.5 transition cursor-pointer focus:ring-2 focus:ring-emerald-400 focus:outline-none active:scale-95 flex-1 sm:flex-none ${
                   duplicateBarcodeProduct || duplicateSkuProduct
                     ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
                     : 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 shadow-emerald-500/20'
                 }`}
               >
                 <Check className="w-4 h-4 stroke-[3]" />
-                {isSubmitting
-                  ? 'Enregistrement...'
-                  : editingProduct
-                  ? 'Mettre à Jour la Fiche'
-                  : 'Enregistrer le Produit'}
+                <span>
+                  {isSubmitting
+                    ? 'Enregistrement...'
+                    : editingProduct
+                    ? 'Mettre à Jour'
+                    : 'Enregistrer le Produit'}
+                </span>
               </button>
             </div>
 

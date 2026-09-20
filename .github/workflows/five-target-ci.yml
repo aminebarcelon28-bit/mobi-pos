@@ -29,7 +29,17 @@ jobs:
           npm run lint
           npx tsc -b
 
-      - name: Run Automated Test Suite (113 Invariants)
+      - name: IPC Seam Guard (AGENTS.md §3)
+        run: |
+          FILES=$(grep -rlE "@tauri-apps/api/(core|event)" src --include="*.ts" --include="*.tsx" | grep -v "^src/platform/" || true)
+          if [ -n "$FILES" ]; then
+            echo "::error::Direct @tauri-apps/api IPC imports found outside src/platform:"
+            echo "$FILES"
+            exit 1
+          fi
+          echo "IPC seam OK: all @tauri-apps/api imports confined to src/platform/"
+
+      - name: Run Automated Test Suite (Business Invariants)
         run: npm test
 
   build-desktop:

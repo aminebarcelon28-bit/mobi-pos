@@ -237,6 +237,8 @@ export const CloudSyncPanel: React.FC = () => {
 
   const formatBytes = (bytes: number): string => {
     if (!bytes || bytes === 0) return '0 Mo';
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return `${gb.toFixed(2)} Go`;
     const mb = bytes / (1024 * 1024);
     if (mb < 1) return `${(bytes / 1024).toFixed(1)} Ko`;
     return `${mb.toFixed(1)} Mo`;
@@ -582,6 +584,11 @@ export const CloudSyncPanel: React.FC = () => {
                 }`}
                 style={{ width: `${Math.max(2, storageReport.usedPercentage)}%` }}
               />
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-pos-muted font-mono pt-1">
+              <span>Fichier : <span className="text-pos-text font-bold">{formatBytes(storageReport.fileBytes)}</span></span>
+              <span>Données : <span className="text-pos-text font-bold">{formatBytes(storageReport.liveBytes)}</span></span>
+              <span>Réutilisable : <span className="text-emerald-400 font-bold">{formatBytes(storageReport.freelistBytes)}</span></span>
             </div>
           </div>
 

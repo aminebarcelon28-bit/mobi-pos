@@ -285,31 +285,33 @@ export const CustomersModal: React.FC = () => {
   return (
     <div
       onClick={closeModal}
-      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none cursor-pointer"
+      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none cursor-pointer"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-[90vh] flex flex-col cursor-default"
+        className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94vh] sm:h-[90vh] flex flex-col cursor-default"
       >
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
         {/* ═══ Header ═══ */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-2.5 text-blue-400">
-            <div className="w-9 h-9 rounded-xl bg-blue-500/20 flex items-center justify-center border border-blue-500/30 shadow-lg">
-              <User className="w-5 h-5 stroke-[2.5]" />
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
+          <div className="flex items-center gap-2.5 text-blue-400 min-w-0">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-blue-500/20 flex items-center justify-center border border-blue-500/30 shadow-lg shrink-0">
+              <User className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
             </div>
-            <div>
-              <h2 className="text-base font-extrabold text-pos-text tracking-wide">
-                CRM & GESTION CLIENTÈLE
+            <div className="min-w-0">
+              <h2 className="text-xs sm:text-base font-extrabold text-pos-text tracking-wide truncate">
+                CRM & FICHIER CLIENTS
               </h2>
-              <p className="text-[10px] text-pos-muted">
-                {(customers || []).length} clients enregistrés • Fidélité, Avoirs & Historique d'Achats
+              <p className="text-[10px] text-pos-muted truncate hidden xs:block">
+                {(customers || []).length} clients enregistrés • Fidélité, Avoirs & Historique
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             {viewMode === 'list' && (
-              <div className="relative flex items-center">
+              <div className="relative hidden md:flex items-center">
                 <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
                 <input
                   ref={searchInputRef}
@@ -327,8 +329,8 @@ export const CustomersModal: React.FC = () => {
                       }
                     }
                   }}
-                  placeholder="Rechercher nom, tél, appareil (Entrée pour assigner)..."
-                  className="bg-pos-bg border border-pos-border rounded-full pl-9 pr-24 py-1.5 text-xs text-pos-text focus:border-blue-400 focus:outline-none w-80 transition-all shadow-inner"
+                  placeholder="Rechercher nom, tél, appareil..."
+                  className="bg-pos-bg border border-pos-border rounded-full pl-9 pr-20 py-1.5 text-xs text-pos-text focus:border-blue-400 focus:outline-none w-64 lg:w-80 transition-all shadow-inner"
                 />
                 {filteredCustomers.length > 0 && searchQuery && (
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 pointer-events-none">
@@ -337,7 +339,11 @@ export const CustomersModal: React.FC = () => {
                 )}
               </div>
             )}
-            <button onClick={closeModal} className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition">
+            <button
+              onClick={closeModal}
+              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition min-h-[38px] min-w-[38px] flex items-center justify-center cursor-pointer"
+              aria-label="Fermer"
+            >
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -723,7 +729,7 @@ export const CustomersModal: React.FC = () => {
               </div>
 
               {/* Customer Cards Grid */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {(filteredCustomers || []).map(customer => {
                   const metrics = getCustomerMetrics(customer.id);
                   const isSelected = currentCustomer?.id === customer.id;
@@ -746,34 +752,42 @@ export const CustomersModal: React.FC = () => {
                       {/* Customer Info Row */}
                       <div className="flex items-start justify-between">
                         <div className="flex items-center gap-3">
-                          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-500/20 to-purple-500/20 border border-pos-border flex items-center justify-center overflow-hidden">
+                          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-500/20 to-purple-500/20 border border-pos-border flex items-center justify-center overflow-hidden shrink-0">
                             {customer.avatarUrl
                               ? <img src={customer.avatarUrl} alt={customer.name} className="w-full h-full object-cover" />
                               : <User className="w-5 h-5 text-blue-400" />}
                           </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h3 className="text-sm font-bold text-pos-text">{customer.name}</h3>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="text-sm font-bold text-pos-text truncate">{customer.name}</h3>
                               {tierBadge(customer.pricingTier)}
                               {hasDebt && (
-                                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[9px] font-black animate-pulse">
+                                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[9px] font-black animate-pulse shrink-0">
                                   Dette: {formatDZD(customer.currentDebt || 0)}
                                 </span>
                               )}
                             </div>
                             <div className="flex flex-wrap items-center gap-2 text-[10px] text-pos-muted mt-0.5">
                               <span className="flex items-center gap-0.5"><Phone className="w-3 h-3" /> {customer.phone}</span>
-                              {customer.email && <span className="flex items-center gap-0.5"><Mail className="w-3 h-3" /> {customer.email}</span>}
+                              {customer.email && <span className="flex items-center gap-0.5 truncate max-w-[150px]"><Mail className="w-3 h-3" /> {customer.email}</span>}
                             </div>
                           </div>
                         </div>
 
-                        {/* Action Icons */}
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-                          <button onClick={() => handleEditClick(customer)} className="p-1.5 text-pos-muted hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition">
+                        {/* Action Icons: visible on mobile, hover on desktop */}
+                        <div className="flex items-center gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0" onClick={e => e.stopPropagation()}>
+                          <button
+                            onClick={() => handleEditClick(customer)}
+                            className="p-1.5 text-pos-muted hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition min-h-[36px] min-w-[36px] flex items-center justify-center"
+                            title="Modifier"
+                          >
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
-                          <button onClick={() => handleDelete(customer.id)} className="p-1.5 text-pos-muted hover:text-red-400 hover:bg-red-500/10 rounded-lg transition">
+                          <button
+                            onClick={() => handleDelete(customer.id)}
+                            className="p-1.5 text-pos-muted hover:text-red-400 hover:bg-red-500/10 rounded-lg transition min-h-[36px] min-w-[36px] flex items-center justify-center"
+                            title="Supprimer"
+                          >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
@@ -871,7 +885,7 @@ export const CustomersModal: React.FC = () => {
           {mainTab === 'debts' && (
             <div className="space-y-5 animate-in fade-in">
               {/* Executive Debt Summary Banner */}
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-gradient-to-br from-amber-950/60 to-orange-950/60 border-2 border-amber-500/60 rounded-2xl p-4 shadow-xl">
                   <div className="flex items-center justify-between">
                     <div>
@@ -951,7 +965,7 @@ export const CustomersModal: React.FC = () => {
                     </p>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {(indebtedCustomers || []).map(customer => {
                       const debt = customer.currentDebt || 0;
                       return (
@@ -1251,9 +1265,14 @@ export const CustomersModal: React.FC = () => {
         )}
 
         {/* ═══ Footer ═══ */}
-        <div className="p-3 border-t border-pos-border bg-pos-card flex justify-between items-center text-xs text-pos-muted shrink-0">
-          <span>CRM Clientèle • {(customers || []).length} profils • {formatDZD(totalCreditOutstanding)} avoirs • {formatDZD(totalDebtOutstanding)} dettes actives</span>
-          <button onClick={closeModal} className="px-4 py-1.5 rounded-xl bg-pos-hover text-pos-text font-semibold cursor-pointer">
+        <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 text-xs text-pos-muted shrink-0">
+          <span className="truncate max-w-[280px] sm:max-w-none">
+            CRM Clientèle • {(customers || []).length} profils • {formatDZD(totalCreditOutstanding)} avoirs • {formatDZD(totalDebtOutstanding)} dettes
+          </span>
+          <button
+            onClick={closeModal}
+            className="px-5 py-2.5 rounded-xl bg-pos-hover hover:bg-pos-border text-pos-text font-bold min-h-[44px] flex items-center justify-center active-press cursor-pointer"
+          >
             Fermer
           </button>
         </div>

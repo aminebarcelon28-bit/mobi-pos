@@ -5,3 +5,9 @@ members = [
     "crates/pos-peripherals",
 ]
 resolver = "2"
+
+# Release tuning (P3.5): thinner Android .so + faster cold start.
+# Thin LTO keeps CI build times sane; strip removes symbols from ship artifacts.
+[profile.release]
+lto = "thin"
+strip = true

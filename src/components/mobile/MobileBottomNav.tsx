@@ -55,7 +55,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   ];
 
   return (
-    <nav className="min-h-16 bg-pos-panel border-t border-pos-border px-2 flex items-center justify-around select-none shrink-0 z-20">
+    <nav className="h-20 px-2 flex items-center justify-around select-none shrink-0" role="tablist" aria-label="Navigation principale">
       {navItems.map((item) => {
         const Icon = item.icon;
         const isActive = activeTab === item.id;
@@ -64,33 +64,50 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
           <button
             key={item.id}
             type="button"
+            role="tab"
+            aria-selected={isActive}
+            aria-label={item.label}
             onClick={() => handleSelect(item.id)}
-            className={`flex-1 flex flex-col items-center justify-center py-1.5 rounded-xl transition-all relative cursor-pointer min-h-[48px] ${
+            className={`flex-1 flex flex-col items-center justify-center py-1.5 transition-all duration-200 relative cursor-pointer min-h-[56px] min-w-[48px] active-press ${
               isActive
-                ? 'text-emerald-400 font-black'
+                ? 'text-emerald-400 font-bold'
                 : 'text-pos-muted hover:text-pos-text font-medium'
             }`}
           >
-            <div className="relative">
-              <Icon
-                className={`w-5 h-5 transition-transform ${
-                  isActive ? 'scale-110 stroke-[2.5]' : 'stroke-2'
+            {/* M3 64x32dp Pill Indicator Container */}
+            <div className="relative flex items-center justify-center">
+              <div
+                className={`w-16 h-8 rounded-full flex items-center justify-center transition-all duration-300 ease-out ${
+                  isActive
+                    ? 'bg-emerald-500/15 text-emerald-400 shadow-xs scale-100 ring-1 ring-emerald-500/30'
+                    : 'bg-transparent text-pos-muted hover:bg-pos-hover/60'
                 }`}
-              />
+              >
+                <Icon
+                  className={`w-5 h-5 transition-transform duration-200 ${
+                    isActive ? 'scale-110 stroke-[2.4]' : 'stroke-[1.8] opacity-85'
+                  }`}
+                />
+              </div>
+
+              {/* M3 Floating Badge Counter */}
               {item.badge !== undefined && (
                 <span
-                  className={`absolute -top-1.5 -right-2 px-1.5 py-0.2 rounded-full text-[10px] font-black shadow-sm ${item.badgeColor}`}
+                  className={`absolute -top-1 right-1 px-1.5 py-0.5 rounded-full text-[10px] font-black tracking-tight shadow-md ring-2 ring-pos-panel tabular-nums animate-in zoom-in-75 ${item.badgeColor}`}
                 >
                   {item.badge}
                 </span>
               )}
             </div>
-            <span className="text-[10px] tracking-tight mt-1 leading-none">
+
+            {/* Navigation Label */}
+            <span
+              className={`text-[11px] tracking-tight mt-1 leading-none transition-colors duration-200 ${
+                isActive ? 'font-bold text-emerald-400' : 'text-pos-muted'
+              }`}
+            >
               {item.label}
             </span>
-            {isActive && (
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 absolute bottom-0.5" />
-            )}
           </button>
         );
       })}

@@ -31,34 +31,40 @@ export const CompatibilityModal: React.FC = () => {
   if (activeModal !== 'compatibility') return null;
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-emerald-500/50 rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl animate-in fade-in zoom-in-95">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
+      <div className="bg-pos-panel border border-emerald-500/50 rounded-t-3xl sm:rounded-2xl w-full max-w-4xl h-[94vh] sm:h-[85vh] flex flex-col overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95">
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-emerald-950/20">
-          <div className="flex items-center gap-2 text-emerald-400">
-            <Smartphone className="w-6 h-6" />
-            <h2 className="text-lg font-bold text-white tracking-wide">Assistant de Compatibilité Accessoires</h2>
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-emerald-950/20 shrink-0 gap-2">
+          <div className="flex items-center gap-2 text-emerald-400 min-w-0">
+            <Smartphone className="w-5 h-5 shrink-0" />
+            <h2 className="text-xs sm:text-lg font-bold text-white tracking-wide truncate">Compatibilité Accessoires</h2>
           </div>
-          <button onClick={closeModal} className="p-1 hover:bg-pos-hover text-pos-muted hover:text-white rounded-lg transition">
-            <X className="w-6 h-6" />
+          <button
+            onClick={closeModal}
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-white rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            aria-label="Fermer"
+          >
+            <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content */}
         <div className="flex-1 flex overflow-hidden">
           {/* Sidebar: Brands & Models */}
-          <div className="w-1/3 bg-pos-card border-r border-pos-border flex flex-col h-full">
-            <div className="p-4 border-b border-pos-border bg-pos-bg/50">
+          <div className={`bg-pos-card border-r border-pos-border flex flex-col h-full ${selectedModel ? 'hidden sm:flex sm:w-1/3' : 'w-full sm:w-1/3'}`}>
+            <div className="p-3 sm:p-4 border-b border-pos-border bg-pos-bg/50">
               <span className="text-xs font-bold text-pos-muted uppercase tracking-wider mb-2 block">1. Marque</span>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-1.5 sm:gap-2">
                 {BRANDS.map(brand => (
                   <button
                     key={brand}
                     onClick={() => { setSelectedBrand(brand); setSelectedModel(null); }}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition border ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border min-h-[36px] active:scale-95 cursor-pointer ${
                       selectedBrand === brand
-                        ? 'bg-emerald-500 text-slate-950 border-emerald-500 shadow-lg shadow-emerald-500/20'
+                        ? 'bg-emerald-500 text-slate-950 border-emerald-500 shadow-md shadow-emerald-500/20 font-black'
                         : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text hover:border-pos-text'
                     }`}
                   >
@@ -68,7 +74,7 @@ export const CompatibilityModal: React.FC = () => {
               </div>
             </div>
 
-            <div className="p-4 flex-1 overflow-y-auto hide-scrollbar space-y-2">
+            <div className="p-3 sm:p-4 flex-1 overflow-y-auto hide-scrollbar space-y-2">
               <span className="text-xs font-bold text-pos-muted uppercase tracking-wider mb-2 block">2. Modèle</span>
               {modelsForBrand.length === 0 ? (
                 <p className="text-xs text-pos-muted italic py-4">Aucun modèle spécifique répertorié</p>
@@ -77,9 +83,9 @@ export const CompatibilityModal: React.FC = () => {
                   <button
                     key={model}
                     onClick={() => setSelectedModel(model)}
-                    className={`w-full text-left px-4 py-3 rounded-xl text-sm font-semibold transition border ${
+                    className={`w-full text-left px-4 py-3 rounded-xl text-xs sm:text-sm font-semibold transition border min-h-[44px] cursor-pointer active:scale-98 ${
                       selectedModel === model
-                        ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
+                        ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400 font-bold'
                         : 'bg-pos-bg border-pos-border/50 text-pos-text hover:border-emerald-500/30'
                     }`}
                   >
@@ -91,17 +97,28 @@ export const CompatibilityModal: React.FC = () => {
           </div>
 
           {/* Main: Matching Accessories */}
-          <div className="flex-1 bg-pos-bg flex flex-col">
-            <div className="p-4 border-b border-pos-border bg-pos-panel/50">
-              <span className="text-xs font-bold text-pos-muted uppercase tracking-wider">3. Accessoires 100% Compatibles</span>
+          <div className={`flex-1 bg-pos-bg flex flex-col ${!selectedModel ? 'hidden sm:flex' : 'flex'}`}>
+            <div className="p-3 sm:p-4 border-b border-pos-border bg-pos-panel/50">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-pos-muted uppercase tracking-wider">3. Accessoires Compatibles</span>
+                {selectedModel && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedModel(null)}
+                    className="sm:hidden text-xs font-bold text-cyan-400 px-2.5 py-1 rounded-lg bg-pos-card border border-pos-border cursor-pointer min-h-[34px]"
+                  >
+                    Changer Modèle
+                  </button>
+                )}
+              </div>
               {selectedModel && (
-                <h3 className="text-lg font-bold text-white mt-1">
+                <h3 className="text-sm sm:text-lg font-bold text-white mt-1">
                   Accessoires pour <span className="text-emerald-400">{selectedModel}</span>
                 </h3>
               )}
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3">
               {!selectedModel ? (
                 <div className="h-full flex flex-col items-center justify-center text-pos-muted">
                   <Smartphone className="w-12 h-12 opacity-20 mb-3" />

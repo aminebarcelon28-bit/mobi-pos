@@ -174,32 +174,38 @@ export const KittingBundleModal: React.FC = () => {
   });
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-[90vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94vh] sm:h-[90vh] flex flex-col">
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-emerald-500/20">
-              <Package className="w-5 h-5 stroke-[2.5]" />
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-emerald-500/20 shrink-0">
+              <Package className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
             </div>
-            <div>
-              <h2 className="text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2">
-                GESTIONNAIRE DE PACKS & BUNDLES (KITTING)
-                <span className="text-[10px] bg-emerald-500/10 text-emerald-400 font-bold px-2 py-0.5 rounded border border-emerald-500/30">
+            <div className="min-w-0">
+              <h2 className="text-xs sm:text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2 truncate">
+                <span>PACKS & BUNDLES (KITTING)</span>
+                <span className="text-[9px] sm:text-[10px] bg-emerald-500/10 text-emerald-400 font-bold px-1.5 sm:px-2 py-0.5 rounded border border-emerald-500/30 shrink-0">
                   ENTERPRISE
                 </span>
               </h2>
-              <p className="text-[11px] text-pos-muted">Création de bundles promotionnels, scan unique et déduction automatique du stock</p>
+              <p className="text-[10px] sm:text-[11px] text-pos-muted truncate">Bundles promo, scan unique et déduction de stock</p>
             </div>
           </div>
-          <button onClick={closeModal} className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition">
+          <button
+            onClick={closeModal}
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition min-h-[38px] min-w-[38px] flex items-center justify-center cursor-pointer shrink-0"
+            aria-label="Fermer"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Executive KPI Summary Bar */}
-        <div className="bg-pos-bg border-b border-pos-border px-4 py-2.5 grid grid-cols-4 gap-3 shrink-0 text-center select-none">
+        <div className="bg-pos-bg border-b border-pos-border px-3 sm:px-4 py-2 sm:py-2.5 grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 shrink-0 text-center select-none">
           <div className="bg-pos-card border border-pos-border rounded-lg p-2">
             <span className="text-[9px] uppercase font-bold text-pos-muted block">Total Packs Actifs</span>
             <span className="text-sm font-black text-pos-text">{totalBundles}</span>

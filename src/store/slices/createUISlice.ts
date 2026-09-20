@@ -409,22 +409,43 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
 
   initDatabase: async () => {
     try {
-      let products = await sqliteAdapter.getAllProducts();
-      let customers = await sqliteAdapter.getAllCustomers();
-      let transactions = await sqliteAdapter.getAllTransactions();
-      const repairOrders = await sqliteAdapter.getAllRepairOrders();
-      const purchaseOrders = await sqliteAdapter.getAllPurchaseOrders();
-      const tradeIns = await sqliteAdapter.getAllTradeIns();
-      const imeiRecords = await sqliteAdapter.getAllIMEIRecords();
-      const cashDrops = await sqliteAdapter.getCashDrops(false);
-      const payouts = await sqliteAdapter.getCashDrops(true);
-      const bundles = await sqliteAdapter.getAllBundles();
-      const customerDebts = await sqliteAdapter.getAllCustomerDebts();
-      const storeExpenses = await sqliteAdapter.getAllStoreExpenses();
-      const activeShift = await sqliteAdapter.getActiveShift();
-      const allShifts = await sqliteAdapter.getAllShifts();
-      const inventoryValuation = await sqliteAdapter.getInventoryValuation();
-      const auditLogs = await sqliteAdapter.getAllAuditLogs();
+      // P3.3: the 16 loads are independent — one parallel wave (latency = max,
+      // not sum). Order of names preserved so the set() below is unchanged.
+      const [
+        products,
+        customers,
+        transactions,
+        repairOrders,
+        purchaseOrders,
+        tradeIns,
+        imeiRecords,
+        cashDrops,
+        payouts,
+        bundles,
+        customerDebts,
+        storeExpenses,
+        activeShift,
+        allShifts,
+        inventoryValuation,
+        auditLogs,
+      ] = await Promise.all([
+        sqliteAdapter.getAllProducts(),
+        sqliteAdapter.getAllCustomers(),
+        sqliteAdapter.getAllTransactions(),
+        sqliteAdapter.getAllRepairOrders(),
+        sqliteAdapter.getAllPurchaseOrders(),
+        sqliteAdapter.getAllTradeIns(),
+        sqliteAdapter.getAllIMEIRecords(),
+        sqliteAdapter.getCashDrops(false),
+        sqliteAdapter.getCashDrops(true),
+        sqliteAdapter.getAllBundles(),
+        sqliteAdapter.getAllCustomerDebts(),
+        sqliteAdapter.getAllStoreExpenses(),
+        sqliteAdapter.getActiveShift(),
+        sqliteAdapter.getAllShifts(),
+        sqliteAdapter.getInventoryValuation(),
+        sqliteAdapter.getAllAuditLogs(),
+      ]);
 
       if (typeof localStorage !== 'undefined') {
         localStorage.removeItem('mobi_pos_products');

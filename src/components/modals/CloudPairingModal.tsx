@@ -64,50 +64,52 @@ export const CloudPairingModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
-      <div className="bg-pos-card border border-pos-border w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
+      <div className="bg-pos-card border-t sm:border border-pos-border w-full max-w-lg rounded-t-3xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 max-h-[92vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-pos-border bg-pos-panel">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center">
+        <div className="flex items-center justify-between p-3.5 sm:p-4 border-b border-pos-border bg-pos-panel shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0">
               <Smartphone className="w-4 h-4" />
             </div>
-            <div>
-              <h3 className="text-sm font-black text-pos-text">Application Mobile & Synchronisation</h3>
-              <p className="text-[10px] text-pos-muted">Hébergée sur GitHub pour Android et iOS</p>
+            <div className="min-w-0">
+              <h3 className="text-sm font-black text-pos-text truncate">Application Mobile & Sync</h3>
+              <p className="text-[10px] text-pos-muted truncate">Hébergée sur GitHub pour Android et iOS</p>
             </div>
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer"
+            className="p-1.5 rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-pos-border bg-pos-panel/50 p-1 gap-1">
+        <div className="flex border-b border-pos-border bg-pos-panel/50 p-1.5 gap-1 shrink-0">
           <button
             onClick={() => setActiveTab('download')}
-            className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px] active-press ${
               activeTab === 'download'
                 ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
                 : 'text-pos-muted hover:text-pos-text hover:bg-pos-hover'
             }`}
           >
             <DownloadCloud className="w-3.5 h-3.5" />
-            <span>1. Télécharger l'App</span>
+            <span>1. Télécharger</span>
           </button>
           <button
             onClick={() => setActiveTab('pair')}
-            className={`flex-1 py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+            className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer min-h-[44px] active-press ${
               activeTab === 'pair'
                 ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20'
                 : 'text-pos-muted hover:text-pos-text hover:bg-pos-hover'
             }`}
           >
             <QrCode className="w-3.5 h-3.5" />
-            <span>2. Lier la Boutique</span>
+            <span>2. Appairer</span>
           </button>
         </div>
 
@@ -329,10 +331,10 @@ export const CloudPairingModal: React.FC = () => {
         </div>
 
         {/* Footer */}
-        <div className="p-3 border-t border-pos-border bg-pos-panel flex justify-end">
+        <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-panel flex justify-end shrink-0">
           <button
             onClick={closeModal}
-            className="px-4 py-1.5 rounded-xl bg-pos-card border border-pos-border hover:bg-pos-hover text-xs font-bold text-pos-text transition cursor-pointer"
+            className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-pos-card border border-pos-border hover:bg-pos-hover text-xs font-bold text-pos-text transition cursor-pointer min-h-[44px] flex items-center justify-center active-press"
           >
             Fermer
           </button>

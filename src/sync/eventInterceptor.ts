@@ -51,63 +51,83 @@ export function getClock(): ClientHlcClock {
 }
 
 /**
- * Central interceptor: constructs a canonical Envelope, appends it to `event_log`,
- * and applies it to projection tables (`p_products`, `p_transactions`, `p_transaction_items`).
+ * Central interceptor: constructs a canonical Envelope, appends it to `event_log`
+ * where the schema supports it, and applies it to projection tables (`p_*`).
+ *
+ * Lane status (ADR-0010): production databases (Rust migration v100) never had
+ * this writer's columns and the cloud has no `event_log` table, so persisting
+ * there is doomed. Instead of paying a doomed INSERT on every call, the first
+ * schema-mismatch error latches a session circuit breaker — afterwards the
+ * function stays a pure constructor (envelope + notification, zero IPC).
+ * Genuine transient errors keep retrying; only schema mismatches break.
+ * The P1 lifecycle gate (writer-schema test DB) keeps exercising the full path.
  */
+let laneDead = false;
+
+function isSchemaMismatch(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /no such column|no such table|has no column/i.test(msg);
+}
+
 export async function recordShadowEvent(
   db: SqlExecutor,
   event: DomainEvent,
   aggregate: string,
   deviceId?: string
 ): Promise<Envelope | null> {
-  try {
-    const devId = deviceId || currentDeviceId;
-    const clock = getClock();
-    const hlc = clock.now();
-    const event_id = generateUlid();
-    const nowIso = new Date().toISOString();
+  const devId = deviceId || currentDeviceId;
+  const clock = getClock();
+  const hlc = clock.now();
+  const event_id = generateUlid();
 
-    const envelope: Envelope = {
-      event_id,
-      aggregate,
-      hlc,
-      device_id: devId,
-      schema_v: 1,
-      event,
-    };
+  const envelope: Envelope = {
+    event_id,
+    aggregate,
+    hlc,
+    device_id: devId,
+    schema_v: 1,
+    event,
+  };
 
-    // 1. Append to event_log
-    await db.execute(
-      `INSERT INTO event_log (
-        event_id, aggregate, hlc, device_id, schema_v, event_type, data_json, synced_to_cloud, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?);`,
-      [
-        envelope.event_id,
-        envelope.aggregate,
-        envelope.hlc,
-        envelope.device_id,
-        envelope.schema_v,
-        envelope.event.type,
-        JSON.stringify(envelope.event.data),
-        nowIso,
-      ]
-    );
+  if (!laneDead) {
+    try {
+      // 1. Append to event_log
+      await db.execute(
+        `INSERT INTO event_log (
+          event_id, aggregate, hlc, device_id, schema_v, event_type, data_json, synced_to_cloud, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?);`,
+        [
+          envelope.event_id,
+          envelope.aggregate,
+          envelope.hlc,
+          envelope.device_id,
+          envelope.schema_v,
+          envelope.event.type,
+          JSON.stringify(envelope.event.data),
+          new Date().toISOString(),
+        ]
+      );
 
-    // 2. Reduce onto p_* projections
-    await reduceEnvelope(db, envelope);
-
-    // 3. Notify reactive live queries
-    if (typeof window !== 'undefined') {
-      try {
-        window.dispatchEvent(new CustomEvent('pos:projection-changed'));
-      } catch {}
+      // 2. Reduce onto p_* projections
+      await reduceEnvelope(db, envelope);
+    } catch (err) {
+      if (isSchemaMismatch(err)) {
+        // Permanent: this database will never accept the lane. Latch open —
+        // all later calls stay pure constructors (no more doomed IPC).
+        laneDead = true;
+      } else {
+        console.warn('[Shadow Event Interceptor] Non-fatal error recording shadow event:', err);
+      }
     }
-
-    return envelope;
-  } catch (err) {
-    // Non-fatal guard: shadow operations must never fail the legacy transaction
-    console.warn('[Shadow Event Interceptor] Non-fatal error recording shadow event:', err);
-    return null;
   }
+
+  // 3. Notify reactive live queries
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(new CustomEvent('pos:projection-changed'));
+    } catch {}
+  }
+
+  return envelope;
 }
 

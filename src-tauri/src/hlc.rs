@@ -89,7 +89,7 @@ impl HlcClock {
     /// Generate next timestamp. Guaranteed strictly greater than any previously
     /// issued timestamp or any timestamp observed via observe().
     pub fn now(&self) -> Hlc {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let phys = Self::now_ms();
         let (p, l) = *st;
 
@@ -110,7 +110,7 @@ impl HlcClock {
     /// Observe a remote HLC timestamp (e.g. from cloud pull or relay event).
     /// Advances local clock so any subsequent write is strictly newer than the remote write.
     pub fn observe(&self, remote: &Hlc) {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let phys = Self::now_ms();
         let (p, l) = *st;
 

@@ -83,8 +83,10 @@ mod win {
             }
 
             if !open_ok {
-                eprintln!("[printer] Windows printer '{}' not found and no default printer available", printer_name);
-                return Ok(());
+                return Err(format!(
+                    "Aucune imprimante disponible : '{}' introuvable et aucune imprimante par défaut configurée",
+                    printer_name
+                ));
             }
 
             let doc_info = DOC_INFO_1W {
@@ -138,7 +140,7 @@ mod win {
 #[cfg(all(not(target_os = "windows"), not(mobile)))]
 mod win {
     pub fn print_raw(_printer_name: &str, _data: &[u8]) -> Result<(), String> {
-        Ok(())
+        Err("Impression ESC/POS non supportée sur macOS/Linux (spooler Windows uniquement).".into())
     }
 }
 

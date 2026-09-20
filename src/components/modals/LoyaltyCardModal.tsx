@@ -36,53 +36,59 @@ export const LoyaltyCardModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 max-h-[92vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 max-h-[92vh] flex flex-col pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-emerald-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-amber-500/20">
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-amber-500 to-emerald-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-amber-500/20 shrink-0">
               <Award className="w-5 h-5 stroke-[2.5]" />
             </div>
-            <div>
-              <h2 className="text-sm font-extrabold text-pos-text tracking-wide flex items-center gap-2">
-                CARTE DE FIDÉLITÉ NUMÉRIQUE & PVC IMPRIMABLE
-                <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded border ${tierInfo.bgColor} ${tierInfo.badgeColor} ${tierInfo.borderColor}`}>
+            <div className="min-w-0">
+              <h2 className="text-xs sm:text-sm font-extrabold text-pos-text tracking-wide flex items-center gap-2 truncate">
+                <span className="truncate">CARTE DE FIDÉLITÉ NUMÉRIQUE & PVC</span>
+                <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded border shrink-0 ${tierInfo.bgColor} ${tierInfo.badgeColor} ${tierInfo.borderColor}`}>
                   {tierInfo.icon} {tierInfo.name}
                 </span>
               </h2>
-              <p className="text-[11px] text-pos-muted">
+              <p className="text-[11px] text-pos-muted truncate">
                 Client: <strong className="text-pos-text">{customer.name}</strong> • Code: <span className="font-mono text-emerald-400">{cardCode}</span>
               </p>
             </div>
           </div>
-          <button onClick={closeModal} className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition">
+          <button
+            onClick={closeModal}
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Studio Sub-Tabs */}
-        <div className="px-5 pt-3 border-b border-pos-border bg-pos-bg flex gap-2 shrink-0">
+        <div className="px-3 sm:px-5 pt-2 sm:pt-3 border-b border-pos-border bg-pos-bg flex gap-2 shrink-0">
           <button
             onClick={() => setActiveTab('pvc_physical')}
-            className={`pb-2 px-3 text-xs font-bold transition flex items-center gap-1.5 border-b-2 ${
+            className={`pb-2.5 px-3 text-xs font-bold transition flex items-center gap-1.5 border-b-2 min-h-[44px] ${
               activeTab === 'pvc_physical'
                 ? 'border-emerald-400 text-emerald-400'
                 : 'border-transparent text-pos-muted hover:text-pos-text'
             }`}
           >
-            <CreditCard className="w-3.5 h-3.5" /> Carte Physique PVC (Format CR80)
+            <CreditCard className="w-3.5 h-3.5 shrink-0" />
+            <span>Carte Physique<span className="hidden sm:inline"> PVC (Format CR80)</span></span>
           </button>
           <button
             onClick={() => setActiveTab('digital_wallet')}
-            className={`pb-2 px-3 text-xs font-bold transition flex items-center gap-1.5 border-b-2 ${
+            className={`pb-2.5 px-3 text-xs font-bold transition flex items-center gap-1.5 border-b-2 min-h-[44px] ${
               activeTab === 'digital_wallet'
                 ? 'border-amber-400 text-amber-400'
                 : 'border-transparent text-pos-muted hover:text-pos-text'
             }`}
           >
-            <Smartphone className="w-3.5 h-3.5" /> Pass Digital Wallet (Apple / Google)
+            <Smartphone className="w-3.5 h-3.5 shrink-0" />
+            <span>Pass Digital<span className="hidden sm:inline"> Wallet (Apple / Google)</span></span>
           </button>
         </div>
 
@@ -224,22 +230,22 @@ export const LoyaltyCardModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between shrink-0">
-          <div className="text-xs text-pos-muted flex items-center gap-1.5">
-            <Check className="w-4 h-4 text-emerald-400" />
-            <span>Format Standard PVC CR80 (85.60 x 53.98 mm) - Haute Définition</span>
+        <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 shrink-0">
+          <div className="text-xs text-pos-muted flex items-center gap-1.5 truncate">
+            <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span className="truncate">Format Standard PVC CR80 (85.60 x 53.98 mm)</span>
           </div>
 
           <div className="flex items-center gap-2">
             <button
               onClick={closeModal}
-              className="px-4 py-2 rounded-xl bg-pos-bg hover:bg-pos-hover text-pos-text border border-pos-border text-xs font-semibold transition"
+              className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-pos-bg hover:bg-pos-hover text-pos-text border border-pos-border text-xs font-semibold transition min-h-[44px] flex items-center justify-center active-press"
             >
               Fermer
             </button>
             <button
               onClick={handlePrintCard}
-              className="px-4 py-2 rounded-xl glow-btn bg-gradient-to-r from-amber-500 to-emerald-600 hover:from-amber-400 hover:to-emerald-500 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-lg shadow-amber-500/20"
+              className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl glow-btn bg-gradient-to-r from-amber-500 to-emerald-600 hover:from-amber-400 hover:to-emerald-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 min-h-[44px] active-press"
             >
               <Printer className="w-4 h-4" /> Imprimer Carte PVC
             </button>

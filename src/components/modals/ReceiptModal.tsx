@@ -5,6 +5,7 @@ import { formatDZD, formatDateTime } from '../../types/pos';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
 import { resolvePrinterForDocument } from '../../utils/printerRoutingEngine';
 import { directPrintReceipt } from '../../utils/escpos';
+import { grossFromTransaction } from '../../utils/receiptMath';
 
 export const ReceiptModal: React.FC = () => {
   const {
@@ -45,15 +46,18 @@ export const ReceiptModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[92vh]">
+        {/* Mobile Pull Handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={closeModal}
-              className="p-1 -ml-1 rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center gap-1 font-bold text-xs"
+              className="p-1.5 -ml-1 rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center gap-1 font-bold text-xs min-h-[36px] min-w-[36px] justify-center"
               title="Retour"
             >
               <ChevronLeft className="w-5 h-5 text-cyan-400 stroke-[2.5]" />
@@ -147,9 +151,15 @@ export const ReceiptModal: React.FC = () => {
                 {currentTx.isRefund ? "Articles Retournés :" : "Articles Achetés :"}
               </p>
               {(currentTx.items || []).map((item) => {
-                const unitPrice = item.appliedPrice || item.product.price;
+                const unitPrice = item.unitPriceCharged || item.appliedPrice || item.product.price;
+                const defaultPrice = item.defaultPrice || item.product.price;
                 const grossLinePrice = unitPrice * item.quantity;
-                const netLinePrice = Math.max(0, grossLinePrice - item.discount);
+                const netLinePrice = Math.max(0, grossLinePrice - (item.discount || 0));
+                const unitCost = item.unitCostAtSale ?? item.product?.costPrice ?? 0;
+                const lineProfit = item.lineProfit !== undefined
+                  ? item.lineProfit
+                  : (unitPrice - unitCost) * item.quantity;
+                const hasManualDiscount = item.discountAmount !== undefined && item.discountAmount > 0;
 
                 return (
                   <div key={item.product.id} className="flex flex-col">
@@ -158,6 +168,11 @@ export const ReceiptModal: React.FC = () => {
                         <p className="font-bold break-words">{item.product.title}</p>
                         <p className="text-[9px] text-gray-600">
                           {item.quantity} x {formatDZD(unitPrice)}
+                          {defaultPrice !== unitPrice && (
+                            <span className="line-through text-gray-400 ml-1.5 font-normal">
+                              {formatDZD(defaultPrice)}
+                            </span>
+                          )}
                         </p>
                       </div>
                       <span className="font-bold text-right shrink-0">{formatDZD(netLinePrice)}</span>
@@ -167,6 +182,22 @@ export const ReceiptModal: React.FC = () => {
                       <div className="flex justify-between text-[9px] text-purple-700 font-semibold italic pl-2">
                         <span>&gt; Remise Produit :</span>
                         <span>-{formatDZD(item.discount)}</span>
+                      </div>
+                    )}
+
+                    {hasManualDiscount && (
+                      <div className="flex justify-between text-[9px] text-amber-700 font-semibold italic pl-2">
+                        <span>&gt; Remise Manuelle :</span>
+                        <span>-{formatDZD((item.discountAmount || 0) * item.quantity)} (-{formatDZD(item.discountAmount || 0)}/u)</span>
+                      </div>
+                    )}
+
+                    {(unitCost > 0 || item.lineProfit !== undefined) && (
+                      <div className="flex justify-between text-[8.5px] text-gray-500 font-mono italic pl-2">
+                        <span>&gt; Marge ligne ({formatDZD(unitPrice - unitCost)}/u) :</span>
+                        <span className={lineProfit >= 0 ? "text-gray-700 font-bold" : "text-rose-700 font-bold"}>
+                          {formatDZD(lineProfit)}
+                        </span>
                       </div>
                     )}
 
@@ -185,7 +216,7 @@ export const ReceiptModal: React.FC = () => {
                 <>
                   <div className="flex justify-between text-gray-700 text-[10px]">
                     <span>SOUS-TOTAL BRUT:</span>
-                    <span>{formatDZD(currentTx.subtotal + currentTx.discountTotal)}</span>
+                      <span>{formatDZD(grossFromTransaction(currentTx))}</span>
                   </div>
                   <div className="flex justify-between text-purple-700 font-bold text-[10px]">
                     <span>REMISE ACCORDÉE:</span>
@@ -207,6 +238,23 @@ export const ReceiptModal: React.FC = () => {
                   {formatDZD(currentTx.total)}
                 </span>
               </div>
+
+              {!currentTx.isRefund && (currentTx.profit !== undefined || currentTx.costTotal !== undefined) && (
+                <div className="flex justify-between text-[9px] text-gray-600 font-mono font-bold pt-0.5 border-t border-dotted border-gray-300">
+                  <span>MARGE COMMERCIALE TOTALE :</span>
+                  <span>
+                    {formatDZD(
+                      currentTx.profit !== undefined
+                        ? currentTx.profit
+                        : (currentTx.items || []).reduce((acc, it) => {
+                            const uCost = it.unitCostAtSale ?? it.product?.costPrice ?? 0;
+                            const uPrice = it.unitPriceCharged ?? it.appliedPrice ?? it.product?.price ?? 0;
+                            return acc + (it.lineProfit ?? ((uPrice - uCost) * it.quantity));
+                          }, 0)
+                    )}
+                  </span>
+                </div>
+              )}
 
               <div className="pt-2 text-[10px] border-t border-dashed border-gray-400 space-y-0.5">
                 <div className="flex justify-between">
@@ -250,30 +298,30 @@ export const ReceiptModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex flex-col gap-3">
+        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col gap-2.5 shrink-0">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] text-emerald-400 flex items-center gap-1">
+            <span className="text-[11px] text-emerald-400 flex items-center gap-1 font-medium">
               <Zap className="w-3.5 h-3.5" /> Signal Ouverture Tiroir-Caisse Envoyé
             </span>
           </div>
-          <div className="flex gap-2 justify-end">
+          <div className="flex flex-col sm:flex-row gap-2 justify-end">
             <button
               onClick={closeModal}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition"
+              className="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text transition cursor-pointer order-3 sm:order-1"
             >
               Fermer
             </button>
             <button
               onClick={handlePrintBrowser}
-              className="px-4 py-2 rounded-xl bg-pos-bg border border-pos-border hover:border-emerald-500 text-pos-text font-semibold text-xs flex items-center gap-1.5 transition"
+              className="w-full sm:w-auto min-h-[42px] px-4 py-2 rounded-xl bg-pos-bg border border-pos-border hover:border-emerald-500 text-pos-text font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-95 cursor-pointer order-2"
             >
-              <Printer className="w-4 h-4" /> Imprimer via Navigateur
+              <Printer className="w-4 h-4" /> <span>Navigateur</span>
             </button>
             <button
               onClick={handlePrintThermal}
-              className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition shadow-lg shadow-emerald-500/20"
+              className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 transition shadow-lg shadow-emerald-500/20 active:scale-95 cursor-pointer order-1 sm:order-3"
             >
-              <Printer className="w-4 h-4" /> Imprimer Thermique
+              <Printer className="w-4 h-4 stroke-[2.5]" /> <span>Imprimer Thermique</span>
             </button>
           </div>
         </div>

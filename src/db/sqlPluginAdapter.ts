@@ -6,6 +6,7 @@
 import Database from '@tauri-apps/plugin-sql';
 import { recordShadowEvent, initClock } from '../sync/eventInterceptor.ts';
 import { backfillExistingProducts } from '../sync/snapshotBackfill.ts';
+import type { Product } from '../types/pos';
 
 const DB_PATH = 'sqlite:mobi_pos.db';
 
@@ -13,6 +14,17 @@ let cached: Database | null = null;
 let columnsEnsured = false;
 
 export async function ensureLocalSyncColumns(db: Database): Promise<void> {
+  // Fast path (boot gate): a migrated DB already carries every column below.
+  // Two probe SELECTs replace 22 doomed ALTERs per boot on established DBs
+  // (measured: 22 of 36 boot IPC ops failed with "duplicate column").
+  // Fresh/partial DBs fail a probe and fall through to the full pass.
+  try {
+    await db.select('SELECT version FROM products LIMIT 0;');
+    await db.select('SELECT last_error FROM sync_outbox LIMIT 0;');
+    return;
+  } catch {
+    // Column (or table) missing — run the full idempotent pass below.
+  }
   const statements = [
     'ALTER TABLE products ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
     'ALTER TABLE transactions ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
@@ -236,6 +248,14 @@ export async function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<{ 
   const now = utcNowIso();
 
   try {
+    // NOTE (F8 reverted 2026-09-18): do NOT wrap this in BEGIN/COMMIT here.
+    // tauri-plugin-sql v2 fronts an sqlx Pool<Sqlite> — each execute() may land
+    // on a different pooled connection, so COMMIT fails with "no transaction
+    // is active" and every checkout aborts (while the autocommitted statements
+    // before it already persisted). Each statement below stays autocommit, as
+    // before. True atomicity needs a Rust-side command over one rusqlite
+    // connection — see the perf-audit remediation log. Never retry blindly on
+    // this path: a failed COMMIT still leaves the sale rows persisted.
     // Ensure referenced products exist locally (stub if seed only hit Dexie).
     // MUST run before order_items (FK product_id -> products).
     for (const p of input.productSnapshots ?? []) {
@@ -543,15 +563,28 @@ export async function syncProductsFromSqlToDexie(productIds?: Iterable<string>):
     }
 
     const validIds = new Set<string>();
+    // Bulk diff (F3): one bulkGet + one bulkPut replaces N×(get + update/put).
+    // Same semantics: existing rows get a stock-only patch, missing rows a full put.
+    const existingById = new Map<string, Product>();
+    if (rows.length > 0) {
+      const found = await dexieDb.products
+        .bulkGet(rows.map((r) => String(r.id ?? '')))
+        .catch(() => [] as Product[]);
+      for (const p of found) {
+        if (p) existingById.set(p.id, p);
+      }
+    }
+    const toPut: Product[] = [];
     await dexieDb.transaction('rw', dexieDb.products, async () => {
       for (const r of rows) {
         const id = String(r.id ?? '');
         if (!id) continue;
         validIds.add(id);
-        const existing = await dexieDb.products.get(id);
+        const existing = existingById.get(id);
         if (existing) {
           if (existing.stock !== Number(r.stock ?? existing.stock)) {
-            await dexieDb.products.update(id, { stock: Number(r.stock ?? 0) });
+            existing.stock = Number(r.stock ?? 0);
+            toPut.push(existing);
           }
         } else {
           let base: Record<string, unknown> = {};
@@ -560,7 +593,7 @@ export async function syncProductsFromSqlToDexie(productIds?: Iterable<string>):
           } catch {
             // keep base empty; row columns remain authoritative
           }
-          await dexieDb.products.put({
+          toPut.push({
             ...base,
             id,
             sku: String(r.sku ?? base.sku ?? ''),
@@ -582,6 +615,9 @@ export async function syncProductsFromSqlToDexie(productIds?: Iterable<string>):
             compatibleModel: String(r.compatible_model ?? base.compatibleModel ?? ''),
           } as never);
         }
+      }
+      if (toPut.length > 0) {
+        await dexieDb.products.bulkPut(toPut);
       }
 
       // Full reconciliation is only needed during the explicit full-sync path.
@@ -625,6 +661,37 @@ export async function markOutbox(
       next_retry_at=$3, last_error=$4, updated_at=$5 WHERE idempotency_key=$6`,
     [patch.status, patch.retryCount ?? null, patch.nextRetryAt ?? null, patch.error ?? null, utcNowIso(), idempotencyKey],
   );
+}
+
+/**
+ * Set-based outbox bookkeeping: one IPC per ~500 rows instead of one per row.
+ * Semantics match markOutbox exactly for uniform patches (same status/error for
+ * every key): `synced` deletes, otherwise status flips with next_retry_at and
+ * last_error reset/overwritten just like the per-row form. Per-row divergent
+ * patches (individual retry counts/errors) must keep using markOutbox.
+ */
+export async function markOutboxMany(
+  idempotencyKeys: string[],
+  patch: { status: 'inflight' | 'pending' | 'synced'; error?: string | null },
+): Promise<void> {
+  if (idempotencyKeys.length === 0) return;
+  const db = await getLocalDb();
+  const now = utcNowIso();
+  for (let i = 0; i < idempotencyKeys.length; i += 500) {
+    const chunk = idempotencyKeys.slice(i, i + 500);
+    const placeholders = chunk.map(() => '?').join(',');
+    if (patch.status === 'synced') {
+      await db.execute(
+        `DELETE FROM sync_outbox WHERE idempotency_key IN (${placeholders})`,
+        chunk,
+      );
+    } else {
+      await db.execute(
+        `UPDATE sync_outbox SET status=?, next_retry_at=NULL, last_error=?, updated_at=? WHERE idempotency_key IN (${placeholders})`,
+        [patch.status, patch.error ?? null, now, ...chunk],
+      );
+    }
+  }
 }
 
 export async function getFailedOutboxCount(): Promise<number> {

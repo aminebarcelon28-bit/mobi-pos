@@ -26,8 +26,11 @@ export const UpdateModal: React.FC = () => {
   if (!isUpdateAvailable) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-4 select-none animate-in fade-in">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none animate-in fade-in">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 flex flex-col">
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* Header */}
         <div className="p-5 border-b border-pos-border bg-gradient-to-r from-blue-950/40 via-pos-card to-purple-950/40 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -128,12 +131,12 @@ export const UpdateModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 border-t border-pos-border bg-pos-card/80 flex items-center justify-end gap-2.5">
+        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card/80 flex flex-wrap sm:flex-nowrap items-center justify-end gap-2 sm:gap-2.5">
           {!readyToRelaunch && !downloading && (
             <>
               <button
                 onClick={dismissUpdate}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text hover:bg-pos-hover transition"
+                className="min-h-[44px] px-4 py-2 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text hover:bg-pos-hover transition cursor-pointer active:scale-95 flex items-center justify-center flex-1 sm:flex-none"
               >
                 Plus tard
               </button>
@@ -146,9 +149,9 @@ export const UpdateModal: React.FC = () => {
                     showToast("Téléchargement et installation en cours...", "info");
                     downloadAndInstall();
                   }}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer active:scale-95"
+                  className="min-h-[44px] px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer active:scale-95 flex-1 sm:flex-none"
                 >
-                  <DownloadCloud className="w-4 h-4" /> Mettre à jour maintenant
+                  <DownloadCloud className="w-4 h-4" /> <span>Mettre à jour</span>
                 </button>
               ) : isAndroidDevice ? (
                 <a
@@ -161,9 +164,9 @@ export const UpdateModal: React.FC = () => {
                     showToast("Téléchargement de l'APK Android démarré...", 'info');
                     openDownloadPage();
                   }}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer no-underline active:scale-95"
+                  className="min-h-[44px] px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer no-underline active:scale-95 flex-1 sm:flex-none"
                 >
-                  <DownloadCloud className="w-4 h-4" /> Télécharger l'APK v{updateInfo?.version}
+                  <DownloadCloud className="w-4 h-4" /> <span>Télécharger l'APK v{updateInfo?.version}</span>
                   <ExternalLink className="w-3.5 h-3.5 opacity-75" />
                 </a>
               ) : isIOSDevice ? (
@@ -175,9 +178,9 @@ export const UpdateModal: React.FC = () => {
                     soundEngine.playKeyBeep?.();
                     openDownloadPage('https://apps.apple.com');
                   }}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer no-underline active:scale-95"
+                  className="min-h-[44px] px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer no-underline active:scale-95 flex-1 sm:flex-none"
                 >
-                  <ExternalLink className="w-4 h-4" /> Ouvrir l'App Store
+                  <ExternalLink className="w-4 h-4" /> <span>Ouvrir l'App Store</span>
                 </a>
               ) : (
                 <a
@@ -189,9 +192,9 @@ export const UpdateModal: React.FC = () => {
                     showToast("Ouverture de la page de mise à jour...", 'info');
                     openDownloadPage();
                   }}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer no-underline active:scale-95"
+                  className="min-h-[44px] px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-blue-500/25 transition cursor-pointer no-underline active:scale-95 flex-1 sm:flex-none"
                 >
-                  <DownloadCloud className="w-4 h-4" /> Télécharger la Mise à Jour
+                  <DownloadCloud className="w-4 h-4" /> <span>Télécharger la Mise à Jour</span>
                   <ExternalLink className="w-3.5 h-3.5 opacity-75" />
                 </a>
               )}
@@ -201,9 +204,9 @@ export const UpdateModal: React.FC = () => {
           {readyToRelaunch && (
             <button
               onClick={relaunchApp}
-              className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer"
+              className="min-h-[44px] w-full sm:w-auto px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer active:scale-95"
             >
-              <RotateCcw className="w-4 h-4" /> Redémarrer l'application
+              <RotateCcw className="w-4 h-4" /> <span>Redémarrer l'application</span>
             </button>
           )}
         </div>

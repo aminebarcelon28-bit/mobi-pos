@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { listenToEvent } from '../platform/events';
 import { scanHardwareDevices } from '../api/hardware';
 import type { DiscoveredDevice } from '../types/pos';
 import type { BindingResult } from '../utils/autoHardwareBinder';
@@ -50,11 +50,14 @@ export function useAutoDetectedHardware() {
 
     const setupListener = async () => {
       try {
-        const unlisten = await listen<DiscoveredDevice[]>('hardware://device-list-updated', (event) => {
-          if (isMounted) {
-            processDeviceList(event.payload);
+        const unlisten = await listenToEvent<DiscoveredDevice[]>(
+          'hardware://device-list-updated',
+          (payload) => {
+            if (isMounted) {
+              processDeviceList(payload);
+            }
           }
-        });
+        );
         if (!isMounted) {
           unlisten();
         } else {

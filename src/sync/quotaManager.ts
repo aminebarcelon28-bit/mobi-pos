@@ -1,66 +1,65 @@
 // Data Usage Meter & Quota Alerts Engine.
-// Queries Turso database size via PRAGMA page_count and dbstat table.
+// Queries Turso database size via PRAGMA page_count, freelist_count and the
+// dbstat table. Billing basis (Turso docs): dbstat tables+indexes sum —
+// freelist pages are not billed, so the meter leads with that number.
 // Enforces configurable warning thresholds (70%, 85%, 95%) with actionable alerts.
 
 import { getTursoClient } from './tursoClient';
 import { ALL_REMOTE_SYNC_TABLES, assertValidSyncTable } from './remoteSchema';
+import {
+  buildStorageReport,
+  DEFAULT_DATABASE_QUOTA_BYTES,
+  type StorageUsageReport,
+  type TableStorageSize,
+} from './storageReport';
 
-export const DEFAULT_DATABASE_QUOTA_BYTES = 500 * 1024 * 1024; // 500 MB (Standard Turso Starter Tier per DB)
-
-export const QUOTA_THRESHOLDS = {
-  NOTICE: 0.70,     // 70% Notice
-  WARNING: 0.85,    // 85% Strong warning
-  CRITICAL: 0.95,   // 95% Critical alert
-} as const;
-
-export interface TableStorageSize {
-  tableName: string;
-  bytes: number;
-  isEstimated: boolean;
-}
-
-export interface StorageUsageReport {
-  totalBytes: number;
-  quotaBytes: number;
-  usedPercentage: number;
-  remainingBytes: number;
-  isEstimated: boolean;
-  tableBreakdown: TableStorageSize[];
-  thresholdLevel: 'OK' | 'NOTICE' | 'WARNING' | 'CRITICAL' | 'EXCEEDED';
-  alertMessage?: string;
-  actionRequired?: string;
-}
+export { DEFAULT_DATABASE_QUOTA_BYTES, QUOTA_THRESHOLDS } from './storageReport';
+export type { StorageUsageReport, TableStorageSize } from './storageReport';
 
 export class QuotaManager {
   /**
-   * Fetches storage usage metrics from Turso using official PRAGMA page_count & dbstat.
+   * Fetches storage usage metrics from Turso using official PRAGMAs & dbstat.
    * If remote queries are unsupported or offline, estimates from row counts and labels as (estimé).
    */
   static async getStorageUsage(quotaBytes = DEFAULT_DATABASE_QUOTA_BYTES): Promise<StorageUsageReport> {
     try {
       const client = await getTursoClient();
 
-      // 1. Total database size via PRAGMA page_count & page_size
+      // 1. On-disk file size via PRAGMA page_count & page_size
       const pageCountRes = await client.execute('PRAGMA page_count;');
       const pageSizeRes = await client.execute('PRAGMA page_size;');
 
       const pageCount = Number(pageCountRes.rows[0]?.[0] ?? pageCountRes.rows[0]?.page_count ?? 0);
       const pageSize = Number(pageSizeRes.rows[0]?.[0] ?? pageSizeRes.rows[0]?.page_size ?? 4096);
-      let totalBytes = pageCount * pageSize;
+      const fileBytes = pageCount * pageSize;
 
-      // 2. Per-table breakdown via dbstat virtual table
+      // 2. Reusable pages (auto-reused by new writes; not billed)
+      let freelistBytes = 0;
+      try {
+        const freelistRes = await client.execute('PRAGMA freelist_count;');
+        const freelist = Number(freelistRes.rows[0]?.[0] ?? freelistRes.rows[0]?.freelist_count ?? 0);
+        freelistBytes = freelist * pageSize;
+      } catch {
+        // freelist PRAGMA unsupported — liveBytes falls back to fileBytes
+      }
+
+      // 3. Per-table breakdown via dbstat virtual table (== billing basis)
       const tableBreakdown: TableStorageSize[] = [];
       let usedDbStat = false;
+      let billedBytes: number | null = null;
 
       try {
         const dbstatRes = await client.execute('SELECT name, SUM(pgsize) as bytes FROM dbstat GROUP BY name;');
+        let sum = 0;
         for (const row of dbstatRes.rows) {
           const tableName = String(row.name);
           const bytes = Number(row.bytes ?? 0);
+          sum += bytes;
           if ((ALL_REMOTE_SYNC_TABLES as readonly string[]).includes(tableName)) {
             tableBreakdown.push({ tableName, bytes, isEstimated: false });
           }
         }
+        billedBytes = sum;
         usedDbStat = true;
       } catch {
         // dbstat might not be enabled on this tier; fallback to per-table estimation
@@ -82,59 +81,24 @@ export class QuotaManager {
         }
       }
 
-      // If totalBytes was 0, sum table breakdown
-      if (totalBytes === 0) {
-        totalBytes = tableBreakdown.reduce((sum, t) => sum + t.bytes, 0);
-      }
-
-      const usedPercentage = Math.min(100, Math.round((totalBytes / quotaBytes) * 100));
-      const remainingBytes = Math.max(0, quotaBytes - totalBytes);
-
-      let thresholdLevel: StorageUsageReport['thresholdLevel'] = 'OK';
-      let alertMessage: string | undefined;
-      let actionRequired: string | undefined;
-
-      const ratio = totalBytes / quotaBytes;
-      if (ratio >= 1.0) {
-        thresholdLevel = 'EXCEEDED';
-        alertMessage = 'Quota de stockage cloud Turso complètement dépassé (100%).';
-        actionRequired = 'La synchronisation automatique est suspendue pour éviter tout surcoût. Contactez votre administrateur pour augmenter le forfait de votre base de données.';
-      } else if (ratio >= QUOTA_THRESHOLDS.CRITICAL) {
-        thresholdLevel = 'CRITICAL';
-        alertMessage = `Alerte critique: Vous avez consommé ${usedPercentage}% de votre espace de stockage cloud.`;
-        actionRequired = 'Il reste très peu d\'espace disponible. Contactez votre fournisseur sans tarder pour mettre à niveau votre compte.';
-      } else if (ratio >= QUOTA_THRESHOLDS.WARNING) {
-        thresholdLevel = 'WARNING';
-        alertMessage = `Avertissement: Votre stockage cloud atteint ${usedPercentage}%.`;
-        actionRequired = 'Pensez à contacter votre administrateur pour planifier une extension de quota.';
-      } else if (ratio >= QUOTA_THRESHOLDS.NOTICE) {
-        thresholdLevel = 'NOTICE';
-        alertMessage = `Information de stockage: Espace utilisé à ${usedPercentage}%.`;
-        actionRequired = 'Surveillez votre volume de ventes ou archivez d\'anciens journaux si nécessaire.';
-      }
-
-      return {
-        totalBytes,
+      return buildStorageReport({
+        fileBytes,
+        freelistBytes,
+        billedBytes,
         quotaBytes,
-        usedPercentage,
-        remainingBytes,
-        isEstimated: !usedDbStat,
         tableBreakdown,
-        thresholdLevel,
-        alertMessage,
-        actionRequired,
-      };
+        isEstimated: !usedDbStat,
+      });
     } catch (e) {
       console.warn('Could not query remote storage size:', e);
-      return {
-        totalBytes: 0,
+      return buildStorageReport({
+        fileBytes: 0,
+        freelistBytes: 0,
+        billedBytes: null,
         quotaBytes,
-        usedPercentage: 0,
-        remainingBytes: quotaBytes,
-        isEstimated: true,
         tableBreakdown: [],
-        thresholdLevel: 'OK',
-      };
+        isEstimated: true,
+      });
     }
   }
 }

@@ -132,29 +132,31 @@ export const LabelPrinterModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[94vh] sm:max-h-[90vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-2 text-emerald-400">
-            <Barcode className="w-5 h-5" />
-            <h2 className="text-base font-bold text-pos-text">
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+          <div className="flex items-center gap-2 text-emerald-400 min-w-0">
+            <Barcode className="w-5 h-5 shrink-0" />
+            <h2 className="text-sm sm:text-base font-bold text-pos-text truncate">
               Studio d'Impression d'Étiquettes Code-Barres & Prix
             </h2>
           </div>
           <button
             onClick={closeModal}
-            className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content Body: Split into Left Selection Panel & Right Label Preview Studio */}
-        <div className="flex-1 flex overflow-hidden divide-x divide-pos-border">
+        <div className="flex-1 flex flex-col lg:flex-row overflow-hidden divide-y lg:divide-y-0 lg:divide-x divide-pos-border">
           
           {/* Left Panel: Search & Product Picker Grid */}
-          <div className="w-7/12 flex flex-col p-4 space-y-3 overflow-hidden bg-pos-bg">
+          <div className="w-full lg:w-7/12 h-1/2 lg:h-auto flex flex-col p-3 sm:p-4 space-y-3 overflow-hidden bg-pos-bg shrink-0 lg:shrink">
             
             {/* Search & Filter Toolbar */}
             <div className="space-y-2 shrink-0">
@@ -260,7 +262,7 @@ export const LabelPrinterModal: React.FC = () => {
           </div>
 
           {/* Right Panel: Label Configuration & Live Studio Preview */}
-          <div className="w-5/12 flex flex-col p-5 bg-pos-panel space-y-4 overflow-y-auto">
+          <div className="w-full lg:w-5/12 flex-1 lg:flex-initial flex flex-col p-3 sm:p-5 bg-pos-panel space-y-3 sm:space-y-4 overflow-y-auto">
             
             {/* Format & Quantity Controls */}
             <div className="space-y-3 bg-pos-card border border-pos-border p-3.5 rounded-xl">
@@ -413,31 +415,31 @@ export const LabelPrinterModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex justify-between items-center shrink-0">
-          <div className="text-xs text-pos-muted flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span>
-              Impression Étiquettes : <strong className="text-pos-text">{labelQuantity}× {selectedProduct?.title || 'Étiquette'}</strong> ({labelSize} mm) — <span className="text-emerald-400 font-bold">⚡ Routé vers : {targetPrinter.printerName}</span>
+        <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 shrink-0">
+          <div className="text-xs text-pos-muted flex items-center gap-2 truncate">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+            <span className="truncate">
+              Impression : <strong className="text-pos-text">{labelQuantity}× {selectedProduct?.title || 'Étiquette'}</strong> ({labelSize} mm)
             </span>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
             <button
               onClick={closeModal}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition-colors"
+              className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition-colors min-h-[44px] flex items-center justify-center active-press"
             >
               Annuler
             </button>
             <button
               onClick={handlePrintLabels}
               disabled={isPrinting}
-              className={`px-6 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 shadow-lg transition-all ${
+              className={`flex-1 sm:flex-initial px-6 py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all min-h-[44px] active-press ${
                 isPrinting
                   ? 'bg-emerald-500/50 text-slate-900 cursor-not-allowed'
                   : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20 cursor-pointer'
               }`}
             >
-              <Printer className="w-4 h-4" /> {isPrinting ? 'Impression en cours...' : `Imprimer Étiquettes (${labelQuantity})`}
+              <Printer className="w-4 h-4" /> {isPrinting ? 'Impression...' : `Imprimer (${labelQuantity})`}
             </button>
           </div>
         </div>

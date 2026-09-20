@@ -63,26 +63,32 @@ export const DiscountModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95">
-        
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[92vh]">
+        {/* Mobile Pull Handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center text-white font-bold shadow-lg shadow-purple-500/20">
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center text-white font-bold shadow-lg shadow-purple-500/20 shrink-0">
               <Percent className="w-5 h-5 stroke-[2.5]" />
             </div>
-            <div>
-              <h2 className="text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2">
+            <div className="min-w-0">
+              <h2 className="text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2 truncate">
                 REMISE SUR PANIER
-                <span className="text-[10px] bg-purple-500/10 text-purple-400 font-bold px-2 py-0.5 rounded border border-purple-500/30">
+                <span className="text-[10px] bg-purple-500/10 text-purple-400 font-bold px-2 py-0.5 rounded border border-purple-500/30 shrink-0">
                   MARKDOWN
                 </span>
               </h2>
-              <p className="text-[11px] text-pos-muted">Appliquez une remise globale en % ou en montant fixe (DA)</p>
+              <p className="text-[11px] text-pos-muted truncate">Appliquez une remise globale en % ou en montant fixe (DA)</p>
             </div>
           </div>
-          <button onClick={closeModal} className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition">
+          <button
+            onClick={closeModal}
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            aria-label="Fermer"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -162,6 +168,7 @@ export const DiscountModal: React.FC = () => {
             {discountMode === 'percent' ? (
               <input
                 type="number"
+                inputMode="decimal"
                 min="0"
                 max="100"
                 value={percentValue}
@@ -171,6 +178,7 @@ export const DiscountModal: React.FC = () => {
             ) : (
               <input
                 type="number"
+                inputMode="decimal"
                 min="0"
                 step="50"
                 value={amountValue}
@@ -180,32 +188,39 @@ export const DiscountModal: React.FC = () => {
             )}
           </div>
 
-          {/* Promo Voucher Input */}
-          <div className="bg-pos-card p-3 rounded-xl border border-pos-border space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-[10px] font-extrabold text-pos-muted uppercase tracking-wider flex items-center gap-1">
-                <Tag className="w-3 h-3 text-cyan-400" /> Code Promo / Coupon Vendeur
-              </label>
-              <span className="text-[9px] text-pos-muted font-mono">ex: SOLDES10, PROMO500</span>
-            </div>
+          {/* Promo Code Input */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-semibold text-pos-muted block">
+              Code Promo ou Coupon Spécial
+            </label>
             <div className="flex gap-2">
-              <input
-                type="text"
-                value={promoInput}
-                onChange={(e) => setPromoInput(e.target.value)}
-                placeholder="Entrez le code coupon..."
-                className="flex-1 bg-pos-bg border border-pos-border rounded-lg px-3 py-1.5 text-xs text-pos-text font-bold uppercase focus:border-cyan-400 focus:outline-none"
-              />
+              <div className="relative flex-1">
+                <Tag className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
+                <input
+                  type="text"
+                  value={promoInput}
+                  onChange={(e) => setPromoInput(e.target.value)}
+                  placeholder="EX: SOLDES10, PROMO500"
+                  autoCapitalize="characters"
+                  autoCorrect="off"
+                  spellCheck="false"
+                  className="w-full bg-pos-card border border-pos-border rounded-xl pl-9 pr-3 py-2 text-xs font-mono uppercase text-pos-text focus:border-purple-400 focus:outline-none"
+                />
+              </div>
               <button
                 type="button"
                 onClick={handleApplyPromoCode}
-                className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs transition"
+                className="px-4 py-2 bg-pos-card border border-pos-border hover:border-purple-400 text-pos-text font-bold text-xs rounded-xl active:scale-95 transition"
               >
                 Valider
               </button>
             </div>
             {promoStatus && (
-              <p className={`text-[10px] font-bold ${promoStatus.includes('Appliqué') ? 'text-emerald-400' : 'text-rose-400'}`}>
+              <p
+                className={`text-[10px] font-medium pt-1 ${
+                  promoStatus.startsWith('Code') ? 'text-emerald-400' : 'text-rose-400'
+                }`}
+              >
                 {promoStatus}
               </p>
             )}
@@ -231,19 +246,23 @@ export const DiscountModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex justify-end gap-2 shrink-0">
-          <button onClick={closeModal} className="px-4 py-2 text-xs font-semibold text-pos-muted hover:text-pos-text transition">
+        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col-reverse sm:flex-row justify-end gap-2 shrink-0">
+          <button
+            onClick={closeModal}
+            className="w-full sm:w-auto min-h-[42px] px-4 py-2 text-xs font-bold text-pos-muted hover:text-pos-text transition cursor-pointer text-center"
+          >
             Annuler
           </button>
           <button
             onClick={handleApply}
-            className="px-6 py-2.5 bg-gradient-to-r from-purple-600 to-emerald-500 hover:from-purple-500 hover:to-emerald-400 text-slate-950 font-extrabold text-xs rounded-xl flex items-center gap-1.5 shadow-lg shadow-purple-600/20 cursor-pointer transition"
+            className="w-full sm:w-auto min-h-[46px] px-6 py-2.5 bg-gradient-to-r from-purple-600 to-emerald-500 hover:from-purple-500 hover:to-emerald-400 text-slate-950 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-lg shadow-purple-600/20 cursor-pointer active:scale-95 transition"
           >
-            <Check className="w-4 h-4" /> Appliquer la Remise
+            <Check className="w-4 h-4 stroke-[2.5]" /> Appliquer la Remise
           </button>
         </div>
       </div>
     </div>
   );
 };
+
 

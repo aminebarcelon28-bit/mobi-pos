@@ -258,33 +258,37 @@ export const CommandTicketDashboardModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-6xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[90vh]">
+    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-6xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 flex flex-col h-[94vh] sm:h-[90vh]">
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* MODAL HEADER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white shadow-lg shadow-amber-500/20">
-              <Clock className="w-6 h-6 stroke-[2.5]" />
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white shadow-lg shadow-amber-500/20 shrink-0">
+              <Clock className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-pos-text uppercase tracking-wider">
-                  Tableau de Bord des Commandes & File d'Attente
+                <h2 className="text-xs sm:text-base font-black text-pos-text uppercase tracking-wider truncate">
+                  Commandes & File d'Attente
                 </h2>
-                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-xs">
+                <span className="px-2 py-0.2 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-[10px] sm:text-xs shrink-0">
                   {waitingPOs.length} En Attente
                 </span>
               </div>
-              <p className="text-xs text-pos-muted">
+              <p className="text-[11px] text-pos-muted truncate hidden sm:block">
                 Suivi centralisé des Bons de Commande Fournisseur, Paniers Suspendus et SAV
               </p>
             </div>
           </div>
           <button
             onClick={closeModal}
-            className="p-2 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            aria-label="Fermer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -346,12 +350,12 @@ export const CommandTicketDashboardModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* NAVIGATION TABS & SEARCH CONTROLS */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-3 border-b border-pos-border bg-pos-panel flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+        <div className="p-2.5 sm:p-3 border-b border-pos-border bg-pos-panel flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-3 shrink-0">
           {/* Tab Selection */}
-          <div className="flex items-center gap-1.5 bg-pos-bg p-1 rounded-xl border border-pos-border w-full sm:w-auto">
+          <div className="flex items-center gap-1.5 bg-pos-bg p-1 rounded-xl border border-pos-border w-full sm:w-auto overflow-x-auto no-scrollbar whitespace-nowrap">
             <button
               onClick={() => setActiveTab('waiting_pos')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center gap-2 transition cursor-pointer ${
+              className={`min-h-[40px] px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center gap-2 transition cursor-pointer shrink-0 active:scale-95 ${
                 activeTab === 'waiting_pos'
                   ? 'bg-amber-500 text-slate-950 shadow-md'
                   : 'text-pos-muted hover:text-pos-text'
@@ -363,7 +367,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('held_sales')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center gap-2 transition cursor-pointer ${
+              className={`min-h-[40px] px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center gap-2 transition cursor-pointer shrink-0 active:scale-95 ${
                 activeTab === 'held_sales'
                   ? 'bg-teal-500 text-slate-950 shadow-md'
                   : 'text-pos-muted hover:text-pos-text'
@@ -375,7 +379,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('repairs')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center gap-2 transition cursor-pointer ${
+              className={`min-h-[40px] px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center gap-2 transition cursor-pointer shrink-0 active:scale-95 ${
                 activeTab === 'repairs'
                   ? 'bg-emerald-500 text-slate-950 shadow-md'
                   : 'text-pos-muted hover:text-pos-text'

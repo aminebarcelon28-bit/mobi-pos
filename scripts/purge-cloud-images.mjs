@@ -70,6 +70,24 @@ console.log(`Target: ${host}`);
 
 const client = createClient({ url, authToken: token });
 
+// Cloud schema is narrower than local: probe real columns per table and only
+// touch what exists (a missing column aborts the whole statement otherwise).
+async function cloudColumns(table) {
+  try {
+    const rs = await client.execute('SELECT sql FROM sqlite_master WHERE name = ?', [table]);
+    const ddl = String(rs.rows[0]?.sql ?? '');
+    const cols = new Set();
+    const body = ddl.slice(ddl.indexOf('(') + 1, ddl.lastIndexOf(')'));
+    for (const part of body.split(',')) {
+      const name = part.trim().split(/\s+/)[0]?.replace(/["'`\[\]]/g, '');
+      if (name) cols.add(name.toLowerCase());
+    }
+    return cols;
+  } catch {
+    return new Set();
+  }
+}
+
 // Tables whose json_payload/data_json may embed media blobs (forensic set).
 const TARGETS = [
   { table: 'products', jsonCol: 'json_payload' },
@@ -87,8 +105,39 @@ async function main() {
   let totalAfter = 0;
   let totalRows = 0;
   const backup = [];
+  const backupFile = `purge-backup-${Date.now()}.json`;
+  const flushBackup = () => {
+    if (!APPLY) return;
+    try {
+      writeFileSync(backupFile, JSON.stringify({ report, backup }, null, 2));
+    } catch (err) {
+      console.warn(`backup manifest write failed (${backupFile}):`, err.message ?? err);
+    }
+  };
 
   for (const { table, jsonCol } of TARGETS) {
+    const cols = await cloudColumns(table);
+    if (!cols.has(jsonCol)) {
+      console.warn(`[${table}] no ${jsonCol} column in cloud schema — skipped`);
+      report.tables[table] = { skipped: `no ${jsonCol} column` };
+      continue;
+    }
+    // Build the UPDATE from columns that actually exist: the image_url CASE,
+    // the version bump, and the updated_at touch are each conditional.
+    // updated_at doubles as the pull-cursor authority — without it (and
+    // without version) healed rows would NOT re-pull on peers, so warn loudly.
+    const sets = [`${jsonCol} = ?`];
+    if (cols.has('image_url')) {
+      sets.push(`image_url = CASE WHEN image_url IS NULL THEN NULL WHEN LENGTH(image_url) > 2048 THEN '' ELSE image_url END`);
+    }
+    if (cols.has('version')) sets.push(`version = version + 1`);
+    let repull = 'version bump';
+    if (cols.has('updated_at')) {
+      sets.push(`updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
+      repull = 'updated_at touch (+version)';
+    } else if (!cols.has('version')) {
+      repull = 'NONE — peers will NOT re-pull these rows automatically';
+    }
     let rows = [];
     try {
       const rs = await client.execute(`SELECT id, ${jsonCol}, version FROM ${table}`);
@@ -129,7 +178,7 @@ async function main() {
           continue;
         }
         await client.execute({
-          sql: `UPDATE ${table} SET ${jsonCol} = ?, image_url = CASE WHEN image_url IS NULL THEN NULL WHEN LENGTH(image_url) > 2048 THEN '' ELSE image_url END, version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`,
+          sql: `UPDATE ${table} SET ${sets.join(', ')} WHERE id = ?`,
           args: [cleaned, String(row.id)],
         });
       }
@@ -137,27 +186,35 @@ async function main() {
     totalBefore += before;
     totalAfter += after;
     totalRows += dirty;
-    report.tables[table] = { scanned, dirty, kbBefore: +(before / 1024).toFixed(1), kbAfter: +(after / 1024).toFixed(1) };
+    report.tables[table] = { scanned, dirty, kbBefore: +(before / 1024).toFixed(1), kbAfter: +(after / 1024).toFixed(1), repull };
     console.log(
       `[${table}] scanned=${scanned} dirty=${dirty} ` +
-      `bytes ${(before / 1024).toFixed(1)}KB -> ${(after / 1024).toFixed(1)}KB`
+      `bytes ${(before / 1024).toFixed(1)}KB -> ${(after / 1024).toFixed(1)}KB ` +
+      `(peer re-pull via ${repull})`
     );
+    flushBackup(); // incremental manifest: a later failure keeps completed tables
   }
 
   // Oversized image_url references outside json_payload (cheap, exact).
+  // Guarded: the cloud products table may not carry the column at all.
   try {
-    const rs = await client.execute(
-      "SELECT COUNT(*) AS cnt, COALESCE(SUM(LENGTH(image_url)),0) AS bytes FROM products WHERE image_url IS NOT NULL AND LENGTH(image_url) > 2048"
-    );
-    const cnt = Number(rs.rows[0]?.cnt ?? 0);
-    const bytes = Number(rs.rows[0]?.bytes ?? 0);
-    console.log(`[products.image_url] oversized references: ${cnt} rows, ${(bytes / 1024).toFixed(1)}KB`);
-    report.oversizedImageUrls = { rows: cnt, kb: +(bytes / 1024).toFixed(1) };
-    if (APPLY && cnt > 0) {
-      await client.execute(
-        "UPDATE products SET image_url = '', version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE image_url IS NOT NULL AND LENGTH(image_url) > 2048"
+    const hasCol = (await cloudColumns('products')).has('image_url');
+    if (!hasCol) {
+      console.log('[products.image_url] no image_url column in cloud schema — skipped');
+    } else {
+      const rs = await client.execute(
+        "SELECT COUNT(*) AS cnt, COALESCE(SUM(LENGTH(image_url)),0) AS bytes FROM products WHERE image_url IS NOT NULL AND LENGTH(image_url) > 2048"
       );
-      console.log('[products.image_url] cleared oversized references (kept normal URLs).');
+      const cnt = Number(rs.rows[0]?.cnt ?? 0);
+      const bytes = Number(rs.rows[0]?.bytes ?? 0);
+      console.log(`[products.image_url] oversized references: ${cnt} rows, ${(bytes / 1024).toFixed(1)}KB`);
+      report.oversizedImageUrls = { rows: cnt, kb: +(bytes / 1024).toFixed(1) };
+      if (APPLY && cnt > 0) {
+        await client.execute(
+          "UPDATE products SET image_url = '', version = version + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE image_url IS NOT NULL AND LENGTH(image_url) > 2048"
+        );
+        console.log('[products.image_url] cleared oversized references (kept normal URLs).');
+      }
     }
   } catch (err) {
     console.warn(`[products.image_url] check skipped: ${err.message}`);
@@ -169,9 +226,8 @@ async function main() {
   if (!APPLY) {
     console.log('DRY-RUN complete — no writes performed. Re-run with --apply to purge.');
   } else {
-    const backupFile = `purge-backup-${Date.now()}.json`;
-    writeFileSync(backupFile, JSON.stringify({ report, backup }, null, 2));
-    console.log(`APPLY complete — backup manifest written to ${backupFile}`);
+    flushBackup();
+    console.log(`APPLY complete — backup manifest at purge-backup-*.json (incremental, per table)`);
     console.log('Peers will re-pull cleaned rows (version+updated_at bumped) and heal local mirrors.');
   }
   // Machine-readable summary for CI logs (bounded: ids only, no payload bytes).

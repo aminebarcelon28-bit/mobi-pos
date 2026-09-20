@@ -98,10 +98,13 @@ export const PinPromptModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col">
+    <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[92vh]">
+        {/* Mobile Pull Handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
           <div className="flex items-center gap-2 text-amber-400">
             <ShieldCheck className="w-5 h-5" />
             <h2 className="text-sm font-bold text-pos-text">Autorisation Responsable</h2>
@@ -111,7 +114,8 @@ export const PinPromptModal: React.FC = () => {
               setPendingPinAction(null);
               closeModal();
             }}
-            className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center"
+            aria-label="Fermer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -165,7 +169,7 @@ export const PinPromptModal: React.FC = () => {
                 key={digit}
                 disabled={lockout.isLocked}
                 onClick={() => handleKeyPress(digit)}
-                className="py-3 rounded-xl bg-pos-card border border-pos-border hover:bg-pos-hover text-pos-text font-bold text-lg transition active:scale-95 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                className="py-3 rounded-xl bg-pos-card border border-pos-border hover:bg-pos-hover text-pos-text font-bold text-lg transition active-press shadow-sm disabled:opacity-40 disabled:cursor-not-allowed min-h-[48px] flex items-center justify-center cursor-pointer"
               >
                 {digit}
               </button>
@@ -173,21 +177,21 @@ export const PinPromptModal: React.FC = () => {
             <button
               disabled={lockout.isLocked}
               onClick={handleClear}
-              className="py-3 rounded-xl bg-pos-card border border-pos-border hover:bg-red-500/20 text-red-400 font-semibold text-xs transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="py-3 rounded-xl bg-pos-card border border-pos-border hover:bg-red-500/20 text-red-400 font-semibold text-xs transition active-press disabled:opacity-40 disabled:cursor-not-allowed min-h-[48px] flex items-center justify-center cursor-pointer"
             >
               Effacer
             </button>
             <button
               disabled={lockout.isLocked}
               onClick={() => handleKeyPress('0')}
-              className="py-3 rounded-xl bg-pos-card border border-pos-border hover:bg-pos-hover text-pos-text font-bold text-lg transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="py-3 rounded-xl bg-pos-card border border-pos-border hover:bg-pos-hover text-pos-text font-bold text-lg transition active-press disabled:opacity-40 disabled:cursor-not-allowed min-h-[48px] flex items-center justify-center cursor-pointer"
             >
               0
             </button>
             <button
               disabled={lockout.isLocked}
               onClick={handleDelete}
-              className="py-3 rounded-xl bg-pos-card border border-pos-border hover:bg-pos-hover text-pos-muted font-semibold text-xs transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="py-3 rounded-xl bg-pos-card border border-pos-border hover:bg-pos-hover text-pos-muted font-semibold text-xs transition active-press disabled:opacity-40 disabled:cursor-not-allowed min-h-[48px] flex items-center justify-center cursor-pointer"
             >
               ⌫
             </button>
@@ -197,7 +201,7 @@ export const PinPromptModal: React.FC = () => {
           <button
             disabled={pin.length !== 4 || lockout.isLocked}
             onClick={handleVerify}
-            className={`w-full py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition shadow-lg ${
+            className={`w-full py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider transition shadow-lg min-h-[48px] active-press flex items-center justify-center ${
               pin.length === 4 && !lockout.isLocked
                 ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/20 cursor-pointer'
                 : 'bg-pos-border text-pos-muted cursor-not-allowed opacity-50'

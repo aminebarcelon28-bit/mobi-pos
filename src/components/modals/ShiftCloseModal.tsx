@@ -192,24 +192,28 @@ export const ShiftCloseModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 max-h-[92vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94vh] sm:max-h-[92vh] flex flex-col">
+        {/* Mobile drag handle */}
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
         {/* Header */}
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
-          <div className="flex items-center gap-2 text-emerald-400">
-            <ShieldCheck className="w-5 h-5" />
-            <div>
-              <h2 className="text-sm font-bold text-pos-text">
-                Clôture de Caisse & Audit de Réconciliation (Rapport Z)
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
+          <div className="flex items-center gap-2 text-emerald-400 min-w-0">
+            <ShieldCheck className="w-5 h-5 shrink-0" />
+            <div className="min-w-0">
+              <h2 className="text-xs sm:text-sm font-bold text-pos-text truncate">
+                Clôture de Caisse & Audit de Réconciliation
               </h2>
-              <p className="text-[11px] text-pos-muted">
-                Protocole de comptage à l'aveugle, audit des écarts et sauvegarde comptable
+              <p className="text-[10px] sm:text-[11px] text-pos-muted truncate">
+                Comptage à l'aveugle, audit des écarts et Rapport Z
               </p>
             </div>
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            aria-label="Fermer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -503,14 +507,14 @@ export const ShiftCloseModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between">
+        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 shrink-0">
           {step === 'BLIND_COUNT' ? (
             <>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition"
+                  className="flex-1 sm:flex-none min-h-[42px] px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text bg-pos-hover/50 sm:bg-transparent transition cursor-pointer"
                 >
                   Annuler
                 </button>
@@ -524,19 +528,20 @@ export const ShiftCloseModal: React.FC = () => {
                       showToast("Impossible d'imprimer le Rapport X (aucune session active ou imprimante déconnectée)", 'error');
                     }
                   }}
-                  className="px-3.5 py-2 rounded-xl border border-pos-border hover:bg-pos-hover text-xs font-bold text-pos-text flex items-center gap-1.5 transition cursor-pointer"
+                  className="flex-1 sm:flex-none min-h-[42px] px-3.5 py-2 rounded-xl border border-pos-border hover:bg-pos-hover text-xs font-bold text-pos-text flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95"
                   title="Imprimer un snapshot financier intermédiaire sans clôturer la caisse"
                 >
                   <Printer className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Imprimer Rapport X</span>
+                  <span>Rapport X</span>
                 </button>
               </div>
               <button
                 type="button"
                 onClick={handleRevealReconciliation}
-                className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98] cursor-pointer"
+                className="w-full sm:w-auto min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98] cursor-pointer"
               >
-                <CheckCircle2 className="w-4 h-4" /> Valider le Comptage & Voir l'Audit
+                <CheckCircle2 className="w-4 h-4" />
+                <span>Valider le Comptage & Voir l'Audit</span>
               </button>
             </>
           ) : (
@@ -544,15 +549,15 @@ export const ShiftCloseModal: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setStep('BLIND_COUNT')}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition"
+                className="min-h-[42px] px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition cursor-pointer"
               >
                 ← Recompter
               </button>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={closeModal}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition"
+                  className="flex-1 sm:flex-none min-h-[42px] px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text bg-pos-hover/50 sm:bg-transparent transition cursor-pointer"
                 >
                   Annuler
                 </button>
@@ -560,13 +565,14 @@ export const ShiftCloseModal: React.FC = () => {
                   type="button"
                   onClick={handleFinalizeClosure}
                   disabled={variance !== 0 && !closingNote.trim()}
-                  className={`px-5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-lg transition active:scale-[0.98] ${
+                  className={`flex-2 sm:flex-none min-h-[44px] px-5 py-2.5 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-lg transition active:scale-[0.98] cursor-pointer ${
                     variance !== 0 && !closingNote.trim()
                       ? 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-60'
                       : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20'
                   }`}
                 >
-                  <Printer className="w-4 h-4" /> Clôturer Caisse & Imprimer Rapport Z
+                  <Printer className="w-4 h-4" />
+                  <span>Clôturer Caisse & Imprimer Rapport Z</span>
                 </button>
               </div>
             </>

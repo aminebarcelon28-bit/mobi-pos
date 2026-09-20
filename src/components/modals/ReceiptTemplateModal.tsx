@@ -35,21 +35,26 @@ export const ReceiptTemplateModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95">
-        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
-          <div className="flex items-center gap-2 text-emerald-400">
-            <Sliders className="w-5 h-5" />
-            <h2 className="text-sm font-bold text-pos-text">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col max-h-[92vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+
+        <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+          <div className="flex items-center gap-2 text-emerald-400 min-w-0">
+            <Sliders className="w-5 h-5 shrink-0" />
+            <h2 className="text-sm font-bold text-pos-text truncate">
               Personnalisation du Ticket & Logo Magasin
             </h2>
           </div>
-          <button onClick={closeModal} className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg">
+          <button
+            onClick={closeModal}
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
+        <form onSubmit={handleSubmit} className="flex-1 p-4 sm:p-5 space-y-4 overflow-y-auto">
           
           {/* Logo Upload Section */}
           <div className="bg-pos-card border border-pos-border p-3.5 rounded-xl space-y-3">
@@ -185,13 +190,17 @@ export const ReceiptTemplateModal: React.FC = () => {
             </div>
           </div>
 
-          <div className="p-4 border-t border-pos-border bg-pos-card flex justify-end gap-2 -mx-5 -mb-4 mt-4">
-            <button type="button" onClick={closeModal} className="px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text">
+          <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-end gap-2 -mx-4 sm:-mx-5 -mb-4 mt-4 shrink-0">
+            <button
+              type="button"
+              onClick={closeModal}
+              className="px-4 py-2.5 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition min-h-[44px] flex items-center justify-center active-press"
+            >
               Annuler
             </button>
             <button
               type="submit"
-              className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20"
+              className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 min-h-[44px] active-press"
             >
               <Check className="w-4 h-4" /> Enregistrer le Modèle
             </button>
