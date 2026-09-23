@@ -7,11 +7,32 @@ import { getLocalDb, getPendingOutbox, markOutbox, markOutboxMany, utcNowIso, ge
 import { getTursoClient, probeOnline } from './tursoClient';
 import { getCloudCredentials } from './keychain';
 import { db as dexieDb } from '../db/database';
-import { ALL_REMOTE_SYNC_TABLES, assertValidSyncTable, ensureRemoteSchemaColumns } from './remoteSchema';
-import type { InValue } from '@libsql/client';
+import { ALL_REMOTE_SYNC_TABLES, assertValidSyncTable, applyRemoteMigrations } from './remoteSchema';
+import { applyGenericRemoteRow } from './genericApply';
+import { resetStaleInflightOutbox } from './outboxFlusher';
+import type { Client, InValue } from '@libsql/client';
 import type Database from '@tauri-apps/plugin-sql';
 import type { OutboxRow, SyncStatus, SyncEventLog, PullTouchSummary } from './types';
 import type { Product } from '../types/pos';
+import { newId } from '../utils/ids';
+import { withWriteLock } from '../db/writeMutex';
+import { withBusyRetry } from '../db/busyRetry';
+
+/**
+ * Additive sync-visibility extension (SyncStatus itself lives in
+ * sync/types.ts, owned by another agent, so it is extended — never edited).
+ * `attentionCount` (failed + inflight) is the number the status badge reads
+ * for silent divergence; `pendingCount` keeps its pending-only semantics.
+ */
+export interface SyncStatusExt extends SyncStatus {
+  attentionCount: number;
+  inflightCount: number;
+  enqueueFailedCount: number;
+  /** Last relay WebSocket failure (DNS/CONN/refused) — empty when connected. */
+  relayLastError?: string;
+  /** Tables whose pull cursor has stalled on repeated apply failures (C6). */
+  stuckTables?: string[];
+}
 
 const GENERIC_TABLES: Record<string, string> = {
   customer: 'customers',
@@ -27,6 +48,7 @@ const GENERIC_TABLES: Record<string, string> = {
   cash_session: 'cash_sessions',
   cash_movement: 'cash_movements',
   setting: 'app_settings',
+  credit_voucher: 'credit_vouchers',
 };
 
 const GENERIC_PULL: Record<string, { dexie: string; ts: string[] }> = {
@@ -43,6 +65,12 @@ const GENERIC_PULL: Record<string, { dexie: string; ts: string[] }> = {
   cash_sessions: { dexie: 'cashSessions', ts: ['updatedAt', 'closedAt', 'openedAt'] },
   cash_movements: { dexie: 'cashMovements', ts: ['createdAt'] },
   app_settings: { dexie: 'appSettings', ts: [] },
+  credit_vouchers: { dexie: 'creditVouchers', ts: ['createdAt', 'updatedAt'] },
+  // FIFO batches are pulled (ALL_REMOTE_SYNC_TABLES) and applied through the
+  // shared generic path (applyGenericRemoteRow mirrors SQLite + Dexie + clock).
+  // Without this entry applyRemoteRow fell through with no write while the
+  // cursor still advanced past the row — peer depletions never converged (C6).
+  stock_batches: { dexie: 'stockBatches', ts: ['updatedAt'] },
 };
 
 // P-½ bleed-stop: explicit pull projections (drop SELECT *). Column lists mirror
@@ -58,6 +86,17 @@ const PULL_COLUMNS: Record<string, string> = {
 };
 
 const GENERIC_PULL_COLUMNS = 'id, data_json, version, updated_at, deleted';
+
+/** Best-effort version stamp of an outbox payload for diagnostics (never throws). */
+function payloadVersionOf(op: { payload_json?: unknown }): number | string {
+  try {
+    const p = typeof op.payload_json === 'string' ? JSON.parse(op.payload_json) : op.payload_json;
+    const v = (p as Record<string, unknown> | null)?.version;
+    return typeof v === 'number' ? v : '?';
+  } catch {
+    return '?';
+  }
+}
 
 // P0 hygiene: a single oversized outbox row (e.g. a 20 MB base64 image) must
 // never ride the 50-row batch forever — every cycle would time out, retry and
@@ -89,8 +128,15 @@ const isMobileView = () =>
 // P-½ bleed-stop: slow safety-net polling to cut Turso row reads (~3-5x).
 // Contract C1 is preserved via relay-triggered pullOnce + notifyLocalWrite/kick,
 // not via poll frequency — poll is only the fallback when signals are missed.
-const PUSH_MS = () => 5_000;
-const PULL_MS = () => (isMobileView() ? 6_000 : 5_000);
+// Adaptive: while the outbox is idle and the last cycle was clean, stretch the
+// poll (fewer Turso reads, same C1 path via notifyLocalWrite's 500ms debounce).
+// Any pending row or error snaps the interval back to the 5s/6s baseline.
+const PUSH_MS_BASE = 5_000;
+const PULL_MS_BASE = () => (isMobileView() ? 6_000 : 5_000);
+const PUSH_MS_IDLE = 15_000;
+const PULL_MS_IDLE = 15_000;
+const PUSH_MS = () => PUSH_MS_BASE;
+const PULL_MS = () => PULL_MS_BASE();
 
 function backoffMs(retry: number): number {
   // Doc ② §7.4 verbatim: base 1s, factor 2, cap 60s, FULL JITTER (anti-thundering-herd)
@@ -111,10 +157,27 @@ class SyncManager {
   private online = typeof navigator === 'undefined' ? true : navigator.onLine;
   private pendingCount = 0;
   private failedCount = 0;
+  private inflightCount = 0;
+  private enqueueFailureCount = 0;
+  /** table → consecutive pull apply failures; ≥3 = cursor stall (surfaced). */
+  private applyFailStreak = new Map<string, number>();
+  /** Keys this pushOnce cycle claimed as inflight (rescued in finally on abort). */
+  private claimedInflightKeys: string[] = [];
+  // Start-generation counter: every start() mints a new generation and every
+  // async continuation bails when it is stale, so a slow earlier start can
+  // never stop() — and kill — a newer start's timers/relay/listeners.
+  private startGeneration = 0;
   private lastPushAt: string | null = null;
   private lastPullAt: string | null = null;
   private lastError: string | null = null;
   private quotaExceeded = false;
+  // Device registry / revocation (ad.md §15): the merchant can revoke a lost
+  // device from any other device. Revocation is enforced three ways — the
+  // relay drops the socket and withholds signals, and THIS client suspends
+  // its own push/pull and persists the flag so a restart cannot resurrect it.
+  // Local sales data is never wiped; queued outbox rows stay pending.
+  private deviceRevoked = false;
+  private merchantRoomName = 'default';
   // No permanent wedges (ADR-0008): both flags below auto-recover. A latch
   // that never clears turns one transient blip into eternal one-way sync.
   private quotaBlockedAt = 0;
@@ -130,7 +193,7 @@ class SyncManager {
   private instanceId: string =
     typeof crypto !== 'undefined' && 'randomUUID' in crypto
       ? crypto.randomUUID()
-      : `inst-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+      : newId('inst');
   private listeners = new Set<Listener>();
   private postWriteDebounce: number | null = null;
   private eventLogs: SyncEventLog[] = [];
@@ -186,24 +249,51 @@ class SyncManager {
       this.relaySocket &&
       this.relaySocket.readyState === WebSocket.OPEN
     );
-    const s: SyncStatus = {
+    const s: SyncStatusExt = {
       online: this.online,
       pushing: this.pushing,
       pulling: this.pulling,
       pendingCount: this.pendingCount,
       failedCount: this.failedCount,
+      // Silent-divergence visibility: quarantined (failed) + stuck-inflight
+      // rows that pendingCount alone would hide from the badge.
+      attentionCount: this.failedCount + this.inflightCount,
+      inflightCount: this.inflightCount,
+      enqueueFailedCount: this.enqueueFailureCount,
+      stuckTables: [...this.applyFailStreak.entries()]
+        .filter(([, n]) => n >= 3)
+        .map(([t]) => t),
       relayConnected: isRelayOpen,
+      relayLastError: this.relayLastError || (
+        Date.now() < this.relayCircuitOpenUntil
+          ? `relay DNS en pause — reconnexion dans ${Math.max(0, Math.ceil((this.relayCircuitOpenUntil - Date.now()) / 60_000))} min`
+          : ''
+      ),
       lastPushAt: this.lastPushAt,
       lastPullAt: this.lastPullAt,
       lastError: this.lastError,
       quotaExceeded: this.quotaExceeded,
+      deviceRevoked: this.deviceRevoked,
     };
     this.listeners.forEach((fn) => { try { fn(s); } catch { /* ignore */ } });
   }
 
+  /**
+   * Records a fire-and-forget sync-enqueue failure (base.ts fireSync lane).
+   * Previously these vanished into console.warn — now they surface in the
+   * emitted status (enqueueFailedCount) and the diagnostics log.
+   */
+  noteEnqueueFailure(entity: string, id: string, error: unknown): void {
+    this.enqueueFailureCount += 1;
+    const msg = `Sync enqueue failed [${entity}/${id}]: ${error instanceof Error ? error.message : String(error)}`;
+    this.lastError = msg;
+    this.logEvent('error', msg, 'warn', { entity, id });
+    this.emit();
+  }
+
   logEvent(type: SyncEventLog['type'], summary: string, level: SyncEventLog['level'] = 'info', details?: Record<string, unknown>) {
     const entry: SyncEventLog = {
-      id: `log-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      id: newId('log'),
       timestamp: new Date().toISOString(),
       type,
       summary,
@@ -225,26 +315,37 @@ class SyncManager {
   }
 
   async start(deviceId: string) {
+    // Generation gate: a stale start's async continuations must never run the
+    // stop()/timer/relay setup below after a newer start took over.
+    const gen = ++this.startGeneration;
     this.deviceId = deviceId;
     this.instanceId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
       ? crypto.randomUUID()
-      : `inst-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+      : newId('inst');
     this.clockSkewChecked = false;
     this.stop();
 
+    // B-022 / C6: rescue orphaned inflight rows BEFORE the creds gate —
+    // a crashed push must re-queue even when cloud credentials are absent
+    // (offline first boot, token cleared). Blanket reset covers age-0 rows
+    // left by a just-killed process; stale >30min rows are the same class.
+    try {
+      const bootDb = await getLocalDb();
+      await bootDb.execute("UPDATE sync_outbox SET status='pending' WHERE status='inflight'");
+    } catch {
+      /* first run / db not ready yet */
+    }
+    if (gen !== this.startGeneration) return;
+
     // Check if cloud credentials exist
     const creds = await getCloudCredentials();
+    if (gen !== this.startGeneration) return;
     if (!creds || !creds.url || !creds.token) {
       return;
     }
 
-    try {
-      const db = await getLocalDb();
-      await db.execute("UPDATE sync_outbox SET status='pending' WHERE status='inflight'");
-    } catch {
-      /* first run */
-    }
     await this.refreshPendingCount();
+    if (gen !== this.startGeneration) return;
 
     this.stop(); // Clean up any existing listeners/timers before starting
 
@@ -252,6 +353,8 @@ class SyncManager {
       this.online = true;
       this.consecutiveProbeFailures = 0;
       this.emit();
+      // B-062b: network flapped — DNS may work now; reopen relay circuit early.
+      this.resetRelayDnsCircuit('online');
       // Jittered kick on reconnect (0-2000ms) to avoid thundering herd
       const jitterMs = Math.floor(Math.random() * 2000);
       window.setTimeout(() => { void this.kick(); }, jitterMs);
@@ -281,6 +384,8 @@ class SyncManager {
     };
     this.onVisibilityHandler = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        // B-062b: user-facing focus is a good moment to re-probe a paused relay.
+        this.resetRelayDnsCircuit('visible');
         void this.kick();
       }
     };
@@ -318,10 +423,24 @@ class SyncManager {
         merchantRoom = 'default';
       }
     }
+    this.merchantRoomName = merchantRoom;
 
     const relayWsUrl = (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_RELAY_WS_URL as string | undefined))
       || `wss://relay.mobipos.app/room/${merchantRoom}`;
-    this.connectRelay(relayWsUrl);
+    // B-062: skip relay WebSocket if the host is dead — avoids
+    // the first 3 never-OPEN attempts that would log ERR_NAME_NOT_RESOLVED.
+    if (await this.relayHostResolves(relayWsUrl)) {
+      this.connectRelay(relayWsUrl);
+    } else {
+      this.relayLastError = 'relay DNS unreachable — polling mode';
+      this.emit();
+    }
+
+    // Re-check a persisted revocation (a revoked device must not resume sync
+    // silently) and converge with the room registry when reachable.
+    await this.loadPersistedRevocation();
+    if (gen !== this.startGeneration) return;
+    void this.checkRevocation();
 
     void this.kick();
     // One-shot clock-skew probe: cursor sync keys on updated_at wall clocks,
@@ -330,6 +449,30 @@ class SyncManager {
   }
 
   private clockSkewChecked = false;
+  /**
+   * Adaptive poll: stretch idle cycles to 15s (fewer Turso reads) and snap
+   * back to the 5s/6s baseline whenever there is work or a recent error.
+   * C1 is unaffected — notifyLocalWrite still debounces 500ms → pushOnce.
+   */
+  private async rearmTimersIfNeeded(): Promise<void> {
+    if (!this.pushTimer && !this.pullTimer) return;
+    try {
+      await this.refreshPendingCount();
+    } catch { /* keep current intervals */ }
+    const busy = this.pendingCount > 0 || this.failedCount > 0 || this.inflightCount > 0
+      || Boolean(this.lastError) || this.quotaExceeded;
+    const pushMs = busy ? PUSH_MS_BASE : PUSH_MS_IDLE;
+    const pullMs = busy ? PULL_MS_BASE() : PULL_MS_IDLE;
+    if (this.pushTimer) {
+      window.clearInterval(this.pushTimer);
+      this.pushTimer = window.setInterval(() => { void this.pushOnce(); }, pushMs);
+    }
+    if (this.pullTimer) {
+      window.clearInterval(this.pullTimer);
+      this.pullTimer = window.setInterval(() => { void this.pullOnce(); }, pullMs);
+    }
+  }
+
   private async checkClockSkewOnce(): Promise<void> {
     if (this.clockSkewChecked) return;
     this.clockSkewChecked = true;
@@ -369,6 +512,11 @@ class SyncManager {
     if (this.pullTimer) window.clearInterval(this.pullTimer);
     if (this.postWriteDebounce) window.clearTimeout(this.postWriteDebounce);
     if (this.relayReconnectTimeout) window.clearTimeout(this.relayReconnectTimeout);
+    if (this.relayCircuitTimer !== null) window.clearTimeout(this.relayCircuitTimer);
+    this.relayCircuitTimer = null;
+    this.relayCircuitOpenUntil = 0;
+    this.relayNeverOpenedStreak = 0;
+    this.relayCircuitLogged = false;
     if (this.broadcastChannel) {
       try { this.broadcastChannel.close(); } catch { /* ignore */ }
       this.broadcastChannel = null;
@@ -400,9 +548,108 @@ class SyncManager {
   private savedRelayWsUrl: string | null = null;
   private relayReconnectTimeout: number | null = null;
   private relayReconnectAttempts = 0;
+  /** B-062: last relay failure message (DNS/CONN) for honest badge text. */
+  private relayLastError: string = '';
+  /** B-062: throttle diagnostics spam — one event every Nth consecutive failure. */
+  private relayFailCount = 0;
+  private readonly RELAY_LOG_EVERY = 8;
+  /**
+   * B-062b: consecutive connect failures that never reached OPEN
+   * (classic ERR_NAME_NOT_RESOLVED / refused). After this many, stop
+   * calling `new WebSocket()` — the browser itself logs every attempt to
+   * the DevTools console and no app-level throttle can suppress that.
+   */
+  private relayNeverOpenedStreak = 0;
+  private readonly RELAY_DNS_STREAK_LIMIT = 3;
+  /** While Date.now() < this, connectRelay is a no-op (DNS circuit open). */
+  private relayCircuitOpenUntil = 0;
+  private readonly RELAY_DNS_PAUSE_MS = 5 * 60_000;
+  private relayCircuitLogged = false;
+  /** Timer that reopens the DNS circuit when the pause expires (no online/visibility event). */
+  private relayCircuitTimer: number | null = null;
+
+  /**
+   * B-062b: DNS preflight — if the relay host does not resolve,
+   * skip the WebSocket entirely on boot so the browser never logs
+   * ERR_NAME_NOT_RESOLVED. Polling (Turso) stays active.
+   */
+  private async relayHostResolves(url: string): Promise<boolean> {
+    try {
+      const host = new URL(url).hostname;
+      if (!host || host === 'localhost') return true;
+      const ctrl = new AbortController();
+      const tid = window.setTimeout(() => ctrl.abort(), 3_000);
+      await fetch(`https://${host}/`, {
+        method: 'HEAD',
+        mode: 'no-cors',
+        signal: ctrl.signal,
+      });
+      window.clearTimeout(tid);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * B-062b: reopen the DNS circuit on network return / tab focus so a
+   * redeployed relay or fixed DNS is picked up without waiting the full pause.
+   */
+  private resetRelayDnsCircuit(reason: string): void {
+    if (this.relayCircuitOpenUntil === 0 && !this.relayCircuitLogged) return;
+    const wasOpen = this.relayCircuitOpenUntil > Date.now();
+    this.relayCircuitOpenUntil = 0;
+    this.relayNeverOpenedStreak = 0;
+    this.relayCircuitLogged = false;
+    if (this.relayCircuitTimer !== null) {
+      window.clearTimeout(this.relayCircuitTimer);
+      this.relayCircuitTimer = null;
+    }
+    if (wasOpen) {
+      this.logEvent('pull', `Relay circuit réouvert (${reason}) — nouvelle tentative`, 'info');
+      this.emit();
+      if (this.savedRelayWsUrl) {
+        void this.connectRelay(this.savedRelayWsUrl);
+      }
+    }
+  }
+
+  /** Open the DNS circuit for RELAY_DNS_PAUSE_MS and arm the reopen timer. */
+  private openRelayDnsCircuit(gen: number): void {
+    this.relayCircuitOpenUntil = Date.now() + this.RELAY_DNS_PAUSE_MS;
+    this.relayLastError = `relay DNS unreachable — pause ${Math.round(this.RELAY_DNS_PAUSE_MS / 60_000)} min (polling actif)`;
+    if (!this.relayCircuitLogged) {
+      this.relayCircuitLogged = true;
+      this.logEvent(
+        'pull',
+        `Signal relay injoignable (DNS) après ${this.relayNeverOpenedStreak} tentatives — reconnexion dans ${Math.round(this.RELAY_DNS_PAUSE_MS / 60_000)} min. Déployer workers/relay ou définir VITE_RELAY_WS_URL. Polling Turso reste actif.`,
+        'warn'
+      );
+    }
+    if (this.relayCircuitTimer !== null) window.clearTimeout(this.relayCircuitTimer);
+    this.relayCircuitTimer = window.setTimeout(() => {
+      this.relayCircuitTimer = null;
+      if (gen !== this.startGeneration) return;
+      this.relayCircuitOpenUntil = 0;
+      this.relayNeverOpenedStreak = 0;
+      this.relayCircuitLogged = false;
+      if (this.savedRelayWsUrl) {
+        this.logEvent('pull', 'Relay circuit expiré — nouvelle tentative', 'info');
+        this.emit();
+        void this.connectRelay(this.savedRelayWsUrl);
+      }
+    }, this.RELAY_DNS_PAUSE_MS + Math.random() * 5_000);
+    this.emit();
+  }
 
   connectRelay(relayWsUrl: string) {
     if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
+    // B-062b: DNS circuit open — do not construct WebSocket (browser would
+    // log ERR_NAME_NOT_RESOLVED again). Polling continues in the background.
+    if (Date.now() < this.relayCircuitOpenUntil) return;
+    // Pin the reconnect loop to this start-generation so a stale socket's
+    // backoff cannot resurrect a relay session after a newer start stopped it.
+    const gen = this.startGeneration;
     this.savedRelayWsUrl = relayWsUrl;
     if (
       this.relaySocket &&
@@ -416,13 +663,46 @@ class SyncManager {
       this.relaySocket = new WebSocket(relayWsUrl);
       this.relaySocket.onopen = () => {
         this.relayReconnectAttempts = 0;
-        this.logEvent('pull', 'Signal relay WebSocket connecté avec succès', 'info');
+        this.relayFailCount = 0;
+        this.relayNeverOpenedStreak = 0;
+        this.relayCircuitOpenUntil = 0;
+        const wasCircuit = this.relayCircuitLogged;
+        this.relayCircuitLogged = false;
+        const wasFailing = this.relayLastError !== '';
+        this.relayLastError = '';
+        if (wasCircuit || wasFailing) {
+          this.logEvent('pull', 'Signal relay WebSocket reconnecté', 'info');
+        } else {
+          this.logEvent('pull', 'Signal relay WebSocket connecté avec succès', 'info');
+        }
+        this.emit();
+        // Register this device in the merchant room registry (name/platform
+        // for the merchant's device list; the room replies `welcome`, or
+        // `device-revoked` when this device was revoked).
+        try {
+          this.relaySocket?.send(JSON.stringify({
+            type: 'hello',
+            epoch: this.relayEpoch,
+            deviceId: this.deviceId,
+            instanceId: this.instanceId,
+            deviceName: this.localDeviceLabel(),
+            platform: this.localDevicePlatform(),
+          }));
+        } catch { /* hello is best-effort; polling still works */ }
       };
 
       this.relaySocket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data as string);
           if (data?.type === 'ping') return;
+          if (data?.type === 'welcome') {
+            this.relayEpoch = Math.max(this.relayEpoch, Number(data?.epoch || 0));
+            return;
+          }
+          if (data?.type === 'device-revoked') {
+            void this.handleDeviceRevoked(data);
+            return;
+          }
           // Self-suppression keys on the instance nonce when present (same
           // device can hold several relay sessions, e.g. installed + dev
           // builds); legacy senders without a nonce fall back to deviceId.
@@ -440,15 +720,65 @@ class SyncManager {
         }
       };
 
-      this.relaySocket.onclose = () => {
+      // B-003: explicit onerror — without it browser default logging fires
+      // and no epoch-guarded reconnect bookkeeping runs before onclose.
+      // B-062: DNS failure (ERR_NAME_NOT_RESOLVED) fires onerror then onclose
+      // on every attempt; log only every Nth consecutive failure so a missing
+      // relay host cannot flood the 200-entry diagnostics ring.
+      this.relaySocket.onerror = () => {
+        this.relayFailCount += 1;
+        this.relayLastError = 'relay unreachable (DNS/network)';
+        if (this.relayFailCount === 1 || this.relayFailCount % this.RELAY_LOG_EVERY === 0) {
+          this.logEvent(
+            'pull',
+            `Signal relay WebSocket error (attempt ${this.relayFailCount}) — polling active`,
+            'warn'
+          );
+          this.emit();
+        }
+      };
+
+      this.relaySocket.onclose = (ev) => {
         this.relaySocket = null;
+        this.relayFailCount += 1;
+        // Prefer the CloseEvent reason when present (Worker may send one).
+        if (ev && typeof ev.reason === 'string' && ev.reason) {
+          this.relayLastError = ev.reason.slice(0, 160);
+        }
+        // B-062b: closed before ever OPEN → DNS/refused. After a short streak
+        // open the circuit so the browser stops logging ERR_NAME_NOT_RESOLVED
+        // every reconnect (no app-level throttle can suppress that log).
+        this.relayNeverOpenedStreak += 1;
+        if (this.relayNeverOpenedStreak >= this.RELAY_DNS_STREAK_LIMIT) {
+          this.openRelayDnsCircuit(gen);
+          return;
+        }
         if (this.savedRelayWsUrl) {
           if (this.relayReconnectTimeout) window.clearTimeout(this.relayReconnectTimeout);
           this.relayReconnectAttempts = Math.min(this.relayReconnectAttempts + 1, 16);
-          const baseMs = Math.min(30_000, 1_000 * Math.pow(1.5, this.relayReconnectAttempts));
-          const jitterMs = Math.random() * 1_000;
+          // B-062: DNS-level failures (ERR_NAME_NOT_RESOLVED / host not
+          // deployed) do not heal by retrying fast — stretch the backoff
+          // harder after the first few misses, still capped at 60s so a
+          // redeployed relay is picked up within a minute.
+          const baseMs = Math.min(
+            60_000,
+            2_000 * Math.pow(1.6, this.relayReconnectAttempts)
+          );
+          const jitterMs = Math.random() * 1_500;
           const backoff = baseMs + jitterMs;
+          if (
+            this.relayFailCount === 1 ||
+            this.relayFailCount % this.RELAY_LOG_EVERY === 0
+          ) {
+            this.logEvent(
+              'pull',
+              `Signal relay fermé — reconnexion dans ${Math.round(backoff / 1000)}s (polling actif)`,
+              'warn'
+            );
+            this.emit();
+          }
           this.relayReconnectTimeout = window.setTimeout(() => {
+            if (gen !== this.startGeneration) return;
             if (this.savedRelayWsUrl) {
               void this.connectRelay(this.savedRelayWsUrl);
             }
@@ -456,7 +786,9 @@ class SyncManager {
         }
       };
     } catch (e) {
+      this.relayLastError = e instanceof Error ? e.message : String(e);
       console.warn('Relay connection error:', e);
+      this.emit();
     }
   }
 
@@ -534,9 +866,17 @@ class SyncManager {
       )) as Array<{ n: number }>;
       this.pendingCount = rows?.[0]?.n ?? 0;
       this.failedCount = await getFailedOutboxCount();
+      // Stuck-inflight rows (push killed mid-batch) are silent divergence:
+      // pendingCount keeps its pending-only semantics, attentionCount carries
+      // failed + inflight to the badge.
+      const inflightRows = (await db.select(
+        "SELECT COUNT(*) as n FROM sync_outbox WHERE status='inflight'"
+      ).catch(() => [{ n: 0 }])) as Array<{ n: number }>;
+      this.inflightCount = inflightRows?.[0]?.n ?? 0;
     } catch {
       this.pendingCount = 0;
       this.failedCount = 0;
+      this.inflightCount = 0;
     }
     this.emit();
   }
@@ -549,6 +889,174 @@ class SyncManager {
       void this.kick();
     }
     return count;
+  }
+
+  // ── Merchant device registry / revocation (ad.md §15) ──────────────
+  // The room URL itself is the bearer secret (same model as the signal room);
+  // the registry answers "which devices exist" and "which are revoked".
+
+  private localDeviceLabel(): string {
+    try {
+      if (typeof navigator !== 'undefined') {
+        const ua = String(navigator.userAgent || '');
+        if (/Android/i.test(ua)) return 'Android';
+        if (/iPhone|iPad/i.test(ua)) return 'iPhone/iPad';
+        if (/Windows/i.test(ua)) return 'Windows';
+        if (/Mac/i.test(ua)) return 'Mac';
+        if (/Linux/i.test(ua)) return 'Linux';
+      }
+    } catch { /* ignore */ }
+    return 'Caisse';
+  }
+
+  private localDevicePlatform(): string {
+    try {
+      if (typeof navigator !== 'undefined') {
+        const ua = String(navigator.userAgent || '');
+        if (/Android/i.test(ua)) return 'android';
+        if (/iPhone|iPad/i.test(ua)) return 'ios';
+        if (/Windows/i.test(ua)) return 'windows';
+        if (/Mac/i.test(ua)) return 'macos';
+        if (/Linux/i.test(ua)) return 'linux';
+      }
+    } catch { /* ignore */ }
+    return 'unknown';
+  }
+
+  private relayHttpBase(): string | null {
+    const ws = this.savedRelayWsUrl
+      || (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_RELAY_WS_URL as string | undefined))
+      || null;
+    if (!ws) return `https://relay.mobipos.app/room/${this.merchantRoomName}`;
+    try {
+      const u = new URL(ws);
+      u.protocol = u.protocol === 'wss:' ? 'https:' : 'http:';
+      u.pathname = `/room/${this.merchantRoomName}`;
+      u.search = '';
+      return u.toString().replace(/\/$/, '');
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * B-042: admin secret for device registry routes. Mirrors the Worker's
+   * `ADMIN_SECRET` (wrangler secret). Missing secret → routes return 503.
+   */
+  private relayAdminHeaders(): Record<string, string> {
+    const secret = (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_RELAY_ADMIN_SECRET as string | undefined)) || '';
+    if (!secret) return {};
+    return { Authorization: `Bearer ${secret}` };
+  }
+
+  /** Merchant device list for the Diagnostics screen (revoked flags included). */
+  async listMerchantDevices(): Promise<Array<{ deviceId: string; deviceName: string; platform: string; firstSeen: number; lastSeen: number; revoked: boolean }>> {
+    const base = this.relayHttpBase();
+    if (!base) return [];
+    try {
+      const res = await fetch(`${base}/devices`, { headers: this.relayAdminHeaders() });
+      if (!res.ok) return [];
+      const body = (await res.json()) as { devices?: Array<{ deviceId: string; deviceName: string; platform: string; firstSeen: number; lastSeen: number; revoked: boolean }> };
+      return Array.isArray(body?.devices) ? body.devices : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Revoke (or re-admit) a device. Takes effect on next signal + next check. */
+  async setDeviceRevoked(deviceId: string, revoked: boolean): Promise<boolean> {
+    const base = this.relayHttpBase();
+    const id = String(deviceId || '');
+    if (!base || !id) return false;
+    try {
+      const res = await fetch(`${base}/devices/${encodeURIComponent(id)}/revoke`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.relayAdminHeaders() },
+        body: JSON.stringify({ revoked }),
+      });
+      if (!res.ok) return false;
+      this.logEvent('info', `Appareil ${id} ${revoked ? 'révoqué' : 'réadmis'}`, 'info');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  private async loadPersistedRevocation(): Promise<void> {
+    try {
+      const db = await getLocalDb();
+      const rows = (await db.select(
+        "SELECT value_json FROM app_settings WHERE key = 'sync.device_revoked'"
+      ).catch(() => [])) as Array<{ value_json: string }>;
+      if (rows?.[0]?.value_json) {
+        const flag = JSON.parse(rows[0].value_json) as { revoked?: boolean };
+        if (flag?.revoked === true) {
+          this.deviceRevoked = true;
+          this.lastError = 'Cet appareil a été révoqué par le gérant — synchronisation suspendue.';
+        }
+      }
+    } catch { /* first run */ }
+    this.emit();
+  }
+
+  private async persistRevocation(revoked: boolean): Promise<void> {
+    try {
+      const db = await getLocalDb();
+      await db.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value_json, updated_at) VALUES ('sync.device_revoked', ?, ?)",
+        [JSON.stringify({ revoked, at: utcNowIso() }), utcNowIso()],
+      ).catch(() => {});
+    } catch { /* persistence best-effort; the in-memory flag still enforced */ }
+  }
+
+  /** Room → this device: enforce a revocation (or clear it on un-revoke). */
+  private async handleDeviceRevoked(msg: { deviceId?: string; revoked?: boolean }): Promise<void> {
+    const target = String(msg?.deviceId || '');
+    const revoked = msg?.revoked !== false;
+    if (target && target !== this.deviceId) {
+      // Peer event — surfaces in the merchant device list on next fetch.
+      this.logEvent('info', `Appareil ${target} ${revoked ? 'révoqué' : 'réadmis'} par le gérant`, 'info');
+      return;
+    }
+    if (!revoked) {
+      if (!this.deviceRevoked) return;
+      this.deviceRevoked = false;
+      await this.persistRevocation(false);
+      this.lastError = null;
+      this.logEvent('push', 'Cet appareil a été réadmis — reprise de la synchronisation', 'success');
+      this.emit();
+      void this.kick();
+      return;
+    }
+    if (this.deviceRevoked) return;
+    this.deviceRevoked = true;
+    await this.persistRevocation(true);
+    this.lastError = 'Cet appareil a été révoqué par le gérant — synchronisation suspendue. Les ventes locales restent disponibles.';
+    this.logEvent('error', this.lastError, 'error');
+    // Drop the signal channel without reconnecting; queued outbox rows stay
+    // pending locally (never wiped, never pushed).
+    this.savedRelayWsUrl = null;
+    if (this.relayReconnectTimeout) window.clearTimeout(this.relayReconnectTimeout);
+    this.relayReconnectTimeout = null;
+    if (this.relaySocket) {
+      try { this.relaySocket.close(); } catch { /* ignore */ }
+      this.relaySocket = null;
+    }
+    await this.refreshPendingCount();
+    this.emit();
+  }
+
+  /** Converge local revocation state with the room registry (boot + manual). */
+  async checkRevocation(): Promise<void> {
+    try {
+      const devices = await this.listMerchantDevices();
+      const mine = devices.find((d) => d.deviceId === this.deviceId);
+      if (!mine) return;
+      if (mine.revoked && !this.deviceRevoked) {
+        await this.handleDeviceRevoked({ deviceId: this.deviceId, revoked: true });
+      } else if (!mine.revoked && this.deviceRevoked) {
+        await this.handleDeviceRevoked({ deviceId: this.deviceId, revoked: false });
+      }
+    } catch { /* offline — revocation state stays as-is */ }
   }
 
   /** Re-probe connectivity when flagged offline, throttled so an offline
@@ -582,8 +1090,35 @@ class SyncManager {
     return Date.now() - this.quotaBlockedAt > 5 * 60_000;
   }
 
+  /**
+   * One-shot remote migration per session. Devices paired before a lane
+   * existed (stock_batches, credit_vouchers, …) carry a cloud DB without
+   * those tables, and every pull/push for them failed forever with
+   * `no such table`. Version-tracked server-side (schema_migrations), so
+   * steady-state cost is two cheap reads; ends with the column backfill.
+   * Failures retry at most once a minute so a sick cloud doesn't spam
+   * migrations (or console warnings) on every 10s sync cycle.
+   */
+  private remoteSchemaRetryAt = 0;
+  private async ensureRemoteSchemaOnce(remote: Client): Promise<void> {
+    if (this.remoteSchemaEnsured) return;
+    if (Date.now() < this.remoteSchemaRetryAt) return;
+    try {
+      await applyRemoteMigrations(remote);
+      this.remoteSchemaEnsured = true;
+    } catch (err) {
+      this.remoteSchemaRetryAt = Date.now() + 60_000;
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(`[SyncManager] Remote migration deferred, retry in 60s: ${detail}`);
+      throw err;
+    }
+  }
+
   async pushOnce(forceOnline = false) {
     if (this.pushing) return;
+    // Revoked devices neither push nor pull (ad.md §15). Local writes keep
+    // queueing in sync_outbox; they ship if the merchant re-admits the device.
+    if (this.deviceRevoked) return;
     if (this.quotaExceeded) {
       if (!this.quotaRetryDue()) return;
       const quotaProbablyReset = await this.probeQuotaReset();
@@ -598,20 +1133,41 @@ class SyncManager {
     if (!creds) return;
 
     this.pushing = true;
+    this.claimedInflightKeys = [];
     this.emit();
 
     try {
+      // Mid-session C6 rescue: a previous pushOnce that died between
+      // markOutboxMany(inflight) and its finally leaves rows invisible to
+      // getPendingOutbox forever (only pending is selectable). Boot already
+      // blanket-resets; this runs every cycle so a mid-session crash heals
+      // without restart. Age 0 = any inflight row older than "just claimed
+      // by THIS cycle" — claimedInflightKeys is empty on entry, so anything
+      // still inflight is orphaned.
+      const rescued = await resetStaleInflightOutbox(0);
+      if (rescued > 0) {
+        this.logEvent('push', `Rescued ${rescued} orphaned inflight outbox row(s)`, 'warn');
+      }
+
       const batch = (await getPendingOutbox(50)) as unknown as OutboxRow[];
       if (batch.length === 0) {
         await this.refreshPendingCount();
         return;
       }
 
-      // Parent-first order: product -> customer -> order -> items/ledger
+      // Parent-first order: product -> customer -> order -> items/ledger.
+      // Within a rank, FIFO by created_at (rowid tiebreak) so a sale row
+      // always pushes before its later refund-status update regardless of
+      // fetch order. A refund applied before its sale exists would orphan
+      // the peer's ledger — ordering here is the choke point that prevents it.
       const rank: Record<string, number> = {
         product: 0, customer: 0, order: 1, order_item: 2, ledger: 2,
       };
-      batch.sort((a, b) => (rank[a.entity_type] ?? 9) - (rank[b.entity_type] ?? 9));
+      batch.sort(
+        (a, b) =>
+          (rank[a.entity_type] ?? 9) - (rank[b.entity_type] ?? 9) ||
+          (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : (a.rowid ?? 0) - (b.rowid ?? 0))
+      );
 
       const remote = await getTursoClient();
 
@@ -641,8 +1197,7 @@ class SyncManager {
       }
       if (!this.remoteSchemaEnsured) {
         try {
-          await ensureRemoteSchemaColumns(remote);
-          this.remoteSchemaEnsured = true;
+          await this.ensureRemoteSchemaOnce(remote);
         } catch (schemaErr) {
           console.warn('[SyncManager] Remote schema check warning:', schemaErr);
         }
@@ -683,9 +1238,41 @@ class SyncManager {
           // Set-based bookkeeping: 2 IPC for the whole batch instead of 2 per row.
           const batchKeys = validOps.map(({ op }) => op.idempotency_key);
           await markOutboxMany(batchKeys, { status: 'inflight' });
-          await remote.batch(validOps.map((v) => v.stmt), 'write');
-          await markOutboxMany(batchKeys, { status: 'synced' });
-          okCount = validOps.length;
+          this.claimedInflightKeys = batchKeys;
+          const batchResults = (await remote.batch(validOps.map((v) => v.stmt), 'write')) as Array<{ rowsAffected?: number }>;
+          // Guarded-upsert truth (C6): a `WHERE excluded.version >= X.version`
+          // upsert that matches 0 rows is a REJECTED stale edit, not a success.
+          // The old code marked it synced and deleted it — silent loss. Stale
+          // rows stay pending with an actionable error (quarantined after 10
+          // retries like any other failure) and trigger a pull so the device
+          // converges to the winning version instead of diverging quietly.
+          // `DO NOTHING` lanes (ledger/order_item replays) legitimately affect
+          // 0 rows on duplicates, so only guarded statements are checked.
+          const syncedKeys: string[] = [];
+          let guardStale = 0;
+          for (let i = 0; i < validOps.length; i++) {
+            const { op, stmt } = validOps[i];
+            const guarded = stmt.sql.includes('WHERE excluded.version');
+            const affected = Number(batchResults?.[i]?.rowsAffected ?? 1);
+            if (guarded && affected === 0) {
+              guardStale++;
+              await markOutbox(op.idempotency_key, {
+                status: 'pending',
+                retryCount: (op.retry_count ?? 0) + 1,
+                error: `[GUARD-STALE] ${op.entity_type}/${op.entity_id}: remote is newer (local v${payloadVersionOf(op)} rejected). Pulled latest — review in Sync Diagnostics.`,
+              });
+            } else {
+              syncedKeys.push(op.idempotency_key);
+            }
+          }
+          if (syncedKeys.length > 0) {
+            await markOutboxMany(syncedKeys, { status: 'synced' });
+          }
+          okCount = syncedKeys.length;
+          if (guardStale > 0) {
+            this.logEvent('push', `${guardStale} modification(s) rejetée(s) par le garde de version — convergence tirée du cloud`, 'warn');
+            void this.pullOnce();
+          }
           batchSucceeded = true;
         } catch (batchErr: unknown) {
           const rawMsg = batchErr instanceof Error ? batchErr.message : String(batchErr);
@@ -699,8 +1286,7 @@ class SyncManager {
           }
           if (rawMsg.includes('has no column') || rawMsg.includes('no column named') || rawMsg.includes('no such column')) {
             try {
-              await ensureRemoteSchemaColumns(remote);
-              this.remoteSchemaEnsured = true;
+              await this.ensureRemoteSchemaOnce(remote);
             } catch {
               // ignore
             }
@@ -709,18 +1295,38 @@ class SyncManager {
         }
 
         if (!batchSucceeded) {
+          let fallbackStale = 0;
           for (const { op, stmt } of validOps) {
             try {
-              await remote.execute(stmt);
+              const res = (await remote.execute(stmt)) as unknown as { rowsAffected?: number };
+              // Same guard-reject rule as the batch path: a guarded upsert
+              // matching 0 rows stays pending with an actionable error.
+              if (stmt.sql.includes('WHERE excluded.version') && Number(res?.rowsAffected ?? 1) === 0) {
+                fallbackStale++;
+                await markOutbox(op.idempotency_key, {
+                  status: 'pending',
+                  retryCount: (op.retry_count ?? 0) + 1,
+                  error: `[GUARD-STALE] ${op.entity_type}/${op.entity_id}: remote is newer (local v${payloadVersionOf(op)} rejected). Pulled latest — review in Sync Diagnostics.`,
+                });
+                continue;
+              }
               await markOutbox(op.idempotency_key, { status: 'synced' });
               okCount++;
             } catch (e: unknown) {
               let rawMsg = e instanceof Error ? e.message : String(e);
               if (rawMsg.includes('has no column') || rawMsg.includes('no column named') || rawMsg.includes('no such column')) {
                 try {
-                  await ensureRemoteSchemaColumns(remote);
-                  this.remoteSchemaEnsured = true;
-                  await remote.execute(stmt);
+                  await this.ensureRemoteSchemaOnce(remote);
+                  const healRes = (await remote.execute(stmt)) as unknown as { rowsAffected?: number };
+                  if (stmt.sql.includes('WHERE excluded.version') && Number(healRes?.rowsAffected ?? 1) === 0) {
+                    fallbackStale++;
+                    await markOutbox(op.idempotency_key, {
+                      status: 'pending',
+                      retryCount: (op.retry_count ?? 0) + 1,
+                      error: `[GUARD-STALE] ${op.entity_type}/${op.entity_id}: remote is newer (local v${payloadVersionOf(op)} rejected). Pulled latest — review in Sync Diagnostics.`,
+                    });
+                    continue;
+                  }
                   await markOutbox(op.idempotency_key, { status: 'synced' });
                   okCount++;
                   continue;
@@ -760,7 +1366,14 @@ class SyncManager {
               }
             }
           }
+          if (fallbackStale > 0) {
+            this.logEvent('push', `${fallbackStale} modification(s) rejetée(s) par le garde de version — convergence tirée du cloud`, 'warn');
+            void this.pullOnce();
+          }
         }
+        // Batch/fallback resolved every claimed key (synced/pending/failed).
+        // Clear the claim list so finally does not re-queue already-resolved work.
+        this.claimedInflightKeys = [];
       }
 
       if (okCount > 0) {
@@ -784,8 +1397,35 @@ class SyncManager {
       this.lastError = e instanceof Error ? e.message : String(e);
       this.logEvent('error', `Erreur de synchronisation push: ${this.lastError}`, 'error');
     } finally {
+      // C6: keys this cycle claimed that are STILL inflight after the run
+      // (aborted mid-batch) must return to pending — getPendingOutbox only
+      // selects pending, so a stuck inflight row is invisible until reboot.
+      // WHERE status='inflight' keeps rows already resolved to pending/
+      // failed/synced untouched (backoff + quarantine preserved).
+      if (this.claimedInflightKeys.length > 0) {
+        try {
+          const still = this.claimedInflightKeys;
+          this.claimedInflightKeys = [];
+          const db = await getLocalDb();
+          const now = utcNowIso();
+          const err = `push aborted: ${this.lastError ?? 'unknown'}`;
+          for (let i = 0; i < still.length; i += 500) {
+            const chunk = still.slice(i, i + 500);
+            const ph = chunk.map(() => '?').join(',');
+            await db.execute(
+              `UPDATE sync_outbox SET status='pending', last_error=?, updated_at=?
+               WHERE status='inflight' AND idempotency_key IN (${ph})`,
+              [err, now, ...chunk],
+            );
+          }
+          this.logEvent('push', `Re-queued still-inflight rows after push abort`, 'warn');
+        } catch {
+          // Next cycle's resetStaleInflightOutbox(0) is the safety net.
+        }
+      }
       this.pushing = false;
       this.emit();
+      void this.rearmTimersIfNeeded();
     }
   }
 
@@ -836,6 +1476,50 @@ class SyncManager {
       }
     }
 
+    // H27: stock_batches is a first-class sync table whose remote shape is
+    // BOTH the generic KV pair AND real FIFO columns. The generic branch
+    // below CANNOT handle it: the remote table declares
+    // `product_id TEXT NOT NULL` with no default and the KV path writes no
+    // real columns (proven: NOT NULL constraint failed). It also conflicts
+    // on `ON CONFLICT(id)` and v6's `id` has no UNIQUE constraint. So
+    // conflict on the real PK `batch_id`, write both the real columns and
+    // the KV pair, and keep the version guard so isGuardedUpsert()
+    // classifies this statement (H14 re-queue on rowsAffected === 0).
+    if (op.entity_type === 'stock_batches') {
+      assertValidSyncTable('stock_batches');
+      const batchId = String(payload.batch_id ?? payload.batchId ?? op.entity_id ?? '');
+      return {
+        sql: `INSERT INTO stock_batches (batch_id, product_id, quantity_remaining, unit_cost,
+          received_at, purchase_order_id, device_id, idempotency_key, sync_status, version,
+          created_at, updated_at, id, data_json, deleted)
+          VALUES (?,?,?,?,?,?,?,?,'synced',?,?,?,?,?,?)
+          ON CONFLICT(batch_id) DO UPDATE SET
+            product_id=excluded.product_id, quantity_remaining=excluded.quantity_remaining,
+            unit_cost=excluded.unit_cost, received_at=excluded.received_at,
+            purchase_order_id=excluded.purchase_order_id, device_id=excluded.device_id,
+            idempotency_key=excluded.idempotency_key, sync_status='synced',
+            version=excluded.version, updated_at=excluded.updated_at,
+            deleted=excluded.deleted, id=excluded.id, data_json=excluded.data_json
+            WHERE excluded.version >= stock_batches.version`,
+        args: [
+          v(batchId),
+          v(payload.product_id ?? payload.productId ?? 'unknown'),
+          v(Number(payload.quantity_remaining ?? payload.quantityRemaining ?? 0)),
+          v(Number(payload.unit_cost ?? payload.unitCost ?? 0)),
+          v(payload.received_at ?? payload.receivedAt ?? now),
+          v(payload.purchase_order_id ?? payload.purchaseOrderId ?? null),
+          v(payload.device_id ?? this.deviceId ?? 'default'),
+          v(op.idempotency_key ?? payload.idempotency_key ?? payload.idempotencyKey ?? `idem-${batchId}`),
+          v(version || 1),
+          v(payload.created_at ?? payload.createdAt ?? now),
+          v(now),
+          v(batchId),
+          v(toBoundedSyncJson(payload ?? {})),
+          v(Number(payload.deleted ?? 0)),
+        ],
+      };
+    }
+
     const genericTable = GENERIC_TABLES[op.entity_type];
     if (genericTable) {
       assertValidSyncTable(genericTable);
@@ -875,7 +1559,7 @@ class SyncManager {
           idempotency_key, sync_status, version, created_at, updated_at, deleted)
           VALUES (?,?,?,?,?,?,?,?,'synced',?,?,?,0) ON CONFLICT(id) DO NOTHING`,
         args: [
-          v(payload.id ?? op.entity_id ?? `led-${Date.now()}`), v(prodId), v(Number(payload.delta ?? 0)),
+          v(payload.id ?? op.entity_id ?? newId('led')), v(prodId), v(Number(payload.delta ?? 0)),
           v(String(payload.reason ?? 'SALE')), v(payload.ref_type ?? payload.refType ?? null),
           v(payload.ref_id ?? payload.refId ?? null), v(payload.device_id ?? this.deviceId ?? 'default'),
           v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`), v(version || 1),
@@ -1026,6 +1710,7 @@ class SyncManager {
 
   async pullOnce(forceOnline = false): Promise<number> {
     if (this.pulling) return 0;
+    if (this.deviceRevoked) return 0;
     if (!(await this.ensureOnline(forceOnline))) return 0;
 
     const creds = await getCloudCredentials();
@@ -1038,6 +1723,17 @@ class SyncManager {
     try {
       const remote = await getTursoClient();
       const db = await getLocalDb();
+
+      // The schema gate must also run on the pull path: a device with an
+      // empty outbox returns from pushOnce before migrating, and would
+      // otherwise fail these queries forever on pre-lane cloud DBs.
+      if (!this.remoteSchemaEnsured) {
+        try {
+          await this.ensureRemoteSchemaOnce(remote);
+        } catch (schemaErr) {
+          console.warn('[SyncManager] Remote schema check warning (pull):', schemaErr);
+        }
+      }
 
       const isBackfill = this.backfillRoundsRemaining > 0;
       if (isBackfill) {
@@ -1112,40 +1808,65 @@ class SyncManager {
         let committedTime = cursor.time;
         let committedId = cursor.id;
         for (let c = 0; c < rsRows.length; c += APPLY_CHUNK) {
-          for (const row of rsRows.slice(c, c + APPLY_CHUNK)) {
-            const r = row as unknown as Record<string, unknown>;
-            const updated = (r.updated_at as string) ?? utcNowIso();
-            const rowId = (r.id as string) ?? '';
-            if (table === 'products' && rowId) touchedProductIds.add(rowId);
-            if (table === 'inventory_ledger' && r.product_id) touchedProductIds.add(String(r.product_id));
-            if (table === 'transactions' || table === 'transaction_items' || table === 'customers') {
-              transactionsNeedReconstruction = true;
-            }
-            if (table === 'transactions' && rowId) touchedTxnIds.add(rowId);
-            if (table === 'transaction_items' && r.transaction_id) {
-              touchedTxnIds.add(String(r.transaction_id));
-            }
-            try {
-              await this.applyRemoteRow(db, table, r);
-              totalPulled++;
-              tablePulled++;
-              // Contract C6: advance the cursor ONLY past rows that applied
-              // cleanly. A failed row keeps the cursor behind it so the next
-              // pull retries it instead of silently skipping it forever.
-              if (updated > maxSeenTime || (updated === maxSeenTime && rowId > maxSeenId)) {
-                maxSeenTime = updated;
-                maxSeenId = rowId;
-              }
-            } catch (e) {
-              console.warn(`[sync] pull apply failed [${table}]:`, e);
-              this.logEvent('error', `Échec d'application pull [${table}]: ${e instanceof Error ? e.message : String(e)}`, 'warn');
-            }
-          }
-          if (maxSeenTime !== committedTime || maxSeenId !== committedId) {
-            await this.setTableCursor(db, table, { time: maxSeenTime, id: maxSeenId });
-            committedTime = maxSeenTime;
-            committedId = maxSeenId;
-          }
+          const chunk = rsRows.slice(c, c + APPLY_CHUNK);
+          // Serialized with sales (then retried on BUSY): a pull chunk must
+          // not interleave its row writes with a checkout's multi-statement
+          // write on the pooled connection, or the sale fails SQLITE_BUSY.
+          // Re-application is idempotent (version guards + idempotency keys).
+          await withBusyRetry(
+            () =>
+              withWriteLock(async () => {
+                for (const row of chunk) {
+                  const r = row as unknown as Record<string, unknown>;
+                  const updated = (r.updated_at as string) ?? utcNowIso();
+                  const rowId = (r.id as string) ?? '';
+                  if (table === 'products' && rowId) touchedProductIds.add(rowId);
+                  if (table === 'inventory_ledger' && r.product_id) touchedProductIds.add(String(r.product_id));
+                  if (table === 'transactions' || table === 'transaction_items' || table === 'customers') {
+                    transactionsNeedReconstruction = true;
+                  }
+                  if (table === 'transactions' && rowId) touchedTxnIds.add(rowId);
+                  if (table === 'transaction_items' && r.transaction_id) {
+                    touchedTxnIds.add(String(r.transaction_id));
+                  }
+                  try {
+                    await this.applyRemoteRow(db, table, r);
+                    totalPulled++;
+                    tablePulled++;
+                    // A clean apply clears the stall streak for this table.
+                    if ((this.applyFailStreak.get(table) ?? 0) > 0) {
+                      this.applyFailStreak.delete(table);
+                    }
+                    // Contract C6: advance the cursor ONLY past rows that applied
+                    // cleanly. A failed row keeps the cursor behind it so the next
+                    // pull retries it instead of silently skipping it forever.
+                    if (updated > maxSeenTime || (updated === maxSeenTime && rowId > maxSeenId)) {
+                      maxSeenTime = updated;
+                      maxSeenId = rowId;
+                    }
+                  } catch (e) {
+                    console.warn(`[sync] pull apply failed [${table}]:`, e);
+                    this.logEvent('error', `Échec d'application pull [${table}]: ${e instanceof Error ? e.message : String(e)}`, 'warn');
+                    // Cursor-stall detection (C6): three consecutive apply
+                    // failures on the same table means the cursor is wedged
+                    // behind a poison row — surface it on the status badge
+                    // instead of silently never advancing that table again.
+                    const streak = (this.applyFailStreak.get(table) ?? 0) + 1;
+                    this.applyFailStreak.set(table, streak);
+                    if (streak === 3) {
+                      this.logEvent('error', `Pull bloqué sur ${table} (${streak} échecs d'application) — curseur non avancé`, 'error');
+                      this.lastError = `Pull bloqué sur ${table} — voir Sync Diagnostics`;
+                    }
+                  }
+                }
+                if (maxSeenTime !== committedTime || maxSeenId !== committedId) {
+                  await this.setTableCursor(db, table, { time: maxSeenTime, id: maxSeenId });
+                  committedTime = maxSeenTime;
+                  committedId = maxSeenId;
+                }
+              }),
+            { attempts: 4, baseDelayMs: 60, label: `pull-${table}` }
+          );
         }
 
         if (tablePulled > 0) touchedTables.add(table);
@@ -1153,30 +1874,56 @@ class SyncManager {
 
       if (totalPulled > 0) {
         this.lastPullAt = utcNowIso();
-        // 1. Recompute products stock from ledger deltas in SQLite
-        // P2: chunk the IN() list — up to 8.5k ids in one statement risks
-        // SQLITE_ERROR (too many variables) on older SQLite builds.
-        if (touchedProductIds.size > 0) {
-          const productIds = [...touchedProductIds];
-          const IN_CHUNK = 500;
-          for (let i = 0; i < productIds.length; i += IN_CHUNK) {
-            const chunk = productIds.slice(i, i + IN_CHUNK);
-            await db.execute(
-              `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger
-                WHERE inventory_ledger.product_id = products.id AND deleted=0), stock)
-               WHERE id IN (${chunk.map(() => '?').join(',')})`,
-              chunk,
-            );
-          }
-        }
-        // 2. CRITICAL: Mirror recomputed stock from SQLite to Dexie so desktop UI gets updated immediately!
-        try {
+        // Same-window serializer: the stock recompute + Dexie mirror must not
+        // interleave with a concurrent checkout's ledger writes, or the cached
+        // products.stock can land between the sale's deltas and its recompute.
+        // (Cross-tab serialization is BEGIN IMMEDIATE's job inside the
+        // writers; see db/writeMutex.)
+        // Retried on BUSY: a collision with a sale in flight delays the
+        // mirror, never fails the sale nor drops the pull.
+        await withBusyRetry(
+          () =>
+            withWriteLock(async () => {
+          // 1. Recompute products stock from ledger deltas in SQLite
+          // P2: chunk the IN() list — up to 8.5k ids in one statement risks
+          // SQLITE_ERROR (too many variables) on older SQLite builds.
           if (touchedProductIds.size > 0) {
-            await syncProductsFromSqlToDexie(touchedProductIds);
+            const productIds = [...touchedProductIds];
+            const IN_CHUNK = 500;
+            for (let i = 0; i < productIds.length; i += IN_CHUNK) {
+              const chunk = productIds.slice(i, i + IN_CHUNK);
+              await db.execute(
+                `UPDATE products SET stock = COALESCE((SELECT SUM(delta) FROM inventory_ledger
+                  WHERE inventory_ledger.product_id = products.id AND deleted=0), stock)
+                 WHERE id IN (${chunk.map(() => '?').join(',')})`,
+                chunk,
+              );
+            }
           }
-        } catch (stockErr) {
-          console.warn('[sync:pull] syncProductsFromSqlToDexie error:', stockErr);
-        }
+          // 2. CRITICAL: Mirror recomputed stock from SQLite to Dexie so desktop UI gets updated immediately!
+          try {
+            if (touchedProductIds.size > 0) {
+              await syncProductsFromSqlToDexie(touchedProductIds);
+            }
+          } catch (stockErr) {
+            console.warn('[sync:pull] syncProductsFromSqlToDexie error:', stockErr);
+          }
+          // 2b. Debt display convergence: the paid/owed number the merchant
+          // sees derives from the customer_debts LEDGER, not from whichever
+          // customer row won the last version race. Recompute it from the
+          // just-pulled ledger so "paid on PC" reads paid here too — even if
+          // the companion customer row is still converging.
+          try {
+            if (touchedTables.has('customer_debts')) {
+              const { reconcileCustomerDebtFromLedger } = await import('../db/sqlPluginAdapter');
+              await reconcileCustomerDebtFromLedger();
+            }
+          } catch (debtErr) {
+            console.warn('[sync:pull] reconcileCustomerDebtFromLedger error:', debtErr);
+          }
+            }),
+          { attempts: 4, baseDelayMs: 60, label: 'pull-recompute' },
+        );
         // 3. Reconstruct Dexie transactions with their line items & customers
         if (transactionsNeedReconstruction) {
           try {
@@ -1205,6 +1952,7 @@ class SyncManager {
     } finally {
       this.pulling = false;
       this.emit();
+      void this.rearmTimersIfNeeded();
     }
     return totalPulled;
   }
@@ -1214,92 +1962,22 @@ class SyncManager {
     const version = Number(r.version ?? 1);
 
     if (generic) {
-      let recordPayload: Record<string, unknown>;
-      try {
-        recordPayload = sanitizeSyncPayload(
-          JSON.parse((r.data_json as string) ?? '{}') as Record<string, unknown>,
-        );
-      } catch {
-        return;
-      }
-      const id = (r.id as string) ?? (recordPayload.id as string);
-      if (!id) return;
-      if (table === 'app_settings' && (id.startsWith('sync.') || (recordPayload.key as string)?.startsWith?.('sync.'))) return;
-
-      const store = (dexieDb as unknown as Record<string, {
-        get: (k: string) => Promise<Record<string, unknown> | undefined>;
-        put: (o: unknown) => Promise<unknown>;
-        delete: (k: string) => Promise<void>;
-      }>)[generic.dexie];
-      if (!store) return;
-
-      if (Number(r.deleted ?? 0) === 1) {
-        if (table === 'customers') {
-          await db.execute('UPDATE customers SET deleted = 1 WHERE id = $1', [id]).catch(() => {});
-        }
-        if (table === 'cash_drops') {
-          await (dexieDb as unknown as { cashDrops: { delete: (k: string) => Promise<void> }; payouts: { delete: (k: string) => Promise<void> } }).cashDrops.delete(id).catch((err: unknown) => {
-            console.warn('[sync:dexie] Failed to delete cashDrop:', err);
-          });
-          await (dexieDb as unknown as { cashDrops: { delete: (k: string) => Promise<void> }; payouts: { delete: (k: string) => Promise<void> } }).payouts.delete(id).catch((err: unknown) => {
-            console.warn('[sync:dexie] Failed to delete payout:', err);
-          });
-        } else {
-          await store.delete(id).catch((err: unknown) => {
-            console.warn(`[sync:dexie] Failed to delete ${table} record:`, err);
-          });
-        }
-        return;
-      }
-
-      const local = await store.get(id).catch((err: unknown) => {
-        console.warn(`[sync:dexie] Failed to get ${table} record:`, err);
-        return undefined;
-      });
-      if (local && Number(local.version ?? 1) > version) {
-        return; // Local version is newer
-      }
-
-      if (table === 'customers') {
-        const c = recordPayload as Record<string, unknown>;
-        const now = utcNowIso();
-        await db.execute(
-          `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11)
-           ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, email=excluded.email,
-             loyalty_points=excluded.loyalty_points, store_credit=excluded.store_credit,
-             pricing_tier=excluded.pricing_tier, total_spent=excluded.total_spent,
-             json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0, version=excluded.version
-             WHERE excluded.version >= customers.version`,
-          [
-            id,
-            (c.name as string) || 'Client',
-            (c.phone as string) || '',
-            (c.email as string) || null,
-            Number(c.loyaltyPoints ?? 0),
-            Number(c.storeCredit ?? 0),
-            (c.pricingTier as string) || 'Retail',
-            Number(c.totalSpent ?? 0),
-            JSON.stringify(c),
-            (c.updatedAt as string) ?? now,
-            version,
-          ],
-        ).catch(() => {});
-      }
-
-      if (table === 'cash_drops') {
-        const payouts = (dexieDb as unknown as { payouts: { put: (o: unknown) => Promise<unknown> } }).payouts;
-        const cashDrops = (dexieDb as unknown as { cashDrops: { put: (o: unknown) => Promise<unknown> } }).cashDrops;
-        if ((recordPayload as Record<string, unknown>)._isPayout) await payouts.put(recordPayload);
-        else await cashDrops.put(recordPayload);
-      } else {
-        await store.put(recordPayload);
-      }
+      // H25/H29: generic KV tables go through the ONE shared apply path
+      // (SQLite authority + Dexie replica + version clock), exactly like
+      // restoreManager. The old inline copy wrote the Dexie replica ONLY and
+      // never advanced `entity_keys`, so a row pulled on device B existed in
+      // the UI replica but not in the SQLite authority, and the next local
+      // edit pushed a version-2 row against a remote version-5 row: the
+      // guarded upsert matched 0 rows, the batch still reported success and
+      // the outbox row was marked synced — silent loss (C6). A throw here is
+      // the desired behaviour: the pull loop catches per-row and holds the
+      // cursor behind a failed row instead of advancing past it.
+      await applyGenericRemoteRow(db, table, r);
       return;
     }
 
     if (table === 'inventory_ledger') {
-      const ledId = String(r.id || `led-${Date.now()}`);
+      const ledId = String(r.id || newId('led'));
       const prodId = String(r.product_id || 'unknown');
       await db.execute(
         `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
@@ -1317,7 +1995,7 @@ class SyncManager {
     }
 
     if (table === 'transactions') {
-      const txId = String(r.id || `txn-${Date.now()}`);
+      const txId = String(r.id || newId('txn'));
       const receiptNo = String(r.receipt_number || txId);
       // New-row detection BEFORE upsert: own sales already exist locally, so a
       // pre-existing id means "echo of my own write" while a missing id means
@@ -1337,10 +2015,11 @@ class SyncManager {
         `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
           cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
           status, created_at, json_payload, device_id, idempotency_key, sync_status, version, updated_at, deleted)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?)
-         ON CONFLICT(id) DO UPDATE SET status=excluded.status, total=excluded.total,
-           json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at, sync_status='synced'
-           WHERE excluded.version >= transactions.version`,
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?)
+          ON CONFLICT(id) DO UPDATE SET status=excluded.status, total=excluded.total,
+            json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at, sync_status='synced',
+            deleted=excluded.deleted
+            WHERE excluded.version >= transactions.version`,
         [
           txId, receiptNo, r.customer_id ? String(r.customer_id) : null, Number(r.subtotal ?? 0), Number(r.tax ?? 0),
           Number(r.discount_total ?? 0), Number(r.total ?? 0), Number(r.cost_total ?? 0), Number(r.profit ?? 0),
@@ -1419,7 +2098,7 @@ class SyncManager {
     }
 
     if (table === 'transaction_items') {
-      const itemId = String(r.id || `item-${Date.now()}`);
+      const itemId = String(r.id || newId('item'));
       const txnId = String(r.transaction_id || '');
       const prodId = String(r.product_id || 'unknown');
       await db.execute(
@@ -1444,7 +2123,7 @@ class SyncManager {
     }
 
     if (table === 'products') {
-      const pId = String(r.id || `prod-${Date.now()}`);
+      const pId = String(r.id || newId('prod'));
       // Fix: include deleted=excluded.deleted so product deletions don't resurrect.
       // stock + price/catalog columns ARE updated on conflict (LWW): the ledger
       // recompute after pull remains the stock authority, but the row must not
@@ -1530,12 +2209,14 @@ class SyncManager {
   }
 
   /**
-   * On-demand verification comparing local vs cloud row counts and SHA-256 hashes.
+   * On-demand verification comparing local vs cloud row counts AND content
+   * hashes (SHA-256 over sorted id/version/updated_at triples per table).
+   * Counts alone can match while rows diverge — the hash catches that.
    */
   async verifyCloudIntegrity(): Promise<{
     verified: boolean;
     report: string;
-    details: Array<{ table: string; localCount: number; remoteCount: number; match: boolean }>;
+    details: Array<{ table: string; localCount: number; remoteCount: number; match: boolean; hashMatch?: boolean }>;
   }> {
     const creds = await getCloudCredentials();
     if (!creds) {
@@ -1544,32 +2225,56 @@ class SyncManager {
 
     const remote = await getTursoClient();
     const local = await getLocalDb();
-    const details: Array<{ table: string; localCount: number; remoteCount: number; match: boolean }> = [];
+    const details: Array<{ table: string; localCount: number; remoteCount: number; match: boolean; hashMatch?: boolean }> = [];
     let allMatch = true;
+
+    const digest = async (rows: Array<Record<string, unknown>>): Promise<string> => {
+      const sorted = rows
+        .map((r) => `${String(r.id ?? r.key ?? '')}|${String(r.version ?? '')}|${String(r.updated_at ?? '')}`)
+        .sort()
+        .join('\n');
+      const enc = new TextEncoder().encode(sorted);
+      const buf = await crypto.subtle.digest('SHA-256', enc);
+      return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    };
 
     for (const table of ALL_REMOTE_SYNC_TABLES) {
       assertValidSyncTable(table);
       let localCount = 0;
-      if (['products', 'transactions', 'transaction_items', 'inventory_ledger'].includes(table)) {
-        const rows = (await local.select(`SELECT COUNT(*) as n FROM ${table} WHERE deleted=0`).catch(() => [{ n: 0 }])) as Array<{ n: number }>;
-        localCount = rows[0]?.n ?? 0;
+      let localHash = '';
+      if (['products', 'transactions', 'transaction_items', 'inventory_ledger', 'stock_batches'].includes(table)) {
+        const idCol = table === 'stock_batches' ? 'batch_id' : 'id';
+        const rows = (await local.select(
+          `SELECT ${idCol} as id, version, updated_at FROM ${table} WHERE deleted=0 ORDER BY ${idCol}`,
+        ).catch(() => [])) as Array<Record<string, unknown>>;
+        localCount = rows.length;
+        localHash = await digest(rows);
       } else {
         const dexieTable = GENERIC_PULL[table]?.dexie;
-        const store = dexieTable ? (dexieDb as unknown as Record<string, { count: () => Promise<number> }>)[dexieTable] : null;
-        localCount = store ? await store.count().catch(() => 0) : 0;
+        const store = dexieTable ? (dexieDb as unknown as Record<string, { toArray?: () => Promise<Array<Record<string, unknown>>> }>)[dexieTable] : null;
+        const rows = store?.toArray ? await store.toArray().catch(() => []) : [];
+        localCount = rows.length;
+        localHash = await digest(rows.map((r) => ({ id: r.id ?? r.key, version: r.version, updated_at: r.updated_at ?? r.updatedAt })));
       }
 
-      const rRes = await remote.execute(`SELECT COUNT(*) as n FROM ${table} WHERE deleted=0`);
-      const remoteCount = Number(rRes.rows[0]?.n ?? 0);
-      const match = localCount === remoteCount;
+      const rRes = await remote.execute(
+        `SELECT id, version, updated_at FROM ${table} WHERE deleted=0 ORDER BY id`,
+      );
+      const remoteRows = rRes.rows.map((r) => r as unknown as Record<string, unknown>);
+      const remoteCount = remoteRows.length;
+      const remoteHash = await digest(remoteRows);
+      const countMatch = localCount === remoteCount;
+      const hashMatch = localHash === remoteHash;
+      const match = countMatch && hashMatch;
       if (!match) allMatch = false;
 
-      details.push({ table, localCount, remoteCount, match });
+      details.push({ table, localCount, remoteCount, match, hashMatch });
     }
 
+    const mismatched = details.filter((d) => !d.match);
     const report = allMatch
-      ? `Intégrité validée à 100% sur l'ensemble des ${details.length} tables synchronisées.`
-      : `Écart détecté sur ${details.filter((d) => !d.match).map((d) => d.table).join(', ')}.`;
+      ? `Intégrité validée (counts + SHA-256) sur l'ensemble des ${details.length} tables synchronisées.`
+      : `Écart détecté sur ${mismatched.map((d) => d.table).join(', ')}${mismatched.some((d) => d.localCount === d.remoteCount && !d.hashMatch) ? ' (hash divergent malgré counts égaux)' : ''}.`;
 
     this.logEvent('info', `Vérification d'intégrité exécutée: ${allMatch ? 'Succès' : 'Écart'}`, allMatch ? 'success' : 'warn');
 

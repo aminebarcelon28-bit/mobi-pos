@@ -6,6 +6,9 @@ members = [
 ]
 resolver = "2"
 
+[patch.crates-io]
+tauri-plugin-sql = { path = "patches/tauri-plugin-sql" }
+
 # Release tuning (P3.5): thinner Android .so + faster cold start.
 # Thin LTO keeps CI build times sane; strip removes symbols from ship artifacts.
 [profile.release]
