@@ -1,6 +1,65 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { usePosStore } from '../store/usePosStore';
 import { soundEngine } from '../utils/audioFeedback';
+import type { Product, Customer, ProductBundle } from '../types/pos';
+
+const lowerKey = (s: string | undefined | null): string => (s || '').trim().toLowerCase();
+const alnumUpper = (s: string): string => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+interface CustomerScanEntry {
+  customer: Customer;
+  cleanId: string;
+}
+
+function buildProductMap(list: Product[]): Map<string, Product> {
+  const map = new Map<string, Product>();
+  for (const p of list) {
+    // First row wins, mirroring Array.find order over the same key set.
+    const keys = [lowerKey(p.barcode), lowerKey(p.sku), lowerKey(p.id)];
+    for (const k of keys) {
+      if (k && !map.has(k)) map.set(k, p);
+    }
+  }
+  return map;
+}
+
+function buildBundleMap(list: ProductBundle[]): Map<string, ProductBundle> {
+  const map = new Map<string, ProductBundle>();
+  for (const b of list) {
+    const keys = [lowerKey(b.barcode), lowerKey(b.id)];
+    for (const k of keys) {
+      if (k && !map.has(k)) map.set(k, b);
+    }
+  }
+  return map;
+}
+
+function buildCustomerIndex(list: Customer[]): { exact: Map<string, Customer>; entries: CustomerScanEntry[] } {
+  const exact = new Map<string, Customer>();
+  const entries: CustomerScanEntry[] = [];
+  const addExact = (key: string, c: Customer) => {
+    const k = key.trim();
+    if (!k) return;
+    const lk = k.toLowerCase();
+    if (!exact.has(lk)) exact.set(lk, c);
+    const digits = k.replace(/[^0-9]/g, '');
+    if (digits && !exact.has(digits)) exact.set(digits, c);
+  };
+  for (const c of list) {
+    addExact(c.id, c);
+    addExact(c.phone || '', c);
+    addExact(c.loyaltyCardCode || '', c);
+    addExact(c.barcode || '', c);
+    if (c.id) {
+      const upper = c.id.toUpperCase();
+      addExact(`LOY-${upper}`, c);
+      addExact(`LOYALTY-${upper}`, c);
+      addExact(`CUST-${upper}`, c);
+    }
+    entries.push({ customer: c, cleanId: alnumUpper(c.id || '') });
+  }
+  return { exact, entries };
+}
 
 /**
  * Hook global pour détecter la saisie d'un lecteur de code-barres USB (HID).
@@ -21,6 +80,22 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
   const lastScanCode = useRef<string>('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Memoized scan indexes, rebuilt only when the underlying list identity
+  // changes — not per item per scan. The previous code ran trim()/regex over
+  // every product/customer on every wedge scan.
+  // NOTE on productAdapter: its indexed Dexie lookup
+  // (findProductByBarcodeOrSku: barcode equalsIgnoreCase -> sku
+  // equalsIgnoreCase) is the DB-layer equivalent of the map below. The wedge
+  // path must stay synchronous (keydown timing), so it reads the in-memory
+  // store mirror through the same key semantics instead of awaiting Dexie.
+  const productCache = useRef<{ list: Product[] | null; map: Map<string, Product> }>({ list: null, map: new Map() });
+  const bundleCache = useRef<{ list: ProductBundle[] | null; map: Map<string, ProductBundle> }>({ list: null, map: new Map() });
+  const customerCache = useRef<{ list: Customer[] | null; exact: Map<string, Customer>; entries: CustomerScanEntry[] }>({
+    list: null,
+    exact: new Map(),
+    entries: [],
+  });
+
   const processScan = useCallback((rawCode: string) => {
     const code = rawCode.trim();
     if (!code) return;
@@ -32,23 +107,6 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
     }
     lastScanCode.current = code;
     lastScanTimestamp.current = now;
-
-    const store = usePosStore.getState();
-    const activeModal = store.activeModal;
-
-    // Guard: If editor or label printer is open, only expose lastScannedCode for barcode field auto-fill
-    if (activeModal === 'product_editor' || activeModal === 'label_printer') {
-      setLastScannedCode(code);
-      soundEngine.playScan();
-      return;
-    }
-
-    // Guard: If any other modal is open (e.g. payment, settings, security audit, pin prompt, reports, refund), ignore scan
-    if (activeModal !== null) {
-      return;
-    }
-
-    setScannerActive(true);
 
     // 1. Parse multiplier syntax (e.g. 5*BARCODE, 12xBARCODE)
     let multiplier = 1;
@@ -62,33 +120,67 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
     // 2. Strip AIM symbology prefix if scanner outputs it (e.g. "]C1", "]E0", "]d2")
     effectiveCode = effectiveCode.replace(/^\][A-Za-z0-9]{2}/, '');
 
+    const store = usePosStore.getState();
+    const activeModal = store.activeModal;
+
+    // Guard: If editor or label printer is open, expose code for auto-fill and dispatch event
+    if (activeModal === 'product_editor' || activeModal === 'label_printer') {
+      setLastScannedCode(effectiveCode);
+      soundEngine.playScan();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pos:barcode-scanned', { detail: { code: effectiveCode, multiplier: 1 } }));
+      }
+      return;
+    }
+
+    // Guard: If payment modal is open, dispatch voucher scan event
+    if (activeModal === 'payment') {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pos:payment-voucher-scanned', { detail: { code: effectiveCode } }));
+      }
+      return;
+    }
+
+    // Guard: If any other modal is open (e.g. settings, security audit, pin prompt, reports, refund), ignore scan
+    if (activeModal !== null) {
+      return;
+    }
+
+    setScannerActive(true);
+
     const products = store.products || [];
     const bundles = store.bundles || [];
     const customers = store.customers || [];
-    
-    const cleanCode = effectiveCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+    if (productCache.current.list !== products) {
+      productCache.current = { list: products, map: buildProductMap(products) };
+    }
+    if (bundleCache.current.list !== bundles) {
+      bundleCache.current = { list: bundles, map: buildBundleMap(bundles) };
+    }
+    if (customerCache.current.list !== customers) {
+      const built = buildCustomerIndex(customers);
+      customerCache.current = { list: customers, exact: built.exact, entries: built.entries };
+    }
+
+    const cleanCode = alnumUpper(effectiveCode);
+    const effectiveLower = effectiveCode.toLowerCase();
+    const effectiveDigits = effectiveCode.replace(/[^0-9]/g, '');
 
     // Check if code matches a Customer Loyalty Card Barcode (PVC / Digital Pass)
-    const customerMatch = customers.find(c => {
-      const cleanId = c.id.toUpperCase().replace(/[^A-Z0-9]/g, '');
-      const cleanPhone = (c.phone || '').replace(/[^0-9]/g, '');
-      const rawPhone = (c.phone || '').trim();
-      const cardCode = (c.loyaltyCardCode || '').toUpperCase().trim();
-      const barcode = (c.barcode || '').toUpperCase().trim();
-
-      return (
-        c.id === effectiveCode ||
-        c.id.toUpperCase() === effectiveCode.toUpperCase() ||
-        rawPhone === effectiveCode ||
-        cleanPhone === effectiveCode ||
-        cardCode === effectiveCode.toUpperCase() ||
-        barcode === effectiveCode.toUpperCase() ||
-        `LOY-${c.id.toUpperCase()}` === effectiveCode.toUpperCase() ||
-        `LOYALTY-${c.id.toUpperCase()}` === effectiveCode.toUpperCase() ||
-        `CUST-${c.id.toUpperCase()}` === effectiveCode.toUpperCase() ||
-        (cleanCode.length >= 3 && cleanCode.includes(cleanId))
+    // Exact keys hit the prebuilt map; only the substring fallback scans entries
+    // (over precomputed cleanIds, no per-item regex).
+    let customerMatch: Customer | undefined;
+    customerMatch =
+      customerCache.current.exact.get(effectiveCode) ||
+      customerCache.current.exact.get(effectiveLower) ||
+      (effectiveDigits ? customerCache.current.exact.get(effectiveDigits) : undefined);
+    if (!customerMatch && cleanCode.length >= 3) {
+      const hit = customerCache.current.entries.find(
+        (e) => e.cleanId.length >= 3 && cleanCode.includes(e.cleanId)
       );
-    });
+      customerMatch = hit?.customer;
+    }
 
     if (customerMatch) {
       soundEngine.playScan();
@@ -101,13 +193,16 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
       );
       setLastScannedCode(null);
     } else {
-      const productMatch = products.find(p => p.barcode === effectiveCode || p.sku === effectiveCode || p.id === effectiveCode);
+      const targetCode = lowerKey(effectiveCode);
+      const productMatch = productCache.current.map.get(targetCode);
+
       if (productMatch) {
         soundEngine.playScan();
         store.addToCart(productMatch, false, multiplier);
         setLastScannedCode(null);
       } else {
-        const bundleMatch = bundles.find(b => b.barcode === effectiveCode || b.id === effectiveCode);
+        const bundleMatch = bundleCache.current.map.get(targetCode);
+
         if (bundleMatch) {
           soundEngine.playScan();
           for (let i = 0; i < multiplier; i++) {
@@ -122,6 +217,11 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
       }
     }
     
+    // Dispatch global event for other components if needed
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('pos:barcode-scanned', { detail: { code: effectiveCode, multiplier } }));
+    }
+
     // Reset active scanner feedback
     setTimeout(() => {
       setScannerActive(false);
@@ -141,13 +241,25 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
       }
 
       if (e.key === 'Enter') {
-        if (buffer.current.length >= 5) {
-          // Code-barres valide détecté (5+ caractères)
+        if (buffer.current.length >= 3) {
+          // Code-barres valide détecté (3+ caractères)
           processScan(buffer.current);
           
-          if (!isInputFocused) {
-            e.preventDefault();
+          // If the user was focused on the search input, clean it up and blur so the grid is not filtered
+          if (isInputFocused && activeElement instanceof HTMLInputElement) {
+            const isSearchBar = 
+              activeElement.placeholder?.toLowerCase().includes('scanner') ||
+              activeElement.placeholder?.toLowerCase().includes('rechercher') ||
+              activeElement.type === 'search';
+
+            if (isSearchBar) {
+              activeElement.value = '';
+              activeElement.blur();
+              usePosStore.getState().setSearchQuery('');
+            }
           }
+          
+          e.preventDefault();
         }
         buffer.current = '';
       } else if (e.key.length === 1) { // Touche de caractère imprimable

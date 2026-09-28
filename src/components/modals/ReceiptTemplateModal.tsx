@@ -17,15 +17,48 @@ export const ReceiptTemplateModal: React.FC = () => {
 
   const handleLogoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (reader.result) {
-          setFormData(prev => ({ ...prev, logoUrl: reader.result as string }));
+    if (!file) return;
+    // Reject oversized uploads before they bloat IndexedDB/localStorage.
+    if (file.size > 500 * 1024) {
+      e.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const raw = reader.result as string | null;
+      if (!raw) return;
+      const img = new window.Image();
+      img.onload = () => {
+        try {
+          const maxW = 400;
+          const w = img.naturalWidth || img.width;
+          const h = img.naturalHeight || img.height;
+          if (!w || !h || w <= maxW) {
+            setFormData((prev) => ({ ...prev, logoUrl: raw }));
+            return;
+          }
+          const scale = maxW / w;
+          const canvas = document.createElement('canvas');
+          canvas.width = maxW;
+          canvas.height = Math.max(1, Math.round(h * scale));
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            setFormData((prev) => ({ ...prev, logoUrl: raw }));
+            return;
+          }
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const downscaled = canvas.toDataURL('image/png');
+          setFormData((prev) => ({ ...prev, logoUrl: downscaled }));
+        } catch {
+          setFormData((prev) => ({ ...prev, logoUrl: raw }));
         }
       };
-      reader.readAsDataURL(file);
-    }
+      img.onerror = () => {
+        setFormData((prev) => ({ ...prev, logoUrl: raw }));
+      };
+      img.src = raw;
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleSubmit = (e: React.FormEvent) => {

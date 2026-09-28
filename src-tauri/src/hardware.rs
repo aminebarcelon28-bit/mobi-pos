@@ -16,6 +16,8 @@
 //! hook re-scans on demand, so discovery stays pull-based.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tauri::Manager;
 
 /// Mirrors the TS `DiscoveredDevice` contract (`src/types/pos.ts`).
 /// Serialized keys must stay camelCase: id / name / category /
@@ -458,6 +460,168 @@ pub fn hardware_update_vfd(
         let payload = build_vfd_payload(&item_title, &total_price_formatted);
         write_serial_port(&port, &payload)
     }
+}
+
+const APP_HWID_SALT: &[u8] = b"mobi-pos-license-salt-v1:";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HardwareFingerprintResult {
+    pub formatted: String,
+    pub hash: String,
+    pub platform: String,
+}
+
+fn format_hwid(raw_entropy: &str) -> (String, String) {
+    let mut hasher = Sha256::new();
+    hasher.update(APP_HWID_SALT);
+    hasher.update(raw_entropy.as_bytes());
+    let hex_digest = format!("{:x}", hasher.finalize());
+    let upper = hex_digest.to_uppercase();
+    let g1 = &upper[0..4];
+    let g2 = &upper[4..8];
+    let g3 = &upper[8..12];
+    let g4 = &upper[12..16];
+    (format!("MOBI-{g1}-{g2}-{g3}-{g4}"), hex_digest)
+}
+
+#[cfg(target_os = "windows")]
+fn get_platform_raw_hwid() -> (String, String) {
+    use winreg::enums::*;
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let machine_guid = hklm
+        .open_subkey_with_flags(r"SOFTWARE\Microsoft\Cryptography", KEY_READ)
+        .and_then(|crypto| crypto.get_value::<String, _>("MachineGuid"))
+        .unwrap_or_else(|_| "UNKNOWN_WINDOWS_GUID".to_string());
+
+    let board = hklm
+        .open_subkey_with_flags(r"HARDWARE\DESCRIPTION\System\BIOS", KEY_READ)
+        .ok()
+        .and_then(|bios| bios.get_value::<String, _>("BaseBoardProduct").ok())
+        .unwrap_or_else(|| "GENERIC_BOARD".to_string());
+
+    (format!("win:{}:{}", machine_guid.trim(), board.trim()), "windows".to_string())
+}
+
+#[cfg(target_os = "android")]
+fn get_platform_raw_hwid(app: &tauri::AppHandle) -> (String, String) {
+    if let Ok(dir) = app.path().app_data_dir() {
+        let path = dir.join(".android_device_id");
+        if let Ok(existing) = std::fs::read_to_string(&path) {
+            let trimmed = existing.trim();
+            if !trimmed.is_empty() {
+                return (format!("android:{}", trimmed), "android".to_string());
+            }
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let minted = format!("droid-{:x}", now);
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(&path, &minted);
+        return (format!("android:{}", minted), "android".to_string());
+    }
+    ("android:fallback-device-id".to_string(), "android".to_string())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
+fn get_platform_raw_hwid() -> (String, String) {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(id) = std::fs::read_to_string("/etc/machine-id") {
+            return (format!("linux:{}", id.trim()), "linux".to_string());
+        }
+    }
+    ("generic:pos-terminal".to_string(), "fallback".to_string())
+}
+
+#[tauri::command]
+pub fn get_hardware_fingerprint(app_handle: tauri::AppHandle) -> Result<HardwareFingerprintResult, String> {
+    #[cfg(target_os = "windows")]
+    let (raw, platform) = {
+        let _ = &app_handle;
+        get_platform_raw_hwid()
+    };
+
+    #[cfg(target_os = "android")]
+    let (raw, platform) = get_platform_raw_hwid(&app_handle);
+
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    let (raw, platform) = {
+        let _ = &app_handle;
+        get_platform_raw_hwid()
+    };
+
+    let (formatted, hash) = format_hwid(&raw);
+    Ok(HardwareFingerprintResult { formatted, hash, platform })
+}
+
+fn get_license_vault_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(".license_token.vault"))
+}
+
+#[tauri::command]
+pub fn get_license_token(app_handle: tauri::AppHandle) -> Result<Option<String>, String> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if let Ok(entry) = keyring::Entry::new("mobi-pos-license", "token") {
+            match entry.get_password() {
+                Ok(token) => return Ok(Some(token)),
+                Err(keyring::Error::NoEntry) => {}
+                Err(e) => eprintln!("[license] keyring read failed: {e}"),
+            }
+        }
+    }
+
+    let vault_path = get_license_vault_path(&app_handle)?;
+    if vault_path.exists() {
+        let data = std::fs::read_to_string(&vault_path).map_err(|e| e.to_string())?;
+        let trimmed = data.trim();
+        if !trimmed.is_empty() {
+            return Ok(Some(trimmed.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+#[tauri::command]
+pub fn set_license_token(app_handle: tauri::AppHandle, token: String) -> Result<(), String> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if let Ok(entry) = keyring::Entry::new("mobi-pos-license", "token") {
+            if let Ok(()) = entry.set_password(&token) {
+                if let Ok(path) = get_license_vault_path(&app_handle) {
+                    let _ = std::fs::remove_file(path);
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    let vault_path = get_license_vault_path(&app_handle)?;
+    std::fs::write(&vault_path, token).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_license_token(app_handle: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if let Ok(entry) = keyring::Entry::new("mobi-pos-license", "token") {
+            let _ = entry.delete_credential();
+        }
+    }
+
+    let vault_path = get_license_vault_path(&app_handle)?;
+    if vault_path.exists() {
+        let _ = std::fs::remove_file(vault_path);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

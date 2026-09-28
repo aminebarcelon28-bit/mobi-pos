@@ -1,4 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
+
+const foldForSearch = (s: string | undefined | null): string =>
+  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 import {
   X,
   CreditCard,
@@ -17,11 +21,27 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
+import { DEFAULT_CREDIT_LIMIT } from '../../store/slices/createCustomerSlice';
 import { formatDZD, formatDateTime } from '../../types/pos';
 import type { Customer, PaymentMethodType } from '../../types/pos';
+import { calculateCustomerTier, normalizeLoyaltyConfig } from '../../utils/loyaltyEngine';
+
+/** Display-only tier resolution — the cached loyaltyTier string may be stale after renames. */
+const resolveCustomerTierName = (customer: Customer): string => {
+  try {
+    return calculateCustomerTier(
+      customer.totalSpent || 0,
+      normalizeLoyaltyConfig(usePosStore.getState().receiptSettings?.loyaltyConfig)
+    ).name;
+  } catch {
+    return customer.loyaltyTier || 'Bronze';
+  }
+};
 import { useToast } from '../ui/Toast';
 import { openWhatsApp } from '../../utils/phoneUtils';
 import { soundEngine } from '../../utils/audioFeedback';
+import { printCoordinator } from '../../utils/printCoordinator';
+import { isMobileDevice, isTauriEnvironment } from '../../utils/platform';
 
 export const DebtLedgerModal: React.FC = () => {
   const {
@@ -32,6 +52,7 @@ export const DebtLedgerModal: React.FC = () => {
     recordCustomerDebtPayment,
     updateCustomer,
     verifyManagerPin,
+    receiptSettings,
   } = usePosStore();
 
   const { showToast } = useToast();
@@ -39,6 +60,14 @@ export const DebtLedgerModal: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'overdue' | 'high_debt' | 'over_limit'>('all');
   const [expandedCustomerId, setExpandedCustomerId] = useState<string | null>(null);
+
+  // Debounced search: input stays instant, the full-list scan runs 200ms after
+  // the last keystroke instead of on every keypress.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 200);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
 
   // Payment Sub-Modal State
   const [payingCustomer, setPayingCustomer] = useState<Customer | null>(null);
@@ -52,6 +81,9 @@ export const DebtLedgerModal: React.FC = () => {
   const [newLimitInput, setNewLimitInput] = useState<string>('');
   const [managerPin, setManagerPin] = useState<string>('');
 
+  // Statement print target (rendered, then printed via the debt channel).
+  const [printingCustomer, setPrintingCustomer] = useState<Customer | null>(null);
+
   // ══════════════════════════════════════════════════════════════
   // AGGREGATIONS & METRICS
   // ══════════════════════════════════════════════════════════════
@@ -60,25 +92,41 @@ export const DebtLedgerModal: React.FC = () => {
   }, [customers]);
 
   const totalOutstandingDebt = allIndebted.reduce((sum, c) => sum + (c.currentDebt || 0), 0);
-  const totalCreditLimits = allIndebted.reduce((sum, c) => sum + (c.debtLimit || 50000), 0);
-  const overLimitCount = allIndebted.filter((c) => (c.currentDebt || 0) >= (c.debtLimit || 50000)).length;
+  const totalCreditLimits = allIndebted.reduce((sum, c) => sum + (c.debtLimit ?? DEFAULT_CREDIT_LIMIT), 0);
+  const overLimitCount = allIndebted.filter((c) => (c.currentDebt || 0) >= (c.debtLimit ?? DEFAULT_CREDIT_LIMIT)).length;
+
+  // customerId -> history rows, built once per customerDebts identity.
+  // Previously each rendered row ran a full filter over the ledger (O(rows*N)).
+  const historyByCustomerId = useMemo(() => {
+    const map = new Map<string, typeof customerDebts>();
+    for (const entry of customerDebts || []) {
+      const key = entry.customerId;
+      const bucket = map.get(key);
+      if (bucket) bucket.push(entry);
+      else map.set(key, [entry]);
+    }
+    return map;
+  }, [customerDebts]);
 
   const filteredDebtors = useMemo(() => {
-    let list = allIndebted.filter(
-      (c) =>
-        c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        c.phone.includes(searchQuery) ||
-        (c.registeredDevice || '').toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    const q = foldForSearch(debouncedSearch.trim());
+    let list = !q
+      ? [...allIndebted]
+      : allIndebted.filter(
+          (c) =>
+            foldForSearch(c.name).includes(q) ||
+            (c.phone || '').includes(debouncedSearch.trim()) ||
+            foldForSearch(c.registeredDevice).includes(q)
+        );
 
     if (filterType === 'over_limit') {
-      list = list.filter((c) => (c.currentDebt || 0) >= (c.debtLimit || 50000));
+      list = list.filter((c) => (c.currentDebt || 0) >= (c.debtLimit ?? DEFAULT_CREDIT_LIMIT));
     } else if (filterType === 'high_debt') {
       list = list.filter((c) => (c.currentDebt || 0) >= 20000);
     }
 
     return list.sort((a, b) => (b.currentDebt || 0) - (a.currentDebt || 0));
-  }, [allIndebted, searchQuery, filterType]);
+  }, [allIndebted, debouncedSearch, filterType]);
 
   if (activeModal !== 'debt_ledger') return null;
 
@@ -95,8 +143,8 @@ export const DebtLedgerModal: React.FC = () => {
   const handleConfirmRepayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!payingCustomer) return;
-    const amount = parseFloat(paymentAmount);
-    if (isNaN(amount) || amount <= 0) {
+    const amount = Math.round(parseLocalizedAmount(paymentAmount));
+    if (!Number.isFinite(amount) || amount <= 0) {
       showToast('Veuillez saisir un montant de versement valide.', 'warning');
       return;
     }
@@ -112,7 +160,18 @@ export const DebtLedgerModal: React.FC = () => {
 
     if (debtPaymentResult.success) {
       soundEngine.playSuccess();
-      showToast(`Versement de ${formatDZD(amount)} enregistré avec succès !`, 'success');
+      // recordCustomerDebtPayment clamps to the outstanding debt: surface the
+      // applied amount + change explicitly instead of silently converting.
+      const { appliedAmount, changeDue } = debtPaymentResult as typeof debtPaymentResult & {
+        appliedAmount?: number;
+        changeDue?: number;
+      };
+      showToast(
+        (changeDue || 0) > 0
+          ? `Versement enregistré : ${formatDZD(appliedAmount ?? amount)} appliqués — monnaie à rendre : ${formatDZD(changeDue || 0)}.`
+          : `Versement de ${formatDZD(amount)} enregistré avec succès !`,
+        'success'
+      );
       setPayingCustomer(null);
     } else {
       soundEngine.playError();
@@ -129,9 +188,48 @@ export const DebtLedgerModal: React.FC = () => {
     }
   };
 
-  const handlePrintStatement = (customer: Customer) => {
-    if (typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window)) {
-      window.print();
+  const handlePrintStatement = async (customer: Customer) => {
+    setPrintingCustomer(customer);
+    const inTauri = isTauriEnvironment();
+    const onMobile = isMobileDevice();
+
+    // Mobile app: no window.print route — send a text statement to the
+    // Android system print sheet (Wi-Fi/Bluetooth printer, PDF).
+    if (inTauri && onMobile) {
+      const debt = customer.currentDebt || 0;
+      const limit = customer.debtLimit ?? DEFAULT_CREDIT_LIMIT;
+      const lines = [
+        `${receiptSettings?.storeName || 'MOBI-POS'}`,
+        'RELEVE DE COMPTE CLIENT',
+        `Client : ${customer.name}`,
+        `Tél : ${customer.phone || '—'}`,
+        `Date : ${new Date().toLocaleString('fr-DZ')}`,
+        '--------------------------------',
+        `Dette actuelle : ${formatDZD(debt)}`,
+        `Plafond autorisé : ${formatDZD(limit)}`,
+        '--------------------------------',
+        'Merci de régulariser votre situation.',
+      ].join('\n');
+      try {
+        const { openNativePrint } = await import('../../utils/phoneUtils');
+        const ok = await openNativePrint(`Relevé ${customer.name}`, lines);
+        showToast(
+          ok ? `🖨️ Feuille d'impression Android ouverte pour ${customer.name}.` : `Impression indisponible sur cet appareil.`,
+          ok ? 'success' : 'error'
+        );
+      } catch {
+        showToast(`Impression indisponible sur cet appareil.`, 'error');
+      }
+      return;
+    }
+
+    // Browser: coordinated channel print. Desktop app: direct channel print
+    // (the coordinator stays silent in Tauri — no hardware route exists for
+    // statements — so bypass it and call window.print ourselves).
+    if (inTauri) {
+      printCoordinator.printChannelDirect('debt_statement', 200);
+    } else {
+      printCoordinator.printDebtStatement(200);
     }
     showToast(`Impression du relevé de compte lancée pour ${customer.name}.`, 'info');
   };
@@ -145,13 +243,25 @@ export const DebtLedgerModal: React.FC = () => {
       return;
     }
 
-    const newLimit = parseFloat(newLimitInput);
-    if (isNaN(newLimit) || newLimit < 0) {
+    const newLimit = Math.round(parseLocalizedAmount(newLimitInput));
+    if (!Number.isFinite(newLimit) || newLimit < 0) {
       showToast('Plafond invalide.', 'warning');
       return;
     }
 
-    await updateCustomer(adjustingCustomer.id, { debtLimit: newLimit });
+    // updateCustomer resolves {success, reason?} on the new contract and void
+    // on the old one — handle both without narrowing the store signature.
+    const limitResult = (await updateCustomer(adjustingCustomer.id, { debtLimit: newLimit })) as unknown as
+      | { success?: boolean; reason?: string }
+      | void;
+    if (limitResult && typeof limitResult === 'object' && 'success' in limitResult && limitResult.success === false) {
+      soundEngine.playError();
+      showToast(
+        `Échec de la mise à jour du plafond${limitResult.reason ? ` : ${limitResult.reason}` : '.'}`,
+        'error'
+      );
+      return;
+    }
     showToast(`Nouveau plafond de ${formatDZD(newLimit)} appliqué à ${adjustingCustomer.name}.`, 'success');
     soundEngine.playSuccess();
     setAdjustingCustomer(null);
@@ -312,12 +422,12 @@ export const DebtLedgerModal: React.FC = () => {
           ) : (
             filteredDebtors.map((customer) => {
               const debt = customer.currentDebt || 0;
-              const limit = customer.debtLimit || 50000;
+              const limit = customer.debtLimit ?? DEFAULT_CREDIT_LIMIT;
               const ratio = Math.min(100, Math.round((debt / limit) * 100));
               const isOver = debt >= limit;
               const isExpanded = expandedCustomerId === customer.id;
 
-              const customerHistory = (customerDebts || []).filter((d) => d.customerId === customer.id);
+              const customerHistory = historyByCustomerId.get(customer.id) || [];
 
               return (
                 <div
@@ -348,7 +458,7 @@ export const DebtLedgerModal: React.FC = () => {
                           )}
                         </div>
                         <p className="text-[11px] text-pos-muted">
-                          Appareil : {customer.registeredDevice || 'Non spécifié'} • Tarif : {customer.pricingTier} • Rang : {customer.loyaltyTier || 'Bronze'}
+                          Appareil : {customer.registeredDevice || 'Non spécifié'} • Tarif : {customer.pricingTier} • Rang : {resolveCustomerTierName(customer)}
                         </p>
                       </div>
                     </div>
@@ -405,7 +515,7 @@ export const DebtLedgerModal: React.FC = () => {
                         <button
                           onClick={() => {
                             setAdjustingCustomer(customer);
-                            setNewLimitInput(String(customer.debtLimit || 50000));
+                            setNewLimitInput(String(customer.debtLimit ?? DEFAULT_CREDIT_LIMIT));
                           }}
                           className="min-h-[38px] min-w-[38px] p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95"
                           title="Ajuster le plafond de crédit autorisé (PIN Manager)"
@@ -517,6 +627,21 @@ export const DebtLedgerModal: React.FC = () => {
                     autoFocus
                     required
                   />
+                  {(() => {
+                    const entered = parseLocalizedAmount(paymentAmount);
+                    const outstanding = payingCustomer.currentDebt || 0;
+                    if (!isNaN(entered) && entered > outstanding && outstanding > 0) {
+                      return (
+                        <p className="mt-1.5 text-[11px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-1.5">
+                          ⚠️ Montant supérieur à la dette ({formatDZD(outstanding)}) — seuls{' '}
+                          {formatDZD(outstanding)} seront appliqués, monnaie à rendre :{' '}
+                          {formatDZD(Math.round(entered - outstanding))}. Le surplus n'est PAS converti en
+                          avoir sans confirmation.
+                        </p>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
 
                 <div>
@@ -529,7 +654,7 @@ export const DebtLedgerModal: React.FC = () => {
                         key={meth}
                         type="button"
                         onClick={() => setPaymentMethod(meth)}
-                        className={`py-2 rounded-xl text-xs font-bold border transition cursor-pointer ${
+                        className={`min-h-[48px] py-2 rounded-xl text-xs font-bold border transition cursor-pointer active:scale-95 ${
                           paymentMethod === meth
                             ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-sm'
                             : 'bg-pos-bg text-pos-muted border-pos-border'
@@ -605,7 +730,7 @@ export const DebtLedgerModal: React.FC = () => {
                   <input
                     type="number"
                     min="0"
-                    step="1000"
+                    step="any"
                     value={newLimitInput}
                     onChange={(e) => setNewLimitInput(e.target.value)}
                     className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base font-mono font-black text-cyan-400 focus:outline-none focus:border-cyan-500"
@@ -619,6 +744,9 @@ export const DebtLedgerModal: React.FC = () => {
                   </label>
                   <input
                     type="password"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    autoComplete="current-password"
                     maxLength={4}
                     value={managerPin}
                     onChange={(e) => setManagerPin(e.target.value)}
@@ -651,7 +779,7 @@ export const DebtLedgerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* FOOTER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between shrink-0">
+        <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between shrink-0 print:hidden">
           <span className="text-xs text-pos-muted">
             • Tous les versements mettent à jour automatiquement le journal comptable et la balance client.
           </span>
@@ -662,6 +790,49 @@ export const DebtLedgerModal: React.FC = () => {
             Fermer (Échap)
           </button>
         </div>
+
+        {/* Dedicated 80mm Customer Statement Print Template */}
+        {printingCustomer && (
+          <div className="print-debt-target hidden print:block bg-white text-black p-1 font-mono text-[11px] leading-snug">
+            <div className="text-center pb-2 border-b border-dashed border-gray-500">
+              <p className="font-extrabold text-sm uppercase tracking-wider">{receiptSettings?.storeName || 'MOBI ACCESSORIES'}</p>
+              <p className="font-black text-xs uppercase mt-1">*** RELEVÉ DE COMPTE CLIENT ***</p>
+              <p className="text-[10px]">{new Date().toLocaleString('fr-DZ')}</p>
+            </div>
+            <div className="py-2 border-b border-dashed border-gray-500">
+              <div className="flex justify-between"><span>Client :</span><span className="font-bold">{printingCustomer.name}</span></div>
+              <div className="flex justify-between"><span>Tél :</span><span className="font-bold">{printingCustomer.phone || '—'}</span></div>
+              <div className="flex justify-between"><span>Plafond :</span><span className="font-bold">{formatDZD(printingCustomer.debtLimit ?? DEFAULT_CREDIT_LIMIT)}</span></div>
+            </div>
+            <div className="py-2 border-b border-dashed border-gray-500">
+              <div className="flex justify-between font-extrabold text-[13px]">
+                <span>DETTE ACTUELLE :</span>
+                <span>{formatDZD(printingCustomer.currentDebt || 0)}</span>
+              </div>
+            </div>
+            {(historyByCustomerId.get(printingCustomer.id) || []).length > 0 && (
+              <div className="py-2 border-b border-dashed border-gray-500">
+                <p className="font-bold text-[10px] uppercase mb-1">Dernières opérations :</p>
+                {(historyByCustomerId.get(printingCustomer.id) || []).slice(-5).reverse().map((entry) => (
+                  <div key={entry.id} className="flex justify-between text-[10px]">
+                    <span>
+                      {entry.type === 'PAYMENT_SETTLED' ? 'Versement' : 'Dette'} • {entry.createdAt ? formatDateTime(entry.createdAt) : ''}
+                      {entry.paymentMethod ? ` • ${entry.paymentMethod}` : ''}
+                    </span>
+                    <span className="font-bold">
+                      {entry.type === 'PAYMENT_SETTLED' ? '-' : '+'}{formatDZD(entry.amount)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="pt-2 text-center">
+              <p className="text-[10px]">Merci de régulariser votre situation.</p>
+              <p className="text-[10px] mt-1">Signature : ____________________</p>
+              <p className="text-[9px] text-gray-600 mt-2">Document généré par Mobi-POS</p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

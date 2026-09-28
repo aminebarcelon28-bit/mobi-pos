@@ -1,5 +1,6 @@
 import React from 'react';
-import { syncManager } from '../sync/SyncManager';
+// P11.3: the sync engine (~267 kB: turso client + sql adapter) must not sit in
+// the entry chunk. Subscribe lazily — status arrives a tick after first paint.
 import type { SyncStatus } from '../sync/types';
 
 const initial: SyncStatus = {
@@ -11,6 +12,19 @@ const initial: SyncStatus = {
 /** Subscribe to background sync status (pending count, online, errors). */
 export function useSyncStatus(): SyncStatus {
   const [status, setStatus] = React.useState<SyncStatus>(initial);
-  React.useEffect(() => syncManager.subscribe(setStatus), []);
+  React.useEffect(() => {
+    let cancelled = false;
+    let unsub: (() => void) | undefined;
+    import('../sync/SyncManager')
+      .then(({ syncManager }) => {
+        if (cancelled) return;
+        unsub = syncManager.subscribe(setStatus);
+      })
+      .catch((err: unknown) => console.warn('[syncStatus] engine unavailable:', err));
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, []);
   return status;
 }

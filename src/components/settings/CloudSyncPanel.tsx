@@ -67,6 +67,11 @@ export const CloudSyncPanel: React.FC = () => {
   const [isVerifying, setIsVerifying] = useState(false);
   const [integrityReport, setIntegrityReport] = useState<string | null>(null);
 
+  // Full repair synchronization (re-enqueue all + reset cursors + verify).
+  const [isFullSyncing, setIsFullSyncing] = useState(false);
+  const [fullSyncStep, setFullSyncStep] = useState('');
+  const [fullSyncReport, setFullSyncReport] = useState<string | null>(null);
+
   const loadStorageReport = useCallback(async () => {
     setIsLoadingStorage(true);
     try {
@@ -153,7 +158,7 @@ export const CloudSyncPanel: React.FC = () => {
     }
     const ok = window.confirm(
       'Restaurer depuis le cloud Turso ?\n\n' +
-      'Cette opération va synchroniser l\'ensemble de votre catalogue, clients, dettes, réparations et ventes depuis votre base Turso dédiée.\n' +
+      'Cette opération FUSIONNE l\'ensemble de votre catalogue, clients, dettes, réparations et ventes depuis votre base Turso dédiée (jamais de remplacement : en cas de conflit, la version la plus récente gagne).\n' +
       'Une sauvegarde locale automatique sera créée avant toute modification.'
     );
     if (!ok) return;
@@ -163,10 +168,20 @@ export const CloudSyncPanel: React.FC = () => {
     try {
       await setCloudCredentials(dbUrl, authToken);
       setHasStoredCreds(true);
+      // RestoreManager.executeRestore takes its own pre-restore backup via the
+      // existing backup command and validates the cloud payload (schema +
+      // row ids) before merging; a backup/validation failure aborts loudly
+      // here and no local row is touched.
+      setRestoreProgress({ phase: 'Sauvegarde', table: 'sauvegarde locale pré-restauration', processed: 0, total: 10 });
       const restoreResult = await RestoreManager.restoreFromCloud((p) => {
         setRestoreProgress(p);
       });
-      showToast(restoreResult.userSummary, 'success');
+      showToast(
+        restoreResult.backupPath
+          ? `${restoreResult.userSummary} (Sauvegarde pré-restauration: ${restoreResult.backupPath})`
+          : restoreResult.userSummary,
+        'success',
+      );
       await usePosStore.getState().refreshAfterPull();
       await syncManager.start(await getStableDeviceId());
       await loadStorageReport();
@@ -187,7 +202,39 @@ export const CloudSyncPanel: React.FC = () => {
     showToast('Synchronisation forcée en cours...', 'info');
     await syncManager.kick();
     await loadStorageReport();
-    showToast('Synchronisation terminée.', 'success');
+    showToast('Synchronisation demandée — voir le badge et les diagnostics pour le résultat.', 'info');
+  };
+
+  const handleFullResync = async () => {
+    const ok = window.confirm(
+      'Synchronisation complète ?\n\n' +
+      'Toutes les données de cet appareil seront renvoyées vers le cloud, puis tout sera relu depuis le cloud et vérifié table par table.\n' +
+      'À utiliser quand des informations manquent sur un autre appareil. Aucune vente locale n’est supprimée.'
+    );
+    if (!ok) return;
+    setIsFullSyncing(true);
+    setFullSyncReport(null);
+    setFullSyncStep('Démarrage…');
+    try {
+      const { fullResync } = await import('../../sync/repairResync');
+      const report = await fullResync((p) => {
+        setFullSyncStep(`${p.detail}`);
+      });
+      setFullSyncReport(
+        `${report.message} Base cloud : ${report.cloudHost || '—'}. ` +
+        `Vérifiez que l’autre appareil affiche exactement la même base cloud dans son panneau.`
+      );
+      showToast(report.message, report.ok ? 'success' : 'warning', 8000);
+      await usePosStore.getState().refreshAfterPull();
+      await loadStorageReport();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setFullSyncReport(`Échec de la synchronisation complète : ${msg}`);
+      showToast(`Échec de la synchronisation complète : ${msg}`, 'error');
+    } finally {
+      setIsFullSyncing(false);
+      setFullSyncStep('');
+    }
   };
 
   const handleVerifyIntegrity = async () => {
@@ -305,6 +352,17 @@ export const CloudSyncPanel: React.FC = () => {
       {/* ══════════════════════════════════════════════════════════════ */}
       {/* QUOTA WARNING BANNERS */}
       {/* ══════════════════════════════════════════════════════════════ */}
+      {sync.deviceRevoked && (
+        <div className="border rounded-xl p-4 flex items-start gap-3 shadow-md bg-red-500/10 border-red-500/40 text-red-300">
+          <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+          <div>
+            <h4 className="font-bold text-sm">Cet appareil a été révoqué</h4>
+            <p className="text-xs mt-1 text-slate-300 leading-relaxed">
+              Synchronisation suspendue par le gérant. Les ventes locales restent disponibles et seront envoyées si l’appareil est réadmis.
+            </p>
+          </div>
+        </div>
+      )}
       {storageReport && storageReport.thresholdLevel !== 'OK' && (
         <div
           className={`border rounded-xl p-4 flex items-start gap-3 shadow-md ${
@@ -676,6 +734,16 @@ export const CloudSyncPanel: React.FC = () => {
             </button>
 
             <button
+              onClick={handleFullResync}
+              disabled={isFullSyncing || sync.pushing || sync.pulling}
+              title="Renvoie tout vers le cloud, relit tout depuis le cloud et vérifie — à utiliser quand des informations manquent sur un autre appareil"
+              className="px-4 py-2 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-xs font-bold text-cyan-200 flex items-center gap-2 transition cursor-pointer"
+            >
+              <Sparkles className={`w-3.5 h-3.5 text-cyan-300 ${isFullSyncing ? 'animate-spin' : ''}`} />
+              {isFullSyncing ? (fullSyncStep || 'Synchronisation complète…') : 'Synchronisation complète (réparer)'}
+            </button>
+
+            <button
               onClick={handleExportLogs}
               className="px-4 py-2 rounded-xl bg-pos-bg hover:bg-pos-hover border border-pos-border text-xs font-bold text-pos-text flex items-center gap-2 transition cursor-pointer"
             >
@@ -688,6 +756,13 @@ export const CloudSyncPanel: React.FC = () => {
             <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
               <span>{integrityReport}</span>
+            </div>
+          )}
+
+          {fullSyncReport && (
+            <div className="p-3 bg-cyan-500/10 border border-cyan-500/30 rounded-xl text-xs text-cyan-200 flex items-start gap-2">
+              <Sparkles className="w-4 h-4 text-cyan-300 shrink-0 mt-0.5" />
+              <span>{fullSyncReport}</span>
             </div>
           )}
         </div>

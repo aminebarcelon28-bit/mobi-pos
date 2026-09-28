@@ -5,10 +5,9 @@ import {
   Keyboard,
   Search,
   Zap,
-  Barcode,
-  CreditCard,
+  Users,
+  Package,
   Sliders,
-  Compass,
   Sparkles,
 } from 'lucide-react';
 
@@ -16,19 +15,20 @@ interface HotkeyItem {
   key: string;
   name: string;
   description: string;
-  category: 'checkout' | 'scanner' | 'payment' | 'management' | 'navigation';
+  // Workflow groups (source of truth for keys: src/hooks/useKeyboardHotkeys.ts — display only)
+  category: 'vente' | 'clients' | 'stock' | 'caisse';
   context: string;
   badge?: string;
   isNew?: boolean;
 }
 
 const ALL_HOTKEYS: HotkeyItem[] = [
-  // ─── 1. Caisse & Vente au Comptoir ───
+  // ─── 1. Vente au comptoir ───
   {
     key: 'F1 ou /',
     name: 'Recherche Rapide Catalogue',
     description: 'Focalise immédiatement la barre de recherche ou active la détection de scan douchette USB.',
-    category: 'checkout',
+    category: 'vente',
     context: 'Écran principal caisse',
     badge: 'Fréquent',
   },
@@ -36,24 +36,24 @@ const ALL_HOTKEYS: HotkeyItem[] = [
     key: 'F2 ou Espace',
     name: 'Encaisser Immédiatement (Espèces)',
     description: 'Ouvre le modal d\'encaissement rapide avec focus automatique sur le montant reçu et rendu de monnaie instantané.',
-    category: 'checkout',
+    category: 'vente',
     context: 'Panier non vide',
     badge: 'Express',
   },
   {
-    key: 'F3',
-    name: 'Assigner un Client (CRM & Dettes)',
-    description: 'Ouvre le répertoire client. Tapez le nom ou tél et appuyez sur Entrée ↵ pour lier le client au panier en 1 seconde.',
-    category: 'checkout',
-    context: 'À tout moment',
-    badge: 'Nouveau F3',
+    key: 'F9',
+    name: 'Article Personnalisé & Services Rapides',
+    description: 'Crée un article hors catalogue (pose film, flash, divers) sans quitter la caisse. F9 ouvre puis referme le modal.',
+    category: 'vente',
+    context: 'Caisse • services 1-clic',
+    badge: 'Services',
     isNew: true,
   },
   {
     key: 'F4',
     name: 'Remise Globale sur Panier',
     description: 'Applique une réduction commerciale sur l\'ensemble de la commande en pourcentage (%) ou en montant fixe (DA).',
-    category: 'checkout',
+    category: 'vente',
     context: 'Panier actif',
     badge: 'Commercial',
   },
@@ -61,7 +61,7 @@ const ALL_HOTKEYS: HotkeyItem[] = [
     key: 'F6',
     name: 'Mettre en Attente / Rappeler Ticket',
     description: 'Suspend le panier actuel pour encaisser un autre client pressé, ou rappelle un ticket mis en attente.',
-    category: 'checkout',
+    category: 'vente',
     context: 'Gestion multi-clients',
     badge: 'Multi-caisse',
   },
@@ -69,43 +69,32 @@ const ALL_HOTKEYS: HotkeyItem[] = [
     key: 'F7',
     name: 'Réimprimer Dernier Ticket',
     description: 'Renvoie instantanément le ticket de la dernière vente à l\'imprimante thermique ticket de caisse (ESC/POS).',
-    category: 'checkout',
+    category: 'vente',
     context: 'Après encaissement',
     badge: 'Imprimante',
   },
   {
-    key: 'Ctrl + Suppr',
+    key: 'Ctrl / Maj + Suppr',
     name: 'Vider / Réinitialiser le Panier',
-    description: 'Efface tous les articles du panier en cours pour repartir sur une vente vierge sans altérer les stocks.',
-    category: 'checkout',
+    description: 'Efface tous les articles du panier en cours (Suppr ou Retour arrière + Ctrl ou Maj), hors saisie et sans modal ouvert.',
+    category: 'vente',
     context: 'Panier actif',
     badge: 'Sécurisé',
   },
-
-  // ─── 2. Scanner Douchette & Saisie Rapide ───
   {
     key: '5*CODE',
     name: 'Multiplicateur de Quantité au Scan',
     description: 'Tapez la quantité suivie d\'un astérisque avant de scanner un article (ex: 3*613123456789 ajoute 3 unités d\'un coup).',
-    category: 'scanner',
+    category: 'vente',
     context: 'Douchette USB / HID',
     badge: 'Productivité',
-    isNew: true,
-  },
-  {
-    key: 'Scan Carte PVC',
-    name: 'Identification Carte Client & QR Pass',
-    description: 'Scannez directement le code-barres ou QR code sur la carte de fidélité PVC ou le smartphone du client pour l\'assigner.',
-    category: 'scanner',
-    context: 'Scanner USB',
-    badge: 'Fidélité',
     isNew: true,
   },
   {
     key: '1 à 9',
     name: 'Touches Rapides Services 1-Clic',
     description: 'Tuiles d\'action directe pour insérer les best-sellers et forfaits de service sans code-barre (pose film, flash, etc.).',
-    category: 'scanner',
+    category: 'vente',
     context: 'Catalogue tactile / souris',
     badge: '1-Clic',
   },
@@ -113,17 +102,15 @@ const ALL_HOTKEYS: HotkeyItem[] = [
     key: 'Double-Clic Qté',
     name: 'Édition Numérique Directe',
     description: 'Double-cliquez sur le nombre d\'unités dans la ligne du panier pour taper directement la quantité désirée.',
-    category: 'scanner',
+    category: 'vente',
     context: 'Panier actif',
     badge: 'Ergonomie',
   },
-
-  // ─── 3. Règlement & Modal de Paiement ───
   {
     key: 'Entrée ↵',
     name: 'Valider et Clôturer la Vente',
     description: 'Confirme le paiement en espèces, valide l\'enregistrement de la transaction et imprime le reçu automatiquement.',
-    category: 'payment',
+    category: 'vente',
     context: 'Modal Paiement F2',
     badge: 'Validation',
   },
@@ -131,67 +118,87 @@ const ALL_HOTKEYS: HotkeyItem[] = [
     key: '500 à 5000 DA',
     name: 'Coupures Rapides Espèces',
     description: 'Boutons pré-calculés des billets algériens pour calculer le rendu de monnaie immédiat sans taper le montant.',
-    category: 'payment',
+    category: 'vente',
     context: 'Modal Paiement F2',
     badge: 'Coupures',
+  },
+
+  // ─── 2. Clients & fidélité ───
+  {
+    key: 'F3 ou F5',
+    name: 'Assigner un Client (CRM & Dettes)',
+    description: 'Ouvre le répertoire client (F5 est un alias de F3). Tapez le nom ou tél et appuyez sur Entrée ↵ pour lier le client au panier en 1 seconde.',
+    category: 'clients',
+    context: 'À tout moment',
+    badge: 'F3 / F5',
+    isNew: true,
+  },
+  {
+    key: 'Scan Carte PVC',
+    name: 'Identification Carte Client & QR Pass',
+    description: 'Scannez directement le code-barres ou QR code sur la carte de fidélité PVC ou le smartphone du client pour l\'assigner.',
+    category: 'clients',
+    context: 'Scanner USB',
+    badge: 'Fidélité',
+    isNew: true,
   },
   {
     key: 'Paiement Partiel',
     name: 'Espèces + Report sur Dette Kredy',
     description: 'Permet d\'encaisser un acompte en espèces et d\'ajouter automatiquement le reste à payer sur le compte crédit du client.',
-    category: 'payment',
+    category: 'clients',
     context: 'Client identifié',
     badge: 'Carnet Kredy',
   },
 
-  // ─── 4. Back-Office, Stock & Clôtures ───
-  {
-    key: 'F8',
-    name: 'Guide Interactif des Raccourcis',
-    description: 'Affiche ou masque ce panneau récapitulatif avec moteur de recherche en temps réel et conseils d\'ergonomie.',
-    category: 'management',
-    context: 'Partout dans l\'application',
-    badge: 'Aide F8',
-  },
-  {
-    key: 'F9',
-    name: 'Rapports Financiers & Clôtures (X / Z)',
-    description: 'Accède au chiffre d\'affaires journalier, marge brute, journal d\'audit et génération des rapports de clôture de caisse.',
-    category: 'management',
-    context: 'Supervision / Caisse',
-    badge: 'Comptabilité',
-  },
+  // ─── 3. Stock & inventaire ───
   {
     key: 'F10',
     name: 'Gestionnaire de Stock & Inventaire',
     description: 'Consultation rapide des disponibilités, alertes de réapprovisionnement, entrées d\'articles et ajustements.',
-    category: 'management',
+    category: 'stock',
     context: 'Gestion de stock',
     badge: 'Inventaire',
+  },
+
+  // ─── 4. Caisse & navigation ───
+  {
+    key: 'F8',
+    name: 'Guide Interactif des Raccourcis',
+    description: 'Affiche ou masque ce panneau récapitulatif avec moteur de recherche en temps réel et conseils d\'ergonomie.',
+    category: 'caisse',
+    context: 'Partout dans l\'application',
+    badge: 'Aide F8',
   },
   {
     key: 'F11',
     name: 'Retours Marchandise & Remboursements',
     description: 'Gestion des retours d\'articles, réintégration automatique en inventaire et émission d\'un avoir ou remboursement espèces.',
-    category: 'management',
+    category: 'caisse',
     context: 'SAV & Avoirs',
     badge: 'Avoirs',
+  },
+  {
+    key: 'Ctrl+L',
+    name: "Verrouiller l'écran / Changer de caissier",
+    description: "Verrouille immédiatement l'écran de caisse et revient à la sélection du profil caissier (F12 ouvre les paramètres, pas le verrou).",
+    category: 'caisse',
+    context: 'Partout dans l\'application',
+    badge: 'Sécurité',
   },
   {
     key: 'F12',
     name: 'Paramètres & Configuration Périphériques',
     description: 'Réglages imprimante thermique, tiroir-caisse, synchronisation cloud Turso, mode sombre et diagnostic.',
-    category: 'management',
+    category: 'caisse',
     context: 'Paramètres système',
     badge: 'Configuration',
   },
-
-  // ─── 5. Navigation Universelle & Dialogues ───
   {
     key: 'Échap (Esc)',
     name: 'Fermer la Boîte Active / Annuler',
     description: 'Ferme instantanément n\'importe quelle boîte modale ouverte ou quitte le champ de saisie actif.',
-    category: 'navigation',
+    category: 'caisse',
     context: 'Toutes fenêtres',
     badge: 'Universel',
   },
@@ -199,13 +206,13 @@ const ALL_HOTKEYS: HotkeyItem[] = [
     key: 'Flèches ↑ / ↓',
     name: 'Navigation dans les Listes & Tableaux',
     description: 'Parcourez les produits, les lignes de commande et les historiques d\'achats facilement au clavier.',
-    category: 'navigation',
+    category: 'caisse',
     context: 'Listes et tableaux',
     badge: 'Navigation',
   },
 ];
 
-type CategoryFilter = 'all' | 'checkout' | 'scanner' | 'payment' | 'management' | 'navigation';
+type CategoryFilter = 'all' | 'vente' | 'clients' | 'stock' | 'caisse';
 
 export const HotkeyGuideModal: React.FC = () => {
   const { activeModal, closeModal } = usePosStore();
@@ -222,6 +229,20 @@ export const HotkeyGuideModal: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [activeModal]);
+
+  // Escape-to-close local (le hook global useKeyboardHotkeys le fait aussi —
+  // ceinture + bretelles avec nettoyage explicite).
+  useEffect(() => {
+    if (activeModal !== 'hotkey_guide') return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeModal();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeModal, closeModal]);
 
   const filteredHotkeys = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -250,34 +271,28 @@ export const HotkeyGuideModal: React.FC = () => {
       count: ALL_HOTKEYS.length,
     },
     {
-      id: 'checkout',
-      label: 'Caisse & Vente',
+      id: 'vente',
+      label: 'Vente au comptoir',
       icon: <Zap className="w-3.5 h-3.5 text-emerald-400" />,
-      count: ALL_HOTKEYS.filter((h) => h.category === 'checkout').length,
+      count: ALL_HOTKEYS.filter((h) => h.category === 'vente').length,
     },
     {
-      id: 'scanner',
-      label: 'Scanner & Douchette',
-      icon: <Barcode className="w-3.5 h-3.5 text-blue-400" />,
-      count: ALL_HOTKEYS.filter((h) => h.category === 'scanner').length,
+      id: 'clients',
+      label: 'Clients & fidélité',
+      icon: <Users className="w-3.5 h-3.5 text-cyan-400" />,
+      count: ALL_HOTKEYS.filter((h) => h.category === 'clients').length,
     },
     {
-      id: 'payment',
-      label: 'Paiement & Monnaie',
-      icon: <CreditCard className="w-3.5 h-3.5 text-purple-400" />,
-      count: ALL_HOTKEYS.filter((h) => h.category === 'payment').length,
+      id: 'stock',
+      label: 'Stock & inventaire',
+      icon: <Package className="w-3.5 h-3.5 text-amber-400" />,
+      count: ALL_HOTKEYS.filter((h) => h.category === 'stock').length,
     },
     {
-      id: 'management',
-      label: 'Stock, Rapports & Outils',
-      icon: <Sliders className="w-3.5 h-3.5 text-cyan-400" />,
-      count: ALL_HOTKEYS.filter((h) => h.category === 'management').length,
-    },
-    {
-      id: 'navigation',
-      label: 'Navigation & Échap',
-      icon: <Compass className="w-3.5 h-3.5 text-rose-400" />,
-      count: ALL_HOTKEYS.filter((h) => h.category === 'navigation').length,
+      id: 'caisse',
+      label: 'Caisse & navigation',
+      icon: <Sliders className="w-3.5 h-3.5 text-purple-400" />,
+      count: ALL_HOTKEYS.filter((h) => h.category === 'caisse').length,
     },
   ];
 

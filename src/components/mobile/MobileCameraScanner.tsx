@@ -30,6 +30,11 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanIntervalRef = useRef<number | null>(null);
+  // Generation guard: unmount-during-start (or facingMode flip) must not orphan
+  // the camera stream or the scan interval. Every startCamera run captures its
+  // generation; stale continuations stop their own tracks + clear any interval
+  // they created instead of publishing to refs/state.
+  const generationRef = useRef(0);
 
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -59,6 +64,14 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
     },
   ) => { data: string } | null;
   const jsQRRef = useRef<null | JsQRDecode>(null);
+  // Native barcode detector (Shape Detection API): EAN-13/UPC/Code128/QR in
+  // one pass where the browser supports it (Chrome/Android). jsQR below stays
+  // the fallback (QR only) so unsupported browsers keep working. Structural
+  // typing on purpose — lib.dom coverage of BarcodeDetector varies.
+  type NativeDetector = {
+    detect(source: unknown): Promise<Array<{ rawValue?: string }>>;
+  };
+  const barcodeDetectorRef = useRef<null | NativeDetector>(null);
 
   // Stop camera tracks cleanly
   const stopCamera = useCallback(() => {
@@ -86,6 +99,8 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
 
   // Initialize and start camera
   const startCamera = useCallback(async () => {
+    const myGen = ++generationRef.current;
+    const isStale = () => myGen !== generationRef.current;
     stopCamera();
     setErrorMessage(null);
 
@@ -110,12 +125,35 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (isStale()) {
+        // Unmounted or superseded while getUserMedia was in flight: stop the
+        // orphan tracks immediately, never publish to refs/state.
+        stream.getTracks().forEach((track) => {
+          try {
+            track.stop();
+          } catch {
+            // ignore
+          }
+        });
+        return;
+      }
       streamRef.current = stream;
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.setAttribute('playsinline', 'true'); // Required for iOS WKWebView
         await videoRef.current.play();
+      }
+      if (isStale()) {
+        stream.getTracks().forEach((track) => {
+          try {
+            track.stop();
+          } catch {
+            // ignore
+          }
+        });
+        if (streamRef.current === stream) streamRef.current = null;
+        return;
       }
 
       setHasPermission(true);
@@ -131,77 +169,173 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
         }
       }
 
-      // Begin QR scanning loop (decoder loads in parallel with the camera)
+      // Begin dual-decoder scanning loop: native 1D/2D detector where
+      // available (real product barcodes), jsQR fallback (QR only). Both
+      // decoders load in parallel with the camera.
+      try {
+        const BD = (
+          window as unknown as {
+            BarcodeDetector?: new (opts?: unknown) => NativeDetector;
+          }
+        ).BarcodeDetector;
+        if (typeof BD === 'function') {
+          try {
+            barcodeDetectorRef.current = new BD({
+              formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'qr_code'],
+            });
+          } catch {
+            try {
+              barcodeDetectorRef.current = new BD();
+            } catch {
+              barcodeDetectorRef.current = null;
+            }
+          }
+        }
+      } catch {
+        barcodeDetectorRef.current = null;
+      }
       try {
         const loaded = (await import('jsqr')) as unknown as {
           default?: JsQRDecode;
         } & JsQRDecode;
+        if (isStale()) {
+          // Owner went away while the decoder chunk loaded: release the stream.
+          stream.getTracks().forEach((track) => {
+            try {
+              track.stop();
+            } catch {
+              // ignore
+            }
+          });
+          if (streamRef.current === stream) streamRef.current = null;
+          return;
+        }
         jsQRRef.current = loaded.default ?? loaded;
       } catch {
         // Decoder unavailable — frames are skipped, camera preview still works.
-      }
-      const interval = window.setInterval(() => {
-        // Skip while a frame is still decoding: overlapping jsQR runs jank
-        // mid-range phones and delay the very detection we wait for.
-        if (busyRef.current) return;
-        // Decoder not yet loaded (or failed): skip frames, keep preview alive.
-        if (!jsQRRef.current) return;
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        if (!video || !canvas || video.readyState !== video.HAVE_ENOUGH_DATA) {
+        if (isStale()) {
+          stream.getTracks().forEach((track) => {
+            try {
+              track.stop();
+            } catch {
+              // ignore
+            }
+          });
+          if (streamRef.current === stream) streamRef.current = null;
           return;
         }
+      }
+      if (isStale()) {
+        stream.getTracks().forEach((track) => {
+          try {
+            track.stop();
+          } catch {
+            // ignore
+          }
+        });
+        if (streamRef.current === stream) streamRef.current = null;
+        return;
+      }
+      const emitScan = (content: string) => {
+        // Time-based duplicate suppression (ref, no re-render, no restart).
+        const now = Date.now();
+        const last = lastScanRef.current;
+        if (!last || last.data !== content || now - last.at > 2000) {
+          lastScanRef.current = { data: content, at: now };
 
-        const width = video.videoWidth;
-        const height = video.videoHeight;
-        if (width === 0 || height === 0) return;
-
-        busyRef.current = true;
-        try {
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d', { willReadFrequently: true });
-          if (!ctx) return;
-
-          ctx.drawImage(video, 0, 0, width, height);
-          const imageData = ctx.getImageData(0, 0, width, height);
-
-          // attemptBoth: glossy screens / harsh exposure often need inversion.
-          const decode = jsQRRef.current;
-          const code = decode
-            ? decode(imageData.data, imageData.width, imageData.height, {
-                inversionAttempts: 'attemptBoth',
-              })
-            : null;
-
-          if (code && code.data && code.data.trim().length > 0) {
-            const content = code.data.trim();
-            // Time-based duplicate suppression (ref, no re-render, no restart).
-            const now = Date.now();
-            const last = lastScanRef.current;
-            if (!last || last.data !== content || now - last.at > 2000) {
-              lastScanRef.current = { data: content, at: now };
-
-              // Audio & Haptic feedback
-              soundEngine.playScan();
-              if (typeof navigator !== 'undefined' && navigator.vibrate) {
-                try {
-                  navigator.vibrate([40, 30, 80]);
-                } catch {
-                  // Ignore vibration failure
-                }
-              }
-
-              onScanRef.current(content);
+          // Audio & Haptic feedback
+          soundEngine.playScan();
+          if (typeof navigator !== 'undefined' && navigator.vibrate) {
+            try {
+              navigator.vibrate([40, 30, 80]);
+            } catch {
+              // Ignore vibration failure
             }
           }
-        } finally {
-          busyRef.current = false;
+
+          onScanRef.current(content);
         }
+      };
+      const interval = window.setInterval(() => {
+        // Skip while a frame is still decoding: overlapping runs jank
+        // mid-range phones and delay the very detection we wait for.
+        if (busyRef.current) return;
+        busyRef.current = true;
+        void (async () => {
+          try {
+            const video = videoRef.current;
+            if (!video || video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+            // Native detector first: resolves EAN-13/UPC/Code128/QR straight
+            // off the video element (no canvas round-trip).
+            const native = barcodeDetectorRef.current;
+            if (native) {
+              try {
+                const codes = await native.detect(video);
+                const raw = (codes ?? [])
+                  .map((c) => c?.rawValue)
+                  .find((v) => v && v.trim().length > 0);
+                if (raw) {
+                  emitScan(raw.trim());
+                  return;
+                }
+              } catch {
+                // Fall through to jsQR below.
+              }
+            }
+
+            // jsQR fallback (QR only): skipped until loaded, and skipped
+            // entirely on frames the native detector already claimed.
+            if (!jsQRRef.current) return;
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+
+            const width = video.videoWidth;
+            const height = video.videoHeight;
+            if (width === 0 || height === 0) return;
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (!ctx) return;
+
+            ctx.drawImage(video, 0, 0, width, height);
+            const imageData = ctx.getImageData(0, 0, width, height);
+
+            // attemptBoth: glossy screens / harsh exposure often need inversion.
+            const decode = jsQRRef.current;
+            const code = decode
+              ? decode(imageData.data, imageData.width, imageData.height, {
+                  inversionAttempts: 'attemptBoth',
+                })
+              : null;
+
+            if (code && code.data && code.data.trim().length > 0) {
+              emitScan(code.data.trim());
+            }
+          } finally {
+            busyRef.current = false;
+          }
+        })();
       }, 90); // ~11 FPS scanning rate: optimal balance between instantaneous recognition and battery efficiency
 
+      if (isStale()) {
+        // Superseded between decoder load and interval creation: clear the
+        // just-created interval and stop the orphan stream.
+        window.clearInterval(interval);
+        stream.getTracks().forEach((track) => {
+          try {
+            track.stop();
+          } catch {
+            // ignore
+          }
+        });
+        if (streamRef.current === stream) streamRef.current = null;
+        return;
+      }
       scanIntervalRef.current = interval;
     } catch (err: unknown) {
+      if (isStale()) return;
       console.warn('Camera access error:', err);
       let message = 'Impossible d\'accéder à la caméra.';
       if (err instanceof Error) {
@@ -246,12 +380,24 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
     if (isActive) {
       startCamera();
     } else {
+      generationRef.current++;
       stopCamera();
     }
     return () => {
+      generationRef.current++;
       stopCamera();
     };
   }, [isActive, startCamera, stopCamera]);
+
+  // Display-only error title/hint (copy only — interval/stream logic untouched).
+  // Scan-success feedback already exists in the scan loop: soundEngine.playScan()
+  // + navigator.vibrate([40, 30, 80]) on every accepted decode.
+  const isNoCamera = errorMessage?.includes('Aucune caméra') ?? false;
+  const errorTitle = isNoCamera
+    ? 'Aucune caméra détectée'
+    : errorMessage?.includes('déjà utilisée')
+      ? 'Caméra occupée'
+      : 'Accès Caméra Requis';
 
   return (
     <div className="relative w-full h-full min-h-[300px] flex flex-col items-center justify-center bg-black rounded-2xl overflow-hidden shadow-2xl border border-pos-border">
@@ -325,7 +471,8 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
             <button
               type="button"
               onClick={toggleTorch}
-              className={`p-2.5 rounded-xl border backdrop-blur-md transition cursor-pointer ${
+              aria-label={torchOn ? 'Éteindre la torche' : 'Allumer la torche'}
+              className={`min-h-[44px] min-w-[44px] flex items-center justify-center p-2.5 rounded-xl border backdrop-blur-md transition cursor-pointer ${
                 torchOn
                   ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
                   : 'bg-black/50 text-white border-white/20 hover:bg-black/70'
@@ -339,7 +486,8 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
           <button
             type="button"
             onClick={flipCamera}
-            className="p-2.5 rounded-xl bg-black/50 text-white border border-white/20 hover:bg-black/70 backdrop-blur-md transition cursor-pointer"
+            aria-label="Changer de caméra"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center p-2.5 rounded-xl bg-black/50 text-white border border-white/20 hover:bg-black/70 backdrop-blur-md transition cursor-pointer"
             title="Changer de caméra"
           >
             <SwitchCamera className="w-4 h-4" />
@@ -354,9 +502,15 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
             <AlertCircle className="w-6 h-6" />
           </div>
           <div className="space-y-1">
-            <h4 className="text-sm font-black text-pos-text">Accès Caméra Requis</h4>
+            <h4 className="text-sm font-black text-pos-text">{errorTitle}</h4>
             <p className="text-xs text-rose-300 font-medium max-w-xs">{errorMessage}</p>
           </div>
+          {isNoCamera ? (
+            <div className="bg-pos-bg/80 border border-pos-border rounded-xl p-3 text-[11px] text-pos-muted max-w-xs text-left space-y-1.5">
+              <p className="font-bold text-pos-text">Sans caméra, pas de blocage :</p>
+              <p>Utilisez le mode <strong>« Coller »</strong> pour saisir le code d’appairage copié depuis votre caisse PC.</p>
+            </div>
+          ) : (
           <div className="bg-pos-bg/80 border border-pos-border rounded-xl p-3 text-[11px] text-pos-muted max-w-xs text-left space-y-1.5">
             <p className="font-bold text-pos-text flex items-center gap-1.5">
               <span>💡</span> Comment activer la caméra :
@@ -364,6 +518,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
             <p>• <strong>Android :</strong> Paramètres &gt; Applis &gt; MobiPOS &gt; Autorisations &gt; Caméra &gt; Autoriser</p>
             <p>• <strong>iOS / iPhone :</strong> Réglages &gt; Safari ou MobiPOS &gt; Caméra &gt; Demander ou Autoriser</p>
           </div>
+          )}
           <button
             type="button"
             onClick={startCamera}

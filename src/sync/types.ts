@@ -4,7 +4,8 @@ export type SyncEntityType =
   | 'product' | 'order' | 'order_item' | 'ledger' | 'customer'
   | 'repair_order' | 'purchase_order' | 'trade_in' | 'imei' | 'audit_log'
   | 'cash_drop' | 'bundle' | 'customer_debt' | 'store_expense'
-  | 'cash_session' | 'cash_movement' | 'setting';
+  | 'cash_session' | 'cash_movement' | 'setting' | 'credit_voucher'
+  | 'stock_batches';
 
 export type OutboxStatus = 'pending' | 'inflight' | 'synced' | 'failed';
 
@@ -49,6 +50,18 @@ export interface SyncStatus {
   lastPullAt: string | null;
   lastError: string | null;
   quotaExceeded?: boolean;
+  /** True when this device was revoked by the merchant (sync suspended). */
+  deviceRevoked?: boolean;
+}
+
+/** One registered device in the merchant relay room (device registry). */
+export interface MerchantDevice {
+  deviceId: string;
+  deviceName: string;
+  platform: string;
+  firstSeen: number;
+  lastSeen: number;
+  revoked: boolean;
 }
 
 /**

@@ -35,9 +35,10 @@ const SYNC_NESTED_JSON_KEYS = new Set([
 ]);
 
 const SYNC_PROTECTED_KEYS = new Set([
-  'id', 'transaction_id', 'product_id', 'customer_id', 'items', 'lines',
+  'id', 'transaction_id', 'product_id', 'customer_id', 'customer', 'items', 'lines',
   'tenders', 'payments', 'subtotal', 'tax', 'discount_total', 'total',
-  'cost_total', 'profit', 'quantity', 'applied_price', 'status',
+  'cost_total', 'costTotal', 'profit', 'profitMargin', 'ledgerCogsTotal',
+  'ledger_cogs_total', 'quantity', 'applied_price', 'status',
   'idempotency_key', 'device_id', 'version',
 ]);
 
@@ -71,6 +72,7 @@ export function sanitizeSyncPayload<T>(value: T, depth = 0): T {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     if (SYNC_BLOB_KEYS.has(k)) continue;
+    if (depth >= 1 && SYNC_NESTED_JSON_KEYS.has(k)) continue;
     if (SYNC_IMAGE_URL_KEYS.has(k) && typeof v === 'string' && v.length > MAX_SYNC_IMAGE_FIELD_BYTES) {
       out[k] = '';
       continue;

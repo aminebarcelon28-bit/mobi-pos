@@ -24,6 +24,7 @@ export const GENERIC_SYNC_TABLES = [
   'cash_sessions',
   'cash_movements',
   'app_settings',
+  'credit_vouchers',
 ] as const;
 
 export const ALL_REMOTE_SYNC_TABLES = [
@@ -31,6 +32,7 @@ export const ALL_REMOTE_SYNC_TABLES = [
   'transactions',
   'transaction_items',
   'inventory_ledger',
+  'stock_batches',
   ...GENERIC_SYNC_TABLES,
 ] as const;
 
@@ -202,20 +204,180 @@ export const REMOTE_MIGRATIONS: RemoteMigration[] = [
       'ALTER TABLE products ADD COLUMN compatible_model TEXT;',
     ],
   },
+  {
+    version: 5,
+    description: 'FIFO stock_batches table and transaction_items costing columns',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS stock_batches (
+        batch_id TEXT PRIMARY KEY,
+        product_id TEXT NOT NULL,
+        quantity_remaining REAL NOT NULL DEFAULT 0 CHECK (quantity_remaining >= 0),
+        unit_cost REAL NOT NULL DEFAULT 0 CHECK (unit_cost >= 0),
+        received_at TEXT NOT NULL,
+        purchase_order_id TEXT,
+        device_id TEXT NOT NULL DEFAULT 'local',
+        idempotency_key TEXT NOT NULL UNIQUE,
+        sync_status TEXT NOT NULL DEFAULT 'pending',
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted INTEGER NOT NULL DEFAULT 0,
+        shadow_sale_id TEXT,
+        shadow_item_id TEXT,
+        shadow_qty REAL NOT NULL DEFAULT 0,
+        shadow_resolved INTEGER NOT NULL DEFAULT 0
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_stock_batches_fifo ON stock_batches(product_id, received_at)`,
+      `CREATE INDEX IF NOT EXISTS idx_stock_batches_updated ON stock_batches(updated_at, batch_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_stock_batches_po ON stock_batches(purchase_order_id)`,
+      `ALTER TABLE transaction_items ADD COLUMN unit_price_charged REAL DEFAULT 0`,
+      `ALTER TABLE transaction_items ADD COLUMN unit_cost_at_sale REAL DEFAULT 0`,
+      `ALTER TABLE transaction_items ADD COLUMN discount_amount REAL DEFAULT 0`,
+      `ALTER TABLE transaction_items ADD COLUMN line_profit REAL DEFAULT 0`,
+    ],
+  },
+  {
+    version: 6,
+    description: 'H27: give stock_batches the shared id/data_json cursor columns so the pull and restore cursor queries can read it',
+    statements: [
+      'ALTER TABLE stock_batches ADD COLUMN id TEXT;',
+      "ALTER TABLE stock_batches ADD COLUMN data_json TEXT NOT NULL DEFAULT '{}';",
+      // Backfill existing rows: `id` mirrors the PK so the shared cursor
+      // key (updated_at, id) works; `data_json` carries the full column set
+      // so the generic-KV apply path can read it. Idempotent (guarded by
+      // `WHERE id IS NULL`) so a re-run touches nothing.
+      `UPDATE stock_batches SET id = batch_id, data_json = json_object(
+        'batch_id', batch_id, 'product_id', product_id,
+        'quantity_remaining', quantity_remaining, 'unit_cost', unit_cost,
+        'received_at', received_at, 'purchase_order_id', purchase_order_id,
+        'device_id', device_id, 'idempotency_key', idempotency_key,
+        'version', version, 'created_at', created_at, 'updated_at', updated_at,
+        'deleted', deleted) WHERE id IS NULL;`,
+      'CREATE INDEX IF NOT EXISTS idx_stock_batches_id_updated ON stock_batches(updated_at, id);',
+    ],
+  },
+
+  {
+    version: 7,
+    description: 'H29: credit_vouchers joins the sync surface (generic KV shape)',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS credit_vouchers (
+        id TEXT PRIMARY KEY,
+        data_json TEXT NOT NULL DEFAULT '{}',
+        device_id TEXT NOT NULL DEFAULT '',
+        idempotency_key TEXT NOT NULL UNIQUE,
+        sync_status TEXT NOT NULL DEFAULT 'pending',
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL,
+        deleted INTEGER NOT NULL DEFAULT 0
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_credit_vouchers_updated ON credit_vouchers(updated_at, id)`,
+    ],
+  },
+
+  {
+    version: 8,
+    description: 'Compensation claims: advisory TTL locks so two online tills cannot pay out the same refund/void twice',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS refund_claims (
+        id TEXT PRIMARY KEY,
+        ticket_id TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'REFUND',
+        device_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_refund_claims_ticket ON refund_claims(ticket_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_refund_claims_expiry ON refund_claims(expires_at)`,
+    ],
+  },
+
+  {
+    version: 9,
+    description: 'Edge B shadow-batch linkage columns on stock_batches (pending-COGS markers reconciled on invoice receipt)',
+    statements: [
+      'ALTER TABLE stock_batches ADD COLUMN shadow_sale_id TEXT;',
+      'ALTER TABLE stock_batches ADD COLUMN shadow_item_id TEXT;',
+      'ALTER TABLE stock_batches ADD COLUMN shadow_qty REAL NOT NULL DEFAULT 0;',
+      'ALTER TABLE stock_batches ADD COLUMN shadow_resolved INTEGER NOT NULL DEFAULT 0;',
+    ],
+  },
+
+  {
+    version: 10,
+    description: 'STRICT FIFO allocation ledger (sale_batch_allocations, frozen checkout COGS)',
+    statements: [
+      `CREATE TABLE IF NOT EXISTS sale_batch_allocations (
+        id TEXT PRIMARY KEY,
+        sale_id TEXT NOT NULL,
+        batch_id TEXT NOT NULL,
+        qty_consumed INTEGER NOT NULL CHECK (qty_consumed > 0),
+        unit_cost_at_sale REAL NOT NULL CHECK (unit_cost_at_sale >= 0),
+        created_at TEXT NOT NULL,
+        product_id TEXT,
+        sale_item_id TEXT,
+        device_id TEXT NOT NULL DEFAULT 'local',
+        idempotency_key TEXT NOT NULL UNIQUE,
+        sync_status TEXT NOT NULL DEFAULT 'pending',
+        version INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL,
+        deleted INTEGER NOT NULL DEFAULT 0
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_alloc_sale ON sale_batch_allocations(sale_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_alloc_batch ON sale_batch_allocations(batch_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_alloc_updated ON sale_batch_allocations(updated_at, id)`,
+    ],
+  },
+
+  {
+    version: 11,
+    description: 'Atomic COGS materialization column (transactions.ledger_cogs_total)',
+    statements: [
+      'ALTER TABLE transactions ADD COLUMN ledger_cogs_total REAL;',
+    ],
+  },
+
+  {
+    version: 12,
+    description: 'Owning cash session id (transactions.shift_id) for close attribution',
+    statements: [
+      'ALTER TABLE transactions ADD COLUMN shift_id TEXT;',
+    ],
+  },
 ];
 
-export const LATEST_REMOTE_VERSION = 4;
+export const LATEST_REMOTE_VERSION = 12;
 
 export async function ensureRemoteSchemaColumns(client: Client): Promise<void> {
   const alterStatements = ALL_REMOTE_SYNC_TABLES.map(
     (table) => `ALTER TABLE ${table} ADD COLUMN version INTEGER NOT NULL DEFAULT 1`
   );
-  alterStatements.push('ALTER TABLE products ADD COLUMN compatible_model TEXT');
+  alterStatements.push(
+    'ALTER TABLE products ADD COLUMN compatible_model TEXT',
+    'ALTER TABLE transaction_items ADD COLUMN unit_price_charged REAL DEFAULT 0',
+    'ALTER TABLE transaction_items ADD COLUMN unit_cost_at_sale REAL DEFAULT 0',
+    'ALTER TABLE transaction_items ADD COLUMN discount_amount REAL DEFAULT 0',
+    'ALTER TABLE transaction_items ADD COLUMN line_profit REAL DEFAULT 0',
+    'ALTER TABLE stock_batches ADD COLUMN shadow_sale_id TEXT',
+    'ALTER TABLE stock_batches ADD COLUMN shadow_item_id TEXT',
+    'ALTER TABLE stock_batches ADD COLUMN shadow_qty REAL NOT NULL DEFAULT 0',
+    'ALTER TABLE stock_batches ADD COLUMN shadow_resolved INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE transactions ADD COLUMN ledger_cogs_total REAL'
+  );
   for (const stmt of alterStatements) {
     try {
       await client.execute(stmt);
-    } catch {
-      // Column already exists, ignore
+    } catch (err: unknown) {
+      // Ignore ONLY duplicate-column errors. A blanket catch previously
+      // swallowed auth/quota/network failures too, letting the migration march
+      // on against a cloud it could not write to (silent divergence, C6).
+      const msg = String((err as { message?: unknown })?.message ?? err).toLowerCase();
+      const isDuplicateColumn =
+        msg.includes('duplicate column') ||
+        msg.includes('duplicate_column') ||
+        msg.includes('already exists');
+      if (isDuplicateColumn) continue;
+      throw err;
     }
   }
 }

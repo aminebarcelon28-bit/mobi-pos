@@ -12,13 +12,29 @@ import {
   Star,
   Check,
   Search,
+  RotateCcw,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import type { PaymentTender, PaymentMethodType } from '../../types/pos';
 import { useToast } from '../../components/ui/Toast';
+import { getEffectiveDebtLimit } from '../../store/slices/createCustomerSlice';
 import { soundEngine } from '../../utils/audioFeedback';
-import { getProductPriceForTier } from '../../utils/pricingEngine';
+import { computeCartTotals } from '../../utils/receiptMath';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { calculateMaxAllowedCredit, calculateCustomerTier, normalizeLoyaltyConfig } from '../../utils/loyaltyEngine';
+
+/** Display-only tier resolution — the cached loyaltyTier string may be stale after renames. */
+const resolveTierName = (totalSpent?: number): string => {
+  try {
+    return calculateCustomerTier(
+      totalSpent || 0,
+      normalizeLoyaltyConfig(usePosStore.getState().receiptSettings?.loyaltyConfig)
+    ).name;
+  } catch {
+    return 'Bronze';
+  }
+};
 
 export const PaymentModal: React.FC = () => {
   const {
@@ -41,22 +57,37 @@ export const PaymentModal: React.FC = () => {
   const [isCustomCreditOpen, setIsCustomCreditOpen] = useState(false);
   const [customCreditInput, setCustomCreditInput] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [voucherInput, setVoucherInput] = useState('');
+  const [voucherBusy, setVoucherBusy] = useState(false);
+  const [voucherError, setVoucherError] = useState<string | null>(null);
   const amountInputRef = useRef<HTMLInputElement>(null);
 
-  // grossSubtotal = catalog value before discounts (what the ticket labels
-  // "SOUS-TOTAL BRUT"). The old accumulator subtracted each item.discount,
-  // making this variable the net total under a gross name: the "Sous-total"
-  // pill understated the real gross and change was computed against the
-  // post-discount base by accident (harmless for change, wrong on display).
-  const grossSubtotal = cart.reduce((acc, item) => {
-    const itemPrice =
-      item.appliedPrice !== undefined
-        ? item.appliedPrice
-        : getProductPriceForTier(item.product, pricingTier);
-    return acc + itemPrice * item.quantity;
-  }, 0);
-  const cartDiscount = cart.reduce((acc, item) => acc + (item.discount || 0), 0);
-  const netSubtotal = Math.max(0, grossSubtotal - cartDiscount);
+  // Runtime-staged voucher credit + VAT rate (owned by other agents' types).
+  const voucherCreditApplied =
+    usePosStore((s) => (s as unknown as { voucherCreditApplied?: number }).voucherCreditApplied ?? 0) || 0;
+  const voucherCode =
+    usePosStore((s) => (s as unknown as { voucherCode?: string | null }).voucherCode ?? null);
+  const vatRate =
+    usePosStore((s) => (s.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate ?? 0) || 0;
+
+  // Canonical totals — the same computeCartTotals() base as CartPanel,
+  // MobileCheckoutTab and processPayment (signed returns, credits, VAT).
+  // grossSubtotal = signed catalog value ("SOUS-TOTAL BRUT" on the ticket);
+  // netToPay = amount the tender must cover (net of credits, incl. VAT).
+  const totals = computeCartTotals(cart, {
+    pricingTier,
+    storeCreditApplied: appliedCredit,
+    voucherCreditApplied,
+    vatRate,
+  });
+  const grossSubtotal = totals.grossSubtotal;
+  const cartDiscount = totals.discountTotal;
+  const netSubtotal = totals.subtotalAfterDiscount;
+  const netToPay = totals.total;
+  const taxAmount = totals.tax;
+  // B-026: net-negative cart → cash owed back; netToPay/ttc is clamped to 0.
+  const refundDue = totals.refundDue;
+  const isRefundDue = refundDue > 0;
 
   useEffect(() => {
     if (activeModal === 'payment') {
@@ -69,11 +100,14 @@ export const PaymentModal: React.FC = () => {
       setIsProcessing(false);
       setIsCustomCreditOpen(false);
 
-      // Auto-populate initial store credit if available
+      // Auto-populate initial store credit if available (honours guardrail
+      // + staged voucher via maxAvailableCredit computed below when modal
+      // is open — here we clamp against balance and net only for the effect
+      // deps; the render-time maxAvailableCredit is the real ceiling).
       const initialCredit = Math.min(
         currentCustomer?.storeCredit || 0,
         storeCreditApplied || 0,
-          netSubtotal
+        netSubtotal
       );
       setAppliedCredit(initialCredit);
 
@@ -91,12 +125,29 @@ export const PaymentModal: React.FC = () => {
 
   if (activeModal !== 'payment') return null;
 
-  // Real-time net calculations
-    // Store credit can never exceed the net due (gross - discounts already
-    // granted), otherwise a discounted sale would over-apply customer credit.
-    const maxAvailableCredit = currentCustomer ? Math.min(currentCustomer.storeCredit || 0, netSubtotal) : 0;
-    const netToPay = Math.max(0, netSubtotal - appliedCredit);
-  const currentCashGiven = parseFloat(cashTenderAmount) || 0;
+  // B-030: wire the COGS margin-floor + 50% cap guardrail — balance-only
+  // clamping let credit cover 100% of the basket (anti-bankruptcy path).
+  const cartCogs = cart.reduce((acc, item) => {
+    const unitCost = item.unitCostAtSale ?? item.unitCostPrice ?? item.product.costPrice ?? 0;
+    return acc + unitCost * item.quantity;
+  }, 0);
+  const creditGuardrail = calculateMaxAllowedCredit(
+    Math.max(0, grossSubtotal - cartDiscount),
+    cartCogs,
+    currentCustomer?.storeCredit || 0,
+    50
+  );
+
+  // Store credit can never exceed the net due after the staged voucher
+  // (gross − discounts − voucher already granted), otherwise a discounted
+  // sale would over-apply customer credit — and never past the guardrail.
+  const maxAvailableCredit = currentCustomer
+    ? Math.min(
+        creditGuardrail.maxAllowedCredit,
+        Math.max(0, netSubtotal - voucherCreditApplied)
+      )
+    : 0;
+  const currentCashGiven = Math.round(parseLocalizedAmount(cashTenderAmount) || 0);
 
   const resteAPayer = Math.max(0, netToPay - currentCashGiven);
   const changeDue = Math.max(0, currentCashGiven - netToPay);
@@ -104,11 +155,10 @@ export const PaymentModal: React.FC = () => {
   const quickBillsDZD = [500, 1000, 2000, 3000, 4000, 5000];
 
   const serializedItems = cart.filter((item) => item.product.isSerialized);
-  const hasMissingIMEI = serializedItems.some((item) => !item.imeiNumber || !item.imeiNumber.trim());
 
   // Credit limits & calculations
   const customerCurrentDebt = currentCustomer?.currentDebt || 0;
-  const customerDebtLimit = currentCustomer?.debtLimit || 100000;
+  const customerDebtLimit = getEffectiveDebtLimit(currentCustomer);
   const projectedDebtOnCredit = customerCurrentDebt + (selectedMethod === 'Crédit Client' ? netToPay : resteAPayer);
   const isOverDebtLimit = currentCustomer ? projectedDebtOnCredit > customerDebtLimit : false;
 
@@ -125,7 +175,10 @@ export const PaymentModal: React.FC = () => {
 
   const handleApplyCustomCredit = (amount: number) => {
     if (!currentCustomer) return;
-    const clamped = Math.max(0, Math.min(amount, currentCustomer.storeCredit || 0, netSubtotal));
+    const clamped = Math.max(
+      0,
+      Math.min(amount, maxAvailableCredit, Math.max(0, netSubtotal - voucherCreditApplied))
+    );
     setAppliedCredit(clamped);
     setStoreCreditApplied(clamped);
     const newNet = Math.max(0, netSubtotal - clamped);
@@ -147,16 +200,81 @@ export const PaymentModal: React.FC = () => {
     showToast('Avoir Client retiré de la vente.', 'info');
   };
 
+  // Voucher code entry: STAGES the credit on the cart (validated against the
+  // durable voucher lane, never captured here). Capture happens only inside
+  // processPayment after the order row is durable.
+  const handleApplyVoucher = async () => {
+    const code = voucherInput.trim().toUpperCase();
+    if (!code || voucherBusy) return;
+    setVoucherBusy(true);
+    setVoucherError(null);
+    try {
+      const st = usePosStore.getState() as unknown as {
+        redeemVoucherInCart: (c: string) => Promise<{ success: boolean; reason?: string; amount?: number }>;
+      };
+      const res = await st.redeemVoucherInCart(code);
+      if (!res.success) {
+        setVoucherError(res.reason || 'Bon refusé.');
+        soundEngine.playError?.();
+      } else {
+        soundEngine.playSuccess?.();
+        showToast(`Bon d'avoir appliqué : -${formatDZD(res.amount || 0)}`, 'success');
+        setVoucherInput('');
+      }
+    } catch {
+      setVoucherError('Vérification du bon impossible.');
+    } finally {
+      setVoucherBusy(false);
+    }
+  };
+
+  const handleRemoveVoucher = () => {
+    const st = usePosStore.getState() as unknown as { clearVoucherCredit?: () => void };
+    st.clearVoucherCredit?.();
+    soundEngine.playKeyBeep?.();
+    showToast("Bon d'avoir retiré de la vente.", 'info');
+  };
+
   const handleProcessPayment = async (isCreditSplit: boolean = false) => {
     if (isProcessing) return;
 
-    if (cart.length === 0) {
+    // Tender-skew guard: rebuild the canonical totals from LIVE store state at
+    // submit time instead of trusting render-time values (paint can lag the
+    // store between render and click). Tender + change below derive from
+    // submitNet/submitCash only.
+    const live = usePosStore.getState();
+    const liveCart = live.cart;
+    const liveVoucherCredit = Math.max(
+      0,
+      Math.round(Number((live as unknown as { voucherCreditApplied?: number }).voucherCreditApplied) || 0)
+    );
+    const liveVat = Math.max(
+      0,
+      Number((live.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate) || 0
+    );
+    const submitTotals = computeCartTotals(liveCart, {
+      pricingTier: live.pricingTier,
+      storeCreditApplied: appliedCredit,
+      voucherCreditApplied: liveVoucherCredit,
+      vatRate: liveVat,
+    });
+    const submitNet = submitTotals.total;
+    // B-026: refund-due carts submit as a pure disbursement — tender covers 0
+    // and processPayment uses refundDue for the cash-out path.
+    const submitRefundDue = submitTotals.refundDue;
+    const submitCash = submitRefundDue > 0 ? 0 : Math.round(parseLocalizedAmount(cashTenderAmount) || 0);
+    const submitReste = Math.max(0, submitNet - submitCash);
+    const liveHasMissingImei = liveCart.some(
+      (item) => item.product.isSerialized && (!item.imeiNumber || !item.imeiNumber.trim())
+    );
+
+    if (liveCart.length === 0) {
       showToast('Panier vide — Veuillez ajouter des articles au panier.', 'warning');
       closeModal();
       return;
     }
 
-    if (hasMissingIMEI) {
+    if (liveHasMissingImei) {
       showToast('Veuillez saisir les numéros IMEI pour tous les articles sérialisés.', 'warning');
       return;
     }
@@ -165,13 +283,45 @@ export const PaymentModal: React.FC = () => {
 
     const finalTenders: PaymentTender[] = [];
 
+    // B-026: pure refund-due cart — no cash-in tender; processPayment logs
+    // the cash-out from refundDue. Skip credit/stock payment branches.
+    // Staged wallet credit still rides as a leg so slice-side refund math
+    // matches the displayed submitRefundDue (net of credit).
+    if (submitRefundDue > 0) {
+      const refundAvoirLeg =
+        appliedCredit > 0 ? [{ method: 'Avoir Client' as const, amount: appliedCredit }] : [];
+      const result = (await processPayment([{ method: 'Espèces', amount: 0 }, ...refundAvoirLeg])) as unknown as {
+        success: boolean;
+        reason?: string;
+        warnings?: string[];
+      };
+      if (result && !result.success) {
+        setIsProcessing(false);
+        if (result.reason === 'NO_ACTIVE_SHIFT') {
+          showToast("Aucun shift ouvert — ouvrez un shift avant de rembourser.", 'error');
+        } else if (result.reason?.startsWith('INSUFFICIENT_STOCK')) {
+          showToast(`Stock insuffisant : ${result.reason.slice('INSUFFICIENT_STOCK:'.length)}`, 'error');
+        } else if (result.reason === 'PERSISTENCE_FAILED' || result.reason?.startsWith('PERSISTENCE_FAILED')) {
+          showToast("Erreur d'écriture base de données. Remboursement non enregistré.", 'error');
+        } else {
+          showToast(`Échec du remboursement (${result.reason || 'inconnu'}).`, 'error');
+        }
+        return;
+      }
+      setIsProcessing(false);
+      closeModal();
+      for (const w of result?.warnings ?? []) showToast(w, 'warning', 5000);
+      showToast(`💵 Remboursement espèces ${formatDZD(submitRefundDue)} • Reçu imprimé`, 'success');
+      return;
+    }
+
     // 1. Add Store Credit tender if applied
     if (appliedCredit > 0) {
       finalTenders.push({ method: 'Avoir Client', amount: appliedCredit });
     }
 
     // 2. Handle remaining balance
-    if (netToPay === 0) {
+    if (submitNet === 0) {
       // 100% paid by Store Credit!
     } else if (selectedMethod === 'Crédit Client' || isCreditSplit) {
       if (!currentCustomer) {
@@ -182,21 +332,21 @@ export const PaymentModal: React.FC = () => {
 
       if (isCreditSplit) {
         // Split: Part paid in cash, remaining placed on credit
-        if (currentCashGiven > 0) {
-          finalTenders.push({ method: 'Espèces', amount: currentCashGiven });
+        if (submitCash > 0) {
+          finalTenders.push({ method: 'Espèces', amount: submitCash });
         }
-        if (resteAPayer > 0) {
-          finalTenders.push({ method: 'Crédit Client', amount: resteAPayer });
+        if (submitReste > 0) {
+          finalTenders.push({ method: 'Crédit Client', amount: submitReste });
         }
       } else {
         // 100% Credit sale for remaining net
-        finalTenders.push({ method: 'Crédit Client', amount: netToPay });
+        finalTenders.push({ method: 'Crédit Client', amount: submitNet });
       }
     } else {
       // Cash payment
-      const cashAmount = currentCashGiven > 0 ? currentCashGiven : netToPay;
-      if (cashAmount < netToPay) {
-        showToast(`Montant espèces insuffisant — Il manque ${formatDZD(netToPay - cashAmount)}`, 'error');
+      const cashAmount = submitCash > 0 ? submitCash : submitNet;
+      if (cashAmount < submitNet) {
+        showToast(`Montant espèces insuffisant — Il manque ${formatDZD(submitNet - cashAmount)}`, 'error');
         setIsProcessing(false);
         return;
       }
@@ -204,17 +354,45 @@ export const PaymentModal: React.FC = () => {
     }
 
     const totalTendered = finalTenders.reduce((acc, t) => acc + t.amount, 0);
-      const calculatedChange = Math.max(0, totalTendered - netToPay);
+      const calculatedChange = Math.max(0, totalTendered - submitNet);
 
-    const result = await processPayment(finalTenders);
+    const result = (await processPayment(finalTenders)) as unknown as {
+      success: boolean;
+      reason?: string;
+      warnings?: string[];
+      recoveryQueued?: boolean;
+    };
     if (result && !result.success) {
       setIsProcessing(false);
-      if (result.reason === 'INSUFFICIENT_CASH') {
+      if (result.reason === 'LICENSE_SALE_BLOCKED') {
+        showToast('Licence expirée — nouvelles ventes bloquées (remboursements et rapports disponibles).', 'error');
+      } else if (result.reason === 'INSUFFICIENT_CASH') {
         showToast('Montant insuffisant pour valider la vente.', 'error');
+      } else if (result.reason === 'NO_ACTIVE_SHIFT') {
+        showToast("Aucun shift ouvert — ouvrez un shift avant d'encaisser.", 'error');
+      } else if (result.reason?.startsWith('INSUFFICIENT_STOCK')) {
+        showToast(`Stock insuffisant : ${result.reason.slice('INSUFFICIENT_STOCK:'.length)}`, 'error');
+      } else if (result.reason?.startsWith('IMEI_ALREADY_SOLD')) {
+        showToast(`IMEI déjà vendu : ${result.reason.slice('IMEI_ALREADY_SOLD:'.length)}`, 'error');
+      } else if (result.reason?.startsWith('VOUCHER')) {
+        showToast(`Bon d'avoir refusé (${result.reason}).`, 'error');
       } else if (result.reason?.startsWith('IMEI_REQUIRED')) {
         showToast('Veuillez saisir les numéros IMEI pour tous les articles sérialisés.', 'warning');
-      } else if (result.reason === 'PERSISTENCE_FAILED') {
-        showToast('Erreur d\'écriture base de données. Vente non enregistrée.', 'error');
+      } else if (result.reason === 'PERSISTENCE_FAILED' || result.reason?.startsWith('PERSISTENCE_FAILED')) {
+        const detail = result.reason.includes(':') ? result.reason.slice('PERSISTENCE_FAILED:'.length) : '';
+        console.error('[checkout] persistence failed:', detail || result.reason);
+        // B-004/B-005 FIX-4: recovery intent is durable in Dexie — soft warn,
+        // keep cart for reversible cash path, do NOT claim the sale is lost.
+        if (result.recoveryQueued) {
+          for (const w of result.warnings ?? []) showToast(w, 'warning', 6000);
+          showToast(
+            `Écriture SQLite en échec — panier conservé. La vente sera reprise au démarrage.${detail ? ` (${detail})` : ''}`,
+            'warning',
+            6000
+          );
+        } else {
+          showToast(`Erreur d'écriture base de données. Vente non enregistrée.${detail ? ` (${detail})` : ''}`, 'error');
+        }
       } else {
         showToast('Échec de validation de la vente.', 'error');
       }
@@ -222,8 +400,23 @@ export const PaymentModal: React.FC = () => {
       setIsProcessing(false);
       closeModal();
 
-      if (appliedCredit > 0 && netToPay === 0) {
-        showToast(`🎁 Vente 100% réglée via Avoir Client (${formatDZD(appliedCredit)}) • Reçu imprimé`, 'success');
+      for (const w of result?.warnings ?? []) {
+        showToast(w, 'warning', 5000);
+      }
+      // Milestone unlock celebration: the just-completed ticket is head of
+      // the transactions list and carries its immutable award snapshots.
+      try {
+        const latest = usePosStore.getState().transactions?.[0];
+        const awards = latest?.milestoneAwards || [];
+        if (awards.length > 0) {
+          const total = awards.reduce((acc, a) => acc + (a.rewardAmount || 0), 0);
+          showToast(`🎉 Palier fidélité débloqué : +${formatDZD(total)} d'Avoir Client !`, 'success', 6000);
+        }
+      } catch {
+        // Celebration must never break checkout UX.
+      }
+      if ((appliedCredit > 0 || voucherCreditApplied > 0) && submitNet === 0) {
+        showToast(`Vente 100% couverte (avoir client / bon d'avoir${voucherCode ? ` ${voucherCode}` : ''}) • Reçu imprimé`, 'success');
       } else if (selectedMethod === 'Crédit Client' || isCreditSplit) {
         showToast(`📋 Vente enregistrée avec solde Crédit pour ${currentCustomer?.name} • Reçu imprimé`, 'success');
       } else if (calculatedChange > 0) {
@@ -290,23 +483,38 @@ export const PaymentModal: React.FC = () => {
                 </span>
               </div>
               <div className="text-right">
-                <span className="text-3xl font-black text-emerald-400 tracking-tight font-mono">
-                  {formatDZD(netToPay)}
+                <span className={`text-3xl font-black tracking-tight font-mono ${isRefundDue ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {isRefundDue ? `-${formatDZD(refundDue)}` : formatDZD(netToPay)}
                 </span>
+                {isRefundDue && (
+                  <span className="text-[10px] text-rose-300 font-bold block uppercase tracking-wider">
+                    Remboursement dû au client
+                  </span>
+                )}
               </div>
             </div>
 
             {/* Subtotal & Store Credit breakdown pill */}
-              {(cartDiscount > 0 || appliedCredit > 0) && (
+              {(cartDiscount > 0 || appliedCredit > 0 || voucherCreditApplied > 0 || taxAmount > 0) && (
               <div className="pt-2 border-t border-pos-border/60 flex items-center justify-between text-xs font-mono">
-                <div className="flex items-center gap-2 text-pos-muted">
+                <div className="flex items-center gap-2 text-pos-muted flex-wrap">
                   <span>Sous-total: {formatDZD(grossSubtotal)}</span>
                     {cartDiscount > 0 && (
                       <span className="text-purple-400 font-bold">Remise: -{formatDZD(cartDiscount)}</span>
                     )}
+                  {appliedCredit > 0 && (
                   <span className="text-purple-400 font-bold flex items-center gap-1">
                     <Gift className="w-3.5 h-3.5" /> Avoir Déduit: -{formatDZD(appliedCredit)}
                   </span>
+                  )}
+                  {voucherCreditApplied > 0 && (
+                    <span className="text-purple-400 font-bold">
+                      Bon{voucherCode ? ` ${voucherCode}` : ''}: -{formatDZD(voucherCreditApplied)}
+                    </span>
+                  )}
+                  {taxAmount > 0 && (
+                    <span className="text-cyan-300 font-bold">TVA ({vatRate}%): +{formatDZD(taxAmount)}</span>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -338,7 +546,10 @@ export const PaymentModal: React.FC = () => {
                     </div>
                     <span className="text-[10px] text-pos-muted flex items-center gap-1">
                       <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
-                      {currentCustomer.loyaltyPoints || 0} Points accumulés • Palier {currentCustomer.loyaltyTier || 'Bronze'}
+                      {currentCustomer.loyaltyPoints || 0} Points accumulés • Palier {resolveTierName(currentCustomer.totalSpent)}
+                      {(currentCustomer.storeCredit || 0) < 0 && (
+                        <span className="text-orange-300 font-bold"> • Solde à récupérer: {formatDZD(currentCustomer.storeCredit)}</span>
+                      )}
                     </span>
                   </div>
                 </div>
@@ -377,8 +588,7 @@ export const PaymentModal: React.FC = () => {
                 <div className="flex items-center gap-1.5 pt-1 border-t border-purple-500/20 text-xs">
                   <span className="text-[10px] text-purple-300 font-bold uppercase tracking-wider">Montants Rapides :</span>
                   {[500, 1000, 2000, 5000].map((amt) => {
-                    if (amt > (currentCustomer.storeCredit || 0) || amt > grossSubtotal) return null;
-                      if (amt > (currentCustomer.storeCredit || 0) || amt > netSubtotal) return null;
+                    if (amt > maxAvailableCredit || amt > Math.max(0, netSubtotal - voucherCreditApplied)) return null;
                     const isSelected = appliedCredit === amt;
                     return (
                       <button
@@ -419,7 +629,7 @@ export const PaymentModal: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => {
-                      const val = parseFloat(customCreditInput) || 0;
+                      const val = Math.round(parseLocalizedAmount(customCreditInput) || 0);
                       handleApplyCustomCredit(val);
                     }}
                     className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold transition cursor-pointer"
@@ -447,16 +657,98 @@ export const PaymentModal: React.FC = () => {
           )}
 
           {/* ══════════════════════════════════════════════════════════════ */}
+          {/* VOUCHER CODE ENTRY (staged credit, captured at payment only) */}
+          {/* ══════════════════════════════════════════════════════════════ */}
+          <div className="bg-pos-card border border-pos-border rounded-2xl p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-pos-text flex items-center gap-1.5">
+                <Gift className="w-4 h-4 text-purple-400" /> Bon d&apos;Avoir (code AV-...)
+              </span>
+              {voucherCreditApplied > 0 && (
+                <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[11px] font-bold px-2.5 py-1 rounded-xl">
+                  Appliqué (-{formatDZD(voucherCreditApplied)})
+                </span>
+              )}
+            </div>
+            {voucherCreditApplied > 0 ? (
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-mono font-bold text-purple-300">{voucherCode}</span>
+                <button
+                  type="button"
+                  onClick={handleRemoveVoucher}
+                  className="text-[10px] text-red-400 hover:text-red-300 font-bold underline transition cursor-pointer"
+                >
+                  Retirer le bon
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={voucherInput}
+                    onChange={(e) => {
+                      setVoucherInput(e.target.value.toUpperCase());
+                      setVoucherError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void handleApplyVoucher();
+                      }
+                    }}
+                    placeholder="Ex : AV-123456"
+                    autoCapitalize="characters"
+                    autoCorrect="off"
+                    spellCheck="false"
+                    className="flex-1 min-w-0 bg-pos-bg border border-pos-border focus:border-purple-400 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-pos-text focus:outline-none uppercase"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleApplyVoucher()}
+                    disabled={voucherBusy || !voucherInput.trim()}
+                    className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+                  >
+                    {voucherBusy ? '...' : 'Appliquer'}
+                  </button>
+                </div>
+                {voucherError && (
+                  <p className="text-[11px] text-red-400 font-bold">{voucherError}</p>
+                )}
+                <p className="text-[10px] text-pos-muted">
+                  Le solde est vérifié puis déduit uniquement à la validation de la vente.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* ══════════════════════════════════════════════════════════════ */}
           {/* 100% STORE CREDIT COVERAGE NOTIFICATION */}
           {/* ══════════════════════════════════════════════════════════════ */}
-          {netToPay === 0 && appliedCredit > 0 ? (
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {/* REFUND DUE NOTIFICATION (B-026) */}
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {isRefundDue ? (
+            <div className="p-4 rounded-2xl bg-gradient-to-br from-rose-950/80 to-red-950/80 border-2 border-rose-500 text-rose-300 shadow-lg space-y-1.5 animate-in fade-in">
+              <div className="flex items-center gap-2 font-black text-sm text-rose-300">
+                <RotateCcw className="w-5 h-5" />
+                <span>Remboursement espèces dû : {formatDZD(refundDue)}</span>
+              </div>
+              <p className="text-xs text-rose-200/80">
+                Les retours dépassent le panier — la caisse doit rembourser{' '}
+                {formatDZD(refundDue)} au client. Aucun encaissement n&apos;est requis.
+              </p>
+            </div>
+          ) : netToPay === 0 && (appliedCredit > 0 || voucherCreditApplied > 0) ? (
             <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-950/80 to-emerald-950/80 border-2 border-emerald-500 text-emerald-300 shadow-lg space-y-1.5 animate-in fade-in">
               <div className="flex items-center gap-2 font-black text-sm text-emerald-300">
                 <Sparkles className="w-5 h-5 text-purple-300" />
-                <span>Panier 100% Couvert par l'Avoir Client !</span>
+                <span>Panier 100% Couvert (Avoir / Bon) !</span>
               </div>
               <p className="text-xs text-emerald-200/80">
-                Le montant total de {formatDZD(netSubtotal)} est intégralement déduit du solde de {currentCustomer?.name}. Aucun encaissement en espèces n'est requis.
+                Le montant total de {formatDZD(netSubtotal)} est intégralement couvert
+                {appliedCredit > 0 && currentCustomer ? ` (avoir ${currentCustomer.name})` : ''}
+                {voucherCreditApplied > 0 ? ` (bon ${voucherCode})` : ''}. Aucun encaissement en espèces n&apos;est requis.
               </p>
             </div>
           ) : (
@@ -630,7 +922,7 @@ export const PaymentModal: React.FC = () => {
                       </div>
 
                       {/* Debt Status Grid */}
-                      <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center text-xs">
                         <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border">
                           <span className="text-[9px] uppercase font-bold text-pos-muted block">Dette Actuelle</span>
                           <span className="font-black text-amber-400 font-mono text-sm">{formatDZD(customerCurrentDebt)}</span>
@@ -726,9 +1018,11 @@ export const PaymentModal: React.FC = () => {
           <button
             type="button"
             onClick={() => handleProcessPayment(false)}
-            disabled={selectedMethod === 'Crédit Client' && !currentCustomer && netToPay > 0}
+            disabled={isProcessing || (selectedMethod === 'Crédit Client' && !currentCustomer && netToPay > 0)}
             className={`w-full sm:w-auto min-h-[48px] glow-btn px-6 sm:px-8 py-3 rounded-xl text-white font-black text-sm shadow-xl flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 ${
-              netToPay === 0 && appliedCredit > 0
+              isRefundDue
+                ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 shadow-rose-600/25'
+                : netToPay === 0 && appliedCredit > 0
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 shadow-purple-600/25'
                 : selectedMethod === 'Crédit Client'
                 ? 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 shadow-amber-600/25'
@@ -737,7 +1031,9 @@ export const PaymentModal: React.FC = () => {
           >
             <CheckCircle2 className="w-5 h-5 shrink-0 stroke-[2.5]" />
             <span className="truncate">
-              {netToPay === 0 && appliedCredit > 0
+              {isRefundDue
+                ? `Rembourser ${formatDZD(refundDue)}`
+                : netToPay === 0 && appliedCredit > 0
                 ? 'Valider Paiement Avoir (100%)'
                 : selectedMethod === 'Crédit Client'
                 ? 'Valider Vente à Crédit'

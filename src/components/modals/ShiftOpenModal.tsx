@@ -1,17 +1,39 @@
-import React, { useState, useMemo } from 'react';
-import { X, Play, Calculator, Sparkles, User, FileText, CheckCircle2 } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { X, Play, Calculator, Sparkles, User, FileText, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import { formatDZD, type DenominationCount } from '../../types/pos';
+import { formatDZD, formatDateTime, type DenominationCount } from '../../types/pos';
 import { useToast } from '../ui/Toast';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
+
+// Lock-screen cashier (createUISlice owns `activeCashier`; absent from the
+// shared PosState type, so read via structural cast). Used as the default
+// shift cashier instead of any hardcoded name.
+function readLockScreenCashierName(): string {
+  const state = usePosStore.getState() as unknown as { activeCashier?: { name?: string } | null };
+  return state.activeCashier?.name?.trim() || '';
+}
 
 export const ShiftOpenModal: React.FC = () => {
   const { activeModal, closeModal, startShift } = usePosStore();
   const { showToast } = useToast();
 
   const [useDenominations, setUseDenominations] = useState<boolean>(true);
-  const [cashierName, setCashierName] = useState<string>('Yacine');
+  const [cashierName, setCashierName] = useState<string>('');
   const [openingNote, setOpeningNote] = useState<string>('');
   const [directFloat, setDirectFloat] = useState<number>(20000);
+  const [alreadyOpen, setAlreadyOpen] = useState<{ id: string; cashier: string; openedAt: string } | null>(null);
+  // Double-submit guard: opening twice races two shift rows — the adapter
+  // refuses the second, but the button must not fire it at all.
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Refresh the cashier default (and clear any stale double-open banner)
+  // every time the modal opens — the lock-screen cashier may have changed.
+  useEffect(() => {
+    if (activeModal === 'shift_open') {
+      setCashierName((prev) => prev.trim() || readLockScreenCashierName());
+      setAlreadyOpen(null);
+    }
+  }, [activeModal]);
 
   const [denominations, setDenominations] = useState<DenominationCount>({
     qty2000: 5,
@@ -93,23 +115,43 @@ export const ShiftOpenModal: React.FC = () => {
   };
 
   const handleOpenShift = async () => {
+    if (isSubmitting) return;
     if (finalFloat < 0) {
       showToast('Le fond de caisse initial ne peut pas être négatif.', 'warning');
       return;
     }
 
-    const result = await startShift(
-      finalFloat,
-      cashierName.trim() || 'Caissier Principal',
-      openingNote.trim() || undefined,
-      useDenominations ? denominations : undefined
-    );
+    setIsSubmitting(true);
+    try {
+      const result = await startShift(
+        finalFloat,
+        cashierName.trim() || readLockScreenCashierName() || 'Caissier Principal',
+        openingNote.trim() || undefined,
+        useDenominations ? denominations : undefined
+      );
 
-    if (result.success) {
-      showToast(`Session ouverte avec succès ! Fond initial : ${formatDZD(finalFloat)}`, 'success');
-      closeModal();
-    } else {
-      showToast(result.reason || "Échec de l'ouverture de session", 'error');
+      if (result.success) {
+        setAlreadyOpen(null);
+        showToast(`Session ouverte avec succès ! Fond initial : ${formatDZD(finalFloat)}`, 'success');
+        closeModal();
+      } else if (result.reason === 'SHIFT_ALREADY_OPEN' && result.session) {
+        // Double-open refused by the adapter: show WHO/WHEN instead of
+        // inserting an orphaned second session.
+        setAlreadyOpen({
+          id: result.session.id,
+          cashier: result.session.cashierName,
+          openedAt: result.session.openedAt,
+        });
+        showToast(
+          `Session déjà ouverte par ${result.session.cashierName} — clôturez-la avant d'en ouvrir une.`,
+          'error'
+        );
+      } else {
+        setAlreadyOpen(null);
+        showToast(result.reason || "Échec de l'ouverture de session", 'error');
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -143,6 +185,19 @@ export const ShiftOpenModal: React.FC = () => {
 
         {/* Body */}
         <div className="p-5 overflow-y-auto space-y-4 flex-1">
+          {alreadyOpen && (
+            <div className="bg-red-500/10 border border-red-500/40 p-3.5 rounded-xl flex items-start gap-3 text-xs text-red-200">
+              <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-400" />
+              <div>
+                <strong className="block text-red-300 font-bold mb-0.5">
+                  Session déjà ouverte — ouverture refusée
+                </strong>
+                Une session est déjà en cours (ID : <span className="font-mono">{alreadyOpen.id}</span> •
+                Caissier : <strong>{alreadyOpen.cashier}</strong> • Ouverte le : {formatDateTime(alreadyOpen.openedAt)}).
+                Clôturez la session en cours avant d'en ouvrir une nouvelle.
+              </div>
+            </div>
+          )}
           {/* Top Bar: Cashier & Mode Toggle */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl space-y-1.5">
@@ -153,7 +208,7 @@ export const ShiftOpenModal: React.FC = () => {
                 type="text"
                 value={cashierName}
                 onChange={(e) => setCashierName(e.target.value)}
-                placeholder="Ex: Yacine, Amina..."
+                placeholder="Nom du caissier de garde…"
                 className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-1.5 text-xs text-pos-text font-semibold focus:border-emerald-400 focus:outline-none"
               />
             </div>
@@ -313,10 +368,10 @@ export const ShiftOpenModal: React.FC = () => {
               </label>
               <input
                 type="number"
-                step="100"
+                step="any"
                 min="0"
                 value={directFloat || ''}
-                onChange={(e) => setDirectFloat(parseFloat(e.target.value) || 0)}
+                onChange={(e) => setDirectFloat(Math.round(parseLocalizedAmount(e.target.value) || 0))}
                 placeholder="20 000 DA"
                 className="w-full bg-pos-bg border border-pos-border rounded-xl px-4 py-3 text-lg font-mono font-bold text-emerald-400 focus:border-emerald-400 focus:outline-none"
               />
@@ -360,10 +415,11 @@ export const ShiftOpenModal: React.FC = () => {
             <button
               type="button"
               onClick={handleOpenShift}
-              className="flex-2 sm:flex-none min-h-[44px] px-4 sm:px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98] cursor-pointer"
+              disabled={isSubmitting}
+              className="flex-2 sm:flex-none min-h-[44px] px-4 sm:px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <CheckCircle2 className="w-4 h-4" />
-              <span>Valider & Ouvrir la Session Caisse</span>
+              <span>{isSubmitting ? 'Ouverture en cours…' : 'Valider & Ouvrir la Session Caisse'}</span>
             </button>
           </div>
         </div>

@@ -12,10 +12,40 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
+import type { CloseShiftWithPin } from '../../store/slices/createShiftSlice';
+import { SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD, isTxInCloseScope } from '../../db/adapters/shiftAdapter';
+import { cashSalesFromTxns, cashRefundsFromTxns } from '../../utils/cashTerms';
 import { formatDZD, type DenominationCount } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { maintenanceService } from '../../services/maintenanceService';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { isMobileDevice } from '../../utils/platform';
+import { useAllocationCogs } from '../../hooks/useAllocationCogs';
+import { isExchangeSaleTx } from '../../utils/receiptMath';
+
+// Lock-screen cashier fallback (createUISlice owns `activeCashier`; absent
+// from the shared PosState type, so read via structural cast).
+function readLockScreenCashierName(): string {
+  const state = usePosStore.getState() as unknown as { activeCashier?: { name?: string } | null };
+  return state.activeCashier?.name?.trim() || '';
+}
+
+// Adapter coded errors → cashier-facing French messages.
+function closeErrorMessage(reason?: string): string {
+  switch (reason) {
+    case 'NO_OPEN_SHIFT':
+      return 'Aucune session de caisse ouverte à clôturer.';
+    case 'CLOSING_NOTE_REQUIRED':
+      return "Écart de caisse détecté : une note justificative est obligatoire pour clôturer.";
+    case 'MANAGER_PIN_REQUIRED':
+      return `Écart ≥ ${formatDZD(SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD)} : validation par code PIN Manager requise.`;
+    case 'MANAGER_PIN_INVALID':
+      return 'Code PIN Manager incorrect — clôture à écart refusée.';
+    default:
+      return reason || 'Erreur lors de la clôture de caisse.';
+  }
+}
 
 export const ShiftCloseModal: React.FC = () => {
   const {
@@ -25,6 +55,8 @@ export const ShiftCloseModal: React.FC = () => {
     closeShift,
     transactions,
     printXReport,
+    verifyManagerPin,
+    logSecurityAction,
   } = usePosStore();
   const { showToast } = useToast();
 
@@ -32,8 +64,26 @@ export const ShiftCloseModal: React.FC = () => {
   const [useDenom, setUseDenom] = useState<boolean>(false);
   const [directPhysicalCount, setDirectPhysicalCount] = useState<number>(0);
   const [closingNote, setClosingNote] = useState<string>('');
-  const [cashierName, setCashierName] = useState<string>(activeShift?.cashierName || 'Yacine');
+  const [cashierName, setCashierName] = useState<string>(
+    () => activeShift?.cashierName || readLockScreenCashierName()
+  );
   const [backupDownloaded, setBackupDownloaded] = useState<boolean>(false);
+
+  // Manager-PIN gate for large variances (threshold enforced in the adapter;
+  // this UI only collects the PIN and forwards it).
+  const [managerPinInput, setManagerPinInput] = useState('');
+  const [managerPinError, setManagerPinError] = useState<string | null>(null);
+  // If the adapter demands a PIN the modal didn't anticipate (its live totals
+  // can lag the adapter's authoritative recompute), force the PIN block open
+  // so the cashier is never stuck with an error and no input.
+  const [forcePinGate, setForcePinGate] = useState(false);
+
+  const [recountPinOpen, setRecountPinOpen] = useState(false);
+  const [recountPinInput, setRecountPinInput] = useState('');
+  const [recountPinError, setRecountPinError] = useState<string | null>(null);
+  // Double-submit guard: closing twice fires two Z-reports and two close
+  // writes — the button locks while the adapter call is in flight.
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [denominations, setDenominations] = useState<DenominationCount>({
     qty2000: 0,
@@ -68,47 +118,55 @@ export const ShiftCloseModal: React.FC = () => {
   const openedAt = activeShift?.openedAt || new Date().toISOString();
 
   const sessionTxns = useMemo(() => {
+    // Same rule as the booking adapter (isTxInCloseScope): stamped rows
+    // belong to exactly one session, legacy rows keep the window — preview
+    // and booked Z count the same tickets.
     return transactions.filter((t) => {
-      return (
-        t.status !== 'VOIDED' &&
-        !t.isRefund &&
-        (!openedAt || t.createdAt >= openedAt)
-      );
+      if (t.isRefund) return false;
+      return isTxInCloseScope(t, { id: activeShift?.id, openedAt });
     });
-  }, [transactions, openedAt]);
+  }, [transactions, openedAt, activeShift?.id]);
 
   const sessionRefunds = useMemo(() => {
     return transactions.filter((t) => {
-      return (
-        t.status !== 'VOIDED' &&
-        t.isRefund &&
-        (!openedAt || t.createdAt >= openedAt)
-      );
+      if (!t.isRefund) return false;
+      return isTxInCloseScope(t, { id: activeShift?.id, openedAt });
     });
-  }, [transactions, openedAt]);
+  }, [transactions, openedAt, activeShift?.id]);
 
+  // Cash terms share one definition with booking, Reports and the Z report
+  // (utils/cashTerms). This also fixes a latent NaN-poison here: the old
+  // inline tender sum added raw tender.amount, so one undefined amount
+  // zeroed the whole preview.
   const totalCashRefunds = useMemo(() => {
-    return sessionRefunds.reduce((sum, t) => {
-      return (t.refundMethod === 'Espèces' || t.paymentMethod === 'Espèces') ? sum + t.total : sum;
-    }, 0);
+    return cashRefundsFromTxns(sessionRefunds);
   }, [sessionRefunds]);
 
   const totalCashSales = useMemo(() => {
-    return sessionTxns.reduce((sum, t) => {
-      if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
-        const cashTenderTotal = t.tenders
-          .filter((tender) => tender.method === 'Espèces')
-          .reduce((acc, tender) => acc + tender.amount, 0);
-        const netCash = Math.max(0, cashTenderTotal - (t.changeDue || 0));
-        return sum + netCash;
-      }
-      return t.paymentMethod === 'Espèces' ? sum + Math.max(0, t.total) : sum;
-    }, 0);
+    return cashSalesFromTxns(sessionTxns);
   }, [sessionTxns]);
 
+  const { allocCogsBySaleId } = useAllocationCogs();
+
   const totalSaleMargins = useMemo(() => {
-    return sessionTxns.reduce((sum, t) => sum + (t.profit || 0), 0);
-  }, [sessionTxns]);
+    // Same unified rule as computeSalesMetrics (receiptMath): exchanges use
+    // the signed row cost first (ledger only freezes sale legs), pure sales
+    // use the frozen allocation sum, legacy rows keep stored profit. Order
+    // matters — mirror it exactly so preview, KPIs, exports and the booked
+    // close can never disagree on basis choice.
+    return sessionTxns.reduce((sum, t) => {
+      if (isExchangeSaleTx(t)) {
+        const row = Number(t.costTotal);
+        if (Number.isFinite(row)) return sum + (Number(t.total ?? 0) - Math.round(row));
+      }
+      const raw = allocCogsBySaleId[t.id];
+      const alloc = Number(raw);
+      if (Number.isFinite(alloc) && alloc >= 0) {
+        return sum + (Number(t.total ?? 0) - Math.round(alloc));
+      }
+      return sum + (t.profit || 0);
+    }, 0);
+  }, [sessionTxns, allocCogsBySaleId]);
 
   const manualDeposits = useMemo(() => {
     return (activeShift?.movements || [])
@@ -166,6 +224,7 @@ export const ShiftCloseModal: React.FC = () => {
   };
 
   const handleFinalizeClosure = async () => {
+    if (isSubmitting) return;
     // Variance Enforcement Guard: If variance !== 0, mandatory explanatory note is required!
     if (variance !== 0 && !closingNote.trim()) {
       showToast(
@@ -175,20 +234,111 @@ export const ShiftCloseModal: React.FC = () => {
       return;
     }
 
-    const closeShiftResult = await closeShift(
-      physicalCount,
-      closingNote.trim() || undefined,
-      cashierName.trim() || undefined
-    );
-
-    if (closeShiftResult.success) {
-      // Print official Z-Report
-      printCoordinator.printZReport(40);
-      showToast('Session caisse clôturée avec succès. Rapport Z imprimé.', 'success');
-      closeModal();
-    } else {
-      showToast(closeShiftResult.reason || 'Erreur lors de la clôture de caisse.', 'error');
+    // Large-variance gate: |discrepancy| >= threshold requires a manager PIN,
+    // verified inside the adapter (same verifyPin helper as price overrides).
+    // forcePinGate covers the stale-totals case where the adapter (source of
+    // truth) demands a PIN the modal's live variance didn't anticipate.
+    const needsManagerPin = forcePinGate || Math.abs(variance) >= SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD;
+    if (needsManagerPin && !managerPinInput.trim()) {
+      setManagerPinError(
+        `Écart de ${formatDZD(variance)} (seuil ${formatDZD(SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD)}) : saisissez le code PIN Manager.`
+      );
+      showToast('Écart important : code PIN Manager obligatoire pour clôturer.', 'error');
+      return;
     }
+
+    setIsSubmitting(true);
+    try {
+      const closeShiftResult = await (closeShift as CloseShiftWithPin)(
+        physicalCount,
+        closingNote.trim() || undefined,
+        cashierName.trim() || undefined,
+        needsManagerPin ? managerPinInput.trim() : undefined
+      );
+
+      if (closeShiftResult.success) {
+        if (needsManagerPin) {
+          logSecurityAction(
+            'Clôture à Écart Validée (Manager)',
+            `Écart de ${variance} DA validé par code PIN Manager • Session: ${activeShift?.id || 'Active'}`,
+            'Manager',
+            true
+          );
+        }
+        // Print official Z-Report (native text sheet on mobile).
+        if (isMobileDevice()) {
+          const st = usePosStore.getState();
+          const { openNativePrint } = await import('../../utils/phoneUtils');
+          const { zReportText } = await import('../../utils/mobileDocPrint');
+          const drops = (st.cashDrops || []).reduce((s, d) => s + (d.amount || 0), 0);
+          const payouts = (st.payouts || []).reduce((s, p) => s + (p.amount || 0), 0);
+          const debtSettlements = (st.customerDebts || [])
+            .filter((d) => d.type === 'PAYMENT_SETTLED' && d.paymentMethod === 'Espèces')
+            .reduce((s, d) => s + (d.amount || 0), 0);
+          const cashExpenses = (st.storeExpenses || [])
+            .filter((e) => e.paymentMethod === 'Espèces')
+            .reduce((s, e) => s + (e.amount || 0), 0);
+          const ok = await openNativePrint(
+            `Rapport Z ${cashierName.trim() || 'Caisse'}`,
+            zReportText({
+              storeName: st.receiptSettings?.storeName,
+              cashierName: cashierName.trim() || 'Caissier',
+              dateStr: new Date().toLocaleString('fr-DZ'),
+              openingFloat,
+              cashSales: totalCashSales,
+              debtSettlements,
+              refunds: totalCashRefunds,
+              expenses: cashExpenses,
+              drops,
+              payouts,
+              expectedCash,
+              countedCash: physicalCount,
+              variance,
+            })
+          );
+          showToast(
+            ok ? 'Session caisse clôturée avec succès. Rapport Z envoyé à l’impression.' : 'Session clôturée. Impression indisponible sur cet appareil.',
+            ok ? 'success' : 'warning'
+          );
+        } else {
+          printCoordinator.printZReport(40);
+          showToast('Session caisse clôturée avec succès. Rapport Z imprimé.', 'success');
+        }
+        closeModal();
+      } else {
+        if (closeShiftResult.reason === 'MANAGER_PIN_REQUIRED' || closeShiftResult.reason === 'MANAGER_PIN_INVALID') {
+          setForcePinGate(true);
+          setManagerPinError(closeErrorMessage(closeShiftResult.reason));
+        }
+        showToast(closeErrorMessage(closeShiftResult.reason), 'error');
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleAuthorizeRecount = () => {
+    if (!recountPinInput.trim()) {
+      setRecountPinError('Veuillez saisir le code PIN.');
+      return;
+    }
+    if (!verifyManagerPin(recountPinInput.trim())) {
+      setRecountPinError('Code PIN Manager incorrect.');
+      showToast('PIN Manager incorrect — Recomptage refusé.', 'error');
+      return;
+    }
+
+    logSecurityAction(
+      'Dérogation Recomptage Clôture',
+      `Recomptage autorisé par le Manager après affichage de l'écart (${variance} DA)`,
+      'Manager',
+      true
+    );
+    setStep('BLIND_COUNT');
+    setRecountPinOpen(false);
+    setRecountPinInput('');
+    setRecountPinError(null);
+    showToast('Autorisation Manager confirmée : recomptage autorisé.', 'info');
   };
 
   return (
@@ -268,10 +418,10 @@ export const ShiftCloseModal: React.FC = () => {
                   </label>
                   <input
                     type="number"
-                    step="100"
+                    step="any"
                     min="0"
                     value={directPhysicalCount || ''}
-                    onChange={(e) => setDirectPhysicalCount(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => setDirectPhysicalCount(Math.round(parseLocalizedAmount(e.target.value) || 0))}
                     placeholder="Ex: 48 500 DA"
                     className="w-full bg-pos-bg border border-pos-border rounded-xl px-4 py-3 text-xl font-mono font-bold text-emerald-400 focus:border-emerald-400 focus:outline-none"
                     autoFocus
@@ -464,7 +614,7 @@ export const ShiftCloseModal: React.FC = () => {
                       type="text"
                       value={cashierName}
                       onChange={(e) => setCashierName(e.target.value)}
-                      placeholder="Yacine"
+                      placeholder="Nom du caissier…"
                       className="w-full bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1.5 text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
                     />
                   </div>
@@ -480,6 +630,38 @@ export const ShiftCloseModal: React.FC = () => {
                       className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-1.5 text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
                     />
                   </div>
+                </div>
+              )}
+
+              {/* Manager-PIN gate for large variances (adapter-enforced) */}
+              {(forcePinGate || Math.abs(variance) >= SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD) && (
+                <div className="bg-amber-500/10 border border-amber-500/40 p-4 rounded-xl space-y-2">
+                  <div className="flex items-center gap-2 text-amber-400">
+                    <Lock className="w-4 h-4" />
+                    <span className="text-xs font-bold">
+                      Validation Manager Requise — Écart ≥ {formatDZD(SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD)}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-amber-200">
+                    L'écart de <strong>{formatDZD(variance)}</strong> dépasse le seuil autorisé.
+                    Saisissez le code PIN Manager pour autoriser la clôture (vérifié côté base, comme pour les remises).
+                  </p>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    autoComplete="current-password"
+                    value={managerPinInput}
+                    onChange={(e) => {
+                      setManagerPinInput(e.target.value);
+                      setManagerPinError(null);
+                    }}
+                    placeholder="Code PIN Manager"
+                    className="w-full bg-pos-bg border border-amber-500/50 rounded-lg px-3 py-2 text-xs text-pos-text font-mono focus:border-amber-400 focus:outline-none"
+                  />
+                  {managerPinError && (
+                    <p className="text-[10px] text-red-400 font-bold">{managerPinError}</p>
+                  )}
                 </div>
               )}
 
@@ -546,13 +728,71 @@ export const ShiftCloseModal: React.FC = () => {
             </>
           ) : (
             <>
-              <button
-                type="button"
-                onClick={() => setStep('BLIND_COUNT')}
-                className="min-h-[42px] px-4 py-2 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition cursor-pointer"
-              >
-                ← Recompter
-              </button>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setRecountPinOpen(true)}
+                  className="min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition cursor-pointer flex items-center gap-1.5"
+                  title="Recompter la caisse (Exige le code PIN Manager)"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>← Recompter (PIN Requis)</span>
+                </button>
+
+                {recountPinOpen && (
+                  <div className="absolute bottom-full left-0 mb-2 p-3 bg-pos-panel border border-amber-500/50 rounded-xl shadow-2xl z-30 w-72 space-y-2 animate-in fade-in">
+                    <div className="flex items-center justify-between text-xs font-bold text-amber-400">
+                      <span>Autorisation Manager Requise</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRecountPinOpen(false);
+                          setRecountPinInput('');
+                          setRecountPinError(null);
+                        }}
+                        className="text-pos-muted hover:text-pos-text"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-pos-muted">
+                      La caisse a déjà été comptée à l'aveugle. Saisissez le code PIN Manager pour autoriser un nouveau comptage.
+                    </p>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      autoComplete="current-password"
+                      autoFocus
+                      value={recountPinInput}
+                      onChange={(e) => {
+                        setRecountPinInput(e.target.value);
+                        setRecountPinError(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAuthorizeRecount();
+                        }
+                      }}
+                      placeholder="Code PIN Manager"
+                      className="w-full bg-pos-card border border-pos-border rounded-lg px-2.5 py-1.5 text-xs text-pos-text font-mono focus:outline-none focus:border-amber-400"
+                    />
+                    {recountPinError && (
+                      <p className="text-[10px] text-red-400 font-bold">{recountPinError}</p>
+                    )}
+                    <div className="flex justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={handleAuthorizeRecount}
+                        className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-lg transition cursor-pointer"
+                      >
+                        Déverrouiller
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -564,9 +804,9 @@ export const ShiftCloseModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleFinalizeClosure}
-                  disabled={variance !== 0 && !closingNote.trim()}
+                  disabled={isSubmitting || (variance !== 0 && !closingNote.trim())}
                   className={`flex-2 sm:flex-none min-h-[44px] px-5 py-2.5 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-lg transition active:scale-[0.98] cursor-pointer ${
-                    variance !== 0 && !closingNote.trim()
+                    isSubmitting || (variance !== 0 && !closingNote.trim())
                       ? 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-60'
                       : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20'
                   }`}

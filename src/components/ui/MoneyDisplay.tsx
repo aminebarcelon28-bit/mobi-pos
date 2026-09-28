@@ -40,6 +40,8 @@ export const MoneyDisplay: React.FC<MoneyDisplayProps> = ({
   return (
     <span
       title={formatted}
+      aria-label={displayValue}
+      role="text"
       className={`inline-block max-w-full truncate whitespace-nowrap font-mono font-black tracking-tight tabular-nums ${SIZE_CLASSES[size]} ${COLOR_CLASSES[color]} ${className}`}
     >
       {displayValue}

@@ -1,0 +1,31 @@
+{
+  "suite": "live browser E2E — PO purchase-to-sale FIFO (headless Chromium, Vite dev, NO Tauri runtime)",
+  "date": "2026-09-26",
+  "licenseKeyUsed": "MOBI-LIFE-C9NG-90SW (user-supplied test key, typed into isolated session only)",
+  "verdict": "INCOMPLETE-BY-ENVIRONMENT — all UI/input layers verified live; receipt+sales require Tauri SQLite",
+  "steps": [
+    { "step": 1, "action": "License activation with test key", "surface": "ui", "result": "PASS — POS unlocked" },
+    { "step": 2, "action": "Team setup (manager PIN 1234, cashiers 1111/2222) + PIN login", "surface": "ui", "result": "PASS — main POS visible, catalog empty" },
+    { "step": 3, "action": "Create product via form (title, price 3500, cost 500, stock 0)", "surface": "ui→dexie", "result": "PASS — Dexie row exactly {price:3500, costPrice:500, stock:0}" },
+    { "step": 4, "action": "Create PO draft via procurement UI", "surface": "ui→dexie", "result": "PASS — Dexie PO row {suggestedQty:10, receivedQty:0, unitCost:500, actualUnitCost:500, status:Waiting List}" },
+    { "step": 5, "action": "Verify/receive form shows qty 1 @ 500, total 500 DA", "surface": "ui", "result": "PASS — per-unit semantics confirmed live" },
+    { "step": 6, "action": "Validate receipt (Valider la Réception)", "surface": "ui→sqlite", "result": "BLOCKED — PO_PERSISTENCE_FAILED: appendInventoryDeltas → Database.load throws (no Tauri IPC in Chromium). Modal stays open, no partial writes (Dexie stockBatches=[], transactions=[]). Fail-closed = correct behavior, not a product bug." },
+    { "step": 7, "action": "Two sales @3500 + profit 6100 assert", "surface": "n/a", "result": "NOT EXECUTABLE HERE — checkout needs the same Tauri SQLite boundary. Covered by node suites (6100) + checked-in Playwright spec for Tauri/CI." }
+  ],
+  "discrepancies": [
+    {
+      "severity": "info",
+      "finding": "No UI-vs-DB discrepancy found on any executable step: form values, Dexie rows, and displayed totals all match (unit-cost semantics hold end to end).",
+      "evidence": "Dexie products row; Dexie purchaseOrders row; verification table snapshot (1 × 500 = 500 DA)."
+    },
+    {
+      "severity": "info",
+      "finding": "Console shows ONLY the expected Tauri-absent warnings (boot maintenance/remirror/backfill/sync-enqueue skip + receipt ledger write). No unexpected errors.",
+      "evidence": "agent-browser console dump 2026-09-26."
+    }
+  ],
+  "codeFixesFromThisInspection": [
+    "PurchaseOrderModal: re-validation now defaults complete lines to remaining qty (was: full suggestedQty → double stock/batches/ledger on re-validate).",
+    "PurchaseOrderModal: both cost inputs now parse localized amounts + whole dinars (was: parseInt truncation on step='any' inputs)."
+  ]
+}

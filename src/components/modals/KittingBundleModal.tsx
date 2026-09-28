@@ -1,4 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
+
+const foldForSearch = (s: string | undefined | null): string =>
+  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 import {
   X,
   Package,
@@ -60,6 +64,42 @@ export const KittingBundleModal: React.FC = () => {
   const [bundlePrice, setBundlePrice] = useState<number>(0);
   const [selectedSkus, setSelectedSkus] = useState<string[]>([]);
   const [skuSearch, setSkuSearch] = useState('');
+
+  // Debounced inputs: instant fields, list scans follow 200ms after typing.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [debouncedSkuSearch, setDebouncedSkuSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 200);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSkuSearch(skuSearch), 200);
+    return () => clearTimeout(t);
+  }, [skuSearch]);
+
+  // Memoized above the early return so typing does not rescan per keystroke.
+  const filteredProductsMemo = useMemo(() => {
+    const q = foldForSearch(debouncedSkuSearch.trim());
+    return products
+      .filter(
+        (p) =>
+          !q ||
+          foldForSearch(p.title).includes(q) ||
+          foldForSearch(p.sku).includes(q)
+      )
+      .slice(0, 50);
+  }, [products, debouncedSkuSearch]);
+  const filteredBundlesMemo = useMemo(() => {
+    const q = foldForSearch(debouncedSearch.trim());
+    if (!q) return bundles;
+    return bundles.filter((b) => {
+      return (
+        foldForSearch(b.bundleTitle).includes(q) ||
+        foldForSearch(b.barcode).includes(q) ||
+        b.childSkus.some((sku) => foldForSearch(sku).includes(q))
+      );
+    });
+  }, [bundles, debouncedSearch]);
 
   if (activeModal !== 'kitting_bundle') return null;
 
@@ -141,13 +181,7 @@ export const KittingBundleModal: React.FC = () => {
     }
   };
 
-  const filteredProducts = products
-    .filter(
-      (p) =>
-        p.title.toLowerCase().includes(skuSearch.toLowerCase()) ||
-        p.sku.toLowerCase().includes(skuSearch.toLowerCase())
-    )
-    .slice(0, 50);
+  const filteredProducts = filteredProductsMemo;
 
   const calculateBundleSavings = () => {
     const totalValue = selectedSkus.reduce((acc, sku) => {
@@ -163,15 +197,7 @@ export const KittingBundleModal: React.FC = () => {
   }, 0);
 
   // Filtered Existing Bundles
-  const filteredBundles = bundles.filter((b) => {
-    const q = searchQuery.trim().toLowerCase();
-    return (
-      !q ||
-      b.bundleTitle.toLowerCase().includes(q) ||
-      b.barcode.toLowerCase().includes(q) ||
-      b.childSkus.some((sku) => sku.toLowerCase().includes(q))
-    );
-  });
+  const filteredBundles = filteredBundlesMemo;
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
@@ -443,10 +469,13 @@ export const KittingBundleModal: React.FC = () => {
                 <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Prix de Vente Forfaitaire du Pack (DA)</label>
                 <input
                   type="number"
-                  step="100"
+                  step="any"
                   required
                   value={bundlePrice}
-                  onChange={(e) => setBundlePrice(parseFloat(e.target.value) || 0)}
+                  onChange={(e) => {
+                    const parsed = parseLocalizedAmount(e.target.value);
+                    setBundlePrice(Number.isFinite(parsed) ? Math.round(parsed) : 0);
+                  }}
                   className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs font-extrabold text-emerald-400 focus:border-emerald-400 focus:outline-none"
                 />
               </div>

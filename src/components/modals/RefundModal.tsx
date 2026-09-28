@@ -1,4 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+
+const foldForSearch = (s: string | undefined | null): string =>
+  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 import {
   X,
   RotateCcw,
@@ -17,6 +20,7 @@ import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import type { SaleTransaction, PaymentMethodType, RefundItem } from '../../types/pos';
 import { useToast } from '../ui/Toast';
+import { computeRefundFundingSplit } from '../../utils/receiptMath';
 
 export const RefundModal: React.FC = () => {
   const {
@@ -42,6 +46,37 @@ export const RefundModal: React.FC = () => {
   const [managerPin, setManagerPin] = useState('');
   const [pinRequired, setPinRequired] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Debounced search: instant input, filtered scan 200ms after last keystroke.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 200);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
+  // Memoized on debounced input so fast typing does not rescan per keystroke.
+  // Hooks must stay above the early return below.
+  const eligibleTransactionsMemo = useMemo(
+    () =>
+      (transactions || []).filter(
+        (t) => t.status !== 'VOIDED' && t.status !== 'REFUNDED' && !t.isRefund
+      ),
+    [transactions]
+  );
+  const filteredTransactionsMemo = useMemo(() => {
+    const q = foldForSearch(debouncedSearch.trim());
+    if (!q) return eligibleTransactionsMemo;
+    return eligibleTransactionsMemo.filter((t) => {
+      return (
+        foldForSearch(t.receiptNumber).includes(q) ||
+        (t.customer?.name ? foldForSearch(t.customer.name).includes(q) : false) ||
+        (t.customer?.phone ? (t.customer.phone.includes(debouncedSearch.trim()) || foldForSearch(t.customer.phone).includes(q)) : false) ||
+        (t.items || []).some(
+          (i) => foldForSearch(i.product?.title).includes(q) || foldForSearch(i.product?.sku).includes(q)
+        )
+      );
+    });
+  }, [eligibleTransactionsMemo, debouncedSearch]);
 
   // Sync with selectedTransactionForRefund when opening from ReportsModal
   useEffect(() => {
@@ -91,20 +126,8 @@ export const RefundModal: React.FC = () => {
   if (activeModal !== 'refund') return null;
 
   // Eligible transactions (exclude already voided or fully refunded)
-  const eligibleTransactions = transactions.filter(
-    (t) => t.status !== 'VOIDED' && t.status !== 'REFUNDED' && !t.isRefund
-  );
 
-  const filteredTransactions = eligibleTransactions.filter((t) => {
-    const q = searchQuery.toLowerCase().trim();
-    if (!q) return true;
-    return (
-      (t.receiptNumber || '').toLowerCase().includes(q) ||
-      (t.customer?.name && t.customer.name.toLowerCase().includes(q)) ||
-      (t.customer?.phone && t.customer.phone.toLowerCase().includes(q)) ||
-      (t.items || []).some((i) => (i.product?.title || '').toLowerCase().includes(q) || (i.product?.sku || '').toLowerCase().includes(q))
-    );
-  });
+  const filteredTransactions = filteredTransactionsMemo;
 
   const handleSelectTransaction = (txn: SaleTransaction) => {
     setSelectedTxn(txn);
@@ -115,14 +138,23 @@ export const RefundModal: React.FC = () => {
   // Calculate refund items
   const activeRefundItems: RefundItem[] = selectedTxn
     ? (selectedTxn.items || [])
-        .filter((item) => selectedItemIds[item.product?.id])
-        .map((item) => {
+        .map((item, lineIdx) => ({ item, lineIdx }))
+        .filter(({ item }) => selectedItemIds[item.product?.id])
+        .map(({ item, lineIdx }) => {
           const qty = Math.min(item.quantity, refundQuantities[item.product.id] || item.quantity);
           const unitPrice = item.appliedPrice || item.product.price;
           // Apply proportion of line discount if any
           const discountPerUnit = item.discount > 0 && item.quantity > 0 ? item.discount / item.quantity : 0;
           const netUnitPrice = Math.max(0, unitPrice - discountPerUnit);
           const totalRefundAmount = netUnitPrice * qty;
+          // Services carry no stock identity — never default them to restock
+          // (the slice also refuses service restock; this just stops offering it).
+          const pid = item.product?.id || '';
+          const isServiceLine =
+            pid.startsWith('qt-') ||
+            pid.startsWith('prod-misc-') ||
+            (item.product?.category as string) === 'Services';
+          const restock = restockMap[item.product.id] ?? !isServiceLine;
 
           return {
             productId: item.product.id,
@@ -131,13 +163,30 @@ export const RefundModal: React.FC = () => {
             unitPrice: netUnitPrice,
             quantity: qty,
             totalRefundAmount,
-            restock: restockMap[item.product.id] ?? true,
+            restock,
             imeiNumber: item.imeiNumber,
-          };
+            // Transaction-linked batch restoration: pin the exact original
+            // sale line so restitution restores historical batches per line.
+            saleItemId: `${selectedTxn.id}-item-${lineIdx}`,
+            condition: restock ? 'restock' : 'defective',
+          } as RefundItem;
         })
     : [];
 
   const totalRefundAmount = activeRefundItems.reduce((acc, i) => acc + i.totalRefundAmount, 0);
+
+  // Funding preview (anti-arbitrage): the till only ever disburses the
+  // cash-funded share — voucher/avoir/debt shares return to their origins.
+  // Same helper as processRefund, so the preview can never disagree. Plain
+  // computation (not a hook): this sits below the modal's early return.
+  const fundingPreview = (() => {
+    if (!selectedTxn || totalRefundAmount <= 0) return null;
+    const priorRecovery = (transactions || [])
+      .filter((t) => t.isRefund && t.originalTransactionId === selectedTxn.id)
+      .reduce((acc, t) => acc + (Number(t.total) || 0), 0);
+    return computeRefundFundingSplit(selectedTxn, totalRefundAmount, priorRecovery);
+  })();
+  const previewCashOut = refundMethod === 'Espèces' ? fundingPreview?.cashShare ?? 0 : 0;
 
   const handleQuantityChange = (productId: string, newQty: number, maxQty: number) => {
     const validQty = Math.max(1, Math.min(maxQty, newQty));
@@ -179,23 +228,41 @@ export const RefundModal: React.FC = () => {
     setIsSubmitting(true);
     try {
       const finalReason = refundReason === 'Autre' && customReason.trim() ? customReason.trim() : refundReason;
-      const refundResult = await processRefund({
+      // Rebut sans restock: a reason note is mandatory (also enforced slice-side).
+      const needsNote = activeRefundItems.some((i) => !i.restock);
+      if (needsNote && !finalReason.trim()) {
+        showToast('Article(s) sans remise en stock : précisez un motif (note obligatoire).', 'error');
+        setIsSubmitting(false);
+        return;
+      }
+      const refundResult = (await processRefund({
         originalTransaction: selectedTxn,
         refundItems: activeRefundItems,
         refundMethod,
         refundReason: finalReason,
         cashierName: 'Manager',
-      });
+      })) as unknown as { success: boolean; reason?: string; warnings?: string[]; refundTransaction?: { total?: number; cashDisbursed?: number } };
 
       if (refundResult.success) {
+        for (const w of refundResult.warnings ?? []) {
+          showToast(w, 'warning', 5000);
+        }
+        const netDone = Math.round(Number(refundResult.refundTransaction?.total ?? totalRefundAmount));
+        const cashDone = Math.round(Number(refundResult.refundTransaction?.cashDisbursed ?? 0));
         showToast(
-          `Remboursement de ${formatDZD(totalRefundAmount)} validé avec succès (${refundMethod}).`,
+          refundMethod === 'Espèces' && cashDone !== netDone
+            ? `Remboursement net ${formatDZD(netDone)} validé — espèces décaissées : ${formatDZD(cashDone)} (le solde retourne à ses origines).`
+            : `Remboursement de ${formatDZD(netDone)} validé avec succès (${refundMethod}).`,
           'success'
         );
         setSelectedTxn(null);
         setSelectedTransactionForRefund(null);
         } else if (refundResult.reason === 'REFUND_EXCEEDS_PURCHASED') {
           showToast('Quantité à rembourser supérieure à la quantité restante non remboursée.', 'error');
+        } else if (refundResult.reason === 'RESTOCK_REASON_REQUIRED') {
+          showToast('Sans remise en stock, un motif de rebut est obligatoire.', 'error');
+        } else if (refundResult.reason === 'REFUND_ALREADY_IN_PROGRESS') {
+          showToast('Ce remboursement est déjà en cours sur un autre appareil — synchronisez puis vérifiez avant de réessayer.', 'warning');
       } else {
         showToast(`Erreur lors du remboursement: ${refundResult.reason}`, 'error');
       }
@@ -447,6 +514,17 @@ export const RefundModal: React.FC = () => {
                     </table>
                   </div>
 
+                  {/* Rebut sans restock: motif obligatoire */}
+                  {activeRefundItems.some((i) => !i.restock) && (
+                    <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3 flex items-start gap-2 text-xs">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <p className="text-amber-200">
+                        Article(s) marqué(s) « Rebut / Défectueux » (sans remise en stock) : le motif
+                        ci-dessous est obligatoire et sera conservé comme note de rebut.
+                      </p>
+                    </div>
+                  )}
+
                   {/* Refund Options & Reason */}
                   <div className="grid grid-cols-2 gap-4">
                     
@@ -535,6 +613,9 @@ export const RefundModal: React.FC = () => {
                           <Key className="w-3.5 h-3.5 text-pos-muted absolute left-3 top-1/2 -translate-y-1/2" />
                           <input
                             type="password"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            autoComplete="current-password"
                             value={managerPin}
                             onChange={(e) => {
                               setManagerPin(e.target.value);
@@ -557,6 +638,15 @@ export const RefundModal: React.FC = () => {
                   <div>
                     <span className="text-[10px] text-pos-muted uppercase font-bold block">Montant Total à Rembourser</span>
                     <span className="text-xl font-black text-purple-400">{formatDZD(totalRefundAmount)}</span>
+                    {fundingPreview && fundingPreview.netRefund !== Math.round(totalRefundAmount) && (
+                      <span className="text-[10px] text-pos-muted block">
+                        Net reversé : {formatDZD(fundingPreview.netRefund)}
+                        {refundMethod === 'Espèces' && ` • Espèces décaissées : ${formatDZD(previewCashOut)}`}
+                        {fundingPreview.voucherShare > 0 && ` • Bon recrédité : ${formatDZD(fundingPreview.voucherShare)}`}
+                        {fundingPreview.avoirShare > 0 && ` • Avoir recrédité : ${formatDZD(fundingPreview.avoirShare)}`}
+                        {fundingPreview.debtShare > 0 && ` • Dette réduite : ${formatDZD(fundingPreview.debtShare)}`}
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-3">

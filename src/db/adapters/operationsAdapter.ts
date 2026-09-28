@@ -8,7 +8,8 @@ import type {
 } from '../../types/pos';
 import { db as dexieDb } from '../database';
 import { fireSync, fireSyncDelete, isTauriEnv } from './base';
-import { getLocalDb } from '../sqlPluginAdapter';
+import { getLocalDb, isDeviceLocalSettingKey, stripDeviceLocalSettingValue } from '../sqlPluginAdapter';
+import { newId } from '../../utils/ids';
 
 export const operationsAdapter = {
   // ── REPAIRS ──
@@ -33,7 +34,8 @@ export const operationsAdapter = {
   },
 
   async getAllPurchaseOrders(): Promise<PurchaseOrder[]> {
-    return await dexieDb.purchaseOrders.toArray();
+    const orders = await dexieDb.purchaseOrders.toArray();
+    return orders.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   },
 
   // ── TRADE-INS ──
@@ -58,22 +60,28 @@ export const operationsAdapter = {
 
   // ── AUDIT LOGS ──
   async saveAuditLog(entry: SecurityAuditLogEntry): Promise<void> {
+    const { getDeviceId, getIpAddress } = await import('../../utils/deviceInfo');
+    const deviceId = entry.deviceId || getDeviceId();
+    const ipAddress = entry.ipAddress || await getIpAddress();
+
     const safeEntry: SecurityAuditLogEntry = {
-      id: entry.id || `audit-${Date.now()}`,
+      id: entry.id || newId('audit'),
       timestamp: entry.timestamp || new Date().toISOString(),
       user: entry.user || 'Yacine (Admin)',
       action: entry.action || 'ACTION',
       details: entry.details || '',
       requiresPin: Boolean(entry.requiresPin),
+      deviceId,
+      ipAddress,
     };
     await dexieDb.securityAuditLogs.put(safeEntry);
     if (isTauriEnv()) {
       try {
         const db = await getLocalDb();
         await db.execute(
-          `INSERT OR REPLACE INTO security_audit_logs (id, timestamp, user, action, details, requires_pin)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [safeEntry.id, safeEntry.timestamp, safeEntry.user, safeEntry.action, safeEntry.details, safeEntry.requiresPin ? 1 : 0],
+          `INSERT OR REPLACE INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, device_id, ip_address)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [safeEntry.id, safeEntry.timestamp, safeEntry.user, safeEntry.action, safeEntry.details, safeEntry.requiresPin ? 1 : 0, safeEntry.deviceId || null, safeEntry.ipAddress || null],
         );
       } catch (err) {
         console.warn('[db:audit] Failed to persist audit log to SQLite:', err);
@@ -87,7 +95,7 @@ export const operationsAdapter = {
       try {
         const db = await getLocalDb();
         const rows = (await db.select(
-          'SELECT id, timestamp, user, action, details, requires_pin FROM security_audit_logs ORDER BY timestamp DESC LIMIT 300'
+          'SELECT id, timestamp, user, action, details, requires_pin, device_id, ip_address FROM security_audit_logs ORDER BY timestamp DESC LIMIT 300'
         )) as Array<{
           id: string;
           timestamp: string;
@@ -95,6 +103,8 @@ export const operationsAdapter = {
           action: string;
           details: string;
           requires_pin: number;
+          device_id: string | null;
+          ip_address: string | null;
         }>;
         if (rows && rows.length > 0) {
           return rows.map((r) => ({
@@ -104,6 +114,8 @@ export const operationsAdapter = {
             action: r.action,
             details: r.details,
             requiresPin: Boolean(r.requires_pin),
+            deviceId: r.device_id || undefined,
+            ipAddress: r.ip_address || undefined,
           }));
         }
       } catch (err) {
@@ -131,13 +143,52 @@ export const operationsAdapter = {
   // ── APP SETTINGS ──
   async setSetting<T>(key: string, value: T): Promise<void> {
     await dexieDb.appSettings.put({ key, value });
-    if (!key.startsWith('sync.')) void fireSync('setting', key, { key, value });
+    // SQLite authority parity: readers increasingly go through the SQLite
+    // lane (restore verify, boot paths), so a Dexie-only write would leave
+    // the two stores diverged. Best-effort — Dexie already landed above.
+    if (isTauriEnv()) {
+      try {
+        const { getLocalDb, utcNowIso } = await import('../sqlPluginAdapter');
+        const db = await getLocalDb();
+        const verRows = (await db
+          .select('SELECT version FROM app_settings WHERE key=$1', [key])
+          .catch(() => [])) as Array<{ version: number }>;
+        const nextVersion = (verRows?.length ?? 0) > 0 ? Number(verRows[0].version) + 1 : 1;
+        await db.execute(
+          `INSERT INTO app_settings (key, value_json, updated_at, version)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,
+             updated_at=excluded.updated_at, version=excluded.version`,
+          [key, JSON.stringify(value), utcNowIso(), nextVersion],
+        );
+      } catch {
+        // Web preview / locked DB — Dexie remains the store.
+      }
+    }
+    if (!isDeviceLocalSettingKey(key)) {
+      const cleanValue = stripDeviceLocalSettingValue(key, value);
+      void fireSync('setting', key, { key, value: cleanValue });
+    }
   },
 
   async getSetting<T>(key: string, fallback: T): Promise<T> {
     const item = await dexieDb.appSettings.get(key);
     if (item && item.value !== undefined) {
       return item.value as T;
+    }
+    if (isTauriEnv()) {
+      try {
+        const { getLocalDb } = await import('../sqlPluginAdapter');
+        const db = await getLocalDb();
+        const rows = (await db.select('SELECT value_json FROM app_settings WHERE key=$1', [key]).catch(() => [])) as Array<{ value_json: string }>;
+        if (rows && rows.length > 0 && rows[0]?.value_json) {
+          try {
+            const parsed = JSON.parse(rows[0].value_json) as T;
+            await dexieDb.appSettings.put({ key, value: parsed }).catch(() => {});
+            return parsed;
+          } catch {}
+        }
+      } catch {}
     }
     return fallback;
   },

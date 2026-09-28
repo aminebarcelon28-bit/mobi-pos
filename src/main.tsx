@@ -6,8 +6,12 @@ import {
   shouldBlockForWebViewUpdate,
   renderWebViewUpdateScreen,
 } from './utils/webviewCompat'
+import { observeLcpOnce } from './utils/bootTimings'
 
 function boot() {
+  // Field LCP attribution (logs one line per LCP candidate, disconnects
+  // after 30s - see bootTimings.ts). Needed to attribute slow LCP to a node.
+  observeLcpOnce();
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <App />
@@ -16,7 +20,7 @@ function boot() {
 }
 
 // P2 crash telemetry (no new dependency): the freeze/crash investigation found
-// zero crash capture — no Sentry, no window.onerror/unhandledrejection
+// zero crash capture - no Sentry, no window.onerror/unhandledrejection
 // handler, ErrorBoundary only console.errors render errors. OOM kills and
 // wedged sync loops left no trail. This ring buffer keeps the last 50 reports
 // in localStorage; read via window.__mobipos_getCrashReports() or attach it
@@ -43,7 +47,7 @@ function recordCrashReport(kind: CrashReport['kind'], message: unknown, stack?: 
     });
     localStorage.setItem(CRASH_REPORT_KEY, JSON.stringify(arr.slice(0, MAX_CRASH_REPORTS)));
   } catch {
-    // Storage full or unavailable — the reporter must never crash the app.
+    // Storage full or unavailable - the reporter must never crash the app.
   }
 }
 

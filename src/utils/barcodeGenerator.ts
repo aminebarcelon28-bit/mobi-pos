@@ -329,6 +329,21 @@ export function generateUniqueEan13Barcode(
 }
 
 /**
+ * Suffixe SKU crypto-aléatoire à 4 chiffres (1000-9999).
+ * Remplace toute dérivation de `Date.now()` : deux appels dans la même
+ * milliseconde (double-clic, burst scanner) produisaient le même suffixe et
+ * l'upsert aval écrasait silencieusement la ligne précédente.
+ */
+function randomSkuSuffix(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const buf = new Uint32Array(1);
+    crypto.getRandomValues(buf);
+    return String(1000 + (buf[0] % 9000));
+  }
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+/**
  * Génère une référence SKU unique adaptée à la catégorie et la marque.
  * @param existingProducts Liste des produits existants
  * @param category Nom de la catégorie
@@ -378,7 +393,7 @@ export function generateUniqueSku(
     }
   }
 
-  return `${catCode}-${brdCode}-${Date.now().toString().slice(-4)}`;
+  return `${catCode}-${brdCode}-${randomSkuSuffix()}`;
 }
 
 /**

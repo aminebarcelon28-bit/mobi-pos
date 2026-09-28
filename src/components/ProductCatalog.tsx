@@ -1,11 +1,16 @@
-import React, { useState, useCallback, useMemo } from 'react';
-import { Search, Edit2, Zap, AlertCircle, Truck, LayoutGrid, List, Sparkles } from 'lucide-react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import { Search, Edit2, Zap, AlertCircle, Truck, LayoutGrid, List, Sparkles, Layers, ChevronDown, Plus } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { useCatalogHotkeys } from '../hooks/useCatalogHotkeys';
 import { formatDZD } from '../types/pos';
 import type { CategoryType, SortOption, Product, BrandName, PricingTier } from '../types/pos';
 import { PinDialog } from './ui/PinDialog';
 import { getProductPriceForTier } from '../utils/pricingEngine';
+import {
+  getQuickTouches,
+  createServiceProductFromTouch,
+  type QuickTouchItem,
+} from '../utils/quickTouchStorage';
 
 const CATEGORIES: CategoryType[] = [
   'Tous les produits',
@@ -33,27 +38,6 @@ const SORT_OPTIONS: { label: string; value: SortOption }[] = [
   { label: 'Par Marque', value: 'brand_asc' },
 ];
 
-interface QuickActionTile {
-  id: string;
-  title: string;
-  category: CategoryType;
-  price: number;
-  costPrice: number;
-  icon: string;
-  color: string;
-}
-
-const DEFAULT_QUICK_TILES: QuickActionTile[] = [
-  { id: 'qt-hydrogel', title: 'Pose Film Hydrogel', category: 'Protège-Écran', price: 1000, costPrice: 200, icon: '🛡️', color: 'from-blue-500/20 to-cyan-500/20 text-cyan-300 border-cyan-500/40' },
-  { id: 'qt-charger20w', title: 'Chargeur 20W Fast', category: 'Chargeurs', price: 1800, costPrice: 900, icon: '⚡', color: 'from-amber-500/20 to-yellow-500/20 text-amber-300 border-amber-500/40' },
-  { id: 'qt-cablec', title: 'Câble Type-C Braided', category: 'Câbles', price: 600, costPrice: 250, icon: '🔌', color: 'from-emerald-500/20 to-teal-500/20 text-emerald-300 border-emerald-500/40' },
-  { id: 'qt-cablelightning', title: 'Câble Type-C vers Lightning', category: 'Câbles', price: 800, costPrice: 350, icon: '⚡', color: 'from-purple-500/20 to-indigo-500/20 text-purple-300 border-purple-500/40' },
-  { id: 'qt-flash', title: 'Flash & Formatage', category: 'Tous les produits', price: 1500, costPrice: 0, icon: '🔄', color: 'from-rose-500/20 to-pink-500/20 text-rose-300 border-rose-500/40' },
-  { id: 'qt-deblocage', title: 'Déblocage FRP / Google', category: 'Tous les produits', price: 2500, costPrice: 0, icon: '🔓', color: 'from-orange-500/20 to-red-500/20 text-orange-300 border-orange-500/40' },
-  { id: 'qt-clean', title: 'Nettoyage Connecteur', category: 'Tous les produits', price: 500, costPrice: 0, icon: '🧹', color: 'from-teal-500/20 to-cyan-500/20 text-teal-300 border-teal-500/40' },
-  { id: 'qt-earphones', title: 'Écouteurs Filaire', category: 'Tous les produits', price: 600, costPrice: 250, icon: '🎧', color: 'from-violet-500/20 to-purple-500/20 text-violet-300 border-violet-500/40' },
-];
-
 /**
  * Compact Action Tile Component (Text-First, 70-85px height, Full-Tile Click Area)
  */
@@ -73,23 +57,32 @@ const ProductTile = React.memo(({
   onOrderStock: (p: Product) => void;
 }) => {
   const activePrice = getProductPriceForTier(product, pricingTier as PricingTier);
-  const isLowStock = product.stock <= (product.reorderPoint || 10) && product.stock > 0;
-  const isOutOfStock = product.stock <= 0;
+  const isService = Boolean(
+    product.isService ||
+    product.category === 'Services' ||
+    product.id.startsWith('qt-') ||
+    product.id.startsWith('prod-misc-')
+  );
+  const isLowStock = !isService && product.stock <= (product.reorderPoint || 10) && product.stock > 0;
+  const isOutOfStock = !isService && product.stock <= 0;
 
   return (
     <div
       onClick={() => onAddToCart(product)}
       role="button"
       tabIndex={0}
+      title={isOutOfStock ? `Rupture de stock — « ${product.title} » : ajout possible avec PIN manager (vente forcée)` : `« ${product.title} » — ${formatDZD(activePrice)} (${product.stock} en stock)`}
+      aria-label={isOutOfStock ? `${product.title}, rupture de stock, ajout possible avec PIN manager` : `${product.title}, ${formatDZD(activePrice)}, ${product.stock} en stock`}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onAddToCart(product);
         }
       }}
-      className={`bg-pos-card border border-pos-border rounded-xl p-2.5 flex flex-col justify-between hover:border-emerald-500/60 hover:bg-pos-hover/60 transition-all duration-150 ease-out cursor-pointer group relative overflow-hidden shadow-sm active:scale-[0.98] active:border-emerald-500 min-h-[76px] select-none ${
+      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 96px' }}
+      className={`pos-tile bg-pos-card border border-pos-border rounded-xl p-2.5 flex flex-col justify-between hover:border-emerald-500/60 hover:bg-pos-hover/60 transition-all duration-150 ease-out motion-reduce:transition-none cursor-pointer group relative overflow-hidden shadow-sm active:scale-[0.98] active:border-emerald-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 min-h-[76px] select-none ${
         isOutOfStock 
-          ? 'opacity-80 border-rose-500/40 bg-rose-950/10 hover:border-rose-500/60' 
+          ? 'opacity-80 border-dashed border-rose-500/50 bg-rose-950/10 hover:border-rose-500/60' 
           : isLowStock 
           ? 'border-amber-500/30' 
           : ''
@@ -112,11 +105,26 @@ const ProductTile = React.memo(({
               <Zap className="w-2.5 h-2.5 fill-cyan-400" />
             </span>
           )}
+          {(product.hasVariants || product.parentProductId) && (
+            <span className="shrink-0 text-purple-400" title="Déclinaison / Matrice">
+              <Layers className="w-2.5 h-2.5" />
+            </span>
+          )}
+          {product.volumeDiscounts && product.volumeDiscounts.length > 0 && (
+            <span className="shrink-0 text-[8px] bg-cyan-500/15 text-cyan-300 font-bold px-1 rounded border border-cyan-500/30" title="Offre par lot disponible">
+              Lot
+            </span>
+          )}
         </div>
 
         {/* Micro Stock Status Badge */}
         <div className="shrink-0">
-          {isOutOfStock ? (
+          {isService ? (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-950/80 text-amber-300 border border-amber-800/70 shadow-xs">
+              <Zap className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
+              Prestation
+            </span>
+          ) : isOutOfStock ? (
             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-extrabold bg-rose-950/90 text-rose-300 border border-rose-800/80 shadow-xs">
               <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />
               Rupture
@@ -144,7 +152,7 @@ const ProductTile = React.memo(({
       <div className="flex items-center justify-between w-full pt-1 border-t border-pos-border/40 mt-auto">
         {/* Tabular Price (14-15px bold font-mono) */}
         <div className="flex items-baseline gap-1.5 font-mono tabular-nums">
-          {pricingTier === 'Wholesale' && (
+          {pricingTier !== 'Retail' && product.price > activePrice && (
             <span className="text-[10px] text-amber-400/80 line-through font-bold">
               {formatDZD(product.price)}
             </span>
@@ -205,12 +213,20 @@ const ProductTableRow = React.memo(({
   onOrderStock: (p: Product) => void;
 }) => {
   const activePrice = getProductPriceForTier(product, pricingTier as PricingTier);
-  const isLowStock = product.stock <= (product.reorderPoint || 10) && product.stock > 0;
-  const isOutOfStock = product.stock <= 0;
+  const isService = Boolean(
+    product.isService ||
+    product.category === 'Services' ||
+    product.id.startsWith('qt-') ||
+    product.id.startsWith('prod-misc-')
+  );
+  const isLowStock = !isService && product.stock <= (product.reorderPoint || 10) && product.stock > 0;
+  const isOutOfStock = !isService && product.stock <= 0;
 
   return (
     <tr
       onClick={() => onAddToCart(product)}
+      title={isOutOfStock ? `Rupture de stock — « ${product.title} » : ajout possible avec PIN manager (vente forcée)` : `« ${product.title} » — ${formatDZD(activePrice)}`}
+      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 40px' }}
       className={`group border-b border-pos-border/50 hover:bg-pos-card/90 active:scale-[0.99] active:bg-emerald-500/10 cursor-pointer transition-all duration-100 select-none ${
         isOutOfStock ? 'opacity-75 bg-rose-950/5' : ''
       }`}
@@ -261,18 +277,29 @@ const ProductTableRow = React.memo(({
       {/* Stock Status */}
       <td className="py-2 px-3 text-xs whitespace-nowrap">
         <div className="flex items-center gap-1.5">
-          <span
-            className={`w-2 h-2 rounded-full shrink-0 ${
-              isOutOfStock ? 'bg-rose-500 ring-2 ring-rose-500/20 animate-pulse' : isLowStock ? 'bg-amber-400' : 'bg-emerald-400'
-            }`}
-          />
-          <span
-            className={`font-mono text-xs font-bold ${
-              isOutOfStock ? 'text-rose-400' : isLowStock ? 'text-amber-400' : 'text-pos-muted'
-            }`}
-          >
-            {isOutOfStock ? 'Rupture' : `${product.stock} dispo`}
-          </span>
+          {isService ? (
+            <>
+              <span className="w-2 h-2 rounded-full shrink-0 bg-amber-400" />
+              <span className="font-mono text-xs font-bold text-amber-300">
+                Prestation
+              </span>
+            </>
+          ) : (
+            <>
+              <span
+                className={`w-2 h-2 rounded-full shrink-0 ${
+                  isOutOfStock ? 'bg-rose-500 ring-2 ring-rose-500/20 animate-pulse' : isLowStock ? 'bg-amber-400' : 'bg-emerald-400'
+                }`}
+              />
+              <span
+                className={`font-mono text-xs font-bold ${
+                  isOutOfStock ? 'text-rose-400' : isLowStock ? 'text-amber-400' : 'text-pos-muted'
+                }`}
+              >
+                {isOutOfStock ? 'Rupture' : `${product.stock} dispo`}
+              </span>
+            </>
+          )}
         </div>
       </td>
 
@@ -318,19 +345,19 @@ const ProductTableRow = React.memo(({
 });
 
 export const ProductCatalog: React.FC = () => {
-  const {
-    products,
-    selectedCategory,
-    setSelectedCategory,
-    searchQuery,
-    sortOption,
-    setSortOption,
-    addToCart,
-    setEditingProduct,
-    pricingTier,
-    openModal,
-    activeModal,
-  } = usePosStore();
+  // Selective subscriptions: whole-store spread re-rendered the full catalog
+  // grid on every cart/sync tick (lag with large catalogs).
+  const products = usePosStore((s) => s.products);
+  const selectedCategory = usePosStore((s) => s.selectedCategory);
+  const setSelectedCategory = usePosStore((s) => s.setSelectedCategory);
+  const searchQuery = usePosStore((s) => s.searchQuery);
+  const sortOption = usePosStore((s) => s.sortOption);
+  const setSortOption = usePosStore((s) => s.setSortOption);
+  const addToCart = usePosStore((s) => s.addToCart);
+  const setEditingProduct = usePosStore((s) => s.setEditingProduct);
+  const pricingTier = usePosStore((s) => s.pricingTier);
+  const openModal = usePosStore((s) => s.openModal);
+  const activeModal = usePosStore((s) => s.activeModal);
 
   const [pinDialogState, setPinDialogState] = useState<{isOpen: boolean, product: Product | null}>({ isOpen: false, product: null });
   const [feedback, setFeedback] = useState<{message: string, type: 'success'|'error'} | null>(null);
@@ -339,6 +366,32 @@ export const ProductCatalog: React.FC = () => {
   const [magsafeOnly, setMagsafeOnly] = useState(false);
   const [showQuickTiles, setShowQuickTiles] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
+
+  // Densité d'affichage (présentation seule) persistée en localStorage, défaut confortable.
+  const [density, setDensity] = useState<'comfortable' | 'compact'>(() => {
+    try {
+      return window.localStorage.getItem('mobipos-catalog-density') === 'compact' ? 'compact' : 'comfortable';
+    } catch {
+      return 'comfortable';
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('mobipos-catalog-density', density);
+    } catch {
+      /* stockage indisponible — densité valable pour la session uniquement */
+    }
+  }, [density]);
+  const compact = density === 'compact';
+  const [quickTouches, setQuickTouches] = useState<QuickTouchItem[]>(() => getQuickTouches());
+
+  useEffect(() => {
+    const handleStorageChange = () => {
+      setQuickTouches(getQuickTouches());
+    };
+    window.addEventListener('mobi:quicktouches-change', handleStorageChange);
+    return () => window.removeEventListener('mobi:quicktouches-change', handleStorageChange);
+  }, []);
 
   // Category counts map
   const categoryCounts = useMemo(() => {
@@ -349,9 +402,21 @@ export const ProductCatalog: React.FC = () => {
     return counts;
   }, [products]);
 
+  // Diacritic-insensitive fold: "écran" matches "ecran" (NFD strip). Sort untouched.
+  const normalizeForSearch = useCallback((s: string | undefined | null): string => {
+    return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  }, []);
+
+  // Memoized low-stock count for the alert chip: the previous inline
+  // `products.filter(...).length` in render ran O(n) on every keystroke.
+  const stockAlertCount = useMemo(
+    () => products.filter((p) => p.stock <= (p.reorderPoint || 10)).length,
+    [products]
+  );
+
   // Memoized filter & sort of products
   const sortedProducts = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = normalizeForSearch(searchQuery.trim());
     const filtered = products.filter((product) => {
       const matchesCategory = selectedCategory === 'Tous les produits' || product.category === selectedCategory;
       const matchesStockAlert = !stockAlertOnly || product.stock <= (product.reorderPoint || 10);
@@ -361,11 +426,12 @@ export const ProductCatalog: React.FC = () => {
       if (!matchesCategory || !matchesStockAlert || !matchesBrand || !matchesMagsafe) return false;
       if (!q) return true;
       return (
-        product.title.toLowerCase().includes(q) ||
-        product.sku.toLowerCase().includes(q) ||
-        product.barcode.toLowerCase().includes(q) ||
-        product.brand.toLowerCase().includes(q) ||
-        product.compatibleModel.toLowerCase().includes(q)
+        normalizeForSearch(product.title).includes(q) ||
+        normalizeForSearch(product.sku).includes(q) ||
+        normalizeForSearch(product.barcode).includes(q) ||
+        (product.imeiNumber && normalizeForSearch(product.imeiNumber).includes(q)) ||
+        normalizeForSearch(product.brand).includes(q) ||
+        normalizeForSearch(product.compatibleModel).includes(q)
       );
     });
 
@@ -377,7 +443,7 @@ export const ProductCatalog: React.FC = () => {
       if (sortOption === 'brand_asc') return a.brand.localeCompare(b.brand);
       return 0;
     });
-  }, [products, selectedCategory, searchQuery, sortOption, stockAlertOnly, selectedBrand, magsafeOnly]);
+  }, [products, selectedCategory, searchQuery, sortOption, stockAlertOnly, selectedBrand, magsafeOnly, normalizeForSearch]);
 
   const showFeedback = (message: string, type: 'success' | 'error') => {
     setFeedback({ message, type });
@@ -385,7 +451,13 @@ export const ProductCatalog: React.FC = () => {
   };
 
   const handleAddToCart = useCallback((product: Product) => {
-    const result = addToCart(product);
+    const isService = Boolean(
+      product.isService ||
+      product.category === 'Services' ||
+      product.id.startsWith('qt-') ||
+      product.id.startsWith('prod-misc-')
+    );
+    const result = addToCart(product, isService);
     if (!result.success) {
       if (result.reason === 'STOCK_EMPTY') {
         setPinDialogState({ isOpen: true, product });
@@ -402,35 +474,10 @@ export const ProductCatalog: React.FC = () => {
     disabled: activeModal !== null || pinDialogState.isOpen,
   });
 
-  const handleQuickTileClick = (tile: QuickActionTile) => {
-    const existing = products.find(
-      (p) => p.title.toLowerCase() === tile.title.toLowerCase() || p.id === tile.id
-    );
-    if (existing) {
-      handleAddToCart(existing);
-      showFeedback(`+1 ${tile.title} ajouté au panier`, 'success');
-    } else {
-      const adHocProduct: Product = {
-        id: tile.id,
-        title: tile.title,
-        price: tile.price,
-        wholesalePrice: Math.round(tile.price * 0.8),
-        costPrice: tile.costPrice,
-        category: tile.category,
-        brand: 'Autre',
-        stock: 999,
-        sku: tile.id.toUpperCase(),
-        barcode: '',
-        compatibleModel: 'Tous modèles',
-        imageUrl: '',
-        reorderPoint: 0,
-        vendorName: 'Fournisseur Local',
-        leadTimeDays: 1,
-        dailySalesVelocity: 5,
-      };
-      addToCart(adHocProduct, true);
-      showFeedback(`+1 ${tile.title} (${formatDZD(tile.price)}) ajouté`, 'success');
-    }
+  const handleQuickTileClick = (tile: QuickTouchItem) => {
+    const serviceProduct = createServiceProductFromTouch(tile);
+    addToCart(serviceProduct, true, 1, false);
+    showFeedback(`+1 ${tile.title} (${formatDZD(tile.price)}) ajouté`, 'success');
   };
 
   const handleOrderStock = useCallback((product: Product) => {
@@ -447,7 +494,7 @@ export const ProductCatalog: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 bg-pos-bg flex flex-col h-full overflow-hidden select-none transition-colors duration-200 relative">
+    <div className="flex-1 min-h-0 min-w-0 bg-pos-bg flex flex-col h-full overflow-hidden select-none transition-colors duration-200 relative">
       {/* Feedback Toast */}
       {feedback && (
         <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full text-xs font-bold shadow-lg animate-in fade-in slide-in-from-top-4 ${
@@ -458,22 +505,28 @@ export const ProductCatalog: React.FC = () => {
       )}
 
       {/* Category Pills & Sorting / View Mode Toolbar */}
-      <div className="p-3 border-b border-pos-border bg-pos-panel flex flex-col gap-2 z-10 relative shrink-0">
+      <div className="p-3 border-b border-pos-border bg-pos-panel flex flex-col gap-2 z-10 sticky top-0 shrink-0">
         {/* Categories & View Mode row */}
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-[70vw] scrollbar-none">
+          <div className="relative min-w-0 flex-1 max-w-[62vw]">
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 pr-6 scrollbar-none" role="tablist" aria-label="Catégories du catalogue">
             {CATEGORIES.map((cat) => {
               const count = categoryCounts[cat] || 0;
               return (
                 <button
                   key={cat}
                   onClick={() => setSelectedCategory(cat)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer ${
+                  role="tab"
+                  aria-selected={selectedCategory === cat}
+                  className={`relative px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all motion-reduce:transition-none flex items-center gap-1.5 cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
                     selectedCategory === cat
                       ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
                       : 'bg-pos-card text-pos-muted hover:text-pos-text border border-pos-border hover:border-emerald-500/40'
                   }`}
                 >
+                  {selectedCategory === cat && (
+                    <span aria-hidden="true" className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 h-1 w-6 rounded-full bg-slate-950/60" />
+                  )}
                   <span>{cat}</span>
                   <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
                     selectedCategory === cat ? 'bg-slate-950/20 text-slate-950' : 'bg-pos-bg text-pos-muted'
@@ -483,15 +536,20 @@ export const ProductCatalog: React.FC = () => {
                 </button>
               );
             })}
+            <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 w-6" style={{ background: 'linear-gradient(to left, var(--pos-panel), transparent)' }} />
+            </div>
           </div>
 
           {/* Right Toolbar: Sort Dropdown & View Mode Segmented Control */}
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-[11px] font-bold text-pos-muted uppercase">Trier:</span>
             <select
+              id="catalog-sort"
+              name="catalog-sort"
+              aria-label="Trier le catalogue"
               value={sortOption}
               onChange={(e) => setSortOption(e.target.value as SortOption)}
-              className="bg-pos-card border border-pos-border rounded-lg px-2.5 py-1 text-xs text-pos-text font-bold focus:border-emerald-500 focus:outline-none cursor-pointer"
+              className="bg-pos-card border border-pos-border rounded-lg px-2.5 py-1 text-xs text-pos-text font-bold focus:border-emerald-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 cursor-pointer"
             >
               {SORT_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -499,6 +557,36 @@ export const ProductCatalog: React.FC = () => {
                 </option>
               ))}
             </select>
+
+            {/* Contrôle de densité (persisté en localStorage, défaut confortable) */}
+            <div className="flex items-center bg-pos-card rounded-lg border border-pos-border p-0.5" role="group" aria-label="Densité d'affichage du catalogue">
+              <button
+                type="button"
+                onClick={() => setDensity('comfortable')}
+                aria-pressed={density === 'comfortable'}
+                title="Densité confortable (défaut)"
+                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
+                  density === 'comfortable'
+                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                    : 'text-pos-muted hover:text-pos-text'
+                }`}
+              >
+                Confort
+              </button>
+              <button
+                type="button"
+                onClick={() => setDensity('compact')}
+                aria-pressed={density === 'compact'}
+                title="Densité compacte (plus d'articles visibles)"
+                className={`px-2 py-1.5 rounded-md text-[11px] font-bold transition cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
+                  density === 'compact'
+                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                    : 'text-pos-muted hover:text-pos-text'
+                }`}
+              >
+                Compact
+              </button>
+            </div>
 
             {/* Segmented Control (Grid vs. Dense Table List) */}
             <div className="flex items-center bg-pos-card rounded-lg border border-pos-border p-0.5 ml-1">
@@ -558,16 +646,37 @@ export const ProductCatalog: React.FC = () => {
               <Sparkles className="w-3.5 h-3.5" /> Compatibilité
             </button>
 
+            {/* Unified Touches Rapides & Article Divers (F9) control */}
+            <div className="flex items-center rounded-lg border border-amber-500/40 bg-amber-500/15 overflow-hidden shadow-sm">
+              <button
+                type="button"
+                onClick={() => openModal('custom_item')}
+                className="px-2.5 py-1 text-xs font-black text-amber-300 hover:bg-amber-500/25 transition flex items-center gap-1.5 cursor-pointer active:scale-95"
+                title="Touches Rapides 1-Clic & Article Divers / Saisie Libre (F9)"
+              >
+                <Zap className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                <span>Touches Rapides & Divers</span>
+                <kbd className="hidden sm:inline font-mono text-[9px] bg-black/40 px-1 py-0.2 rounded border border-amber-500/30 text-amber-200">F9</kbd>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowQuickTiles(!showQuickTiles)}
+                className={`px-1.5 py-1 text-xs border-l border-amber-500/30 hover:bg-amber-500/30 transition cursor-pointer text-amber-300 ${
+                  showQuickTiles ? 'bg-amber-500/30 text-amber-200' : ''
+                }`}
+                title={showQuickTiles ? 'Masquer le bandeau de touches rapides' : 'Afficher le bandeau de touches rapides'}
+              >
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${showQuickTiles ? 'rotate-180' : ''}`} />
+              </button>
+            </div>
+
             <button
-              onClick={() => setShowQuickTiles(!showQuickTiles)}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 border cursor-pointer ${
-                showQuickTiles
-                  ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
-                  : 'bg-pos-card text-pos-muted border-pos-border hover:text-pos-text'
-              }`}
-              title="Afficher/masquer les touches rapides 1-clic"
+              onClick={() => openModal('product_matrix')}
+              className="px-2.5 py-1 rounded-lg text-xs font-black transition flex items-center gap-1 border border-cyan-500/40 bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25 cursor-pointer shadow-sm active:scale-95"
+              title="Générateur de Matrice & Variantes (Téléphones x Couleurs)"
             >
-              <Zap className="w-3.5 h-3.5 fill-amber-400 text-amber-400" /> Touches Rapides
+              <Layers className="w-3.5 h-3.5" />
+              <span>+ Matrice Variantes</span>
             </button>
 
             <button
@@ -589,42 +698,77 @@ export const ProductCatalog: React.FC = () => {
                   : 'bg-pos-card text-pos-muted border-pos-border hover:text-pos-text'
               }`}
             >
-              <AlertCircle className="w-3.5 h-3.5" /> Alertes Stock ({products.filter(p => p.stock <= (p.reorderPoint || 10)).length})
+              <AlertCircle className="w-3.5 h-3.5" /> Alertes Stock ({stockAlertCount})
             </button>
           </div>
         </div>
       </div>
 
-      {/* ═══ Quick-Action Favorites Tile Matrix ("Touches Rapides 1-Clic") ═══ */}
+      {/* ═══ Quick-Action Favorites Tile Matrix ("Touches Rapides 1-Clic & Services") ═══ */}
       {showQuickTiles && (
         <div className="px-3 py-2.5 bg-pos-panel/60 border-b border-pos-border shrink-0 animate-in fade-in slide-in-from-top-2">
-          <div className="flex items-center justify-between mb-1.5">
-            <div className="flex items-center gap-1.5">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
               <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
-              <span className="text-[10px] font-black uppercase tracking-wider text-pos-text">
-                Touches Rapides 1-Clic (Services & Best-Sellers Sans Code-Barre)
+              <span className="text-[11px] font-black uppercase tracking-wider text-pos-text">
+                Touches Rapides 1-Clic
+              </span>
+              <span className="text-[10px] text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                Prestations & Services (Illimité)
               </span>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowQuickTiles(false)}
-              className="text-[10px] text-pos-muted hover:text-pos-text transition cursor-pointer"
-            >
-              Masquer ✕
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => openModal('custom_item')}
+                className="text-[10px] font-bold text-amber-300 hover:text-amber-200 transition cursor-pointer flex items-center gap-1 bg-amber-500/10 hover:bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/30"
+                title="Gérer les touches rapides ou faire une saisie libre"
+              >
+                <Plus className="w-3 h-3" /> Gérer / Saisie Libre (F9)
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowQuickTiles(false)}
+                className="text-[10px] text-pos-muted hover:text-pos-text transition cursor-pointer px-1"
+              >
+                Masquer ✕
+              </button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
-            {DEFAULT_QUICK_TILES.map((tile) => (
+          <div className="grid grid-cols-4 sm:grid-cols-8 md:grid-cols-9 gap-2">
+            {/* Quick action shortcut tile: Saisie libre */}
+            <button
+              type="button"
+              onClick={() => openModal('custom_item')}
+              className="p-2 rounded-xl border border-dashed border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 active:scale-95 transition-all text-left flex flex-col justify-between shadow-sm cursor-pointer min-h-[58px] group"
+              title="Ajouter un article hors catalogue ou créer une touche"
+            >
+              <div className="flex items-center justify-between w-full">
+                <Plus className="w-3.5 h-3.5 text-amber-400 group-hover:scale-110 transition-transform" />
+                <span className="text-[8px] font-mono font-bold px-1 rounded bg-black/40 text-amber-300 border border-amber-500/30">
+                  F9
+                </span>
+              </div>
+              <span className="text-[10px] font-black leading-tight text-amber-300 group-hover:text-amber-200">
+                + Saisie Libre
+              </span>
+            </button>
+
+            {/* Dynamic Quick Touches from storage */}
+            {quickTouches.map((tile) => (
               <button
                 key={tile.id}
                 type="button"
                 onClick={() => handleQuickTileClick(tile)}
-                className={`p-2 rounded-xl bg-gradient-to-br ${tile.color} border hover:scale-[1.02] active:scale-95 transition-all text-left flex flex-col justify-between shadow-sm cursor-pointer min-h-[58px] group`}
+                className={`p-2 rounded-xl bg-gradient-to-br ${
+                  tile.color || 'from-amber-600/30 to-amber-900/40 border-amber-500/40'
+                } border hover:scale-[1.02] active:scale-95 transition-all text-left flex flex-col justify-between shadow-sm cursor-pointer min-h-[58px] group relative overflow-hidden`}
+                title={`${tile.title} — ${formatDZD(tile.price)} (Prestation sans décompte stock)`}
               >
                 <div className="flex items-center justify-between w-full">
-                  <span className="text-sm">{tile.icon}</span>
-                  <span className="text-[9px] font-mono font-black px-1 rounded bg-slate-950/40 text-pos-text">
+                  <span className="text-sm select-none">{tile.icon || '⚡'}</span>
+                  <span className="text-[9px] font-mono font-black px-1 rounded bg-slate-950/60 text-amber-300 border border-amber-500/20">
                     {formatDZD(tile.price)}
                   </span>
                 </div>
@@ -638,7 +782,7 @@ export const ProductCatalog: React.FC = () => {
       )}
 
       {/* Product Catalog Display: High-Density Action Tile Matrix or Dense Table List */}
-      <div className="flex-1 overflow-y-auto p-3.5">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3.5">
         {sortedProducts.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-pos-muted space-y-2 py-12">
             <Search className="w-10 h-10 opacity-40 text-emerald-400" />
@@ -647,7 +791,7 @@ export const ProductCatalog: React.FC = () => {
           </div>
         ) : viewMode === 'grid' ? (
           /* ═══ High-Density Compact Action Tiles (16-24 items visible without scroll) ═══ */
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4 2xl:grid-cols-6 gap-2 sm:gap-2.5">
+          <div className={`grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4 2xl:grid-cols-6 ${compact ? 'gap-1.5 [&_.pos-tile]:p-1.5 [&_.pos-tile]:min-h-[56px]' : 'gap-2 sm:gap-2.5'}`}>
             {sortedProducts.map((product, index) => (
               <ProductTile
                 key={product.id}
@@ -664,7 +808,7 @@ export const ProductCatalog: React.FC = () => {
           /* ═══ Dense Table List View (For rapid barcode reference) ═══ */
           <div className="bg-pos-card border border-pos-border rounded-xl overflow-hidden shadow-sm">
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
+              <table className={`w-full text-left border-collapse ${compact ? '[&_td]:py-1' : ''}`}>
                 <thead>
                   <tr className="bg-pos-panel border-b border-pos-border text-[10px] uppercase font-black text-pos-muted tracking-wider">
                     <th className="py-2.5 px-3">Réf / SKU</th>

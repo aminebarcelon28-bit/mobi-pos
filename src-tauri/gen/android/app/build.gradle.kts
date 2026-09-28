@@ -68,6 +68,10 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
+    // PO invoice scanner: GMS document capture + on-device text recognition.
+    // (DocumentScannerPlugin — outputs normalized OCR boxes for geometry.rs.)
+    implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
+    implementation("com.google.mlkit:text-recognition:16.0.0")
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.4")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")

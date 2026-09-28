@@ -1,0 +1,5 @@
+# sqlx migration checksums are byte-sensitive: a CRLF worktree copy of lib.rs
+# changes EVERY migration's SHA-384 vs the LF bytes recorded in
+# _sqlx_migrations, bricking upgraded DBs with "migration N was previously
+# applied but has been modified". Force LF for the migration source.
+src-tauri/src/lib.rs text eol=lf

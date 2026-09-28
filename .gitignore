@@ -26,6 +26,10 @@ dist-ssr
 # Env + secrets (Turso tokens live here — NEVER commit)
 .env
 .env.local
+.env.licensing
+workers/licensing/.dev.vars
+licenses_ledger.json
+*.vault
 proxy/.env
 
 # Tauri Signing Keys & Target
@@ -35,3 +39,13 @@ proxy/.env
 src-tauri/target
 target/
 /target
+
+# Test scratch artifacts — regression suites create these at runtime
+# (tmp-*.db SQLite copies, _testall_out.txt capture, tmp-h28-shim/ shim tree).
+# Never commit: they are run leftovers, not source.
+tmp-*.db
+tmp-*.db-*
+tmp-*-shim/
+_testall_out.txt
+scripts/_*.mjs
+scripts/_*.txt

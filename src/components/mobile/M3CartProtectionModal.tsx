@@ -2,6 +2,7 @@ import React from 'react';
 import { PauseCircle, Trash2, ArrowLeft, ShoppingBag } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
+import { computeCartTotals } from '../../utils/receiptMath';
 import { soundEngine } from '../../utils/audioFeedback';
 
 interface M3CartProtectionModalProps {
@@ -17,14 +18,24 @@ export const M3CartProtectionModal: React.FC<M3CartProtectionModalProps> = ({
   onHoldAndExit,
   onDiscardAndExit,
 }) => {
+  const cart = usePosStore((state) => state.cart);
+  const pricingTier = usePosStore((state) => state.pricingTier);
+  const storeCreditApplied = usePosStore((state) => state.storeCreditApplied);
+  const voucherCreditApplied =
+    usePosStore((s) => (s as unknown as { voucherCreditApplied?: number }).voucherCreditApplied ?? 0) || 0;
+
   if (!isOpen) return null;
 
-  const cart = usePosStore((state) => state.cart);
-
-  const cartTotal = cart.reduce((acc, item) => {
-    const price = item.appliedPrice ?? item.product.price;
-    return acc + price * item.quantity;
-  }, 0);
+  // At-risk total from the canonical checkout math (tier, discounts,
+  // credits, VAT) — the naive appliedPrice sum overstated risk whenever
+  // markdowns or credits were staged.
+  const cartTotals = computeCartTotals(cart, {
+    pricingTier,
+    storeCreditApplied,
+    voucherCreditApplied,
+    vatRate: 0,
+  });
+  const cartTotal = Math.max(0, cartTotals.total);
 
   const totalItems = cart.reduce((acc, item) => acc + item.quantity, 0);
 
@@ -92,3 +103,4 @@ export const M3CartProtectionModal: React.FC<M3CartProtectionModalProps> = ({
     </div>
   );
 };
+

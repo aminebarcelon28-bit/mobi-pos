@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Wrench,
@@ -19,10 +19,12 @@ import {
   Check,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
+import { REPAIR_BALANCE_DUE_EVENT } from '../../store/slices/createRepairSlice';
 import { formatDZD, formatDateTime } from '../../types/pos';
 import type { ConditionChecklist, RepairOrder } from '../../types/pos';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { useToast } from '../ui/Toast';
+import { isMobileDevice } from '../../utils/platform';
 
 const initialChecklist: ConditionChecklist = {
   screenOk: false,
@@ -60,6 +62,25 @@ export const RepairWorkOrderModal: React.FC = () => {
   } = usePosStore();
 
   const { showToast } = useToast();
+
+  // A completed repair with an unpaid balance never auto-logs drawer cash:
+  // the slice broadcasts REPAIR_BALANCE_DUE_EVENT — toast here and route the
+  // cashier to an EXPLICIT shift-movement deposit (Mouvements de caisse).
+  useEffect(() => {
+    const onBalanceDue = (e: Event) => {
+      const detail =
+        (e as CustomEvent<{ ticketNumber?: string; remainingBalance?: number }>).detail || {};
+      const amount = Math.max(0, Math.round(Number(detail.remainingBalance) || 0));
+      if (amount <= 0) return;
+      showToast(
+        `Ticket SAV #${detail.ticketNumber || '?'} soldé avec ${formatDZD(amount)} restants — enregistrez un dépôt manuel explicite (Mouvements de caisse → Dépôt manuel) pour encaisser le solde.`,
+        'warning',
+        8000
+      );
+    };
+    window.addEventListener(REPAIR_BALANCE_DUE_EVENT, onBalanceDue);
+    return () => window.removeEventListener(REPAIR_BALANCE_DUE_EVENT, onBalanceDue);
+  }, [showToast]);
 
   const [activeTab, setActiveTab] = useState<'Nouveau' | 'Historique'>('Nouveau');
   const [successMsg, setSuccessMsg] = useState<string>('');
@@ -143,6 +164,12 @@ export const RepairWorkOrderModal: React.FC = () => {
   };
 
   const handleSendWhatsAppNotification = (order: RepairOrder) => {
+    // Guard the whatsapp-modal precondition: opening 'whatsapp_dispatch' with
+    // no order context renders an empty modal with no feedback. Toast instead.
+    if (!order) {
+      showToast('Aucun ordre de réparation sélectionné pour la notification.', 'warning');
+      return;
+    }
     setSelectedRepairOrderForNotification(order);
     openModal('whatsapp_dispatch');
   };
@@ -168,10 +195,12 @@ export const RepairWorkOrderModal: React.FC = () => {
       return;
     }
 
-    const validLabor = Math.max(0, isNaN(laborCost) ? 0 : laborCost);
-    const validParts = Math.max(0, isNaN(partsCost) ? 0 : partsCost);
+    // B-033: integer DZD at the write boundary — drawer movements round, so
+    // unrounded labor/parts/deposit drift repair reports vs drawer.
+    const validLabor = Math.max(0, Math.round(isNaN(laborCost) ? 0 : laborCost));
+    const validParts = Math.max(0, Math.round(isNaN(partsCost) ? 0 : partsCost));
     const validTotal = validLabor + validParts;
-    const validDeposit = Math.max(0, Math.min(validTotal, isNaN(depositAmount) ? 0 : depositAmount));
+    const validDeposit = Math.max(0, Math.min(validTotal, Math.round(isNaN(depositAmount) ? 0 : depositAmount)));
 
     if (editingId) {
       updateRepairOrder(editingId, {
@@ -234,7 +263,21 @@ export const RepairWorkOrderModal: React.FC = () => {
     showSuccess('Statut mis à jour !');
   };
 
-  const handlePrintTicket = (order: RepairOrder) => {
+  const handlePrintTicket = async (order: RepairOrder) => {
+    // Mobile: no window.print dialog — text fiche via the Android sheet.
+    if (isMobileDevice()) {
+      const { openNativePrint } = await import('../../utils/phoneUtils');
+      const { repairTicketText } = await import('../../utils/mobileDocPrint');
+      const ok = await openNativePrint(
+        `Fiche SAV ${order.ticketNumber}`,
+        repairTicketText(order, receiptSettings)
+      );
+      showToast(
+        ok ? '🖨️ Feuille d’impression Android ouverte.' : 'Impression indisponible sur cet appareil.',
+        ok ? 'success' : 'error'
+      );
+      return;
+    }
     setPrintingOrder(order);
     printCoordinator.printRepairWorkOrder(50);
   };
@@ -330,7 +373,7 @@ export const RepairWorkOrderModal: React.FC = () => {
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-5 relative bg-pos-bg">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-5 relative bg-pos-bg">
           {successMsg && (
             <div className="absolute top-3 left-1/2 -translate-x-1/2 bg-emerald-500/20 border border-emerald-500/60 text-emerald-300 px-5 py-2.5 rounded-full text-xs font-bold flex items-center gap-2 z-20 shadow-lg animate-in fade-in slide-in-from-top-4">
               <CheckCircle2 className="w-4 h-4" /> {successMsg}
@@ -338,29 +381,29 @@ export const RepairWorkOrderModal: React.FC = () => {
           )}
 
           {activeTab === 'Nouveau' && (
-            <form onSubmit={handleSaveOrder} className="bg-pos-card border border-pos-border rounded-2xl p-5 space-y-4 max-w-4xl mx-auto shadow-md">
+            <form onSubmit={handleSaveOrder} className="bg-pos-card border border-pos-border rounded-2xl p-3.5 sm:p-5 space-y-3 sm:space-y-4 max-w-4xl mx-auto shadow-md">
               
               {editingId && (
-                <div className="flex justify-between items-center bg-emerald-500/10 border border-emerald-500/30 p-2.5 rounded-xl">
+                <div className="flex flex-col gap-2 sm:flex-row sm:justify-between sm:items-center bg-emerald-500/10 border border-emerald-500/30 p-2.5 rounded-xl">
                   <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
-                    <Edit className="w-4 h-4" /> Modification de la Fiche Réparation #{editingId}
+                    <Edit className="w-4 h-4 shrink-0" /> <span className="truncate">Modification de la Fiche Réparation #{editingId}</span>
                   </span>
-                  <button type="button" onClick={resetForm} className="text-xs text-pos-muted hover:text-pos-text underline">
+                  <button type="button" onClick={resetForm} className="text-xs text-pos-muted hover:text-pos-text underline self-start sm:self-auto min-h-[32px]">
                     Annuler l'Édition
                   </button>
                 </div>
               )}
 
               {/* Customer Selection & Auto-Fill Toolbar */}
-              <div className="bg-pos-bg p-3.5 rounded-xl border border-pos-border space-y-3">
-                <div className="flex items-center justify-between">
+              <div className="bg-pos-bg p-3 sm:p-3.5 rounded-xl border border-pos-border space-y-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-xs font-bold text-pos-text flex items-center gap-1.5">
                     <UserCheck className="w-4 h-4 text-emerald-400" /> Informations Client
                   </span>
                   {customers.length > 0 && (
                     <select
                       onChange={(e) => handleSelectCustomer(e.target.value)}
-                      className="bg-pos-card border border-pos-border text-pos-text text-xs rounded-lg px-2.5 py-1 focus:border-emerald-400 focus:outline-none"
+                      className="w-full sm:w-auto min-h-[44px] bg-pos-card border border-pos-border text-pos-text text-sm sm:text-xs rounded-lg px-2.5 py-1 focus:border-emerald-400 focus:outline-none"
                     >
                       <option value="">Sélectionner un client existant...</option>
                       {(customers || []).map(c => (
@@ -370,7 +413,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                   )}
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Nom du Client</label>
                     <input
@@ -379,18 +422,19 @@ export const RepairWorkOrderModal: React.FC = () => {
                       value={customerName}
                       onChange={(e) => setCustomerName(e.target.value)}
                       placeholder="Ex: Yacine Benali"
-                      className="w-full bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
+                      className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
                     />
                   </div>
                   <div>
                     <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Téléphone / Contact</label>
                     <input
-                      type="text"
+                      type="tel"
+                      inputMode="tel"
                       required
                       value={customerPhone}
                       onChange={(e) => setCustomerPhone(e.target.value)}
                       placeholder="Ex: 0550 12 34 56"
-                      className="w-full bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
+                      className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
                     />
                   </div>
                   <div>
@@ -401,7 +445,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                       value={deviceModel}
                       onChange={(e) => setDeviceModel(e.target.value)}
                       placeholder="Ex: iPhone 15 Pro Max"
-                      className="w-full bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
+                      className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
                     />
                   </div>
                 </div>
@@ -414,7 +458,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                       key={preset}
                       type="button"
                       onClick={() => setDeviceModel(preset)}
-                      className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition shrink-0 ${
+                      className={`min-h-[40px] px-2.5 py-1.5 rounded text-[10px] font-semibold border transition shrink-0 active:scale-95 ${
                         deviceModel === preset
                           ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-bold'
                           : 'bg-pos-card border-pos-border text-pos-muted hover:text-pos-text'
@@ -427,16 +471,17 @@ export const RepairWorkOrderModal: React.FC = () => {
               </div>
 
               {/* IMEI & Problem Description */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Numéro IMEI / N° Série</label>
                   <input
                     type="text"
+                    inputMode="numeric"
                     required
                     value={imei}
                     onChange={(e) => setImei(e.target.value)}
                     placeholder="Ex: 358921004812345"
-                    className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs font-mono font-bold text-emerald-400 focus:border-emerald-400 focus:outline-none"
+                    className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-mono font-bold text-emerald-400 focus:border-emerald-400 focus:outline-none"
                   />
                 </div>
                 <div>
@@ -447,7 +492,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     value={problemDescription}
                     onChange={(e) => setProblemDescription(e.target.value)}
                     placeholder="Ex: Écran fissuré + connecteur de charge cassé"
-                    className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
+                    className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
                   />
                 </div>
               </div>
@@ -458,23 +503,23 @@ export const RepairWorkOrderModal: React.FC = () => {
                   rows={2}
                   value={diagnosticNotes}
                   onChange={(e) => setDiagnosticNotes(e.target.value)}
-                  className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
+                  className="w-full min-h-[64px] bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
                   placeholder="Notes de diagnostic, micro-soudures nécessaires, tests effectués..."
                 />
               </div>
 
               {/* Visual Interactive Checklists (Pre & Post) */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 {/* Pre Checklist */}
-                <div className="bg-pos-bg p-3.5 rounded-xl border border-pos-border space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-extrabold text-pos-text uppercase tracking-wider block flex items-center gap-1.5">
-                      <ShieldAlert className="w-3.5 h-3.5 text-amber-400" /> Checklist à la Réception
+                <div className="bg-pos-bg p-3 sm:p-3.5 rounded-xl border border-pos-border space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-extrabold text-pos-text uppercase tracking-wider block flex items-center gap-1.5 min-w-0 truncate">
+                      <ShieldAlert className="w-3.5 h-3.5 text-amber-400 shrink-0" /> <span className="truncate">Checklist à la Réception</span>
                     </span>
                     <button
                       type="button"
                       onClick={() => handleSetAllChecklistOk('pre')}
-                      className="text-[10px] bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 px-2 py-0.5 rounded font-bold transition border border-emerald-500/30 cursor-pointer flex items-center gap-1"
+                      className="text-[10px] bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 px-2.5 py-1.5 min-h-[36px] rounded font-bold transition border border-emerald-500/30 cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 active:scale-95"
                     >
                       <Check className="w-3 h-3" /> Tout Conforme
                     </button>
@@ -484,7 +529,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setChecklist({ ...checklist, screenOk: !checklist.screenOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer ${
+                      className={`min-h-[48px] px-3 py-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer active:scale-95 ${
                         checklist.screenOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -494,7 +539,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setChecklist({ ...checklist, faceIdOk: !checklist.faceIdOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer ${
+                      className={`min-h-[48px] px-3 py-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer active:scale-95 ${
                         checklist.faceIdOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -504,7 +549,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setChecklist({ ...checklist, cameraOk: !checklist.cameraOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer ${
+                      className={`min-h-[48px] px-3 py-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer active:scale-95 ${
                         checklist.cameraOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -514,7 +559,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setChecklist({ ...checklist, chargingOk: !checklist.chargingOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer ${
+                      className={`min-h-[48px] px-3 py-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer active:scale-95 ${
                         checklist.chargingOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -524,7 +569,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setChecklist({ ...checklist, batteryOk: !checklist.batteryOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer ${
+                      className={`min-h-[48px] px-3 py-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer active:scale-95 ${
                         checklist.batteryOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -534,7 +579,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setChecklist({ ...checklist, audioOk: !checklist.audioOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer ${
+                      className={`min-h-[48px] px-3 py-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer active:scale-95 ${
                         checklist.audioOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -544,15 +589,15 @@ export const RepairWorkOrderModal: React.FC = () => {
                 </div>
 
                 {/* Post Checklist */}
-                <div className="bg-pos-bg p-3.5 rounded-xl border border-pos-border space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-extrabold text-pos-text uppercase tracking-wider block flex items-center gap-1.5">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Contrôle Qualité (Après)
+                <div className="bg-pos-bg p-3 sm:p-3.5 rounded-xl border border-pos-border space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-extrabold text-pos-text uppercase tracking-wider block flex items-center gap-1.5 min-w-0 truncate">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> <span className="truncate">Contrôle Qualité (Après)</span>
                     </span>
                     <button
                       type="button"
                       onClick={() => handleSetAllChecklistOk('post')}
-                      className="text-[10px] bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 px-2 py-0.5 rounded font-bold transition border border-emerald-500/30 cursor-pointer flex items-center gap-1"
+                      className="text-[10px] bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 px-2.5 py-1.5 min-h-[36px] rounded font-bold transition border border-emerald-500/30 cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 active:scale-95"
                     >
                       <Check className="w-3 h-3" /> Tout Conforme
                     </button>
@@ -562,7 +607,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setPostChecklist({ ...postChecklist, screenOk: !postChecklist.screenOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition ${
+                      className={`min-h-[48px] px-3 py-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer active:scale-95 ${
                         postChecklist.screenOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -572,7 +617,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setPostChecklist({ ...postChecklist, faceIdOk: !postChecklist.faceIdOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition ${
+                      className={`min-h-[48px] px-3 py-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer active:scale-95 ${
                         postChecklist.faceIdOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -582,7 +627,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setPostChecklist({ ...postChecklist, cameraOk: !postChecklist.cameraOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition ${
+                      className={`min-h-[48px] px-3 py-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer active:scale-95 ${
                         postChecklist.cameraOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -592,7 +637,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setPostChecklist({ ...postChecklist, chargingOk: !postChecklist.chargingOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition ${
+                      className={`min-h-[48px] px-3 py-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer active:scale-95 ${
                         postChecklist.chargingOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -602,7 +647,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setPostChecklist({ ...postChecklist, batteryOk: !postChecklist.batteryOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition ${
+                      className={`min-h-[48px] px-3 py-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer active:scale-95 ${
                         postChecklist.batteryOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -612,7 +657,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setPostChecklist({ ...postChecklist, audioOk: !postChecklist.audioOk })}
-                      className={`p-2 rounded-lg border text-left font-bold flex items-center gap-2 transition ${
+                      className={`min-h-[48px] px-3 py-2 rounded-lg border text-left font-bold flex items-center gap-2 transition cursor-pointer active:scale-95 ${
                         postChecklist.audioOk ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300' : 'bg-pos-card border-pos-border text-pos-muted'
                       }`}
                     >
@@ -623,16 +668,17 @@ export const RepairWorkOrderModal: React.FC = () => {
               </div>
 
               {/* Financial Calculation & Deposit Engine */}
-              <div className="bg-pos-bg p-3.5 rounded-xl border border-pos-border space-y-3">
-                <div className="grid grid-cols-4 gap-3 items-center">
+              <div className="bg-pos-bg p-3 sm:p-3.5 rounded-xl border border-pos-border space-y-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:items-center">
                   <div>
                     <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Main d'Œuvre (DA)</label>
                     <input
                       type="number"
-                      step="100"
+                      inputMode="decimal"
+                      step="any"
                       value={laborCost}
                       onChange={(e) => setLaborCost(parseFloat(e.target.value) || 0)}
-                      className="w-full bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-xs font-bold text-emerald-400 focus:outline-none"
+                      className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-emerald-400 focus:outline-none"
                     />
                   </div>
 
@@ -640,10 +686,11 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Prix Pièces / Composants (DA)</label>
                     <input
                       type="number"
-                      step="100"
+                      inputMode="decimal"
+                      step="any"
                       value={partsCost}
                       onChange={(e) => setPartsCost(parseFloat(e.target.value) || 0)}
-                      className="w-full bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-xs font-bold text-amber-400 focus:outline-none"
+                      className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-amber-400 focus:outline-none"
                     />
                   </div>
 
@@ -651,28 +698,29 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Acompte Versé (DA)</label>
                     <input
                       type="number"
-                      step="100"
+                      inputMode="decimal"
+                      step="any"
                       value={depositAmount}
                       onChange={(e) => setDepositAmount(parseFloat(e.target.value) || 0)}
-                      className="w-full bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-xs font-bold text-cyan-400 focus:outline-none"
+                      className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-cyan-400 focus:outline-none"
                     />
                   </div>
 
-                  <div className="text-right">
+                  <div className="col-span-2 sm:col-span-1 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2 sm:bg-transparent sm:border-0 sm:p-0 text-left sm:text-right flex sm:block items-center justify-between gap-2">
                     <span className="text-[10px] text-pos-muted uppercase block font-bold">Reste à Payer (Livraison)</span>
-                    <span className="text-lg font-black text-emerald-400">{formatDZD(remainingBalance)}</span>
+                    <span className="text-xl sm:text-lg font-black text-emerald-400 whitespace-nowrap">{formatDZD(remainingBalance)}</span>
                   </div>
                 </div>
               </div>
 
               {/* Status & Save Button */}
-              <div className="flex justify-between items-center pt-2 border-t border-pos-border">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-pos-muted font-bold">Statut du Ticket:</span>
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 pt-2 border-t border-pos-border">
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <span className="text-xs text-pos-muted font-bold whitespace-nowrap shrink-0">Statut du Ticket:</span>
                   <select
                     value={status}
                     onChange={(e) => setStatus(e.target.value as RepairOrder['status'])}
-                    className="bg-pos-bg border border-pos-border rounded-xl px-3.5 py-2 text-xs font-bold text-pos-text focus:outline-none cursor-pointer"
+                    className="flex-1 sm:flex-none min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3.5 py-2 text-sm sm:text-xs font-bold text-pos-text focus:outline-none cursor-pointer"
                   >
                     <option value="Diagnostic">Statut: Diagnostic</option>
                     <option value="En attente de pièces">Statut: En attente de pièces</option>
@@ -683,9 +731,9 @@ export const RepairWorkOrderModal: React.FC = () => {
 
                 <button
                   type="submit"
-                  className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-2 transition shadow-lg shadow-emerald-500/20 cursor-pointer"
+                  className="w-full sm:w-auto min-h-[52px] px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm sm:text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-500/20 cursor-pointer active:scale-[0.98]"
                 >
-                  <CheckCircle2 className="w-4 h-4" /> {editingId ? 'Mettre à jour Ticket' : 'Enregistrer le Ticket SAV'}
+                  <CheckCircle2 className="w-5 h-5 sm:w-4 sm:h-4" /> {editingId ? 'Mettre à jour Ticket' : 'Enregistrer le Ticket SAV'}
                 </button>
               </div>
             </form>
@@ -826,80 +874,114 @@ export const RepairWorkOrderModal: React.FC = () => {
 
         {/* Dedicated SAV Repair Ticket Print Template */}
         {printingOrder && (
-          <div className="print-repair-target hidden print:block bg-white text-black p-6 font-sans text-xs">
-            {/* Header */}
-            <div className="flex justify-between items-start border-b-2 border-black pb-3 mb-4">
+          <div className="print-repair-target hidden print:block bg-white text-black p-2 font-sans text-xs">
+            <div className="doc-banner">
               <div>
-                <h1 className="text-lg font-black uppercase">{receiptSettings.storeName || 'MOBI ACCESSORIES'}</h1>
-                <p className="text-[10px] text-gray-600">Atelier de Réparation Express & SAV</p>
-                <p className="text-[10px] text-gray-600">Tél: {receiptSettings.phone}</p>
+                <p className="doc-title">{receiptSettings.storeName || 'MOBI ACCESSORIES'}</p>
+                <p className="doc-sub">Atelier de Réparation Express & SAV • Tél: {receiptSettings.phone}</p>
               </div>
-              <div className="text-right bg-gray-100 p-2 rounded border border-gray-300">
-                <p className="text-[10px] font-black uppercase">FICHE D'INTERVENTION SAV</p>
-                <p className="text-sm font-bold text-gray-900">N° {printingOrder.ticketNumber}</p>
-                <p className="text-[9px] text-gray-600">Date: {formatDateTime(printingOrder.createdAt)}</p>
+              <div className="doc-refbox">
+                <p className="doc-reftype">Fiche d'intervention SAV</p>
+                <p className="doc-ref">N° {printingOrder.ticketNumber}</p>
+                <p className="doc-refdate">{formatDateTime(printingOrder.createdAt)}</p>
               </div>
             </div>
 
             {/* Customer & Device Information */}
-            <div className="grid grid-cols-2 gap-3 bg-gray-50 border border-gray-200 p-3 rounded mb-4">
-              <div>
-                <p className="text-[9px] font-bold text-gray-500 uppercase">Client :</p>
-                <p className="font-bold text-sm text-black">{printingOrder.customerName}</p>
-                <p className="text-xs text-gray-700">Tél: {printingOrder.customerPhone || 'Non renseigné'}</p>
+            <div className="doc-grid2">
+              <div className="doc-card">
+                <p className="doc-label">Client</p>
+                <p className="doc-value">{printingOrder.customerName}</p>
+                <p className="doc-muted">Tél: {printingOrder.customerPhone || 'Non renseigné'}</p>
               </div>
-              <div>
-                <p className="text-[9px] font-bold text-gray-500 uppercase">Appareil Déposé :</p>
-                <p className="font-bold text-sm text-black">{printingOrder.deviceModel}</p>
-                <p className="text-[10px] text-gray-600 font-mono">IMEI / Série: {printingOrder.imei || 'N/A'}</p>
+              <div className="doc-card">
+                <p className="doc-label">Appareil déposé</p>
+                <p className="doc-value">{printingOrder.deviceModel}</p>
+                <p className="doc-muted" style={{ fontFamily: 'monospace' }}>IMEI / Série: {printingOrder.imei || 'N/A'}</p>
               </div>
             </div>
 
             {/* Diagnostic & Problem Description */}
-            <div className="border border-gray-300 p-3 rounded mb-4 space-y-2">
-              <div>
-                <p className="text-[9px] font-bold text-gray-500 uppercase">Symptôme / Problème signalé :</p>
-                <p className="font-semibold text-xs text-gray-900">{printingOrder.problemDescription}</p>
-              </div>
+            <div className="doc-notebox">
+              <p className="doc-label">Symptôme / problème signalé</p>
+              <p className="doc-muted" style={{ fontWeight: 700, color: '#111827' }}>{printingOrder.problemDescription}</p>
               {printingOrder.diagnosticNotes && (
-                <div>
-                  <p className="text-[9px] font-bold text-gray-500 uppercase">Diagnostic Technique Atelier :</p>
-                  <p className="text-xs text-gray-700 italic">{printingOrder.diagnosticNotes}</p>
-                </div>
+                <>
+                  <p className="doc-label" style={{ marginTop: '6px' }}>Diagnostic technique atelier</p>
+                  <p className="doc-muted" style={{ fontStyle: 'italic' }}>{printingOrder.diagnosticNotes}</p>
+                </>
               )}
             </div>
 
+            {/* Reception & Quality Checklists */}
+            {(() => {
+              const checks: Array<[string, boolean | undefined]> = [
+                ['Écran', printingOrder.conditionChecklist?.screenOk],
+                ['FaceID', printingOrder.conditionChecklist?.faceIdOk],
+                ['Caméra', printingOrder.conditionChecklist?.cameraOk],
+                ['Charge', printingOrder.conditionChecklist?.chargingOk],
+                ['Batterie', printingOrder.conditionChecklist?.batteryOk],
+                ['Audio', printingOrder.conditionChecklist?.audioOk],
+              ];
+              const postChecks: Array<[string, boolean | undefined]> = [
+                ['Écran', printingOrder.postRepairChecklist?.screenOk],
+                ['FaceID', printingOrder.postRepairChecklist?.faceIdOk],
+                ['Caméra', printingOrder.postRepairChecklist?.cameraOk],
+                ['Charge', printingOrder.postRepairChecklist?.chargingOk],
+                ['Batterie', printingOrder.postRepairChecklist?.batteryOk],
+                ['Audio', printingOrder.postRepairChecklist?.audioOk],
+              ];
+              const renderChips = (list: Array<[string, boolean | undefined]>) => (
+                <div className="doc-checkgrid">
+                  {list.map(([label, ok]) => (
+                    <span key={label} className={`doc-chip ${ok ? 'doc-chip-ok' : 'doc-chip-ko'}`}>
+                      {label} : {ok ? 'OK' : 'KO'}
+                    </span>
+                  ))}
+                </div>
+              );
+              return (
+                <>
+                  <p className="doc-label">Checklist à la réception</p>
+                  {renderChips(checks)}
+                  <p className="doc-label">Contrôle qualité après réparation</p>
+                  {renderChips(postChecks)}
+                </>
+              );
+            })()}
+
             {/* Financial Summary */}
-            <div className="bg-gray-100 border border-gray-300 p-3 rounded mb-6 flex justify-between items-center font-mono">
+            <div className="doc-totalband">
               <div>
-                <span className="text-[10px] text-gray-600 block">Total Devis Réparation : {formatDZD(printingOrder.totalCost)}</span>
-                {printingOrder.depositAmount ? (
-                  <span className="text-[10px] text-blue-700 block">Acompte Versé : -{formatDZD(printingOrder.depositAmount)}</span>
-                ) : null}
+                <p className="doc-totallabel">Reste à régler à la livraison</p>
+                <p className="doc-totalsub">Devis {formatDZD(printingOrder.totalCost)}{printingOrder.depositAmount ? ` • Acompte −${formatDZD(printingOrder.depositAmount)}` : ''}</p>
               </div>
-              <div className="text-right">
-                <span className="text-[10px] uppercase font-bold text-gray-500 block">Reste à Régler :</span>
-                <span className="text-base font-black text-black">
-                  {formatDZD(Math.max(0, printingOrder.totalCost - (printingOrder.depositAmount || 0)))}
-                </span>
-              </div>
+              <span className="doc-totalval">
+                {formatDZD(Math.max(0, printingOrder.totalCost - (printingOrder.depositAmount || 0)))}
+              </span>
             </div>
 
             {/* Terms and Signatures */}
-            <div className="pt-2 border-t border-dashed border-gray-400 text-[8px] text-gray-500 space-y-1">
-              <p>• Le client s'engage à récupérer son appareil dans un délai maximum de 30 jours après notification.</p>
-              <p>• MOBI ACCESSORIES décline toute responsabilité quant aux données non sauvegardées préalablement.</p>
+            <div className="doc-notebox">
+              <p className="doc-terms">• Le client s'engage à récupérer son appareil dans un délai maximum de 30 jours après notification.</p>
+              <p className="doc-terms">• MOBI ACCESSORIES décline toute responsabilité quant aux données non sauvegardées préalablement.</p>
             </div>
 
-            <div className="grid grid-cols-2 gap-6 pt-6 mt-4 border-t border-gray-300 text-center">
+            <div className="doc-sign">
               <div>
-                <p className="text-[10px] font-bold text-gray-700">Signature Client :</p>
-                <div className="h-12 border-b border-gray-300 mt-1" />
+                <p className="doc-signlabel">Signature client</p>
+                <div className="doc-signline" />
               </div>
               <div>
-                <p className="text-[10px] font-bold text-gray-700">Cachet Atelier :</p>
-                <div className="h-12 border-b border-gray-300 mt-1" />
+                <p className="doc-signlabel">Cachet atelier</p>
+                <div className="doc-signline" />
               </div>
+            </div>
+
+            <div className="doc-footer">
+              <span>{receiptSettings.storeName || 'MOBI ACCESSORIES'} • Tél: {receiptSettings.phone}</span>
+              <span>Ticket N° {printingOrder.ticketNumber}</span>
+              <span>Document généré par Mobi-POS</span>
             </div>
           </div>
         )}

@@ -15,10 +15,13 @@ import {
   Package,
   Copy,
   Coins,
+  Layers,
+  Plus,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import type { BrandName, CategoryType, ProductInput } from '../../types/pos';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
 import {
   generateUniqueEan13Barcode,
   generateUniqueSku,
@@ -172,6 +175,7 @@ export const ProductEditorModal: React.FC = () => {
     compatibleModel: '',
     category: 'Coques iPhone',
     price: 3500,
+    semiWholesalePrice: 2950,
     wholesalePrice: 2400,
     costPrice: 1500,
     stock: 20,
@@ -180,6 +184,7 @@ export const ProductEditorModal: React.FC = () => {
     material: 'Silicone Liquide Soft-Touch',
     isMagSafe: false,
     isSerialized: false,
+    isService: false,
     imeiNumber: '',
     vendorName: '',
     leadTimeDays: 7,
@@ -189,6 +194,7 @@ export const ProductEditorModal: React.FC = () => {
     shelfLocation: 'Rayon A1',
     minPrice: 2000,
     isActive: true,
+    volumeDiscounts: [],
   });
 
   const [autoPrintLabel, setAutoPrintLabel] = useState(false);
@@ -218,11 +224,13 @@ export const ProductEditorModal: React.FC = () => {
     const retail = Math.ceil((cost * multiplier) / 50) * 50;
     const wholesaleMult = 1 + (multiplier - 1) * 0.6;
     const wholesale = Math.max(cost, Math.ceil((cost * wholesaleMult) / 50) * 50);
+    const semiWholesale = Math.ceil(((retail + wholesale) / 2) / 50) * 50;
     const floor = Math.max(cost, Math.ceil((cost * 1.1) / 50) * 50);
 
     setFormData((prev) => ({
       ...prev,
       price: retail,
+      semiWholesalePrice: semiWholesale,
       wholesalePrice: wholesale,
       minPrice: floor,
     }));
@@ -234,6 +242,7 @@ export const ProductEditorModal: React.FC = () => {
     setFormData((prev) => ({
       ...prev,
       price: Math.ceil(prev.price / 100) * 100,
+      semiWholesalePrice: Math.ceil((prev.semiWholesalePrice || 0) / 100) * 100,
       wholesalePrice: Math.ceil(prev.wholesalePrice / 100) * 100,
       minPrice: Math.ceil((prev.minPrice || 0) / 100) * 100,
     }));
@@ -247,6 +256,9 @@ export const ProductEditorModal: React.FC = () => {
 
     const freshBarcode = generateUniqueEan13Barcode(products, '613');
     const freshSku = generateUniqueSku(products, source.category, source.brand);
+    const semiWholesale =
+      source.semiWholesalePrice ??
+      Math.round(((source.price || 0) + (source.wholesalePrice || 0)) / 2);
 
     setFormData({
       ...source,
@@ -254,6 +266,8 @@ export const ProductEditorModal: React.FC = () => {
       title: `${source.title} (Copie)`,
       barcode: freshBarcode,
       sku: freshSku,
+      imeiNumber: '',
+      semiWholesalePrice: semiWholesale,
       imageUrl: '',
       stock: 10,
       isActive: true,
@@ -274,16 +288,44 @@ export const ProductEditorModal: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeModal, closeModal]);
 
+  // Live Barcode Scanner auto-fill when editor is open
+  useEffect(() => {
+    if (activeModal !== 'product_editor') return;
+
+    const handleBarcodeScanned = (e: Event) => {
+      const customEvent = e as CustomEvent<{ code: string }>;
+      if (customEvent.detail?.code) {
+        const scanned = customEvent.detail.code;
+        setFormData((prev) => ({ ...prev, barcode: scanned }));
+        showToast(`Code-barres scanné avec succès : ${scanned}`, 'success');
+      }
+    };
+
+    window.addEventListener('pos:barcode-scanned', handleBarcodeScanned);
+    return () => window.removeEventListener('pos:barcode-scanned', handleBarcodeScanned);
+  }, [activeModal, showToast]);
+
   // Sync state on modal open
   useEffect(() => {
     if (activeModal === 'product_editor') {
       if (editingProduct) {
+        const fallbackSemi = Math.round(
+          ((editingProduct.price || 0) + (editingProduct.wholesalePrice || 0)) / 2
+        );
+        const isSerialized = Boolean(
+          editingProduct.isSerialized ||
+          editingProduct.imeiNumber ||
+          editingProduct.category === "Téléphones d'Occasion (Reprise)"
+        );
         setFormData({
           ...editingProduct,
+          semiWholesalePrice: editingProduct.semiWholesalePrice ?? fallbackSemi,
           warrantyMonths: editingProduct.warrantyMonths || 0,
           shelfLocation: editingProduct.shelfLocation || 'Rayon A1',
           minPrice: editingProduct.minPrice || Math.round(editingProduct.price * 0.8),
           isActive: editingProduct.isActive !== false,
+          isSerialized,
+          imeiNumber: editingProduct.imeiNumber || '',
           imageUrl: '',
         });
       } else {
@@ -297,6 +339,7 @@ export const ProductEditorModal: React.FC = () => {
           compatibleModel: '',
           category: 'Coques iPhone',
           price: 3500,
+          semiWholesalePrice: 2950,
           wholesalePrice: 2400,
           costPrice: 1500,
           stock: 20,
@@ -305,6 +348,7 @@ export const ProductEditorModal: React.FC = () => {
           material: 'Silicone Liquide Soft-Touch',
           isMagSafe: false,
           isSerialized: false,
+          isService: false,
           imeiNumber: '',
           vendorName: '',
           leadTimeDays: 7,
@@ -314,6 +358,7 @@ export const ProductEditorModal: React.FC = () => {
           shelfLocation: 'Rayon A1',
           minPrice: 2000,
           isActive: true,
+          volumeDiscounts: [],
         });
       }
       setTimeout(() => titleInputRef.current?.focus(), 80);
@@ -387,9 +432,17 @@ export const ProductEditorModal: React.FC = () => {
       }
     }
 
+    const isSerialized = Boolean(
+      formData.isSerialized ||
+      formData.category === "Téléphones d'Occasion (Reprise)" ||
+      (formData.imeiNumber && formData.imeiNumber.trim().length > 0)
+    );
+
     setIsSubmitting(true);
     const savePayload: ProductInput = {
       ...formData,
+      isSerialized,
+      imeiNumber: formData.imeiNumber?.trim() || undefined,
       title: formattedTitle,
       imageUrl: '',
     };
@@ -437,6 +490,7 @@ export const ProductEditorModal: React.FC = () => {
         compatibleModel: '',
         category: formData.category,
         price: formData.price,
+        semiWholesalePrice: formData.semiWholesalePrice,
         wholesalePrice: formData.wholesalePrice,
         costPrice: formData.costPrice,
         stock: 20,
@@ -465,6 +519,16 @@ export const ProductEditorModal: React.FC = () => {
   const grossProfit = Math.max(0, formData.price - (formData.costPrice || 0));
   const profitMarginPercent =
     formData.price > 0 ? ((grossProfit / formData.price) * 100).toFixed(1) : '0';
+  
+  const semiWholesalePriceVal =
+    formData.semiWholesalePrice ||
+    Math.round(((formData.price || 0) + (formData.wholesalePrice || 0)) / 2);
+  const semiWholesaleProfit = Math.max(0, semiWholesalePriceVal - (formData.costPrice || 0));
+  const semiWholesaleMarginPercent =
+    semiWholesalePriceVal > 0
+      ? ((semiWholesaleProfit / semiWholesalePriceVal) * 100).toFixed(1)
+      : '0';
+
   const wholesaleProfit = Math.max(0, formData.wholesalePrice - (formData.costPrice || 0));
   const wholesaleMarginPercent =
     formData.wholesalePrice > 0
@@ -472,6 +536,8 @@ export const ProductEditorModal: React.FC = () => {
       : '0';
 
   const isLossPrice = (formData.costPrice || 0) > 0 && formData.price <= (formData.costPrice || 0);
+  const isSemiWholesaleLoss =
+    (formData.costPrice || 0) > 0 && semiWholesalePriceVal <= (formData.costPrice || 0);
   const isWholesaleLoss =
     (formData.costPrice || 0) > 0 && formData.wholesalePrice <= (formData.costPrice || 0);
   const isLowStock = (formData.stock || 0) <= (formData.reorderPoint || 0);
@@ -483,7 +549,7 @@ export const ProductEditorModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-3 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[95vh] h-[94vh] sm:h-[700px] overflow-hidden animate-in slide-in-from-bottom-5 sm:zoom-in-95">
+      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in slide-in-from-bottom-5 sm:zoom-in-95">
         {/* Mobile drag handle */}
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
@@ -501,15 +567,15 @@ export const ProductEditorModal: React.FC = () => {
               <h2 className="text-sm font-black text-pos-text tracking-wide whitespace-nowrap">
                 {editingProduct ? 'MODIFICATION FICHE PRODUIT' : 'CRÉATION FICHE PRODUIT'}
               </h2>
-              <span className="text-[10px] bg-emerald-500/10 text-emerald-400 font-black px-2 py-0.5 rounded border border-emerald-500/30 uppercase tracking-wider shrink-0">
+              <span className="text-[9px] bg-emerald-500/10 text-emerald-400 font-bold px-1.5 py-px rounded border border-emerald-500/30 uppercase tracking-wider shrink-0">
                 ENTERPRISE V2
               </span>
-              
+
               {/* Actif / Inactif Toggle Switch */}
               <button
                 type="button"
                 onClick={() => setFormData((prev) => ({ ...prev, isActive: prev.isActive === false }))}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-pos-bg border border-pos-border hover:border-emerald-500/40 transition cursor-pointer shrink-0"
+                className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-pos-bg border border-pos-border hover:border-emerald-500/40 transition cursor-pointer shrink-0 self-center"
                 title="Statut d'activation du produit dans le catalogue"
               >
                 <div
@@ -537,19 +603,22 @@ export const ProductEditorModal: React.FC = () => {
           {/* Header Right: Dupliquer un Article Existant + Close Button */}
           <div className="flex items-center gap-2.5 shrink-0">
             {!editingProduct && products.length > 0 && (
-              <div className="relative">
+              <div className="relative shrink-0">
+                <Copy className="w-3.5 h-3.5 text-slate-500 pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2" />
                 <select
                   defaultValue=""
+                  aria-label="Dupliquer depuis le catalogue"
+                  title="Dupliquer depuis le catalogue"
                   onChange={(e) => {
                     if (e.target.value) {
                       handleDuplicateFromProduct(e.target.value);
                       e.target.value = '';
                     }
                   }}
-                  className="h-8 bg-pos-bg border border-pos-border hover:border-emerald-500/40 text-pos-text text-xs rounded-lg px-2.5 pr-7 font-semibold focus:border-emerald-400 focus:outline-none cursor-pointer appearance-none transition"
+                  className="h-8 bg-white border border-slate-200 hover:border-emerald-500 text-slate-700 text-xs rounded-lg pl-8 pr-2.5 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer appearance-none transition max-w-[160px]"
                 >
                   <option value="" disabled>
-                    📋 Dupliquer depuis le catalogue...
+                    Dupliquer…
                   </option>
                   {products.slice(0, 30).map((p) => (
                     <option key={p.id} value={p.id}>
@@ -557,9 +626,6 @@ export const ProductEditorModal: React.FC = () => {
                     </option>
                   ))}
                 </select>
-                <div className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-pos-muted text-[10px]">
-                  <Copy className="w-3 h-3 text-emerald-400" />
-                </div>
               </div>
             )}
 
@@ -581,9 +647,10 @@ export const ProductEditorModal: React.FC = () => {
         <form onSubmit={handleFormSubmit} className="flex flex-col flex-1 min-h-0 bg-pos-bg">
           
           {/* ======================================================================= */}
-          {/* MAIN 2-COLUMN BODY (Zero Scroll Guaranteed on 1080p/768p)               */}
+          {/* MAIN SCROLLABLE FORM CONTENT (header/footer pinned via shrink-0)       */}
           {/* ======================================================================= */}
-          <div className="flex-1 min-h-0 overflow-y-auto lg:overflow-y-hidden p-4 sm:p-5 flex flex-col lg:flex-row gap-5">
+          <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+          <div className="flex flex-col lg:flex-row gap-5 pb-6">
             
             {/* --------------------------------------------------------------------- */}
             {/* 2. LEFT COLUMN (50% Width) — Identification & Attributes              */}
@@ -645,12 +712,12 @@ export const ProductEditorModal: React.FC = () => {
                     }
                   }}
                   placeholder="ex: Coque Silicone MagSafe iPhone 15 Pro Max - Noir Titane"
-                  className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-3 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none transition shadow-sm"
+                  className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 text-base sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none transition shadow-sm"
                 />
               </div>
 
               {/* Row 1 (3-column grid): Marque, Catégorie, Modèle */}
-              <div className="grid grid-cols-3 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 <div>
                   <label className="text-[10px] font-bold text-pos-muted block mb-1">
                     Marque / Fabricant
@@ -658,7 +725,7 @@ export const ProductEditorModal: React.FC = () => {
                   <select
                     value={formData.brand}
                     onChange={(e) => setFormData({ ...formData, brand: e.target.value as BrandName })}
-                    className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-2 text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer transition"
+                    className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-2 text-base sm:text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer transition"
                   >
                     {BRANDS.map((b) => (
                       <option key={b} value={b}>
@@ -674,10 +741,15 @@ export const ProductEditorModal: React.FC = () => {
                   </label>
                   <select
                     value={formData.category}
-                    onChange={(e) =>
-                      setFormData({ ...formData, category: e.target.value as CategoryType })
-                    }
-                    className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-2 text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer transition"
+                    onChange={(e) => {
+                      const newCat = e.target.value as CategoryType;
+                      if (newCat === "Téléphones d'Occasion (Reprise)") {
+                        setFormData({ ...formData, category: newCat, isSerialized: true });
+                      } else {
+                        setFormData({ ...formData, category: newCat });
+                      }
+                    }}
+                    className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-2 text-base sm:text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer transition"
                   >
                     {CATEGORIES.map((c) => (
                       <option key={c} value={c}>
@@ -696,7 +768,7 @@ export const ProductEditorModal: React.FC = () => {
                     value={formData.compatibleModel}
                     onChange={(e) => setFormData({ ...formData, compatibleModel: e.target.value })}
                     placeholder="ex: iPhone 15 Pro Max"
-                    className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-2.5 text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none transition"
+                    className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-2.5 text-base sm:text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none transition"
                   />
                 </div>
               </div>
@@ -712,7 +784,7 @@ export const ProductEditorModal: React.FC = () => {
                     value={formData.vendorName}
                     onChange={(e) => setFormData({ ...formData, vendorName: e.target.value })}
                     placeholder="ex: Distributeur Officiel Apple Algérie"
-                    className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-2.5 text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none transition"
+                    className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-2.5 text-base sm:text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none transition"
                   />
                 </div>
 
@@ -726,7 +798,7 @@ export const ProductEditorModal: React.FC = () => {
                       value={formData.sku}
                       onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
                       placeholder="ex: COQ-APP-5735"
-                      className={`w-full h-9 bg-pos-card border rounded-lg pl-2.5 pr-14 text-xs font-mono font-bold text-pos-text focus:outline-none transition ${
+                      className={`w-full min-h-[48px] bg-pos-card border rounded-lg pl-2.5 pr-14 text-xs font-mono font-bold text-pos-text focus:outline-none transition ${
                         duplicateSkuProduct
                           ? 'border-amber-500 focus:border-amber-400'
                           : 'border-pos-border focus:border-emerald-400'
@@ -758,17 +830,17 @@ export const ProductEditorModal: React.FC = () => {
                   )}
                 </div>
 
-                <div className="flex items-center gap-2.5">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-2.5">
                   {/* Inline Barcode Input */}
                   <input
                     type="text"
                     value={formData.barcode}
                     onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
                     placeholder="ex: 6138318449885"
-                    className={`flex-1 h-9 bg-pos-bg border rounded-lg px-2.5 text-xs font-mono font-bold focus:outline-none transition ${
+                    className={`flex-1 min-h-[48px] bg-white border rounded-lg px-2.5 text-base sm:text-xs font-mono font-normal text-slate-900 focus:outline-none transition focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 ${
                       duplicateBarcodeProduct
-                        ? 'border-red-500 text-red-400 focus:border-red-400'
-                        : 'border-pos-border text-emerald-400 focus:border-emerald-400'
+                        ? 'border-red-300'
+                        : 'border-slate-200'
                     }`}
                   />
 
@@ -776,57 +848,143 @@ export const ProductEditorModal: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleGenerateFreshEan13}
-                    className="h-9 px-3 rounded-lg bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/30 text-xs font-bold flex items-center gap-1.5 shrink-0 transition cursor-pointer"
+                      className="min-h-[48px] px-3 rounded-lg bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/30 text-xs font-bold flex items-center justify-center gap-1.5 shrink-0 transition cursor-pointer active:scale-95"
                   >
                     <RefreshCw className="w-3 h-3" />
                     Générer EAN-13
                   </button>
 
                   {/* Compact Live Barcode Canvas Preview */}
-                  <div className="h-9 w-32 bg-white rounded-lg border border-pos-border px-1 flex items-center justify-center shrink-0 shadow-sm overflow-hidden">
+                  <div className="min-h-[48px] w-full sm:w-32 bg-white rounded-lg border border-pos-border px-1 flex items-center justify-center shrink-0 shadow-sm overflow-hidden">
                     <canvas ref={barcodeCanvasRef} className="h-7 w-full mix-blend-multiply" />
                   </div>
                 </div>
+
+                {/* Intelligent IMEI vs Barcode Helper */}
+                {formData.barcode && formData.barcode.length === 15 && /^\d{15}$/.test(formData.barcode) && (
+                  <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-2.5 flex items-center justify-between text-[11px] text-cyan-300 animate-in fade-in">
+                    <div className="flex items-center gap-1.5 min-w-0 pr-2">
+                      <Shield className="w-4 h-4 text-cyan-400 shrink-0" />
+                      <span>Ce code comporte 15 chiffres et ressemble à un IMEI. Déplacez-le dans le champ IMEI pour garder un code-barres produit scannable.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const imeiVal = formData.barcode;
+                        const freshBarcode = generateUniqueEan13Barcode(products, '613');
+                        setFormData((prev) => ({
+                          ...prev,
+                          barcode: freshBarcode,
+                          imeiNumber: imeiVal,
+                          isSerialized: true,
+                        }));
+                        showToast('IMEI transféré avec succès dans son champ dédié. Nouveau code-barres EAN-13 attribué.', 'success');
+                      }}
+                      className="px-2.5 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 font-bold text-cyan-200 shrink-0 cursor-pointer"
+                    >
+                      Déplacer vers IMEI
+                    </button>
+                  </div>
+                )}
               </div>
 
-              {/* Secondary Attribute Strip (MagSafe, IMEI, Auto-Print) */}
-              <div className="flex items-center justify-between gap-3 px-2 py-1.5 bg-pos-card/30 border border-pos-border/40 rounded-lg text-xs font-bold text-pos-text">
-                <label className="flex items-center gap-1.5 cursor-pointer hover:text-emerald-400 transition">
+              {/* Options / Tags (2x2 grid of compact toggle cards) */}
+              <div className="grid grid-cols-2 gap-2">
+                <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 cursor-pointer transition hover:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/20">
                   <input
                     type="checkbox"
                     checked={formData.isMagSafe || false}
                     onChange={(e) => setFormData({ ...formData, isMagSafe: e.target.checked })}
-                    className="w-3.5 h-3.5 rounded text-emerald-500 focus:ring-emerald-400 cursor-pointer"
+                    className="w-3.5 h-3.5 rounded border-slate-200 text-emerald-600 focus:ring-emerald-500/20 cursor-pointer"
                   />
-                  <span className="flex items-center gap-1 text-[11px]">
-                    <Zap className="w-3 h-3 text-emerald-400" /> MagSafe
+                  <span className="flex items-center gap-1.5 text-[11px] font-medium text-slate-700">
+                    <Zap className="w-3.5 h-3.5 text-slate-500" /> MagSafe
                   </span>
                 </label>
 
-                <label className="flex items-center gap-1.5 cursor-pointer hover:text-cyan-400 transition">
+                <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 cursor-pointer transition hover:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/20">
                   <input
                     type="checkbox"
                     checked={formData.isSerialized || false}
                     onChange={(e) => setFormData({ ...formData, isSerialized: e.target.checked })}
-                    className="w-3.5 h-3.5 rounded text-emerald-500 focus:ring-emerald-400 cursor-pointer"
+                    className="w-3.5 h-3.5 rounded border-slate-200 text-emerald-600 focus:ring-emerald-500/20 cursor-pointer"
                   />
-                  <span className="flex items-center gap-1 text-[11px]">
-                    <Shield className="w-3 h-3 text-cyan-400" /> Sérialisé IMEI
+                  <span className="flex items-center gap-1.5 text-[11px] font-medium text-slate-700">
+                    <Shield className="w-3.5 h-3.5 text-slate-500" /> Sérialisé IMEI
                   </span>
                 </label>
 
-                <label className="flex items-center gap-1.5 cursor-pointer hover:text-emerald-400 transition">
+                <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 cursor-pointer transition hover:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/20">
+                  <input
+                    type="checkbox"
+                    checked={formData.isService || false}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        isService: e.target.checked,
+                        stock: e.target.checked && formData.stock === 0 ? 999999 : formData.stock,
+                      })
+                    }
+                    className="w-3.5 h-3.5 rounded border-slate-200 text-emerald-600 focus:ring-emerald-500/20 cursor-pointer"
+                  />
+                  <span className="flex items-center gap-1.5 text-[11px] font-medium text-slate-700">
+                    <Zap className="w-3.5 h-3.5 text-slate-500" /> Prestation (Sans stock)
+                  </span>
+                </label>
+
+                <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 cursor-pointer transition hover:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/20">
                   <input
                     type="checkbox"
                     checked={autoPrintLabel}
                     onChange={(e) => setAutoPrintLabel(e.target.checked)}
-                    className="w-3.5 h-3.5 rounded text-emerald-500 focus:ring-emerald-400 cursor-pointer"
+                    className="w-3.5 h-3.5 rounded border-slate-200 text-emerald-600 focus:ring-emerald-500/20 cursor-pointer"
                   />
-                  <span className="flex items-center gap-1 text-[11px] text-emerald-400">
-                    <Printer className="w-3 h-3" /> Imprimer Étiquette
+                  <span className="flex items-center gap-1.5 text-[11px] font-medium text-slate-700">
+                    <Printer className="w-3.5 h-3.5 text-slate-500" /> Imprimer Étiquette
                   </span>
                 </label>
               </div>
+
+              {/* Dedicated IMEI Section for Serialized Devices / Used Phones */}
+              {(formData.isSerialized || formData.category === "Téléphones d'Occasion (Reprise)") && (
+                <div className="p-3 bg-cyan-500/10 border border-cyan-500/30 rounded-xl space-y-2 animate-in fade-in slide-in-from-top-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Shield className="w-3.5 h-3.5 text-cyan-400" />
+                      Numéro IMEI Matériel (Appareil Unique)
+                    </span>
+                    <span className="text-[10px] text-cyan-300/80 font-semibold">
+                      Strictement distinct du code-barres
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={formData.imeiNumber || ''}
+                      onChange={(e) => {
+                        const clean = e.target.value.replace(/\D/g, '').slice(0, 15);
+                        setFormData({ ...formData, imeiNumber: clean, isSerialized: true });
+                      }}
+                      placeholder="ex: 358921004812345 (15 chiffres)"
+                      className="flex-1 min-h-[48px] bg-white border border-slate-200 rounded-lg px-2.5 text-base sm:text-xs font-mono font-normal text-slate-900 focus:outline-none transition focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                      maxLength={15}
+                    />
+                    {formData.imeiNumber && formData.imeiNumber.length === 15 ? (
+                      <span className="min-h-[36px] px-2.5 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 text-[10px] font-bold flex items-center gap-1 shrink-0">
+                        <CheckCircle2 className="w-3 h-3" /> 15 chiffres OK
+                      </span>
+                    ) : formData.imeiNumber ? (
+                      <span className="min-h-[36px] px-2.5 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/40 text-[10px] font-bold flex items-center gap-1 shrink-0">
+                        {formData.imeiNumber.length}/15 chiffres
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="text-[10px] text-pos-muted">
+                    L'IMEI identifie le châssis physique pour la garantie et le SAV. Le code-barres sert au scan en caisse et à l'impression d'étiquettes.
+                  </p>
+                </div>
+              )}
 
             </div>
 
@@ -840,22 +998,30 @@ export const ProductEditorModal: React.FC = () => {
                 <div className="grid grid-cols-2 gap-2.5">
                   <div>
                     <label className="text-[10px] font-bold text-pos-text block mb-1">
-                      Stock Initial *
+                      {formData.isService ? 'Stock (Service: Illimité)' : 'Stock Initial *'}
                     </label>
                     <input
                       type="number"
-                      required
+                      required={!formData.isService}
+                      disabled={formData.isService}
                       min="0"
-                      value={formData.stock}
+                      value={formData.isService ? 999999 : formData.stock}
                       onChange={(e) =>
                         setFormData({ ...formData, stock: parseInt(e.target.value) || 0 })
                       }
-                      className={`w-full h-9 bg-pos-bg border rounded-lg px-2.5 text-xs font-black text-pos-text focus:outline-none transition ${
-                        isLowStock
+                      className={`w-full min-h-[48px] bg-pos-bg border rounded-lg px-2.5 text-base sm:text-xs font-black text-pos-text focus:outline-none transition ${
+                        formData.isService
+                          ? 'border-amber-500/40 text-amber-300 bg-amber-950/20 cursor-not-allowed'
+                          : isLowStock
                           ? 'border-amber-500/60 focus:border-amber-400'
                           : 'border-pos-border focus:border-emerald-400'
                       }`}
                     />
+                    {formData.isService && (
+                      <p className="text-[9px] text-amber-300/80 mt-1 font-medium">
+                        Prestation intangible : stock illimité sans rupture.
+                      </p>
+                    )}
                   </div>
 
                   <div>
@@ -869,13 +1035,13 @@ export const ProductEditorModal: React.FC = () => {
                       onChange={(e) =>
                         setFormData({ ...formData, reorderPoint: parseInt(e.target.value) || 0 })
                       }
-                      className="w-full h-9 bg-pos-bg border border-pos-border rounded-lg px-2.5 text-xs font-bold text-pos-muted focus:border-emerald-400 focus:outline-none transition"
+                      className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-lg px-2.5 text-base sm:text-xs font-bold text-pos-muted focus:border-emerald-400 focus:outline-none transition"
                     />
                   </div>
                 </div>
 
                 {/* Valorisation Financière du Stock (High-Value Retail Dashboard) */}
-                <div className="grid grid-cols-3 gap-2 pt-1 border-t border-pos-border/50">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 border-t border-pos-border/50">
                   <div className="bg-pos-bg px-2 py-1 rounded-lg border border-pos-border text-center">
                     <span className="text-[8px] text-pos-muted font-bold block uppercase tracking-wider">
                       Coût Total Lot
@@ -953,67 +1119,103 @@ export const ProductEditorModal: React.FC = () => {
                   </div>
                 </div>
 
-                {/* 2x2 Price Inputs */}
-                <div className="grid grid-cols-2 gap-2.5">
-                  {/* Prix Achat (Cost) */}
-                  <div>
-                    <label className="text-[10px] font-bold text-pos-muted block mb-1">
-                      Prix Achat Cost (DA)
-                    </label>
-                    <input
-                      type="number"
-                      step="50"
-                      min="0"
-                      value={formData.costPrice}
-                      onChange={(e) =>
-                        setFormData({ ...formData, costPrice: parseFloat(e.target.value) || 0 })
-                      }
-                      className="w-full h-9 bg-pos-bg border border-pos-border rounded-lg px-2.5 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none transition"
-                    />
-                  </div>
-
+                {/* 3-Tier Selling Prices Row */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {/* Prix Vente Détail */}
                   <div>
-                    <label className="text-[10px] font-bold text-emerald-400 block mb-1">
-                      Prix Vente Détail (DA) *
-                    </label>
+                    <span className="inline-flex px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-semibold text-slate-600 mb-1">
+                      Détail (DA) *
+                    </span>
                     <input
                       type="number"
-                      step="50"
+                      step="any"
                       required
                       min="0"
                       value={formData.price}
                       onChange={(e) =>
-                        setFormData({ ...formData, price: parseFloat(e.target.value) || 0 })
+                        setFormData({
+                          ...formData,
+                          price: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)),
+                        })
                       }
-                      className={`w-full h-9 bg-pos-bg border rounded-lg px-2.5 text-xs font-black text-emerald-400 focus:outline-none transition ${
-                        isLossPrice ? 'border-red-500' : 'border-pos-border focus:border-emerald-400'
+                      className={`w-full min-h-[48px] bg-white border rounded-lg px-2.5 text-base sm:text-xs font-normal text-slate-900 focus:outline-none transition focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 ${
+                        isLossPrice ? 'border-red-300' : 'border-slate-200'
+                      }`}
+                    />
+                  </div>
+
+                  {/* Prix Vente Demi-Gros */}
+                  <div>
+                    <span className="inline-flex px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-semibold text-slate-600 mb-1">
+                      Demi-Gros (DA)
+                    </span>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={formData.semiWholesalePrice ?? ''}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          semiWholesalePrice: e.target.value
+                            ? Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0))
+                            : undefined,
+                        })
+                      }
+                      placeholder={String(Math.round(((formData.price || 0) + (formData.wholesalePrice || 0)) / 2))}
+                      className={`w-full min-h-[48px] bg-white border rounded-lg px-2.5 text-base sm:text-xs font-normal text-slate-900 focus:outline-none transition focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 ${
+                        isSemiWholesaleLoss
+                          ? 'border-red-300'
+                          : 'border-slate-200'
                       }`}
                     />
                   </div>
 
                   {/* Prix Vente Gros */}
                   <div>
-                    <label className="text-[10px] font-bold text-amber-400 block mb-1">
-                      Prix Vente Gros (DA) *
-                    </label>
+                    <span className="inline-flex px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-semibold text-slate-600 mb-1">
+                      Gros (DA) *
+                    </span>
                     <input
                       type="number"
-                      step="50"
+                      step="any"
                       required
                       min="0"
                       value={formData.wholesalePrice}
                       onChange={(e) =>
                         setFormData({
                           ...formData,
-                          wholesalePrice: parseFloat(e.target.value) || 0,
+                          wholesalePrice: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)),
                         })
                       }
-                      className={`w-full h-9 bg-pos-bg border rounded-lg px-2.5 text-xs font-black text-amber-400 focus:outline-none transition ${
+                      className={`w-full min-h-[48px] bg-white border rounded-lg px-2.5 text-base sm:text-xs font-normal text-slate-900 focus:outline-none transition focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 ${
                         isWholesaleLoss
-                          ? 'border-red-500'
-                          : 'border-pos-border focus:border-amber-400'
+                          ? 'border-red-300'
+                          : 'border-slate-200'
                       }`}
+                    />
+                  </div>
+                </div>
+
+                {/* Cost and Floor Price Row */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  {/* Prix Achat (Cost) */}
+                  <div>
+                    <label className="text-[10px] font-bold text-pos-muted block mb-1">
+                      Prix Achat Coûtant (DA)
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      value={formData.costPrice}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          costPrice: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)),
+                        })
+                      }
+                      className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-lg px-2.5 text-base sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none transition"
                     />
                   </div>
 
@@ -1024,51 +1226,112 @@ export const ProductEditorModal: React.FC = () => {
                     </label>
                     <input
                       type="number"
-                      step="50"
+                      step="any"
                       min="0"
                       value={formData.minPrice || 0}
                       onChange={(e) =>
-                        setFormData({ ...formData, minPrice: parseFloat(e.target.value) || 0 })
+                        setFormData({
+                          ...formData,
+                          minPrice: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)),
+                        })
                       }
-                      className="w-full h-9 bg-pos-bg border border-pos-border rounded-lg px-2.5 text-xs font-bold text-pos-muted focus:border-emerald-400 focus:outline-none transition"
+                      className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-lg px-2.5 text-base sm:text-xs font-bold text-pos-muted focus:border-emerald-400 focus:outline-none transition"
                     />
                   </div>
                 </div>
 
-                {/* Real-Time Margin Badges */}
-                <div className="grid grid-cols-3 gap-2 pt-1">
-                  <div className="bg-pos-bg px-2 py-1 rounded-lg border border-pos-border flex flex-col items-center justify-center text-center">
-                    <span className="text-[9px] text-pos-muted font-bold">Bénéfice Détail</span>
-                    <span
-                      className={`font-black text-xs truncate ${
-                        isLossPrice ? 'text-red-400' : 'text-emerald-400'
-                      }`}
-                    >
-                      {isLossPrice ? 'Perte !' : `+${formatDZD(grossProfit)}`}
+                {/* Real-Time Margin Summary (compact neutral pill card) */}
+                <div className="flex items-center justify-between gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-medium text-slate-700">
+                  <span className="whitespace-nowrap">
+                    Détail <strong className={`font-semibold ${isLossPrice ? 'text-red-600' : 'text-slate-900'}`}>{profitMarginPercent}% ({formatDZD(grossProfit)})</strong>
+                  </span>
+                  <span className="w-px h-4 bg-slate-200 shrink-0" aria-hidden="true" />
+                  <span className="whitespace-nowrap">
+                    Demi-Gros <strong className={`font-semibold ${isSemiWholesaleLoss ? 'text-red-600' : 'text-slate-900'}`}>{semiWholesaleMarginPercent}% ({formatDZD(semiWholesaleProfit)})</strong>
+                  </span>
+                  <span className="w-px h-4 bg-slate-200 shrink-0" aria-hidden="true" />
+                  <span className="whitespace-nowrap">
+                    Gros <strong className={`font-semibold ${isWholesaleLoss ? 'text-red-600' : 'text-slate-900'}`}>{wholesaleMarginPercent}% ({formatDZD(wholesaleProfit)})</strong>
+                  </span>
+                </div>
+
+                {/* Offres par Lots (Volume Pricing Tiers) */}
+                <div className="pt-2 border-t border-pos-border/60 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Layers className="w-3.5 h-3.5" />
+                      Offres par Lots (Volume Pricing)
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const current = formData.volumeDiscounts || [];
+                        const nextMin = current.length > 0 ? current[current.length - 1].minQty + 2 : 3;
+                        const suggested = Math.max(0, Math.round((formData.price * 0.85) / 50) * 50);
+                        setFormData({
+                          ...formData,
+                          volumeDiscounts: [...current, { minQty: nextMin, price: suggested }],
+                        });
+                      }}
+                      className="px-2 py-0.5 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-[10px] font-bold transition cursor-pointer flex items-center gap-1"
+                    >
+                      <Plus className="w-3 h-3" />
+                      Ajouter Palier
+                    </button>
                   </div>
 
-                  <div className="bg-pos-bg px-2 py-1 rounded-lg border border-pos-border flex flex-col items-center justify-center text-center">
-                    <span className="text-[9px] text-pos-muted font-bold">Marge Détail</span>
-                    <span
-                      className={`font-black text-xs ${
-                        isLossPrice ? 'text-red-400' : 'text-emerald-400'
-                      }`}
-                    >
-                      {profitMarginPercent}%
-                    </span>
-                  </div>
-
-                  <div className="bg-pos-bg px-2 py-1 rounded-lg border border-pos-border flex flex-col items-center justify-center text-center">
-                    <span className="text-[9px] text-pos-muted font-bold">Marge Gros</span>
-                    <span
-                      className={`font-black text-xs ${
-                        isWholesaleLoss ? 'text-red-400' : 'text-amber-400'
-                      }`}
-                    >
-                      {wholesaleMarginPercent}%
-                    </span>
-                  </div>
+                  {(!formData.volumeDiscounts || formData.volumeDiscounts.length === 0) ? (
+                    <p className="text-[10.5px] text-pos-muted italic">
+                      Aucun palier volume configuré. Exemple: "3 pièces pour 400 DA/u (au lieu de 500 DA)".
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                      {formData.volumeDiscounts.map((tier, tIdx) => (
+                        <div key={tIdx} className="flex items-center gap-2 bg-pos-bg p-1.5 rounded-lg border border-pos-border">
+                          <span className="text-[10px] font-bold text-pos-muted whitespace-nowrap">Dès</span>
+                          <input
+                            type="number"
+                            min="2"
+                            value={tier.minQty}
+                            onChange={(e) => {
+                              const updated = [...(formData.volumeDiscounts || [])];
+                              updated[tIdx] = { ...updated[tIdx], minQty: parseInt(e.target.value) || 2 };
+                              setFormData({ ...formData, volumeDiscounts: updated });
+                            }}
+                            className="w-12 h-7 bg-pos-card border border-pos-border rounded px-1.5 text-xs font-bold text-pos-text text-center focus:outline-none focus:border-cyan-400"
+                          />
+                          <span className="text-[10px] font-bold text-pos-muted whitespace-nowrap">pcs →</span>
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            value={tier.price}
+                            onChange={(e) => {
+                              const updated = [...(formData.volumeDiscounts || [])];
+                              updated[tIdx] = {
+                                ...updated[tIdx],
+                                price: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)),
+                              };
+                              setFormData({ ...formData, volumeDiscounts: updated });
+                            }}
+                            className="w-20 h-7 bg-white border border-slate-200 rounded px-1.5 text-xs font-normal text-slate-900 font-mono text-center focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          />
+                          <span className="text-[10px] font-bold text-cyan-400">DA/u</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = (formData.volumeDiscounts || []).filter((_, idx) => idx !== tIdx);
+                              setFormData({ ...formData, volumeDiscounts: updated });
+                            }}
+                            className="ml-auto p-1 text-pos-muted hover:text-rose-400 transition"
+                            title="Supprimer ce palier"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
               </div>
@@ -1084,7 +1347,7 @@ export const ProductEditorModal: React.FC = () => {
                     value={formData.shelfLocation || 'Rayon A1'}
                     onChange={(e) => setFormData({ ...formData, shelfLocation: e.target.value })}
                     placeholder="ex: Rayon A2 - Vitrine 1"
-                    className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-2.5 text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none transition"
+                    className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-2.5 text-base sm:text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none transition"
                   />
                 </div>
 
@@ -1097,7 +1360,7 @@ export const ProductEditorModal: React.FC = () => {
                     onChange={(e) =>
                       setFormData({ ...formData, warrantyMonths: parseInt(e.target.value) || 0 })
                     }
-                    className="w-full h-9 bg-pos-card border border-pos-border rounded-lg px-2.5 text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer transition"
+                    className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-2.5 text-base sm:text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer transition"
                   >
                     <option value={0}>Sans Garantie</option>
                     <option value={1}>1 Mois Garantie SAV</option>
@@ -1110,7 +1373,7 @@ export const ProductEditorModal: React.FC = () => {
               </div>
 
             </div>
-
+          </div>
           </div>
 
           {/* ======================================================================= */}
@@ -1157,16 +1420,16 @@ export const ProductEditorModal: React.FC = () => {
                 </button>
               )}
 
-              {/* Annuler */}
+              {/* Annuler (ghost) */}
               <button
                 type="button"
                 onClick={closeModal}
-                className="min-h-[40px] px-4 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text hover:bg-pos-hover transition cursor-pointer active:scale-95 flex items-center justify-center"
+                className="min-h-[40px] px-4 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition cursor-pointer active:scale-95 flex items-center justify-center"
               >
                 Annuler
               </button>
 
-              {/* Enregistrer & Nouveau */}
+              {/* Enregistrer & Nouveau (outlined secondary) */}
               {!editingProduct && (
                 <button
                   type="button"
@@ -1176,14 +1439,14 @@ export const ProductEditorModal: React.FC = () => {
                     Boolean(duplicateSkuProduct)
                   }
                   onClick={handleSaveAndNew}
-                  className="min-h-[40px] px-4 rounded-xl bg-pos-card hover:bg-pos-hover text-pos-text border border-pos-border hover:border-emerald-500/50 text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
+                  className="min-h-[40px] px-4 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 hover:border-emerald-500 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
                 >
-                  <Package className="w-3.5 h-3.5 text-emerald-400" />
+                  <Package className="w-3.5 h-3.5 text-slate-500" />
                   <span>Enregistrer & Nouveau</span>
                 </button>
               )}
 
-              {/* Enregistrer le Produit (Primary Submit button, triggers on Enter) */}
+              {/* Enregistrer le Produit (solid primary CTA, triggers on Enter) */}
               <button
                 type="submit"
                 disabled={
@@ -1191,10 +1454,10 @@ export const ProductEditorModal: React.FC = () => {
                   Boolean(duplicateBarcodeProduct) ||
                   Boolean(duplicateSkuProduct)
                 }
-                className={`min-h-[40px] px-5 rounded-xl text-slate-950 font-black text-xs shadow-md flex items-center justify-center gap-1.5 transition cursor-pointer focus:ring-2 focus:ring-emerald-400 focus:outline-none active:scale-95 flex-1 sm:flex-none ${
+                className={`min-h-[40px] px-5 rounded-xl font-bold text-xs shadow-md flex items-center justify-center gap-1.5 transition cursor-pointer focus:ring-2 focus:ring-emerald-500/20 focus:outline-none active:scale-95 flex-1 sm:flex-none ${
                   duplicateBarcodeProduct || duplicateSkuProduct
-                    ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                    : 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 shadow-emerald-500/20'
+                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                    : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'
                 }`}
               >
                 <Check className="w-4 h-4 stroke-[3]" />

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Clock,
@@ -19,14 +19,61 @@ import {
   Wrench,
   ShoppingBag,
   FileText,
+  Eye,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
 import type { PurchaseOrder, PaymentMethodType } from '../../types/pos';
 import { useToast } from '../ui/Toast';
-import { printCoordinator } from '../../utils/printCoordinator';
 import { buildWhatsAppUrl } from '../../utils/phoneUtils';
 import { soundEngine } from '../../utils/audioFeedback';
+import { PurchaseOrderA4Document } from './PurchaseOrderA4Document';
+
+// ─── Affichage seul : ancienneté relative en français ───
+// TTL 48 h des paniers suspendus (miroir lecture-seule de createCartSlice).
+
+const HOLD_TTL_MS = 48 * 60 * 60 * 1000;
+
+function parseIsoMs(raw: unknown): number | null {
+  if (typeof raw !== 'string' || !raw) return null;
+  const t = new Date(raw).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+/** « à l'instant », « il y a X min », « il y a X h », « il y a X j » — null si date absente/illisible. */
+function formatAgeFr(createdAtMs: number | null, nowMs: number): string | null {
+  if (createdAtMs === null) return null;
+  const diffMin = Math.max(0, Math.floor((nowMs - createdAtMs) / 60000));
+  if (diffMin < 1) return "à l'instant";
+  if (diffMin < 60) return `il y a ${diffMin} min`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `il y a ${diffH} h`;
+  return `il y a ${Math.floor(diffH / 24)} j`;
+}
+
+type AgeTone = 'fresh' | 'watch' | 'old' | 'unknown';
+
+/** Code couleur d'ancienneté : récent < 1 h, à surveiller < 24 h, ancien au-delà. */
+function ageTone(createdAtMs: number | null, nowMs: number): AgeTone {
+  if (createdAtMs === null) return 'unknown';
+  const ageMs = nowMs - createdAtMs;
+  if (ageMs < 60 * 60 * 1000) return 'fresh';
+  if (ageMs < 24 * 60 * 60 * 1000) return 'watch';
+  return 'old';
+}
+
+const AGE_TONE_CLASSES: Record<AgeTone, string> = {
+  fresh: 'bg-teal-500/15 border-teal-500/30 text-teal-300',
+  watch: 'bg-amber-500/15 border-amber-500/30 text-amber-300',
+  old: 'bg-red-500/15 border-red-500/30 text-red-300 animate-pulse',
+  unknown: 'bg-pos-bg border-pos-border text-pos-muted',
+};
+
+/** Instant de suspension déduit de l'expiresAt (48 h TTL) — null pour les tickets historiques sans TTL. */
+function heldSaleCreatedAtMs(hs: unknown): number | null {
+  const exp = parseIsoMs((hs as { expiresAt?: unknown }).expiresAt);
+  return exp === null ? null : exp - HOLD_TTL_MS;
+}
 
 export const CommandTicketDashboardModal: React.FC = () => {
   const {
@@ -42,6 +89,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
     cancelPO,
     deletePO,
     updateRepairOrderStatus,
+    receiptSettings,
   } = usePosStore();
 
   const { showToast } = useToast();
@@ -56,18 +104,51 @@ export const CommandTicketDashboardModal: React.FC = () => {
 
   // Receiving Sub-Modal State
   const [receivingPO, setReceivingPO] = useState<PurchaseOrder | null>(null);
+  const [printingPO, setPrintingPO] = useState<PurchaseOrder | null>(null);
+  const [previewingPO, setPreviewingPO] = useState<PurchaseOrder | null>(null);
   const [verifiedQtyMap, setVerifiedQtyMap] = useState<Record<string, number>>({});
   const [verifiedCostMap, setVerifiedCostMap] = useState<Record<string, number>>({});
   const [discrepancyReasons, setDiscrepancyReasons] = useState<Record<string, string>>({});
   const [autoRecordExpense, setAutoRecordExpense] = useState<boolean>(true);
   const [expensePaymentMethod, setExpensePaymentMethod] = useState<PaymentMethodType>('Espèces');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  // Rafraîchit les anciennetés « il y a X min » toutes les 30 s (affichage seul).
+  const [, setAgeTick] = useState(0);
+
+  useEffect(() => {
+    if (activeModal !== 'command_tickets') return;
+    const timer = setTimeout(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    }, 60);
+    return () => clearTimeout(timer);
+  }, [activeModal]);
+
+  useEffect(() => {
+    if (activeModal !== 'command_tickets') return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeModal();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeModal, closeModal]);
+
+  useEffect(() => {
+    if (activeModal !== 'command_tickets') return;
+    const id = setInterval(() => setAgeTick((t) => t + 1), 30000);
+    return () => clearInterval(id);
+  }, [activeModal]);
 
   if (activeModal !== 'command_tickets') return null;
 
   // ══════════════════════════════════════════════════════════════
   // GLOBAL KPIS CALCULATIONS
   // ══════════════════════════════════════════════════════════════
+  const nowMs = Date.now();
   const waitingPOs = (purchaseOrders || []).filter(
     (po) => po.status === 'Waiting List' || po.status === 'Draft' || po.status === 'Partially Received'
   );
@@ -88,16 +169,27 @@ export const CommandTicketDashboardModal: React.FC = () => {
     (r) => r.status === 'Diagnostic' || r.status === 'En attente de pièces' || r.status === 'En cours'
   );
 
-  // Filtered Purchase Orders
-  const filteredPOs = (purchaseOrders || []).filter((po) => {
-    const matchesSearch =
-      po.poNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      po.vendorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      po.items.some((item) => item.title.toLowerCase().includes(searchQuery.toLowerCase()) || item.sku.toLowerCase().includes(searchQuery.toLowerCase()));
+  // Filtered Purchase Orders — newest first (creation timestamp DESC).
+  // Enterprise rule: a "Bons Fournisseur" waiting list must surface the most
+  // recently created order at the top, never oldest-first.
+  const filteredPOs = (purchaseOrders || [])
+    .filter((po) => {
+      const matchesSearch =
+        po.poNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        po.vendorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        po.items.some((item) => item.title.toLowerCase().includes(searchQuery.toLowerCase()) || item.sku.toLowerCase().includes(searchQuery.toLowerCase()));
 
-    const matchesStatus = statusFilter === 'all' ? true : po.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+      const matchesStatus = statusFilter === 'all' ? true : po.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    })
+    .sort((a, b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (Number.isNaN(ta) && Number.isNaN(tb)) return 0;
+      if (Number.isNaN(ta)) return 1;
+      if (Number.isNaN(tb)) return -1;
+      return tb - ta;
+    });
 
   // Filtered Held Sales
   const filteredHeldSales = (heldSales || []).filter((hs) => {
@@ -128,8 +220,11 @@ export const CommandTicketDashboardModal: React.FC = () => {
     const initReasons: Record<string, string> = {};
 
     po.items.forEach((item) => {
+      // Default to REMAINING qty (0 for complete lines): defaulting to the
+      // full suggestedQty re-added complete lines on re-validation,
+      // double-counting stock + batches + ledger (receivedQty accumulates).
       const remaining = Math.max(0, item.suggestedQty - (item.receivedQty || 0));
-      initQty[item.productId] = remaining > 0 ? remaining : item.suggestedQty;
+      initQty[item.productId] = remaining;
       initCost[item.productId] = item.actualUnitCost || item.unitCost;
       initReasons[item.productId] = item.discrepancyReason || '';
     });
@@ -193,30 +288,24 @@ export const CommandTicketDashboardModal: React.FC = () => {
   // ══════════════════════════════════════════════════════════════
   // ACTIONS: EXPORT & WHATSAPP
   // ══════════════════════════════════════════════════════════════
-  const handleExportCsv = (po: PurchaseOrder) => {
-    const BOM = '\uFEFF';
-    let csv = `${BOM}BON DE COMMANDE FOURNISSEUR\n`;
-    csv += `N° Bon: ${po.poNumber}\nFournisseur: ${po.vendorName}\nDate: ${formatDateTime(po.createdAt)}\nStatut: ${po.status}\n\n`;
-    csv += 'SKU;Désignation Article;Quantité Demandée;Quantité Reçue;Prix Unitaire Achat (DA);Total Ligne (DA)\n';
-
-    let total = 0;
-    po.items.forEach((item) => {
-      const lineTotal = item.unitCost * item.suggestedQty;
-      total += lineTotal;
-      csv += `"${item.sku}";"${item.title}";${item.suggestedQty};${item.receivedQty || 0};${item.unitCost};${lineTotal}\n`;
-    });
-
-    csv += `\n;;;;TOTAL ESTIMÉ (DA);${total}\n`;
-
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `Bon_Commande_${po.poNumber}_${po.vendorName.replace(/\s+/g, '_')}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast(`Bon de commande #${po.poNumber} exporté en CSV.`, 'success');
+  const handleExportExcel = (po: PurchaseOrder) => {
+    try {
+      // Professionally styled .xlsx: branded emerald headers, thin table
+      // borders, auto-fitted columns, DA currency formatting and dynamic
+      // =SUM() formulas for line amounts + grand total.
+      void import('../../utils/purchaseOrderXlsx').then(({ downloadPurchaseOrderXlsx }) => {
+        const filename = downloadPurchaseOrderXlsx(po, {
+          storeName: receiptSettings?.storeName,
+          address: receiptSettings?.address,
+          phone: receiptSettings?.phone,
+          email: receiptSettings?.email,
+        });
+        showToast(`Bon de commande #${po.poNumber} exporté en Excel (${filename}).`, 'success');
+      });
+    } catch (err) {
+      console.error('Failed to export purchase order to Excel:', err);
+      showToast('Échec de l’export Excel du bon de commande.', 'error');
+    }
   };
 
   const handleSendWhatsApp = (po: PurchaseOrder) => {
@@ -230,9 +319,17 @@ export const CommandTicketDashboardModal: React.FC = () => {
     window.open(url, '_blank');
   };
 
-  const handlePrintPO = (po: PurchaseOrder) => {
-    printCoordinator.printPurchaseOrder(50);
-    showToast(`Impression Bon #${po.poNumber} envoyée vers l'imprimante A4.`, 'info');
+  const handlePrintPO = async (po: PurchaseOrder) => {
+    setPrintingPO(po);
+    const { printCoordinator } = await import('../../utils/printCoordinator');
+    const printed = printCoordinator.printPurchaseOrder(100);
+    if (!printed) {
+      const { openNativePrint } = await import('../../utils/phoneUtils');
+      const { purchaseOrderText } = await import('../../utils/mobileDocPrint');
+      const st = usePosStore.getState();
+      await openNativePrint(`Bon ${po.poNumber}`, purchaseOrderText(po, st.receiptSettings));
+    }
+    showToast(`Impression Bon #${po.poNumber} (Format A4) lancée.`, 'info');
   };
 
   const handleDeleteOrCancelPO = async (po: PurchaseOrder) => {
@@ -244,9 +341,29 @@ export const CommandTicketDashboardModal: React.FC = () => {
   };
 
   const handleRestoreHeldSaleClick = (saleId: string) => {
-    retrieveSale(saleId);
+    // retrieveSale returns { success, warnings } at runtime (expired /
+    // double-restore guards) — surface failures instead of toasting success.
+    const res = retrieveSale(saleId) as unknown as { success: boolean; reason?: string; warnings?: string[] };
+    if (!res || res.success === false) {
+      soundEngine.playError();
+      const reason = res?.reason;
+      showToast(
+        reason === 'HOLD_EXPIRED'
+          ? 'Ticket en attente expiré — il a été purgé.'
+          : reason === 'ALREADY_RESTORED'
+          ? 'Ticket déjà restauré (double-clic ignoré).'
+          : reason === 'HOLD_NOT_FOUND'
+          ? 'Ticket en attente introuvable.'
+          : 'Restauration du panier impossible.',
+        'error'
+      );
+      return;
+    }
     closeModal();
     soundEngine.playSuccess();
+    for (const w of res.warnings ?? []) {
+      showToast(w, 'warning', 5000);
+    }
     showToast('Panier en attente restauré avec succès dans la caisse !', 'success');
   };
 
@@ -337,7 +454,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
           <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
             <div>
               <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
-                Paniers Suspendus (F4)
+                Paniers Suspendus (F6)
               </span>
               <span className="text-xl font-black text-teal-400 font-mono">{heldSales.length}</span>
             </div>
@@ -395,10 +512,12 @@ export const CommandTicketDashboardModal: React.FC = () => {
             <div className="relative flex-1 sm:w-64">
               <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
               <input
+                ref={searchInputRef}
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Rechercher bon, fournisseur, SKU..."
+                aria-label="Rechercher dans la file d'attente"
                 className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-3 py-1.5 text-xs text-pos-text focus:outline-none focus:border-amber-400"
               />
             </div>
@@ -463,10 +582,11 @@ export const CommandTicketDashboardModal: React.FC = () => {
                   <h3 className="font-bold text-sm text-pos-text">Aucun bon de commande trouvé</h3>
                   <p className="text-xs text-pos-muted max-w-sm mx-auto">
                     Tous les réapprovisionnements en attente apparaîtront ici dès leur validation depuis le module Fournisseurs.
+                    Astuce : le réapprovisionnement intelligent propose les quantités depuis les alertes de stock.
                   </p>
                   <button
                     onClick={() => openModal('vendor_procurement')}
-                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl transition cursor-pointer"
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl transition cursor-pointer min-h-[44px]"
                   >
                     Lancer un Réapprovisionnement Intelligent
                   </button>
@@ -477,6 +597,10 @@ export const CommandTicketDashboardModal: React.FC = () => {
                   const isWaiting = po.status === 'Waiting List' || po.status === 'Draft' || po.status === 'Partially Received';
                   const totalUnits = (po.items || []).reduce((sum, item) => sum + item.suggestedQty, 0);
                   const receivedUnits = (po.items || []).reduce((sum, item) => sum + (item.receivedQty || 0), 0);
+                  // Ancienneté relative calculée du createdAt déjà présent (affichage seul).
+                  const poCreatedMs = parseIsoMs(po.createdAt);
+                  const poAgeLabel = formatAgeFr(poCreatedMs, nowMs);
+                  const poAgeTone = ageTone(poCreatedMs, nowMs);
 
                   return (
                     <div
@@ -514,6 +638,14 @@ export const CommandTicketDashboardModal: React.FC = () => {
                               >
                                 {po.status === 'Waiting List' ? 'En Liste d\'Attente' : po.status}
                               </span>
+                              {poAgeLabel && (
+                                <span
+                                  className={`px-2 py-0.5 rounded-md text-[10px] font-bold border whitespace-nowrap ${AGE_TONE_CLASSES[poAgeTone]}`}
+                                  title={`Créé le ${formatDateTime(po.createdAt)}`}
+                                >
+                                  🕓 {poAgeLabel}
+                                </span>
+                              )}
                             </div>
                             <span className="text-[11px] text-pos-muted">
                               Créé le : {formatDateTime(po.createdAt)} • {po.items.length} références ({receivedUnits}/{totalUnits} pcs reçues)
@@ -551,20 +683,29 @@ export const CommandTicketDashboardModal: React.FC = () => {
                             <MessageSquare className="w-4 h-4" />
                           </button>
 
+                          {/* Aperçu A4 Pro */}
+                          <button
+                            onClick={() => setPreviewingPO(po)}
+                            className="p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-emerald-400 rounded-xl transition cursor-pointer"
+                            title="Aperçu Bon de Commande A4 Officiel"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+
                           {/* Print PO */}
                           <button
                             onClick={() => handlePrintPO(po)}
                             className="p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
-                            title="Imprimer le bon de commande (A4 / 80mm)"
+                            title="Imprimer le bon de commande (A4 PDF)"
                           >
                             <Printer className="w-4 h-4" />
                           </button>
 
-                          {/* Export CSV */}
+                          {/* Export Excel (.xlsx stylé) */}
                           <button
-                            onClick={() => handleExportCsv(po)}
+                            onClick={() => handleExportExcel(po)}
                             className="p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
-                            title="Télécharger en fichier CSV"
+                            title="Télécharger en Excel (.xlsx stylé)"
                           >
                             <Download className="w-4 h-4" />
                           </button>
@@ -654,7 +795,8 @@ export const CommandTicketDashboardModal: React.FC = () => {
                   <ShoppingBag className="w-12 h-12 text-pos-muted mx-auto opacity-40" />
                   <h3 className="font-bold text-sm text-pos-text">Aucun panier en attente</h3>
                   <p className="text-xs text-pos-muted max-w-sm mx-auto">
-                    Pour mettre une vente en attente pendant un rush caisse, appuyez simplement sur <span className="text-emerald-400 font-bold">F7</span> dans la caisse.
+                    En plein rush, appuyez sur <span className="text-emerald-400 font-bold">F6</span> pour suspendre
+                    le panier en cours et servir le client suivant. Les tickets sont conservés 48 h.
                   </p>
                 </div>
               ) : (
@@ -665,6 +807,10 @@ export const CommandTicketDashboardModal: React.FC = () => {
                       (sum, item) => sum + (item.appliedPrice || item.product.price) * item.quantity - (item.discount || 0),
                       0
                     );
+                    // Ancienneté déduite de l'expiresAt (TTL 48 h) — affichage seul.
+                    const hsCreatedMs = heldSaleCreatedAtMs(hs);
+                    const hsAgeLabel = formatAgeFr(hsCreatedMs, nowMs);
+                    const hsAgeTone = ageTone(hsCreatedMs, nowMs);
 
                     return (
                       <div
@@ -678,8 +824,16 @@ export const CommandTicketDashboardModal: React.FC = () => {
                             </div>
                             <div>
                               <h4 className="font-black text-sm text-pos-text">{custName}</h4>
-                              <span className="text-[10px] text-pos-muted flex items-center gap-1">
+                              <span className="text-[10px] text-pos-muted flex items-center gap-1 flex-wrap">
                                 <Clock className="w-3 h-3 text-teal-400" /> {hs.timestamp}
+                                {hsAgeLabel && (
+                                  <span
+                                    className={`px-1.5 py-px rounded text-[9px] font-bold border whitespace-nowrap ${AGE_TONE_CLASSES[hsAgeTone]}`}
+                                    title="Ancienneté du ticket suspendu"
+                                  >
+                                    {hsAgeLabel}
+                                  </span>
+                                )}
                               </span>
                             </div>
                           </div>
@@ -706,13 +860,13 @@ export const CommandTicketDashboardModal: React.FC = () => {
                           >
                             Supprimer
                           </button>
-                          <button
-                            onClick={() => handleRestoreHeldSaleClick(hs.id)}
-                            className="px-4 py-2 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-black text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-teal-900/30 transition cursor-pointer"
-                          >
-                            <Play className="w-3.5 h-3.5" />
-                            <span>Reprendre la Vente (F4)</span>
-                          </button>
+                            <button
+                              onClick={() => handleRestoreHeldSaleClick(hs.id)}
+                              className="px-4 py-2 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-black text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-teal-900/30 transition cursor-pointer"
+                            >
+                              <Play className="w-3.5 h-3.5" />
+                              <span>Reprendre la Vente (F6)</span>
+                            </button>
                         </div>
                       </div>
                     );
@@ -731,11 +885,17 @@ export const CommandTicketDashboardModal: React.FC = () => {
                   <h3 className="font-bold text-sm text-pos-text">Aucun ticket SAV en attente</h3>
                   <p className="text-xs text-pos-muted max-w-sm mx-auto">
                     Créez des ordres de réparation et imprimez les étiquettes SAV depuis le bouton Réparation du menu supérieur.
+                    Les tickets « En cours » et « En attente de pièces » apparaissent ici avec leur ancienneté.
                   </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {(filteredRepairs || []).map((repair) => (
+                  {(filteredRepairs || []).map((repair) => {
+                    // Ancienneté relative calculée du createdAt déjà présent (affichage seul).
+                    const repCreatedMs = parseIsoMs(repair.createdAt);
+                    const repAgeLabel = formatAgeFr(repCreatedMs, nowMs);
+                    const repAgeTone = ageTone(repCreatedMs, nowMs);
+                    return (
                     <div
                       key={repair.id}
                       className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 shadow-sm hover:border-emerald-500/40 transition"
@@ -747,6 +907,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                           </span>
                           <h4 className="font-bold text-sm text-pos-text">{repair.deviceModel}</h4>
                         </div>
+                        <div className="flex flex-col items-end gap-1 shrink-0">
                         <span
                           className={`px-2.5 py-1 rounded-lg text-[10px] font-bold ${
                             repair.status === 'Prêt / Terminé'
@@ -758,6 +919,15 @@ export const CommandTicketDashboardModal: React.FC = () => {
                         >
                           {repair.status}
                         </span>
+                        {repAgeLabel && (
+                          <span
+                            className={`px-2 py-px rounded-md text-[9px] font-bold border whitespace-nowrap ${AGE_TONE_CLASSES[repAgeTone]}`}
+                            title="Ancienneté du ticket SAV"
+                          >
+                            🕓 {repAgeLabel}
+                          </span>
+                        )}
+                        </div>
                       </div>
 
                       <div className="space-y-1 text-xs">
@@ -801,7 +971,8 @@ export const CommandTicketDashboardModal: React.FC = () => {
                         </div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -966,6 +1137,69 @@ export const CommandTicketDashboardModal: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* ══════════════════════════════════════════════════════════════ */}
+      {/* INTERACTIVE A4 DOCUMENT PREVIEW MODAL */}
+      {/* ══════════════════════════════════════════════════════════════ */}
+      {previewingPO && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center p-3 sm:p-6 animate-in fade-in">
+          <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Header bar */}
+            <div className="p-4 border-b border-pos-border bg-pos-card flex flex-wrap items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/15 text-emerald-400 flex items-center justify-center">
+                  <FileText className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-pos-text">Aperçu Bon de Commande #{previewingPO.poNumber}</h3>
+                  <p className="text-[11px] text-pos-muted">Fournisseur : {previewingPO.vendorName}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handlePrintPO(previewingPO)}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1.5 transition cursor-pointer shadow-md"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Imprimer / PDF A4</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExportExcel(previewingPO)}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Excel (.xlsx)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewingPO(null)}
+                  className="p-1.5 text-pos-muted hover:text-pos-text rounded-lg hover:bg-pos-hover transition cursor-pointer"
+                  title="Fermer l'aperçu"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Body containing the realistic A4 paper */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-slate-950/60 flex justify-center">
+              <div className="w-full max-w-[210mm]">
+                <PurchaseOrderA4Document po={previewingPO} receiptSettings={receiptSettings} previewMode={true} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modern full-page A4 Purchase Order (Bon de commande) — print / Save as PDF */}
+      {printingPO && (
+        <div className="print-po-target po-a4 hidden print:block bg-white text-black font-sans text-xs">
+          <PurchaseOrderA4Document po={printingPO} receiptSettings={receiptSettings} />
+        </div>
+      )}
     </div>
   );
 };

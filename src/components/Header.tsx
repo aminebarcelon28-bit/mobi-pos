@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Search,
   UserCheck,
@@ -29,6 +30,8 @@ import {
   Monitor,
   CheckCircle2,
   Keyboard,
+  Lock,
+  Ticket,
 } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { calculateStockAlerts } from '../utils/alertEngine';
@@ -39,29 +42,63 @@ import { soundEngine } from '../utils/audioFeedback';
 import { formatDZD } from '../types/pos';
 
 export const Header: React.FC = () => {
-  const {
-    searchQuery,
-    setSearchQuery,
-    currentCustomer,
-    setCurrentCustomer,
-    customers,
-    openModal,
-    setEditingProduct,
-    logSecurityAction,
-    products,
-    addToCart,
-    activeShift,
-    purchaseOrders,
-    heldSales,
-  } = usePosStore();
+  // Selective subscriptions: subscribing to the whole store re-renders the
+  // header on every cart keystroke / sync tick (noticeable lag). Select only
+  // the slices this toolbar reads.
+  const searchQuery = usePosStore((s) => s.searchQuery);
+  const setSearchQuery = usePosStore((s) => s.setSearchQuery);
+  const currentCustomer = usePosStore((s) => s.currentCustomer);
+  const customers = usePosStore((s) => s.customers);
+  const openModal = usePosStore((s) => s.openModal);
+  const setEditingProduct = usePosStore((s) => s.setEditingProduct);
+  const logSecurityAction = usePosStore((s) => s.logSecurityAction);
+  const products = usePosStore((s) => s.products);
+  const activeShift = usePosStore((s) => s.activeShift);
+  const purchaseOrders = usePosStore((s) => s.purchaseOrders);
+  const heldSales = usePosStore((s) => s.heldSales);
+  const activeCashier = usePosStore((s) => s.activeCashier);
+  const lockScreen = usePosStore((s) => s.lockScreen);
 
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(() => soundEngine.getProfile().isMuted);
   const [isToolsDropdownOpen, setIsToolsDropdownOpen] = useState(false);
+  const toolsAnchorRef = useRef<HTMLDivElement>(null);
+  const toolsButtonRef = useRef<HTMLButtonElement>(null);
   const toolsMenuRef = useRef<HTMLDivElement>(null);
+  // Fixed position of the portaled tools menu (computed from the anchor so
+  // the menu is never clipped by the scrolling toolbar — see below).
+  const [toolsMenuPos, setToolsMenuPos] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
   const [isPinOpen, setIsPinOpen] = useState(false);
   const { showToast } = useToast();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [localSearch, setLocalSearch] = useState(searchQuery);
+
+  // ── Center-toolbar overflow affordance: the action strip scrolls on narrow
+  // windows — track whether hidden actions exist on either side so fade edges
+  // can hint at them (display only, no layout or behavior change).
+  const centerScrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollCenterLeft, setCanScrollCenterLeft] = useState(false);
+  const [canScrollCenterRight, setCanScrollCenterRight] = useState(false);
+
+  const updateCenterScrollEdges = () => {
+    const el = centerScrollRef.current;
+    if (!el) return;
+    setCanScrollCenterLeft(el.scrollLeft > 4);
+    setCanScrollCenterRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  };
+
+  useEffect(() => {
+    const updateEdges = () => {
+      const el = centerScrollRef.current;
+      if (!el) return;
+      setCanScrollCenterLeft(el.scrollLeft > 4);
+      setCanScrollCenterRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+    };
+    updateEdges();
+    window.addEventListener('resize', updateEdges);
+    return () => window.removeEventListener('resize', updateEdges);
+    // Mount-only: re-subscribing on every render (no deps array) churned a
+    // resize listener per render — the visible system lag on the toolbar.
+  }, []);
 
   useEffect(() => {
     setLocalSearch(searchQuery);
@@ -102,92 +139,75 @@ export const Header: React.FC = () => {
     }
   };
 
+  // Tools menu: portaled to <body> with fixed positioning, so the
+  // center toolbar's `overflow-x: auto` can never clip it (an abs-positioned
+  // child of a scroll container is cut off — the menu appeared to open
+  // nothing). Position is anchored under the Grid button and clamped to the
+  // viewport; Escape / outside-click / resize / scroll dismiss or re-anchor.
   useEffect(() => {
+    if (!isToolsDropdownOpen) return;
+    const anchor = toolsAnchorRef.current;
+    const place = () => {
+      const r = anchor?.getBoundingClientRect();
+      if (!r) return;
+      setToolsMenuPos({
+        top: Math.min(r.bottom + 8, window.innerHeight - 16),
+        right: Math.max(8, window.innerWidth - r.right),
+      });
+    };
+    place();
     const handleClickOutside = (event: MouseEvent) => {
-      if (toolsMenuRef.current && !toolsMenuRef.current.contains(event.target as Node)) {
+      const t = event.target as Node;
+      if (
+        toolsMenuRef.current && !toolsMenuRef.current.contains(t) &&
+        toolsAnchorRef.current && !toolsAnchorRef.current.contains(t)
+      ) {
         setIsToolsDropdownOpen(false);
       }
     };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsToolsDropdownOpen(false);
+        toolsButtonRef.current?.focus();
+      }
+    };
+    const handleReposition = () => place();
+    const handleScroll = () => setIsToolsDropdownOpen(false);
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    document.addEventListener('keydown', handleKey);
+    window.addEventListener('resize', handleReposition);
+    // Any scroll (toolbar strip, modal, page) invalidates the anchor — close
+    // rather than float detached. Capture phase catches inner scrolls too.
+    window.addEventListener('scroll', handleScroll, true);
+    // Focus the first menu item for keyboard users.
+    toolsMenuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKey);
+      window.removeEventListener('resize', handleReposition);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [isToolsDropdownOpen]);
 
-  // Global Barcode Scanner Hardware Listener
+  // F1 / "/" shortcut: focus the global search input.
+  // NOTE: barcode wedge decoding lives in useBarcodeScanner (App-level,
+  // indexed maps, debounced). The previous duplicate listener here ran a
+  // linear products/customers scan on every keystroke and double-added every
+  // scan (two Enter handlers) — a major source of the reported lag.
   useEffect(() => {
-    let buffer = '';
-    let lastKeyTime = Date.now();
-
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       const activeTag = document.activeElement?.tagName.toLowerCase();
-
-      // Hotkey F1 or / to focus search input
       if (e.key === 'F1' || (e.key === '/' && activeTag !== 'input' && activeTag !== 'textarea')) {
         e.preventDefault();
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
-        return;
-      }
-
-      // Ignore keys inside standard inputs to allow normal typing
-      if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
-        return;
-      }
-
-      const currentTime = Date.now();
-      if (currentTime - lastKeyTime > 150) {
-        buffer = '';
-      }
-      lastKeyTime = currentTime;
-
-      if (e.key === 'Enter') {
-        if (buffer.length >= 2) {
-          e.preventDefault();
-          const scannedCode = buffer.trim();
-
-          // 1. Check Product Barcode or SKU Match
-          const foundProduct = products.find(
-            (p) =>
-              p.barcode === scannedCode ||
-              p.sku.toLowerCase() === scannedCode.toLowerCase()
-          );
-
-          if (foundProduct) {
-            addToCart(foundProduct);
-            showToast(`+1 ${foundProduct.title} ajouté au panier`, 'success');
-            soundEngine.playScan();
-            buffer = '';
-            return;
-          }
-
-          // 2. Check Customer Loyalty Barcode or Phone Match
-          const foundCustomer = (customers || []).find(
-            (c) =>
-              c.phone === scannedCode ||
-              c.phone.replace(/^0/, '+213') === scannedCode ||
-              c.id === scannedCode ||
-              `LOY-${c.id}` === scannedCode
-          );
-
-          if (foundCustomer) {
-            setCurrentCustomer(foundCustomer);
-            showToast(`Client ${foundCustomer.name} identifié !`, 'success');
-            soundEngine.playSuccess();
-            buffer = '';
-            return;
-          }
-
-          // 3. Fallback: put into search query
-          setSearchQuery(scannedCode);
-        }
-        buffer = '';
-      } else if (e.key.length === 1) {
-        buffer += e.key;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [products, customers, addToCart, setCurrentCustomer, setSearchQuery, showToast]);
+  }, []);
 
   const handleNoSaleDrawerOpen = () => {
     setIsPinOpen(true);
@@ -223,26 +243,31 @@ export const Header: React.FC = () => {
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 group-hover:scale-105 transition shrink-0">
             <Smartphone className="w-5 h-5 stroke-[2.5]" />
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-1.5 leading-none">
-              <span className="font-black text-sm text-pos-text tracking-tight group-hover:text-emerald-400 transition">
+              <span className="font-black text-sm text-pos-text tracking-tight group-hover:text-emerald-400 transition truncate">
                 MobiPOS
               </span>
-              <span className="text-[9px] uppercase font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded">
+              {/* PRO badge hides on very narrow windows so the brand block compresses gracefully */}
+              <span className="hidden sm:inline-block text-[9px] uppercase font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded shrink-0">
                 PRO
               </span>
             </div>
-            <span className="text-[10px] text-pos-muted font-medium">Accessoires & Caisse</span>
+            {/* Subtitle already hidden below md — verified, kept */}
+            <span className="text-[10px] text-pos-muted font-medium hidden md:block truncate">Accessoires & Caisse</span>
           </div>
         </button>
 
-        {/* Global Search Bar */}
-        <div className="flex-1 max-w-xs md:max-w-sm lg:max-w-md xl:max-w-lg relative mx-1">
-          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
+        {/* Global Search Bar — min width floor keeps the F1 badge visible at all widths */}
+        <div className="flex-1 min-w-[110px] max-w-xs md:max-w-sm lg:max-w-md xl:max-w-lg relative mx-1">
+          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted pointer-events-none" />
           <input
             ref={searchInputRef}
+            id="catalog-search"
+            name="catalog-search"
             type="text"
             value={localSearch}
+            aria-label="Recherche catalogue (F1)"
             onChange={(e) => setLocalSearch(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
@@ -267,9 +292,18 @@ export const Header: React.FC = () => {
         </div>
 
         {/* ══════════════════════════════════════════════════════════════ */}
-        {/* 2. CENTER: PRIMARY ACTION CONTROLS & DROPDOWN */}
+        {/* 2. CENTER: PRIMARY ACTION CONTROLS & DROPDOWN (scrolls on narrow screens) */}
+        {/* Fade edges hint at hidden actions; customer widget + shift pill sit */}
+        {/* outside this scroll zone so they never clip.                          */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="relative flex min-w-0 items-center">
+        <div
+          ref={centerScrollRef}
+          onScroll={updateCenterScrollEdges}
+          role="toolbar"
+          aria-label="Barre d'outils caisse — faites défiler pour plus d'actions"
+          className="flex items-center gap-1.5 min-w-0 overflow-x-auto no-scrollbar py-0.5"
+        >
           {/* Quick Add Product */}
           <button
             onClick={() => setEditingProduct(null)}
@@ -284,7 +318,7 @@ export const Header: React.FC = () => {
           <button
             type="button"
             onClick={() => openModal('imei_inspector')}
-            className="p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-cyan-400 hover:text-cyan-300 transition cursor-pointer"
+            className="p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-cyan-400 hover:text-cyan-300 transition cursor-pointer shrink-0"
             title="Inspecteur Traçabilité IMEI & Modèles Téléphones (Cliquez pour ouvrir)"
           >
             <Smartphone className="w-4 h-4" />
@@ -293,7 +327,7 @@ export const Header: React.FC = () => {
           {/* SAV Repair Work Orders */}
           <button
             onClick={() => openModal('repair_work_order')}
-            className="p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-emerald-400 hover:text-emerald-300 transition cursor-pointer"
+            className="p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-emerald-400 hover:text-emerald-300 transition cursor-pointer shrink-0"
             title="Gestion des Réparations & Tickets SAV"
           >
             <Wrench className="w-4 h-4" />
@@ -302,7 +336,7 @@ export const Header: React.FC = () => {
           {/* Stock Alerts Bell */}
           <button
             onClick={() => openModal('vendor_procurement')}
-            className="relative p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-emerald-400 hover:text-emerald-300 transition cursor-pointer"
+            className="relative p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-emerald-400 hover:text-emerald-300 transition cursor-pointer shrink-0"
             title={`Alertes Réapprovisionnement (${stockAlerts.length} articles en alerte)`}
           >
             <Bell className="w-4 h-4" />
@@ -320,7 +354,7 @@ export const Header: React.FC = () => {
           {/* Command Tickets & Waiting List */}
           <button
             onClick={() => openModal('command_tickets')}
-            className="relative p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-amber-400 hover:text-amber-300 transition cursor-pointer"
+            className="relative p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-amber-400 hover:text-amber-300 transition cursor-pointer shrink-0"
             title="File d'Attente des Commandes & Ventes Suspendues"
           >
             <Clock className="w-4 h-4" />
@@ -334,7 +368,7 @@ export const Header: React.FC = () => {
           {/* Customer Debt & Kredy Ledger */}
           <button
             onClick={() => openModal('debt_ledger')}
-            className="relative p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-rose-400 hover:text-rose-300 transition cursor-pointer"
+            className="relative p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-rose-400 hover:text-rose-300 transition cursor-pointer shrink-0"
             title="Registre & Suivi des Dettes Clients (Kredy)"
           >
             <CreditCard className="w-4 h-4" />
@@ -348,26 +382,24 @@ export const Header: React.FC = () => {
           {/* Store Expenses Manager */}
           <button
             onClick={() => openModal('expense_manager')}
-            className="p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-amber-400 hover:text-amber-300 transition cursor-pointer"
+            className="p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-amber-400 hover:text-amber-300 transition cursor-pointer shrink-0"
             title="Gestionnaire des Dépenses & Sorties de Caisse (EBITDA)"
           >
             <DollarSign className="w-4 h-4" />
           </button>
 
-          {/* Mobile App & Companion Simulator */}
-          <button
-            onClick={() => openModal('mobile_simulator')}
-            className="p-1.5 px-3 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400 text-cyan-200 hover:text-white transition cursor-pointer flex items-center gap-2 text-xs font-black shadow-sm ring-1 ring-cyan-500/30"
-            title="Ouvrir l'Émulateur Mobile MobiPOS (Android / iOS)"
-          >
-            <Smartphone className="w-4 h-4 text-cyan-400 animate-pulse" />
-            <span className="text-[11px] font-black tracking-wide">App Mobile</span>
-          </button>
-
           {/* ── Secondary Tools & Modules Dropdown Menu ── */}
-          <div className="relative" ref={toolsMenuRef}>
+          {/* NOTE: only the anchor button lives in the scrolling toolbar. The
+              menu itself is portaled to <body> (see below): an abs-positioned
+              child of an `overflow-x: auto` container is clipped, which made
+              the Grid menu appear to open nothing. */}
+          <div className="relative shrink-0" ref={toolsAnchorRef}>
             <button
+              ref={toolsButtonRef}
               onClick={() => setIsToolsDropdownOpen(!isToolsDropdownOpen)}
+              aria-haspopup="menu"
+              aria-expanded={isToolsDropdownOpen}
+              aria-label="Centre d'Outils & Modules Complémentaires"
               className={`p-1.5 rounded-xl border transition cursor-pointer flex items-center gap-1 ${
                 isToolsDropdownOpen
                   ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50'
@@ -378,9 +410,20 @@ export const Header: React.FC = () => {
               <Grid className="w-4 h-4 text-cyan-400" />
               <ChevronDown className="w-3 h-3" />
             </button>
+          </div>
 
-            {isToolsDropdownOpen && (
-              <div className="absolute right-0 top-full mt-2 w-64 bg-pos-panel border border-pos-border rounded-2xl shadow-2xl overflow-hidden z-50 animate-in fade-in zoom-in-95 p-1.5 space-y-1">
+      {/* Portaled tools menu — rendered into <body> with fixed positioning so
+          the toolbar's `overflow-x: auto` can never clip it. Anchored under
+          the Grid button (toolsMenuPos), viewport-clamped, scrollable on
+          short screens. */}
+      {isToolsDropdownOpen && createPortal(
+        <div
+          ref={toolsMenuRef}
+          role="menu"
+          aria-label="Modules Spécialisés"
+          style={{ position: 'fixed', top: toolsMenuPos.top, right: toolsMenuPos.right }}
+          className="w-64 max-h-[70vh] overflow-y-auto bg-pos-panel border border-pos-border rounded-2xl shadow-2xl z-[60] animate-in fade-in zoom-in-95 p-1.5 space-y-1"
+        >
                 <span className="text-[10px] font-bold text-pos-muted uppercase px-2 py-1 block">
                   Modules Spécialisés
                 </span>
@@ -390,7 +433,7 @@ export const Header: React.FC = () => {
                     openModal('invoice_ingestion');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <FileText className="w-4 h-4 text-emerald-400" />
                   <span>Ingestion Facture Fournisseur</span>
@@ -401,7 +444,7 @@ export const Header: React.FC = () => {
                     openModal('label_printer');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <Barcode className="w-4 h-4 text-emerald-500" />
                   <span>Étiquettes Codes-barres</span>
@@ -412,7 +455,7 @@ export const Header: React.FC = () => {
                     openModal('imei_inspector');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <Smartphone className="w-4 h-4 text-cyan-400" />
                   <span>Traçabilité IMEI & Garantie</span>
@@ -423,7 +466,7 @@ export const Header: React.FC = () => {
                     openModal('kitting_bundle');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <Package className="w-4 h-4 text-amber-400" />
                   <span>Packs Protection & Bundles</span>
@@ -434,7 +477,7 @@ export const Header: React.FC = () => {
                     openModal('trade_in_buyback');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <RefreshCw className="w-4 h-4 text-cyan-400" />
                   <span>Reprise Occasion (Trade-In)</span>
@@ -447,10 +490,11 @@ export const Header: React.FC = () => {
                     openModal('reports');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <BarChart3 className="w-4 h-4 text-cyan-400" />
-                  <span>Rapports Financiers & Bilan (F9)</span>
+                  {/* F9 opens the custom-item modal (see useKeyboardHotkeys) — no key suffix here */}
+                  <span>Rapports Financiers & Bilan</span>
                 </button>
 
                 <button
@@ -458,7 +502,7 @@ export const Header: React.FC = () => {
                     openModal('refund');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <RotateCcw className="w-4 h-4 text-purple-400" />
                   <span>Retours & Remboursements (F11)</span>
@@ -469,7 +513,7 @@ export const Header: React.FC = () => {
                     handleNoSaleDrawerOpen();
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <Unlock className="w-4 h-4 text-amber-400" />
                   <span>Ouvrir Tiroir Caisse ('No Sale')</span>
@@ -480,7 +524,7 @@ export const Header: React.FC = () => {
                     openModal('security_audit');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <ShieldAlert className="w-4 h-4 text-amber-500" />
                   <span>Journal d'Audit Sécurité</span>
@@ -491,7 +535,7 @@ export const Header: React.FC = () => {
                     openModal('receipt_template');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <Sliders className="w-4 h-4 text-pos-muted" />
                   <span>Modèle de Ticket</span>
@@ -502,7 +546,7 @@ export const Header: React.FC = () => {
                     openModal('shift_movement');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <ArrowDownCircle className="w-4 h-4 text-amber-400" />
                   <span>Dépense / Mouvement Caisse</span>
@@ -513,7 +557,7 @@ export const Header: React.FC = () => {
                     openModal('customer_display');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <Monitor className="w-4 h-4 text-purple-400" />
                   <span>Double Écran Client</span>
@@ -524,7 +568,7 @@ export const Header: React.FC = () => {
                     openModal('hotkey_guide');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <Keyboard className="w-4 h-4 text-emerald-400" />
                   <span>Guide des Raccourcis (F8)</span>
@@ -535,7 +579,7 @@ export const Header: React.FC = () => {
                     openModal('licensing');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <CheckCircle2 className="w-4 h-4 text-purple-400" />
                   <span>Licence & Activation</span>
@@ -546,14 +590,25 @@ export const Header: React.FC = () => {
                     openModal('db_maintenance');
                     setIsToolsDropdownOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer"
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
                 >
                   <Database className="w-4 h-4 text-cyan-400" />
                   <span>Maintenance Base SQLite WAL</span>
                 </button>
-              </div>
-            )}
-          </div>
+
+                <button
+                  onClick={() => {
+                    openModal('mobile_simulator');
+                    setIsToolsDropdownOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-xl hover:bg-pos-hover text-xs text-pos-text font-medium transition cursor-pointer shrink-0"
+                >
+                  <Smartphone className="w-4 h-4 text-cyan-400" />
+                  <span>Simulateur Mobile</span>
+                </button>
+        </div>,
+        document.body
+      )}
 
           {/* Cash Register Session Status */}
           {activeShift ? (
@@ -576,6 +631,34 @@ export const Header: React.FC = () => {
             </button>
           )}
 
+          {/* Cashier Lock & Switch Button */}
+          <button
+            type="button"
+            onClick={lockScreen}
+            className="px-2.5 py-1 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-text text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 group"
+            title="Verrouiller l'écran (Ctrl+L) • Changer de caissier"
+          >
+            <div
+              className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-black text-slate-950"
+              style={{ backgroundColor: activeCashier?.avatarColor || '#3b82f6' }}
+            >
+              {activeCashier?.name.charAt(0) || 'C'}
+            </div>
+            <span className="text-[11px] font-bold truncate max-w-[100px]">{activeCashier?.name || 'Caissier'}</span>
+            <Lock className="w-3.5 h-3.5 text-pos-muted group-hover:text-amber-400 transition" />
+          </button>
+
+          {/* Scannable Store Credit Vouchers (Bons d'Avoir) */}
+          <button
+            type="button"
+            onClick={() => openModal('credit_voucher')}
+            className="px-2 py-1 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/30 text-purple-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0"
+            title="Bons d'Avoir & Crédits d'Échange"
+          >
+            <Ticket className="w-3.5 h-3.5 text-purple-400" />
+            <span className="text-[11px]">Avoirs</span>
+          </button>
+
           {/* Audio Mute Toggle */}
           <button
             type="button"
@@ -595,15 +678,32 @@ export const Header: React.FC = () => {
             <ThemeToggle />
           </div>
         </div>
+        {/* Scroll affordance fades — pointer-events-none so no click is ever blocked */}
+        {canScrollCenterLeft && (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-0 w-6"
+            style={{ background: 'linear-gradient(to right, var(--pos-panel), transparent)' }}
+          />
+        )}
+        {canScrollCenterRight && (
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 right-0 w-6"
+            style={{ background: 'linear-gradient(to left, var(--pos-panel), transparent)' }}
+          />
+        )}
+        </div>
 
         {/* ══════════════════════════════════════════════════════════════ */}
-        {/* 3. RIGHT: ANCHORED BEAUTIFUL CUSTOMER PROFILE WIDGET */}
+        {/* 3. RIGHT: ANCHORED BEAUTIFUL CUSTOMER PROFILE WIDGET (never clips: */}
+        {/*    shrink-0 keeps it out of the scroll zone, cap + truncate on xs)  */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="shrink-0 max-w-[260px]">
+        <div className="shrink-0 min-w-0 max-w-[150px] sm:max-w-[260px]">
           {currentCustomer ? (
             <div
               onClick={() => openModal('customers')}
-              className="flex items-center gap-2 bg-pos-card hover:bg-pos-hover border border-pos-border hover:border-emerald-500/40 p-1.5 rounded-xl shadow-sm transition cursor-pointer"
+              className="flex items-center gap-2 bg-pos-card hover:bg-pos-hover border border-pos-border hover:border-emerald-500/40 p-1.5 rounded-xl shadow-sm transition cursor-pointer shrink-0"
               title="Cliquez pour changer ou modifier le client (F3)"
             >
               {currentCustomer.avatarUrl ? (
@@ -638,7 +738,7 @@ export const Header: React.FC = () => {
           ) : (
             <button
               onClick={() => openModal('customers')}
-              className="flex items-center gap-1.5 bg-pos-card hover:bg-pos-hover border border-pos-border hover:border-emerald-500/40 px-3 py-1.5 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text transition cursor-pointer"
+              className="flex items-center gap-1.5 bg-pos-card hover:bg-pos-hover border border-pos-border hover:border-emerald-500/40 px-3 py-1.5 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text transition cursor-pointer shrink-0"
               title="Sélectionner ou Créer un Client (F3)"
             >
               <UserCheck className="w-4 h-4 text-emerald-400" />

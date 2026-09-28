@@ -32,7 +32,10 @@ export class CashTenderEngine {
     const isFullyPaid = safeTendered >= totalDue && totalDue > 0;
 
     let remainingChange = changeDue;
-    const denominations = [2000, 1000, 500, 200, 100];
+    // Full DZD cash ladder (notes + coins down to 5 DA). The old list stopped
+    // at 100, so e.g. 150 DA of change itemized only 100 and silently dropped
+    // 50 (OBS-A3). Greedy is exact for this canonical ladder.
+    const denominations = [2000, 1000, 500, 200, 100, 50, 20, 10, 5];
     const changeDenominationBreakdown: Record<number, number> = {};
 
     for (const note of denominations) {

@@ -41,7 +41,8 @@ export const ACTIVE_MODAL_NAMES: readonly ActiveModalType[] = [
   'kitting_bundle',
   'hotkey_guide',
   'customer_display',
-  'pin_prompt',
+  'credit_voucher',
+  'product_matrix',
   'loyalty_card',
   'refund',
   'whatsapp_dispatch',
@@ -51,6 +52,8 @@ export const ACTIVE_MODAL_NAMES: readonly ActiveModalType[] = [
   'expense_manager',
   'db_maintenance',
   'mobile_simulator',
+  'cloud_pairing',
+  'custom_item',
 ] as const;
 
 /**

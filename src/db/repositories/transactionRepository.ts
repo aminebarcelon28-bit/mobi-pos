@@ -1,13 +1,19 @@
-import { sqliteAdapter } from '../sqliteAdapter';
 import type { SaleTransaction, Product, Customer, SecurityAuditLogEntry } from '../../types/pos';
+
+// P11.3: resolve the sqliteAdapter barrel lazily — a static import pins the whole
+// DB graph (adapters -> dexie + libsql) into the importing chunk.
+async function getSqlite() {
+  const { sqliteAdapter } = await import('../sqliteAdapter');
+  return sqliteAdapter;
+}
 
 export const transactionRepository = {
   async getAll(): Promise<SaleTransaction[]> {
-    return await sqliteAdapter.getAllTransactions();
+    return await (await getSqlite()).getAllTransactions();
   },
 
   async save(transaction: SaleTransaction): Promise<void> {
-    await sqliteAdapter.processSaleTransactionAtomic(
+    await (await getSqlite()).processSaleTransactionAtomic(
       transaction,
       [],
       transaction.customer || undefined,
@@ -21,7 +27,7 @@ export const transactionRepository = {
     updatedCustomer?: Customer,
     auditEntry?: SecurityAuditLogEntry
   ): Promise<void> {
-    await sqliteAdapter.processSaleTransactionAtomic(
+    await (await getSqlite()).processSaleTransactionAtomic(
       transaction,
       updatedProducts,
       updatedCustomer,
@@ -30,7 +36,7 @@ export const transactionRepository = {
   },
 
   async findByReceipt(receiptNumber: string): Promise<SaleTransaction | undefined> {
-    const txns = await sqliteAdapter.getAllTransactions();
+    const txns = await (await getSqlite()).getAllTransactions();
     return txns.find((t) => t.receiptNumber.trim() === receiptNumber.trim());
   },
 
@@ -42,7 +48,7 @@ export const transactionRepository = {
     restoredImeis: string[] = [],
     auditEntry?: SecurityAuditLogEntry
   ): Promise<void> {
-    await sqliteAdapter.voidTransactionAtomic(
+    await (await getSqlite()).voidTransactionAtomic(
       transactionId,
       voidedTransaction,
       restoredProducts,
@@ -60,7 +66,7 @@ export const transactionRepository = {
     restoredImeis: string[] = [],
     auditEntry?: SecurityAuditLogEntry
   ): Promise<void> {
-    await sqliteAdapter.processRefundAtomic(
+    await (await getSqlite()).processRefundAtomic(
       refundTransaction,
       updatedOriginalTransaction,
       restockedProducts,

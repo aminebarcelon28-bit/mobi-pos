@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Users,
   Percent,
@@ -18,37 +18,17 @@ import {
 import { usePosStore } from '../store/usePosStore';
 import { useToast } from './ui/Toast';
 import { useSyncStatus } from '../hooks/useSyncStatus';
-import { syncManager } from '../sync/SyncManager';
+// P11.3: sync engine loads on demand (static import pulls ~267 kB into entry).
 
-export const BottomBar: React.FC = () => {
-  const { openModal, holdSale, heldSales, cart, reprintReceipt, lastTransaction } = usePosStore();
-  const { showToast } = useToast();
-  const sync = useSyncStatus();
+// 1-second clock isolated so its tick does not re-render the whole bottom bar.
+const BottomBarClock: React.FC = React.memo(() => {
   const [timeStr, setTimeStr] = useState('');
   const [dateStr, setDateStr] = useState('');
-
-  const handleSyncClick = () => {
-    if (!sync.online) {
-      showToast('Hors ligne — les ventes restent en file locale et partiront à la reconnexion.', 'warning');
-      return;
-    }
-    if (sync.pendingCount === 0 && !sync.pushing && !sync.pulling) {
-      showToast(
-        sync.lastPullAt
-          ? `Synchronisé avec Turso. Dernier pull: ${new Date(sync.lastPullAt).toLocaleTimeString('fr-FR')}.`
-          : 'Synchronisé avec Turso.',
-        'success',
-      );
-      return;
-    }
-    void syncManager.kick();
-    showToast('Synchronisation Turso forcée…', 'info');
-  };
 
   useEffect(() => {
     const updateTime = () => {
       const now = new Date();
-      setTimeStr(now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }));
+      setTimeStr(now.toLocaleTimeString('fr-DZ', { hour: '2-digit', minute: '2-digit' }));
       setDateStr(
         now.toLocaleDateString('fr-DZ', {
           month: 'short',
@@ -62,6 +42,80 @@ export const BottomBar: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  return (
+    <div className="text-right whitespace-nowrap leading-tight">
+      <span className="font-black text-pos-text text-xs tracking-wide font-mono">{timeStr || '19:30'}</span>
+      <p className="text-[10px] text-pos-muted capitalize font-medium">{dateStr || '1 Septembre 2026'}</p>
+    </div>
+  );
+});
+BottomBarClock.displayName = 'BottomBarClock';
+
+export const BottomBar: React.FC = () => {
+  // Selective subscriptions: whole-store spread re-rendered this footer on
+  // every unrelated slice change (cart keystroke, sync tick) — visible lag.
+  const openModal = usePosStore((s) => s.openModal);
+  const holdSale = usePosStore((s) => s.holdSale);
+  const heldSales = usePosStore((s) => s.heldSales);
+  const cart = usePosStore((s) => s.cart);
+  const reprintReceipt = usePosStore((s) => s.reprintReceipt);
+  const lastTransaction = usePosStore((s) => s.lastTransaction);
+  const { showToast } = useToast();
+  const sync = useSyncStatus();
+  // SyncStatus exposes failedCount (quarantined outbox rows); no separate
+  // quarantined field exists — failedCount IS the quarantine count.
+  const failedCount = sync.failedCount ?? 0;
+  // Horizontal action strip: translate a vertical mouse wheel into a
+  // horizontal scroll so the buttons are reachable without Shift+wheel
+  // or a trackpad gesture. Attached non-passively so preventDefault works.
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      if (el.scrollWidth <= el.clientWidth + 1) return;
+      el.scrollLeft += e.deltaY;
+      e.preventDefault();
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  const handleSyncClick = async () => {
+    if (!sync.online) {
+      showToast('Hors ligne — les ventes restent en file locale et partiront à la reconnexion.', 'warning');
+      return;
+    }
+    if (sync.pendingCount === 0 && failedCount === 0 && !sync.pushing && !sync.pulling) {
+      showToast(
+        sync.lastPullAt
+          ? `Synchronisé avec Turso. Dernier pull: ${new Date(sync.lastPullAt).toLocaleTimeString('fr-DZ')}.`
+          : 'Synchronisé avec Turso.',
+        'success',
+      );
+      return;
+    }
+    try {
+      const { syncManager } = await import('../sync/SyncManager');
+      if (failedCount > 0) {
+        const requeued = await syncManager.retryQuarantinedOutbox();
+        showToast(
+          requeued > 0
+            ? `${requeued} élément(s) en quarantaine remis en file d'attente…`
+            : 'Synchronisation Turso forcée…',
+          'info',
+        );
+      } else {
+        showToast('Synchronisation Turso forcée…', 'info');
+      }
+      void syncManager.kick();
+    } catch (err: unknown) {
+      console.warn('[bottombar] sync kick failed:', err);
+      showToast('Erreur lors du forçage de la synchronisation', 'error');
+    }
+  };
+
   const handleHoldSaleClick = () => {
     const holdResult = holdSale();
     if (holdResult && holdResult.success) {
@@ -72,10 +126,11 @@ export const BottomBar: React.FC = () => {
   };
 
   return (
-    <footer className="bg-pos-panel border-t border-pos-border px-3 py-1.5 select-none shrink-0 relative z-20 w-full">
-      <div className="flex items-center justify-between gap-3 w-full">
-        {/* Left Side: Shortcut Function Keys */}
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 min-w-0">
+    <footer aria-label="Barre d'actions caisse" className="bg-pos-panel border-t border-pos-border px-3 py-1.5 select-none shrink-0 relative z-20 w-full max-w-full overflow-hidden">
+      <div className="flex items-center gap-3 w-full max-w-full min-w-0">
+        {/* Left Side: Shortcut Function Keys — défilement horizontal + fondus de bord */}
+        <div className="relative min-w-0 flex-1 overflow-hidden">
+        <div ref={stripRef} className="flex flex-nowrap items-center gap-1.5 overflow-x-auto overflow-y-hidden max-w-full min-w-0 no-scrollbar py-0.5 px-0.5 [&_button]:focus-visible:outline-none [&_button]:focus-visible:ring-2 [&_button]:focus-visible:ring-emerald-500 [&_button]:active:scale-95" role="toolbar" aria-label="Encaissement et modules">
           {/* Quick Cash Tender (F2) */}
           <button
             onClick={() => cart.length > 0 && openModal('payment')}
@@ -159,15 +214,14 @@ export const BottomBar: React.FC = () => {
             <span className="hotkey-badge">F8</span>
           </button>
 
-          {/* Reports (F9) */}
+          {/* Reports (no hotkey — F9 opens custom items) */}
           <button
             onClick={() => openModal('reports')}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
-            title="Rapports Financiers & Synthèse (F9)"
+            title="Rapports Financiers & Synthèse"
           >
             <BarChart3 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             <span>Rapports</span>
-            <span className="hotkey-badge">F9</span>
           </button>
 
           {/* Stock (F10) */}
@@ -202,25 +256,30 @@ export const BottomBar: React.FC = () => {
             <span>Paramètres</span>
             <span className="hotkey-badge">F12</span>
           </button>
+          </div>
+          <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 w-6" style={{ background: 'linear-gradient(to right, var(--pos-panel), transparent)' }} />
+          <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 w-6" style={{ background: 'linear-gradient(to left, var(--pos-panel), transparent)' }} />
         </div>
 
         {/* Right Corner: Telemetry & System Clock */}
         <div className="flex items-center gap-3 pl-3 border-l border-pos-border shrink-0 text-xs">
           <button
             onClick={handleSyncClick}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition cursor-pointer shadow-sm shrink-0 ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 cursor-pointer shadow-sm shrink-0 ${
               !sync.online
                 ? 'bg-slate-500/10 hover:bg-slate-500/20 border-slate-500/30 text-slate-300'
                 : sync.pushing || sync.pulling
                   ? 'bg-sky-500/10 hover:bg-sky-500/20 border-sky-500/30 text-sky-300'
-                  : sync.pendingCount > 0
-                    ? 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-300'
-                    : 'bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
+                  : failedCount > 0
+                    ? 'bg-rose-500/10 hover:bg-rose-500/20 border-rose-500/30 text-rose-300'
+                    : sync.pendingCount > 0
+                      ? 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-300'
+                      : 'bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
             }`}
             title={
               !sync.online
-                ? 'Hors ligne — file locale active, sync auto à la reconnexion'
-                : sync.lastError ?? `Turso Sync (${sync.relayConnected ? 'Relay Temps Réel Actif' : 'Polling Rapide 1.5s'}). Dernier pull: ${sync.lastPullAt ? new Date(sync.lastPullAt).toLocaleTimeString('fr-FR') : '—'}. Cliquez pour forcer.`
+                ? `Hors ligne — file locale active, sync auto à la reconnexion${sync.pendingCount > 0 ? ` (${sync.pendingCount} en attente` : ''}${failedCount > 0 ? `${sync.pendingCount > 0 ? ', ' : ' ('}${failedCount} en échec/quarantaine` : ''}${sync.pendingCount > 0 || failedCount > 0 ? ')' : ''}`
+                : sync.lastError ?? `Turso Sync (${sync.relayConnected ? 'Relay Temps Réel Actif' : `Polling Rapide 1.5s${(sync as { relayLastError?: string }).relayLastError ? ` — relay: ${(sync as { relayLastError?: string }).relayLastError}` : ''}`}). Dernier push : ${sync.lastPushAt ? new Date(sync.lastPushAt).toLocaleTimeString('fr-DZ') : '—'} • Dernier pull : ${sync.lastPullAt ? new Date(sync.lastPullAt).toLocaleTimeString('fr-DZ') : '—'}${sync.pendingCount > 0 ? ` • ${sync.pendingCount} en attente` : ''}${failedCount > 0 ? ` • ${failedCount} en échec/quarantaine` : ''}. Cliquez pour forcer.`
             }
           >
             {!sync.online ? (
@@ -235,28 +294,34 @@ export const BottomBar: React.FC = () => {
                 ? 'Hors ligne'
                 : sync.pushing || sync.pulling
                   ? 'Sync…'
-                  : sync.pendingCount > 0
-                    ? `${sync.pendingCount} en attente`
-                    : sync.relayConnected
-                      ? 'Relay Actif'
-                      : 'Sync Turso'}
+                  : failedCount > 0 && sync.pendingCount > 0
+                    ? `${sync.pendingCount} en attente • ${failedCount} échec`
+                    : failedCount > 0
+                      ? `${failedCount} échec`
+                      : sync.pendingCount > 0
+                        ? `${sync.pendingCount} en attente`
+                        : sync.relayConnected
+                          ? 'Relay Actif'
+                          : 'Sync Turso'}
             </span>
             <span
               className={`w-1.5 h-1.5 rounded-full ${
                 !sync.online
                   ? 'bg-slate-400'
-                  : sync.pendingCount > 0
-                    ? 'bg-amber-400 animate-pulse'
-                    : sync.relayConnected
-                      ? 'bg-emerald-400 animate-pulse'
-                      : 'bg-emerald-400'
+                  : failedCount > 0
+                    ? 'bg-rose-400 animate-pulse'
+                    : sync.pendingCount > 0
+                      ? 'bg-amber-400 animate-pulse'
+                      : sync.relayConnected
+                        ? 'bg-emerald-400 animate-pulse'
+                        : 'bg-emerald-400'
               }`}
             />
           </button>
 
           <button
             onClick={() => openModal('db_maintenance')}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-[11px] font-bold text-cyan-300 transition cursor-pointer shadow-sm shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-[11px] font-bold text-cyan-300 transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 cursor-pointer shadow-sm shrink-0"
             title="Moteur SQLite WAL Actif • Cliquez pour ouvrir le Centre de Maintenance"
           >
             <Database className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
@@ -264,10 +329,7 @@ export const BottomBar: React.FC = () => {
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
           </button>
 
-          <div className="text-right whitespace-nowrap leading-tight">
-            <span className="font-black text-pos-text text-xs tracking-wide font-mono">{timeStr || '19:30'}</span>
-            <p className="text-[10px] text-pos-muted capitalize font-medium">{dateStr || '1 Septembre 2026'}</p>
-          </div>
+          <BottomBarClock />
 
           <div
             className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-md shadow-emerald-500/50 animate-pulse shrink-0"

@@ -130,8 +130,123 @@ pub fn launch_print<R: Runtime>(app: AppHandle<R>, title: String, content: Strin
 }
 
 #[tauri::command]
-pub fn launch_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
-    if !is_url_allowed(&url) {
+pub fn launch_print_label<R: Runtime>(
+    app: AppHandle<R>,
+    title: String,
+    image_base64: String,
+    width_mm: f64,
+    height_mm: f64,
+    copies: i32,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = app.state::<PhonePlugin<R>>();
+        plugin
+            .0
+            .run_mobile_plugin::<()>(
+                "printLabel",
+                serde_json::json!({
+                    "title": title,
+                    "imageBase64": image_base64,
+                    "widthMm": width_mm,
+                    "heightMm": height_mm,
+                    "copies": copies,
+                }),
+            )
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, title, image_base64, width_mm, height_mm, copies);
+        Err("Impression d'étiquettes native disponible uniquement sur Android".to_string())
+    }
+}
+
+/// Raw TCP print to a Wi-Fi thermal/label printer (default port 9100).
+/// Accepts ESC/POS, TSPL or ZPL bytes as base64 — the printer language is
+/// chosen frontend-side from the configured model.
+#[tauri::command]
+pub fn mobile_wifi_print<R: Runtime>(
+    app: AppHandle<R>,
+    host: String,
+    port: u16,
+    data_base64: String,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = app.state::<PhonePlugin<R>>();
+        plugin
+            .0
+            .run_mobile_plugin::<()>(
+                "wifiPrint",
+                serde_json::json!({
+                    "host": host,
+                    "port": port,
+                    "dataBase64": data_base64,
+                }),
+            )
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, host, port, data_base64);
+        Err("Impression Wi-Fi disponible uniquement sur Android".to_string())
+    }
+}
+
+/// Lists Bluetooth printers already paired in Android settings
+/// (no location permission needed for bonded devices).
+#[tauri::command]
+pub fn mobile_bluetooth_printers<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = app.state::<PhonePlugin<R>>();
+        plugin
+            .0
+            .run_mobile_plugin::<serde_json::Value>("bluetoothPrinters", serde_json::json!({}))
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("Bluetooth disponible uniquement sur Android".to_string())
+    }
+}
+
+/// Raw SPP/RFCOMM print to a paired Bluetooth printer (ESC/POS, TSPL, ZPL).
+#[tauri::command]
+pub fn mobile_bluetooth_print<R: Runtime>(
+    app: AppHandle<R>,
+    mac: String,
+    data_base64: String,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let plugin = app.state::<PhonePlugin<R>>();
+        plugin
+            .0
+            .run_mobile_plugin::<()>(
+                "bluetoothPrint",
+                serde_json::json!({
+                    "mac": mac,
+                    "dataBase64": data_base64,
+                }),
+            )
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, mac, data_base64);
+        Err("Impression Bluetooth disponible uniquement sur Android".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn launch_url(app: tauri::AppHandle, url: String) -> Result<(), String> {    if !is_url_allowed(&url) {
         return Err(format!("URL non autorisée : {}", url));
     }
     app.opener().open_url(&url, None::<&str>).map_err(|e| e.to_string())

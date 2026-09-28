@@ -115,8 +115,13 @@ const pending = await local.execute("SELECT COUNT(*) as n FROM sync_outbox WHERE
 check('outbox has 4 pending (product first)', Number(pending.rows[0].n) === 4);
 
 // ── 3. Push (mirrors SyncManager.pushOnce via broker token) ─────────
+const BROKER_SECRET = fileEnv.BROKER_SECRET ?? '';
 const tokRes = await fetch(`http://localhost:${PORT}/api/sync-token`, {
-  method: 'POST', headers: { 'content-type': 'application/json' },
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    ...(BROKER_SECRET ? { authorization: `Bearer ${BROKER_SECRET}` } : {}),
+  },
   body: JSON.stringify({ deviceId: 'e2e-device' }),
 });
 check('broker token', tokRes.ok);

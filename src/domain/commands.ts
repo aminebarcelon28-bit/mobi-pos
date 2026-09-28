@@ -23,6 +23,30 @@ export interface CommandResult<T = unknown> {
 }
 
 /**
+ * Module-level last command error, surfaced to SyncDiagnostics.
+ * Every command failure records here; every success clears it, so the value
+ * always describes the most recent command outcome, never a stale one.
+ * SyncDiagnosticsTab wiring (a single status line reading getLastCommandError
+ * alongside getLastProjectionError) lives outside this module's ownership —
+ * the getters below are the hookup point.
+ */
+let lastCommandError: string | null = null;
+
+export function getLastCommandError(): string | null {
+  return lastCommandError;
+}
+
+function failCommand<T>(error: string): CommandResult<T> {
+  lastCommandError = error;
+  return { success: false, envelopes: [], error };
+}
+
+function succeedCommand<T>(data: T, envelopes: Envelope[]): CommandResult<T> {
+  lastCommandError = null;
+  return { success: true, data, envelopes };
+}
+
+/**
  * Check if a command is flipped to the new ES-LFP engine via sync_state flags.
  * Defaults to true if 'cmd.all' is '1' or if the specific command flag is '1'.
  */
@@ -69,11 +93,11 @@ export async function adjustStock(
   deviceId?: string
 ): Promise<CommandResult<{ productId: string; newStock: number }>> {
   if (!input.productId) {
-    return { success: false, envelopes: [], error: 'productId is required' };
+    return failCommand('productId is required');
   }
   const delta = Math.round(input.delta);
   if (delta === 0) {
-    return { success: false, envelopes: [], error: 'delta must be non-zero' };
+    return failCommand('delta must be non-zero');
   }
 
   const envelope = await recordShadowEvent(
@@ -91,7 +115,7 @@ export async function adjustStock(
   );
 
   if (!envelope) {
-    return { success: false, envelopes: [], error: 'Failed to record stock_adjusted event' };
+    return failCommand('Failed to record stock_adjusted event');
   }
 
   const rows = (await db.select(
@@ -101,11 +125,7 @@ export async function adjustStock(
 
   const newStock = rows?.[0]?.stock ?? 0;
 
-  return {
-    success: true,
-    data: { productId: input.productId, newStock },
-    envelopes: [envelope],
-  };
+  return succeedCommand({ productId: input.productId, newStock }, [envelope]);
 }
 
 /**
@@ -117,11 +137,11 @@ export async function receiveStock(
   deviceId?: string
 ): Promise<CommandResult<{ productId: string; newStock: number }>> {
   if (!input.productId) {
-    return { success: false, envelopes: [], error: 'productId is required' };
+    return failCommand('productId is required');
   }
   const qty = Math.round(input.qty);
   if (qty <= 0) {
-    return { success: false, envelopes: [], error: 'qty must be positive' };
+    return failCommand('qty must be positive');
   }
 
   const envelope = await recordShadowEvent(
@@ -139,7 +159,7 @@ export async function receiveStock(
   );
 
   if (!envelope) {
-    return { success: false, envelopes: [], error: 'Failed to record stock_received event' };
+    return failCommand('Failed to record stock_received event');
   }
 
   const rows = (await db.select(
@@ -149,11 +169,7 @@ export async function receiveStock(
 
   const newStock = rows?.[0]?.stock ?? 0;
 
-  return {
-    success: true,
-    data: { productId: input.productId, newStock },
-    envelopes: [envelope],
-  };
+  return succeedCommand({ productId: input.productId, newStock }, [envelope]);
 }
 
 /**
@@ -171,7 +187,7 @@ export async function upsertProduct(
   deviceId?: string
 ): Promise<CommandResult<{ productId: string }>> {
   if (!input.name) {
-    return { success: false, envelopes: [], error: 'name is required' };
+    return failCommand('name is required');
   }
   const productId = input.id || `prod-${generateUlid()}`;
   const priceCents = Math.round(Number(input.priceCents || 0));
@@ -246,11 +262,10 @@ export async function upsertProduct(
     }
   }
 
-  return {
-    success: envelopes.length > 0,
-    data: { productId },
-    envelopes,
-  };
+  if (envelopes.length === 0) {
+    return failCommand('upsert_product produced no events');
+  }
+  return succeedCommand({ productId }, envelopes);
 }
 
 /**
@@ -262,7 +277,7 @@ export async function renameProduct(
   deviceId?: string
 ): Promise<CommandResult<{ id: string }>> {
   if (!input.id || !input.newName) {
-    return { success: false, envelopes: [], error: 'id and newName are required' };
+    return failCommand('id and newName are required');
   }
 
   const envelope = await recordShadowEvent(
@@ -275,11 +290,10 @@ export async function renameProduct(
     deviceId
   );
 
-  return {
-    success: !!envelope,
-    data: { id: input.id },
-    envelopes: envelope ? [envelope] : [],
-  };
+  if (!envelope) {
+    return failCommand('Failed to record product_renamed event');
+  }
+  return succeedCommand({ id: input.id }, [envelope]);
 }
 
 /**
@@ -298,7 +312,7 @@ export async function checkout(
   deviceId?: string
 ): Promise<CommandResult<{ transactionId: string; totalCents: number }>> {
   if (!input.lines || input.lines.length === 0) {
-    return { success: false, envelopes: [], error: 'Cart must not be empty' };
+    return failCommand('Cart must not be empty');
   }
 
   const txId = input.transactionId || `TXN-${generateUlid()}`;
@@ -358,11 +372,10 @@ export async function checkout(
     }
   }
 
-  return {
-    success: envelopes.length > 0,
-    data: { transactionId: txId, totalCents },
-    envelopes,
-  };
+  if (envelopes.length === 0) {
+    return failCommand('checkout produced no events');
+  }
+  return succeedCommand({ transactionId: txId, totalCents }, envelopes);
 }
 
 /**
@@ -374,7 +387,7 @@ export async function deleteProduct(
   deviceId?: string
 ): Promise<CommandResult<{ id: string }>> {
   if (!input.id) {
-    return { success: false, envelopes: [], error: 'id is required' };
+    return failCommand('id is required');
   }
 
   const envelope = await recordShadowEvent(
@@ -387,9 +400,8 @@ export async function deleteProduct(
     deviceId
   );
 
-  return {
-    success: !!envelope,
-    data: { id: input.id },
-    envelopes: envelope ? [envelope] : [],
-  };
+  if (!envelope) {
+    return failCommand('Failed to record product_deleted event');
+  }
+  return succeedCommand({ id: input.id }, [envelope]);
 }

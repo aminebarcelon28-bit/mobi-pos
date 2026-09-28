@@ -39,8 +39,11 @@ export class ErrorBoundary extends Component<Props, State> {
   public render() {
     if (this.state.hasError) {
       return (
-        <div className="p-6 bg-pos-panel border border-pos-border rounded-2xl max-w-md mx-auto my-8 text-center space-y-4 shadow-2xl animate-in fade-in select-none">
-          <div className="w-14 h-14 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/30 mx-auto shadow-lg">
+        <div
+          role="alert"
+          className="p-6 bg-pos-panel border border-pos-border rounded-2xl max-w-md mx-auto my-8 text-center space-y-4 shadow-2xl animate-in fade-in select-none"
+        >
+          <div className="w-14 h-14 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/30 mx-auto shadow-lg" aria-hidden="true">
             <AlertTriangle className="w-7 h-7 stroke-[2.5]" />
           </div>
 
@@ -49,7 +52,12 @@ export class ErrorBoundary extends Component<Props, State> {
               {this.props.fallbackTitle || 'Un problème temporaire est survenu'}
             </h3>
             <p className="text-xs text-pos-muted mt-1">
-              L'application a intercepté une erreur d'affichage. Vos données de caisse sont conservées en sécurité.
+              L'affichage de cet écran a été interrompu. Vos données de caisse
+              sont conservées en sécurité — aucune vente n'est perdue.
+            </p>
+            <p className="text-xs text-pos-muted mt-1">
+              Essayez « Réessayer » ci-dessous. Si le problème persiste,
+              rechargez l'application.
             </p>
           </div>
 
@@ -59,7 +67,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 {this.state.error.toString()}
               </div>
               {(this.state.error?.stack || this.state.errorInfo?.componentStack) && (
-                <details className="text-[9px] font-mono text-pos-muted bg-pos-card p-2 rounded-lg border border-pos-border" open>
+                <details className="text-[9px] font-mono text-pos-muted bg-pos-card p-2 rounded-lg border border-pos-border">
                   <summary className="cursor-pointer font-bold text-rose-400">Détails techniques</summary>
                   <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[9px] text-rose-200/80 max-h-48 overflow-y-auto">
                     {this.state.error?.stack}
@@ -72,16 +80,18 @@ export class ErrorBoundary extends Component<Props, State> {
 
           <div className="flex justify-center gap-2 pt-2">
             <button
+              type="button"
               onClick={this.handleReset}
               className="px-4 py-2 rounded-xl bg-pos-card border border-pos-border text-pos-text font-bold text-xs hover:border-emerald-400 flex items-center gap-1.5 transition cursor-pointer"
             >
-              <RotateCcw className="w-3.5 h-3.5" /> Réessayer
+              <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" /> Réessayer
             </button>
             <button
+              type="button"
               onClick={this.handleReload}
               className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition shadow-lg shadow-emerald-500/20 cursor-pointer"
             >
-              <RefreshCw className="w-3.5 h-3.5" /> Recharger l'App
+              <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" /> Recharger l'App
             </button>
           </div>
         </div>

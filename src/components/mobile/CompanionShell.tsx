@@ -20,7 +20,7 @@ import { useToast } from '../ui/Toast';
 
 interface CompanionShellProps {
   onOpenPairingWizard?: () => void;
-  /** 'parent' when embedded in a fixed-height frame (device simulator). */
+  /** 'parent' when embedded in a fixed-height parent container. */
   fill?: 'viewport' | 'parent';
 }
 
@@ -31,6 +31,9 @@ export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWiz
   const clearCart = usePosStore((state) => state.clearCart);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [isCartProtectionOpen, setIsCartProtectionOpen] = useState(false);
+  // Tab requested while the protection modal is up (tab taps are the
+  // highest-traffic cart-abandon vector — previously unguarded).
+  const [pendingTab, setPendingTab] = useState<MobileTab | null>(null);
   const { showToast } = useToast();
 
   // Android hardware back button and escape listener with cart protection
@@ -50,29 +53,51 @@ export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWiz
       showToast('Vente mise en attente avec succès !', 'success');
     }
     setIsCartProtectionOpen(false);
-    setActiveTab('activity');
+    setActiveTab(pendingTab ?? 'activity');
+    setPendingTab(null);
   };
 
   const handleDiscardAndExit = () => {
     clearCart();
     showToast('Panier vidé', 'info');
     setIsCartProtectionOpen(false);
-    setActiveTab('activity');
+    setActiveTab(pendingTab ?? 'activity');
+    setPendingTab(null);
+  };
+
+  const handleTabChange = (tab: MobileTab) => {
+    if (tab !== 'checkout' && activeTab === 'checkout' && cart.length > 0) {
+      setPendingTab(tab);
+      setIsCartProtectionOpen(true);
+      return;
+    }
+    setActiveTab(tab);
   };
 
   useEffect(() => {
+    let cancelled = false;
     let unsub: (() => void) | undefined;
     import('../../sync/SyncManager')
       .then(({ syncManager }) => {
+        if (cancelled) return;
         unsub = syncManager.subscribe((s) => {
           setPendingSyncCount(s.pendingCount);
         });
       })
       .catch((err: unknown) => console.warn('[shell] sync engine unavailable:', err));
-    return () => unsub?.();
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
   }, []);
 
   const handleSelectSale = (sale: SaleTransaction) => {
+    // Guard the receipt-modal precondition: opening 'receipt' with no current
+    // transaction renders an empty modal with no feedback. Toast instead.
+    if (!sale) {
+      showToast('Aucune transaction à afficher.', 'warning');
+      return;
+    }
     usePosStore.getState().setSelectedTransactionForRefund(sale);
     usePosStore.getState().openModal('receipt');
   };
@@ -84,7 +109,7 @@ export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWiz
       footer={
         <MobileBottomNav
           activeTab={activeTab}
-          onTabChange={setActiveTab}
+          onTabChange={handleTabChange}
           cartCount={cart.reduce((acc, i) => acc + i.quantity, 0)}
           pendingSyncCount={pendingSyncCount}
         />
@@ -109,7 +134,10 @@ export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWiz
       {/* Cart Back Navigation Protection Modal */}
       <M3CartProtectionModal
         isOpen={isCartProtectionOpen}
-        onContinueSale={() => setIsCartProtectionOpen(false)}
+        onContinueSale={() => {
+          setIsCartProtectionOpen(false);
+          setPendingTab(null);
+        }}
         onHoldAndExit={handleHoldAndExit}
         onDiscardAndExit={handleDiscardAndExit}
       />

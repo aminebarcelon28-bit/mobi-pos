@@ -2,7 +2,15 @@ import { useEffect } from 'react';
 import { usePosStore } from '../store/usePosStore';
 
 export const useKeyboardHotkeys = () => {
-  const { openModal, closeModal, activeModal, clearCart, holdSale, reprintReceipt, lastTransaction } = usePosStore();
+  // Selective subscriptions: whole-store spread re-rendered (and re-armed
+  // this global key handler) on every unrelated slice change.
+  const openModal = usePosStore((s) => s.openModal);
+  const closeModal = usePosStore((s) => s.closeModal);
+  const activeModal = usePosStore((s) => s.activeModal);
+  const clearCart = usePosStore((s) => s.clearCart);
+  const holdSale = usePosStore((s) => s.holdSale);
+  const reprintReceipt = usePosStore((s) => s.reprintReceipt);
+  const lastTransaction = usePosStore((s) => s.lastTransaction);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -10,6 +18,34 @@ export const useKeyboardHotkeys = () => {
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement ||
         e.target instanceof HTMLSelectElement;
+
+      // Locked screen eats money hotkeys: F2/Space (cash tender), F4 (basket
+      // discount) and F11 (refund) must not open payment surfaces behind the
+      // lock overlay. Read straight from the store (no subscription) and
+      // early-return — navigation/Escape keep working so the cashier can
+      // still reach the PIN pad.
+      if (usePosStore.getState().isScreenLocked) {
+        if (
+          e.key === 'F2' || e.key === ' ' ||
+          e.key === 'F4' || e.key === 'F11'
+        ) {
+          e.preventDefault();
+          return;
+        }
+      }
+
+      // Ctrl+L / Cmd+L: Lock display / switch cashier (the lock shortcut —
+      // F12 opens Settings, it never locked the screen, which is why F12
+      // "did not work" for locking). preventDefault is required: browsers
+      // reserve Ctrl+L for the address bar. Works from inputs too (it is not
+      // text entry) and no-ops while already locked.
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault();
+        if (!usePosStore.getState().isScreenLocked) {
+          usePosStore.getState().lockScreen();
+        }
+        return;
+      }
 
       // Prevent browser default behavior for function keys
       if (e.key.startsWith('F') && e.key.length <= 3) {
@@ -107,13 +143,13 @@ export const useKeyboardHotkeys = () => {
         return;
       }
 
-      // F9: Financial Reports & Z-Report
+      // F9: Quick Custom Item & Rapid Services (Pose film, réparations, divers)
       if (e.key === 'F9') {
         e.preventDefault();
-        if (activeModal === 'reports') {
+        if (activeModal === 'custom_item') {
           closeModal();
         } else {
-          openModal('reports');
+          openModal('custom_item');
         }
         return;
       }

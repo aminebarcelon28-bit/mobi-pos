@@ -1,6 +1,6 @@
 export type BrandName = 'Apple' | 'Samsung' | 'Google' | 'ZAGG' | 'Belkin' | 'Anker' | 'Autre';
 
-export type CategoryType = 
+export type CategoryType =
   | 'Tous les produits'
   | 'Coques iPhone'
   | 'Coques Samsung'
@@ -8,7 +8,8 @@ export type CategoryType =
   | 'Chargeurs'
   | 'Câbles'
   | 'Protège-Écran'
-  | 'Téléphones d\'Occasion (Reprise)';
+  | "Téléphones d'Occasion (Reprise)"
+  | 'Services';
 
 export type SortOption = 
   | 'name_asc'
@@ -35,6 +36,8 @@ export interface Product {
   category: CategoryType;
   price: number;
   wholesalePrice: number;
+  /** Demi-gros tier price. Optional: falls back to wholesalePrice when unset. */
+  semiWholesalePrice?: number;
   volumeDiscounts?: VolumeDiscountTier[];
   costPrice: number;
   stock: number;
@@ -55,9 +58,62 @@ export interface Product {
   shelfLocation?: string;
   minPrice?: number;
   isActive?: boolean;
+  /** Hors-catalogue service line (pose film, réparation, saisie libre) — no stock tracking. */
+  isService?: boolean;
+  /** Parent product id for variant-matrix children. */
+  parentProductId?: string;
+  /** Human variant label, e.g. "iPhone 15 / Noir". Set on matrix children. */
+  variantName?: string;
+  /** True when this product heads a variant matrix (has children). */
+  hasVariants?: boolean;
 }
 
 export type ProductInput = Omit<Product, 'id'> & { id?: string };
+
+export interface FifoAllocation {
+  batchId: string;
+  quantity: number;
+  unitCost: number;
+}
+
+export interface StockBatch {
+  batchId: string;
+  productId: string;
+  quantityRemaining: number;
+  unitCost: number;
+  receivedAt: string;
+  purchaseOrderId?: string;
+  deviceId?: string;
+  idempotencyKey?: string;
+  syncStatus?: string;
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  deleted?: number;
+}
+
+/**
+ * v104 STRICT FIFO ALLOCATION LEDGER row (frozen checkout COGS).
+ * One row per (sale item, batch consumed): `qtyConsumed * unitCostAtSale`
+ * is the exact frozen cost for those units. The Sales & Net Profit report
+ * sums ONLY this table — never products.costPrice or live stock_batches.
+ */
+export interface SaleBatchAllocation {
+  id: string;
+  saleId: string;
+  batchId: string;
+  qtyConsumed: number;
+  unitCostAtSale: number;
+  createdAt?: string;
+  productId?: string;
+  saleItemId?: string;
+  deviceId?: string;
+  idempotencyKey?: string;
+  syncStatus?: string;
+  version?: number;
+  updatedAt?: string;
+  deleted?: number;
+}
 
 export interface CartItem {
   product: Product;
@@ -68,12 +124,21 @@ export interface CartItem {
   appliedPrice: number;
   unitCostPrice?: number; // Immutable unit cost price captured permanently at checkout
   volumeTierApplied?: boolean;
+  unitPriceCharged?: number;
+  defaultPrice?: number;
+  unitCostAtSale?: number;
+  discountAmount?: number;
+  lineProfit?: number;
+  fifoAllocations?: FifoAllocation[];
+  isReturn?: boolean; // When true, represents a returned/exchanged item (re-stocks and subtracts from cart total)
 }
 
 export type LoyaltyTierName = 'Bronze' | 'Silver' | 'Gold' | 'Platinum' | 'VIP Diamond';
 
 export interface LoyaltyTierInfo {
-  name: LoyaltyTierName;
+  /** Resolved tier def id (present when resolved from a dynamic table). */
+  id?: string;
+  name: string;
   minSpend: number;
   pointsMultiplier: number;
   discountPercent: number;
@@ -81,7 +146,48 @@ export interface LoyaltyTierInfo {
   bgColor: string;
   borderColor: string;
   icon: string;
+  /** Point-bucket lifetime for this tier (null = never expires). */
+  expiryDays?: number | null;
 }
+
+/** Merchant-configurable tier row. Tier id `tier-0` is the immutable bottom tier (minSpend: 0). */
+export interface LoyaltyTierDef {
+  id: string;
+  name: string;
+  minSpend: number;
+  multiplier: number;
+  style: {
+    badgeColor: string;
+    bgColor: string;
+    borderColor: string;
+    icon: string;
+  };
+  /** Point-bucket lifetime for points earned while in this tier (null = never expires). */
+  expiryDays?: number | null;
+}
+
+/** Merchant-configurable spend milestone: cross `threshold` DA cumulative spend → `reward` DA store credit. */
+export interface SpendMilestone {
+  id: string;
+  threshold: number;
+  reward: number;
+  /** When true, every crossed tranche re-awards; otherwise each tranche awards once. */
+  repeatable: boolean;
+}
+
+/**
+ * Immutable award snapshot persisted on the transaction. Clawbacks reverse
+ * these recorded amounts — never the mutable live config values.
+ */
+export interface MilestoneAward {
+  milestoneId: string;
+  threshold: number;
+  rewardAmount: number;
+  tranche?: number;
+}
+
+/** Master-switch behavior when the program is disabled. */
+export type LoyaltyDisabledMode = 'freeze-all' | 'earn-off-redeem-on';
 
 export interface CategoryMultiplier {
   category: CategoryType;
@@ -99,16 +205,36 @@ export interface PromoCampaignRule {
 
 export interface LoyaltyProgramConfig {
   enabled: boolean;
+  /** Behavior while `enabled === false`. */
+  disabledMode: LoyaltyDisabledMode;
+  /** Independent kill-switch for point earn/redeem. Milestones are unaffected. */
+  pointsEnabled?: boolean;
+  /** When false, tier multipliers earn at 1.0x (campaigns still apply). */
+  tierMultipliersEnabled?: boolean;
   baseSpendPerPoint: number; // e.g. 100 DA spent = 1 base point
   pointRedemptionRate: number; // e.g. 10 Pts = 100 DA (1 Pt = 10 DA value)
   minimumRedemptionPoints: number; // e.g. 50 pts required
   maximumRedemptionPercentPerSale: number; // e.g. 50% max of cart total
+  /**
+   * Dynamic tier table, ascending by minSpend. Tier id `tier-0` must exist
+   * with minSpend 0 (enforced by normalizeLoyaltyConfig).
+   */
+  tiers: LoyaltyTierDef[];
+  /** Spend milestones (threshold → store-credit reward). Evaluated in order. */
+  spendMilestones: SpendMilestone[];
+  /**
+   * @deprecated Legacy fixed 5-tier thresholds. Kept for stored-config
+   * hydration only — normalizeLoyaltyConfig prefers `tiers` when present.
+   */
   tierThresholds: {
     silverMinSpend: number;
     goldMinSpend: number;
     platinumMinSpend: number;
     vipDiamondMinSpend: number;
   };
+  /**
+   * @deprecated Legacy fixed 5-tier multipliers. See `tiers`.
+   */
   tierMultipliers: {
     bronze: number;
     silver: number;
@@ -181,12 +307,15 @@ export interface LoyaltyLedgerEntry {
   id: string;
   customerId: string;
   timestamp: string;
-  type: 'earn' | 'redeem' | 'bonus' | 'conversion' | 'adjustment' | 'expired';
+  type: 'earn' | 'redeem' | 'bonus' | 'conversion' | 'adjustment' | 'expired' | 'milestone';
   points: number;
   balanceAfter: number;
   description: string;
   referenceId?: string;
   creditDeltaDzd?: number;
+  /** Immutable snapshot of the milestone economics behind this entry (grants + clawbacks). */
+  milestoneThresholdDzd?: number;
+  milestoneRewardDzd?: number;
   expiresAt?: string | null;
   performedBy?: string;
 }
@@ -202,7 +331,12 @@ export interface Customer {
   currentCreditBalanceDzd?: number;
   totalLifetimeSpentDzd?: number;
   pricingTier: PricingTier;
-  loyaltyTier?: LoyaltyTierName;
+  /**
+   * Cached display tier only — never read for calculations. All earn,
+   * multiplier, and progress logic re-resolves via
+   * calculateCustomerTier(totalSpent, normalizedConfig).
+   */
+  loyaltyTier?: string;
   totalSpent?: number;
   ledger?: LoyaltyLedgerEntry[];
   pointBuckets?: LoyaltyPointBucket[];
@@ -237,6 +371,7 @@ export type ExpenseCategory =
   | 'Transport / Livraison'
   | 'Internet / Téléphonie'
   | 'Maintenance / Travaux'
+  | 'Perte Stock / SAV'
   | 'Autre Charge';
 
 export interface StoreExpense {
@@ -287,6 +422,22 @@ export interface RefundItem {
   totalRefundAmount: number;
   restock: boolean;
   imeiNumber?: string;
+  unitCostAtSale?: number;
+  fifoAllocations?: FifoAllocation[];
+  /**
+   * Transaction-linked batch restoration: stable id of the ORIGINAL sale line
+   * (`${saleTxnId}-item-${lineIdx}`, same derivation as the durable
+   * transaction_items rows). Restitution matches this line first so a
+   * multi-line ticket with the same product twice restores exact batches.
+   */
+  saleItemId?: string;
+  /**
+   * Return condition flag — Condition: [Remise en stock | Défectueux / SAV].
+   * 'restock' re-enters the sellable FIFO queue at historical cost;
+   * 'defective' routes to the write-off account (no stock movement, cost
+   * logged as inventory loss). Mirrors `restock` (true/false) for compat.
+   */
+  condition?: 'restock' | 'defective';
 }
 
 export interface ProcessRefundPayload {
@@ -309,6 +460,16 @@ export interface SaleTransaction {
   costTotal: number;
   profit: number;
   profitMargin: number;
+  /**
+   * ATOMIC COGS MATERIALIZATION (v105): exact FIFO sum
+   * (Σ sale_batch_allocations.qty_consumed × unit_cost_at_sale) written
+   * into the sales row inside the checkout transaction BEFORE commit.
+   * The receipt reads this one number — never re-derives COGS. Absent
+   * (legacy rows) means unknown: look up the ledger, never treat as zero.
+   */
+  ledgerCogsTotal?: number;
+  ledger_cogs_total?: number;
+  cost_total?: number;
   pricingTier: PricingTier;
   paymentMethod: PaymentMethodType;
   tenders?: PaymentTender[];
@@ -329,6 +490,39 @@ export interface SaleTransaction {
   debtRemainingTotal?: number;
   deviceId?: string;
   device_id?: string;
+  /**
+   * Owning cash session id, stamped at checkout from the live OPEN row.
+   * Closes scope by [openedAt, closedAt) with this as the attribution tiebreak;
+   * absent on legacy rows, which keep the pure window rule.
+   */
+  shiftId?: string;
+  /**
+   * Staged voucher tender captured at checkout (code + applied amount).
+   * Persisted on the row (not just the envelope) so void/refund flows can
+   * credit the bearer value back instead of burning it. Absent = no voucher.
+   */
+  voucherCode?: string | null;
+  voucherCreditApplied?: number;
+  /**
+   * Exact cash disbursed through a refund row (funding-split: net of
+   * voucher/wallet/debt shares restored to their origins). The drawer lane
+   * reads this; revenue lanes read total (value reversed). Absent on legacy
+   * rows, which keep the old total===cash reading.
+   */
+  cashDisbursed?: number;
+  /**
+   * Loyalty campaign multiplier applied at earn time (e.g. weekend 2×).
+   * Void/refund reversals read this so a post-campaign void deducts what
+   * was actually earned. Absent (legacy rows) falls back to currently
+   * active campaigns.
+   */
+  loyaltyCampaignMultiplier?: number;
+  /**
+   * Immutable milestone award snapshots minted by this sale. Clawbacks
+   * reverse these recorded amounts — never live config. Absent (legacy
+   * rows) means unknown: fall back to ledger grant snapshots.
+   */
+  milestoneAwards?: MilestoneAward[];
 }
 
 export interface StockAlert {
@@ -447,6 +641,8 @@ export interface TradeInItem {
   id: string;
   deviceModel: string;
   imei: string;
+  /** Real packaging barcode when scanned at intake, else generated EAN-13. */
+  barcode?: string;
   brand: BrandName;
   conditionGrade: ConditionGrade;
   customerName: string;
@@ -481,6 +677,9 @@ export interface ImeiLifecycleDossier {
   imei: string;
   productTitle: string;
   isSold: boolean;
+  /** Included store warranty duration (months). Drives the dossier banner for
+   *  in-stock devices whose coverage starts at sale. Optional for compat. */
+  warrantyMonths?: number;
   soldAt?: string;
   warrantyExpiresAt?: string;
   isWarrantyValid: boolean;
@@ -533,6 +732,32 @@ export interface IMEIRecord {
   warrantyExpiresAt?: string;
   receivedAt: string;
   soldAt?: string;
+  notes?: string;
+  version?: number;
+}
+
+export interface CashierUser {
+  id: string;
+  name: string;
+  /** Hashed PIN (hashPin) or '' when unset. Empty never authenticates. */
+  pin: string;
+  role: 'admin' | 'cashier';
+  avatarColor: string;
+}
+
+export interface CreditVoucher {
+  id: string;
+  /** Human code, e.g. AV-482913. */
+  code: string;
+  initialAmount: number;
+  remainingAmount: number;
+  status: 'ACTIVE' | 'EXHAUSTED' | 'EXPIRED';
+  customerName?: string;
+  customerPhone?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt?: string;
 }
 
 export type CustomerInput = Omit<Customer, 'id'> & { id?: string };
@@ -545,6 +770,26 @@ export interface PrinterRoutingConfig {
   reportPrinterId: string;
   reportPrinterName: string;
   autoRoutingEnabled: boolean;
+}
+
+/**
+ * Per-device mobile printer (phone/tablet only, never synced).
+ * Wi-Fi = raw TCP to port 9100 (any network thermal printer).
+ * Bluetooth = SPP/RFCOMM to a PAIRED classic printer (pair in Android
+ * settings first — no location permission needed for bonded devices).
+ */
+export type MobilePrinterConnection = 'wifi' | 'bluetooth';
+export type MobileLabelProtocol = 'ESCPOS' | 'TSPL' | 'ZPL';
+
+export interface MobilePrinterConfig {
+  enabled: boolean;
+  connection: MobilePrinterConnection;
+  wifiHost: string;
+  wifiPort: number;
+  bluetoothName: string;
+  bluetoothMac: string;
+  /** Raw label language sent over Wi-Fi/BT (PNG sheet ignores this). */
+  labelProtocol: MobileLabelProtocol;
 }
 
 export interface ReceiptSettings {
@@ -569,6 +814,7 @@ export interface ReceiptSettings {
   baridimobRip?: string;        // 16 or 20-digit BaridiMob RIP
   ccpAccount?: string;          // CCP Account + Clé
   bankBeneficiaryName?: string; // Account Holder Name
+  vatRate?: number; // TVA percent (e.g. 19 for 19%). Default 0 = unchanged behavior.
 }
 
 export interface SecurityAuditLogEntry {
@@ -578,6 +824,8 @@ export interface SecurityAuditLogEntry {
   action: string;
   details: string;
   requiresPin: boolean;
+  deviceId?: string;
+  ipAddress?: string;
 }
 
 export interface CashDropEntry {
@@ -627,11 +875,15 @@ export interface CashSession {
   totalProfits?: number;
   status: 'OPEN' | 'CLOSED';
   cashierName: string;
+  openedBy?: string; // lock-screen cashier who opened the shift (immutable).
+  currentCashier?: string; // who currently owns the drawer; updated via setShiftCashier.
   openingNote?: string;
   closingNote?: string | null;
   denominations?: DenominationCount | null;
   movements?: CashMovement[];
   updatedAt?: string;
+  deviceId?: string;
+  terminalName?: string;
 }
 
 export interface InventoryValuation {
@@ -682,15 +934,30 @@ export interface HardwareStatus {
 
 export const APP_VERSION = '1.6.8';
 
-export const formatDZD = (amount: number): string => {
-  const safeAmount = Number.isFinite(amount) ? amount : 0;
-  const isWhole = safeAmount % 1 === 0;
-  return new Intl.NumberFormat('fr-DZ', {
+// Cached formatters: constructing Intl.NumberFormat per call showed up in
+// checkout/catalog hot paths. One instance per fraction variant.
+const dzdFormatters: Record<'int' | 'frac', Intl.NumberFormat> = {
+  int: new Intl.NumberFormat('fr-DZ', {
     style: 'currency',
     currency: 'DZD',
-    maximumFractionDigits: isWhole ? 0 : 2,
-    minimumFractionDigits: isWhole ? 0 : 2,
-  })
+    maximumFractionDigits: 0,
+    minimumFractionDigits: 0,
+  }),
+  frac: new Intl.NumberFormat('fr-DZ', {
+    style: 'currency',
+    currency: 'DZD',
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  }),
+};
+
+export const formatDZD = (amount: number): string => {
+  // Non-finite input is a data bug: render an explicit placeholder instead of
+  // a valid-looking "0 DA" that would corrupt a merchant's mental ledger.
+  if (typeof amount !== 'number' || !Number.isFinite(amount)) return '—';
+  const safeAmount = amount;
+  const isWhole = safeAmount % 1 === 0;
+  return dzdFormatters[isWhole ? 'int' : 'frac']
     .format(safeAmount)
     .replace('DZD', 'DA');
 };
@@ -699,7 +966,9 @@ export const formatDateTime = (dateStr?: string): string => {
   if (!dateStr) return '';
   const parsedDate = new Date(dateStr);
   if (isNaN(parsedDate.getTime())) return dateStr;
-  return parsedDate.toLocaleDateString('fr-DZ', {
+  // toLocaleString (not toLocaleDateString): the date-only variant silently
+  // dropped the hour/minute fields even though they were requested.
+  return parsedDate.toLocaleString('fr-DZ', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',

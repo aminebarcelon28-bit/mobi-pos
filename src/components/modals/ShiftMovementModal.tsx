@@ -3,6 +3,15 @@ import { X, ArrowDownCircle, ArrowUpCircle, FileText, CheckCircle2, AlertTriangl
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { useToast } from '../ui/Toast';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { MANUAL_MOVEMENT_TAG } from '../../utils/cashTerms';
+
+// Lock-screen cashier fallback (createUISlice owns `activeCashier`; absent
+// from the shared PosState type, so read via structural cast).
+function readLockScreenCashierName(): string {
+  const state = usePosStore.getState() as unknown as { activeCashier?: { name?: string } | null };
+  return state.activeCashier?.name?.trim() || '';
+}
 
 export const ShiftMovementModal: React.FC = () => {
   const { activeModal, closeModal, activeShift, logCashMovement } = usePosStore();
@@ -11,11 +20,21 @@ export const ShiftMovementModal: React.FC = () => {
   const [type, setType] = useState<'EXPENSE' | 'MANUAL_DEPOSIT'>('EXPENSE');
   const [amount, setAmount] = useState<number>(0);
   const [reason, setReason] = useState<string>('');
-  const [cashierName, setCashierName] = useState<string>(activeShift?.cashierName || 'Yacine');
+  const [cashierName, setCashierName] = useState<string>(
+    () => activeShift?.cashierName || readLockScreenCashierName()
+  );
+  // Double-submit guard: two taps would book the movement twice (no natural
+  // idempotency key on cash movements).
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (activeModal !== 'shift_movement') return null;
 
+  // NOTE: this modal is the ONLY legitimate path for MANUAL_DEPOSIT entries —
+  // incl. repair-balance deposits prompted via the REPAIR_BALANCE_DUE_EVENT
+  // (see createRepairSlice). Never auto-fabricate deposits from status
+  // changes; the cashier always confirms amount + motif explicitly here.
   const handleSaveMovement = async () => {
+    if (isSubmitting) return;
     const validAmount = Math.max(0, isNaN(amount) ? 0 : amount);
     if (validAmount <= 0) {
       showToast('Veuillez saisir un montant supérieur à 0 DA.', 'warning');
@@ -27,21 +46,30 @@ export const ShiftMovementModal: React.FC = () => {
       return;
     }
 
-    const movementResult = await logCashMovement(
-      validAmount,
-      type,
-      reason.trim(),
-      cashierName.trim() || undefined
-    );
-
-    if (movementResult.success) {
-      showToast(
-        `${type === 'EXPENSE' ? 'Dépense' : 'Apport'} de ${formatDZD(validAmount)} enregistré avec succès.`,
-        'success'
+    setIsSubmitting(true);
+    try {
+      // Standalone-movement tag: this modal is the only writer of movements
+      // WITHOUT a source-table twin, and Reports counts exactly the tagged
+      // rows (cashTerms standalone helpers). Twin writers never carry the
+      // tag, so tagged rows can never double-count.
+      const movementResult = await logCashMovement(
+        validAmount,
+        type,
+        `${reason.trim()} ${MANUAL_MOVEMENT_TAG}`,
+        cashierName.trim() || undefined
       );
-      closeModal();
-    } else {
-      showToast(movementResult.reason || 'Erreur enregistrement mouvement', 'error');
+
+      if (movementResult.success) {
+        showToast(
+          `${type === 'EXPENSE' ? 'Dépense' : 'Apport'} de ${formatDZD(validAmount)} enregistré avec succès.`,
+          'success'
+        );
+        closeModal();
+      } else {
+        showToast(movementResult.reason || 'Erreur enregistrement mouvement', 'error');
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -113,9 +141,9 @@ export const ShiftMovementModal: React.FC = () => {
             <input
               type="number"
               min="0"
-              step="50"
+              step="any"
               value={amount || ''}
-              onChange={(e) => setAmount(parseFloat(e.target.value) || 0)}
+              onChange={(e) => setAmount(Math.round(parseLocalizedAmount(e.target.value) || 0))}
               placeholder="0 DA"
               className={`w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-lg font-mono font-bold focus:outline-none ${
                 type === 'EXPENSE' ? 'text-red-400 focus:border-red-400' : 'text-emerald-400 focus:border-emerald-400'
@@ -133,7 +161,7 @@ export const ShiftMovementModal: React.FC = () => {
                 type="text"
                 value={cashierName}
                 onChange={(e) => setCashierName(e.target.value)}
-                placeholder="Yacine"
+                placeholder="Nom du caissier…"
                 className="w-full bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1.5 text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
               />
             </div>
@@ -173,7 +201,8 @@ export const ShiftMovementModal: React.FC = () => {
           <button
             type="button"
             onClick={handleSaveMovement}
-            className={`flex-2 sm:flex-none min-h-[44px] px-5 py-2.5 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-lg transition active:scale-[0.98] cursor-pointer ${
+            disabled={isSubmitting}
+            className={`flex-2 sm:flex-none min-h-[44px] px-5 py-2.5 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-lg transition active:scale-[0.98] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
               type === 'EXPENSE'
                 ? 'bg-red-500 hover:bg-red-400 text-white shadow-red-500/20'
                 : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20'

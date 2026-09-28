@@ -4,18 +4,31 @@ import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { useToast } from '../../components/ui/Toast';
 import { printCoordinator } from '../../utils/printCoordinator';
+import { isMobileDevice } from '../../utils/platform';
+import { isTxInCloseScope } from '../../db/adapters/shiftAdapter';
+import {
+  cashSalesFromTxns,
+  cashRefundsFromTxns,
+  exchangeCashOutFromMovements,
+  standaloneDepositsFromMovements,
+  standaloneExpensesFromMovements,
+} from '../../utils/cashTerms';
 
 export const ShiftZReportModal: React.FC = () => {
   const {
     activeModal,
     closeModal,
     shiftFloat,
+    activeShift,
     transactions,
     cashDrops,
     payouts,
     addCashDrop,
     customerDebts,
     storeExpenses,
+    repairOrders,
+    tradeIns,
+    receiptSettings,
   } = usePosStore();
   const [actualCountedCash, setActualCountedCash] = useState<number>(0);
   const [isBlindRevealed, setIsBlindRevealed] = useState<boolean>(false);
@@ -23,43 +36,106 @@ export const ShiftZReportModal: React.FC = () => {
   const [cashDropReason, setCashDropReason] = useState<string>('Dépôt coffre-fort mi-journée');
   const { showToast } = useToast();
 
+  // Lock-screen cashier fallback (createUISlice owns `activeCashier`; absent
+  // from the shared PosState type, so read via structural cast).
+  const lockScreenCashier =
+    (usePosStore.getState() as unknown as { activeCashier?: { name?: string } | null })
+      .activeCashier?.name?.trim() || 'Caissier';
+
   if (activeModal !== 'shift_zreport') return null;
 
-  // Financial Shift Auditing (Strict zero-variance accounting)
+  // Financial Shift Auditing (Strict zero-variance accounting).
+  // Cash terms share one definition with booking, the close preview and
+  // Reports (utils/cashTerms). Scope: the open shift window — the previous
+  // code summed ALL-TIME history against one shift's float, inflating
+  // expected cash by every past debt settlement, expense and drop. Without
+  // an open shift there is no window to scope to, so legacy all-time
+  // behavior is kept as the fallback. Non-txn lanes carry no shiftId, so
+  // they scope by createdAt >= openedAt; txns use the stamp-aware booking
+  // rule (isTxInCloseScope) exactly like preview + booking.
+  const openedAt = activeShift?.openedAt ?? null;
+  const inShiftWindow = (iso: string | undefined) => {
+    if (!openedAt) return true;
+    if (!iso) return true;
+    return iso >= openedAt;
+  };
   const safeTransactions = transactions || [];
-  const validCashSales = safeTransactions.filter(
-    (t) => t.status !== 'VOIDED' && !t.isRefund
-  );
-  const totalCashSales = validCashSales.reduce(
-    (acc, t) => {
-      if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
-        const cashTenderTotal = t.tenders
-          .filter((td) => td.method === 'Espèces')
-          .reduce((sum, td) => sum + (td.amount || 0), 0);
-        return acc + Math.max(0, cashTenderTotal - (t.changeDue || 0));
-      }
-      return t.paymentMethod === 'Espèces' ? acc + (t.total || 0) : acc;
-    },
-    0
-  );
-  const totalCashRefunds = safeTransactions
-    .filter((t) => t.isRefund && (t.paymentMethod === 'Espèces' || t.refundMethod === 'Espèces'))
-    .reduce((acc, t) => acc + (t.total || 0), 0);
+  const shiftTxns = openedAt
+    ? safeTransactions.filter((t) =>
+        isTxInCloseScope(t, { id: activeShift?.id, openedAt })
+      )
+    : safeTransactions;
+  const totalCashSales = cashSalesFromTxns(shiftTxns);
+  const totalCashRefunds = cashRefundsFromTxns(shiftTxns);
 
   const todayDebtSettlements = (customerDebts || [])
-    .filter((d) => d.type === 'PAYMENT_SETTLED' && d.paymentMethod === 'Espèces')
+    .filter((d) => d.type === 'PAYMENT_SETTLED' && d.paymentMethod === 'Espèces' && inShiftWindow(d.createdAt))
     .reduce((acc, d) => acc + (d.amount || 0), 0);
 
   const todayCashExpenses = (storeExpenses || [])
-    .filter((e) => e.paymentMethod === 'Espèces')
+    .filter((e) => e.paymentMethod === 'Espèces' && inShiftWindow(e.createdAt))
     .reduce((acc, e) => acc + (e.amount || 0), 0);
 
-  const totalDrops = (cashDrops || []).reduce((acc, d) => acc + (d.amount || 0), 0);
-  const totalPayouts = (payouts || []).reduce((acc, p) => acc + (p.amount || 0), 0);
-  const expectedCash = shiftFloat + totalCashSales + todayDebtSettlements - totalCashRefunds - totalDrops - totalPayouts - todayCashExpenses;
+  // SAV deposits actually taken (never imputed unpaid balances) + cash
+  // trade-in payouts — both were missing here, understating and overstating
+  // expected cash respectively.
+  const savDeposits = (repairOrders || [])
+    .filter((r) => inShiftWindow(r.createdAt))
+    .reduce((acc, r) => acc + (r.depositAmount || 0), 0);
+  const tradeInCashOut = (tradeIns || [])
+    .filter((t) => !t.creditToWallet && inShiftWindow(t.createdAt))
+    .reduce((acc, t) => acc + (t.buybackValue || 0), 0);
+
+  const totalDrops = (cashDrops || []).filter((d) => inShiftWindow(d.timestamp)).reduce((acc, d) => acc + (d.amount || 0), 0);
+  const totalPayouts = (payouts || []).filter((p) => inShiftWindow(p.timestamp)).reduce((acc, p) => acc + (p.amount || 0), 0);
+
+  // Movement-only terms from the open session's in-store movements (same
+  // rows booking reads): exchange cash-outs + twin-less manual movements.
+  const sessionMovements = activeShift?.movements || [];
+  const exchangeOut = exchangeCashOutFromMovements(sessionMovements);
+  const manualIn = standaloneDepositsFromMovements(sessionMovements);
+  const manualOut = standaloneExpensesFromMovements(sessionMovements);
+
+  const openingFloat = activeShift?.openingFloat ?? shiftFloat;
+  const expectedCash =
+    openingFloat + totalCashSales + todayDebtSettlements + savDeposits + manualIn
+    - totalCashRefunds - totalDrops - totalPayouts - todayCashExpenses - tradeInCashOut - exchangeOut - manualOut;
   const variance = actualCountedCash - expectedCash;
 
-  const handlePrintZReport = () => {
+  const handlePrintZReport = async () => {
+    // Mobile: no window.print dialog — text Z via the Android print sheet.
+    if (isMobileDevice()) {
+      const { openNativePrint } = await import('../../utils/phoneUtils');
+      const { zReportText } = await import('../../utils/mobileDocPrint');
+      const ok = await openNativePrint(
+        `Rapport Z ${lockScreenCashier}`,
+        zReportText({
+          storeName: receiptSettings?.storeName,
+          cashierName: lockScreenCashier,
+          dateStr: new Date().toLocaleString('fr-DZ'),
+          openingFloat,
+          cashSales: totalCashSales,
+          debtSettlements: todayDebtSettlements,
+          savDeposits,
+          refunds: totalCashRefunds,
+          expenses: todayCashExpenses,
+          tradeIns: tradeInCashOut,
+          drops: totalDrops,
+          payouts: totalPayouts,
+          exchangeOut,
+          manualIn,
+          manualOut,
+          expectedCash,
+          countedCash: actualCountedCash,
+          variance,
+        })
+      );
+      showToast(
+        ok ? '🖨️ Feuille d’impression Android ouverte.' : 'Impression indisponible sur cet appareil.',
+        ok ? 'success' : 'error'
+      );
+      return;
+    }
     printCoordinator.printZReport(40);
   };
 
@@ -77,7 +153,7 @@ export const ShiftZReportModal: React.FC = () => {
     addCashDrop({
       amount: validDrop,
       reason: cashDropReason.trim() || 'Dépôt coffre-fort régulier',
-      user: 'Yacine',
+      user: lockScreenCashier,
     });
     showToast(`Dépôt coffre-fort de ${formatDZD(validDrop)} enregistré.`, 'success');
     setCashDropInput(0);
@@ -87,10 +163,10 @@ export const ShiftZReportModal: React.FC = () => {
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
       <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94vh] sm:max-h-[90vh] flex flex-col">
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0 print:hidden" />
 
         {/* Header */}
-        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2 print:hidden">
           <div className="flex items-center gap-2 text-emerald-400 min-w-0">
             <ShieldAlert className="w-5 h-5 shrink-0" />
             <h2 className="text-xs sm:text-sm font-bold text-pos-text truncate">
@@ -107,12 +183,13 @@ export const ShiftZReportModal: React.FC = () => {
         </div>
 
         {/* Scrollable Body */}
-        <div className="print-zreport-target p-5 overflow-y-auto space-y-5 flex-1">
+        {/* Scrollable Body (screen only — print uses the dedicated doc below) */}
+        <div className="print-zreport-target p-5 overflow-y-auto space-y-5 flex-1 print:hidden">
           {/* Shift Cash Summary Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
               <span className="text-[10px] text-pos-muted uppercase font-bold">Fond Initial</span>
-              <p className="text-sm font-bold text-pos-text mt-0.5">{formatDZD(shiftFloat)}</p>
+              <p className="text-sm font-bold text-pos-text mt-0.5">{formatDZD(openingFloat)}</p>
             </div>
 
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
@@ -141,6 +218,38 @@ export const ShiftZReportModal: React.FC = () => {
               </div>
             )}
 
+            {savDeposits > 0 && (
+              <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                <span className="text-[10px] text-pos-muted uppercase font-bold">Acomptes SAV</span>
+                <p className="text-sm font-bold text-emerald-400 mt-0.5">+{formatDZD(savDeposits)}</p>
+              </div>
+            )}
+
+            {tradeInCashOut > 0 && (
+              <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                <span className="text-[10px] text-pos-muted uppercase font-bold">Rachats Occasions</span>
+                <p className="text-sm font-bold text-red-400 mt-0.5">-{formatDZD(tradeInCashOut)}</p>
+              </div>
+            )}
+
+            {exchangeOut > 0 && (
+              <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                <span className="text-[10px] text-pos-muted uppercase font-bold">Retours Échanges</span>
+                <p className="text-sm font-bold text-red-400 mt-0.5">-{formatDZD(exchangeOut)}</p>
+              </div>
+            )}
+
+            {(manualIn > 0 || manualOut > 0) && (
+              <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                <span className="text-[10px] text-pos-muted uppercase font-bold">Mouvements Manuels</span>
+                <p className="text-sm font-bold text-pos-text mt-0.5">
+                  {manualIn > 0 && <span className="text-emerald-400">+{formatDZD(manualIn)}</span>}
+                  {manualIn > 0 && manualOut > 0 && <span className="text-pos-muted"> / </span>}
+                  {manualOut > 0 && <span className="text-red-400">-{formatDZD(manualOut)}</span>}
+                </p>
+              </div>
+            )}
+
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
               <span className="text-[10px] text-pos-muted uppercase font-bold">Dépôts Coffre</span>
               <p className="text-sm font-bold text-amber-400 mt-0.5">-{formatDZD(totalDrops)}</p>
@@ -166,7 +275,7 @@ export const ShiftZReportModal: React.FC = () => {
                 <label className="text-xs text-pos-muted block mb-1 font-semibold">Montant Physique Compté (DA)</label>
                 <input
                   type="number"
-                  step="100"
+                  step="any"
                   value={actualCountedCash}
                   onChange={(e) => {
                     setActualCountedCash(parseFloat(e.target.value) || 0);
@@ -211,24 +320,25 @@ export const ShiftZReportModal: React.FC = () => {
             <h4 className="text-xs font-bold text-pos-text flex items-center gap-1.5">
               <ArrowDownCircle className="w-4 h-4 text-amber-400" /> Enregistrer un Dépôt Coffre-fort (Cash Drop)
             </h4>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <input
                 type="number"
+                inputMode="decimal"
                 value={cashDropInput}
                 onChange={(e) => setCashDropInput(parseFloat(e.target.value) || 0)}
                 placeholder="Montant (DA)"
-                className="bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-xs text-pos-text"
+                className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-base sm:text-xs text-pos-text"
               />
               <input
                 type="text"
                 value={cashDropReason}
                 onChange={(e) => setCashDropReason(e.target.value)}
                 placeholder="Motif dépôt"
-                className="bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-xs text-pos-text"
+                className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-base sm:text-xs text-pos-text"
               />
               <button
                 onClick={handleAddCashDrop}
-                className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-lg py-1.5 transition"
+                className="w-full min-h-[48px] bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-lg py-1.5 transition active:scale-95"
               >
                 Enregistrer Dépôt
               </button>
@@ -249,9 +359,83 @@ export const ShiftZReportModal: React.FC = () => {
           </div>
         </div>
 
+        {/* Print-only Z document (thermal 80mm) */}
+        <div className="print-zreport-target hidden print:block bg-white text-black p-1 font-mono text-[11px] leading-snug">
+          <div className="text-center pb-2 border-b border-dashed border-gray-500">
+            <p className="font-extrabold text-sm uppercase tracking-wider">{receiptSettings?.storeName || 'MOBI ACCESSORIES'}</p>
+            <p className="font-black text-xs uppercase mt-1">*** RAPPORT Z — CLÔTURE DE CAISSE ***</p>
+            <p className="text-[10px]">Caissier: {lockScreenCashier}</p>
+            <p className="text-[10px]">{new Date().toLocaleString('fr-DZ')}</p>
+          </div>
+          <div className="py-2 space-y-0.5 border-b border-dashed border-gray-500">
+            <div className="flex justify-between"><span>Fond initial :</span><span className="font-bold">{formatDZD(openingFloat)}</span></div>
+            <div className="flex justify-between"><span>Ventes espèces :</span><span className="font-bold">+{formatDZD(totalCashSales)}</span></div>
+            {todayDebtSettlements > 0 && (
+              <div className="flex justify-between"><span>Règlements dettes :</span><span className="font-bold">+{formatDZD(todayDebtSettlements)}</span></div>
+            )}
+            {savDeposits > 0 && (
+              <div className="flex justify-between"><span>Acomptes SAV :</span><span className="font-bold">+{formatDZD(savDeposits)}</span></div>
+            )}
+            {manualIn > 0 && (
+              <div className="flex justify-between"><span>Apports manuels :</span><span className="font-bold">+{formatDZD(manualIn)}</span></div>
+            )}
+            {totalCashRefunds > 0 && (
+              <div className="flex justify-between"><span>Remboursements :</span><span className="font-bold">-{formatDZD(totalCashRefunds)}</span></div>
+            )}
+            {todayCashExpenses > 0 && (
+              <div className="flex justify-between"><span>Dépenses espèces :</span><span className="font-bold">-{formatDZD(todayCashExpenses)}</span></div>
+            )}
+            {tradeInCashOut > 0 && (
+              <div className="flex justify-between"><span>Rachats occasions :</span><span className="font-bold">-{formatDZD(tradeInCashOut)}</span></div>
+            )}
+            {exchangeOut > 0 && (
+              <div className="flex justify-between"><span>Retours échanges :</span><span className="font-bold">-{formatDZD(exchangeOut)}</span></div>
+            )}
+            {manualOut > 0 && (
+              <div className="flex justify-between"><span>Dépenses manuelles :</span><span className="font-bold">-{formatDZD(manualOut)}</span></div>
+            )}
+            {totalDrops > 0 && (
+              <div className="flex justify-between"><span>Dépôts coffre :</span><span className="font-bold">-{formatDZD(totalDrops)}</span></div>
+            )}
+            {totalPayouts > 0 && (
+              <div className="flex justify-between"><span>Décaissements :</span><span className="font-bold">-{formatDZD(totalPayouts)}</span></div>
+            )}
+          </div>
+          <div className="py-2 border-b border-dashed border-gray-500">
+            <div className="flex justify-between font-extrabold text-[13px]">
+              <span>ESPÈCES THÉORIQUES :</span>
+              <span>{formatDZD(expectedCash)}</span>
+            </div>
+            <div className="flex justify-between mt-0.5">
+              <span>Compté physique :</span>
+              <span className="font-bold">{formatDZD(actualCountedCash)}</span>
+            </div>
+            <div className="flex justify-between font-extrabold">
+              <span>ÉCART :</span>
+              <span>{variance >= 0 ? `+${formatDZD(variance)}` : formatDZD(variance)}</span>
+            </div>
+          </div>
+          {(cashDrops || []).length > 0 && (
+            <div className="py-2 border-b border-dashed border-gray-500">
+              <p className="font-bold text-[10px] uppercase mb-1">Dépôts coffre-fort :</p>
+              {(cashDrops || []).map((drop) => (
+                <div key={drop.id} className="flex justify-between text-[10px]">
+                  <span>{drop.reason}</span>
+                  <span className="font-bold">{formatDZD(drop.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="pt-2 text-center">
+            <p className="text-[10px]">Signature caissier : ____________________</p>
+            <p className="text-[10px] mt-1">Cachet & signature gérant : ____________________</p>
+            <p className="text-[9px] text-gray-600 mt-2">Document généré par Mobi-POS</p>
+          </div>
+        </div>
+
         {/* Footer Actions */}
-        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2.5 shrink-0">
-          <span className="text-[11px] text-pos-muted text-center sm:text-left">Shift ID: SHIFT-20260801 • Caissier: Yacine</span>
+        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2.5 shrink-0 print:hidden">
+          <span className="text-[11px] text-pos-muted text-center sm:text-left">Shift ID: SHIFT-20260801 • Caissier: {lockScreenCashier}</span>
           <div className="flex items-center gap-2">
             <button
               onClick={closeModal}

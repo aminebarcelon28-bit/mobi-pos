@@ -1,10 +1,28 @@
-export type PrintChannelType = 
-  | 'receipt' 
-  | 'label' 
-  | 'purchase_order' 
-  | 'z_report' 
-  | 'repair_work_order' 
-  | 'trade_in_voucher';
+export type PrintChannelType =
+  | 'receipt'
+  | 'label'
+  | 'purchase_order'
+  | 'z_report'
+  | 'repair_work_order'
+  | 'trade_in_voucher'
+  | 'debt_statement'
+  | 'loyalty_card'
+  | 'credit_voucher'
+  | 'text_doc';
+
+/**
+ * Hardware channels go to native drivers (ESC/POS spooler on desktop, PNG
+ * sheet on mobile) BEFORE the coordinator runs — calling window.print() for
+ * them would double-print. Document channels are HTML-only and must always
+ * reach window.print(), including inside the desktop app.
+ */
+const HARDWARE_CHANNELS: ReadonlySet<PrintChannelType> = new Set(['receipt', 'label']);
+
+function isMobileWebView(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || (navigator as Navigator & { vendor?: string }).vendor || '';
+  return /android|iphone|ipad|ipod/i.test(ua);
+}
 
 interface PrintJobOptions {
   delayMs?: number;
@@ -84,12 +102,22 @@ class PrintCoordinator {
 
     const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
+    // Window.print() is suppressed ONLY for hardware channels inside Tauri
+    // (already printed via spooler/native) and for every channel inside the
+    // mobile WebView (no print dialog there — callers use native paths first).
+    // Document channels inside the desktop app MUST reach window.print():
+    // WebView2 opens the system dialog (any printer model, Save as PDF).
+    const suppress =
+      isTauri && (HARDWARE_CHANNELS.has(channel) || isMobileWebView());
+
     setTimeout(() => {
       try {
-        if (!isTauri) {
+        if (!suppress) {
           window.print();
         } else {
-          console.log(`[PrintCoordinator] Direct hardware mode in Tauri for channel: ${channel} (window.print suppressed)`);
+          if (HARDWARE_CHANNELS.has(channel)) {
+            console.log(`[PrintCoordinator] Direct hardware mode in Tauri for channel: ${channel} (window.print suppressed)`);
+          }
           cleanup();
         }
       } catch (err) {
@@ -97,6 +125,53 @@ class PrintCoordinator {
         cleanup();
       }
     }, delay);
+
+    return true;
+  }
+
+  /**
+   * Direct channel print that always calls window.print() — for HTML
+   * documents (statements, cards) with no ESC/POS hardware route, including
+   * inside the Tauri desktop WebView where `executePrint` stays silent.
+   */
+  public printChannelDirect(
+    channel: PrintChannelType,
+    delayMs: number = 150
+  ): boolean {
+    if (this.isPrinting) {
+      console.warn(`[PrintCoordinator] Print job rejected: Channel "${this.activeChannel}" is already printing.`);
+      return false;
+    }
+
+    this.isPrinting = true;
+    this.activeChannel = channel;
+
+    document.documentElement.setAttribute('data-print-channel', channel);
+    document.body.setAttribute('data-print-channel', channel);
+
+    const cleanup = () => {
+      if (this.cleanupTimer) {
+        clearTimeout(this.cleanupTimer);
+        this.cleanupTimer = null;
+      }
+      document.documentElement.removeAttribute('data-print-channel');
+      document.body.removeAttribute('data-print-channel');
+      this.isPrinting = false;
+      this.activeChannel = null;
+      window.removeEventListener('afterprint', cleanup);
+    };
+
+    window.addEventListener('afterprint', cleanup, { once: true });
+    this.cleanupTimer = setTimeout(cleanup, 5000);
+
+    setTimeout(() => {
+      try {
+        window.print();
+      } catch (err) {
+        console.error('[PrintCoordinator] direct print execution error:', err);
+        cleanup();
+      }
+    }, delayMs);
 
     return true;
   }
@@ -126,6 +201,14 @@ class PrintCoordinator {
 
   public printTradeInVoucher(delayMs: number = 80): boolean {
     return this.executePrint('trade_in_voucher', { delayMs });
+  }
+
+  public printDebtStatement(delayMs: number = 150): boolean {
+    return this.executePrint('debt_statement', { delayMs });
+  }
+
+  public printLoyaltyCard(delayMs: number = 150): boolean {
+    return this.executePrint('loyalty_card', { delayMs });
   }
 }
 

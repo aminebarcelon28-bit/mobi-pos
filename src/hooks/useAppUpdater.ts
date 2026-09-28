@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { APP_VERSION } from '../types/pos';
-import type { Update } from '@tauri-apps/plugin-updater';
+import { checkNativeUpdate, relaunchApp as relaunchAppNative, type Update } from '../platform/updater';
 import { isMobileDevice, isAndroid, isIOS, isTauriEnvironment } from '../utils/platform';
 
 export interface UpdateInfo {
@@ -141,10 +141,7 @@ export function useAppUpdater() {
       // 1. On desktop Tauri, attempt native plugin updater first
       if (!isMobile && isTauriEnvironment()) {
         try {
-          const { check } = await import('@tauri-apps/plugin-updater');
-          const update = await check({
-            timeout: 10000,
-          });
+          const update = await checkNativeUpdate({ timeout: 10000 });
 
           if (update) {
             const currentVer = update.currentVersion || APP_VERSION;
@@ -203,14 +200,50 @@ export function useAppUpdater() {
       }
 
       // 2. CORS-compliant GitHub REST API check (Works on Mobile Android/iOS, Web, and desktop fallback)
-      const res = await fetch(GITHUB_API_LATEST_RELEASE_URL, {
-        cache: 'no-cache',
-        headers: { Accept: 'application/vnd.github.v3+json' },
-      });
+      // api.github.com sends `Access-Control-Allow-Origin: *`, so plain `mode: 'cors'`
+      // works from http(s) web, Android WebView, iOS WKWebView and Tauri WebView
+      // (CSP `connect-src https:` already allows it — no opener/fetch permission needed).
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      let res: Response;
+      try {
+        res = await fetch(GITHUB_API_LATEST_RELEASE_URL, {
+          mode: 'cors',
+          cache: 'no-store',
+          signal: controller.signal,
+          headers: { Accept: 'application/vnd.github.v3+json' },
+        });
+      } catch (fetchErr: unknown) {
+        if (fetchErr instanceof DOMException && fetchErr.name === 'AbortError') {
+          throw new Error('Délai de connexion GitHub dépassé. Vérifiez votre connexion.');
+        }
+        // TypeError: offline, DNS, adblock, or CORS blocked — keep message actionable
+        throw new Error('Impossible de joindre GitHub. Vérifiez votre connexion internet.');
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!res.ok) {
+        if (res.status === 404) {
+          throw new Error('Aucune version publiée pour le moment.');
+        }
         if (res.status === 403 || res.status === 429) {
-          throw new Error('Limite de requêtes GitHub atteinte. Réessayez dans un instant.');
+          const retryAfter = res.headers.get('retry-after');
+          const reset = res.headers.get('x-ratelimit-reset');
+          let suffix = 'Réessayez dans un instant.';
+          if (retryAfter) {
+            suffix = `Réessayez dans ${retryAfter}s.`;
+          } else if (reset) {
+            const waitSec = Number(reset) * 1000 - Date.now();
+            if (Number.isFinite(waitSec) && waitSec > 0) {
+              const waitMin = Math.max(1, Math.ceil(waitSec / 60000));
+              suffix = `Réessayez dans ~${waitMin} min.`;
+            }
+          }
+          throw new Error(`Limite de requêtes GitHub atteinte. ${suffix}`);
+        }
+        if (res.status >= 500) {
+          throw new Error(`GitHub momentanément indisponible (statut ${res.status}). Réessayez.`);
         }
         throw new Error(`Serveur GitHub indisponible (statut ${res.status})`);
       }
@@ -317,8 +350,7 @@ export function useAppUpdater() {
 
   const relaunchApp = useCallback(async () => {
     try {
-      const { relaunch } = await import('@tauri-apps/plugin-process');
-      await relaunch();
+      await relaunchAppNative();
     } catch (err: unknown) {
       console.error('Failed to relaunch application:', err);
       window.location.reload();

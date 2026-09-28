@@ -10,3 +10,8 @@ bindings = [
 [[migrations]]
 tag = "v1"
 new_classes = ["MerchantRoom"]
+
+# B-042: set with `wrangler secret put ADMIN_SECRET` (long random value).
+# Device registry routes return 503 until this secret is set.
+# [vars]
+# (do not commit secrets — use wrangler secret)

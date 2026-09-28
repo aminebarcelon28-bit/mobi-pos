@@ -12,7 +12,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { syncManager } from '../../../sync/SyncManager';
-import type { SyncStatus } from '../../../sync/types';
+import type { SyncStatus, MerchantDevice } from '../../../sync/types';
 import { QuotaManager } from '../../../sync/quotaManager';
 import { formatBytes, type StorageUsageReport } from '../../../sync/storageReport';
 import { usePosStore } from '../../../store/usePosStore';
@@ -37,6 +37,44 @@ export const SyncDiagnosticsTab: React.FC = () => {
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const [isRetryingQuarantined, setIsRetryingQuarantined] = useState(false);
   const [manualSyncMsg, setManualSyncMsg] = useState<string | null>(null);
+
+  // Merchant device registry (ad.md §15): which devices share this store,
+  // revoke a lost device, re-admit it. The relay is the registry host.
+  const [merchantDevices, setMerchantDevices] = useState<MerchantDevice[]>([]);
+  const [isLoadingDevices, setIsLoadingDevices] = useState(false);
+  const [deviceActionId, setDeviceActionId] = useState<string | null>(null);
+
+  const loadMerchantDevices = async () => {
+    setIsLoadingDevices(true);
+    try {
+      setMerchantDevices(await syncManager.listMerchantDevices());
+    } catch {
+      setMerchantDevices([]);
+    } finally {
+      setIsLoadingDevices(false);
+    }
+  };
+
+  const handleDeviceRevocation = async (deviceId: string, revoked: boolean) => {
+    const ok = window.confirm(
+      revoked
+        ? 'Révoquer cet appareil ? Il ne recevra plus les ventes et ne pourra plus envoyer les siennes, jusqu’à réadmission.'
+        : 'Réadmettre cet appareil ? Il reprendra la synchronisation.'
+    );
+    if (!ok) return;
+    setDeviceActionId(deviceId);
+    try {
+      const done = await syncManager.setDeviceRevoked(deviceId, revoked);
+      if (done) {
+        soundEngine.playSuccess?.();
+        await loadMerchantDevices();
+      } else {
+        soundEngine.playError?.();
+      }
+    } finally {
+      setDeviceActionId(null);
+    }
+  };
 
   // Cloud storage meter (same QuotaManager as desktop settings; read-only).
   const [storageReport, setStorageReport] = useState<StorageUsageReport | null>(null);
@@ -78,15 +116,72 @@ export const SyncDiagnosticsTab: React.FC = () => {
   const [crashReports, setCrashReports] = useState<CrashReport[]>([]);
   const [crashMsg, setCrashMsg] = useState<string | null>(null);
 
+  // Both-offline double-payout exceptions (payoutWatch): synced audit rows
+  // with the shared exception action — one entry per ticket, both devices.
+  interface PayoutException {
+    id: string;
+    details: string;
+    timestamp: string;
+  }
+  const [payoutExceptions, setPayoutExceptions] = useState<PayoutException[]>([]);
+
+  const loadPayoutExceptions = async () => {
+    try {
+      const { db } = await import('../../../db/database');
+      const rows = await db.securityAuditLogs
+        .filter((r) => r.action === 'Double Encaissement Suspecté')
+        .toArray()
+        .catch(() => []);
+      setPayoutExceptions(
+        (rows ?? []).map((r) => ({ id: String(r.id), details: String(r.details ?? ''), timestamp: String(r.timestamp ?? '') }))
+      );
+    } catch {
+      setPayoutExceptions([]);
+    }
+  };
+
   useEffect(() => {
     const unsub = syncManager.subscribe((s) => {
       setSyncStatus(s);
     });
     setCrashReports(readCrashReports());
     void loadStorageReport();
+    void loadMerchantDevices();
+    void loadPayoutExceptions();
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Full repair synchronization (re-enqueue all + reset cursors + verify).
+  const [isFullSyncing, setIsFullSyncing] = useState(false);
+  const [fullSyncStep, setFullSyncStep] = useState('');
+  const [fullSyncReport, setFullSyncReport] = useState<string | null>(null);
+
+  const handleFullResync = async () => {
+    soundEngine.playKeyBeep?.();
+    setIsFullSyncing(true);
+    setFullSyncReport(null);
+    setFullSyncStep('Démarrage…');
+    try {
+      const { fullResync } = await import('../../../sync/repairResync');
+      const { usePosStore } = await import('../../../store/usePosStore');
+      const report = await fullResync((p) => {
+        setFullSyncStep(p.detail);
+      });
+      setFullSyncReport(`${report.message} Base cloud : ${report.cloudHost || '—'}.`);
+      if (report.ok) soundEngine.playSuccess?.();
+      else soundEngine.playError?.();
+      await usePosStore.getState().refreshAfterPull().catch(() => {});
+      setTimeout(() => setFullSyncReport(null), 12000);
+    } catch {
+      soundEngine.playError?.();
+      setFullSyncReport('Échec de la synchronisation complète.');
+      setTimeout(() => setFullSyncReport(null), 8000);
+    } finally {
+      setIsFullSyncing(false);
+      setFullSyncStep('');
+    }
+  };
 
   const handleRetryQuarantined = async () => {
     soundEngine.playKeyBeep?.();
@@ -206,15 +301,33 @@ export const SyncDiagnosticsTab: React.FC = () => {
           type="button"
           disabled={isSyncing}
           onClick={handleManualSync}
-          className="w-full py-2.5 px-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-md transition cursor-pointer disabled:opacity-50"
+          className="w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-md transition cursor-pointer disabled:opacity-50"
         >
           <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
           <span>{isSyncing ? 'Synchronisation en cours...' : 'Forcer la Synchronisation'}</span>
         </button>
 
+        {/* Full repair: re-enqueue all + reset cursors + verify (missing data). */}
+        <button
+          type="button"
+          disabled={isSyncing || isFullSyncing}
+          onClick={() => void handleFullResync()}
+          title="Renvoie tout vers le cloud, relit tout et vérifie — quand des informations manquent sur un appareil"
+          className="w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 active:scale-95 border border-cyan-500/40 text-cyan-200 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+        >
+          <RefreshCw className={`w-4 h-4 ${isFullSyncing ? 'animate-spin' : ''}`} />
+          <span>{isFullSyncing ? (fullSyncStep || 'Synchronisation complète…') : 'Synchronisation complète (réparer)'}</span>
+        </button>
+
         {manualSyncMsg && (
           <p className="text-[11px] font-bold text-center text-cyan-300 animate-in fade-in">
             {manualSyncMsg}
+          </p>
+        )}
+
+        {fullSyncReport && (
+          <p className="text-[11px] font-bold text-center text-cyan-200 bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-2 animate-in fade-in">
+            {fullSyncReport}
           </p>
         )}
       </div>
@@ -225,54 +338,86 @@ export const SyncDiagnosticsTab: React.FC = () => {
           Métriques de Synchronisation
         </h4>
 
-        <div className="space-y-2">
-          <div className="flex justify-between items-center py-1 border-b border-pos-border/40">
-            <span className="text-pos-muted flex items-center gap-1.5">
-              <Cloud className="w-3.5 h-3.5 text-cyan-400" /> Mutations en attente (Outbox) :
-            </span>
-            <span className="font-mono font-black text-pos-text">
-              {syncStatus.pendingCount}
-            </span>
+        <div className="space-y-3">
+          <div className="py-1 border-b border-pos-border/40">
+            <div className="flex justify-between items-center">
+              <span className="text-pos-muted flex items-center gap-1.5">
+                <Cloud className="w-3.5 h-3.5 text-cyan-400" /> Mutations en attente (Outbox) :
+              </span>
+              <span className="font-mono font-black text-pos-text">
+                {syncStatus.pendingCount}
+              </span>
+            </div>
+            <p className="text-[11px] text-pos-muted leading-relaxed mt-1">
+              {syncStatus.pendingCount === 0
+                ? 'Tout est envoyé : vos ventes sont à jour dans le cloud. Rien à faire.'
+                : 'Ce sont vos ventes conservées sur l’appareil. Elles partiront seules à la prochaine connexion — vous pouvez continuer à vendre.'}
+            </p>
           </div>
 
-          <div className="flex justify-between items-center py-1 border-b border-pos-border/40">
-            <span className="text-pos-muted flex items-center gap-1.5">
-              <RefreshCw className="w-3.5 h-3.5 text-emerald-400" /> Dernier Envoi (Push) :
-            </span>
-            <span className="font-mono text-pos-text font-medium">
-              {syncStatus.lastPushAt
-                ? new Date(syncStatus.lastPushAt).toLocaleTimeString('fr-FR')
-                : 'Aucun'}
-            </span>
+          <div className="py-1 border-b border-pos-border/40">
+            <div className="flex justify-between items-center">
+              <span className="text-pos-muted flex items-center gap-1.5">
+                <RefreshCw className="w-3.5 h-3.5 text-emerald-400" /> Dernier Envoi (Push) :
+              </span>
+              <span className="font-mono text-pos-text font-medium">
+                {syncStatus.lastPushAt
+                  ? new Date(syncStatus.lastPushAt).toLocaleTimeString('fr-FR')
+                  : 'Aucun'}
+              </span>
+            </div>
+            <p className="text-[11px] text-pos-muted leading-relaxed mt-1">
+              Heure du dernier envoi de vos ventes vers le cloud.
+              {' « Aucun » après une installation est normal — touchez « Forcer la Synchronisation » une fois en ligne.'}
+            </p>
           </div>
 
-          <div className="flex justify-between items-center py-1 border-b border-pos-border/40">
-            <span className="text-pos-muted flex items-center gap-1.5">
-              <Database className="w-3.5 h-3.5 text-purple-400" /> Dernière Réception (Pull) :
-            </span>
-            <span className="font-mono text-pos-text font-medium">
-              {syncStatus.lastPullAt
-                ? new Date(syncStatus.lastPullAt).toLocaleTimeString('fr-FR')
-                : 'Initial'}
-            </span>
+          <div className="py-1 border-b border-pos-border/40">
+            <div className="flex justify-between items-center">
+              <span className="text-pos-muted flex items-center gap-1.5">
+                <Database className="w-3.5 h-3.5 text-purple-400" /> Dernière Réception (Pull) :
+              </span>
+              <span className="font-mono text-pos-text font-medium">
+                {syncStatus.lastPullAt
+                  ? new Date(syncStatus.lastPullAt).toLocaleTimeString('fr-FR')
+                  : 'Initial'}
+              </span>
+            </div>
+            <p className="text-[11px] text-pos-muted leading-relaxed mt-1">
+              Heure de la dernière réception (catalogue, prix, clients) depuis le cloud vers ce téléphone.
+            </p>
           </div>
 
-          <div className="flex justify-between items-center py-1 border-b border-pos-border/40">
-            <span className="text-pos-muted flex items-center gap-1.5">
-              <Radio className="w-3.5 h-3.5 text-cyan-400" /> Relais Temps Réel (Relay DO) :
-            </span>
-            <span className={`font-mono text-xs font-bold ${syncStatus.relayConnected ? 'text-emerald-400' : 'text-amber-400'}`}>
-              {syncStatus.relayConnected ? 'Connecté (WebSocket)' : 'Mode Polling Adaptatif'}
-            </span>
+          <div className="py-1 border-b border-pos-border/40">
+            <div className="flex justify-between items-center">
+              <span className="text-pos-muted flex items-center gap-1.5">
+                <Radio className="w-3.5 h-3.5 text-cyan-400" /> Relais Temps Réel (Relay DO) :
+              </span>
+              <span className={`font-mono text-xs font-bold ${syncStatus.relayConnected ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {syncStatus.relayConnected ? 'Connecté (WebSocket)' : 'Mode Polling Adaptatif'}
+              </span>
+            </div>
+            <p className="text-[11px] text-pos-muted leading-relaxed mt-1">
+              {syncStatus.relayConnected
+                ? 'Les nouveautés de la caisse arrivent ici en direct. Rien à faire.'
+                : (syncStatus as { relayLastError?: string }).relayLastError
+                  ? `Relay inaccessible (${(syncStatus as { relayLastError?: string }).relayLastError}) — polling adaptatif actif (5 s si activité, 15 s au repos). Déployer le Worker relay (workers/relay) ou définir VITE_RELAY_WS_URL rétablit le temps réel.`
+                  : 'Vérification périodique : tout arrive quand même, avec un léger délai. Si cela dure, vérifiez votre connexion.'}
+            </p>
           </div>
 
-          <div className="flex justify-between items-center py-1 border-b border-pos-border/40">
-            <span className="text-pos-muted flex items-center gap-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Contrat C1 Latence :
-            </span>
-            <span className="font-mono font-bold text-emerald-400">
-              ≤ 1.5s p95
-            </span>
+          <div className="py-1 border-b border-pos-border/40">
+            <div className="flex justify-between items-center">
+              <span className="text-pos-muted flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Contrat C1 Latence :
+              </span>
+              <span className="font-mono font-bold text-emerald-400">
+                ≤ 1.5s p95 (objectif)
+              </span>
+            </div>
+            <p className="text-[11px] text-pos-muted leading-relaxed mt-1">
+              Objectif de conception : une vente saisie sur la caisse apparaît sur ce téléphone en moins de 1,5 seconde (non mesuré en continu).
+            </p>
           </div>
         </div>
       </div>
@@ -288,7 +433,7 @@ export const SyncDiagnosticsTab: React.FC = () => {
             type="button"
             onClick={() => void loadStorageReport()}
             disabled={isLoadingStorage}
-            className="py-1 px-2 rounded-lg bg-pos-panel border border-pos-border text-pos-muted font-bold text-[11px] flex items-center gap-1 active:scale-95 transition cursor-pointer disabled:opacity-50"
+            className="min-h-[44px] min-w-[44px] py-1 px-2 rounded-lg bg-pos-panel border border-pos-border text-pos-muted font-bold text-[11px] flex items-center gap-1 active:scale-95 transition cursor-pointer disabled:opacity-50"
           >
             <RefreshCw className={`w-3 h-3 ${isLoadingStorage ? 'animate-spin' : ''}`} />
             Actualiser
@@ -296,10 +441,10 @@ export const SyncDiagnosticsTab: React.FC = () => {
         </div>
 
         {!storageReport || (storageReport.totalBytes === 0 && storageReport.isEstimated) ? (
-          <p className="text-[11px] text-pos-muted">
+          <p className="text-[11px] text-pos-muted leading-relaxed">
             {isLoadingStorage
               ? 'Mesure en cours…'
-              : 'Non disponible hors-ligne — actualisez après connexion.'}
+              : 'Non disponible hors-ligne — actualisez après connexion. Votre espace cloud restant s’affiche ici.'}
           </p>
         ) : (
           <div className="space-y-2">
@@ -329,6 +474,10 @@ export const SyncDiagnosticsTab: React.FC = () => {
               <span>Données : <span className="text-pos-text font-bold">{formatBytes(storageReport.liveBytes)}</span></span>
               <span>Réutilisable : <span className="text-emerald-400 font-bold">{formatBytes(storageReport.freelistBytes)}</span></span>
             </div>
+            <p className="text-[11px] text-pos-muted leading-relaxed">
+              En clair : « Réutilisable » sera récupéré automatiquement par le cloud.
+              Tant que la barre reste verte, rien à faire — au-delà de 70 %, pensez à archiver les anciennes données.
+            </p>
             {(storageReport.thresholdLevel === 'WARNING' ||
               storageReport.thresholdLevel === 'CRITICAL' ||
               storageReport.thresholdLevel === 'EXCEEDED') && (
@@ -347,8 +496,9 @@ export const SyncDiagnosticsTab: React.FC = () => {
             <AlertTriangle className="w-4 h-4 shrink-0" />
             <span>{syncStatus.failedCount} mutation(s) en quarantaine (Échecs répétés)</span>
           </div>
-          <p className="text-[11px] text-pos-muted">
+          <p className="text-[11px] text-pos-muted leading-relaxed">
             Ces opérations ont échoué après 10 tentatives et ont été isolées pour ne pas bloquer les ventes en cours (Protection anti-blocage).
+            {' Que faire : touchez « Réessayer » une fois en ligne. Si l’erreur persiste, copiez le message ci-dessous pour le support.'}
           </p>
           {syncStatus.lastError && (
             <p className="text-[10px] font-mono bg-pos-panel/60 p-2 rounded-lg text-rose-300 break-all border border-rose-500/20">
@@ -359,11 +509,91 @@ export const SyncDiagnosticsTab: React.FC = () => {
             type="button"
             disabled={isRetryingQuarantined || isSyncing}
             onClick={handleRetryQuarantined}
-            className="w-full py-2 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 active:scale-95 border border-rose-500/40 text-rose-300 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+            className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 active:scale-95 border border-rose-500/40 text-rose-300 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
           >
             <RotateCcw className={`w-3.5 h-3.5 ${isRetryingQuarantined ? 'animate-spin' : ''}`} />
             <span>{isRetryingQuarantined ? 'Réactivation en cours...' : 'Réessayer les éléments en quarantaine'}</span>
           </button>
+        </div>
+      )}
+
+      {/* Merchant Devices (ad.md §15 — registry + revocation) */}
+      <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 text-xs">
+        <div className="flex items-center justify-between">
+          <h4 className="text-[11px] font-black uppercase text-pos-muted tracking-wider flex items-center gap-1.5">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            Appareils du Magasin ({merchantDevices.length})
+          </h4>
+          <button
+            type="button"
+            onClick={() => void loadMerchantDevices()}
+            disabled={isLoadingDevices}
+            className="min-h-[44px] min-w-[44px] py-1.5 px-2.5 rounded-lg bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 font-bold text-[11px] active:scale-95 transition cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingDevices ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
+        {syncStatus.deviceRevoked && (
+          <p className="text-[11px] font-bold text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-lg p-2">
+            Cet appareil a été révoqué — synchronisation suspendue. Les ventes locales restent disponibles.
+          </p>
+        )}
+        {merchantDevices.length === 0 ? (
+          <p className="text-[11px] text-pos-muted">
+            {isLoadingDevices ? 'Chargement des appareils…' : 'Aucun appareil enregistré (relais injoignable ou aucun appareil connecté).'}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {merchantDevices.map((d) => (
+              <div key={d.deviceId} className="bg-pos-panel/60 p-2 rounded-lg border border-pos-border/60 flex items-center gap-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-bold text-pos-text truncate">
+                    {d.deviceName} <span className="font-mono text-pos-muted">· {d.platform}</span>
+                  </p>
+                  <p className="text-[10px] font-mono text-pos-muted truncate">
+                    {d.deviceId.slice(0, 18)}… · vu {new Date(d.lastSeen).toLocaleString('fr-FR')}
+                    {d.revoked && <span className="text-rose-300 font-bold"> · RÉVOQUÉ</span>}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={deviceActionId === d.deviceId}
+                  onClick={() => void handleDeviceRevocation(d.deviceId, !d.revoked)}
+                  className={`min-h-[44px] px-2.5 rounded-lg font-bold text-[11px] active:scale-95 transition cursor-pointer border ${
+                    d.revoked
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                      : 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                  }`}
+                >
+                  {deviceActionId === d.deviceId ? '…' : d.revoked ? 'Réadmettre' : 'Révoquer'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Both-offline double-payout exceptions (payoutWatch convergence) */}
+      {payoutExceptions.length > 0 && (
+        <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4 space-y-3 text-xs">
+          <div className="flex items-center gap-2 text-rose-400 font-bold">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{payoutExceptions.length} double-paiement(s) suspecté(s) — caisse à contrôler</span>
+          </div>
+          <p className="text-[11px] text-pos-muted leading-relaxed">
+            Le même ticket a été payé en espèces sur deux appareils (souvent pendant une coupure internet).
+            Les écritures sont fusionnées, mais la monnaie a pu être rendue deux fois.
+          </p>
+          <div className="space-y-2">
+            {payoutExceptions.slice(0, 5).map((ex) => (
+              <div key={ex.id} className="bg-pos-panel/60 p-2 rounded-lg border border-rose-500/20">
+                <p className="text-[11px] text-pos-text leading-relaxed">{ex.details}</p>
+                <span className="font-mono text-[10px] text-pos-muted">
+                  {ex.timestamp ? new Date(ex.timestamp).toLocaleString('fr-FR') : ''}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -379,14 +609,14 @@ export const SyncDiagnosticsTab: React.FC = () => {
               <button
                 type="button"
                 onClick={handleCopyCrashReports}
-                className="py-1.5 px-2.5 rounded-lg bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 font-bold text-[11px] active:scale-95 transition cursor-pointer"
+                className="min-h-[44px] min-w-[44px] py-1.5 px-2.5 rounded-lg bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 font-bold text-[11px] active:scale-95 transition cursor-pointer"
               >
                 Copier
               </button>
               <button
                 type="button"
                 onClick={handleClearCrashReports}
-                className="py-1.5 px-2.5 rounded-lg bg-pos-panel border border-pos-border text-pos-muted font-bold text-[11px] active:scale-95 transition cursor-pointer"
+                className="min-h-[44px] min-w-[44px] py-1.5 px-2.5 rounded-lg bg-pos-panel border border-pos-border text-pos-muted font-bold text-[11px] active:scale-95 transition cursor-pointer"
               >
                 Effacer
               </button>

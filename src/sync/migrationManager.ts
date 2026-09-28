@@ -3,12 +3,13 @@
 // Never deletes or prunes local data.
 
 import type { InValue } from '@libsql/client';
-import { getLocalDb, ensureLocalSyncColumns, utcNowIso } from '../db/sqlPluginAdapter';
+import { getLocalDb, ensureLocalSyncColumns, utcNowIso, isDeviceLocalSettingKey } from '../db/sqlPluginAdapter';
 import { db as dexieDb } from '../db/database';
 import { createPreMigrationBackup } from '../db/backupManager';
 import { applyRemoteMigrations, checkRemoteSchemaStatus, ensureRemoteSchemaColumns, ALL_REMOTE_SYNC_TABLES, GENERIC_SYNC_TABLES, assertValidSyncTable } from './remoteSchema';
 import { getTursoClient } from './tursoClient';
 import { RestoreManager } from './restoreManager';
+import { newId } from '../utils/ids';
 
 export interface TableVerificationResult {
   tableName: string;
@@ -267,6 +268,10 @@ export class MigrationManager {
             discount: ci.discount || 0,
             imei_number: ci.imeiNumber || null,
             cost_price: ci.unitCostPrice || ci.product?.costPrice || 0,
+            unit_price_charged: ci.unitPriceCharged || ci.appliedPrice || ci.product?.price || 0,
+            unit_cost_at_sale: ci.unitCostAtSale || ci.unitCostPrice || ci.product?.costPrice || 0,
+            discount_amount: ci.discountAmount || 0,
+            line_profit: ci.lineProfit || 0,
             json_payload: JSON.stringify(ci),
             device_id: 'migration',
             idempotency_key: itemKey,
@@ -282,12 +287,16 @@ export class MigrationManager {
       for (const it of localItems) {
         await local.execute(
           `INSERT OR REPLACE INTO transaction_items (id, transaction_id, product_id, quantity, applied_price,
-            discount, imei_number, cost_price, json_payload, device_id, idempotency_key, sync_status,
+            discount, imei_number, cost_price, unit_price_charged, unit_cost_at_sale,
+            discount_amount, line_profit, json_payload, device_id, idempotency_key, sync_status,
             version, created_at, updated_at, deleted)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'synced',$12,$13,$14,$15)`,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'synced',$16,$17,$18,$19)`,
           [
             it.id, it.transaction_id, it.product_id, it.quantity, it.applied_price,
-            it.discount, it.imei_number, it.cost_price, it.json_payload, it.device_id,
+            it.discount, it.imei_number, it.cost_price,
+            Number(it.unit_price_charged ?? 0), Number(it.unit_cost_at_sale ?? 0),
+            Number(it.discount_amount ?? 0), Number(it.line_profit ?? 0),
+            it.json_payload, it.device_id,
             it.idempotency_key, it.version, it.created_at, it.updated_at, it.deleted,
           ]
         );
@@ -298,15 +307,19 @@ export class MigrationManager {
       const chunk = localItems.slice(i, i + 50);
       const stmts = chunk.map((it) => ({
         sql: `INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price,
-          discount, imei_number, cost_price, json_payload, device_id, idempotency_key, sync_status,
+          discount, imei_number, cost_price, unit_price_charged, unit_cost_at_sale,
+          discount_amount, line_profit, json_payload, device_id, idempotency_key, sync_status,
           version, created_at, updated_at, deleted)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT(id) DO NOTHING`,
         args: [
           it.id as InValue, it.transaction_id as InValue, it.product_id as InValue,
           Number(it.quantity ?? 1) as InValue, Number(it.applied_price ?? 0) as InValue,
           Number(it.discount ?? 0) as InValue, (it.imei_number ?? null) as InValue,
-          Number(it.cost_price ?? 0) as InValue, (it.json_payload ?? '{}') as InValue,
+          Number(it.cost_price ?? 0) as InValue,
+          Number(it.unit_price_charged ?? 0) as InValue, Number(it.unit_cost_at_sale ?? 0) as InValue,
+          Number(it.discount_amount ?? 0) as InValue, Number(it.line_profit ?? 0) as InValue,
+          (it.json_payload ?? '{}') as InValue,
           (it.device_id ?? 'migration') as InValue, (it.idempotency_key ?? `mig-${it.id}`) as InValue,
           'synced' as InValue, Number(it.version ?? 1) as InValue,
           (it.created_at ?? now) as InValue, (it.updated_at ?? now) as InValue,
@@ -354,6 +367,7 @@ export class MigrationManager {
       cash_sessions: 'cashSessions',
       cash_movements: 'cashMovements',
       app_settings: 'appSettings',
+      credit_vouchers: 'creditVouchers',
     };
 
     for (const remoteTable of GENERIC_SYNC_TABLES) {
@@ -368,8 +382,8 @@ export class MigrationManager {
         const chunk = rows.slice(i, i + 50);
         const stmts: Array<{ sql: string; args: InValue[] }> = [];
         for (const item of chunk) {
-          const id = String(item.id || item.imei || item.key || `gen-${Date.now()}`);
-          if (remoteTable === 'app_settings' && id.startsWith('sync.')) continue;
+          const id = String(item.id || item.imei || item.key || newId('gen'));
+          if (remoteTable === 'app_settings' && isDeviceLocalSettingKey(id)) continue;
 
           stmts.push({
             sql: `INSERT INTO ${remoteTable} (id, data_json, device_id, idempotency_key, sync_status, version, updated_at, deleted)
@@ -392,9 +406,11 @@ export class MigrationManager {
     // holds catalog and sales created on other terminals. Ingest all remote records into local
     // SQLite and Dexie so both replicas achieve identical, provable mathematical parity.
     onProgress?.('Synchronisation et fusion des données distantes du cloud...', 80, 100);
+    // skipPreBackup: this migration already took its pre-migration backup in
+    // step 1 — a second snapshot per convergence pull would only churn storage.
     await RestoreManager.executeRestore((p) => {
       onProgress?.(`Récupération ${p.table} (${p.processed}/${p.total})...`, 80 + Math.round((p.processed / Math.max(1, p.total)) * 8), 100);
-    }, true);
+    }, true, { skipPreBackup: true });
 
     // ── Step 4: Verification (PROVE Zero Data Loss & Zero Duplicates) ──
     onProgress?.('Vérification mathématique de l\'intégrité (comptages et hachages SHA-256)...', 90, 100);
@@ -413,7 +429,7 @@ export class MigrationManager {
         const store = dexieTable ? (dexieDb as unknown as Record<string, { toArray: () => Promise<Array<Record<string, unknown>>> }>)[dexieTable] : null;
         const dRows = store ? await store.toArray().catch(() => []) : [];
         const filtered = table === 'app_settings'
-          ? dRows.filter((r) => !String(r.key || r.id).startsWith('sync.'))
+          ? dRows.filter((r) => !isDeviceLocalSettingKey(String(r.key || r.id)))
           : dRows;
         filtered.sort((a, b) => String(a.id || a.imei || a.key).localeCompare(String(b.id || b.imei || b.key)));
         localCount = filtered.length;
@@ -427,7 +443,11 @@ export class MigrationManager {
       const localHash = await sha256(localCanonical);
       const remoteHash = await sha256(remoteCanonical);
 
-      const verified = localCount === remoteCount;
+      // Counts alone cannot prove parity (same count, different rows). The
+      // SHA-256 digests were computed but discarded — compare them.
+      const countsMatch = localCount === remoteCount;
+      const hashesMatch = localHash === remoteHash;
+      const verified = countsMatch && hashesMatch;
       tableResults.push({
         tableName: table,
         localCount,
@@ -435,7 +455,11 @@ export class MigrationManager {
         localHash,
         remoteHash,
         verified,
-        mismatchReason: verified ? undefined : `Écart détecté: local=${localCount}, distant=${remoteCount}`,
+        mismatchReason: verified
+          ? undefined
+          : !countsMatch
+            ? `Écart détecté: local=${localCount}, distant=${remoteCount}`
+            : `Contenu divergent: même nombre (${localCount}) mais hachages SHA-256 différents (local=${localHash.slice(0, 12)}…, distant=${remoteHash.slice(0, 12)}…)`,
       });
     }
 
@@ -443,7 +467,7 @@ export class MigrationManager {
     if (failedTables.length > 0) {
       // Retry delta pull once in case a concurrent write occurred during verification
       onProgress?.('Ajustement final des deltas distants...', 95, 100);
-      await RestoreManager.executeRestore(undefined, true).catch(() => {});
+      await RestoreManager.executeRestore(undefined, true, { skipPreBackup: true }).catch(() => {});
 
       for (const failed of failedTables) {
         const table = failed.tableName;
@@ -459,7 +483,7 @@ export class MigrationManager {
           const store = dexieTable ? (dexieDb as unknown as Record<string, { toArray: () => Promise<Array<Record<string, unknown>>> }>)[dexieTable] : null;
           const dRows = store ? await store.toArray().catch(() => []) : [];
           const filtered = table === 'app_settings'
-            ? dRows.filter((r) => !String(r.key || r.id).startsWith('sync.'))
+            ? dRows.filter((r) => !isDeviceLocalSettingKey(String(r.key || r.id)))
             : dRows;
           filtered.sort((a, b) => String(a.id || a.imei || a.key).localeCompare(String(b.id || b.imei || b.key)));
           localCount = filtered.length;
@@ -472,14 +496,20 @@ export class MigrationManager {
 
         const localHash = await sha256(localCanonical);
         const remoteHash = await sha256(remoteCanonical);
-        const verified = localCount === remoteCount;
+        const countsMatch = localCount === remoteCount;
+        const hashesMatch = localHash === remoteHash;
+        const verified = countsMatch && hashesMatch;
 
         failed.localCount = localCount;
         failed.remoteCount = remoteCount;
         failed.localHash = localHash;
         failed.remoteHash = remoteHash;
         failed.verified = verified;
-        failed.mismatchReason = verified ? undefined : `Écart détecté: local=${localCount}, distant=${remoteCount}`;
+        failed.mismatchReason = verified
+          ? undefined
+          : !countsMatch
+            ? `Écart détecté: local=${localCount}, distant=${remoteCount}`
+            : `Contenu divergent: même nombre (${localCount}) mais hachages SHA-256 différents (local=${localHash.slice(0, 12)}…, distant=${remoteHash.slice(0, 12)}…)`;
       }
       failedTables = tableResults.filter((t) => !t.verified);
     }

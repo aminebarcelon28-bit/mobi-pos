@@ -6,12 +6,17 @@ import {
   Bluetooth, Usb, ChevronDown, ChevronUp, Settings, HardDrive,
   Server, RotateCcw, Database, Shield, Radio, Sparkles,
   Award, TrendingUp, Volume2, VolumeX, Music, Cloud,
-  Sun, Moon, ChevronLeft, Store, Smartphone, ExternalLink
+  Sun, Moon, ChevronLeft, Store, Smartphone, ExternalLink,
+  Users, UserPlus, Trash2, Edit3, Lock, Eye, EyeOff,
+  ShieldAlert, User, Check
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
-import { formatDZD, APP_VERSION } from '../../types/pos';
-import { DEFAULT_LOYALTY_CONFIG, calculateFinancialProfitImpact } from '../../utils/loyaltyEngine';
+import { formatDZD, APP_VERSION, type CashierUser } from '../../types/pos';
+import { verifyPin, hashPin } from '../../utils/security';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { normalizeLoyaltyConfig, calculateFinancialProfitImpact } from '../../utils/loyaltyEngine';
+import type { LoyaltyProgramConfig } from '../../types/pos';
 // P11.3: maintenanceService -> maintenanceAdapter -> backupSchema pulls the whole
 // zod runtime into the entry chunk. These only run from settings actions.
 import type { DbStats, IntegrityReport } from '../../services/maintenanceService';
@@ -30,7 +35,7 @@ type DeviceCategory = 'receipt_printer' | 'label_printer' | 'barcode_scanner' | 
 type ConnectionType = 'USB' | 'Bluetooth' | 'Wi-Fi' | 'Serial' | 'HID' | 'Network' | 'HDMI';
 type DeviceStatus = 'connected' | 'ready' | 'active' | 'testing' | 'error' | 'offline' | 'warning';
 type DiagnosticResult = 'pass' | 'fail' | 'warning' | 'pending' | 'running';
-type SettingsTab = 'appearance' | 'hardware' | 'cloud_sync' | 'diagnostics' | 'loyalty' | 'backup' | 'updates';
+type SettingsTab = 'appearance' | 'hardware' | 'security' | 'cloud_sync' | 'diagnostics' | 'loyalty' | 'backup' | 'updates';
 
 interface PeripheralDevice {
   id: string;
@@ -264,21 +269,258 @@ const resultConfig: Record<DiagnosticResult, { label: string; color: string; ico
 // COMPONENT
 // ══════════════════════════════════════════════════════════════
 
+// Mobile Wi-Fi / Bluetooth printer card (phone only, per-device config).
+// Self-contained: lazy-loads the mobilePrinter module so the escpos graph
+// stays out of the settings chunk until this card mounts.
+const MobilePrinterCard: React.FC<{ storeName?: string }> = ({ storeName }) => {
+  const { showToast } = useToast();
+  const [config, setConfig] = useState<import('../../types/pos').MobilePrinterConfig | null>(null);
+  const [btDevices, setBtDevices] = useState<Array<{ name: string; mac: string }>>([]);
+  const [btScanning, setBtScanning] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    import('../../utils/mobilePrinter')
+      .then((m) => setConfig((prev) => prev || m.loadMobilePrinter()))
+      .catch(() => undefined);
+  }, []);
+
+  const update = (patch: Partial<import('../../types/pos').MobilePrinterConfig>) => {
+    // B-051: pure state update — persistence runs outside the setState
+    // updater (updaters may re-run under StrictMode; side effects there
+    // double-save or swallow errors silently).
+    const base = config || {
+      enabled: false,
+      connection: 'wifi' as const,
+      wifiHost: '192.168.1.50',
+      wifiPort: 9100,
+      bluetoothName: '',
+      bluetoothMac: '',
+      labelProtocol: 'ESCPOS' as const,
+    };
+    const next = { ...base, ...patch };
+    setConfig(next);
+    import('../../utils/mobilePrinter')
+      .then((m) => m.saveMobilePrinter(next))
+      .catch((err: unknown) => {
+        console.error('[mobile-printer] save failed:', err);
+        setMsg('Échec de sauvegarde de l\'imprimante — réessayez.');
+      });
+    setMsg('');
+  };
+
+  const handleBtScan = async () => {
+    setBtScanning(true);
+    setMsg('');
+    try {
+      const { listBondedBluetoothPrinters } = await import('../../utils/mobilePrinter');
+      const devices = await listBondedBluetoothPrinters();
+      setBtDevices(devices);
+      setMsg(
+        devices.length === 0
+          ? "Aucune imprimante appairée — appairez-la d'abord dans les réglages Bluetooth d'Android, puis touchez « Rechercher »."
+          : `${devices.length} appareil(s) appairé(s) — touchez-en un pour le sélectionner.`
+      );
+    } catch {
+      setMsg("Bluetooth inaccessible — autorisez l'accès puis réessayez.");
+    } finally {
+      setBtScanning(false);
+    }
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    setMsg('');
+    try {
+      const { buildMobileTestPage, printBytesViaMobilePrinter } = await import('../../utils/mobilePrinter');
+      const result = await printBytesViaMobilePrinter(
+        buildMobileTestPage(storeName || 'MOBI-POS', config?.connection === 'bluetooth' ? `Bluetooth ${config.bluetoothMac}` : `Wi-Fi ${config?.wifiHost}:${config?.wifiPort}`)
+      );
+      const okMsg = '✅ Page de test envoyée — vérifiez l’imprimante.';
+      const koMsg = "❌ Échec d'envoi — vérifiez l'adresse IP / l'appairage Bluetooth.";
+      setMsg(result.sent ? okMsg : koMsg);
+      showToast(result.sent ? okMsg : koMsg, result.sent ? 'success' : 'error');
+    } catch {
+      setMsg("❌ Échec d'envoi — vérifiez la configuration.");
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  if (!config) return null;
+
+  return (
+    <div className="bg-pos-card border border-cyan-500/30 rounded-xl p-4 space-y-3 shadow-md">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-8 h-8 rounded-xl bg-cyan-500/15 text-cyan-400 flex items-center justify-center shrink-0">
+            <Printer className="w-4 h-4" />
+          </div>
+          <div className="min-w-0">
+            <h4 className="text-xs font-bold text-pos-text truncate">Imprimante Mobile Wi-Fi / Bluetooth</h4>
+            <span className="text-[10px] text-pos-muted block truncate">Tickets & étiquettes directs, sans PC</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => update({ enabled: !config.enabled })}
+          className={`min-h-[44px] px-4 rounded-xl text-xs font-bold border transition cursor-pointer active:scale-95 shrink-0 ${
+            config.enabled
+              ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+              : 'bg-pos-bg border-pos-border text-pos-muted'
+          }`}
+        >
+          {config.enabled ? 'Activée' : 'Désactivée'}
+        </button>
+      </div>
+
+      {config.enabled && (
+        <div className="space-y-3">
+          {/* Connection picker */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => update({ connection: 'wifi' })}
+              className={`min-h-[48px] rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95 ${
+                config.connection === 'wifi'
+                  ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300'
+                  : 'bg-pos-bg border-pos-border text-pos-muted'
+              }`}
+            >
+              <Wifi className="w-4 h-4" /> Wi-Fi (réseau)
+            </button>
+            <button
+              type="button"
+              onClick={() => update({ connection: 'bluetooth' })}
+              className={`min-h-[48px] rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-95 ${
+                config.connection === 'bluetooth'
+                  ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300'
+                  : 'bg-pos-bg border-pos-border text-pos-muted'
+              }`}
+            >
+              <Bluetooth className="w-4 h-4" /> Bluetooth
+            </button>
+          </div>
+
+          {config.connection === 'wifi' ? (
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-2">
+                <label className="text-[10px] text-pos-muted font-bold block mb-1">Adresse IP imprimante</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={config.wifiHost}
+                  onChange={(e) => update({ wifiHost: e.target.value.trim() })}
+                  placeholder="192.168.1.50"
+                  className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-pos-muted font-bold block mb-1">Port</label>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  value={config.wifiPort}
+                  onChange={(e) => update({ wifiPort: Math.max(1, Math.min(65535, parseInt(e.target.value) || 9100)) })}
+                  placeholder="9100"
+                  className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={handleBtScan}
+                disabled={btScanning}
+                className="w-full min-h-[48px] rounded-xl bg-cyan-600/20 hover:bg-cyan-600/30 border border-cyan-500/40 text-cyan-300 text-xs font-bold transition cursor-pointer active:scale-95 disabled:opacity-50"
+              >
+                {btScanning ? 'Recherche en cours…' : '🔍 Rechercher les imprimantes appairées'}
+              </button>
+              {btDevices.map((d) => (
+                <button
+                  key={d.mac}
+                  type="button"
+                  onClick={() => update({ bluetoothMac: d.mac, bluetoothName: d.name })}
+                  className={`w-full min-h-[48px] px-3 rounded-xl border text-xs font-bold flex items-center justify-between gap-2 transition cursor-pointer active:scale-95 ${
+                    config.bluetoothMac === d.mac
+                      ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+                      : 'bg-pos-bg border-pos-border text-pos-text'
+                  }`}
+                >
+                  <span className="truncate">{d.name}</span>
+                  <span className="font-mono text-[10px] text-pos-muted shrink-0">{d.mac}</span>
+                </button>
+              ))}
+              <p className="text-[10px] text-pos-muted leading-relaxed">
+                Appairez d'abord l'imprimante dans les réglages Bluetooth d'Android (code PIN souvent 0000 ou 1234).
+              </p>
+            </div>
+          )}
+
+          {/* Label language */}
+          <div>
+            <label className="text-[10px] text-pos-muted font-bold block mb-1">Langage étiquettes (imprimante tickets/codes-barres)</label>
+            <div className="grid grid-cols-3 gap-2">
+              {(['ESCPOS', 'TSPL', 'ZPL'] as const).map((proto) => (
+                <button
+                  key={proto}
+                  type="button"
+                  onClick={() => update({ labelProtocol: proto })}
+                  className={`min-h-[48px] rounded-xl border text-xs font-bold transition cursor-pointer active:scale-95 ${
+                    config.labelProtocol === proto
+                      ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+                      : 'bg-pos-bg border-pos-border text-pos-muted'
+                  }`}
+                >
+                  {proto === 'ESCPOS' ? 'Ticket (ESC/POS)' : proto === 'TSPL' ? 'TSC / Xprinter' : 'Zebra (ZPL)'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleTest}
+            disabled={testing}
+            className="w-full min-h-[52px] rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm transition cursor-pointer active:scale-[0.98] disabled:opacity-50"
+          >
+            {testing ? 'Envoi en cours…' : '🖨️ Imprimer une page de test'}
+          </button>
+
+          {msg && (
+            <p className="text-[11px] text-pos-text bg-pos-bg border border-pos-border rounded-xl px-3 py-2 leading-relaxed">{msg}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const SettingsModal: React.FC = () => {
   const {
     activeModal,
     closeModal,
+    openModal,
     exportDatabase,
     importDatabase,
     receiptSettings,
     setReceiptSettings,
     setManagerPin,
     verifyManagerPin,
+    cashierUsers,
+    setCashierUsers,
+    activeCashier,
+    securityAuditLog,
     themeMode,
     toggleTheme,
   } = usePosStore();
   const { showToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Restore is a destructive tamper primitive (replaces transactions, audit,
+  // vouchers): manager PIN required before the picker even opens.
+  const [restorePinInput, setRestorePinInput] = useState('');
   const updater = useAppUpdater();
 
   const handleCheckUpdates = async () => {
@@ -299,6 +541,50 @@ export const SettingsModal: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('hardware');
   const [devices, setDevices] = useState<PeripheralDevice[]>(INITIAL_DEVICE_REGISTRY);
+  // Tab strip: translate a vertical mouse wheel into a horizontal scroll so
+  // all tabs stay reachable without Shift+wheel or a trackpad gesture.
+  const tabStripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = tabStripRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      if (el.scrollWidth <= el.clientWidth + 1) return;
+      el.scrollLeft += e.deltaY;
+      e.preventDefault();
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  // B-044: receipt profile fields edit a local draft; a 500ms debounce
+  // flushes to the async store setter so keystrokes are never lost to an
+  // unawaited Promise and DB failures surface as a toast.
+  const [receiptDraft, setReceiptDraft] = useState(receiptSettings);
+  const receiptSaveTimerRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (activeModal !== 'settings') return;
+    setReceiptDraft(receiptSettings);
+    return () => {
+      if (receiptSaveTimerRef.current) window.clearTimeout(receiptSaveTimerRef.current);
+    };
+    // Intentionally not depending on receiptSettings — syncing on every store
+    // write would clobber in-flight keystrokes (that's the bug we're fixing).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeModal]);
+
+  const scheduleReceiptSave = (next: typeof receiptDraft) => {
+    setReceiptDraft(next);
+    if (receiptSaveTimerRef.current) window.clearTimeout(receiptSaveTimerRef.current);
+    receiptSaveTimerRef.current = window.setTimeout(() => {
+      setReceiptSettings(next)
+        .then(() => undefined)
+        .catch((err: unknown) => {
+          console.error('[settings] receipt settings save failed:', err);
+          showToast("Échec de sauvegarde des paramètres de ticket — réessayez.", 'error');
+        });
+    }, 500);
+  };
   const [expandedDevice, setExpandedDevice] = useState<string | null>(null);
   const [diagnosticTests, setDiagnosticTests] = useState<DiagnosticTest[]>([]);
   const [isRunningAllDiag, setIsRunningAllDiag] = useState(false);
@@ -313,6 +599,284 @@ export const SettingsModal: React.FC = () => {
   const [newPinInput, setNewPinInput] = useState('');
   const [confirmPinInput, setConfirmPinInput] = useState('');
   const [isUpdatingPin, setIsUpdatingPin] = useState(false);
+  const [showManagerPin, setShowManagerPin] = useState(false);
+
+  // ── Cashier & Staff Management State ──
+  const [isCashierModalOpen, setIsCashierModalOpen] = useState(false);  const [editingCashierId, setEditingCashierId] = useState<string | null>(null);
+  const [cashierNameInput, setCashierNameInput] = useState('');
+  const [previousCashierPinInput, setPreviousCashierPinInput] = useState('');
+  const [cashierPinInput, setCashierPinInput] = useState('');
+  const [confirmCashierPinInput, setConfirmCashierPinInput] = useState('');
+  const [cashierRoleInput, setCashierRoleInput] = useState<'admin' | 'cashier'>('cashier');
+  const [cashierColorInput, setCashierColorInput] = useState('#10b981');
+  const [showCashierPin, setShowCashierPin] = useState(false);
+  const [isSavingCashier, setIsSavingCashier] = useState(false);
+
+  const handleOpenAddCashier = () => {
+    setEditingCashierId(null);
+    setCashierNameInput('');
+    setPreviousCashierPinInput('');
+    setCashierPinInput('');
+    setConfirmCashierPinInput('');
+    setCashierRoleInput('cashier');
+    setCashierColorInput('#10b981');
+    setShowCashierPin(false);
+    setIsCashierModalOpen(true);
+  };
+
+  const handleOpenEditCashier = (cashier: CashierUser) => {
+    setEditingCashierId(cashier.id);
+    setCashierNameInput(cashier.name);
+    setPreviousCashierPinInput('');
+    setCashierPinInput('');
+    setConfirmCashierPinInput('');
+    setCashierRoleInput(cashier.role);
+    setCashierColorInput(cashier.avatarColor || '#3b82f6');
+    setShowCashierPin(false);
+    setIsCashierModalOpen(true);
+  };
+
+  const handleSaveCashier = async () => {
+    const cleanName = cashierNameInput.trim();
+    if (!cleanName) {
+      showToast("Veuillez saisir un nom pour l'employé.", 'error');
+      return;
+    }
+
+    let targetPin = '';
+
+    if (editingCashierId) {
+      const existing = cashierUsers.find((u) => u.id === editingCashierId);
+      if (!existing) return;
+
+      const cleanPrev = previousCashierPinInput.trim();
+      const cleanNew = cashierPinInput.trim();
+      const cleanConfirm = confirmCashierPinInput.trim();
+
+      const isAttemptingPinChange = cleanPrev.length > 0 || cleanNew.length > 0 || cleanConfirm.length > 0;
+
+      if (isAttemptingPinChange) {
+        if (!cleanPrev) {
+          showToast("Sécurité : veuillez saisir l'ancien code PIN du caissier (ou le PIN Manager).", 'error');
+          return;
+        }
+
+        const isAuthorized =
+          verifyPin(cleanPrev, existing.pin) ||
+          cleanPrev === existing.pin ||
+          verifyManagerPin(cleanPrev);
+
+        if (!isAuthorized) {
+          showToast("L'ancien code PIN est incorrect (ou PIN Manager invalide).", 'error');
+          return;
+        }
+
+        if (!/^[0-9]{4}$/.test(cleanNew)) {
+          showToast("Le nouveau code PIN doit comporter exactement 4 chiffres.", 'error');
+          return;
+        }
+
+        if (cleanNew !== cleanConfirm) {
+          showToast("Les deux nouveaux codes PIN saisis ne correspondent pas.", 'error');
+          return;
+        }
+
+        // Strict per-profile PIN: every account keeps a distinct code so the
+        // lock screen can resolve identity by selection (shared codes would
+        // let one PIN open two profiles). Check side-effect free via
+        // verifyPin (never verifyManagerPin here — it records failures).
+        const otherUsers = cashierUsers.filter((u) => u.id !== editingCashierId);
+        if (otherUsers.some((u) => verifyPin(cleanNew, u.pin))) {
+          showToast('Chaque personne doit avoir un code PIN différent (code déjà utilisé).', 'error');
+          return;
+        }
+
+        // Single-PIN contract: the primary admin (first role==='admin') IS the
+        // manager — their PIN change goes through the master flow, which
+        // mirrors it back onto this user row. Secondary admins keep their own.
+        const primaryAdminId = cashierUsers.find((u) => u.role === 'admin')?.id;
+        if (existing.id === primaryAdminId) {
+          await setManagerPin(cleanNew);
+          targetPin = usePosStore.getState().managerPin || hashPin(cleanNew);
+          showToast('Code PIN du gérant mis à jour (PIN Manager synchronisé).', 'success');
+        } else {
+          const managerHash = usePosStore.getState().managerPin;
+          if (managerHash && verifyPin(cleanNew, managerHash)) {
+            showToast('Chaque personne doit avoir un code PIN différent (code gérant réservé).', 'error');
+            return;
+          }
+          targetPin = hashPin(cleanNew);
+        }
+      } else {
+        // Conserver le code PIN existant sans modification
+        targetPin = existing.pin;
+      }
+    } else {
+      // Création d'un nouveau caissier
+      const cleanNew = cashierPinInput.trim();
+      const cleanConfirm = confirmCashierPinInput.trim();
+
+      if (!/^[0-9]{4}$/.test(cleanNew)) {
+        showToast("Le code PIN caissier doit comporter exactement 4 chiffres (ex: 1234).", 'error');
+        return;
+      }
+
+      if (cleanNew !== cleanConfirm) {
+        showToast("Les deux codes PIN saisis ne correspondent pas.", 'error');
+        return;
+      }
+
+      // Strict per-profile PIN (see edit branch): reject codes already owned
+      // by another profile or by the manager — side-effect free verifyPin.
+      const managerHashForNew = usePosStore.getState().managerPin;
+      if (
+        cashierUsers.some((u) => verifyPin(cleanNew, u.pin)) ||
+        (managerHashForNew && verifyPin(cleanNew, managerHashForNew))
+      ) {
+        showToast('Chaque personne doit avoir un code PIN différent (code déjà utilisé).', 'error');
+        return;
+      }
+
+      targetPin = hashPin(cleanNew);
+    }
+
+    setIsSavingCashier(true);
+    try {
+      let updated: CashierUser[];
+      if (editingCashierId) {
+        const otherAdmins = cashierUsers.filter((u) => u.id !== editingCashierId && u.role === 'admin');
+        if (otherAdmins.length === 0 && cashierRoleInput !== 'admin') {
+          showToast('Impossible : il doit rester au moins un Administrateur dans le système.', 'error');
+          setIsSavingCashier(false);
+          return;
+        }
+
+        updated = cashierUsers.map((u) =>
+          u.id === editingCashierId
+            ? {
+                ...u,
+                name: cleanName,
+                pin: targetPin,
+                role: cashierRoleInput,
+                avatarColor: cashierColorInput,
+              }
+            : u
+        );
+      } else {
+        const newId = `usr-${Date.now().toString(36)}`;
+        const newCashier: CashierUser = {
+          id: newId,
+          name: cleanName,
+          pin: targetPin,
+          role: cashierRoleInput,
+          avatarColor: cashierColorInput,
+        };
+        updated = [...cashierUsers, newCashier];
+      }
+
+      // Single-PIN contract: if the primary admin was just demoted, the
+      // manager PIN follows the new primary admin (first remaining admin) —
+      // otherwise the manager would hold two PINs again.
+      const prevPrimaryId = cashierUsers.find((u) => u.role === 'admin')?.id;
+      const nextPrimary = updated.find((u) => u.role === 'admin');
+      const masterHash = usePosStore.getState().managerPin;
+      const demotedPrimary =
+        editingCashierId && prevPrimaryId === editingCashierId && nextPrimary && nextPrimary.id !== editingCashierId;
+      const finalUpdated =
+        demotedPrimary && masterHash && nextPrimary.pin !== masterHash
+          ? updated.map((u) => (u.id === nextPrimary.id ? { ...u, pin: masterHash } : u))
+          : updated;
+
+      await setCashierUsers(finalUpdated);
+      setIsCashierModalOpen(false);
+      soundEngine.playSuccess?.();
+      showToast(
+        editingCashierId
+          ? `Caissier "${cleanName}" mis à jour avec succès.`
+          : `Caissier "${cleanName}" ajouté à l'équipe !`,
+        'success'
+      );
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast(`Erreur : ${msg}`, 'error');
+    } finally {
+      setIsSavingCashier(false);
+    }
+  };
+
+  const handleDeleteCashier = async (cashierId: string) => {
+    const target = cashierUsers.find((u) => u.id === cashierId);
+    if (!target) return;
+
+    if (target.role === 'admin') {
+      const adminCount = cashierUsers.filter((u) => u.role === 'admin').length;
+      if (adminCount <= 1) {
+        showToast('Action impossible : vous ne pouvez pas supprimer le seul Administrateur du magasin.', 'error');
+        return;
+      }
+    }
+
+    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer le compte caissier "${target.name}" ?`)) {
+      return;
+    }
+
+    try {
+      const nextUsers = cashierUsers.filter((u) => u.id !== cashierId);
+      // Single-PIN contract: if the primary admin was just deleted, the
+      // manager PIN follows the new primary admin.
+      const wasPrimary = cashierUsers.find((u) => u.role === 'admin')?.id === cashierId;
+      const masterHash = usePosStore.getState().managerPin;
+      const nextPrimary = nextUsers.find((u) => u.role === 'admin');
+      const finalUsers =
+        wasPrimary && masterHash && nextPrimary && nextPrimary.pin !== masterHash
+          ? nextUsers.map((u) => (u.id === nextPrimary.id ? { ...u, pin: masterHash } : u))
+          : nextUsers;
+      await setCashierUsers(finalUsers);
+      soundEngine.playSuccess?.();
+      showToast(`Compte caissier "${target.name}" supprimé.`, 'info');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast(`Erreur suppression : ${msg}`, 'error');
+    }
+  };
+
+  const handleUpdateManagerPin = async () => {
+    if (!currentPinInput) {
+      showToast('Veuillez saisir votre code PIN actuel.', 'error');
+      return;
+    }
+    if (!verifyManagerPin(currentPinInput)) {
+      showToast('Le code PIN actuel est incorrect.', 'error');
+      return;
+    }
+    // New manager PINs are exactly 4 digits (aligns setup + lock-screen
+    // auto-submit at 4). Existing longer PINs are NOT broken: the current-PIN
+    // verification above (verifyManagerPin) accepts any length, and the
+    // current-PIN input below keeps maxLength 8 so legacy codes stay enterable.
+    if (!/^[0-9]{4}$/.test(newPinInput)) {
+      showToast('Le nouveau code PIN doit comporter exactement 4 chiffres (ex: 1234).', 'error');
+      return;
+    }
+    if (newPinInput !== confirmPinInput) {
+      showToast('Les deux nouveaux codes PIN saisis ne correspondent pas.', 'error');
+      return;
+    }
+    setIsUpdatingPin(true);
+    try {
+      await setManagerPin(newPinInput);
+      setCurrentPinInput('');
+      setNewPinInput('');
+      setConfirmPinInput('');
+      soundEngine.playSuccess?.();
+      showToast('Nouveau Code PIN Manager enregistré avec succès.', 'success');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showToast(`Erreur : ${msg}`, 'error');
+    } finally {
+      setIsUpdatingPin(false);
+    }
+  };
+
   // ── Audio Feedback Profile State ──
   const [audioProfile, setAudioProfile] = useState(() => soundEngine.getProfile());
 
@@ -546,6 +1110,17 @@ export const SettingsModal: React.FC = () => {
   if (activeModal !== 'settings') return null;
 
   // ── File Upload Handler ──
+  // Manager-PIN gate: a restore REPLACES live books (transactions, audit
+  // trail, voucher balances) with an older export — without a gate any
+  // cashier could resurrect voided sales or wipe the audit. The PIN is
+  // verified before the picker opens, never after the file is read.
+  const handleRestoreClick = () => {
+    if (!verifyManagerPin(restorePinInput)) {
+      showToast('Code PIN Manager requis pour restaurer une sauvegarde.', 'error');
+      return;
+    }
+    fileInputRef.current?.click();
+  };
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -555,6 +1130,7 @@ export const SettingsModal: React.FC = () => {
       if (content) {
         const importResult = await importDatabase(content);
         if (importResult.success) {
+          setRestorePinInput('');
           showToast('Base de données restaurée avec succès !', 'success');
           closeModal();
         } else {
@@ -563,6 +1139,8 @@ export const SettingsModal: React.FC = () => {
       }
     };
     reader.readAsText(file);
+    // Reset the picker so the same file can be re-chosen after a fix.
+    e.target.value = '';
   };
 
   // ── Manual Status Toggle ──
@@ -616,6 +1194,7 @@ export const SettingsModal: React.FC = () => {
   const tabs: { key: SettingsTab; label: string; icon: React.ReactNode }[] = [
     { key: 'appearance', label: 'Apparence & Thème', icon: <Sun className="w-4 h-4 text-amber-400" /> },
     { key: 'hardware', label: 'Matériel & Périphériques', icon: <Cpu className="w-4 h-4" /> },
+    { key: 'security', label: 'Sécurité & Personnel', icon: <ShieldCheck className="w-4 h-4 text-emerald-400" /> },
     { key: 'cloud_sync', label: 'Synchronisation Cloud', icon: <Cloud className="w-4 h-4 text-sky-400" /> },
     { key: 'diagnostics', label: 'Diagnostique Avancé', icon: <Activity className="w-4 h-4" /> },
     { key: 'loyalty', label: 'Configuration Fidélité', icon: <Award className="w-4 h-4 text-amber-400" /> },
@@ -720,7 +1299,7 @@ export const SettingsModal: React.FC = () => {
         </div>
 
         {/* ═══ Tab Navigation (horizontally scrollable on mobile) ═══ */}
-        <div className="flex gap-1 px-2.5 sm:px-4 pt-2 sm:pt-3 pb-0 shrink-0 overflow-x-auto no-scrollbar whitespace-nowrap border-b border-pos-border/40">
+        <div ref={tabStripRef} className="flex flex-nowrap gap-1 px-2.5 sm:px-4 pt-2 sm:pt-3 pb-0 shrink-0 overflow-x-auto overflow-y-hidden no-scrollbar whitespace-nowrap border-b border-pos-border/40 min-w-0 max-w-full">
           {tabs.map(tab => (
             <button
               key={tab.key}
@@ -807,8 +1386,8 @@ export const SettingsModal: React.FC = () => {
                     <label className="text-[11px] font-bold text-pos-muted block mb-1">Nom de la Boutique / Enseigne :</label>
                     <input
                       type="text"
-                      value={receiptSettings.storeName}
-                      onChange={(e) => setReceiptSettings({ ...receiptSettings, storeName: e.target.value })}
+                      value={receiptDraft.storeName}
+                      onChange={(e) => scheduleReceiptSave({ ...receiptDraft, storeName: e.target.value })}
                       className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text font-bold"
                     />
                   </div>
@@ -816,8 +1395,8 @@ export const SettingsModal: React.FC = () => {
                     <label className="text-[11px] font-bold text-pos-muted block mb-1">Adresse :</label>
                     <input
                       type="text"
-                      value={receiptSettings.address}
-                      onChange={(e) => setReceiptSettings({ ...receiptSettings, address: e.target.value })}
+                      value={receiptDraft.address}
+                      onChange={(e) => scheduleReceiptSave({ ...receiptDraft, address: e.target.value })}
                       className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text"
                     />
                   </div>
@@ -825,10 +1404,29 @@ export const SettingsModal: React.FC = () => {
                     <label className="text-[11px] font-bold text-pos-muted block mb-1">Numéro de Téléphone :</label>
                     <input
                       type="text"
-                      value={receiptSettings.phone}
-                      onChange={(e) => setReceiptSettings({ ...receiptSettings, phone: e.target.value })}
+                      value={receiptDraft.phone}
+                      onChange={(e) => scheduleReceiptSave({ ...receiptDraft, phone: e.target.value })}
                       className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text"
                     />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-pos-muted block mb-1">Taux TVA applicable aux ventes (%) :</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.5"
+                      value={(receiptDraft as unknown as { vatRate?: number }).vatRate ?? 0}
+                      onChange={(e) => {
+                        // Localized parsing: parseFloat("19,5") silently yields 19 (FR decimals).
+                        const v = Math.max(0, Math.min(100, parseLocalizedAmount(e.target.value) || 0));
+                        scheduleReceiptSave({ ...receiptDraft, vatRate: v } as typeof receiptDraft);
+                      }}
+                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text"
+                    />
+                    <p className="text-[10px] text-pos-muted mt-1">
+                      0 = TVA désactivée (comportement inchangé). Sinon la TVA s&apos;ajoute au net et est persistée dans la colonne « tax » du ticket.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -856,6 +1454,11 @@ export const SettingsModal: React.FC = () => {
                   </p>
                 </div>
               </div>
+
+              {/* Mobile Wi-Fi / Bluetooth printer (phone only — per-device config) */}
+              {typeof navigator !== 'undefined' && /android|iphone|ipad|ipod/i.test(navigator.userAgent || '') && (
+                <MobilePrinterCard storeName={receiptSettings?.storeName} />
+              )}
 
               {/* Smart Document Printer Routing Control Studio */}
               <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3 shadow-md">
@@ -1042,7 +1645,7 @@ export const SettingsModal: React.FC = () => {
                       {isExpanded && (
                         <div className="px-4 pb-4 border-t border-pos-border pt-3 space-y-3">
                           {/* Technical Specs */}
-                          <div className="grid grid-cols-3 gap-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
                             <div className="bg-pos-bg p-3 rounded-lg border border-pos-border">
                               <span className="text-[9px] text-pos-muted uppercase font-bold block mb-1">Protocole</span>
                               <span className="text-xs font-bold text-pos-text">{device.protocol || 'Standard'}</span>
@@ -1253,6 +1856,543 @@ export const SettingsModal: React.FC = () => {
             </div>
           )}
 
+          {/* ══════ TAB: Sécurité & Personnel (Staff & Access Control) ══════ */}
+          {activeTab === 'security' && (
+            <div className="space-y-6 max-w-4xl mx-auto py-1">
+              {/* Executive Security Header Card */}
+              <div className="bg-gradient-to-r from-emerald-950/40 via-pos-card to-purple-950/40 border border-emerald-500/30 rounded-2xl p-4 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/40 shadow-lg shadow-emerald-500/10 shrink-0">
+                      <ShieldCheck className="w-6 h-6 stroke-[2.5]" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-extrabold text-pos-text tracking-wide">
+                          Contrôle d'Accès, Personnel & Sécurité (RBAC)
+                        </h3>
+                        <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-500/30 flex items-center gap-1 shrink-0">
+                          <Lock className="w-3 h-3" /> Protection Anti-Coulage
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-pos-muted">
+                        Configurez le Code PIN Superviseur, gérez l'équipe de caisse et inspectez le journal des dérogations.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => openModal('security_audit')}
+                    className="px-3.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer shrink-0 shadow-sm"
+                  >
+                    <ShieldAlert className="w-4 h-4 text-amber-400" />
+                    <span>Journal d'Audit ({securityAuditLog.length})</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* ── CARD 1: Code PIN Manager Maître (Superviseur) ── */}
+              <div className="bg-pos-card border border-pos-border rounded-2xl p-5 space-y-4 shadow-md">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-pos-border/60 pb-3 gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center border border-purple-500/30 shrink-0">
+                      <Shield className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-pos-text uppercase tracking-wider">
+                        Code PIN Manager Maître (Superviseur)
+                      </h4>
+                      <span className="text-[10px] text-pos-muted">
+                        Clé universelle de dérogation pour remises &gt; 20%, ventes sous coût, tiroir No Sale et annulations
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[10px] text-pos-muted bg-pos-bg px-2.5 py-1 rounded-lg border border-pos-border">
+                      Statut : <strong className="text-emerald-400 font-mono">Actif (Salé SHA-256)</strong>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowManagerPin(!showManagerPin)}
+                      className="p-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text text-xs transition cursor-pointer"
+                      title={showManagerPin ? 'Masquer chiffres' : 'Afficher chiffres'}
+                    >
+                      {showManagerPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-[10px] text-pos-muted font-bold block mb-1">PIN Actuel (Obligatoire)</label>
+                    <input
+                      type={showManagerPin ? 'text' : 'password'}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      autoComplete="current-password"
+                      enterKeyHint="next"
+                      aria-label="PIN gérant actuel"
+                      maxLength={8}
+                      value={currentPinInput}
+                      onChange={(e) => setCurrentPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="PIN Actuel"
+                      className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-pos-muted font-bold block mb-1">Nouveau PIN (4 chiffres)</label>
+                    <input
+                      type={showManagerPin ? 'text' : 'password'}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      autoComplete="new-password"
+                      enterKeyHint="next"
+                      aria-label="Nouveau PIN gérant"
+                      maxLength={4}
+                      value={newPinInput}
+                      onChange={(e) => setNewPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="Nouveau Code PIN"
+                      className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-pos-muted font-bold block mb-1">Confirmer le Nouveau PIN (4 chiffres)</label>
+                    <input
+                      type={showManagerPin ? 'text' : 'password'}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      autoComplete="new-password"
+                      enterKeyHint="done"
+                      aria-label="Confirmer le nouveau PIN gérant"
+                      maxLength={4}
+                      value={confirmPinInput}
+                      onChange={(e) => setConfirmPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="Confirmer Code PIN"
+                      className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between pt-1 gap-2 border-t border-pos-border/40">
+                  <span className="text-[10px] text-pos-muted italic">
+                    Aucun code usine par défaut — le PIN Manager est créé à l'installation (configuration initiale obligatoire). Conservez-le confidentiel.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleUpdateManagerPin}
+                    disabled={isUpdatingPin || !currentPinInput || !newPinInput || !confirmPinInput}
+                    className="py-2 px-5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition disabled:opacity-40 cursor-pointer shadow-md shadow-purple-600/20 active:scale-95"
+                  >
+                    {isUpdatingPin ? 'Enregistrement...' : 'Enregistrer le PIN Manager'}
+                  </button>
+                </div>
+              </div>
+
+              {/* ── CARD 2: Gestion de l'Équipe & Caissiers (Personnel) ── */}
+              <div className="bg-pos-card border border-pos-border rounded-2xl p-5 space-y-4 shadow-md">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-pos-border/60 pb-3 gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30 shrink-0">
+                      <Users className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-pos-text uppercase tracking-wider">
+                        Équipe de Caisse & Codes PIN Vendeurs
+                      </h4>
+                      <span className="text-[10px] text-pos-muted">
+                        Chaque employé possède son propre nom, couleur et code PIN à 4 chiffres pour la passation de caisse (Ctrl+L)
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleOpenAddCashier}
+                    className="py-2 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-md shadow-emerald-600/20 active:scale-95 shrink-0"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span>Ajouter un Caissier</span>
+                  </button>
+                </div>
+
+                {/* Inline Cashier Add / Edit Modal Drawer */}
+                {isCashierModalOpen && (
+                  <div className="bg-pos-panel border-2 border-emerald-500/40 rounded-2xl p-4 space-y-4 shadow-xl animate-in fade-in zoom-in-95">
+                    <div className="flex items-center justify-between border-b border-pos-border pb-2">
+                      <div className="flex items-center gap-2">
+                        {editingCashierId ? <Edit3 className="w-4 h-4 text-amber-400" /> : <UserPlus className="w-4 h-4 text-emerald-400" />}
+                        <h5 className="text-xs font-bold text-pos-text">
+                          {editingCashierId ? 'Modifier les informations du caissier' : 'Ajouter un nouveau membre d\'équipe'}
+                        </h5>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsCashierModalOpen(false)}
+                        className="p-1 rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Name input */}
+                      <div>
+                        <label className="text-[10px] text-pos-muted font-bold block mb-1">
+                          Nom de l'employé ou Identifiant Caisse *
+                        </label>
+                        <input
+                          type="text"
+                          value={cashierNameInput}
+                          onChange={(e) => setCashierNameInput(e.target.value)}
+                          placeholder="Ex: Samir, Karim (Shift Soir), Caisse 2"
+                          className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:outline-none focus:border-emerald-400"
+                        />
+                      </div>
+
+                      {/* PIN Inputs (Requires previous PIN if editing) */}
+                      {editingCashierId ? (
+                        <div className="sm:col-span-2 bg-pos-bg/80 border border-pos-border rounded-xl p-3 space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold text-pos-text flex items-center gap-1.5">
+                              <Lock className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Modifier le Code PIN de cet Employé</span>
+                            </span>
+                            <span className="text-[10px] text-pos-muted italic">
+                              (Laissez vide si vous souhaitez conserver le code PIN actuel)
+                            </span>
+                          </div>
+                          {(() => {
+                            const edited = cashierUsers.find((u) => u.id === editingCashierId);
+                            const isPrimary =
+                              !!edited && edited.role === 'admin' && cashierUsers.find((u) => u.role === 'admin')?.id === edited.id;
+                            return isPrimary ? (
+                              <p className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2 leading-relaxed">
+                                Cet employé est le gérant : son nouveau PIN deviendra aussi le PIN Manager (un seul code pour les deux).
+                              </p>
+                            ) : null;
+                          })()}
+
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <label className="text-[10px] text-pos-muted font-bold">
+                                  Ancien PIN (ou PIN Manager)
+                                </label>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowCashierPin(!showCashierPin)}
+                                  className="text-[10px] text-pos-muted hover:text-pos-text cursor-pointer"
+                                  title={showCashierPin ? 'Masquer' : 'Afficher'}
+                                >
+                                  {showCashierPin ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                </button>
+                              </div>
+                              <input
+                                type={showCashierPin ? 'text' : 'password'}
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                autoComplete="current-password"
+                                enterKeyHint="next"
+                                aria-label="Ancien PIN du caissier ou PIN Manager"
+                                maxLength={8}
+                                value={previousCashierPinInput}
+                                onChange={(e) => setPreviousCashierPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                                placeholder="PIN Actuel ou Manager"
+                                className="w-full min-h-[48px] bg-pos-panel border border-pos-border rounded-xl px-3 py-1.5 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-amber-400"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-[10px] text-pos-muted font-bold block mb-1">
+                                Nouveau PIN (4 chiffres)
+                              </label>
+                              <input
+                                type={showCashierPin ? 'text' : 'password'}
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                autoComplete="new-password"
+                                enterKeyHint="next"
+                                aria-label="Nouveau PIN du caissier"
+                                maxLength={4}
+                                value={cashierPinInput}
+                                onChange={(e) => setCashierPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                                placeholder="Ex: 4892"
+                                className="w-full min-h-[48px] bg-pos-panel border border-pos-border rounded-xl px-3 py-1.5 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400 tracking-widest"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-[10px] text-pos-muted font-bold block mb-1">
+                                Confirmer Nouveau PIN
+                              </label>
+                              <input
+                                type={showCashierPin ? 'text' : 'password'}
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                autoComplete="new-password"
+                                enterKeyHint="done"
+                                aria-label="Confirmer le nouveau PIN du caissier"
+                                maxLength={4}
+                                value={confirmCashierPinInput}
+                                onChange={(e) => setConfirmCashierPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                                placeholder="Ex: 4892"
+                                className="w-full min-h-[48px] bg-pos-panel border border-pos-border rounded-xl px-3 py-1.5 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400 tracking-widest"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-[10px] text-pos-muted font-bold">
+                                Code PIN Personnel (4 chiffres) *
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => setShowCashierPin(!showCashierPin)}
+                                className="text-[10px] text-pos-muted hover:text-pos-text flex items-center gap-1 cursor-pointer"
+                              >
+                                {showCashierPin ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                <span>{showCashierPin ? 'Masquer' : 'Afficher'}</span>
+                              </button>
+                            </div>
+                            <input
+                              type={showCashierPin ? 'text' : 'password'}
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              autoComplete="new-password"
+                              enterKeyHint="next"
+                              aria-label="Code PIN du nouveau caissier"
+                              maxLength={4}
+                              value={cashierPinInput}
+                              onChange={(e) => setCashierPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                              placeholder="Ex: 2580"
+                              className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400 tracking-widest"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] text-pos-muted font-bold block mb-1">
+                              Confirmer le Code PIN (4 chiffres) *
+                            </label>
+                            <input
+                              type={showCashierPin ? 'text' : 'password'}
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              autoComplete="new-password"
+                              enterKeyHint="done"
+                              aria-label="Confirmer le code PIN du nouveau caissier"
+                              maxLength={4}
+                              value={confirmCashierPinInput}
+                              onChange={(e) => setConfirmCashierPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                              placeholder="Ex: 2580"
+                              className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400 tracking-widest"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Role selection */}
+                      <div>
+                        <label className="text-[10px] text-pos-muted font-bold block mb-1">
+                          Rôle & Niveau d'Autorisation
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setCashierRoleInput('cashier')}
+                            className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                              cashierRoleInput === 'cashier'
+                                ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+                                : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
+                            }`}
+                          >
+                            <User className="w-3.5 h-3.5" />
+                            <span>Caissier Standard</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCashierRoleInput('admin')}
+                            className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                              cashierRoleInput === 'admin'
+                                ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                                : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
+                            }`}
+                          >
+                            <Shield className="w-3.5 h-3.5" />
+                            <span>Gérant / Admin</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Avatar color picker */}
+                      <div>
+                        <label className="text-[10px] text-pos-muted font-bold block mb-1">
+                          Couleur d'Avatar Visuelle
+                        </label>
+                        <div className="flex items-center gap-2 pt-1">
+                          {[
+                            { color: '#3b82f6', label: 'Bleu' },
+                            { color: '#10b981', label: 'Émeraude' },
+                            { color: '#f59e0b', label: 'Ambre' },
+                            { color: '#8b5cf6', label: 'Violet' },
+                            { color: '#ec4899', label: 'Rose' },
+                            { color: '#06b6d4', label: 'Cyan' },
+                            { color: '#ef4444', label: 'Rouge' },
+                            { color: '#64748b', label: 'Ardoise' },
+                          ].map((c) => (
+                            <button
+                              key={c.color}
+                              type="button"
+                              onClick={() => setCashierColorInput(c.color)}
+                              className={`w-6 h-6 rounded-full transition-transform cursor-pointer flex items-center justify-center ${
+                                cashierColorInput === c.color ? 'scale-125 ring-2 ring-white ring-offset-2 ring-offset-pos-panel' : 'opacity-80 hover:opacity-100'
+                              }`}
+                              style={{ backgroundColor: c.color }}
+                              title={c.label}
+                            >
+                              {cashierColorInput === c.color && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-2 border-t border-pos-border">
+                      <button
+                        type="button"
+                        onClick={() => setIsCashierModalOpen(false)}
+                        className="px-4 py-2 rounded-xl bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text text-xs font-bold transition cursor-pointer"
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveCashier}
+                        disabled={isSavingCashier || !cashierNameInput.trim() || cashierPinInput.length !== 4}
+                        className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition cursor-pointer shadow-md disabled:opacity-40 active:scale-95"
+                      >
+                        {isSavingCashier ? 'Enregistrement...' : editingCashierId ? 'Mettre à jour' : 'Ajouter le Caissier'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Staff Roster Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {cashierUsers.map((cashier) => {
+                    const isActive = activeCashier?.id === cashier.id;
+                    return (
+                      <div
+                        key={cashier.id}
+                        className={`bg-pos-bg border rounded-2xl p-3.5 flex flex-col justify-between space-y-3 transition relative group ${
+                          isActive ? 'border-amber-500/50 shadow-md shadow-amber-500/5' : 'border-pos-border hover:border-pos-border/80'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div
+                              className="w-10 h-10 rounded-full flex items-center justify-center font-black text-sm text-slate-950 shadow shrink-0"
+                              style={{ backgroundColor: cashier.avatarColor || '#3b82f6' }}
+                            >
+                              {cashier.role === 'admin' ? (
+                                <Shield className="w-5 h-5 text-white" />
+                              ) : (
+                                <User className="w-5 h-5 text-white" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <span className="font-bold text-xs text-pos-text block truncate">
+                                {cashier.name}
+                              </span>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span
+                                  className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${
+                                    cashier.role === 'admin'
+                                      ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                      : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                  }`}
+                                >
+                                  {cashier.role === 'admin' ? 'Gérant' : 'Caissier'}
+                                </span>
+                                {isActive && (
+                                  <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-bold px-1.5 py-0.5 rounded">
+                                    Session Active
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditCashier(cashier)}
+                              className="p-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
+                              title="Modifier nom, rôle, PIN"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCashier(cashier.id)}
+                              className="p-1.5 rounded-lg bg-pos-card hover:bg-red-500/20 border border-pos-border text-pos-muted hover:text-red-400 transition cursor-pointer"
+                              title="Supprimer l'employé"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[11px] pt-2 border-t border-pos-border/40 text-pos-muted font-mono">
+                          <span>Code PIN :</span>
+                          <span className="bg-pos-card px-2 py-0.5 rounded border border-pos-border text-pos-text font-bold tracking-wider">
+                            ••••
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* ── CARD 3: Politiques Antivol & Protection Financière (Synthèse) ── */}
+              <div className="bg-pos-card border border-pos-border rounded-2xl p-5 space-y-3 shadow-md">
+                <div className="flex items-center gap-2 border-b border-pos-border/60 pb-2.5">
+                  <ShieldCheck className="w-4 h-4 text-cyan-400" />
+                  <h4 className="text-xs font-bold text-pos-text uppercase tracking-wider">
+                    Politiques Antivol & Contrôle des Marges
+                  </h4>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                  <div className="bg-pos-bg p-3 rounded-xl border border-pos-border space-y-1">
+                    <span className="text-[10px] text-amber-400 font-bold block uppercase">Plafond Remise Caissier</span>
+                    <p className="font-bold text-pos-text">20% Maximum</p>
+                    <p className="text-[10px] text-pos-muted">Au-delà de 20%, le PIN Manager superviseur est obligatoirement requis.</p>
+                  </div>
+                  <div className="bg-pos-bg p-3 rounded-xl border border-pos-border space-y-1">
+                    <span className="text-[10px] text-rose-400 font-bold block uppercase">Vente à Perte</span>
+                    <p className="font-bold text-pos-text">Bloquée (Strict)</p>
+                    <p className="text-[10px] text-pos-muted">Interdiction absolue de vendre sous le coût d'achat FIFO sans accord superviseur.</p>
+                  </div>
+                  <div className="bg-pos-bg p-3 rounded-xl border border-pos-border space-y-1">
+                    <span className="text-[10px] text-purple-400 font-bold block uppercase">Recomptage Espèces</span>
+                    <p className="font-bold text-pos-text">Verrouillage Z</p>
+                    <p className="text-[10px] text-pos-muted">Le comptage aveugle de fin de shift ne peut être altéré sans PIN Manager.</p>
+                  </div>
+                  <div className="bg-pos-bg p-3 rounded-xl border border-pos-border space-y-1">
+                    <span className="text-[10px] text-emerald-400 font-bold block uppercase">Audit Immuable</span>
+                    <p className="font-bold text-pos-text">Horodatage Local</p>
+                    <p className="text-[10px] text-pos-muted">Chaque dérogation, ouverture tiroir No Sale et changement PIN est archivé.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* ══════ TAB: Advanced Diagnostics ══════ */}
           {activeTab === 'diagnostics' && (
             <div className="space-y-4">
@@ -1322,7 +2462,7 @@ export const SettingsModal: React.FC = () => {
               ) : (
                 <div className="space-y-2">
                   {/* Summary Bar */}
-                  <div className="grid grid-cols-4 gap-2 mb-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2">
                     <div className="bg-pos-card border border-pos-border rounded-lg p-2 text-center">
                       <span className="text-[9px] text-pos-muted uppercase font-bold block">Total Tests</span>
                       <span className="text-sm font-black text-pos-text">{totalTests}</span>
@@ -1378,9 +2518,23 @@ export const SettingsModal: React.FC = () => {
           {/* ══════ TAB: Loyalty Program Studio & Financial Simulator ══════ */}
           {activeTab === 'loyalty' && (
             <div className="space-y-5 max-w-4xl mx-auto">
-              
-              {/* Studio Header Card */}
-              <div className="bg-pos-card border border-pos-border rounded-xl p-4 flex items-center justify-between">
+              {(() => {
+                const cfg = normalizeLoyaltyConfig(receiptDraft.loyaltyConfig);
+                const updateLoyaltyCfg = (next: LoyaltyProgramConfig) => {
+                  scheduleReceiptSave({ ...receiptDraft, loyaltyConfig: normalizeLoyaltyConfig(next) });
+                };
+                const freshId = (prefix: string) =>
+                  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+                    ? (crypto as Crypto).randomUUID()
+                    : `${prefix}-${Date.now().toString(36)}`;
+                const numField = (raw: string, fallback: number): number => {
+                  const n = Number(raw);
+                  return Number.isFinite(n) ? n : fallback;
+                };
+                return (<>
+
+              {/* Studio Header Card + master switch */}
+              <div className="bg-pos-card border border-pos-border rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30">
                     <Award className="w-5 h-5 stroke-[2.5]" />
@@ -1388,8 +2542,8 @@ export const SettingsModal: React.FC = () => {
                   <div>
                     <h3 className="text-sm font-bold text-pos-text flex items-center gap-2">
                       Studio de Configuration du Programme de Fidélité & Modèle Financier
-                      <span className="text-[9px] bg-emerald-500/10 text-emerald-400 font-extrabold px-2 py-0.5 rounded border border-emerald-500/30">
-                        Actif
+                      <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded border ${cfg.enabled ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-slate-500/10 text-slate-400 border-slate-500/30'}`}>
+                        {cfg.enabled ? 'Actif' : 'Désactivé'}
                       </span>
                     </h3>
                     <p className="text-[11px] text-pos-muted">
@@ -1397,22 +2551,81 @@ export const SettingsModal: React.FC = () => {
                     </p>
                   </div>
                 </div>
-                <button
-                  onClick={() => showToast('Paramètres du programme de fidélité mis à jour avec succès.', 'success')}
-                  className="px-4 py-2 bg-gradient-to-r from-amber-500 to-emerald-600 hover:from-amber-400 hover:to-emerald-500 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-amber-500/20 cursor-pointer"
-                >
-                  Enregistrer les Paramètres
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => updateLoyaltyCfg({ ...cfg, enabled: !cfg.enabled })}
+                    className={`px-4 py-2 font-bold text-xs rounded-xl shadow-lg cursor-pointer transition ${cfg.enabled ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-gradient-to-r from-amber-500 to-emerald-600 hover:from-amber-400 hover:to-emerald-500 text-slate-950 shadow-amber-500/20'}`}
+                  >
+                    {cfg.enabled ? 'Désactiver le Programme' : 'Activer le Programme'}
+                  </button>
+                  <button
+                    onClick={() => { scheduleReceiptSave({ ...receiptDraft, loyaltyConfig: cfg }); showToast('Paramètres du programme de fidélité mis à jour avec succès.', 'success'); }}
+                    className="px-4 py-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text font-bold text-xs rounded-xl cursor-pointer"
+                  >
+                    Enregistrer
+                  </button>
+                </div>
               </div>
 
+              {/* Disabled-mode selector */}
+              {!cfg.enabled && (
+                <div className="bg-pos-card border border-amber-500/30 rounded-xl p-4 space-y-2">
+                  <h4 className="text-xs font-bold text-pos-text">Comportement à l'arrêt</h4>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <button
+                      onClick={() => updateLoyaltyCfg({ ...cfg, disabledMode: 'freeze-all' })}
+                      className={`p-2.5 rounded-lg border text-left cursor-pointer transition ${cfg.disabledMode === 'freeze-all' ? 'border-amber-500 bg-amber-500/10 text-pos-text font-bold' : 'border-pos-border bg-pos-bg text-pos-muted'}`}
+                    >
+                      <span className="block font-bold mb-0.5">❄️ Gel total</span>
+                      <span className="text-[10px]">Soldes conservés. Ni gain, ni échange.</span>
+                    </button>
+                    <button
+                      onClick={() => updateLoyaltyCfg({ ...cfg, disabledMode: 'earn-off-redeem-on' })}
+                      className={`p-2.5 rounded-lg border text-left cursor-pointer transition ${cfg.disabledMode === 'earn-off-redeem-on' ? 'border-emerald-500 bg-emerald-500/10 text-pos-text font-bold' : 'border-pos-border bg-pos-bg text-pos-muted'}`}
+                    >
+                      <span className="block font-bold mb-0.5">💰 Gains coupés, échanges ouverts</span>
+                      <span className="text-[10px]">Les clients dépensent leurs points, sans en gagner.</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Distribution & Redemption Rules */}
-              <div className="grid grid-cols-2 gap-4">
-                
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
                 {/* Rule Card 1: Earning & Redemption Rates */}
                 <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3">
                   <h4 className="text-xs font-bold text-pos-text flex items-center gap-1.5 border-b border-pos-border/60 pb-2">
                     <Zap className="w-4 h-4 text-amber-400" /> Règles de Gain & Conversion de Points
                   </h4>
+                  {/* Granular mechanism switches */}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      onClick={() => updateLoyaltyCfg({ ...cfg, pointsEnabled: !(cfg.pointsEnabled ?? true) })}
+                      className={`p-2 rounded-lg border text-left cursor-pointer transition ${cfg.pointsEnabled ?? true ? 'border-amber-500/60 bg-amber-500/10' : 'border-pos-border bg-pos-bg opacity-70'}`}
+                      title="Points gagnés et échanges"
+                    >
+                      <span className="block text-[11px] font-bold text-pos-text">⭐ Système de points</span>
+                      <span className={`text-[9px] font-bold uppercase ${(cfg.pointsEnabled ?? true) ? 'text-emerald-400' : 'text-pos-muted'}`}>
+                        {(cfg.pointsEnabled ?? true) ? 'Activé' : 'Coupé'}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => updateLoyaltyCfg({ ...cfg, tierMultipliersEnabled: !(cfg.tierMultipliersEnabled ?? true) })}
+                      className={`p-2 rounded-lg border text-left cursor-pointer transition ${cfg.tierMultipliersEnabled ?? true ? 'border-cyan-500/60 bg-cyan-500/10' : 'border-pos-border bg-pos-bg opacity-70'}`}
+                      title="Multiplicateurs de palier (les campagnes restent actives)"
+                    >
+                      <span className="block text-[11px] font-bold text-pos-text">✖️ Multiplicateurs de palier</span>
+                      <span className={`text-[9px] font-bold uppercase ${(cfg.tierMultipliersEnabled ?? true) ? 'text-emerald-400' : 'text-pos-muted'}`}>
+                        {(cfg.tierMultipliersEnabled ?? true) ? 'Activés (1.0x–2.5x)' : 'Forcés à 1.0x'}
+                      </span>
+                    </button>
+                  </div>
+                  {(cfg.pointsEnabled === false) && (
+                    <p className="text-[10px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-lg p-2">
+                      Points coupés : aucun gain ni échange de points. Les paliers de dépense (Avoir automatique) restent actifs.
+                    </p>
+                  )}
                   <div className="space-y-3 text-xs">
                     <div>
                       <label className="text-[11px] text-pos-muted font-semibold block mb-1">
@@ -1420,10 +2633,12 @@ export const SettingsModal: React.FC = () => {
                       </label>
                       <input
                         type="number"
-                        defaultValue={DEFAULT_LOYALTY_CONFIG.baseSpendPerPoint}
+                        min={1}
+                        value={cfg.baseSpendPerPoint}
+                        onChange={(e) => updateLoyaltyCfg({ ...cfg, baseSpendPerPoint: Math.max(1, Math.floor(numField(e.target.value, cfg.baseSpendPerPoint))) })}
                         className="w-full bg-pos-bg border border-pos-border rounded-lg p-2 text-pos-text font-bold"
                       />
-                      <span className="text-[9.5px] text-pos-muted mt-0.5 block">100 DA dépensés = 1 Point de Base</span>
+                      <span className="text-[9.5px] text-pos-muted mt-0.5 block">{cfg.baseSpendPerPoint} DA dépensés = 1 Point de Base</span>
                     </div>
 
                     <div>
@@ -1432,10 +2647,12 @@ export const SettingsModal: React.FC = () => {
                       </label>
                       <input
                         type="number"
-                        defaultValue={DEFAULT_LOYALTY_CONFIG.pointRedemptionRate}
+                        min={1}
+                        value={cfg.pointRedemptionRate}
+                        onChange={(e) => updateLoyaltyCfg({ ...cfg, pointRedemptionRate: Math.max(1, Math.floor(numField(e.target.value, cfg.pointRedemptionRate))) })}
                         className="w-full bg-pos-bg border border-pos-border rounded-lg p-2 text-emerald-400 font-bold"
                       />
-                      <span className="text-[9.5px] text-pos-muted mt-0.5 block">1 Point = 10 DA d'Avoir Client (10 Pts = 100 DA)</span>
+                      <span className="text-[9.5px] text-pos-muted mt-0.5 block">1 Point = {cfg.pointRedemptionRate} DA d'Avoir Client</span>
                     </div>
 
                     <div>
@@ -1444,40 +2661,192 @@ export const SettingsModal: React.FC = () => {
                       </label>
                       <input
                         type="number"
-                        defaultValue={DEFAULT_LOYALTY_CONFIG.minimumRedemptionPoints}
+                        min={1}
+                        value={cfg.minimumRedemptionPoints}
+                        onChange={(e) => updateLoyaltyCfg({ ...cfg, minimumRedemptionPoints: Math.max(1, Math.floor(numField(e.target.value, cfg.minimumRedemptionPoints))) })}
+                        className="w-full bg-pos-bg border border-pos-border rounded-lg p-2 text-pos-text font-bold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] text-pos-muted font-semibold block mb-1">
+                        Plafond d'Échange par Vente (% du panier)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={cfg.maximumRedemptionPercentPerSale}
+                        onChange={(e) => updateLoyaltyCfg({ ...cfg, maximumRedemptionPercentPerSale: Math.min(100, Math.max(0, numField(e.target.value, cfg.maximumRedemptionPercentPerSale))) })}
                         className="w-full bg-pos-bg border border-pos-border rounded-lg p-2 text-pos-text font-bold"
                       />
                     </div>
                   </div>
                 </div>
 
-                {/* Rule Card 2: Multiplicateurs de Statut */}
+                {/* Rule Card 2: Tier table editor */}
                 <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3">
                   <h4 className="text-xs font-bold text-pos-text flex items-center gap-1.5 border-b border-pos-border/60 pb-2">
-                    <Sparkles className="w-4 h-4 text-cyan-400" /> Multiplicateurs par Statut Client
+                    <Sparkles className="w-4 h-4 text-cyan-400" /> Paliers & Multiplicateurs
                   </h4>
                   <div className="space-y-2 text-xs">
-                    <div className="flex justify-between items-center bg-pos-bg p-2 rounded-lg border border-pos-border">
-                      <span className="font-semibold text-amber-600">🥉 Bronze (0 DA)</span>
-                      <span className="font-mono font-bold text-pos-text">1.0x (Standard)</span>
-                    </div>
-                    <div className="flex justify-between items-center bg-pos-bg p-2 rounded-lg border border-pos-border">
-                      <span className="font-semibold text-slate-300">🥈 Silver (50 000 DA)</span>
-                      <span className="font-mono font-bold text-slate-300">1.25x (+25%)</span>
-                    </div>
-                    <div className="flex justify-between items-center bg-pos-bg p-2 rounded-lg border border-pos-border">
-                      <span className="font-semibold text-amber-400">🥇 Gold (150 000 DA)</span>
-                      <span className="font-mono font-bold text-amber-400">1.5x (+50%)</span>
-                    </div>
-                    <div className="flex justify-between items-center bg-pos-bg p-2 rounded-lg border border-pos-border">
-                      <span className="font-semibold text-cyan-400">💎 Platinum (300 000 DA)</span>
-                      <span className="font-mono font-bold text-cyan-400">2.0x (Double Points)</span>
-                    </div>
-                    <div className="flex justify-between items-center bg-pos-bg p-2 rounded-lg border border-pos-border">
-                      <span className="font-semibold text-purple-400">👑 VIP Diamond (600 000 DA)</span>
-                      <span className="font-mono font-bold text-purple-400">2.5x (Ultra VIP)</span>
-                    </div>
+                    {cfg.tiers.map((t) => (
+                      <div key={t.id} className="bg-pos-bg p-2 rounded-lg border border-pos-border space-y-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm">{t.style.icon}</span>
+                          <input
+                            type="text"
+                            value={t.name}
+                            disabled={t.id === 'tier-0'}
+                            title={t.id === 'tier-0' ? 'Palier de base verrouillé' : 'Nom du palier'}
+                            onChange={(e) => {
+                              const tiers = cfg.tiers.map((x) => (x.id === t.id ? { ...x, name: e.target.value } : x));
+                              updateLoyaltyCfg({ ...cfg, tiers });
+                            }}
+                            className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-pos-border focus:border-amber-500 rounded px-1 py-0.5 font-semibold text-pos-text focus:outline-none disabled:opacity-70"
+                          />
+                          {t.id === 'tier-0' && (
+                            <span className="text-[9px] font-bold text-pos-muted uppercase">Base 🔒</span>
+                          )}
+                          {t.id !== 'tier-0' && (
+                            <button
+                              onClick={() => updateLoyaltyCfg({ ...cfg, tiers: cfg.tiers.filter((x) => x.id !== t.id) })}
+                              className="p-1 text-pos-muted hover:text-red-400 cursor-pointer"
+                              title="Supprimer ce palier"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <label className="block">
+                            <span className="text-[9px] text-pos-muted uppercase font-semibold">Seuil (DA)</span>
+                            <input
+                              type="number"
+                              min={t.id === 'tier-0' ? 0 : 1}
+                              disabled={t.id === 'tier-0'}
+                              value={t.minSpend}
+                              onChange={(e) => {
+                                const tiers = cfg.tiers.map((x) => (x.id === t.id ? { ...x, minSpend: Math.max(0, Math.floor(numField(e.target.value, t.minSpend))) } : x));
+                                updateLoyaltyCfg({ ...cfg, tiers });
+                              }}
+                              className="w-full bg-pos-card border border-pos-border rounded px-1.5 py-1 font-mono font-bold text-pos-text focus:outline-none focus:border-amber-500 disabled:opacity-70"
+                            />
+                          </label>
+                          <label className={`block ${(cfg.tierMultipliersEnabled ?? true) ? '' : 'opacity-40'}`}>
+                            <span className="text-[9px] text-pos-muted uppercase font-semibold">Multiplicateur{(cfg.tierMultipliersEnabled ?? true) ? '' : ' (forcé 1.0x)'}</span>
+                            <input
+                              type="number"
+                              min={0.1}
+                              step={0.05}
+                              value={t.multiplier}
+                              disabled={!(cfg.tierMultipliersEnabled ?? true)}
+                              onChange={(e) => {
+                                const tiers = cfg.tiers.map((x) => (x.id === t.id ? { ...x, multiplier: Math.max(0.1, numField(e.target.value, t.multiplier)) } : x));
+                                updateLoyaltyCfg({ ...cfg, tiers });
+                              }}
+                              className="w-full bg-pos-card border border-pos-border rounded px-1.5 py-1 font-mono font-bold text-pos-text focus:outline-none focus:border-amber-500 disabled:cursor-not-allowed"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => {
+                        const maxSpend = cfg.tiers.reduce((m, t) => Math.max(m, t.minSpend), 0);
+                        const lastMult = cfg.tiers[cfg.tiers.length - 1]?.multiplier ?? 1;
+                        updateLoyaltyCfg({
+                          ...cfg,
+                          tiers: [...cfg.tiers, {
+                            id: freshId('tier'), name: `Palier ${cfg.tiers.length + 1}`,
+                            minSpend: maxSpend + 50000, multiplier: lastMult,
+                            style: { badgeColor: 'text-pos-text', bgColor: 'bg-pos-bg', borderColor: 'border-pos-border', icon: '⭐' },
+                          }],
+                        });
+                      }}
+                      className="w-full py-1.5 rounded-lg border border-dashed border-pos-border hover:border-amber-500/50 text-[11px] font-bold text-pos-muted hover:text-pos-text cursor-pointer"
+                    >
+                      + Ajouter un palier
+                    </button>
                   </div>
+                </div>
+              </div>
+
+              {/* Milestone builder */}
+              <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3">
+                <h4 className="text-xs font-bold text-pos-text flex items-center gap-1.5 border-b border-pos-border/60 pb-2">
+                  <Award className="w-4 h-4 text-amber-400" /> Paliers de Dépense → Avoir Automatique
+                </h4>
+                <p className="text-[10px] text-pos-muted">Ex : 20 000 DA cumulés → 1 000 DA d'Avoir crédités. Modifier un seuil ou une récompense crée un nouveau palier (l'historique reste intact).</p>
+                <div className="space-y-2 text-xs">
+                  {cfg.spendMilestones.length === 0 && (
+                    <p className="text-[11px] text-pos-muted italic">Aucun palier — ajoutez-en un ci-dessous.</p>
+                  )}
+                  {cfg.spendMilestones.map((m) => (
+                    <div key={m.id} className="grid grid-cols-[1fr_1fr_auto_auto] gap-1.5 items-end bg-pos-bg p-2 rounded-lg border border-pos-border">
+                      <label className="block">
+                        <span className="text-[9px] text-pos-muted uppercase font-semibold">Seuil (DA)</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={m.threshold}
+                          onChange={(e) => {
+                            const rows = cfg.spendMilestones.map((x) => (x.id === m.id
+                              ? { ...x, id: freshId('ms'), threshold: Math.max(1, Math.floor(numField(e.target.value, m.threshold))) }
+                              : x));
+                            updateLoyaltyCfg({ ...cfg, spendMilestones: rows });
+                          }}
+                          className="w-full bg-pos-card border border-pos-border rounded px-1.5 py-1 font-mono font-bold text-pos-text focus:outline-none focus:border-amber-500"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[9px] text-pos-muted uppercase font-semibold">Récompense (DA)</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={m.reward}
+                          onChange={(e) => {
+                            const rows = cfg.spendMilestones.map((x) => (x.id === m.id
+                              ? { ...x, id: freshId('ms'), reward: Math.max(0, Math.floor(numField(e.target.value, m.reward))) }
+                              : x));
+                            updateLoyaltyCfg({ ...cfg, spendMilestones: rows });
+                          }}
+                          className="w-full bg-pos-card border border-pos-border rounded px-1.5 py-1 font-mono font-bold text-emerald-400 focus:outline-none focus:border-amber-500"
+                        />
+                      </label>
+                      <label className="flex items-center gap-1 pb-1 cursor-pointer text-[10px] text-pos-muted font-semibold" title="Chaque tranche dépensée récompense à nouveau">
+                        <input
+                          type="checkbox"
+                          checked={m.repeatable}
+                          onChange={(e) => {
+                            const rows = cfg.spendMilestones.map((x) => (x.id === m.id ? { ...x, repeatable: e.target.checked } : x));
+                            updateLoyaltyCfg({ ...cfg, spendMilestones: rows });
+                          }}
+                          className="rounded border-pos-border"
+                        />
+                        Répétable
+                      </label>
+                      <button
+                        onClick={() => updateLoyaltyCfg({ ...cfg, spendMilestones: cfg.spendMilestones.filter((x) => x.id !== m.id) })}
+                        className="p-1.5 text-pos-muted hover:text-red-400 cursor-pointer"
+                        title="Supprimer ce palier"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => updateLoyaltyCfg({
+                      ...cfg,
+                      spendMilestones: [...cfg.spendMilestones, { id: freshId('ms'), threshold: 20000, reward: 1000, repeatable: true }],
+                    })}
+                    className="w-full py-1.5 rounded-lg border border-dashed border-pos-border hover:border-amber-500/50 text-[11px] font-bold text-pos-muted hover:text-pos-text cursor-pointer"
+                  >
+                    + Ajouter un palier de dépense
+                  </button>
+                  <p className="text-[10px] text-pos-muted italic">
+                    Note sur les nouveaux paliers : L'ajout ou l'activation d'un nouveau palier s'appliquera rétroactivement au volume d'achat historique des clients existants dès leur prochaine synchronisation.
+                  </p>
                 </div>
               </div>
 
@@ -1491,9 +2860,9 @@ export const SettingsModal: React.FC = () => {
                 </div>
 
                 {(() => {
-                  const sim = calculateFinancialProfitImpact(10000, 500, 1000, 4500, 150, DEFAULT_LOYALTY_CONFIG);
+                  const sim = calculateFinancialProfitImpact(10000, 500, 1000, 4500, 150, cfg);
                   return (
-                    <div className="grid grid-cols-4 gap-3 text-xs">
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 text-xs">
                       <div className="bg-pos-bg p-3 rounded-xl border border-pos-border">
                         <span className="text-[10px] text-pos-muted uppercase font-semibold block">Panier Brut</span>
                         <span className="text-base font-black text-pos-text">{formatDZD(sim.grossSubtotal)}</span>
@@ -1517,6 +2886,7 @@ export const SettingsModal: React.FC = () => {
                 })()}
               </div>
 
+                </>);})()}
             </div>
           )}
 
@@ -1574,7 +2944,7 @@ export const SettingsModal: React.FC = () => {
               </div>
 
               {/* Database Live KPIs */}
-              <div className="grid grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
                 <div className="bg-pos-card border border-pos-border rounded-xl p-3.5 shadow-sm">
                   <span className="text-[10px] text-pos-muted uppercase font-bold block mb-1">Taille Base de Données</span>
                   <div className="flex items-baseline gap-1.5">
@@ -1634,11 +3004,11 @@ export const SettingsModal: React.FC = () => {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-3">
                   <button
                     onClick={handleRunIntegrityCheck}
                     disabled={isCheckingIntegrity}
-                    className="py-2.5 px-3 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+                    className="min-h-[48px] py-2.5 px-3 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 active:scale-95"
                   >
                     <Activity className={`w-4 h-4 ${isCheckingIntegrity ? 'animate-spin' : ''}`} />
                     {isCheckingIntegrity ? 'Vérification...' : 'Vérifier Intégrité Complète'}
@@ -1647,7 +3017,7 @@ export const SettingsModal: React.FC = () => {
                   <button
                     onClick={handleCheckpointWal}
                     disabled={isCheckpointing}
-                    className="py-2.5 px-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+                    className="min-h-[48px] py-2.5 px-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 active:scale-95"
                   >
                     <Zap className={`w-4 h-4 ${isCheckpointing ? 'animate-spin' : ''}`} />
                     {isCheckpointing ? 'Checkpoint...' : 'Checkpoint WAL (TRUNCATE)'}
@@ -1656,7 +3026,7 @@ export const SettingsModal: React.FC = () => {
                   <button
                     onClick={handleVacuum}
                     disabled={isVacuuming}
-                    className="py-2.5 px-3 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-300 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+                    className="min-h-[48px] py-2.5 px-3 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-300 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 active:scale-95"
                   >
                     <RefreshCcw className={`w-4 h-4 ${isVacuuming ? 'animate-spin' : ''}`} />
                     {isVacuuming ? 'Défragmentation...' : 'Optimiser Pages (VACUUM)'}
@@ -1691,95 +3061,28 @@ export const SettingsModal: React.FC = () => {
                 )}
               </div>
 
-              {/* Manager Security PIN Card */}
-              <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3 shadow-md">
-                <div className="flex items-center justify-between border-b border-pos-border/60 pb-2.5">
-                  <div className="flex items-center gap-2">
-                    <Shield className="w-4 h-4 text-purple-400" />
+              {/* Security & Access Redirection Banner */}
+              <div className="bg-pos-card border border-pos-border rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center border border-purple-500/30 shrink-0">
+                    <Shield className="w-5 h-5" />
+                  </div>
+                  <div>
                     <h4 className="text-xs font-bold text-pos-text uppercase tracking-wider">
-                      Code PIN Manager & Sécurité Financière
+                      Code PIN Manager & Gestion de l'Équipe
                     </h4>
-                  </div>
-                  <span className="text-[10px] text-pos-muted">
-                    PIN Actif : <strong className="text-emerald-400 font-mono">••••</strong> (Chiffré SHA-256 / Salé)
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div>
-                    <label className="text-[10px] text-pos-muted font-bold block mb-1">PIN Actuel (Obligatoire)</label>
-                    <input
-                      type="password"
-                      maxLength={6}
-                      value={currentPinInput}
-                      onChange={(e) => setCurrentPinInput(e.target.value.replace(/[^0-9]/g, ''))}
-                      placeholder="PIN Actuel"
-                      className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-pos-muted font-bold block mb-1">Nouveau PIN (4 à 6 chiffres)</label>
-                    <input
-                      type="password"
-                      maxLength={6}
-                      value={newPinInput}
-                      onChange={(e) => setNewPinInput(e.target.value.replace(/[^0-9]/g, ''))}
-                      placeholder="Ex: 4892"
-                      className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-pos-muted font-bold block mb-1">Confirmer le Nouveau PIN</label>
-                    <input
-                      type="password"
-                      maxLength={6}
-                      value={confirmPinInput}
-                      onChange={(e) => setConfirmPinInput(e.target.value.replace(/[^0-9]/g, ''))}
-                      placeholder="Ex: 4892"
-                      className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
-                    />
+                    <p className="text-[11px] text-pos-muted">
+                      La gestion des codes PIN et des caissiers est désormais regroupée dans l'onglet dédié « Sécurité & Personnel ».
+                    </p>
                   </div>
                 </div>
-                <div className="flex justify-end pt-2">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if (!currentPinInput) {
-                        showToast('Veuillez saisir votre code PIN actuel.', 'error');
-                        return;
-                      }
-                      if (!verifyManagerPin(currentPinInput)) {
-                        showToast('Le code PIN actuel est incorrect.', 'error');
-                        return;
-                      }
-                      if (!newPinInput || newPinInput.length < 4) {
-                        showToast('Le nouveau code PIN doit comporter au moins 4 chiffres.', 'error');
-                        return;
-                      }
-                      if (newPinInput !== confirmPinInput) {
-                        showToast('Les deux nouveaux codes PIN saisis ne correspondent pas.', 'error');
-                        return;
-                      }
-                      setIsUpdatingPin(true);
-                      try {
-                        await setManagerPin(newPinInput);
-                        setCurrentPinInput('');
-                        setNewPinInput('');
-                        setConfirmPinInput('');
-                        showToast('Nouveau Code PIN Manager enregistré avec succès.', 'success');
-                      } catch (e: unknown) {
-                        const msg = e instanceof Error ? e.message : String(e);
-                        showToast(`Erreur : ${msg}`, 'error');
-                      } finally {
-                        setIsUpdatingPin(false);
-                      }
-                    }}
-                    disabled={isUpdatingPin || !currentPinInput || !newPinInput || !confirmPinInput}
-                    className="py-2 px-5 rounded-lg bg-purple-500 hover:bg-purple-400 text-slate-950 font-bold text-xs transition disabled:opacity-40 cursor-pointer shadow-md"
-                  >
-                    {isUpdatingPin ? 'Enregistrement...' : 'Modifier PIN Manager'}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('security')}
+                  className="px-3.5 py-1.5 rounded-xl bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/40 text-purple-300 text-xs font-bold transition cursor-pointer shrink-0"
+                >
+                  Ouvrir Sécurité & Personnel →
+                </button>
               </div>
 
               {/* JSON Backup & Restore Cards */}
@@ -1817,11 +3120,21 @@ export const SettingsModal: React.FC = () => {
                     </div>
                     <p className="text-[10px] text-pos-muted">
                       Importe et synchronise un fichier de sauvegarde JSON dans les tables de la base de données.
+                      Remplace les données actuelles — PIN Manager requis.
                     </p>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="current-password"
+                      value={restorePinInput}
+                      onChange={(e) => setRestorePinInput(e.target.value)}
+                      placeholder="PIN Manager requis"
+                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:border-blue-400 focus:outline-none"
+                    />
                   </div>
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={handleRestoreClick}
                     className="w-full py-2 px-3 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-400 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition cursor-pointer"
                   >
                     <Upload className="w-4 h-4" /> Sélectionner un Fichier JSON

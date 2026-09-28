@@ -48,10 +48,26 @@ import { useToast } from '../../ui/Toast';
 import { MoneyDisplay } from '../../ui/MoneyDisplay';
 import { useAppUpdater } from '../../../hooks/useAppUpdater';
 import { APP_VERSION } from '../../../types/pos';
+import { todayLocalKey, toLocalDayKey } from '../../../utils/dateUtils';
+import { computeSalesMetrics } from '../../../utils/receiptMath';
+import { useAllocationCogs } from '../../../hooks/useAllocationCogs';
 
 interface ManagementTabProps {
   onOpenPairingWizard?: () => void;
 }
+
+// Mini-nav anchors (display only — smooth-scrolls to the sections below).
+const MGMT_SECTIONS = [
+  { id: 'mgmt-caisse', label: 'Caisse' },
+  { id: 'mgmt-facture-hero', label: '📸 Facture IA' },
+  { id: 'mgmt-activite', label: 'Activité' },
+  { id: 'mgmt-atelier', label: 'Atelier' },
+  { id: 'mgmt-stocks', label: 'Stocks' },
+  { id: 'mgmt-finances', label: 'Finances' },
+  { id: 'mgmt-config', label: 'Config' },
+  { id: 'mgmt-prefs', label: 'Préférences' },
+  { id: 'mgmt-maj', label: 'MàJ' },
+] as const;
 
 export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizard }) => {
   const {
@@ -67,6 +83,8 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
   const { setRoleMode } = useDeviceMode();
   const { showToast } = useToast();
   const updater = useAppUpdater();
+  // Label printing rides the desktop ESC/POS path; on mobile the modal
+  // renders labels to PNG and opens the Android print sheet instead.
 
   const [isPinOpen, setIsPinOpen] = useState(false);
 
@@ -119,33 +137,43 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
   const [isManualSyncing, setIsManualSyncing] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     let unsub: (() => void) | undefined;
     import('../../../sync/SyncManager')
       .then(({ syncManager }) => {
+        if (cancelled) return;
         unsub = syncManager.subscribe((s) => {
           setSyncStatus(s);
         });
       })
       .catch((err: unknown) => console.warn('[mgmt] sync engine unavailable:', err));
-    return () => unsub?.();
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
   }, []);
 
-  // Today's summary calculation
+  // Today's summary — canonical unified metrics (same formula as Desktop
+  // ReportsModal + LiveActivityTab): CA Net = Σ net(valid) − Σ refunds.
+  // The previous code summed Σ total(valid) without subtracting refund
+  // vouchers, overstating today's CA whenever a refund exists.
   const todayTransactions = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayLocalKey();
     return (transactions || []).filter(
-      (tx) => (tx.createdAt || '').startsWith(today) && tx.status !== 'VOIDED' && !tx.isRefund,
+      (tx) => toLocalDayKey(tx.createdAt || '') === today && tx.status !== 'VOIDED',
     );
   }, [transactions]);
 
-  const todayRevenue = useMemo(() => {
-    return todayTransactions.reduce((acc, tx) => acc + (tx.total || 0), 0);
-  }, [todayTransactions]);
+  // STRICT FIFO LEDGER (v104): frozen allocation COGS wins per sale.
+  const { allocCogsBySaleId } = useAllocationCogs();
+  const todayMetrics = useMemo(
+    () => computeSalesMetrics(todayTransactions, { allocCogsBySaleId }),
+    [todayTransactions, allocCogsBySaleId]
+  );
 
-  const averageBasket = useMemo(() => {
-    if (todayTransactions.length === 0) return 0;
-    return Math.round(todayRevenue / todayTransactions.length);
-  }, [todayRevenue, todayTransactions.length]);
+  const todayRevenue = todayMetrics.netRevenue;
+
+  const averageBasket = todayMetrics.averageBasket;
 
   const handleToggleSound = () => {
     const muted = soundEngine.toggleMute();
@@ -176,11 +204,49 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
     showToast('Mode Bureau activé. Pivotez votre téléphone pour afficher la caisse.', 'info');
   };
 
+  // Sticky mini-nav: scrolls the tab's scroll region to the section (display only).
+  const scrollToSection = (id: string) => {
+    soundEngine.playKeyBeep?.();
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // Display-only "last successful sync" (the freshest of push/pull, existing values).
+  const lastSyncAt = syncStatus.lastPushAt ?? syncStatus.lastPullAt;
+  const lastSyncLabel = lastSyncAt
+    ? new Date(lastSyncAt).toLocaleString('fr-FR', {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : null;
+
   return (
-    <AppTabContent contentClassName="px-3.5 py-3 select-none font-sans text-xs">
+    <AppTabContent
+      contentClassName="px-3.5 py-3 select-none font-sans text-xs"
+      pinnedTop={
+        <nav
+          aria-label="Sections de gestion"
+          className="px-3.5 pt-2.5 pb-2 bg-pos-bg border-b border-pos-border/60"
+        >
+          <div className="flex gap-1.5 overflow-x-auto">
+            {MGMT_SECTIONS.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => scrollToSection(s.id)}
+                className="min-h-[44px] px-3 rounded-xl bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text hover:border-cyan-400/50 font-bold text-[11px] whitespace-nowrap shrink-0 transition cursor-pointer active:scale-95"
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </nav>
+      }
+    >
       <div className="space-y-3.5 pb-4">
         {/* 1. Store Header & Shift Banner */}
-        <div className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3">
+        <div id="mgmt-caisse" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3 scroll-mt-2">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-cyan-500 to-emerald-500 flex items-center justify-center text-slate-950 font-black shadow-md shadow-emerald-500/20 shrink-0">
@@ -207,7 +273,8 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               <button
                 type="button"
                 onClick={() => openModal('shift_close')}
-                className="min-h-[40px] px-3.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 font-bold text-xs shrink-0 cursor-pointer active:scale-95 transition"
+                className="min-h-[44px] px-3.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 font-bold text-xs shrink-0 cursor-pointer active:scale-95 transition"
+                title="Ouvrir le récapitulatif de clôture (confirmation demandée avant validation)"
               >
                 Clôturer
               </button>
@@ -215,7 +282,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               <button
                 type="button"
                 onClick={() => openModal('shift_open')}
-                className="min-h-[40px] px-3.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 font-bold text-xs shrink-0 cursor-pointer active:scale-95 transition"
+                className="min-h-[44px] px-3.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 font-bold text-xs shrink-0 cursor-pointer active:scale-95 transition"
               >
                 Ouvrir Caisse
               </button>
@@ -252,8 +319,46 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           </div>
         </div>
 
+        {/* HERO QUICK ACTION: Direct 1-Tap Invoice & BL Scanner */}
+        <div id="mgmt-facture-hero" className="bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-cyan-500/15 border-2 border-emerald-500/40 rounded-3xl p-4 shadow-sm space-y-3 scroll-mt-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="relative w-11 h-11 rounded-2xl bg-emerald-500 text-slate-950 flex items-center justify-center font-black shadow-md shadow-emerald-500/25 shrink-0">
+                <Camera className="w-5 h-5" />
+                <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-cyan-400 ring-2 ring-pos-panel animate-ping" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <h3 className="text-xs font-black text-pos-text leading-tight truncate">
+                    Scanner Facture & Bon (IA)
+                  </h3>
+                  <span className="text-[9px] font-black uppercase tracking-wider bg-emerald-500 text-slate-950 px-1.5 py-0.5 rounded-full shrink-0">
+                    Nouveau
+                  </span>
+                </div>
+                <p className="text-[10px] text-pos-muted truncate mt-0.5 font-medium">
+                  Capture caméra ML Kit, invariants mathématiques & entrée stock
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                soundEngine.playKeyBeep?.();
+                openModal('invoice_ingestion');
+              }}
+              className="min-h-[44px] px-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shrink-0 cursor-pointer active:scale-95 transition shadow-sm shadow-emerald-500/20 flex items-center gap-1.5"
+              title="Ouvrir le scanner de documents et factures"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Scanner</span>
+            </button>
+          </div>
+        </div>
+
         {/* 2. Today's Financial Overview */}
-        <div className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3">
+        <div id="mgmt-activite" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3 scroll-mt-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-pos-text font-black text-xs">
               <TrendingUp className="w-4 h-4 text-emerald-400" />
@@ -280,7 +385,9 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 />
               </div>
               <span className="text-[10px] text-pos-muted/80 mt-1 truncate">
-                Panier moy. : {averageBasket.toLocaleString('fr-DZ')} DA
+                {todayMetrics.validCount === 0
+                  ? 'Aucune vente aujourd’hui — la première apparaîtra ici.'
+                  : `Panier moy. : ${averageBasket.toLocaleString('fr-DZ')} DA`}
               </span>
             </div>
 
@@ -290,13 +397,13 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               </span>
               <div className="mt-1 flex items-baseline gap-1.5 min-w-0">
                 <span className="text-xl font-black text-pos-text font-mono tracking-tight">
-                  {todayTransactions.length}
+                  {todayMetrics.validCount}
                 </span>
                 <span className="text-xs text-pos-muted font-bold">tickets</span>
               </div>
               <span className="text-[10px] text-cyan-400 font-medium mt-1 truncate flex items-center gap-1">
                 <ShoppingBag className="w-3 h-3" />
-                Activité en direct
+                {todayMetrics.validCount === 0 ? 'En attente du premier ticket' : 'Activité en direct'}
               </span>
             </div>
           </div>
@@ -316,7 +423,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
         </div>
 
         {/* 3. Services Atelier, SAV & Reprises (100% Desktop Parity) */}
-        <div className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-2">
+        <div id="mgmt-atelier" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-2 scroll-mt-2">
           <h3 className="text-[10px] font-black uppercase text-pos-muted tracking-wider mb-1 px-1 flex items-center justify-between">
             <span>Atelier, SAV & Reprises</span>
             <span className="text-[9px] bg-cyan-500/10 text-cyan-400 font-bold px-2 py-0.5 rounded border border-cyan-500/20">
@@ -445,7 +552,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
         </div>
 
         {/* 4. Gestion des Stocks & Fournisseurs */}
-        <div className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-2">
+        <div id="mgmt-stocks" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-2 scroll-mt-2">
           <h3 className="text-[10px] font-black uppercase text-pos-muted tracking-wider mb-1 px-1">
             Stocks & Fournisseurs
           </h3>
@@ -494,8 +601,11 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 <FileText className="w-4 h-4" />
               </div>
               <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Ingestion Facture Fournisseur</span>
-                <span className="text-[10px] text-pos-muted block truncate">Import automatique de factures d'achat</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-xs block text-pos-text truncate">Scanner & Ingestion Facture (IA)</span>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Nouveau</span>
+                </div>
+                <span className="text-[10px] text-pos-muted block truncate">Numérisation caméra, contrôle d'invariants & stock</span>
               </div>
             </div>
             <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
@@ -504,6 +614,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           <button
             type="button"
             onClick={() => openModal('label_printer')}
+            title="Étiquettes code-barres : feuille d'impression Android sur mobile"
             className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
@@ -512,7 +623,9 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Étiquettes Codes-barres</span>
-                <span className="text-[10px] text-pos-muted block truncate">Impression thermique de prix & références</span>
+                <span className="text-[10px] text-pos-muted block truncate">
+                  Studio d'étiquettes : impression Android ou partage
+                </span>
               </div>
             </div>
             <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
@@ -520,7 +633,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
         </div>
 
         {/* 5. Finances & CRM Clients */}
-        <div className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-2">
+        <div id="mgmt-finances" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-2 scroll-mt-2">
           <h3 className="text-[10px] font-black uppercase text-pos-muted tracking-wider mb-1 px-1">
             Finances & Clients
           </h3>
@@ -578,7 +691,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
         </div>
 
         {/* 6. Configuration & Système */}
-        <div className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-2">
+        <div id="mgmt-config" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-2 scroll-mt-2">
           <h3 className="text-[10px] font-black uppercase text-pos-muted tracking-wider mb-1 px-1">
             Configuration, Caisse & Sécurité
           </h3>
@@ -683,7 +796,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               <button
                 type="button"
                 onClick={onOpenPairingWizard}
-                className="min-h-[38px] px-3 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-slate-950 font-bold text-xs active:scale-95 transition cursor-pointer flex items-center gap-1.5 shadow-sm shadow-emerald-500/20 shrink-0"
+                className="min-h-[44px] px-3 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-slate-950 font-bold text-xs active:scale-95 transition cursor-pointer flex items-center gap-1.5 shadow-sm shadow-emerald-500/20 shrink-0"
               >
                 <Camera className="w-3.5 h-3.5" />
                 <span>Scanner</span>
@@ -693,7 +806,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
         </div>
 
         {/* 5. Preferences & Settings */}
-        <div className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3">
+        <div id="mgmt-prefs" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3 scroll-mt-2">
           <h3 className="text-[10px] font-black uppercase text-pos-muted tracking-wider px-1">
             Préférences Rapides
           </h3>
@@ -711,7 +824,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
             <button
               type="button"
               onClick={toggleTheme}
-              className="min-h-[36px] px-3 rounded-xl bg-pos-panel border border-pos-border font-bold text-xs text-pos-text hover:border-cyan-400 active:scale-95 transition cursor-pointer flex items-center gap-1.5"
+              className="min-h-[44px] px-3 rounded-xl bg-pos-panel border border-pos-border font-bold text-xs text-pos-text hover:border-cyan-400 active:scale-95 transition cursor-pointer flex items-center gap-1.5"
             >
               <span>{themeMode === 'dark' ? 'Sombre' : 'Clair'}</span>
             </button>
@@ -730,7 +843,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
             <button
               type="button"
               onClick={handleToggleSound}
-              className="min-h-[36px] px-3 rounded-xl bg-pos-panel border border-pos-border font-bold text-xs text-pos-text hover:border-cyan-400 active:scale-95 transition cursor-pointer"
+              className="min-h-[44px] px-3 rounded-xl bg-pos-panel border border-pos-border font-bold text-xs text-pos-text hover:border-cyan-400 active:scale-95 transition cursor-pointer"
             >
               {isAudioMuted ? 'Désactivés' : 'Activés'}
             </button>
@@ -767,11 +880,23 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               />
               <span>{isManualSyncing ? 'Synchronisation en cours...' : 'Forcer la Synchronisation'}</span>
             </button>
+
+            {/* Dernière synchro réussie — affichage seul (réutilise lastPushAt/lastPullAt). */}
+            <p className="text-[11px] text-pos-muted leading-relaxed bg-pos-panel/60 border border-pos-border/40 rounded-xl px-2.5 py-2">
+              {lastSyncLabel ? (
+                <>
+                  Dernière synchro réussie : <strong className="text-pos-text">{lastSyncLabel}</strong>
+                  {' '}— vos ventes sont à jour sur tous les appareils.
+                </>
+              ) : (
+                'Aucune synchronisation réussie pour le moment — touchez « Forcer la Synchronisation » une fois en ligne.'
+              )}
+            </p>
           </div>
         </div>
 
         {/* 6. Software Updates */}
-        <div className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3">
+        <div id="mgmt-maj" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3 scroll-mt-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
@@ -792,7 +917,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               type="button"
               disabled={updater.isChecking}
               onClick={handleCheckUpdatesMobile}
-              className="flex-1 min-h-[42px] px-3 rounded-xl bg-purple-600 hover:bg-purple-500 active:scale-98 font-bold text-xs text-white flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-purple-600/20 disabled:opacity-50"
+              className="flex-1 min-h-[44px] px-3 rounded-xl bg-purple-600 hover:bg-purple-500 active:scale-98 font-bold text-xs text-white flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-purple-600/20 disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 text-white ${updater.isChecking ? 'animate-spin' : ''}`} />
               <span>{updater.isChecking ? 'Vérification...' : 'Vérifier Mises à Jour'}</span>
@@ -807,7 +932,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 soundEngine.playKeyBeep?.();
                 showToast("Téléchargement de l'APK Android démarré...", 'info');
               }}
-              className="min-h-[42px] px-3 rounded-xl bg-emerald-500/15 border border-emerald-500/40 hover:bg-emerald-500/25 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-98 no-underline shrink-0 cursor-pointer"
+              className="min-h-[44px] px-3 rounded-xl bg-emerald-500/15 border border-emerald-500/40 hover:bg-emerald-500/25 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-98 no-underline shrink-0 cursor-pointer"
               title="Télécharger directement le fichier APK"
             >
               <Download className="w-3.5 h-3.5 text-emerald-400" />

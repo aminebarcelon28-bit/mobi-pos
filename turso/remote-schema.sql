@@ -132,3 +132,13 @@ CREATE TABLE IF NOT EXISTS app_settings (
   version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_app_settings_updated ON app_settings(updated_at, id);
+CREATE TABLE IF NOT EXISTS refund_claims (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'REFUND',
+  device_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_refund_claims_ticket ON refund_claims(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_refund_claims_expiry ON refund_claims(expires_at);

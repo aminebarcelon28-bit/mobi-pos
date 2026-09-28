@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { getProductPriceForTier } from '../../utils/pricingEngine';
@@ -7,21 +7,44 @@ import { X, MonitorPlay } from 'lucide-react';
 export const CustomerDisplayModal: React.FC = () => {
   const { activeModal, closeModal, cart, currentCustomer } = usePosStore();
     const pricingTier = usePosStore((s) => s.pricingTier);
-  
+  // Persistent channel: allocated once, reused across cart changes, closed on unmount.
+  const channelRef = useRef<BroadcastChannel | null>(null);
+
+  const getChannel = (): BroadcastChannel | null => {
+    if (typeof BroadcastChannel === 'undefined') return null;
+    if (!channelRef.current) {
+      try {
+        channelRef.current = new BroadcastChannel('mobi_pos_customer_display');
+      } catch {
+        return null;
+      }
+    }
+    return channelRef.current;
+  };
+
   // Use BroadcastChannel to sync data to external display if needed
   useEffect(() => {
     if (activeModal === 'customer_display') {
-      const channel = new BroadcastChannel('mobi_pos_customer_display');
-      channel.postMessage({
+      getChannel()?.postMessage({
         type: 'SYNC_STATE',
         payload: {
           cart,
           currentCustomer,
         },
       });
-      return () => channel.close();
     }
   }, [activeModal, cart, currentCustomer]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        channelRef.current?.close();
+      } catch {
+        // ignore
+      }
+      channelRef.current = null;
+    };
+  }, []);
 
   if (activeModal !== 'customer_display') return null;
 

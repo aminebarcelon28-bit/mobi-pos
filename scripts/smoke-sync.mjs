@@ -23,6 +23,7 @@ function loadEnvFile(path) {
 const fileEnv = loadEnvFile('proxy/.env');
 const PORT = fileEnv.PORT ?? '8787';
 const proxyUrl = `http://localhost:${PORT}/api/sync-token`;
+const BROKER_SECRET = fileEnv.BROKER_SECRET ?? '';
 const now = () => new Date().toISOString();
 const stamp = `smoke-${Date.now()}`;
 let failures = 0;
@@ -36,7 +37,11 @@ const health = await fetch(`http://localhost:${PORT}/health`).then((r) => r.json
 check('proxy /health', health?.ok === true);
 
 const tokRes = await fetch(proxyUrl, {
-  method: 'POST', headers: { 'content-type': 'application/json' },
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    ...(BROKER_SECRET ? { authorization: `Bearer ${BROKER_SECRET}` } : {}),
+  },
   body: JSON.stringify({ deviceId: stamp }),
 });
 check('proxy /api/sync-token 200', tokRes.ok);

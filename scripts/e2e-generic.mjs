@@ -25,8 +25,13 @@ const check = (name, cond, extra = '') => {
   if (!cond) failures++;
 };
 
+const BROKER_SECRET = fileEnv.BROKER_SECRET ?? '';
 const tokRes = await fetch(`http://localhost:${fileEnv.PORT ?? '8787'}/api/sync-token`, {
-  method: 'POST', headers: { 'content-type': 'application/json' },
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    ...(BROKER_SECRET ? { authorization: `Bearer ${BROKER_SECRET}` } : {}),
+  },
   body: JSON.stringify({ deviceId: 'e2e-generic' }),
 });
 check('broker token', tokRes.ok);

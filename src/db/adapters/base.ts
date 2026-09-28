@@ -34,6 +34,10 @@ import type { GenericEntity } from '../sqlPluginAdapter';
 
 // Full-sync disaster-recovery lane: every entity change is enqueued as JSON
 // after its Dexie mirror lands. Fire-and-forget by design — use `void`.
+// Enqueue failures are NOT silent: they are reported to SyncManager
+// (noteEnqueueFailure → enqueueFailedCount in the emitted status) so a lane
+// that stops enqueueing becomes visible on the badge instead of diverging
+// quietly. The local Dexie/SQLite write that preceded the call already landed.
 export async function fireSync(entity: GenericEntity, id: string, syncPayload: unknown): Promise<void> {
   try {
     const { enqueueGenericSync } = await import('../sqlPluginAdapter');
@@ -42,6 +46,12 @@ export async function fireSync(entity: GenericEntity, id: string, syncPayload: u
     syncManager.notifyLocalWrite();
   } catch (e) {
     console.warn(`Sync enqueue skipped [${entity}]:`, e);
+    try {
+      const { syncManager } = await import('../../sync/SyncManager');
+      syncManager.noteEnqueueFailure(entity, id, e);
+    } catch {
+      // Status engine itself unavailable — the warn above is the record.
+    }
   }
 }
 
@@ -53,5 +63,11 @@ export async function fireSyncDelete(entity: GenericEntity, id: string): Promise
     syncManager.notifyLocalWrite();
   } catch (e) {
     console.warn(`Sync delete enqueue skipped [${entity}]:`, e);
+    try {
+      const { syncManager } = await import('../../sync/SyncManager');
+      syncManager.noteEnqueueFailure(entity, id, e);
+    } catch {
+      // Status engine itself unavailable — the warn above is the record.
+    }
   }
 }

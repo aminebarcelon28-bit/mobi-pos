@@ -1,9 +1,20 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, CatalogSlice } from '../types';
-import type { Product, IMEIRecord } from '../../types/pos';
-import { productRepository } from '../../db/repositories/productRepository';
-import { imeiRepository } from '../../db/repositories/imeiRepository';
+import type { Product } from '../../types/pos';
 import { audioBus } from '../../utils/audioEvents';
+import { rebaseReconciledSales } from './rebaseReconciledSales';
+import { newId } from '../../utils/ids';
+
+// P11.3: repositories pull sqliteAdapter -> dexie + libsql; catalog writes are
+// async user actions, so they resolve on first use, not at cold start.
+async function getProductRepo() {
+  const { productRepository } = await import('../../db/repositories/productRepository');
+  return productRepository;
+}
+async function getImeiRepo() {
+  const { imeiRepository } = await import('../../db/repositories/imeiRepository');
+  return imeiRepository;
+}
 
 export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = (set, get) => ({
   products: [],
@@ -19,7 +30,9 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
 
   saveProduct: async (input, options) => {
     const { products, logSecurityAction } = get();
-    const previousProducts = products;
+    // Pre-image for the stock-durability adjustment below: manual edits must
+    // land in the ledger, or the next sale's recompute wipes them.
+    const prevStock = input.id ? products.find((p) => p.id === input.id)?.stock : undefined;
 
     // 1. Mandatory Title Validation
     if (!input.title || !input.title.trim()) {
@@ -54,12 +67,20 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
       }
     }
 
-    let updatedProducts: Product[];
     let targetProduct: Product;
 
     if (input.id) {
-      targetProduct = input as Product;
-      updatedProducts = products.map((p) => (p.id === input.id ? targetProduct : p));
+      const isService = Boolean(
+        input.isService ||
+        input.category === 'Services' ||
+        input.id.startsWith('qt-') ||
+        input.id.startsWith('prod-misc-')
+      );
+      targetProduct = {
+        ...(input as Product),
+        isService,
+        stock: isService ? 999999 : input.stock,
+      };
       logSecurityAction(
         'Modification Produit Catalogue',
         `Mise à jour fiche: ${targetProduct.title} (SKU: ${targetProduct.sku}, Stock: ${targetProduct.stock})`,
@@ -67,11 +88,13 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
         false
       );
     } else {
+      const isService = Boolean(input.isService || input.category === 'Services');
       targetProduct = {
         ...(input as Omit<Product, 'id'>),
-        id: `prod-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        id: newId('prod'),
+        isService,
+        stock: isService ? 999999 : input.stock,
       };
-      updatedProducts = [targetProduct, ...products];
       logSecurityAction(
         'Création Produit Catalogue',
         `Nouveau produit: ${targetProduct.title} (Code-barres: ${targetProduct.barcode}, Stock: ${targetProduct.stock})`,
@@ -80,49 +103,216 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
       );
     }
 
-    // 4. Instant optimistic state update & audio feedback (<1ms)
+    // 4. Persist FIRST (Dexie + SQLite + Outbox), then publish to UI state.
+    // The old optimistic set-then-background-save closed the editor modal on
+    // a product the database never recorded, and its `previousProducts`
+    // rollback was captured before the save — any concurrent catalog edit in
+    // between got clobbered by the stale restore. Failure now returns before
+    // any set(), so state is trivially "rolled back" (untouched) and fresh.
+    try {
+      await (await getProductRepo()).save(targetProduct);
+    } catch (err: unknown) {
+      console.error('Product persistence failed — catalog state untouched:', err);
+      audioBus.emit('error');
+      return {
+        success: false,
+        reason: err instanceof Error ? err.message : 'Échec d\'enregistrement du produit.',
+      };
+    }
+
+    // 5. B-040: re-read get() after the await — `products`/`targetProduct`
+    // snapshot is pre-await; a concurrent catalog edit between step 3 and
+    // here would be clobbered by the stale map.
     audioBus.emit('success');
+    const latest = get().products;
+    let nextProducts: Product[];
+    if (input.id) {
+      nextProducts = latest.map((p) => (p.id === targetProduct.id ? targetProduct : p));
+      // Product was deleted concurrently — keep the delete, do not resurrect.
+      if (!nextProducts.some((p) => p.id === targetProduct.id)) {
+        nextProducts = latest;
+      }
+    } else {
+      nextProducts = latest.some((p) => p.id === targetProduct.id)
+        ? latest
+        : [targetProduct, ...latest];
+    }
     set({
-      products: updatedProducts,
+      products: nextProducts,
       editingProduct: null,
       ...(options?.keepModalOpen ? {} : { activeModal: null }),
     });
 
-    // 5. Background asynchronous persistence (Dexie + SQLite + Outbox)
-    void (async () => {
-      try {
-        await productRepository.save(targetProduct);
-      } catch (err: unknown) {
-        console.error('Background product persistence failed:', err);
-        audioBus.emit('error');
-        // Rollback state in case of catastrophic storage failure
-        set({ products: previousProducts });
+    // Stock durability: a manual stock edit without a ledger delta evaporates
+    // on the next sale's `stock = SUM(ledger)` recompute (and the variance
+    // never books). Persist the variance as an ADJUST delta — best-effort,
+    // never fails the saved product. Services keep their 999999 sentinel
+    // (the helper double-guards, but don't even call it for them). The
+    // operation id is fresh per save so retries converge via deterministic
+    // delta identities without colliding with later edits.
+    if (targetProduct.stock !== prevStock) {
+      const isService =
+        targetProduct.isService ||
+        targetProduct.category === 'Services' ||
+        targetProduct.id.startsWith('qt-') ||
+        targetProduct.id.startsWith('prod-misc-');
+      if (!isService) {
+        try {
+          const { appendStocktakeAdjustments } = await import('../../db/sqlPluginAdapter');
+          await appendStocktakeAdjustments(
+            [{ productId: targetProduct.id, countedStock: targetProduct.stock, refId: newId('stedit') }],
+            { refType: 'manual-edit' }
+          );
+        } catch (adjErr) {
+          console.error('[catalog:stock] Manual stock saved but ledger adjustment deferred — recount to converge:', adjErr);
+        }
       }
-    })();
+    }
 
     return { success: true };
   },
 
   deleteProduct: async (id) => {
-    const { products, cart } = get();
-    const updatedProducts = products.filter((p) => p.id !== id);
-    const updatedCart = cart.filter((item) => item.product.id !== id);
     try {
-      await productRepository.delete(id);
-      set({ products: updatedProducts, cart: updatedCart });
+      await (await getProductRepo()).delete(id);
+      // Orphan-batch tombstone: deleting only the product row leaves live
+      // stock_batches behind — valuation keeps their cost (retail 0 via the
+      // products LEFT JOIN) as phantom unsellable assets. Tombstone them
+      // here (best-effort, never fails the delete) and audit the write-off.
+      try {
+        const { getLocalDb } = await import('../../db/sqlPluginAdapter');
+        const db = await getLocalDb();
+        const live = (await db
+          .select('SELECT batch_id FROM stock_batches WHERE product_id = $1 AND deleted = 0', [id])
+          .catch(() => [])) as Array<{ batch_id: string }>;
+        const batchIds = [...new Set((live ?? []).map((r) => String(r.batch_id)).filter(Boolean))];
+        if (batchIds.length > 0) {
+          const now = new Date().toISOString();
+          await db.execute(
+            `UPDATE stock_batches SET deleted = 1, version = version + 1, updated_at = $1, sync_status = 'pending' WHERE product_id = $2 AND deleted = 0`,
+            [now, id]
+          );
+          for (const bid of batchIds) {
+            await db
+              .execute(
+                `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+                 VALUES ($1, 'stock_batches', $2, 'UPSERT', $3, 'pending')
+                 ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, status='pending', updated_at=$4`,
+                [
+                  `sb-${bid}-tombstone`,
+                  bid,
+                  JSON.stringify({ batch_id: bid, product_id: id, deleted: 1, updated_at: now }),
+                  now,
+                ]
+              )
+              .catch(() => {});
+          }
+          try {
+            const { mirrorStockBatchesToDexie } = await import('../../db/sqlPluginAdapter');
+            await mirrorStockBatchesToDexie(db as never, [id]);
+          } catch {
+            // Mirror heals on next mutation/boot.
+          }
+          get().logSecurityAction(
+            'Suppression Produit (Lots Soldés)',
+            `Produit supprimé — ${batchIds.length} lot(s) en stock soldé(s) (valeur retirée de l'actif).`,
+            'Yacine (Admin)',
+            false
+          );
+        }
+      } catch (tombErr) {
+        console.warn('[catalog:delete] Batch tombstone deferred:', tombErr);
+      }
+      // B-040: re-read after await so concurrent catalog edits survive.
+      const latest = get().products;
+      set({
+        products: latest.filter((p) => p.id !== id),
+        cart: get().cart.filter((item) => item.product.id !== id),
+      });
     } catch (err) {
       console.error(`Failed to delete product [${id}]:`, err);
+      audioBus.emit('error');
     }
   },
 
-  ingestInvoiceBatch: async (updatedProducts: Product[], newImeis: IMEIRecord[]) => {
+  ingestInvoiceBatch: async (updatedProducts, newImeis, receipts = [], opts) => {
     const { products, imeiRecords, logSecurityAction } = get();
     if (updatedProducts.length === 0) return;
 
-    await productRepository.bulkSave(updatedProducts);
+    await (await getProductRepo()).bulkSave(updatedProducts);
 
     for (const rec of newImeis) {
-      await imeiRepository.save(rec);
+      await (await getImeiRepo()).save(rec);
+    }
+
+    // Batch-tracked invoice stock: every received unit joins the FIFO batches
+    // ledger (same shape as PO receipts) instead of landing as untracked
+    // stock that later shadows at the latest cost. Best-effort — the catalog
+    // save above already landed; a batch failure only warns.
+    //
+    // Idempotency: delta + batch identities derive from ONE operation key
+    // (content hash from the modal when available, else a per-call nonce),
+    // so a BUSY-after-commit retry converges via ON CONFLICT instead of
+    // doubling stock, and re-importing the same file is a durable no-op.
+    const opKey =
+      opts?.importKey && String(opts.importKey).trim().length > 0
+        ? String(opts.importKey).trim()
+        : `once-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    try {
+      const lines = (receipts ?? []).filter((r) => r && r.productId && Number(r.qty) > 0);
+      if (lines.length > 0) {
+        // P11.3: sqlPluginAdapter pulls the libsql/Turso sync graph; load on first write.
+        const { appendInventoryDeltas, insertStockBatch } = await import('../../db/sqlPluginAdapter');
+        await appendInventoryDeltas(
+          lines.map((r) => {
+            const lineKey = `inv-${opKey}-${r.productId}`;
+            return {
+              id: lineKey,
+              idempotencyKey: lineKey,
+              productId: r.productId,
+              delta: Math.max(0, Math.floor(Number(r.qty))),
+              reason: 'RECEIVE' as const,
+              refType: 'INVOICE_IMPORT',
+              refId: r.productId,
+            };
+          }),
+        );
+        for (const [lineIdx, r] of lines.entries()) {
+          const qty = Math.max(0, Math.floor(Number(r.qty)));
+          if (qty <= 0) continue;
+          const unitCost = Math.max(0, Math.round(Number(r.unitCost) || 0));
+          const batchId = `batch-inv-${opKey}-${r.productId}-${lineIdx}`;
+          await insertStockBatch({
+            batchId,
+            productId: r.productId,
+            quantityRemaining: qty,
+            unitCost,
+            idempotencyKey: `sb-${batchId}`,
+          }).catch((err) => {
+            console.warn('[invoice:batch] Failed to insert stock batch in SQLite:', err);
+          });
+          try {
+            const { dexieDb } = await import('../../db/database');
+            await dexieDb.stockBatches.put({
+              batchId,
+              productId: r.productId,
+              quantityRemaining: qty,
+              unitCost,
+              receivedAt: new Date().toISOString(),
+            });
+          } catch (dexieErr) {
+            console.warn('[invoice:batch] Failed to insert stock batch in Dexie:', dexieErr);
+          }
+        }
+        try {
+          const { syncManager } = await import('../../sync/SyncManager');
+          syncManager.notifyLocalWrite();
+        } catch {
+          // Sync kick best-effort.
+        }
+      }
+    } catch (batchErr) {
+      console.warn('[invoice:batch] Batch-tracked ingestion deferred:', batchErr);
     }
 
     const updatedMap = new Map<string, Product>(updatedProducts.map((p) => [p.id, p]));
@@ -138,5 +328,84 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
 
     audioBus.emit('success');
     set({ products: nextProducts, imeiRecords: nextImeis });
+
+    // Batch inserts above may have triggered shadow reconciliation for
+    // older sales — rebase the in-memory mirror (see procurement receive).
+    await rebaseReconciledSales(get, set);
+  },
+
+  bulkSaveProducts: async (newProducts: Product[]) => {
+    const { products, logSecurityAction } = get();
+    if (newProducts.length === 0) return;
+
+    // Save to DB (Dexie + SQLite + Outbox)
+    await (await getProductRepo()).bulkSave(newProducts);
+
+    // Merge into catalog in memory
+    const newMap = new Map<string, Product>(newProducts.map((p) => [p.id, p]));
+    const existingFiltered = products.filter((p) => !newMap.has(p.id));
+    const nextProducts = [...newProducts, ...existingFiltered];
+
+    void logSecurityAction(
+      'Génération Matrice Variantes',
+      `${newProducts.length} variantes enregistrées dans le catalogue`,
+      'Yacine (Admin)',
+      false
+    );
+
+    audioBus.emit('success');
+    set({ products: nextProducts });
+  },
+
+  applyStocktakeAudit: async (items: { productId: string; countedStock: number; previousStock: number }[]) => {
+    const { products, logSecurityAction } = get();
+    if (items.length === 0) return;
+
+    const countMap = new Map<string, number>(items.map((i) => [i.productId, i.countedStock]));
+    const updatedProducts: Product[] = [];
+
+    const nextProducts = products.map((p) => {
+      const counted = countMap.get(p.id);
+      if (counted !== undefined && counted !== p.stock) {
+        const updated = { ...p, stock: Math.max(0, counted) };
+        updatedProducts.push(updated);
+        return updated;
+      }
+      return p;
+    });
+
+    if (updatedProducts.length > 0) {
+      await (await getProductRepo()).bulkSave(updatedProducts);
+
+      // Durability: without ledger deltas these counts evaporate on the next
+      // sale's recompute (and shrinkage never books). Persist each variance
+      // vs the live ledger sum as an ADJUST delta — best-effort, never fails
+      // the saved count. Services are skipped inside the helper. One fresh
+      // operation id per audit: delta identities derive from it, so retries
+      // converge while distinct audits never collide.
+      try {
+        const { appendStocktakeAdjustments } = await import('../../db/sqlPluginAdapter');
+        const stocktakeId = newId('stocktake');
+        await appendStocktakeAdjustments(
+          updatedProducts.map((p) => ({ productId: p.id, countedStock: p.stock, refId: stocktakeId })),
+          { refType: 'stocktake' }
+        );
+      } catch (adjErr) {
+        console.error('[catalog:stocktake] Counts saved but ledger adjustment deferred — recount to converge:', adjErr);
+      }
+
+      const totalVariance = items.reduce((acc, i) => acc + (i.countedStock - i.previousStock), 0);
+      const sign = totalVariance >= 0 ? `+${totalVariance}` : `${totalVariance}`;
+
+      void logSecurityAction(
+        'Inventaire Physique (Audit Douchette)',
+        `${updatedProducts.length} articles ajustés. Écart net total: ${sign} pièces`,
+        'Manager',
+        true
+      );
+
+      audioBus.emit('success');
+      set({ products: nextProducts });
+    }
   },
 });

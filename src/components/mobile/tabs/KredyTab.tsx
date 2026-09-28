@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Users,
   Search,
@@ -11,6 +11,7 @@ import {
   DollarSign,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
+import { DEFAULT_CREDIT_LIMIT } from '../../../store/slices/createCustomerSlice';
 import { AppTabContent } from '../AppScreenLayout';
 import type { Customer } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
@@ -23,6 +24,13 @@ export const KredyTab: React.FC = () => {
   const { showToast } = useToast();
   const [search, setSearch] = useState('');
   const [filterDebtorsOnly, setFilterDebtorsOnly] = useState(true);
+  // Recherche anti-rebond : champ instantané, filtrage 200 ms après la frappe
+  // (même motif que CatalogSearchTab — affichage seul, aucune logique métier).
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 200);
+    return () => clearTimeout(t);
+  }, [search]);
 
   // Debt calculations
   const totalOutstandingDebt = useMemo(() => {
@@ -33,18 +41,20 @@ export const KredyTab: React.FC = () => {
     return (customers || []).filter((c) => (c.currentDebt || 0) > 0).length;
   }, [customers]);
 
-  // Filtered customers
+  // Filtered customers (diacritic-insensitive on names; raw substring on phones)
   const filteredCustomers = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = (debouncedSearch.trim() || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const rawQ = debouncedSearch.trim();
     return (customers || []).filter((c) => {
       if (filterDebtorsOnly && (c.currentDebt || 0) <= 0) return false;
       if (!q) return true;
+      const nameFold = (c.name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
       return (
-        (c.name || '').toLowerCase().includes(q) ||
-        (c.phone || '').includes(q)
+        nameFold.includes(q) ||
+        (c.phone || '').includes(rawQ)
       );
     });
-  }, [customers, search, filterDebtorsOnly]);
+  }, [customers, debouncedSearch, filterDebtorsOnly]);
 
   const handleWhatsApp = async (customer: Customer, e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -111,7 +121,7 @@ export const KredyTab: React.FC = () => {
                   soundEngine.playKeyBeep?.();
                   openModal('debt_ledger');
                 }}
-                className="min-h-[38px] px-3 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm shadow-amber-500/20"
+                className="min-h-[44px] px-3 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm shadow-amber-500/20"
                 title="Ouvrir le Grand Livre des créances et règlements"
               >
                 <BookOpen className="w-3.5 h-3.5" />
@@ -124,13 +134,18 @@ export const KredyTab: React.FC = () => {
                   soundEngine.playKeyBeep?.();
                   openModal('customers');
                 }}
-                className="min-h-[42px] px-3 rounded-xl bg-pos-panel border border-pos-border hover:border-cyan-400/50 text-cyan-400 active-press font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                className="min-h-[44px] px-3 rounded-xl bg-pos-panel border border-pos-border hover:border-cyan-400/50 text-cyan-400 active-press font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
                 title="Gérer les clients et créer un compte (CRM)"
               >
                 <UserPlus className="w-3.5 h-3.5" />
                 <span>+ Nouveau Client</span>
               </button>
             </div>
+
+            {/* Guide de règlement — point d'entrée du flux de paiement. */}
+            <p className="text-[11px] text-pos-muted leading-relaxed pt-1 border-t border-amber-500/20">
+              Pour encaisser un versement, touchez <strong className="text-amber-300">« Régler »</strong> sur la fiche du client — le Grand Livre enregistre le reçu.
+            </p>
           </div>
 
           {/* Search Input & Filter Pills */}
@@ -142,13 +157,13 @@ export const KredyTab: React.FC = () => {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Rechercher nom ou téléphone du client..."
-                className="w-full min-h-[42px] bg-pos-panel border border-pos-border focus:border-amber-400 rounded-xl pl-9 pr-9 py-2 text-xs text-pos-text placeholder-pos-muted focus:outline-none transition-all shadow-xs"
+                className="w-full min-h-[44px] bg-pos-panel border border-pos-border focus:border-amber-400 rounded-xl pl-9 pr-9 py-2 text-xs text-pos-text placeholder-pos-muted focus:outline-none transition-all shadow-xs"
               />
               {search && (
                 <button
                   type="button"
                   onClick={() => setSearch('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-pos-muted hover:text-pos-text min-h-[38px] min-w-[38px] flex items-center justify-center active-press cursor-pointer"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-pos-muted hover:text-pos-text min-h-[44px] min-w-[44px] flex items-center justify-center active-press cursor-pointer"
                   aria-label="Effacer"
                 >
                   <X className="w-4 h-4" />
@@ -160,7 +175,7 @@ export const KredyTab: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setFilterDebtorsOnly(true)}
-                className={`flex-1 min-h-[40px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 active-press ${
+                className={`flex-1 min-h-[44px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 active-press ${
                   filterDebtorsOnly
                     ? 'bg-amber-500 text-slate-950 font-black shadow-md shadow-amber-500/20'
                     : 'bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text'
@@ -172,7 +187,7 @@ export const KredyTab: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setFilterDebtorsOnly(false)}
-                className={`flex-1 min-h-[40px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 active-press ${
+                className={`flex-1 min-h-[44px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 active-press ${
                   !filterDebtorsOnly
                     ? 'bg-amber-500 text-slate-950 font-black shadow-md shadow-amber-500/20'
                     : 'bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text'
@@ -181,6 +196,13 @@ export const KredyTab: React.FC = () => {
                 <span>Tous ({customers?.length || 0})</span>
               </button>
             </div>
+
+            {/* Compteur de résultats (annoncé aux lecteurs d'écran). */}
+            <p aria-live="polite" className="text-[11px] text-pos-muted font-medium px-1">
+              {debouncedSearch.trim()
+                ? `${filteredCustomers.length} résultat${filteredCustomers.length > 1 ? 's' : ''} pour « ${debouncedSearch.trim()} »`
+                : `${filteredCustomers.length} fiche${filteredCustomers.length > 1 ? 's' : ''} affichée${filteredCustomers.length > 1 ? 's' : ''}`}
+            </p>
           </div>
         </div>
       }
@@ -188,7 +210,20 @@ export const KredyTab: React.FC = () => {
     >
       {/* Customer Cards List */}
       <div className="space-y-2.5 pt-1">
-        {filteredCustomers.length === 0 ? (
+        {filteredCustomers.length === 0 && filterDebtorsOnly && debtorsCount === 0 && !debouncedSearch.trim() ? (
+          /* État de fête : aucune dette en cours (distinct du « sans résultat »). */
+          <div className="p-8 my-4 text-center bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex flex-col items-center justify-center space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+              <CreditCard className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-black text-emerald-300">Aucune dette en cours — tout est réglé ! 🎉</p>
+              <p className="text-[11px] text-pos-muted mt-0.5">
+                Tous les clients sont à jour. Les nouvelles créances apparaîtront ici automatiquement.
+              </p>
+            </div>
+          </div>
+        ) : filteredCustomers.length === 0 ? (
           <div className="p-8 my-4 text-center bg-pos-panel/60 border border-dashed border-pos-border rounded-2xl flex flex-col items-center justify-center space-y-3">
             <div className="w-12 h-12 rounded-2xl bg-pos-card border border-pos-border flex items-center justify-center text-pos-muted">
               <Users className="w-6 h-6 opacity-60" />
@@ -206,14 +241,24 @@ export const KredyTab: React.FC = () => {
           filteredCustomers.map((c) => {
             const debt = c.currentDebt || 0;
             const hasDebt = debt > 0;
-            const debtLimit = c.debtLimit;
+            // Unified default ceiling — an absent debtLimit means the standard
+            // limit, not "no limit".
+            const debtLimit = c.debtLimit ?? DEFAULT_CREDIT_LIMIT;
             const isNearLimit = debtLimit && debt >= debtLimit * 0.8;
+            // Gravité plafond (affichage seul — aucune donnée d'échéance n'existe
+            // sur Customer, donc pas de vieillissement réel possible sans schéma).
+            const isOverLimit = debtLimit > 0 && debt >= debtLimit;
+            const limitUsagePct = debtLimit > 0 ? Math.min(100, Math.round((debt / debtLimit) * 100)) : 0;
             const initials = (c.name || 'C').slice(0, 2).toUpperCase();
 
             return (
               <div
                 key={c.id}
-                className="bg-pos-card border border-pos-border rounded-2xl p-3.5 space-y-3 shadow-xs hover:border-amber-500/40 active:border-amber-500/60 transition-all"
+                className={`bg-pos-card border rounded-2xl p-3.5 space-y-3 shadow-xs transition-all ${
+                  isOverLimit
+                    ? 'border-rose-500/60'
+                    : 'border-pos-border hover:border-amber-500/40 active:border-amber-500/60'
+                }`}
               >
                 {/* Header: Customer info & Debt pill */}
                 <div className="flex items-start justify-between gap-3">
@@ -248,17 +293,47 @@ export const KredyTab: React.FC = () => {
                     >
                       {formatDZD(debt)}
                     </span>
-                    {debtLimit ? (
+                    <span
+                      className={`text-[9px] font-bold block mt-0.5 ${
+                        isNearLimit ? 'text-rose-400' : 'text-pos-muted'
+                      }`}
+                    >
+                      Plafond : {formatDZD(debtLimit)}
+                      {c.debtLimit == null ? ' (défaut)' : ''}
+                    </span>
+                    {hasDebt && (
                       <span
-                        className={`text-[9px] font-bold block mt-0.5 ${
-                          isNearLimit ? 'text-rose-400' : 'text-pos-muted'
+                        className={`inline-block text-[9px] font-black px-1.5 py-0.5 rounded mt-1 border ${
+                          isOverLimit
+                            ? 'bg-rose-500/15 text-rose-300 border-rose-500/40'
+                            : isNearLimit
+                              ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                              : 'bg-pos-panel text-pos-muted border-pos-border'
                         }`}
                       >
-                        Plafond : {formatDZD(debtLimit)}
+                        {isOverLimit
+                          ? 'Plafond atteint — exiger un versement'
+                          : isNearLimit
+                            ? 'Plafond presque atteint'
+                            : 'À recouvrer'}
                       </span>
-                    ) : null}
+                    )}
                   </div>
                 </div>
+
+                {/* Jauge du plafond consommé (affichage seul). */}
+                {hasDebt && debtLimit > 0 && (
+                  <div
+                    role="img"
+                    aria-label={`Plafond consommé à ${limitUsagePct} %`}
+                    className="h-1.5 rounded-full bg-pos-panel border border-pos-border/60 overflow-hidden"
+                  >
+                    <div
+                      className={`h-full rounded-full ${isOverLimit ? 'bg-rose-400' : isNearLimit ? 'bg-amber-400' : 'bg-emerald-400'}`}
+                      style={{ width: `${limitUsagePct}%` }}
+                    />
+                  </div>
+                )}
 
                 {/* Communication & Payment Actions */}
                 <div className="flex items-center gap-2 pt-1 border-t border-pos-border/50">

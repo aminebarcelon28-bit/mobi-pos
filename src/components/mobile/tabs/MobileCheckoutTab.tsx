@@ -24,15 +24,20 @@ import {
   Delete,
   Check,
   RotateCcw,
+  FileText,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
 import { AppTabContent } from '../AppScreenLayout';
 import type { CartItem, Customer, PricingTier } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
 import { getProductPriceForTier } from '../../../utils/pricingEngine';
+import { computeCartTotals } from '../../../utils/receiptMath';
+import { parseLocalizedAmount } from '../../../utils/moneyInput';
+import { useFifoPreviewCosts } from '../../../hooks/useFifoPreviewCosts';
 import { soundEngine } from '../../../utils/audioFeedback';
 import { useToast } from '../../ui/Toast';
 import { MobileCameraScanner } from '../MobileCameraScanner';
+import { getEffectiveDebtLimit } from '../../../store/slices/createCustomerSlice';
 import { openWhatsApp } from '../../../utils/phoneUtils';
 
 interface MobileCheckoutTabProps {
@@ -58,6 +63,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     verifyManagerPin,
     heldSales,
     holdSale,
+    storeCreditApplied,
   } = usePosStore();
 
   const { showToast } = useToast();
@@ -93,13 +99,41 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
   const [managerPinInput, setManagerPinInput] = useState<string>('');
   const [overrideError, setOverrideError] = useState<string | null>(null);
 
-  // Cart Calculations
-  const grossSubtotal = cart.reduce((acc, i) => {
-    const unit = i.appliedPrice !== undefined ? i.appliedPrice : getProductPriceForTier(i.product, pricingTier);
-    return acc + unit * i.quantity;
-  }, 0);
-  const totalDiscount = cart.reduce((acc, i) => acc + (i.discount || 0), 0);
-  const netTotal = Math.max(0, grossSubtotal - totalDiscount);
+  // FIFO COGS preview (index-aligned with cart): the editor's cost/margin
+  // must use oldest-first batch costs, not product.costPrice (latest cost).
+  // Undefined while loading/failed → pending display, never a
+  // costPrice-derived margin.
+  const fifoPreviewCosts = useFifoPreviewCosts(cart);
+  const editingCartIdx = editingItem
+    ? cart.findIndex(
+        (ci) => ci.product.id === editingItem.product.id && Boolean(ci.isReturn) === Boolean(editingItem.isReturn),
+      )
+    : -1;
+  const editingFifoCost = editingCartIdx >= 0 ? fifoPreviewCosts[editingCartIdx] : undefined;
+
+  // Cart Calculations — canonical computeCartTotals() base, shared with
+  // CartPanel, PaymentModal and processPayment: signed return quantities,
+  // store/voucher credits and VAT (no clamping of refunds to 0 here — a
+  // negative net is a refund due, displayed as such below).
+  const voucherCreditApplied =
+    usePosStore((s) => (s as unknown as { voucherCreditApplied?: number }).voucherCreditApplied ?? 0) || 0;
+  const vatRate =
+    usePosStore((s) => (s.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate ?? 0) || 0;
+  const totals = computeCartTotals(cart, {
+    pricingTier,
+    storeCreditApplied,
+    voucherCreditApplied,
+    vatRate,
+  });
+  const grossSubtotal = totals.grossSubtotal;
+  const totalDiscount = totals.discountTotal;
+  const netTotal = totals.total;
+  const taxTotal = totals.tax;
+  // Signed net (may be negative when returns dominate): shown as a refund
+  // due instead of being clamped to 0. Tender logic still floors at 0.
+  const signedNet = totals.net;
+  // B-026: cash-out owed on net-negative carts; total/ttc is clamped to 0.
+  const refundDue = totals.refundDue;
 
   // Smart Algerian Banknote Presets (500 DA, 1000 DA, 2000 DA, etc.)
   const smartBanknotes = useMemo(() => {
@@ -143,12 +177,25 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
   };
 
   const handleBarcodeScanned = (scannedCode: string) => {
-    const code = scannedCode.trim().toLowerCase();
-    const found = products.find(
-      (p) =>
-        (p.barcode && p.barcode.toLowerCase() === code) ||
-        (p.sku && p.sku.toLowerCase() === code)
-    );
+    const raw = (scannedCode || '').trim();
+    if (!raw) return;
+    const code = raw.toLowerCase();
+    const clean = raw.replace(/^\][A-Za-z0-9]{2}/, '').toLowerCase();
+    const noLeadingZeros = clean.replace(/^0+/, '');
+
+    const found = products.find((p) => {
+      const b = (p.barcode || '').trim().toLowerCase();
+      const s = (p.sku || '').trim().toLowerCase();
+      return (
+        b === code ||
+        b === clean ||
+        (noLeadingZeros.length > 0 && b === noLeadingZeros) ||
+        s === code ||
+        s === clean ||
+        (noLeadingZeros.length > 0 && s === noLeadingZeros)
+      );
+    });
+
     if (found) {
       addToCart(found);
       soundEngine.playScan?.();
@@ -171,7 +218,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
 
   const handleApplyPriceOverride = () => {
     if (!editingItem) return;
-    const newPrice = parseFloat(overridePriceInput);
+    const newPrice = parseLocalizedAmount(overridePriceInput);
     if (isNaN(newPrice) || newPrice < 0) {
       setOverrideError('Veuillez saisir un montant valide');
       soundEngine.playError?.();
@@ -224,10 +271,89 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
 
   const handleConfirmCashTender = async () => {
     if (cart.length === 0 || isSubmitting) return;
-    const tendered = parseFloat(tenderedStr) || 0;
-    if (tendered < netTotal) {
+    // Serialized units need their IMEI before any tender: without it
+    // processPayment rejects deep in the lane. Per-line IMEI entry is
+    // desktop-only for now — block here with an actionable message.
+    const missingImei = cart.find((i) => i.product?.isSerialized && !(i.imeiNumber || '').trim());
+    if (missingImei) {
       soundEngine.playError?.();
-      showToast(`Montant insuffisant (${formatDZD(tendered)} < ${formatDZD(netTotal)})`, 'warning');
+      showToast(
+        `IMEI manquant : "${missingImei.product?.title || 'article sérialisé'}" exige son IMEI (saisie sur le terminal principal).`,
+        'warning'
+      );
+      return;
+    }
+    // Tender-skew guard: rebuild the canonical net from LIVE store state at
+    // submit time instead of trusting the render-time netTotal (paint can lag
+    // the store between render and tap). Behavior otherwise unchanged.
+    const live = usePosStore.getState();
+    const liveVoucherCredit = Math.max(
+      0,
+      Math.round(Number((live as unknown as { voucherCreditApplied?: number }).voucherCreditApplied) || 0)
+    );
+    const liveVat = Math.max(
+      0,
+      Number((live.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate) || 0
+    );
+    const submitTotals = computeCartTotals(live.cart, {
+      pricingTier: live.pricingTier,
+      storeCreditApplied: live.storeCreditApplied,
+      voucherCreditApplied: liveVoucherCredit,
+      vatRate: liveVat,
+    });
+    const submitNet = submitTotals.total;
+    const submitRefundDue = submitTotals.refundDue;
+    const tendered = Math.round(parseLocalizedAmount(tenderedStr) || 0);
+
+    // B-026: refund-due carts disburse cash-out with a zero cash-in tender.
+    if (submitRefundDue > 0) {
+      if (tendered > 0) {
+        soundEngine.playError?.();
+        showToast('Remboursement dû — aucun encaissement espèces requis.', 'warning');
+        return;
+      }
+      setIsSubmitting(true);
+      soundEngine.playKeyBeep?.();
+      try {
+        // Staged wallet credit rides as an explicit leg so the slice-side
+        // refund math matches the displayed submitRefundDue (net of credit).
+        const mobileAvoirRefund = Math.max(0, Math.round(Number(live.storeCreditApplied) || 0));
+        const res = (await processPayment([
+          { method: 'Espèces', amount: 0 },
+          ...(mobileAvoirRefund > 0 ? [{ method: 'Avoir Client' as const, amount: mobileAvoirRefund }] : []),
+        ])) as unknown as { success: boolean; reason?: string; warnings?: string[] };
+        if (res && res.success) {
+          soundEngine.playSuccess?.();
+          for (const w of res.warnings ?? []) showToast(w, 'warning', 5000);
+          const lastTx = usePosStore.getState().lastTransaction;
+          setSaleCelebrationData({
+            receiptNumber: lastTx?.receiptNumber || 'OK',
+            netTotal: submitNet,
+            tendered: 0,
+            changeDue: 0,
+            customerName: currentCustomer?.name,
+            customerPhone: currentCustomer?.phone,
+            items: [...cart],
+          });
+          setWhatsAppPhoneInput(currentCustomer?.phone || '');
+          setIsCashTenderOpen(false);
+          showToast(`💵 Remboursement ${formatDZD(submitRefundDue)} effectué`, 'success');
+        } else {
+          soundEngine.playError?.();
+          showToast(res?.reason || 'Échec du remboursement.', 'error');
+        }
+      } catch (e) {
+        soundEngine.playError?.();
+        showToast(e instanceof Error ? e.message : 'Erreur remboursement.', 'error');
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
+
+    if (tendered < submitNet) {
+      soundEngine.playError?.();
+      showToast(`Montant insuffisant (${formatDZD(tendered)} < ${formatDZD(submitNet)})`, 'warning');
       return;
     }
 
@@ -235,16 +361,29 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     soundEngine.playKeyBeep?.();
 
     try {
-      const res = await processPayment([
-        { method: 'Espèces', amount: netTotal },
-      ]);
+      // Persist the ACTUAL tendered amount (not the net): processPayment
+      // derives and stores changeDue from it instead of dropping the change.
+      // Staged wallet credit rides as an explicit leg (mirrors PaymentModal):
+      // submitNet above is net of it, and tender-less staging aborts loudly
+      // slice-side instead of charging past the displayed net.
+      const mobileAvoir = Math.max(0, Math.round(Number(live.storeCreditApplied) || 0));
+      const res = (await processPayment([
+        { method: 'Espèces', amount: tendered },
+        ...(mobileAvoir > 0 ? [{ method: 'Avoir Client' as const, amount: mobileAvoir }] : []),
+      ])) as unknown as { success: boolean; reason?: string; warnings?: string[]; recoveryQueued?: boolean };
       if (res && res.success) {
         soundEngine.playSuccess?.();
+        for (const w of res.warnings ?? []) {
+          showToast(w, 'warning', 5000);
+        }
         const lastTx = usePosStore.getState().lastTransaction;
-        const change = Math.max(0, tendered - netTotal);
+        // Prefer the persisted changeDue (covers credits/VAT rounding);
+        // fall back to the local tendered − net difference.
+        const persistedChange = lastTx ? lastTx.changeDue : undefined;
+        const change = typeof persistedChange === 'number' ? persistedChange : Math.max(0, tendered - submitNet);
         setSaleCelebrationData({
           receiptNumber: lastTx?.receiptNumber || 'OK',
-          netTotal,
+          netTotal: submitNet,
           tendered,
           changeDue: change,
           customerName: currentCustomer?.name,
@@ -255,7 +394,48 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
         setIsCashTenderOpen(false);
       } else {
         soundEngine.playError?.();
-        showToast('Erreur lors du paiement.', 'error');
+        const reason = (res as unknown as { reason?: string } | undefined)?.reason;
+        const recoveryQueued = (res as unknown as { recoveryQueued?: boolean }).recoveryQueued;
+        if (reason === 'PERSISTENCE_FAILED' || (reason && reason.startsWith('PERSISTENCE_FAILED'))) {
+          const detail = reason.includes(':') ? reason.slice('PERSISTENCE_FAILED:'.length) : '';
+          console.error('[mobile checkout] persistence failed:', detail || reason);
+          if (recoveryQueued) {
+            for (const w of res.warnings ?? []) showToast(w, 'warning', 6000);
+            showToast(
+              `Écriture SQLite en échec — panier conservé. La vente sera reprise au démarrage.${detail ? ` (${detail})` : ''}`,
+              'warning',
+              6000
+            );
+          } else {
+            showToast(
+              `Erreur d'écriture base de données. Vente non enregistrée — panier conservé.${detail ? ` (${detail})` : ''}`,
+              'error'
+            );
+          }
+        } else {
+          showToast(
+            reason === 'NO_ACTIVE_SHIFT'
+              ? "Aucun shift ouvert — ouvrez un shift avant d'encaisser."
+              : reason && reason.startsWith('INSUFFICIENT_STOCK')
+              ? `Stock insuffisant : ${reason.slice('INSUFFICIENT_STOCK:'.length)}`
+              : reason && reason.startsWith('IMEI_ALREADY_SOLD')
+              ? `IMEI déjà vendu : ${reason.slice('IMEI_ALREADY_SOLD:'.length)}`
+              : reason === 'IMEI_REQUIRED' || reason === 'DUPLICATE_IMEI'
+              ? 'IMEI invalide ou en double — vérifiez la saisie (terminal principal).'
+              : reason === 'INSUFFICIENT_CASH'
+              ? 'Encaissement insuffisant pour ce panier.'
+              : reason === 'AVOIR_STAGING_DROPPED'
+              ? "Avoir staged ignoré par sécurité — finalisez via l'écran d'encaissement principal."
+              : reason === 'CREDIT_LIMIT_EXCEEDED'
+              ? 'Plafond de crédit client dépassé.'
+              : reason === 'LICENSE_SALE_BLOCKED'
+              ? 'Licence expirée — nouvelles ventes bloquées (remboursements et rapports disponibles).'
+              : reason && reason.startsWith('VOUCHER_')
+              ? "Bon d'avoir invalide, expiré ou épuisé."
+              : 'Erreur lors du paiement.',
+            'error'
+          );
+        }
       }
     } catch (err) {
       console.error('Mobile checkout cash tender error:', err);
@@ -273,9 +453,39 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       return;
     }
 
+    const missingImeiCredit = cart.find((i) => i.product?.isSerialized && !(i.imeiNumber || '').trim());
+    if (missingImeiCredit) {
+      soundEngine.playError?.();
+      showToast(
+        `IMEI manquant : "${missingImeiCredit.product?.title || 'article sérialisé'}" exige son IMEI (saisie sur le terminal principal).`,
+        'warning'
+      );
+      return;
+    }
+
+    // Same submit-time rebuild as the cash path: the credit tender must cover
+    // the live net, not the painted one.
+    const live = usePosStore.getState();
+    const liveVoucherCredit = Math.max(
+      0,
+      Math.round(Number((live as unknown as { voucherCreditApplied?: number }).voucherCreditApplied) || 0)
+    );
+    const liveVat = Math.max(
+      0,
+      Number((live.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate) || 0
+    );
+    const submitNet = computeCartTotals(live.cart, {
+      pricingTier: live.pricingTier,
+      storeCreditApplied: live.storeCreditApplied,
+      voucherCreditApplied: liveVoucherCredit,
+      vatRate: liveVat,
+    }).total;
+
     const currentDebt = currentCustomer.currentDebt || 0;
-    const debtLimit = currentCustomer.debtLimit ?? Infinity;
-    if (currentDebt + netTotal > debtLimit) {
+    // Real ceiling: an absent per-customer limit resolves to the unified
+    // default (never Infinity — an unbounded mobile credit sale is a hole).
+    const debtLimit = getEffectiveDebtLimit(currentCustomer);
+    if (currentDebt + submitNet > debtLimit) {
       alert(
         `Plafond de crédit dépassé pour ${currentCustomer.name} ! Dette actuelle : ${formatDZD(
           currentDebt
@@ -287,16 +497,23 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
 
     setIsSubmitting(true);
     try {
-      const res = await processPayment([
-        { method: 'Crédit Client', amount: netTotal },
-      ]);
+      // Staged wallet credit rides as an explicit leg (mirrors PaymentModal):
+      // submitNet above is net of it.
+      const mobileAvoirCredit = Math.max(0, Math.round(Number(live.storeCreditApplied) || 0));
+      const res = (await processPayment([
+        { method: 'Crédit Client', amount: submitNet },
+        ...(mobileAvoirCredit > 0 ? [{ method: 'Avoir Client' as const, amount: mobileAvoirCredit }] : []),
+      ])) as unknown as { success: boolean; reason?: string; warnings?: string[]; recoveryQueued?: boolean };
       if (res && res.success) {
         soundEngine.playSuccess?.();
+        for (const w of res.warnings ?? []) {
+          showToast(w, 'warning', 5000);
+        }
         const lastTx = usePosStore.getState().lastTransaction;
         setSaleCelebrationData({
           receiptNumber: lastTx?.receiptNumber || 'OK',
-          netTotal,
-          tendered: netTotal,
+          netTotal: submitNet,
+          tendered: submitNet,
           changeDue: 0,
           customerName: currentCustomer.name,
           customerPhone: currentCustomer.phone,
@@ -305,7 +522,44 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
         setWhatsAppPhoneInput(currentCustomer.phone || '');
       } else {
         soundEngine.playError?.();
-        showToast('Erreur lors de la vente à crédit.', 'error');
+        const reason = (res as unknown as { reason?: string } | undefined)?.reason;
+        const recoveryQueued = (res as unknown as { recoveryQueued?: boolean }).recoveryQueued;
+        if (reason === 'PERSISTENCE_FAILED' || (reason && reason.startsWith('PERSISTENCE_FAILED'))) {
+          const detail = reason.includes(':') ? reason.slice('PERSISTENCE_FAILED:'.length) : '';
+          console.error('[mobile credit] persistence failed:', detail || reason);
+          if (recoveryQueued) {
+            for (const w of res.warnings ?? []) showToast(w, 'warning', 6000);
+            showToast(
+              `Écriture SQLite en échec — panier conservé. La vente sera reprise au démarrage.${detail ? ` (${detail})` : ''}`,
+              'warning',
+              6000
+            );
+          } else {
+            showToast(
+              `Erreur d'écriture base de données. Vente non enregistrée — panier conservé.${detail ? ` (${detail})` : ''}`,
+              'error'
+            );
+          }
+        } else {
+          showToast(
+            reason === 'NO_ACTIVE_SHIFT'
+              ? "Aucun shift ouvert — ouvrez un shift avant d'encaisser."
+              : reason && reason.startsWith('INSUFFICIENT_STOCK')
+              ? `Stock insuffisant : ${reason.slice('INSUFFICIENT_STOCK:'.length)}`
+              : reason && reason.startsWith('IMEI_ALREADY_SOLD')
+              ? `IMEI déjà vendu : ${reason.slice('IMEI_ALREADY_SOLD:'.length)}`
+              : reason === 'IMEI_REQUIRED' || reason === 'DUPLICATE_IMEI'
+              ? 'IMEI invalide ou en double — vérifiez la saisie (terminal principal).'
+              : reason === 'CREDIT_LIMIT_EXCEEDED'
+              ? 'Plafond de crédit client dépassé.'
+              : reason === 'LICENSE_SALE_BLOCKED'
+              ? 'Licence expirée — nouvelles ventes bloquées.'
+              : reason && reason.startsWith('VOUCHER_')
+              ? "Bon d'avoir invalide, expiré ou épuisé."
+              : 'Erreur lors de la vente à crédit.',
+            'error'
+          );
+        }
       }
     } catch (err) {
       console.error('Mobile credit sale error:', err);
@@ -330,12 +584,17 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       minute: '2-digit',
     });
     const itemsList = saleCelebrationData.items
-      .map(
-        (i) =>
-          `• ${i.product.title} x${i.quantity} = ${formatDZD(
-            (i.appliedPrice ?? i.product.price) * i.quantity
-          )}`
-      )
+      .map((i) => {
+        // Charged line total from the frozen checkout fields — NOT a
+        // recompute from catalog price (which ignores tier, per-line and
+        // cart discounts, credits and VAT and would not reconcile with the
+        // collected total below).
+        const chargedUnit = i.unitPriceCharged ?? i.appliedPrice ?? i.product.price;
+        const lineDiscount = i.discountAmount ?? i.discount ?? 0;
+        return `• ${i.product.title} x${i.quantity} = ${formatDZD(
+          Math.max(0, chargedUnit * i.quantity - lineDiscount)
+        )}`;
+      })
       .join('\n');
 
     const message = `🧾 *TICKET DE CAISSE - MOBIPOS*\n📅 Date: ${dateStr}\n🎫 Ticket N°: #${saleCelebrationData.receiptNumber}${
@@ -452,7 +711,10 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
         pinnedBottom={
           cart.length > 0 ? (
             <div className="px-3.5 pb-2.5 pt-2 bg-pos-bg">
-              <div className="bg-pos-card/95 backdrop-blur-md border border-pos-border rounded-2xl p-4 space-y-3 shadow-xl">
+              <div
+                className="bg-pos-card/95 backdrop-blur-md border border-pos-border rounded-2xl p-4 space-y-3 shadow-xl"
+                aria-busy={isSubmitting}
+              >
                 <div className="space-y-1.5 text-xs">
                   <div className="flex justify-between text-pos-muted">
                     <span>Sous-total Brut</span>
@@ -464,11 +726,44 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                       <span className="font-mono">-{formatDZD(totalDiscount)}</span>
                     </div>
                   )}
+                  {(storeCreditApplied || 0) > 0 && (
+                    <div className="flex justify-between text-purple-300 font-medium">
+                      <span>Avoir Client</span>
+                      <span className="font-mono">-{formatDZD(storeCreditApplied)}</span>
+                    </div>
+                  )}
+                  {voucherCreditApplied > 0 && (
+                    <div className="flex justify-between text-purple-300 font-medium">
+                      <span>Bon d&apos;Avoir</span>
+                      <span className="font-mono">-{formatDZD(voucherCreditApplied)}</span>
+                    </div>
+                  )}
+                  {taxTotal > 0 && (
+                    <div className="flex justify-between text-cyan-300 font-medium">
+                      <span>TVA ({vatRate}%)</span>
+                      <span className="font-mono">+{formatDZD(taxTotal)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between items-baseline pt-2 border-t border-pos-border text-pos-text">
-                    <span className="text-xs font-black uppercase tracking-wider">Total Net</span>
-                    <span className="text-2xl font-black font-mono text-emerald-400 tracking-tight">
-                      {formatDZD(netTotal)}
+                    <span className="text-xs font-black uppercase tracking-wider">
+                      {refundDue > 0 || signedNet < 0 ? 'Remboursement Dû' : 'Total Net'}
                     </span>
+                    {isSubmitting ? (
+                      <span
+                        aria-hidden="true"
+                        className="inline-block h-8 w-28 rounded-lg bg-pos-panel border border-pos-border animate-pulse"
+                      />
+                    ) : (
+                      <span
+                        className={`text-2xl font-black font-mono tracking-tight ${
+                          refundDue > 0 || signedNet < 0 ? 'text-rose-400' : 'text-emerald-400'
+                        }`}
+                      >
+                        {refundDue > 0 || signedNet < 0
+                          ? `-${formatDZD(refundDue > 0 ? refundDue : Math.abs(signedNet))}`
+                          : formatDZD(netTotal)}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -502,6 +797,28 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       >
         {/* Cart Header & Quick Action Bar */}
         <div className="space-y-2">
+          {/* Résumé du total collant : reste visible au-dessus de la ligne de flottaison */}
+          {cart.length > 0 && (
+            <div className="sticky top-0 z-10 bg-pos-bg/95 backdrop-blur-sm py-1.5 -mx-0.5 px-0.5">
+              <div
+                className="bg-pos-card border border-pos-border rounded-xl px-3 py-2 flex items-center justify-between shadow-xs"
+                aria-live="polite"
+              >
+                <span className="text-[10px] font-black uppercase tracking-wider text-pos-muted">
+                  {refundDue > 0 || signedNet < 0 ? 'Remboursement Dû' : 'Total Net'}
+                </span>
+                <span
+                  className={`font-mono text-base font-black tabular-nums ${
+                    refundDue > 0 || signedNet < 0 ? 'text-rose-400' : 'text-emerald-400'
+                  }`}
+                >
+                  {refundDue > 0 || signedNet < 0
+                    ? `-${formatDZD(refundDue > 0 ? refundDue : Math.abs(signedNet))}`
+                    : formatDZD(netTotal)}
+                </span>
+              </div>
+            </div>
+          )}
           <div className="flex items-center justify-between px-1 text-xs font-bold text-pos-muted">
             <span>Articles au Panier ({cart.length})</span>
             <div className="flex items-center gap-1.5 flex-wrap justify-end">
@@ -549,6 +866,15 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 <Camera className="w-3.5 h-3.5" /> Scanner
               </button>
 
+              <button
+                type="button"
+                onClick={() => openModal('invoice_ingestion')}
+                className="text-[11px] text-teal-400 hover:text-teal-300 font-bold flex items-center gap-1 cursor-pointer py-1 px-2.5 rounded-xl bg-teal-500/10 border border-teal-500/20 active:scale-95 transition min-h-[36px]"
+                title="Scanner ou importer une facture fournisseur (Entrée en stock)"
+              >
+                <FileText className="w-3.5 h-3.5" /> Facture
+              </button>
+
               {cart.length > 0 && (
                 <button
                   type="button"
@@ -563,7 +889,12 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
               {cart.length > 0 && (
                 <button
                   type="button"
-                  onClick={clearCart}
+                  onClick={() => {
+                    const n = cart.reduce((a, i) => a + i.quantity, 0);
+                    if (window.confirm(`Vider le panier (${n} article${n > 1 ? 's' : ''}) ? Cette action est irréversible.`)) {
+                      clearCart();
+                    }
+                  }}
                   className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1 cursor-pointer py-1 px-2 rounded-xl hover:bg-rose-500/10 transition min-h-[36px]"
                 >
                   <Trash2 className="w-3.5 h-3.5" /> Vider
@@ -580,8 +911,8 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
               </div>
               <div>
                 <h4 className="text-sm font-black text-pos-text">Votre panier est vide</h4>
-                <p className="text-xs text-pos-muted mt-1 max-w-xs">
-                  Scannez un code-barres avec votre appareil ou parcourez le catalogue pour composer un ticket.
+                <p className="text-xs text-pos-muted mt-1">
+                  Scannez un article ou ouvrez le catalogue pour commencer.
                 </p>
               </div>
 
@@ -894,7 +1225,12 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border">
                   <span className="text-[10px] text-cyan-400 uppercase font-bold block">Coût FIFO Stock</span>
                   <span className="font-mono font-black text-cyan-300 text-sm block mt-0.5">
-                    {formatDZD(editingItem.unitCostAtSale ?? editingItem.unitCostPrice ?? editingItem.product.costPrice ?? 0)}
+                    {(() => {
+                      // Pending (…) until the FIFO preview resolves — never
+                      // flash a costPrice-derived cost for fresh lines.
+                      const known = editingFifoCost ?? editingItem.unitCostAtSale ?? editingItem.unitCostPrice;
+                      return known === undefined ? '…' : formatDZD(known ?? editingItem.product.costPrice ?? 0);
+                    })()}
                   </span>
                 </div>
               </div>
@@ -965,8 +1301,14 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
 
               {/* Live Margin and Loss Calculations */}
               {(() => {
-                const newPrice = parseFloat(overridePriceInput) || 0;
-                const cost = editingItem.unitCostAtSale ?? editingItem.unitCostPrice ?? editingItem.product.costPrice ?? 0;
+                const newPrice = parseLocalizedAmount(overridePriceInput) || 0;
+                // STRICT LEDGER: displayed margin is FIFO-or-pending (never a
+                // costPrice-derived number); the below-cost gate keeps the
+                // conservative fallback so protection never sleeps.
+                const costKnown = editingFifoCost !== undefined
+                  || editingItem.unitCostAtSale !== undefined
+                  || editingItem.unitCostPrice !== undefined;
+                const cost = editingFifoCost ?? editingItem.unitCostAtSale ?? editingItem.unitCostPrice ?? editingItem.product.costPrice ?? 0;
                 const def = editingItem.defaultPrice ?? editingItem.product.price;
                 const profit = (newPrice - cost) * editingItem.quantity;
                 const discount = Math.max(0, def - newPrice);
@@ -981,7 +1323,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                         Remise : -{formatDZD(discount)} ({discountPct}%)
                       </span>
                       <span className={isLoss ? 'text-rose-400 font-black' : 'text-emerald-400 font-black'}>
-                        Marge : {isLoss ? '' : '+'}{formatDZD(profit)}
+                        Marge : {costKnown ? (isLoss ? '' : '+') : ''}{costKnown ? formatDZD(profit) : '…'}
                       </span>
                     </div>
 
@@ -996,6 +1338,8 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                         <input
                           type="password"
                           inputMode="numeric"
+                          pattern="[0-9]*"
+                          autoComplete="current-password"
                           maxLength={8}
                           value={managerPinInput}
                           onChange={(e) => {
@@ -1076,7 +1420,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
             <div className="p-4 space-y-3 overflow-y-auto overscroll-contain">
               {/* Total Net & Change Due Display Card */}
               {(() => {
-                const tenderedNum = parseFloat(tenderedStr) || 0;
+                const tenderedNum = Math.round(parseLocalizedAmount(tenderedStr) || 0);
                 const changeDue = Math.max(0, tenderedNum - netTotal);
                 const remainingDue = Math.max(0, netTotal - tenderedNum);
                 const isExact = tenderedNum === netTotal;
@@ -1149,13 +1493,15 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 </span>
                 <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
                   {smartBanknotes.map((preset) => {
-                    const isSelected = (parseFloat(tenderedStr) || 0) === preset;
+                    const isSelected = Math.round(parseLocalizedAmount(tenderedStr) || 0) === preset;
                     const isExact = preset === netTotal;
 
                     return (
                       <button
                         key={preset}
                         type="button"
+                        aria-pressed={isSelected}
+                        aria-label={isExact ? `Montant exact : ${formatDZD(preset)}` : `Encaisser ${formatDZD(preset)}`}
                         onClick={() => {
                           soundEngine.playKeyBeep?.();
                           setTenderedStr(String(preset));
@@ -1244,7 +1590,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
               {/* Confirm Cash Tender Button */}
               <button
                 type="button"
-                disabled={isSubmitting || (parseFloat(tenderedStr) || 0) < netTotal}
+                disabled={isSubmitting || Math.round(parseLocalizedAmount(tenderedStr) || 0) < netTotal}
                 onClick={handleConfirmCashTender}
                 className="w-full min-h-[54px] rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 active-press text-slate-950 font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer disabled:opacity-50 disabled:pointer-events-none mt-2"
               >

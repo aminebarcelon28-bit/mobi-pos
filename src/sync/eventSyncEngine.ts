@@ -11,6 +11,8 @@ import type { Envelope, SyncPhase } from '../bindings/bindings.ts';
 import type { SqlExecutor } from '../domain/reducers.ts';
 import { reduceEnvelope } from '../domain/reducers.ts';
 import { getClock } from './eventInterceptor.ts';
+import { withWriteLock } from '../db/writeMutex.ts';
+import { withBusyRetry } from '../db/busyRetry.ts';
 
 export interface EventSyncStatus {
   phase: SyncPhase;
@@ -81,12 +83,18 @@ export async function pushEventBatch(db: SqlExecutor, cloudClient: Client): Prom
 
   await cloudClient.batch(cloudStatements, 'write');
 
-  // 2. Mark locally as synced
+  // 2. Mark locally as synced (serialized with sales, retried on BUSY).
   const placeholders = unsyncedRows.map(() => '?').join(',');
   const ids = unsyncedRows.map((r) => r.event_id);
-  await db.execute(
-    `UPDATE event_log SET synced_to_cloud = 1 WHERE event_id IN (${placeholders});`,
-    ids
+  await withBusyRetry(
+    () =>
+      withWriteLock(() =>
+        db.execute(
+          `UPDATE event_log SET synced_to_cloud = 1 WHERE event_id IN (${placeholders});`,
+          ids
+        )
+      ),
+    { attempts: 4, baseDelayMs: 60, label: 'event-mark' }
   );
 
   return unsyncedRows.length;
@@ -126,59 +134,67 @@ export async function pullRemoteEventBatch(
   let maxHlc = lastPulledHlc;
   const nowIso = new Date().toISOString();
 
-  for (const r of cloudRes.rows) {
-    const eventId = String(r.event_id);
-    const aggregate = String(r.aggregate);
-    const remoteHlc = String(r.hlc);
-    const devId = String(r.device_id);
-    const schemaV = Number(r.schema_v);
-    const eventType = String(r.event_type);
-    const dataJson = String(r.data_json);
-    const createdAt = String(r.created_at);
+  // Serialized with sales (then retried): row inserts + projection reduces
+  // must not interleave with a checkout on the pooled connection.
+  await withBusyRetry(
+    () =>
+      withWriteLock(async () => {
+        for (const r of cloudRes.rows) {
+          const eventId = String(r.event_id);
+          const aggregate = String(r.aggregate);
+          const remoteHlc = String(r.hlc);
+          const devId = String(r.device_id);
+          const schemaV = Number(r.schema_v);
+          const eventType = String(r.event_type);
+          const dataJson = String(r.data_json);
+          const createdAt = String(r.created_at);
 
-    // Advance local clock causally
-    clock.observe(remoteHlc);
+          // Advance local clock causally
+          clock.observe(remoteHlc);
 
-    // Insert into local event_log
-    await db.execute(
-      `INSERT INTO event_log (
-        event_id, aggregate, hlc, device_id, schema_v, event_type, data_json, synced_to_cloud, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-      ON CONFLICT(event_id) DO NOTHING;`,
-      [eventId, aggregate, remoteHlc, devId, schemaV, eventType, dataJson, createdAt]
-    );
+          // Insert into local event_log
+          await db.execute(
+            `INSERT INTO event_log (
+              event_id, aggregate, hlc, device_id, schema_v, event_type, data_json, synced_to_cloud, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+            ON CONFLICT(event_id) DO NOTHING;`,
+            [eventId, aggregate, remoteHlc, devId, schemaV, eventType, dataJson, createdAt]
+          );
 
-    // Reduce onto local projections
-    try {
-      const data = JSON.parse(dataJson);
-      const envelope: Envelope = {
-        event_id: eventId,
-        aggregate,
-        hlc: remoteHlc,
-        device_id: devId,
-        schema_v: schemaV,
-        event: {
-          type: eventType as any,
-          data,
-        },
-      };
+          // Reduce onto local projections
+          try {
+            const data = JSON.parse(dataJson);
+            const envelope: Envelope = {
+              event_id: eventId,
+              aggregate,
+              hlc: remoteHlc,
+              device_id: devId,
+              schema_v: schemaV,
+            event: {
+              type: eventType as any,
+              data,
+            },
+            };
 
-      await reduceEnvelope(db, envelope);
-    } catch (parseErr) {
-      console.warn(`[EventSyncEngine] Malformed remote payload for event ${eventId}:`, parseErr);
-    }
+            await reduceEnvelope(db, envelope);
+          } catch (parseErr) {
+            console.warn(`[EventSyncEngine] Malformed remote payload for event ${eventId}:`, parseErr);
+          }
 
-    if (remoteHlc > maxHlc) {
-      maxHlc = remoteHlc;
-    }
-  }
+          if (remoteHlc > maxHlc) {
+            maxHlc = remoteHlc;
+          }
+        }
 
-  // Advance watermark cursor
-  await db.execute(
-    `INSERT INTO sync_state (key, value, updated_at)
-     VALUES ('sync.pull_hlc_cursor', ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`,
-    [maxHlc, nowIso]
+        // Advance watermark cursor
+        await db.execute(
+          `INSERT INTO sync_state (key, value, updated_at)
+           VALUES ('sync.pull_hlc_cursor', ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`,
+          [maxHlc, nowIso]
+        );
+      }),
+    { attempts: 4, baseDelayMs: 60, label: 'event-pull' }
   );
 
   // Notify reactive UI queries of updated projections

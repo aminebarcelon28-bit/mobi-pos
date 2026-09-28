@@ -1,36 +1,174 @@
-import React, { useMemo, useState, useEffect } from 'react';
-import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X, ShoppingBag } from 'lucide-react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X, ShoppingBag, AlertTriangle, ArrowLeftRight, RotateCcw, Layers } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
+import { useToast } from './ui/Toast';
+import { canRedeemPoints, normalizeLoyaltyConfig, isEarnAllowed, isRedeemAllowed } from '../utils/loyaltyEngine';
 import { soundEngine } from '../utils/audioFeedback';
 import { getProductPriceForTier } from '../utils/pricingEngine';
+import { computeCartTotals } from '../utils/receiptMath';
+import { parseLocalizedAmount } from '../utils/moneyInput';
+import { useFifoPreviewCosts } from '../hooks/useFifoPreviewCosts';
 
 export const CartPanel: React.FC = () => {
-  const {
-    cart,
-    updateCartQty,
-    setCartItemQty,
-    removeFromCart,
-    clearCart,
-    openModal,
-    pricingTier,
-    setPricingTier,
-    products,
-    addToCart,
-    currentCustomer,
-    setCurrentCustomer,
-    redeemLoyaltyPoints,
-    processPayment,
-    applyCartDiscountPercent,
-    storeCreditApplied,
-    setStoreCreditApplied,
-    logSecurityAction,
-  } = usePosStore();
+  // Selective subscriptions: whole-store spread re-rendered the cart on every
+  // unrelated slice change (sync ticks, catalog edits) — visible input lag.
+  const cart = usePosStore((s) => s.cart);
+  const updateCartQty = usePosStore((s) => s.updateCartQty);
+  const setCartItemQty = usePosStore((s) => s.setCartItemQty);
+  const removeFromCart = usePosStore((s) => s.removeFromCart);
+  const clearCart = usePosStore((s) => s.clearCart);
+  const openModal = usePosStore((s) => s.openModal);
+  const pricingTier = usePosStore((s) => s.pricingTier);
+  const setPricingTier = usePosStore((s) => s.setPricingTier);
+  const products = usePosStore((s) => s.products);
+  const toggleCartItemReturn = usePosStore((s) => s.toggleCartItemReturn);
+  const currentCustomer = usePosStore((s) => s.currentCustomer);
+  const setCurrentCustomer = usePosStore((s) => s.setCurrentCustomer);
+  const redeemLoyaltyPoints = usePosStore((s) => s.redeemLoyaltyPoints);
+  const processPayment = usePosStore((s) => s.processPayment);
+  const applyCartDiscountPercent = usePosStore((s) => s.applyCartDiscountPercent);
+  const storeCreditApplied = usePosStore((s) => s.storeCreditApplied);
+  const setStoreCreditApplied = usePosStore((s) => s.setStoreCreditApplied);
+  const logSecurityAction = usePosStore((s) => s.logSecurityAction);
+  const overrideCartItemPrice = usePosStore((s) => s.overrideCartItemPrice);
+  const verifyManagerPin = usePosStore((s) => s.verifyManagerPin);
+  const addToCart = usePosStore((s) => s.addToCart);
 
   const [isDiscountOpen, setIsDiscountOpen] = useState(false);
   const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
   const [selectedCartIndex, setSelectedCartIndex] = useState<number | null>(null);
+
+  const [editingPriceProductId, setEditingPriceProductId] = useState<string | null>(null);
+  const [overridePriceInput, setOverridePriceInput] = useState<string>('');
+  const [managerPinInput, setManagerPinInput] = useState<string>('');
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+  // Double-submit guard: quick-cash + Encaisser stay disabled while a payment
+  // is in flight so a double-tap cannot fire processPayment twice.
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  // Dernier ajout — quick-undo local (Ctrl+Z) : présentation/interaction seule,
+  // réutilise removeFromCart. Écouteur propre au panneau (useKeyboardHotkeys
+  // appartient à un autre agent) avec cleanup ; ignoré dans les champs et les
+  // modales pour préserver l'annuler-frappe natif.
+  const [lastAddedId, setLastAddedId] = useState<string | null>(null);
+  const prevCartIdsRef = useRef<string[]>([]);
+
+  // FIFO COGS preview (index-aligned with cart): margin badges must use the
+  // oldest-first batch costs the checkout will store, not product.costPrice
+  // (latest cost). Entries are undefined while loading/failed — badges render
+  // a pending state, never a costPrice-derived margin (which printed
+  // 6,000/6,200 for a 6,100 cart).
+  const fifoPreviewCosts = useFifoPreviewCosts(cart);
+
+  const { showToast } = useToast();
+  const receiptSettings = usePosStore((s) => s.receiptSettings);
+  const loyaltyCfg = normalizeLoyaltyConfig(receiptSettings?.loyaltyConfig);
+  const loyaltyRedeemAllowed = isRedeemAllowed(loyaltyCfg);
+  const loyaltyEarnAllowed = isEarnAllowed(loyaltyCfg);
+  const loyaltyVisible = loyaltyRedeemAllowed || loyaltyEarnAllowed;
+  // Quick-convert preset honors the merchant-configured minimum.
+  const pointConvertPreset = loyaltyCfg.minimumRedemptionPoints;
+  const pointConvertCredit = pointConvertPreset * loyaltyCfg.pointRedemptionRate;
+
+  const handleConvertPresetPoints = async () => {
+    if (!currentCustomer) return;
+    // B-030: pass saleTotal so maximumRedemptionPercentPerSale actually
+    // enforces — omitting it only checked the minimum.
+    const liveTotals = computeCartTotals(cart, {
+      pricingTier,
+      storeCreditApplied: storeCreditApplied || 0,
+      voucherCreditApplied,
+      vatRate,
+    });
+    const saleTotalForCap = Math.max(0, liveTotals.subtotalAfterDiscount - voucherCreditApplied);
+    const check = canRedeemPoints(currentCustomer.loyaltyPoints ?? 0, pointConvertPreset, saleTotalForCap, loyaltyCfg);
+    if (!check.allowed) {
+      soundEngine.playError?.();
+      const reasonMsg =
+        check.reason === 'BELOW_MINIMUM'
+          ? `Conversion minimale : ${pointConvertPreset} pts requis (solde : ${currentCustomer.loyaltyPoints ?? 0} pts).`
+          : check.reason === 'INSUFFICIENT_POINTS'
+          ? `Solde insuffisant : ${currentCustomer.loyaltyPoints ?? 0} pts disponibles.`
+          : check.reason === 'EXCEEDS_SALE_PERCENT'
+          ? `Plafond de conversion dépassé — maximum ${check.maxRedeemablePoints ?? 0} pts sur ce panier.`
+          : `Conversion impossible (${check.reason || 'erreur'}).`;
+      showToast(reasonMsg, 'warning');
+      return;
+    }
+    const res = await redeemLoyaltyPoints(currentCustomer.id, pointConvertPreset, saleTotalForCap);
+    if (!res.success) {
+      soundEngine.playError?.();
+      showToast(`Conversion refusée (${res.reason || 'erreur'}).`, 'error');
+    } else {
+      soundEngine.playSuccess?.();
+      showToast(`+${formatDZD(res.creditAdded || 0)} d'Avoir (${pointConvertPreset} pts convertis).`, 'success');
+    }
+  };
+
+  // Global-discount PIN flow: cart discounts above 10 % are refused by the
+  // slice without manager approval — this holds the pending percent + PIN.
+  const [discountPinFor, setDiscountPinFor] = useState<number | null>(null);
+  const [discountPinInput, setDiscountPinInput] = useState('');
+  const [discountPinError, setDiscountPinError] = useState<string | null>(null);
+
+  // Runtime-staged voucher credit + VAT rate (owned by other agents' types).
+  const voucherCreditApplied =
+    usePosStore((s) => (s as unknown as { voucherCreditApplied?: number }).voucherCreditApplied ?? 0) || 0;
+  const voucherCode =
+    usePosStore((s) => (s as unknown as { voucherCode?: string | null }).voucherCode ?? null);
+  const vatRate =
+    usePosStore((s) => (s.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate ?? 0) || 0;
+
+  const handleOpenPriceOverride = (item: typeof cart[0], e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingPriceProductId(item.product.id);
+    const initialPrice = item.unitPriceCharged ?? item.appliedPrice ?? getItemPrice(item);
+    setOverridePriceInput(String(initialPrice));
+    setManagerPinInput('');
+    setOverrideError(null);
+  };
+
+  const handleApplyPriceOverride = (item: typeof cart[0], e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newPrice = parseLocalizedAmount(overridePriceInput);
+    if (isNaN(newPrice) || newPrice < 0) {
+      setOverrideError('Prix unitaire invalide.');
+      return;
+    }
+
+    const defaultPrice = item.defaultPrice ?? item.product.price ?? item.appliedPrice;
+    const unitCost = item.unitCostAtSale ?? item.unitCostPrice ?? item.product.costPrice ?? 0;
+    const isBelowCost = newPrice < unitCost;
+    const discountPercent = defaultPrice > 0 ? ((defaultPrice - newPrice) / defaultPrice) * 100 : 0;
+    const isHighDiscount = discountPercent > 20;
+
+    let managerApproved = false;
+    if (isBelowCost || isHighDiscount) {
+      if (!managerPinInput) {
+        setOverrideError(isBelowCost ? 'Vente à perte : PIN Manager requis' : 'Remise > 20% : PIN Manager requis');
+        return;
+      }
+      if (!verifyManagerPin(managerPinInput)) {
+        setOverrideError('Code PIN Manager incorrect.');
+        return;
+      }
+      managerApproved = true;
+    }
+
+    const res = overrideCartItemPrice(item.product.id, newPrice, managerApproved);
+    if (!res.success) {
+      setOverrideError(res.reason || 'Erreur modification');
+      return;
+    }
+
+    soundEngine.playSuccess?.();
+    setEditingPriceProductId(null);
+    setOverridePriceInput('');
+    setManagerPinInput('');
+    setOverrideError(null);
+  };
 
   // Keyboard navigation for cart items (ArrowUp / ArrowDown / + / - / Delete)
   useEffect(() => {
@@ -84,17 +222,78 @@ export const CartPanel: React.FC = () => {
     return () => window.removeEventListener('keydown', handleCartKeyNav);
   }, [selectedCartIndex, updateCartQty, removeFromCart, logSecurityAction]);
 
+  // Suit le dernier article apparu dans le panier (ajouts seuls, même valeur affichée).
+  useEffect(() => {
+    const ids = cart.map((i) => i.product.id);
+    const added = ids.find((id) => !prevCartIdsRef.current.includes(id));
+    if (added !== undefined) {
+      setLastAddedId(added);
+    } else if (lastAddedId !== null && !ids.includes(lastAddedId)) {
+      setLastAddedId(null);
+    }
+    prevCartIdsRef.current = ids;
+  }, [cart, lastAddedId]);
+
+  const handleUndoLastAdded = useCallback(() => {
+    if (!lastAddedId) return;
+    const current = usePosStore.getState().cart.find((i) => i.product.id === lastAddedId);
+    if (!current) {
+      setLastAddedId(null);
+      return;
+    }
+    soundEngine.playKeyBeep?.();
+    removeFromCart(current.product.id);
+    showToast(`« ${current.product.title} » retiré du panier (annulation).`, 'info');
+    setLastAddedId(null);
+  }, [lastAddedId, removeFromCart, showToast]);
+
+  // Ctrl+Z (ou Cmd+Z) local au panneau : retire le dernier ajout, avec cleanup.
+  useEffect(() => {
+    if (!lastAddedId) return;
+    const handleUndoKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey) return;
+      if (e.key !== 'z' && e.key !== 'Z') return;
+      const activeEl = document.activeElement;
+      if (
+        activeEl instanceof HTMLInputElement ||
+        activeEl instanceof HTMLTextAreaElement ||
+        activeEl instanceof HTMLSelectElement
+      )
+        return;
+      if (activeEl instanceof HTMLElement && activeEl.isContentEditable) return;
+      if (usePosStore.getState().activeModal !== null) return;
+      e.preventDefault();
+      handleUndoLastAdded();
+    };
+    window.addEventListener('keydown', handleUndoKey);
+    return () => window.removeEventListener('keydown', handleUndoKey);
+  }, [lastAddedId, handleUndoLastAdded]);
+
   // Calculate gross total based on active pricing tier
   const getItemPrice = (item: typeof cart[0]) => {
     if (item.appliedPrice !== undefined) return item.appliedPrice;
     return getProductPriceForTier(item.product, pricingTier);
   };
 
-  const grossTotal = cart.reduce((acc, item) => acc + getItemPrice(item) * item.quantity, 0);
-  const totalDiscount = cart.reduce((acc, item) => acc + (item.discount || 0), 0);
-  const subtotal = Math.max(0, grossTotal - totalDiscount);
-  const netTotal = Math.max(0, subtotal - (storeCreditApplied || 0));
-  const total = netTotal;
+  // Canonical totals — the same computeCartTotals() base as PaymentModal,
+  // MobileCheckoutTab and processPayment (signed returns, credits, VAT).
+  const totals = computeCartTotals(cart, {
+    pricingTier,
+    storeCreditApplied,
+    voucherCreditApplied,
+    vatRate,
+  });
+  const grossTotal = totals.grossSubtotal;
+  const totalDiscount = totals.discountTotal;
+  const subtotal = totals.subtotalAfterDiscount;
+  const total = totals.total;
+  const taxTotal = totals.tax;
+  // B-026: `total`/`ttc` is clamped to 0 for net-negative carts — branch the
+  // refund UI on refundDue (or signed net), never on `total < 0` (dead code).
+  const refundDue = totals.refundDue;
+  const isRefundDue = refundDue > 0;
+
+  const lastAddedItem = lastAddedId !== null ? cart.find((i) => i.product.id === lastAddedId) ?? null : null;
 
   // Realistic Algerian Cash Denominations (no 10,000 DA bill exists)
   const quickBills = [500, 1000, 2000, 3000, 4000, 5000];
@@ -144,14 +343,85 @@ export const CartPanel: React.FC = () => {
     return { primaryModel: mainModel, recommendedProducts: recs };
   }, [cart, products]);
 
+  const runGlobalDiscount = (pct: number, approved = false) => {
+    const fn = applyCartDiscountPercent as unknown as (
+      p: number,
+      a?: boolean
+    ) => { success: boolean; requiresPin?: boolean; reason?: string } | void;
+    const res = fn(pct, approved);
+    if (res && res.requiresPin) {
+      setDiscountPinFor(pct);
+      setDiscountPinInput('');
+      setDiscountPinError(null);
+      return;
+    }
+    setDiscountPinFor(null);
+    setDiscountPinInput('');
+    setIsDiscountOpen(false);
+  };
+
   const handleQuickCashWithBill = async (billAmount: number) => {
-    if (cart.length === 0) return;
+    if (cart.length === 0 || isProcessing) return;
     const hasMissingIMEI = cart.some((item) => item.product.isSerialized && (!item.imeiNumber || !item.imeiNumber.trim()));
     if (hasMissingIMEI) {
       openModal('payment');
       return;
     }
-    await processPayment([{ method: 'Espèces', amount: billAmount }]);
+    setIsProcessing(true);
+    try {
+      // Carry staged wallet credit as an explicit tender leg (mirrors
+      // PaymentModal): the totals above are net of it, and the slice drops
+      // tender-less staging loudly (AVOIR_STAGING_DROPPED) instead of
+      // charging past the displayed net.
+      const avoirAmount = Math.max(0, Math.round(Number(storeCreditApplied) || 0));
+      const res = (await processPayment([
+        { method: 'Espèces', amount: billAmount },
+        ...(avoirAmount > 0 ? [{ method: 'Avoir Client' as const, amount: avoirAmount }] : []),
+      ])) as unknown as {
+        success: boolean;
+        reason?: string;
+        warnings?: string[];
+        recoveryQueued?: boolean;
+      };
+      if (!res || !res.success) {
+        const reason = res?.reason;
+        soundEngine.playError?.();
+        if (res?.recoveryQueued && reason?.startsWith('PERSISTENCE_FAILED')) {
+          const detail = reason.includes(':') ? reason.slice('PERSISTENCE_FAILED:'.length) : '';
+          for (const w of res.warnings ?? []) showToast(w, 'warning', 6000);
+          showToast(
+            `Écriture SQLite en échec — panier conservé. La vente sera reprise au démarrage.${detail ? ` (${detail})` : ''}`,
+            'warning',
+            6000
+          );
+          return;
+        }
+        showToast(
+          reason === 'NO_ACTIVE_SHIFT'
+            ? "Aucun shift ouvert — ouvrez un shift avant d'encaisser."
+            : reason && reason.startsWith('INSUFFICIENT_STOCK')
+              ? `Stock insuffisant : ${reason.slice('INSUFFICIENT_STOCK:'.length)}`
+              : reason && reason.startsWith('IMEI_ALREADY_SOLD')
+                ? `IMEI déjà vendu : ${reason.slice('IMEI_ALREADY_SOLD:'.length)}`
+                : reason === 'PERSISTENCE_FAILED' || (reason && reason.startsWith('PERSISTENCE_FAILED'))
+                  ? `Erreur d'écriture base de données. Vente non enregistrée — panier conservé.${reason.includes(':') ? ` (${reason.slice('PERSISTENCE_FAILED:'.length, 'PERSISTENCE_FAILED:'.length + 120)})` : ''}`
+                  : `Échec de l'encaissement rapide${reason ? ` (${reason})` : ''} — panier conservé.`,
+          'error'
+        );
+        return;
+      }
+      soundEngine.playSuccess?.();
+      for (const w of res.warnings ?? []) {
+        showToast(w, 'warning', 5000);
+      }
+      showToast('✅ Vente encaissée • Reçu imprimé', 'success');
+    } catch (err) {
+      console.error('[cart] quick-cash payment failed:', err);
+      soundEngine.playError?.();
+      showToast("Erreur d'encaissement rapide. Vente non enregistrée — panier conservé.", 'error');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   return (
@@ -201,8 +471,7 @@ export const CartPanel: React.FC = () => {
                 <button
                   key={pct}
                   onClick={() => {
-                    applyCartDiscountPercent(pct);
-                    setIsDiscountOpen(false);
+                    runGlobalDiscount(pct);
                   }}
                   className="flex-1 py-1 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 border border-purple-500/40 text-xs font-black transition cursor-pointer"
                 >
@@ -210,6 +479,55 @@ export const CartPanel: React.FC = () => {
                 </button>
               ))}
             </div>
+            {discountPinFor !== null && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-2 space-y-1.5">
+                <p className="text-[10px] font-bold text-red-300">
+                  Remise -{discountPinFor}% &gt; 10% : PIN Manager requis
+                </p>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    autoComplete="current-password"
+                    value={discountPinInput}
+                    onChange={(e) => {
+                      setDiscountPinInput(e.target.value);
+                      setDiscountPinError(null);
+                    }}
+                    placeholder="PIN Manager"
+                    className="flex-1 min-w-0 bg-pos-card border border-red-500/40 rounded-lg px-2 py-1 text-xs text-pos-text focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!verifyManagerPin(discountPinInput)) {
+                        setDiscountPinError('Code PIN Manager incorrect.');
+                        return;
+                      }
+                      runGlobalDiscount(discountPinFor, true);
+                    }}
+                    className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[10px] font-black transition cursor-pointer"
+                  >
+                    Valider
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDiscountPinFor(null);
+                      setDiscountPinInput('');
+                      setDiscountPinError(null);
+                    }}
+                    className="px-2 py-1 text-[10px] font-bold text-pos-muted hover:text-pos-text cursor-pointer"
+                  >
+                    Annuler
+                  </button>
+                </div>
+                {discountPinError && (
+                  <p className="text-[10px] text-red-400 font-bold">{discountPinError}</p>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -257,16 +575,24 @@ export const CartPanel: React.FC = () => {
               </div>
             </div>
 
-            {/* Financial & Loyalty Pills */}
+            {/* Financial & Loyalty Pills (hidden when the program is fully off) */}
             <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
-              <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold flex items-center gap-1">
-                <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-                {currentCustomer.loyaltyPoints} pts
-              </span>
+              {loyaltyVisible && (
+                <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold flex items-center gap-1">
+                  <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                  {currentCustomer.loyaltyPoints} pts
+                </span>
+              )}
 
               {(currentCustomer.storeCredit || 0) > 0 && (
                 <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold font-mono">
                   Avoir: {formatDZD(currentCustomer.storeCredit)}
+                </span>
+              )}
+
+              {(currentCustomer.storeCredit || 0) < 0 && (
+                <span className="px-2 py-0.5 rounded-md bg-orange-500/15 border border-orange-500/30 text-orange-300 font-bold font-mono" title="Avoir consommé puis annulé — les prochains remboursements le comblent avant tout versement">
+                  Solde à récupérer: {formatDZD(currentCustomer.storeCredit)}
                 </span>
               )}
 
@@ -277,15 +603,15 @@ export const CartPanel: React.FC = () => {
               )}
             </div>
 
-            {/* Point Conversion Button */}
-            {currentCustomer.loyaltyPoints >= 10 && (
+            {/* Point Conversion Button (hidden when redeem is off or points are cut) */}
+            {loyaltyRedeemAllowed && loyaltyCfg.pointsEnabled !== false && currentCustomer.loyaltyPoints >= 10 && (
               <button
                 type="button"
-                onClick={() => redeemLoyaltyPoints(currentCustomer.id, 10)}
+                onClick={() => void handleConvertPresetPoints()}
                 className="w-full py-1 bg-gradient-to-r from-amber-500/20 to-yellow-500/20 hover:from-amber-500/30 hover:to-yellow-500/30 border border-amber-500/50 text-amber-300 font-black text-[11px] rounded-lg transition flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
               >
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>Convertir 10 pts (+100 DA d'Avoir)</span>
+                <span>Convertir {pointConvertPreset} pts (+{formatDZD(pointConvertCredit)} d'Avoir)</span>
               </button>
             )}
           </div>
@@ -300,65 +626,70 @@ export const CartPanel: React.FC = () => {
           </button>
         )}
 
-        {/* Pricing Tier Selector (Retail / Wholesale / B2B) */}
+        {/* Pricing Tier Selector (Retail / Demi-Gros / Wholesale) */}
         <div className="flex items-center gap-1.5 bg-pos-bg p-1 rounded-xl border border-pos-border">
           <Tag className="w-3.5 h-3.5 text-emerald-500 ml-1.5 shrink-0" />
           <span className="text-[10px] font-bold text-pos-muted uppercase">Tarif:</span>
-          {(['Retail', 'Wholesale'] as PricingTier[]).map((tier) => (
+          {(['Retail', 'VIP', 'Wholesale'] as PricingTier[]).map((tier) => (
             <button
               key={tier}
+              type="button"
               onClick={() => setPricingTier(tier)}
               className={`flex-1 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
                 pricingTier === tier
-                  ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                  ? tier === 'VIP'
+                    ? 'bg-cyan-500 text-slate-950 font-black shadow-sm'
+                    : tier === 'Wholesale'
+                    ? 'bg-amber-500 text-slate-950 font-black shadow-sm'
+                    : 'bg-emerald-500 text-slate-950 font-black shadow-sm'
                   : 'text-pos-muted hover:text-pos-text'
               }`}
             >
-              {tier === 'Retail' ? 'Détail' : 'Gros B2B'}
+              {tier === 'Retail' ? 'Détail' : tier === 'VIP' ? 'Demi-Gros' : 'Gros B2B'}
             </button>
           ))}
         </div>
       </div>
 
       {/* Cart Items List */}
-      <div className="flex-1 overflow-y-auto p-2.5 space-y-2">
+      <div className="flex-1 overflow-y-auto p-2.5 space-y-2 [&_button]:focus-visible:outline-none [&_button]:focus-visible:ring-2 [&_button]:focus-visible:ring-emerald-500">
         {cart.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center p-3 text-center space-y-3">
+          <div role="status" aria-live="polite" className="h-full flex flex-col items-center justify-center p-3 text-center space-y-3">
             <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-inner">
               <ShoppingBag className="w-6 h-6 stroke-[2.2]" />
             </div>
             <div className="space-y-1 max-w-[280px]">
               <p className="text-xs font-black text-pos-text uppercase tracking-wider">Caisse Prête à Vendre</p>
-              <p className="text-[11px] text-pos-muted">Scannez un code-barres USB ou utilisez les raccourcis ci-dessous :</p>
+              <p className="text-[11px] text-pos-muted">Scannez un article ou appuyez sur <span className="font-mono font-bold text-pos-accent">F1</span> — raccourcis ci-dessous :</p>
             </div>
             <div className="w-full bg-pos-card border border-pos-border rounded-xl p-2.5 space-y-1.5 text-left text-[10.5px] shadow-sm">
               <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
                 <span className="text-pos-muted">Rechercher catalogue</span>
-                <span className="font-mono font-bold text-emerald-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F1 ou /</span>
+                <span className="font-mono font-bold text-pos-accent bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F1 ou /</span>
               </div>
               <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
                 <span className="text-pos-muted">Encaisser Espèces</span>
-                <span className="font-mono font-bold text-emerald-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F2 ou Espace</span>
+                <span className="font-mono font-bold text-pos-accent bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F2 ou Espace</span>
               </div>
               <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
                 <span className="text-pos-muted">Client / Dette / Fidélité</span>
-                <span className="font-mono font-bold text-amber-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F3</span>
+                <span className="font-mono font-bold text-pos-accent-amber bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F3</span>
               </div>
               <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
                 <span className="text-pos-muted">Remise globale panier</span>
-                <span className="font-mono font-bold text-purple-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F4</span>
+                <span className="font-mono font-bold text-pos-accent-purple bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F4</span>
               </div>
               <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
                 <span className="text-pos-muted">Mettre la vente en attente</span>
-                <span className="font-mono font-bold text-cyan-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F6</span>
+                <span className="font-mono font-bold text-pos-accent-cyan bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F6</span>
               </div>
               <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
                 <span className="text-pos-muted">Réimprimer dernier ticket</span>
-                <span className="font-mono font-bold text-indigo-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F7</span>
+                <span className="font-mono font-bold text-pos-accent-indigo bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F7</span>
               </div>
               <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
                 <span className="text-pos-muted">Guide des raccourcis</span>
-                <span className="font-mono font-bold text-amber-400 bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F8</span>
+                <span className="font-mono font-bold text-pos-accent-amber bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F8</span>
               </div>
               <div className="flex justify-between items-center py-0.5">
                 <span className="text-pos-muted">Quantité multiple au scan</span>
@@ -374,29 +705,88 @@ export const CartPanel: React.FC = () => {
               <div
                 key={item.product.id}
                 onClick={() => setSelectedCartIndex(idx)}
-                className={`bg-pos-card border rounded-xl p-2.5 flex items-start gap-2.5 transition group cursor-pointer ${
+                className={`bg-pos-card border rounded-xl p-2.5 flex items-start gap-2.5 transition motion-reduce:transition-none group cursor-pointer animate-in fade-in slide-in-from-top-2 motion-reduce:animate-none ${
                   isSelected
                     ? 'border-emerald-500 ring-2 ring-emerald-500/40 bg-emerald-500/[0.04]'
+                    : item.isReturn
+                    ? 'border-rose-500/40 bg-rose-500/[0.03] hover:border-rose-500/60'
                     : 'border-pos-border/80 hover:border-emerald-500/40'
                 }`}
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-start gap-1">
-                    <h3 className="text-xs font-semibold text-pos-text truncate leading-tight" title={item.product.title}>
+                    <h3 className="text-xs font-semibold text-pos-text truncate leading-tight min-h-[1rem]" title={item.product.title}>
                       {item.product.title}
                     </h3>
-                    <span className="text-xs font-black text-pos-text pl-1 shrink-0 font-mono">
-                      {formatDZD(unitPrice * item.quantity - item.discount)}
-                    </span>
+                    <div className="text-right shrink-0">
+                      {item.defaultPrice && item.unitPriceCharged !== undefined && item.unitPriceCharged < item.defaultPrice && (
+                        <span className="text-[10px] text-pos-muted line-through mr-1 font-mono">
+                          {formatDZD(item.defaultPrice * item.quantity)}
+                        </span>
+                      )}
+                      <span className={`text-xs font-black pl-1 font-mono ${item.isReturn ? 'text-rose-400 font-bold' : 'text-pos-text'}`}>
+                        {item.isReturn ? '-' : ''}{formatDZD(unitPrice * item.quantity - item.discount)}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1.5 mt-0.5">
+                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                    {item.isReturn && (
+                      <span className="text-[9px] bg-rose-500/20 text-rose-300 font-black px-1.5 py-0.5 rounded border border-rose-500/40 shrink-0 animate-pulse">
+                        RETOUR / ÉCHANGE
+                      </span>
+                    )}
                     <span className="text-[10px] text-pos-muted truncate font-bold">{item.product.brand}</span>
+                    {pricingTier === 'VIP' && (
+                      <span className="text-[9px] bg-cyan-500/10 text-cyan-400 font-bold px-1 rounded border border-cyan-500/30 shrink-0">
+                        Demi-Gros
+                      </span>
+                    )}
                     {pricingTier === 'Wholesale' && (
-                      <span className="text-[8.5px] bg-amber-500/10 text-amber-500 font-bold px-1 rounded border border-amber-500/30 shrink-0">
+                      <span className="text-[9px] bg-amber-500/10 text-amber-500 font-bold px-1 rounded border border-amber-500/30 shrink-0">
                         Gros
                       </span>
                     )}
                     <span className="text-[9.5px] text-pos-muted font-mono truncate">Réf: {item.product.sku}</span>
+                    {item.volumeTierApplied && (
+                      <span className="text-[9px] bg-cyan-500/20 text-cyan-300 font-bold px-1.5 py-0.5 rounded border border-cyan-500/40 shrink-0 flex items-center gap-1 animate-in fade-in">
+                        <Layers className="w-2.5 h-2.5" />
+                        Offre Lot ({formatDZD(item.unitPriceCharged ?? unitPrice)}/u)
+                      </span>
+                    )}
+                    {item.discountAmount !== undefined && item.discountAmount > 0 && !item.volumeTierApplied && (
+                      <span className="text-[9px] bg-purple-500/15 text-purple-300 font-bold px-1 rounded border border-purple-500/30">
+                        -{formatDZD(item.discountAmount)}/u
+                      </span>
+                    )}
+                    {(() => {
+                      // STRICT LEDGER: fresh lines show the FIFO preview only.
+                      // A costPrice-derived badge printed 6,000/6,200 for a
+                      // 6,100 cart — render pending (…) while unresolved.
+                      // Lines with frozen checkout costs stay exact.
+                      const previewCost = fifoPreviewCosts[idx];
+                      const frozenCost = item.isReturn ? (item.unitCostAtSale ?? item.unitCostPrice) : undefined;
+                      if (previewCost === undefined && frozenCost === undefined) {
+                        return (
+                          <span className="text-[9px] font-mono px-1 rounded border font-bold bg-pos-card text-pos-muted border-pos-border/60">
+                            Marge: …
+                          </span>
+                        );
+                      }
+                      const cost = previewCost ?? frozenCost ?? 0;
+                      const profit = (unitPrice - cost) * item.quantity;
+                      const isLoss = profit < 0;
+                      return (
+                        <span
+                          className={`text-[9px] font-mono px-1 rounded border font-bold ${
+                            isLoss
+                              ? 'bg-red-500/15 text-red-400 border-red-500/30'
+                              : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                          }`}
+                        >
+                          Marge: {isLoss ? '' : '+'}{formatDZD(profit)}
+                        </span>
+                      );
+                    })()}
                   </div>
 
                   {/* Quantity Stepper & Actions */}
@@ -416,6 +806,8 @@ export const CartPanel: React.FC = () => {
                       </button>
                       <input
                         type="number"
+                        id={`cart-qty-${item.product.id}`}
+                        name={`cart-qty-${item.product.id}`}
                         min="1"
                         max={item.product.stock > 0 ? item.product.stock : 9999}
                         value={item.quantity}
@@ -445,27 +837,168 @@ export const CartPanel: React.FC = () => {
                       </button>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        soundEngine.playKeyBeep?.();
-                        logSecurityAction(
-                          'Suppression Article Panier',
-                          `Article: ${item.product.title} (${item.quantity} unités)`,
-                          'Caissier',
-                          false
-                        );
-                        removeFromCart(item.product.id);
-                        setSelectedCartIndex(null);
-                      }}
-                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 transition cursor-pointer"
-                      title="Retirer cet article de la vente"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Supprimer</span>
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={(e) => handleOpenPriceOverride(item, e)}
+                        className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                          item.discountAmount && item.discountAmount > 0
+                            ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+                            : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 border-amber-500/30'
+                        }`}
+                        title="Modifier le prix de la ligne (Dérogation / Remise manuelle)"
+                      >
+                        <Tag className="w-3 h-3" />
+                        <span>Prix</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleCartItemReturn(item.product.id);
+                        }}
+                        className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                          item.isReturn
+                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                            : 'bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text border-pos-border/60'
+                        }`}
+                        title={item.isReturn ? 'Annuler le mode retour' : 'Passer cet article en retour / échange client'}
+                      >
+                        <ArrowLeftRight className="w-3 h-3" />
+                        <span>{item.isReturn ? 'Retour' : 'Échange'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          soundEngine.playKeyBeep?.();
+                          logSecurityAction(
+                            'Suppression Article Panier',
+                            `Article: ${item.product.title} (${item.quantity} unités)`,
+                            'Caissier',
+                            false
+                          );
+                          removeFromCart(item.product.id);
+                          setSelectedCartIndex(null);
+                        }}
+                        className="flex items-center justify-center p-1.5 rounded-lg text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 transition cursor-pointer shrink-0 active:scale-95"
+                        title="Supprimer cet article de la vente"
+                        aria-label="Supprimer cet article"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Inline Price Override Popover */}
+                  {editingPriceProductId === item.product.id && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-2.5 p-3 bg-pos-panel border border-amber-500/40 rounded-xl space-y-2 text-xs shadow-xl animate-in fade-in"
+                    >
+                      <div className="flex justify-between items-center text-[10px] font-bold text-pos-muted">
+                        <span>Prix Normal: <strong className="text-pos-text">{formatDZD(item.defaultPrice ?? item.product.price)}</strong></span>
+                        <span>Coût FIFO: <strong className="text-cyan-400">{(() => {
+                          const pc = fifoPreviewCosts[idx];
+                          const fc = item.isReturn ? (item.unitCostAtSale ?? item.unitCostPrice) : undefined;
+                          const cost = pc ?? fc;
+                          // Pending (…) until the FIFO preview resolves — never
+                          // flash a costPrice-derived cost for fresh lines.
+                          return cost === undefined
+                            ? '…'
+                            : formatDZD(cost);
+                        })()}</strong></span>
+                      </div>
+
+                      <div>
+                        <label htmlFor={`price-override-${item.product.id}`} className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                          Nouveau Prix Vendu (DA/unité) :
+                        </label>
+                        <input
+                          id={`price-override-${item.product.id}`}
+                          type="number"
+                          min="0"
+                          value={overridePriceInput}
+                          onChange={(e) => setOverridePriceInput(e.target.value)}
+                          className="w-full bg-pos-card border border-pos-border rounded-lg px-2.5 py-1.5 font-mono font-bold text-pos-text text-xs focus:outline-none focus:border-amber-400"
+                          placeholder="Ex: 3500"
+                          autoFocus
+                        />
+                      </div>
+
+                      {/* Live Margin & Discount Calculation */}
+                      {(() => {
+                        const p = parseLocalizedAmount(overridePriceInput) || 0;
+                        const previewCost = fifoPreviewCosts[idx];
+                        const frozenCost = item.isReturn ? (item.unitCostAtSale ?? item.unitCostPrice) : undefined;
+                        // Displayed margin is FIFO-or-pending (never a
+                        // costPrice-derived number); the below-cost gate below
+                        // keeps the conservative fallback chain so protection
+                        // never sleeps while the preview resolves.
+                        const costKnown = previewCost !== undefined || frozenCost !== undefined;
+                        const c = previewCost ?? frozenCost ?? item.product.costPrice ?? 0;
+                        const def = item.defaultPrice ?? item.product.price;
+                        const pr = (p - c) * item.quantity;
+                        const disc = Math.max(0, def - p);
+                        const discPct = def > 0 ? ((disc / def) * 100).toFixed(0) : '0';
+                        const isLoss = p < c;
+                        const isHighDisc = Number(discPct) > 20;
+
+                        return (
+                          <div className="space-y-1.5">
+                            <div className="flex justify-between items-center text-[10px] font-mono">
+                              <span className="text-pos-muted">Remise: -{formatDZD(disc)} ({discPct}%)</span>
+                              <span className={isLoss ? 'text-red-400 font-bold' : 'text-emerald-400 font-bold'}>
+                                Marge: {costKnown ? `${isLoss ? '' : '+'}` : ''}{costKnown ? formatDZD(pr) : '…'}
+                              </span>
+                            </div>
+
+                            {(isLoss || isHighDisc) && (
+                              <div className="p-2 bg-red-500/10 border border-red-500/30 rounded-lg space-y-1">
+                                <div className="flex items-center gap-1.5 text-red-400 text-[10px] font-bold">
+                                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                                  <span>{isLoss ? 'Vente à perte (Marge négative)' : 'Remise > 20%'} — PIN Requis</span>
+                                </div>
+                                <input
+                                  type="password"
+                                  inputMode="numeric"
+                                  pattern="[0-9]*"
+                                  autoComplete="current-password"
+                                  value={managerPinInput}
+                                  onChange={(e) => setManagerPinInput(e.target.value)}
+                                  placeholder="Code PIN Manager"
+                                  className="w-full bg-pos-card border border-red-500/40 rounded px-2 py-1 text-xs text-pos-text focus:outline-none"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {overrideError && (
+                        <p className="text-[10px] text-red-400 font-bold">{overrideError}</p>
+                      )}
+
+                      <div className="flex justify-end gap-1.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setEditingPriceProductId(null)}
+                          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold text-pos-muted hover:text-pos-text cursor-pointer"
+                        >
+                          Annuler
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleApplyPriceOverride(item, e)}
+                          className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] rounded-lg transition cursor-pointer"
+                        >
+                          Valider
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -473,8 +1006,32 @@ export const CartPanel: React.FC = () => {
         )}
       </div>
 
-      {/* Totals Summary & Compact Payment Controls */}
-      <div className="p-3 border-t border-pos-border bg-pos-panel space-y-2 shrink-0">
+      {/* Dernier ajout — annulation rapide locale (Ctrl+Z), réutilise removeFromCart */}
+      {lastAddedItem && (
+        <div className="px-3 pt-2 shrink-0" role="status" aria-live="polite">
+          <div className="flex items-center justify-between gap-2 bg-cyan-500/10 border border-cyan-500/30 rounded-xl px-2.5 py-1.5 text-xs animate-in fade-in motion-reduce:animate-none">
+            <span className="min-w-0 truncate text-cyan-200">
+              <span className="font-bold">Dernier ajout : </span>
+              <span className="truncate" title={lastAddedItem.product.title}>
+                {lastAddedItem.product.title} × {lastAddedItem.quantity}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={handleUndoLastAdded}
+              title="Retirer le dernier article ajouté (Ctrl+Z)"
+              className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 active:scale-95 text-cyan-200 text-[11px] font-bold border border-cyan-500/40 transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Annuler</span>
+              <kbd className="hidden sm:inline font-mono text-[9px] bg-black/40 px-1 py-0.2 rounded border border-cyan-500/30">Ctrl+Z</kbd>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Totals Summary & Compact Payment Controls — pied sticky : total toujours visible */}
+      <div className="p-3 border-t border-pos-border bg-pos-panel space-y-2 shrink-0 sticky bottom-0 z-10 shadow-[0_-8px_24px_-12px_rgba(0,0,0,0.45)] [&_button]:focus-visible:outline-none [&_button]:focus-visible:ring-2 [&_button]:focus-visible:ring-emerald-500">
         {/* Customer Available Store Credit Quick Bar */}
         {currentCustomer && (currentCustomer.storeCredit || 0) > 0 && storeCreditApplied === 0 && (
           <div className="bg-purple-950/40 border border-purple-500/40 rounded-xl px-2.5 py-1.5 flex items-center justify-between text-xs animate-in fade-in">
@@ -485,7 +1042,10 @@ export const CartPanel: React.FC = () => {
             <button
               type="button"
               onClick={() => {
-                const maxCredit = Math.min(currentCustomer.storeCredit, subtotal);
+                const maxCredit = Math.min(
+                  currentCustomer.storeCredit,
+                  Math.max(0, subtotal - voucherCreditApplied)
+                );
                 setStoreCreditApplied(maxCredit);
                 soundEngine.playSuccess();
               }}
@@ -497,7 +1057,7 @@ export const CartPanel: React.FC = () => {
         )}
 
         {/* Breakdown of Subtotal, Discounts and Store Credit if active */}
-        {(totalDiscount > 0 || (storeCreditApplied || 0) > 0) && (
+        {(totalDiscount > 0 || (storeCreditApplied || 0) > 0 || voucherCreditApplied > 0 || taxTotal > 0) && (
           <div className="space-y-1 pb-1.5 border-b border-pos-border/40 text-xs font-mono">
             <div className="flex justify-between items-center text-pos-muted">
               <span className="text-[11px] font-sans font-semibold">Sous-Total Brut :</span>
@@ -519,24 +1079,44 @@ export const CartPanel: React.FC = () => {
                 <span className="text-purple-300">-{formatDZD(storeCreditApplied)}</span>
               </div>
             )}
+            {voucherCreditApplied > 0 && (
+              <div className="flex justify-between items-center text-emerald-400 font-bold">
+                <span className="text-[11px] font-sans flex items-center gap-1">
+                  <Gift className="w-3 h-3 text-purple-300" /> Bon d&apos;Avoir{voucherCode ? ` (${voucherCode})` : ''} :
+                </span>
+                <span className="text-purple-300">-{formatDZD(voucherCreditApplied)}</span>
+              </div>
+            )}
+            {taxTotal > 0 && (
+              <div className="flex justify-between items-center text-cyan-300 font-bold">
+                <span className="text-[11px] font-sans">TVA ({vatRate}%) :</span>
+                <span>+{formatDZD(taxTotal)}</span>
+              </div>
+            )}
           </div>
         )}
 
         {/* Total Net Header - 1-Second Glance Dominance */}
         <div className="flex justify-between items-baseline pt-0.5">
           <div>
-            <span className="text-xs font-black text-pos-text tracking-wider uppercase block">
-              {(storeCreditApplied || 0) > 0 ? 'Net Restant à Payer' : 'Total Net à Payer'}
+            <span className={`text-xs font-black tracking-wider uppercase block ${isRefundDue ? 'text-rose-400' : 'text-pos-text'}`}>
+              {isRefundDue
+                ? 'Remboursement Dû au Client'
+                : (storeCreditApplied || 0) > 0
+                ? 'Net Restant à Payer'
+                : 'Total Net à Payer'}
             </span>
-            <span className="text-[10px] text-pos-muted font-medium">TTC • Rendu auto</span>
+            <span className="text-[10px] text-pos-muted font-medium">
+              {isRefundDue ? 'Échange d\'articles • Espèces à rendre' : 'TTC • Rendu auto'}
+            </span>
           </div>
-          <span className="text-2xl md:text-3xl font-black text-emerald-400 tracking-tight font-mono">
-            {formatDZD(total)}
+          <span aria-live="polite" aria-atomic="true" title={`Total net : ${isRefundDue ? `-${formatDZD(refundDue)}` : formatDZD(total)}`} className={`text-2xl md:text-3xl font-black tracking-tight font-mono ${isRefundDue ? 'text-rose-400' : 'text-emerald-400'}`}>
+            {isRefundDue ? `-${formatDZD(refundDue)}` : formatDZD(total)}
           </span>
         </div>
 
         {/* Compact Quick Cash Denominations (1-Click Change Calculator) */}
-        {cart.length > 0 && (
+        {cart.length > 0 && total > 0 && !isRefundDue && (
           <div className="space-y-1">
             <span className="text-[9px] text-pos-muted uppercase font-bold tracking-wider block">
               Coupures Rapides (Espèces) :
@@ -547,9 +1127,9 @@ export const CartPanel: React.FC = () => {
                 return (
                   <button
                     key={bill}
-                    disabled={isUnder}
+                    disabled={isUnder || isProcessing}
                     onClick={() => handleQuickCashWithBill(bill)}
-                    className={`py-1.5 px-1 rounded-lg text-[9.5px] font-extrabold border transition cursor-pointer flex flex-col items-center justify-center font-mono ${
+                    className={`py-1.5 px-1 rounded-lg text-[9.5px] font-extrabold border transition active:scale-95 cursor-pointer flex flex-col items-center justify-center font-mono ${
                       isUnder
                         ? 'opacity-30 bg-pos-bg border-pos-border text-pos-muted cursor-not-allowed'
                         : 'bg-pos-card hover:bg-emerald-500/20 border-pos-border hover:border-emerald-500/50 text-pos-text hover:text-emerald-300'
@@ -558,7 +1138,7 @@ export const CartPanel: React.FC = () => {
                   >
                     <span>{bill.toLocaleString('fr-DZ')}</span>
                     {!isUnder && bill > total && (
-                      <span className="text-[7.5px] text-emerald-400 font-normal leading-none">+{bill - total}</span>
+                      <span className="text-[8px] text-emerald-400 font-bold leading-none" title={`Rendu : ${bill - total} DA`}>+{bill - total}</span>
                     )}
                   </button>
                 );
@@ -571,19 +1151,29 @@ export const CartPanel: React.FC = () => {
         <div className="pt-0.5">
           <button
             onClick={() => openModal('payment')}
-            disabled={cart.length === 0}
-            className="w-full glow-btn bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-40 text-white rounded-xl py-3 px-3 flex items-center justify-between shadow-md shadow-emerald-600/25 group cursor-pointer transition"
-            title="Encaisser en Espèces & Calcul Rendu de Monnaie - F2 / Espace"
+            disabled={cart.length === 0 || isProcessing}
+            className={`w-full glow-btn disabled:opacity-40 text-white rounded-xl py-3 px-3 flex items-center justify-between shadow-md group cursor-pointer transition active:scale-[0.98] ${
+              isRefundDue
+                ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 shadow-rose-600/25'
+                : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-emerald-600/25'
+            }`}
+            title="Encaisser ou Rembourser en Espèces - F2 / Espace"
           >
             <div className="flex items-center gap-2 min-w-0">
-              <Banknote className="w-5 h-5 text-emerald-200 shrink-0" />
-              <span className="text-xs font-black tracking-wide truncate">Encaisser en Espèces</span>
+              {isRefundDue ? (
+                <RotateCcw className="w-5 h-5 text-rose-200 shrink-0 animate-spin-reverse" />
+              ) : (
+                <Banknote className="w-5 h-5 text-emerald-200 shrink-0" />
+              )}
+              <span className="text-xs font-black tracking-wide truncate">
+                {isRefundDue ? `Rembourser Espèces (${formatDZD(refundDue)})` : 'Encaisser en Espèces'}
+              </span>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="text-[9px] text-emerald-200 font-bold uppercase tracking-wider bg-black/30 px-1.5 py-0.5 rounded border border-white/10">
-                Cash Only
+              <span className={`text-[9px] font-bold uppercase tracking-wider bg-black/30 px-1.5 py-0.5 rounded border border-white/10 ${isRefundDue ? 'text-rose-200' : 'text-emerald-200'}`}>
+                {isRefundDue ? 'Rendu Espèces' : 'Cash Only'}
               </span>
-              <span className="hotkey-badge bg-black/50 text-emerald-200 border-white/20 px-2 py-0.5 text-[10px] font-black shrink-0">
+              <span className="hotkey-badge bg-black/50 text-white border-white/20 px-2 py-0.5 text-[10px] font-black shrink-0">
                 F2
               </span>
             </div>

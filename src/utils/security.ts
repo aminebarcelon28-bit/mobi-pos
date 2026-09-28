@@ -4,6 +4,31 @@
  */
 
 // Pure TypeScript Synchronous SHA-256 implementation
+// Perf: the prime-derived H/K constants are input-independent — compute once
+// and reuse. The old code rebuilt them (prime sieve) on every hash, so each
+// PIN verify paid the sieve cost (verify loops over users × hashes).
+let cachedSha256Init: { h0: number[]; k: number[] } | null = null;
+function getSha256Init(): { h0: number[]; k: number[] } {
+  if (cachedSha256Init) return cachedSha256Init;
+  const mathPow = Math.pow;
+  const maxWord = mathPow(2, 32);
+  const h0: number[] = [];
+  const k: number[] = [];
+  let primeCounter = 0;
+  const isComposite: Record<number, boolean> = {};
+  for (let candidate = 2; primeCounter < 64; candidate++) {
+    if (!isComposite[candidate]) {
+      for (let i = 0; i < 300; i += candidate) {
+        isComposite[i] = true;
+      }
+      h0[primeCounter] = (mathPow(candidate, 0.5) * maxWord) | 0;
+      k[primeCounter++] = (mathPow(candidate, 1 / 3) * maxWord) | 0;
+    }
+  }
+  cachedSha256Init = { h0, k };
+  return cachedSha256Init;
+}
+
 function sha256Sync(ascii: string): string {
   function rightRotate(value: number, amount: number) {
     return (value >>> amount) | (value << (32 - amount));
@@ -16,20 +41,8 @@ function sha256Sync(ascii: string): string {
   const words: number[] = [];
   const asciiBitLength = ascii.length * 8;
 
-  let hash: number[] = [];
-  let k: number[] = [];
-  let primeCounter = 0;
-
-  const isComposite: Record<number, boolean> = {};
-  for (let candidate = 2; primeCounter < 64; candidate++) {
-    if (!isComposite[candidate]) {
-      for (let i = 0; i < 300; i += candidate) {
-        isComposite[i] = true;
-      }
-      hash[primeCounter] = (mathPow(candidate, 0.5) * maxWord) | 0;
-      k[primeCounter++] = (mathPow(candidate, 1 / 3) * maxWord) | 0;
-    }
-  }
+  const { h0, k } = getSha256Init();
+  let hash: number[] = [...h0];
 
   ascii += '\x80';
   while ((ascii.length % 64) - 56) ascii += '\x00';
@@ -118,7 +131,10 @@ export function hashPin(pin: string, salt?: string): string {
 }
 
 /**
- * Synchronous verification of PIN against stored hash or legacy plaintext
+ * Synchronous verification of a PIN against its stored `v1$` hash.
+ * Fail-closed: anything that is not a verifiable v1 hash rejects — including
+ * legacy plaintext (ancient installs are migrated to hashes at boot, and
+ * hashes are the only PIN form that ever syncs to peer devices).
  */
 export function verifyPin(inputPin: string, storedHashOrPlain: string): boolean {
   const cleanInput = inputPin.trim();
@@ -138,15 +154,7 @@ export function verifyPin(inputPin: string, storedHashOrPlain: string): boolean 
     }
   }
 
-  // Legacy plaintext fallback
-  return timingSafeEqual(cleanInput, storedHashOrPlain);
-}
-
-/**
- * Check if stored PIN is legacy plaintext
- */
-export function isLegacyPlainPin(stored: string): boolean {
-  return !stored.startsWith('v1$');
+  return false;
 }
 
 // ── BRUTE FORCE LOCKOUT PROTECTION ──

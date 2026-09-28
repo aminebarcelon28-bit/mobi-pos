@@ -4,8 +4,7 @@
  * Implements Bug Fix F-01 (v1.7.0). All native calls route through the src/platform seam.
  */
 
-import { invokeCommand } from '../platform/invoke';
-import { openExternalUrl } from '../platform/opener';
+
 
 export interface NormalizedPhoneResult {
   raw: string;
@@ -125,6 +124,43 @@ export function normalizeAlgerianPhone(input: string | undefined | null): Normal
 }
 
 /**
+ * Canonical Algerian phone canonicalizer (string form).
+ *
+ * Returns the canonical `+213XXXXXXXXX` string for a local `0XXXXXXXXX`
+ * input (digits only in, canonical out). Unifies with the structured
+ * {@link normalizeAlgerianPhone} above: valid numbers delegate to its
+ * `international` field; anything else gets a deterministic best-effort
+ * `+213<national>` fallback ('' for empty input).
+ *
+ * Naming note: this is intentionally NOT called `normalizeAlgerianPhone` —
+ * that export already exists in this file and returns a
+ * {@link NormalizedPhoneResult} object. Renaming/retyping it would break its
+ * two consumers (KredyTab, MobileCheckoutTab) and every future importer, so
+ * the string form lives here under the `-Canonical` suffix. Other agents:
+ * import THIS function for canonical-string needs.
+ *
+ * Handles Arabic-Indic / Persian / full-width digits (via
+ * {@link convertNonAsciiDigits}) plus spaces, dashes, dots and parentheses.
+ */
+export function normalizeAlgerianPhoneCanonical(raw: string): string {
+  const norm = normalizeAlgerianPhone(raw);
+  if (norm.isValid && norm.international) return norm.international;
+  const converted = convertNonAsciiDigits((raw || '').trim());
+  const digits = converted.replace(/\D/g, '');
+  if (!digits) return '';
+  let national = digits;
+  if (national.startsWith('00213')) {
+    national = national.slice(5);
+  } else if (national.startsWith('213')) {
+    national = national.slice(3);
+  } else if (national.startsWith('0')) {
+    national = national.slice(1);
+  }
+  if (!national) return '';
+  return `+213${national}`;
+}
+
+/**
  * Builds an RFC 3966 compliant tel: URI
  */
 export function buildTelUri(phoneNumber: string): string {
@@ -156,6 +192,16 @@ export function isTauriEnvironment(): boolean {
   );
 }
 
+async function getPlatformInvoke() {
+  const mod = await import('../platform/invoke');
+  return mod.invokeCommand;
+}
+
+async function getPlatformOpener() {
+  const mod = await import('../platform/opener');
+  return mod.openExternalUrl;
+}
+
 /**
  * Places a call through the native phone app.
  * On Android Tauri, the native bridge requests CALL_PHONE when needed and uses ACTION_CALL.
@@ -168,6 +214,7 @@ export async function openDialer(phoneNumber: string): Promise<boolean> {
 
   if (isTauriEnvironment()) {
     try {
+      const invokeCommand = await getPlatformInvoke();
       await invokeCommand('launch_call', { phone: normalized.international });
       return true;
     } catch (error) {
@@ -202,6 +249,7 @@ export async function openWhatsApp(phoneNumber: string, message: string): Promis
 
   if (isTauriEnvironment()) {
     try {
+      const invokeCommand = await getPlatformInvoke();
       await invokeCommand('launch_whatsapp', { url: waUrl });
       return true;
     } catch (error) {
@@ -234,10 +282,12 @@ export async function openUrl(url: string): Promise<boolean> {
 
   if (isTauriEnvironment()) {
     try {
+      const invokeCommand = await getPlatformInvoke();
       await invokeCommand('launch_url', { url });
       return true;
     } catch {
       try {
+        const openExternalUrl = await getPlatformOpener();
         await openExternalUrl(url);
         return true;
       } catch (e) {
@@ -255,23 +305,130 @@ export async function openUrl(url: string): Promise<boolean> {
 export async function openNativePrint(title: string, content: string): Promise<boolean> {
   if (!title.trim() || !content.trim()) return false;
 
+  const escapeHtml = (s: string): string =>
+    s.replace(/[&<>]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[char] || char));
+
   if (isTauriEnvironment()) {
-    try {
-      await invokeCommand('launch_print', { title, content });
-      return true;
-    } catch (error) {
-      console.warn('[phoneUtils] Native print launch failed:', error);
+    const ua = typeof navigator !== 'undefined' ? navigator.userAgent || '' : '';
+    const onAndroid = /android/i.test(ua);
+    const onMobile = /android|iphone|ipad|ipod/i.test(ua);
+
+    // Android: system print sheet via the native plugin (any printer model).
+    if (onAndroid) {
+      try {
+        const invokeCommand = await getPlatformInvoke();
+        await invokeCommand('launch_print', { title, content });
+        return true;
+      } catch (error) {
+        console.warn('[phoneUtils] Native print launch failed:', error);
+      }
+    } else if (!onMobile) {
+      // Desktop app: WebView2 has no popup flow — render the text into the
+      // shared print target and open the system dialog (any printer / PDF).
+      // (iOS WebViews have no print dialog either: fall through to the
+      // popup attempt below so failure stays loud instead of fake-success.)
+      try {
+        const { printCoordinator } = await import('./printCoordinator');
+        let host = document.getElementById('mobi-print-text-host');
+        if (!host) {
+          host = document.createElement('div');
+          host.id = 'mobi-print-text-host';
+          host.className = 'print-text-target hidden print:block';
+          document.body.appendChild(host);
+        }
+        host.innerHTML = `<pre>${escapeHtml(content)}</pre>`;
+        printCoordinator.printChannelDirect('text_doc', 150);
+        return true;
+      } catch (error) {
+        console.warn('[phoneUtils] Desktop text print failed:', error);
+        return false;
+      }
     }
   }
 
   try {
     const printWindow = window.open('', '_blank', 'noopener,noreferrer');
     if (!printWindow) return false;
-    printWindow.document.write(`<pre style="font: 12px monospace; white-space: pre-wrap;">${content.replace(/[&<>]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[char] || char))}</pre>`);
+    printWindow.document.write(`<pre style="font: 12px monospace; white-space: pre-wrap;">${escapeHtml(content)}</pre>`);
     printWindow.document.close();
     printWindow.focus();
     printWindow.print();
     printWindow.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface LabelPrintImagePayload {
+  title: string;
+  /** PNG data URL (`data:image/png;base64,…`) rendered by `renderLabelToCanvas`. */
+  imageBase64: string;
+  widthMm: number;
+  heightMm: number;
+  copies: number;
+}
+
+/**
+ * Sends a label PNG to the Android system print sheet (`launch_print_label`
+ * → PhonePlugin `printLabel`). Returns false when not on Tauri-Android or
+ * when the native call rejects, so callers can fall back to the share sheet.
+ */
+export async function printLabelImageNative(payload: LabelPrintImagePayload): Promise<boolean> {
+  if (!payload.imageBase64) return false;
+  if (!isTauriEnvironment()) return false;
+  try {
+    const invokeCommand = await getPlatformInvoke();
+    await invokeCommand('launch_print_label', {
+      title: payload.title,
+      imageBase64: payload.imageBase64,
+      widthMm: payload.widthMm,
+      heightMm: payload.heightMm,
+      copies: Math.max(1, Math.min(200, Math.round(payload.copies) || 1)),
+    });
+    return true;
+  } catch (error) {
+    console.warn('[phoneUtils] Native label print failed:', error);
+    return false;
+  }
+}
+
+/**
+ * Shares a PNG via the OS share sheet (printer apps, WhatsApp, Drive…),
+ * falling back to a plain download when Web Share is unavailable.
+ */
+export async function sharePngFile(
+  fileName: string,
+  dataUrl: string,
+  title?: string,
+  text?: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    const file = new File([blob], fileName, { type: 'image/png' });
+    const nav = navigator as Navigator & {
+      canShare?: (data: { files: File[] }) => boolean;
+      share?: (data: { files: File[]; title?: string; text?: string }) => Promise<void>;
+    };
+    if (typeof nav.canShare === 'function' && typeof nav.share === 'function') {
+      try {
+        if (nav.canShare({ files: [file] })) {
+          await nav.share({ files: [file], title, text });
+          return true;
+        }
+      } catch {
+        return false; // user dismissed the sheet — not an error to escalate
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
     return true;
   } catch {
     return false;

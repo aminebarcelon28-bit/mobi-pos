@@ -95,7 +95,10 @@ export async function setCloudCredentials(url: string, token: string): Promise<v
     try {
       await apiSetCloudCredentials(trimmedUrl, trimmedToken);
     } catch (err) {
-      console.warn('Failed to save cloud credentials via IPC:', err);
+      // B-057: a failed IPC save must NOT report success — memoryCache-only
+      // would leave the merchant thinking cloud pairing stuck after restart.
+      console.error('Failed to save cloud credentials via IPC:', err);
+      throw err instanceof Error ? err : new Error('Échec de sauvegarde des identifiants cloud');
     }
   }
 
@@ -124,7 +127,10 @@ export async function deleteCloudCredentials(): Promise<void> {
     try {
       await apiDeleteCloudCredentials();
     } catch (err) {
-      console.warn('Keychain delete error:', err);
+      // B-056: a failed keychain/vault delete is a security failure — rethrow
+      // so the UI can surface it instead of pretending credentials are gone.
+      console.error('Keychain delete error:', err);
+      throw err instanceof Error ? err : new Error('Échec de suppression des identifiants cloud');
     }
   }
   try {

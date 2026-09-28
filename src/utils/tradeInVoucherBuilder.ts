@@ -4,6 +4,7 @@
  */
 import type { TradeInItem, ReceiptSettings, SaleTransaction } from '../types/pos';
 import { EscPosBuilder } from './escpos';
+import { grossFromTransaction } from './receiptMath';
 
 export class TradeInVoucherBuilder {
   public static buildLegalBuybackCertificate(
@@ -114,7 +115,7 @@ export class TradeInVoucherBuilder {
       ? '------------------------------------------------'
       : '--------------------------------';
 
-    const grossTotal = transaction.subtotal || transaction.total;
+    const grossTotal = grossFromTransaction(transaction);
     const tradeInDeduction = tradeIn.buybackValue;
     const netToPay = Math.max(0, grossTotal - tradeInDeduction - (transaction.discountTotal || 0));
 

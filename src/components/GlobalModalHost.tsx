@@ -28,7 +28,8 @@ const TradeInBuybackModal = React.lazy(() => import('./modals/TradeInBuybackModa
 const KittingBundleModal = React.lazy(() => import('./modals/KittingBundleModal').then(m => ({ default: m.KittingBundleModal })));
 const HotkeyGuideModal = React.lazy(() => import('./modals/HotkeyGuideModal').then(m => ({ default: m.HotkeyGuideModal })));
 const CustomerDisplayModal = React.lazy(() => import('./modals/CustomerDisplayModal').then(m => ({ default: m.CustomerDisplayModal })));
-const PinPromptModal = React.lazy(() => import('./modals/PinPromptModal').then(m => ({ default: m.PinPromptModal })));
+const VoucherModal = React.lazy(() => import('./modals/VoucherModal').then(m => ({ default: m.VoucherModal })));
+const ProductMatrixModal = React.lazy(() => import('./modals/ProductMatrixModal').then(m => ({ default: m.ProductMatrixModal })));
 const LoyaltyCardModal = React.lazy(() => import('./modals/LoyaltyCardModal').then(m => ({ default: m.LoyaltyCardModal })));
 const UpdateModal = React.lazy(() => import('./modals/UpdateModal').then(m => ({ default: m.UpdateModal })));
 const RefundModal = React.lazy(() => import('./modals/RefundModal').then(m => ({ default: m.RefundModal })));
@@ -40,6 +41,7 @@ const ExpenseManagerModal = React.lazy(() => import('./modals/ExpenseManagerModa
 const DatabaseMaintenanceModal = React.lazy(() => import('./modals/DatabaseMaintenanceModal').then(m => ({ default: m.DatabaseMaintenanceModal })));
 const MobileSimulatorModal = React.lazy(() => import('./mobile/MobileSimulatorModal').then(m => ({ default: m.MobileSimulatorModal })));
 const CloudPairingModal = React.lazy(() => import('./modals/CloudPairingModal').then(m => ({ default: m.CloudPairingModal })));
+const CustomItemModal = React.lazy(() => import('./modals/CustomItemModal').then(m => ({ default: m.CustomItemModal })));
 
 export const GlobalModalHost: React.FC = () => {
   const activeModal = usePosStore((state) => state.activeModal);
@@ -73,7 +75,8 @@ export const GlobalModalHost: React.FC = () => {
         {activeModal === 'kitting_bundle' && <KittingBundleModal />}
         {activeModal === 'hotkey_guide' && <HotkeyGuideModal />}
         {activeModal === 'customer_display' && <CustomerDisplayModal />}
-        {activeModal === 'pin_prompt' && <PinPromptModal />}
+        {activeModal === 'credit_voucher' && <VoucherModal />}
+        {activeModal === 'product_matrix' && <ProductMatrixModal />}
         {activeModal === 'loyalty_card' && <LoyaltyCardModal />}
         <UpdateModal />
         {activeModal === 'refund' && <RefundModal />}
@@ -85,6 +88,7 @@ export const GlobalModalHost: React.FC = () => {
         {activeModal === 'db_maintenance' && <DatabaseMaintenanceModal />}
         {activeModal === 'mobile_simulator' && <MobileSimulatorModal />}
         {activeModal === 'cloud_pairing' && <CloudPairingModal />}
+        {activeModal === 'custom_item' && <CustomItemModal />}
       </ErrorBoundary>
     </Suspense>
   );

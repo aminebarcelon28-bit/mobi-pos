@@ -218,5 +218,62 @@ export function buildExcelStyles(): string {
     <Border ss:Position="Bottom" ss:LineStyle="Double" ss:Weight="3" ss:Color="#047857"/>
    </Borders>
   </Style>
+
+  <!-- Gold Table Header (payments / loyalty accents) -->
+  <Style ss:ID="HeaderRowGold">
+   <Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/>
+   <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="11" ss:Bold="1" ss:Color="#FFFFFF"/>
+   <Interior ss:Color="#B45309" ss:Pattern="Solid"/>
+   <Borders>
+    <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#92400E"/>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#92400E"/>
+    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D97706"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D97706"/>
+   </Borders>
+  </Style>
+
+  <!-- Cover Sheet: giant brand title -->
+  <Style ss:ID="CoverTitle">
+   <Alignment ss:Horizontal="Left" ss:Vertical="Center"/>
+   <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="22" ss:Bold="1" ss:Color="#FFFFFF"/>
+   <Interior ss:Color="#064E3B" ss:Pattern="Solid"/>
+  </Style>
+
+  <!-- Cover Sheet: subtitle line -->
+  <Style ss:ID="CoverSub">
+   <Alignment ss:Horizontal="Left" ss:Vertical="Center"/>
+   <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="11" ss:Italic="1" ss:Color="#A7F3D0"/>
+   <Interior ss:Color="#065F46" ss:Pattern="Solid"/>
+  </Style>
+
+  <!-- Cover Sheet: KPI label -->
+  <Style ss:ID="CoverKpiLabel">
+   <Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/>
+   <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="10" ss:Bold="1" ss:Color="#475569"/>
+   <Interior ss:Color="#F1F5F9" ss:Pattern="Solid"/>
+   <Borders>
+    <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#0EA5E9"/>
+    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#0EA5E9"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#0EA5E9"/>
+   </Borders>
+  </Style>
+
+  <!-- Cover Sheet: KPI value -->
+  <Style ss:ID="CoverKpiValue">
+   <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>
+   <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="15" ss:Bold="1" ss:Color="#0C4A6E"/>
+   <Interior ss:Color="#E0F2FE" ss:Pattern="Solid"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#0EA5E9"/>
+    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#0EA5E9"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#0EA5E9"/>
+   </Borders>
+  </Style>
+
+  <!-- Cover Sheet: footnote -->
+  <Style ss:ID="CoverNote">
+   <Alignment ss:Horizontal="Left" ss:Vertical="Center" ss:WrapText="1"/>
+   <Font ss:FontName="Calibri" x:Family="Swiss" ss:Size="9" ss:Italic="1" ss:Color="#64748B"/>
+  </Style>
  </Styles>`;
 }

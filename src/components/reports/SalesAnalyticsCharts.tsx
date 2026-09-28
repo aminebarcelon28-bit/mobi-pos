@@ -1,6 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
+import { toLocalDayKey } from '../../utils/dateUtils';
+import { computeSalesMetrics, netFromTransaction, isExchangeSaleTx } from '../../utils/receiptMath';
+import { useAllocationCogs } from '../../hooks/useAllocationCogs';
 import { TrendingUp, Activity, PieChart } from 'lucide-react';
 
 export const SalesAnalyticsCharts: React.FC = () => {
@@ -10,16 +13,19 @@ export const SalesAnalyticsCharts: React.FC = () => {
   // --- Derived Data Calculations ---
   const safeTransactions = useMemo(() => transactions || [], [transactions]);
 
-  // KPI Metrics (Calculated in a single pass)
+  // KPI Metrics — canonical unified formula (same as ReportsModal + Mobile):
+  // CA Net = Σ net(valid) − Σ refunds, profit = CA Net − Σ cost,
+  // basket = round(Σ net(valid) / validCount). VOIDED/refunds excluded.
+  // STRICT FIFO LEDGER (v104): frozen allocation COGS wins per sale.
+  const { allocCogsBySaleId } = useAllocationCogs();
   const { avgTicket, avgItemVelocity, grossMarginPct } = useMemo(() => {
-    const totalOrders = safeTransactions.length;
-    let revenueSum = 0;
-    let profitSum = 0;
+    const metrics = computeSalesMetrics(safeTransactions, { allocCogsBySaleId });
+    const totalOrders = metrics.validCount;
+    const revenueSum = metrics.netRevenue;
+    const profitSum = metrics.profitTotal;
     let itemsSum = 0;
 
-    for (const txn of safeTransactions) {
-      revenueSum += (txn.total || 0);
-      profitSum += (txn.profit || 0);
+    for (const txn of metrics.validSales) {
       if (txn.items) {
         for (const item of txn.items) {
           itemsSum += (item.quantity || 0);
@@ -27,7 +33,7 @@ export const SalesAnalyticsCharts: React.FC = () => {
       }
     }
 
-    const avgTicketCalc = totalOrders > 0 ? revenueSum / totalOrders : 0;
+    const avgTicketCalc = metrics.averageBasket;
     const velocityCalc = totalOrders > 0 ? (itemsSum / totalOrders).toFixed(1) : '0';
     const marginCalc = revenueSum > 0 ? ((profitSum / revenueSum) * 100).toFixed(1) : '0';
 
@@ -38,12 +44,13 @@ export const SalesAnalyticsCharts: React.FC = () => {
       avgItemVelocity: velocityCalc,
       grossMarginPct: marginCalc,
     };
-  }, [safeTransactions]);
+  }, [safeTransactions, allocCogsBySaleId]);
 
-  // Bar Chart: Hourly Traffic (08:00 - 20:00) in a single pass
+  // Bar Chart: Hourly Traffic (08:00 - 20:00) — valid sales only (VOIDED excluded)
   const hourlyData = useMemo(() => {
     const counts = new Array<number>(13).fill(0);
     for (const txn of safeTransactions) {
+      if (txn.status === 'VOIDED' || txn.isRefund) continue;
       const createdDate = new Date(txn.createdAt);
       if (!isNaN(createdDate.getTime())) {
         const hour = createdDate.getHours();
@@ -60,7 +67,9 @@ export const SalesAnalyticsCharts: React.FC = () => {
 
   const maxVolume = useMemo(() => Math.max(...hourlyData.map(d => d.volume), 1), [hourlyData]);
 
-  // Area Chart: Weekly Trend (7 Days) in a single pass
+  // Area Chart: Weekly Trend (7 Days) in a single pass, memoized on
+  // transactions identity. Day keys use the shop-timezone helper on BOTH
+  // sides so UTC midnight drift cannot orphan a sale from its bucket.
   const trendData = useMemo(() => {
     const dayBuckets = new Map<string, { day: string; revenue: number; profit: number }>();
     const orderedDays: string[] = [];
@@ -68,36 +77,104 @@ export const SalesAnalyticsCharts: React.FC = () => {
     for (let i = 0; i < 7; i++) {
       const targetDate = new Date();
       targetDate.setDate(targetDate.getDate() - (6 - i));
-      const key = targetDate.toDateString();
+      const key = toLocalDayKey(targetDate);
       const dayStr = targetDate.toLocaleDateString('fr-DZ', { weekday: 'short' });
       dayBuckets.set(key, { day: dayStr, revenue: 0, profit: 0 });
       orderedDays.push(key);
     }
 
     for (const txn of safeTransactions) {
-      const createdDate = new Date(txn.createdAt);
-      if (!isNaN(createdDate.getTime())) {
-        const key = createdDate.toDateString();
-        const bucket = dayBuckets.get(key);
-        if (bucket) {
-          bucket.revenue += (txn.total || 0);
-          bucket.profit += (txn.profit || 0);
+      const key = toLocalDayKey(txn.createdAt);
+      if (!key) continue;
+      const bucket = dayBuckets.get(key);
+      if (bucket) {
+        if (txn.status === 'VOIDED') continue;
+        if (txn.isRefund) {
+          // Refund voucher: reduces net revenue (and profit, cost kept —
+          // same convention as the unified SalesMetrics).
+          bucket.revenue -= txn.total || 0;
+          bucket.profit -= txn.total || 0;
+        } else {
+          bucket.revenue += netFromTransaction(txn);
+          // STRICT FIFO LEDGER (v104) + exchange branch (same unified rule
+          // as computeSalesMetrics): frozen allocation wins; exchanges use
+          // the signed row cost; legacy falls back to stored costTotal.
+          const allocTrend = (() => {
+            const raw = allocCogsBySaleId[txn.id];
+            const v = Number(raw);
+            return Number.isFinite(v) && v >= 0 ? Math.round(v) : undefined;
+          })();
+          let trendCost: number | undefined;
+          if (isExchangeSaleTx(txn)) {
+            const row = Number(txn.costTotal);
+            if (Number.isFinite(row)) trendCost = Math.round(row);
+          }
+          trendCost ??= allocTrend;
+          trendCost ??= (typeof txn.costTotal === 'number' && Number.isFinite(txn.costTotal) ? txn.costTotal : 0);
+          bucket.profit += netFromTransaction(txn) - trendCost;
         }
       }
     }
 
     return orderedDays.map((key) => dayBuckets.get(key)!);
-  }, [safeTransactions]);
+  }, [safeTransactions, allocCogsBySaleId]);
 
   const maxRev = useMemo(() => Math.max(...trendData.map(d => d.revenue), 1), [trendData]);
 
-  // Donut Chart: Categories
-  const categories = [
-    { name: 'Smartphones', value: 45, color: '#10b981' }, // emerald-500
-    { name: 'Accessoires', value: 30, color: '#3b82f6' }, // blue-500
-    { name: 'Réparations', value: 15, color: '#f59e0b' }, // amber-500
-    { name: 'Services', value: 10, color: '#a855f7' }     // purple-500
-  ];
+  // Donut Chart: real per-category margins from frozen line costs —
+  // Σ over sale legs of (charged − unitCostAtSale) × qty, grouped by
+  // product category, with the ledger average for lines missing a frozen
+  // cost. Lines with no basis at all are skipped (never fabricated).
+  // Positive contributors only (a net-negative category cannot render as a
+  // donut share); top 5 plus an Autres remainder, percentages closed to 100.
+  const CATEGORY_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#a855f7', '#ef4444', '#06b6d4'];
+  const categories = useMemo(() => {
+    const byCat = new Map<string, number>();
+    for (const txn of safeTransactions) {
+      if (txn.status === 'VOIDED' || txn.isRefund) continue;
+      const items = txn.items || [];
+      if (items.length === 0) continue;
+      const raw = allocCogsBySaleId[txn.id];
+      const alloc = Number(raw);
+      const hasAlloc = Number.isFinite(alloc) && alloc >= 0;
+      const ledger = Number((txn as { ledgerCogsTotal?: unknown }).ledgerCogsTotal);
+      const hasLedger = Number.isFinite(ledger) && ledger >= 0;
+      const totalQty = items.reduce((a, it) => a + Math.abs(Number(it.quantity ?? 0)), 0);
+      const avgUnit =
+        totalQty > 0 && (hasAlloc || hasLedger) ? (hasAlloc ? alloc : ledger) / totalQty : undefined;
+      for (const it of items) {
+        const qty = Number(it.quantity ?? 0);
+        if (qty === 0) continue;
+        const unit =
+          typeof it.unitCostAtSale === 'number' && Number.isFinite(it.unitCostAtSale)
+            ? it.unitCostAtSale
+            : avgUnit;
+        if (unit === undefined) continue;
+        const charged = Number(it.unitPriceCharged ?? it.appliedPrice ?? it.product?.price ?? 0);
+        if (!Number.isFinite(charged)) continue;
+        const cat = String(it.product?.category || 'Autres');
+        byCat.set(cat, (byCat.get(cat) ?? 0) + (charged - unit) * qty);
+      }
+    }
+    const positives = [...byCat.entries()].filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+    const total = positives.reduce((a, [, v]) => a + v, 0);
+    if (positives.length === 0 || !(total > 0)) {
+      return [{ name: 'Aucune marge', value: 100, color: '#6b7280' }];
+    }
+    const top = positives.slice(0, 5);
+    const out = top.map(([name, v], i) => ({
+      name,
+      value: Math.max(1, Math.round((v / total) * 100)),
+      color: CATEGORY_COLORS[i % CATEGORY_COLORS.length],
+    }));
+    const shown = out.reduce((a, s) => a + s.value, 0);
+    if (positives.length > top.length) {
+      out.push({ name: 'Autres', value: Math.max(1, 100 - shown), color: '#6b7280' });
+    } else if (shown !== 100 && out.length > 0) {
+      out[0].value += 100 - shown;
+    }
+    return out;
+  }, [safeTransactions, allocCogsBySaleId]);
   
   // SVG Donut Calculations
   let cumulativePercent = 0;

@@ -22,6 +22,9 @@ import type { ExpenseCategory, PaymentMethodType, StoreExpense } from '../../typ
 import { useToast } from '../ui/Toast';
 import { soundEngine } from '../../utils/audioFeedback';
 import { newId } from '../../utils/ids';
+import { csvCell } from '../../utils/spreadsheetSafe';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { todayLocalKey, toLocalDayKey } from '../../utils/dateUtils';
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
   'Loyer': <Building className="w-4 h-4 text-amber-400" />,
@@ -63,12 +66,11 @@ export const ExpenseManagerModal: React.FC = () => {
   // AGGREGATIONS & METRICS
   // ══════════════════════════════════════════════════════════════
   const allExpenses = useMemo(() => storeExpenses || [], [storeExpenses]);
-  const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
-  const currentMonthStr = now.toISOString().slice(0, 7);
+  const todayStr = todayLocalKey();
+  const currentMonthStr = todayLocalKey().slice(0, 7);
 
-  const todayExpenses = allExpenses.filter((e) => e.createdAt.startsWith(todayStr));
-  const monthExpenses = allExpenses.filter((e) => e.createdAt.startsWith(currentMonthStr));
+  const todayExpenses = allExpenses.filter((e) => toLocalDayKey(e.createdAt) === todayStr);
+  const monthExpenses = allExpenses.filter((e) => toLocalDayKey(e.createdAt).slice(0, 7) === currentMonthStr);
 
   const totalMonthAmount = monthExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
   const totalTodayAmount = todayExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
@@ -82,9 +84,9 @@ export const ExpenseManagerModal: React.FC = () => {
     let list = allExpenses;
 
     if (dateFilter === 'today') {
-      list = list.filter((e) => e.createdAt.startsWith(todayStr));
+      list = list.filter((e) => toLocalDayKey(e.createdAt) === todayStr);
     } else if (dateFilter === 'month') {
-      list = list.filter((e) => e.createdAt.startsWith(currentMonthStr));
+      list = list.filter((e) => toLocalDayKey(e.createdAt).slice(0, 7) === currentMonthStr);
     }
 
     if (selectedCategoryFilter !== 'Tous') {
@@ -112,8 +114,9 @@ export const ExpenseManagerModal: React.FC = () => {
   // ══════════════════════════════════════════════════════════════
   const handleSaveExpense = async (e: React.FormEvent) => {
     e.preventDefault();
-    const val = parseFloat(amount);
-    if (isNaN(val) || val <= 0) {
+    // Integer DA only: localized parse then round to minor units.
+    const val = Math.round(parseLocalizedAmount(amount));
+    if (!Number.isFinite(val) || val <= 0) {
       showToast('Veuillez saisir un montant de charge valide.', 'warning');
       return;
     }
@@ -144,8 +147,20 @@ export const ExpenseManagerModal: React.FC = () => {
 
   const handleDelete = async (id: string, expTitle: string) => {
     if (confirm(`Confirmez-vous la suppression de la dépense "${expTitle}" ?`)) {
-      await deleteStoreExpense(id);
-      showToast('Dépense supprimée.', 'info');
+      const res = await deleteStoreExpense(id);
+      if (!res.success) {
+        showToast(
+          res.reason === 'CLOSED_SESSION_IMMUTABLE'
+            ? "Suppression interdite : charge espèces d'une session clôturée (livres immuables). Enregistrez une charge corrective sur la session active."
+            : 'Suppression impossible — réessayez.',
+          'error'
+        );
+        return;
+      }
+      showToast(
+        res.compensated ? 'Dépense supprimée — caisse contre-passée.' : 'Dépense supprimée.',
+        'info'
+      );
     }
   };
 
@@ -158,7 +173,9 @@ export const ExpenseManagerModal: React.FC = () => {
     let sum = 0;
     filteredExpenses.forEach((e) => {
       sum += e.amount;
-      csv += `"${e.id}";"${formatDateTime(e.createdAt)}";"${e.category}";"${e.title}";"${e.paidTo || ''}";"${e.paymentMethod}";${e.amount};"${e.recordedBy}";"${e.notes || ''}"\n`;
+      // csvCell on every text column: quoting alone does NOT stop formula
+      // execution (=cmd survives quotes) — neutralize + escape quotes.
+      csv += `${csvCell(e.id)};${csvCell(formatDateTime(e.createdAt))};${csvCell(e.category)};${csvCell(e.title)};${csvCell(e.paidTo || '')};${csvCell(e.paymentMethod)};${e.amount};${csvCell(e.recordedBy)};${csvCell(e.notes || '')}\n`;
     });
 
     csv += `\n;;;;;TOTAL DÉPENSES (DA);${sum};;\n`;
@@ -167,10 +184,11 @@ export const ExpenseManagerModal: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `Depenses_MobiPOS_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `Depenses_MobiPOS_${todayLocalKey()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
     showToast('Export CSV des dépenses terminé avec succès.', 'success');
   };
 
@@ -453,6 +471,7 @@ export const ExpenseManagerModal: React.FC = () => {
                       <option value="Achat Marchandises / Fournisseur">📦 Marchandises / Fournisseur</option>
                       <option value="Transport / Livraison">🚚 Transport & Logistique</option>
                       <option value="Maintenance">🔧 Maintenance & Entretien</option>
+                      <option value="Perte Stock / SAV">📦 Perte Stock / SAV</option>
                       <option value="Autre">💵 Autre Charge</option>
                     </select>
                   </div>

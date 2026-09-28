@@ -1,0 +1,51 @@
+[
+  {
+    "timestamp": "2026-09-26 01:56:50",
+    "action": "TOGGLE_STATUS",
+    "details": "Statut changé en SUSPENDED",
+    "client": "zoughlal",
+    "key": "MOBI-LIFE-SKN0-CNP5"
+  },
+  {
+    "timestamp": "2026-09-26 01:38:11",
+    "action": "TOGGLE_STATUS",
+    "details": "Statut changé en ACTIVE",
+    "client": "amine",
+    "key": "MOBI-LIFE-ZDKS-E0BW"
+  },
+  {
+    "timestamp": "2026-09-26 01:37:18",
+    "action": "TOGGLE_STATUS",
+    "details": "Statut changé en SUSPENDED",
+    "client": "amine",
+    "key": "MOBI-LIFE-ZDKS-E0BW"
+  },
+  {
+    "timestamp": "2026-09-26 01:36:02",
+    "action": "TOGGLE_STATUS",
+    "details": "Statut changé en ACTIVE",
+    "client": "amine",
+    "key": "MOBI-LIFE-ZDKS-E0BW"
+  },
+  {
+    "timestamp": "2026-09-26 01:30:34",
+    "action": "TOGGLE_STATUS",
+    "details": "Statut changé en SUSPENDED",
+    "client": "amine",
+    "key": "MOBI-LIFE-ZDKS-E0BW"
+  },
+  {
+    "timestamp": "2026-09-24 21:31:17",
+    "action": "UPGRADE_LICENSE",
+    "details": "Surclassement vers LIFETIME (Expiration: À Vie)",
+    "client": "amine",
+    "key": "MOBI-LIFE-ZDKS-E0BW"
+  },
+  {
+    "timestamp": "2026-09-24 21:31:03",
+    "action": "UPGRADE_LICENSE",
+    "details": "Surclassement vers LIFETIME (Expiration: À Vie)",
+    "client": "amine",
+    "key": "MOBI-LIFE-ZDKS-E0BW"
+  }
+]

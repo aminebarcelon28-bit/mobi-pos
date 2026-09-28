@@ -39,8 +39,11 @@ export async function createPreMigrationBackup(): Promise<LocalBackupResult> {
     }
   }
 
-  // 2. Dexie full snapshot
+  // 2. Dexie full snapshot — purge first so the write itself is less likely
+  // to hit quota, then keep only the last 3 snapshots afterwards.
+  purgeOldDexieSnapshots(3);
   let dexieSnapshotKey = '';
+  let quotaExceeded = false;
   try {
     const dexieSnapshot = {
       timestamp: new Date().toISOString(),
@@ -60,12 +63,34 @@ export async function createPreMigrationBackup(): Promise<LocalBackupResult> {
       cashSessions: await dexieDb.cashSessions.toArray(),
       cashMovements: await dexieDb.cashMovements.toArray(),
       appSettings: await dexieDb.appSettings.toArray(),
+      // B-015: mirror tables added after the original snapshot list froze —
+      // without them a restore drops FIFO cost basis, vouchers, ledger, outbox.
+      stockBatches: await dexieDb.stockBatches.toArray(),
+      creditVouchers: await dexieDb.creditVouchers.toArray(),
+      inventoryLedger: await dexieDb.inventoryLedger.toArray(),
+      syncOutbox: await dexieDb.syncOutbox.toArray(),
+      // Frozen FIFO allocation rows + pending checkout recovery intents:
+      // without them a restore loses per-batch COGS (reports fall back to
+      // stale stored costs) and drops in-flight sales recovery. Restoring
+      // intents is safe: replay-after-commit short-circuits in the adapter.
+      saleBatchAllocations: await dexieDb.saleBatchAllocations.toArray(),
+      checkoutRecoveryIntents: await dexieDb.checkoutRecoveryIntents.toArray(),
     };
     dexieSnapshotKey = `mobi_pos_backup_dexie_${timestamp}`;
     try {
       localStorage.setItem(dexieSnapshotKey, JSON.stringify(dexieSnapshot));
+      // Retention: keep only the last 3 snapshots — unbounded snapshot growth
+      // is itself a quota time-bomb on low-end devices.
+      purgeOldDexieSnapshots(3);
     } catch (storageErr) {
-      console.warn('Dexie snapshot localStorage quota exceeded or write failed:', storageErr);
+      quotaExceeded =
+        typeof DOMException !== 'undefined' &&
+        storageErr instanceof DOMException &&
+        (storageErr.name === 'QuotaExceededError' || storageErr.code === 22);
+      console.error(
+        `Dexie snapshot localStorage write FAILED${quotaExceeded ? ' (quota exceeded)' : ''}:`,
+        storageErr,
+      );
       dexieSnapshotKey = '';
     }
   } catch (e) {
@@ -79,16 +104,26 @@ export async function createPreMigrationBackup(): Promise<LocalBackupResult> {
   // run with no restorable backup. In pure web builds there is no native file,
   // so the Dexie snapshot is the only backup and counts.
   const isSuccess = isTauri() ? Boolean(sqliteBackupPath) : Boolean(dexieSnapshotKey);
+  // Quota is fatal ONLY where the snapshot is the only copy (pure web): fail
+  // loudly instead of warn-only. Inside Tauri the native SQLite file is the
+  // authority and the snapshot is a convenience mirror, so a quota miss stays
+  // a loud console error without failing the backup.
+  const error = isSuccess
+    ? undefined
+    : isTauri()
+      ? 'Sauvegarde locale impossible: échec de la copie SQLite native'
+      : quotaExceeded
+        ? 'Sauvegarde locale impossible: quota de stockage dépassé — supprimez d\'anciennes sauvegardes (seules les 3 dernières sont conservées automatiquement) puis réessayez'
+        : 'Sauvegarde locale impossible: écriture du snapshot local refusée';
+  if (!isTauri() && !isSuccess) {
+    console.error(`[backup] Pre-migration backup FAILED (web, snapshot is the only copy): ${error}`);
+  }
   return {
     success: isSuccess,
     sqliteBackupPath,
     dexieBackupSnapshot: dexieSnapshotKey || undefined,
     timestamp,
-    error: isSuccess
-      ? undefined
-      : isTauri()
-        ? 'Sauvegarde locale impossible: échec de la copie SQLite native'
-        : 'Sauvegarde locale impossible: quota stockage dépassé',
+    error,
   };
 }
 
@@ -156,6 +191,15 @@ const DEXIE_SNAPSHOT_TABLES = [
   'cashSessions',
   'cashMovements',
   'appSettings',
+  // B-015: keep in sync with createPreMigrationBackup's snapshot builder.
+  'stockBatches',
+  'creditVouchers',
+  'inventoryLedger',
+  'syncOutbox',
+  // Frozen FIFO allocations + recovery intents (see builder comment). Old
+  // snapshots lack these keys and restore skips them gracefully below.
+  'saleBatchAllocations',
+  'checkoutRecoveryIntents',
 ] as const;
 
 export interface DexieSnapshotRestoreResult {
@@ -168,6 +212,31 @@ export interface DexieSnapshotRestoreResult {
 interface WritableMirrorTable {
   clear(): Promise<void>;
   bulkPut(rows: unknown[]): Promise<unknown>;
+}
+
+/**
+ * Deletes all but the newest `keep` Dexie snapshots. Retention bound so
+ * localStorage growth cannot itself trigger quota failures on low-end
+ * devices. Returns the number of snapshots removed. Never throws.
+ */
+export function purgeOldDexieSnapshots(keep = 3): number {
+  try {
+    const all = listDexieSnapshots();
+    const stale = all.slice(Math.max(0, keep));
+    for (const key of stale) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        // Storage restricted — best effort.
+      }
+    }
+    if (stale.length > 0) {
+      console.info(`[backup] Purged ${stale.length} stale Dexie snapshot(s), kept ${Math.min(keep, all.length)}`);
+    }
+    return stale.length;
+  } catch {
+    return 0;
+  }
 }
 
 /**

@@ -21,12 +21,17 @@ import {
   Building2,
   Sparkles,
   Layers,
+  Download,
+  Eye,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
 import type { PurchaseOrder, PaymentMethodType, Product } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { printCoordinator } from '../../utils/printCoordinator';
+import { isMobileDevice } from '../../utils/platform';
+import { PurchaseOrderA4Document } from './PurchaseOrderA4Document';
 
 interface DraftPOLineItem {
   productId: string;
@@ -51,7 +56,7 @@ export const PurchaseOrderModal: React.FC = () => {
   } = usePosStore();
   const { showToast } = useToast();
 
-  const [activeTab, setActiveTab] = useState<'waiting_list' | 'new_po' | 'active_po' | 'completed'>('waiting_list');
+  const [activeTab, setActiveTab] = useState<'waiting_list' | 'new_po' | 'active_po' | 'completed' | 'preview_a4'>('waiting_list');
   const [inspectingPO, setInspectingPO] = useState<PurchaseOrder | null>(null);
 
   // New Flexible PO Draft State
@@ -71,12 +76,24 @@ export const PurchaseOrderModal: React.FC = () => {
   const [expensePaymentMethod, setExpensePaymentMethod] = useState<PaymentMethodType>('Espèces');
   const [isProcessing, setIsProcessing] = useState(false);
 
-  if (activeModal !== 'purchase_order') return null;
+  // Newest-first ordering (creation timestamp DESC) — newest PO at the top.
+  const byCreatedDesc = (a: PurchaseOrder, b: PurchaseOrder) => {
+    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (Number.isNaN(ta) && Number.isNaN(tb)) return 0;
+    if (Number.isNaN(ta)) return 1;
+    if (Number.isNaN(tb)) return -1;
+    return tb - ta;
+  };
 
-  const waitingListOrders = (purchaseOrders || []).filter(
-    (po) => po.status === 'Waiting List' || po.status === 'Partially Received' || po.status === 'Draft'
-  );
-  const completedOrders = (purchaseOrders || []).filter((po) => po.status === 'Completed' || po.status === 'Received');
+  const waitingListOrders = (purchaseOrders || [])
+    .filter(
+      (po) => po.status === 'Waiting List' || po.status === 'Partially Received' || po.status === 'Draft'
+    )
+    .sort(byCreatedDesc);
+  const completedOrders = (purchaseOrders || [])
+    .filter((po) => po.status === 'Completed' || po.status === 'Received')
+    .sort(byCreatedDesc);
 
   const selectedPO = inspectingPO || activeDraftPO || waitingListOrders[0];
 
@@ -87,8 +104,12 @@ export const PurchaseOrderModal: React.FC = () => {
     const initReasons: Record<string, string> = {};
 
     po.items.forEach((item) => {
+      // Default to the REMAINING quantity (0 for already-complete lines):
+      // defaulting to the full suggestedQty re-added complete lines on every
+      // re-validation, double-counting stock + batches + ledger deltas
+      // (receivedQty accumulates in validateAndReceivePO).
       const remainingQty = Math.max(0, item.suggestedQty - (item.receivedQty || 0));
-      initQty[item.productId] = remainingQty > 0 ? remainingQty : item.suggestedQty;
+      initQty[item.productId] = remainingQty;
       initCost[item.productId] = item.actualUnitCost || item.unitCost;
       initReasons[item.productId] = item.discrepancyReason || '';
     });
@@ -151,14 +172,47 @@ export const PurchaseOrderModal: React.FC = () => {
 
       setInspectingPO(null);
       setActiveTab('waiting_list');
+    } else if (poReceiptResult.reason === 'PO_ALREADY_COMPLETED') {
+      showToast(`Bon #${selectedPO.poNumber} déjà entièrement réceptionné — réception verrouillée.`, 'warning');
     } else {
       showToast('Erreur lors de la validation du bon de commande.', 'error');
     }
   };
 
-  const handlePrintPO = () => {
-    printCoordinator.printPurchaseOrder(50);
-    showToast(`Impression Bon #${selectedPO?.poNumber || 'PO'} routée vers imprimante A4`, 'info');
+  const handlePrintPO = async (po?: PurchaseOrder) => {
+    const targetPO = po || selectedPO;
+    if (!targetPO) return;
+    if (po && (!selectedPO || selectedPO.id !== po.id)) {
+      setInspectingPO(po);
+    }
+    const printed = printCoordinator.printPurchaseOrder(80);
+    if (!printed && isMobileDevice()) {
+      const { openNativePrint } = await import('../../utils/phoneUtils');
+      const { purchaseOrderText } = await import('../../utils/mobileDocPrint');
+      await openNativePrint(`Bon ${targetPO.poNumber}`, purchaseOrderText(targetPO, receiptSettings));
+    }
+    showToast(`Impression Bon #${targetPO.poNumber} A4 lancée`, 'info');
+  };
+
+  const handleExportExcel = async (po?: PurchaseOrder) => {
+    const targetPO = po || selectedPO;
+    if (!targetPO) {
+      showToast('Aucun bon de commande à exporter.', 'error');
+      return;
+    }
+    try {
+      const { downloadPurchaseOrderXlsx } = await import('../../utils/purchaseOrderXlsx');
+      const filename = downloadPurchaseOrderXlsx(targetPO, {
+        storeName: receiptSettings?.storeName,
+        address: receiptSettings?.address,
+        phone: receiptSettings?.phone,
+        email: receiptSettings?.email,
+      });
+      showToast(`Bon #${targetPO.poNumber} exporté en Excel (${filename}).`, 'success');
+    } catch (err) {
+      console.error('Failed to export purchase order to Excel:', err);
+      showToast('Échec de l’export Excel du bon de commande.', 'error');
+    }
   };
 
   const handleCancelOrder = async (poId: string) => {
@@ -212,6 +266,8 @@ export const PurchaseOrderModal: React.FC = () => {
       )
       .slice(0, 30);
   }, [products, catalogSearchTerm, catalogFilterMode, lowStockProducts]);
+
+  if (activeModal !== 'purchase_order') return null;
 
   const handleAddProductToDraft = (product: Product, customQty?: number) => {
     setNewPoItems((prev) => {
@@ -397,6 +453,21 @@ export const PurchaseOrderModal: React.FC = () => {
               </button>
             )}
 
+            {selectedPO && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('preview_a4')}
+                className={`min-h-[36px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
+                  activeTab === 'preview_a4'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md'
+                    : 'text-pos-muted hover:text-pos-text'
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5" />
+                Aperçu Document A4
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => setActiveTab('completed')}
@@ -509,14 +580,44 @@ export const PurchaseOrderModal: React.FC = () => {
                           </div>
                         </div>
 
-                        <div className="flex items-center justify-between pt-2 border-t border-pos-border">
-                          <button
-                            type="button"
-                            onClick={() => handleCancelOrder(po.id)}
-                            className="px-2.5 py-1.5 rounded-lg bg-pos-bg hover:bg-rose-500/10 text-pos-muted hover:text-rose-400 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
-                          >
-                            <Ban className="w-3.5 h-3.5" /> Annuler
-                          </button>
+                        <div className="flex items-center justify-between pt-2 border-t border-pos-border gap-2 flex-wrap">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => handleCancelOrder(po.id)}
+                              className="px-2.5 py-1.5 rounded-lg bg-pos-bg hover:bg-rose-500/10 text-pos-muted hover:text-rose-400 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
+                              title="Annuler ce bon"
+                            >
+                              <Ban className="w-3.5 h-3.5" /> Annuler
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setInspectingPO(po);
+                                setActiveTab('preview_a4');
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                              title="Aperçu A4 Document Pro"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-emerald-400" /> Aperçu A4
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleExportExcel(po)}
+                              className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs transition cursor-pointer"
+                              title="Télécharger en Excel (.xlsx stylé)"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handlePrintPO(po)}
+                              className="p-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text text-xs transition cursor-pointer"
+                              title="Imprimer / PDF A4"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
 
                           <button
                             type="button"
@@ -813,11 +914,14 @@ export const PurchaseOrderModal: React.FC = () => {
                                 <div className="flex items-center justify-end gap-1">
                                   <input
                                     type="number"
-                                    step="50"
+                                    step="any"
                                     min="0"
                                     value={item.unitCost}
                                     onChange={(e) =>
-                                      handleUpdateDraftCost(item.productId, parseInt(e.target.value) || 0)
+                                      // Integer-DA cost input: parseLocalizedAmount honours
+                                      // FR decimals ("400,50") where parseInt silently
+                                      // truncated; Math.round lands whole dinars.
+                                      handleUpdateDraftCost(item.productId, Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)))
                                     }
                                     className="w-24 text-right bg-pos-bg border border-pos-border rounded-lg text-pos-text font-bold font-mono py-1 px-1.5 focus:outline-none focus:border-emerald-400"
                                   />
@@ -903,13 +1007,29 @@ export const PurchaseOrderModal: React.FC = () => {
                   </p>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
-                    onClick={handlePrintPO}
+                    onClick={() => setActiveTab('preview_a4')}
+                    className="px-3.5 py-2 rounded-xl bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                    title="Voir l'aperçu du document A4"
+                  >
+                    <Eye className="w-4 h-4 text-emerald-400" /> Aperçu A4
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handlePrintPO()}
                     className="px-3.5 py-2 rounded-xl bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
                   >
                     <Printer className="w-4 h-4 text-emerald-400" /> Imprimer Bon A4
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleExportExcel()}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                    title="Télécharger en Excel (.xlsx stylé)"
+                  >
+                    <Download className="w-4 h-4" /> Excel (.xlsx)
                   </button>
                 </div>
               </div>
@@ -1033,12 +1153,13 @@ export const PurchaseOrderModal: React.FC = () => {
                               <div className="flex items-center justify-end gap-1">
                                 <input
                                   type="number"
-                                  step="50"
+                                  step="any"
                                   value={verifiedCost}
                                   onChange={(e) =>
                                     setVerifiedCostMap({
                                       ...verifiedCostMap,
-                                      [item.productId]: Math.max(0, parseInt(e.target.value) || 0),
+                                      // Integer-DA cost input (see draft input above).
+                                      [item.productId]: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)),
                                     })
                                   }
                                   className="w-24 text-right bg-pos-bg border border-pos-border rounded-lg text-pos-text font-bold font-mono py-1 px-1.5 focus:outline-none focus:border-emerald-400"
@@ -1140,8 +1261,9 @@ export const PurchaseOrderModal: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleVerifyAndReceive}
-                    disabled={isProcessing || totalVerifiedUnits === 0}
+                    disabled={isProcessing || totalVerifiedUnits === 0 || selectedPO?.status === 'Completed'}
                     className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/20 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={selectedPO?.status === 'Completed' ? 'Bon déjà réceptionné — réception verrouillée' : undefined}
                   >
                     <CheckCircle2 className="w-4 h-4" />
                     Valider la Réception & Mettre en Stock ({formatDZD(totalVerifiedCostAmount)})
@@ -1220,20 +1342,49 @@ export const PurchaseOrderModal: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="flex justify-between items-center pt-2 border-t border-pos-border text-xs">
+                      <div className="flex justify-between items-center pt-2 border-t border-pos-border text-xs gap-2 flex-wrap">
                         <span className="text-pos-muted flex items-center gap-1">
                           <Check className="w-3.5 h-3.5 text-emerald-400" /> Charge enregistrée
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setInspectingPO(po);
-                            setActiveTab('active_po');
-                          }}
-                          className="px-3 py-1 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text font-bold text-xs transition cursor-pointer"
-                        >
-                          Consulter les Détails
-                        </button>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInspectingPO(po);
+                              setActiveTab('preview_a4');
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+                            title="Aperçu A4 / PDF"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-emerald-400" /> Aperçu A4
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleExportExcel(po)}
+                            className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs transition cursor-pointer"
+                            title="Télécharger Excel (.xlsx stylé)"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handlePrintPO(po)}
+                            className="p-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text text-xs transition cursor-pointer"
+                            title="Imprimer / PDF A4"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInspectingPO(po);
+                              setActiveTab('active_po');
+                            }}
+                            className="px-3 py-1 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text font-bold text-xs transition cursor-pointer"
+                          >
+                            Consulter les Détails
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -1241,89 +1392,78 @@ export const PurchaseOrderModal: React.FC = () => {
               )}
             </div>
           )}
+
+          {activeTab === 'preview_a4' && selectedPO && (
+            <div className="space-y-4">
+              {/* Top pro action bar */}
+              <div className="bg-pos-card border border-pos-border rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-sm sticky top-0 z-10 backdrop-blur-md">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center font-bold">
+                    <FileText className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-base font-black text-pos-text">Bon de Commande #{selectedPO.poNumber}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 uppercase">
+                        Document A4 Officiel
+                      </span>
+                    </div>
+                    <p className="text-xs text-pos-muted mt-0.5">
+                      Fournisseur : <strong className="text-pos-text">{selectedPO.vendorName}</strong> • {selectedPO.items?.length || 0} références
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => handlePrintPO(selectedPO)}
+                    className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/20 transition cursor-pointer"
+                    title="Imprimer ou enregistrer en PDF via la boîte de dialogue système"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>Imprimer / PDF (A4)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleExportExcel(selectedPO)}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                    title="Télécharger en tableur Excel (.xlsx stylé avec formules =SUM)"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Exporter Excel (.xlsx)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('active_po')}
+                    className="px-3.5 py-2 rounded-xl bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <PackageCheck className="w-4 h-4 text-emerald-400" />
+                    <span>Contrôle & Réception</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Realistic A4 Paper sheet preview */}
+              <div className="bg-slate-950/50 border border-pos-border/60 rounded-2xl p-3 sm:p-8 overflow-x-auto flex justify-center">
+                <div className="w-full max-w-[210mm] transition-all duration-200">
+                  <PurchaseOrderA4Document
+                    po={selectedPO}
+                    receiptSettings={receiptSettings}
+                    previewMode={true}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Dedicated A4 Purchase Order Print Template */}
+        {/* Modern full-page A4 Purchase Order (Bon de commande) — print / Save as PDF */}
         {selectedPO && (
-          <div className="print-po-target hidden print:block bg-white text-black p-8 font-sans text-xs">
-            <div className="flex justify-between items-start border-b-2 border-black pb-4 mb-6">
-              <div>
-                <h1 className="text-xl font-black uppercase tracking-wider">
-                  {receiptSettings?.storeName || 'MOBI ACCESSORIES'}
-                </h1>
-                <p className="text-gray-600 text-xs">{receiptSettings?.address}</p>
-                <p className="text-gray-600 text-xs">
-                  Tél: {receiptSettings?.phone} • Email: {receiptSettings?.email}
-                </p>
-              </div>
-              <div className="text-right">
-                <div className="bg-gray-100 p-3 rounded border border-gray-300">
-                  <p className="text-xs font-black uppercase text-black">BON DE COMMANDE FOURNISSEUR</p>
-                  <p className="text-sm font-bold text-gray-900 mt-1">N° : {selectedPO.poNumber}</p>
-                  <p className="text-[10px] text-gray-600">Date: {formatDateTime(selectedPO.createdAt)}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-gray-50 border border-gray-200 p-4 rounded mb-6 flex justify-between">
-              <div>
-                <p className="text-[10px] uppercase font-bold text-gray-500">Fournisseur Destinataire :</p>
-                <p className="text-sm font-black text-black">{selectedPO.vendorName}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] uppercase font-bold text-gray-500">Conditions de Règlement :</p>
-                <p className="text-xs font-bold text-black">Paiement à Réception / Espèces</p>
-              </div>
-            </div>
-
-            <table className="w-full text-left border-collapse mb-6">
-              <thead>
-                <tr className="bg-gray-200 border-y border-black text-[10px] uppercase font-bold">
-                  <th className="p-2">#</th>
-                  <th className="p-2">Désignation Produit</th>
-                  <th className="p-2">SKU</th>
-                  <th className="p-2 text-center">Quantité</th>
-                  <th className="p-2 text-right">Prix Unitaire (DA)</th>
-                  <th className="p-2 text-right">Total HT (DA)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-300">
-                {(selectedPO?.items || []).map((item, idx) => (
-                  <tr key={item.productId}>
-                    <td className="p-2 text-gray-500 font-mono">{idx + 1}</td>
-                    <td className="p-2 font-bold">{item.title}</td>
-                    <td className="p-2 font-mono text-[10px] text-gray-600">{item.sku}</td>
-                    <td className="p-2 text-center font-bold">{item.suggestedQty}</td>
-                    <td className="p-2 text-right font-mono">{formatDZD(item.unitCost)}</td>
-                    <td className="p-2 text-right font-mono font-bold">{formatDZD(item.totalCost)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <div className="flex justify-between items-start pt-4 border-t border-black">
-              <div className="w-1/2 text-[10px] text-gray-600 space-y-1">
-                <p>• Ce bon de commande engage l'approvisionnement des stocks listés ci-dessus.</p>
-                <p>• Les prix convenus sont fermes et non révisables à la livraison.</p>
-              </div>
-              <div className="w-1/3 bg-gray-100 p-4 rounded border border-gray-300 space-y-2 text-right">
-                <div className="flex justify-between font-black text-sm text-black">
-                  <span>TOTAL COMMANDE :</span>
-                  <span>{formatDZD(selectedPO.totalAmount)}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-8 pt-12 mt-6 border-t border-dashed border-gray-400 text-center">
-              <div>
-                <p className="text-xs font-bold uppercase text-gray-700">Cachet & Signature Magasin :</p>
-                <div className="h-16 border-b border-gray-300 mt-2" />
-              </div>
-              <div>
-                <p className="text-xs font-bold uppercase text-gray-700">Accusé de Réception Fournisseur :</p>
-                <div className="h-16 border-b border-gray-300 mt-2" />
-              </div>
-            </div>
+          <div className="print-po-target po-a4 hidden print:block bg-white text-black font-sans text-xs">
+            <PurchaseOrderA4Document po={selectedPO} receiptSettings={receiptSettings} />
           </div>
         )}
       </div>

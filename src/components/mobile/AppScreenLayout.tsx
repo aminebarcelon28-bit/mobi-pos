@@ -25,7 +25,7 @@ interface AppScreenLayoutProps {
   children: React.ReactNode;
   /**
    * Height mode: 'viewport' (default, h-[100dvh] top-level screens) or
-   * 'parent' (h-full when embedded in a fixed-height frame, e.g. device simulator).
+   * 'parent' (h-full when embedded in a fixed-height parent container).
    */
   fill?: 'viewport' | 'parent';
   className?: string;
@@ -40,7 +40,10 @@ export const AppScreenLayout: React.FC<AppScreenLayoutProps> = ({
 }) => {
   return (
     <div
-      className={`${fill === 'viewport' ? 'h-[100dvh]' : 'h-full'} w-full flex flex-col overflow-hidden bg-pos-bg text-pos-text select-none font-sans ${className}`}
+      // min-h-[100vh] : repli pour les webviews anciennes (plancher Android 7)
+      // sans prise en charge de dvh — propriété distincte de height, donc sans
+      // conflit de cascade quand dvh est supporté.
+      className={`${fill === 'viewport' ? 'h-[100dvh] min-h-[100vh]' : 'h-full'} w-full flex flex-col overflow-hidden bg-pos-bg text-pos-text select-none font-sans ${className}`}
     >
       {header && (
         <div

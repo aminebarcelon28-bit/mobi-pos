@@ -103,9 +103,39 @@ class SoundEngine {
   }
 
   /**
+   * Subtle native haptic feedback for mobile touch screens (Android & supported iOS).
+   * WCAG & mobile platform standard: provides tactile confirmation of tap/scan/success.
+   */
+  public triggerHaptic(type: 'light' | 'medium' | 'success' | 'warning' | 'error' = 'light'): void {
+    if (typeof navigator === 'undefined' || !navigator.vibrate) return;
+    try {
+      switch (type) {
+        case 'light':
+          navigator.vibrate(10);
+          break;
+        case 'medium':
+          navigator.vibrate(25);
+          break;
+        case 'success':
+          navigator.vibrate([15, 30, 20]);
+          break;
+        case 'warning':
+          navigator.vibrate([30, 40, 30]);
+          break;
+        case 'error':
+          navigator.vibrate([50, 50, 50]);
+          break;
+      }
+    } catch {
+      // Safe to ignore on unsupported platforms
+    }
+  }
+
+  /**
    * 1. Standard Barcode Scan (Crisp High-Frequency Beep: 880 Hz / 60ms)
    */
   public playScan(): void {
+    this.triggerHaptic('medium');
     if (!this.profile.enableScanBeep || this.profile.isMuted) return;
     try {
       const ctx = this.getContext();
@@ -171,6 +201,7 @@ class SoundEngine {
    * 3. Warning Alert: Warranty Expired / Debt Over-Limit / Stock Rupture (Low Tone: 220 Hz)
    */
   public playError(): void {
+    this.triggerHaptic('error');
     if (!this.profile.enableWarningBuzzer || this.profile.isMuted) return;
     try {
       const ctx = this.getContext();
@@ -205,6 +236,7 @@ class SoundEngine {
    * 4. Cash Sale Completed / Checkout Chime (1200 Hz Harmonic Bell)
    */
   public playSuccess(): void {
+    this.triggerHaptic('success');
     if (!this.profile.enableCashChime || this.profile.isMuted) return;
     try {
       const ctx = this.getContext();
@@ -273,6 +305,7 @@ class SoundEngine {
    * 6. Soft Keypad Feedback
    */
   public playKeyBeep(): void {
+    this.triggerHaptic('light');
     if (this.profile.isMuted) return;
     try {
       const ctx = this.getContext();

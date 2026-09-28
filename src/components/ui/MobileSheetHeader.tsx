@@ -20,10 +20,11 @@ export const MobileSheetHeader: React.FC<MobileSheetHeaderProps> = ({
         <button
           type="button"
           onClick={onBack}
-          className="p-2 -ml-1 rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center gap-1 font-bold text-xs min-h-[44px] min-w-[44px]"
+          aria-label="Revenir en arrière"
           title="Revenir en arrière"
+          className="p-2 -ml-1 rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center gap-1 font-bold text-xs min-h-[44px] min-w-[44px]"
         >
-          <ChevronLeft className="w-5 h-5 text-cyan-400 stroke-[2.5]" />
+          <ChevronLeft className="w-5 h-5 text-cyan-400 stroke-[2.5]" aria-hidden="true" />
           <span>Retour</span>
         </button>
 
@@ -38,10 +39,11 @@ export const MobileSheetHeader: React.FC<MobileSheetHeaderProps> = ({
         <button
           type="button"
           onClick={onBack}
-          className="p-2 rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
+          aria-label="Fermer la fenêtre"
           title="Fermer la fenêtre"
+          className="p-2 rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
         >
-          <X className="w-4 h-4" />
+          <X className="w-4 h-4" aria-hidden="true" />
         </button>
       </div>
     </div>

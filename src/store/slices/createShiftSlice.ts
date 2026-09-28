@@ -1,8 +1,25 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, ShiftSlice } from '../types';
-import type { CashDropEntry } from '../../types/pos';
-import { sqliteAdapter } from '../../db/sqliteAdapter';
+import type { CashDropEntry, CashSession } from '../../types/pos';
 import { audioBus } from '../../utils/audioEvents';
+import { newId } from '../../utils/ids';
+
+// P11.3: sqliteAdapter -> dexie + libsql graph; shift actions are all async and
+// never run during cold start, so the adapter resolves on first use.
+async function getSqlite() {
+  const { sqliteAdapter } = await import('../../db/sqliteAdapter');
+  return sqliteAdapter;
+}
+
+// Call-shape of closeShift INCLUDING the 4th managerPin passthrough (kept
+// out of the shared ShiftSlice type — owned by another agent — so modals
+// cast to this instead of widening the interface themselves).
+export type CloseShiftWithPin = (
+  blindCount: number,
+  closingNote?: string,
+  cashierName?: string,
+  managerPin?: string
+) => Promise<{ success: boolean; session?: CashSession; reason?: string }>;
 
 export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set, get) => ({
   activeShift: null,
@@ -16,12 +33,12 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
     const { cashDrops } = get();
     const newDrop: CashDropEntry = {
       ...entry,
-      id: `drop-${Date.now()}`,
+       id: newId('drop'),
       timestamp: new Date().toISOString(),
     };
     const updated = [newDrop, ...cashDrops];
     try {
-      await sqliteAdapter.saveCashDrop(newDrop, false);
+      await (await getSqlite()).saveCashDrop(newDrop, false);
 
       // Auto-record drawer skimming into active shift movements
       if (get().activeShift) {
@@ -40,13 +57,25 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
 
   startShift: async (openingFloat, cashierName, openingNote, denominations) => {
     const { logSecurityAction } = get();
+    // Cashier default comes from the lock-screen cashier (createUISlice owns
+    // `activeCashier`; it is absent from the shared PosState type so read it
+    // via a structural cast — never fall back to a hardcoded name here).
+    const lockScreenCashier = (get() as unknown as { activeCashier?: { name?: string } | null })
+      .activeCashier?.name?.trim();
+    const effectiveCashier = (cashierName || '').trim() || lockScreenCashier || 'Caissier Principal';
     try {
-      const session = await sqliteAdapter.startShift(openingFloat, cashierName, openingNote, denominations);
-      const allShifts = await sqliteAdapter.getAllShifts();
+      const session = await (await getSqlite()).startShift(
+        openingFloat,
+        effectiveCashier,
+        openingNote,
+        denominations,
+        lockScreenCashier || effectiveCashier
+      );
+      const allShifts = await (await getSqlite()).getAllShifts();
       logSecurityAction(
         'Ouverture Session Caisse (Shift Open)',
-        `Fond de caisse initial: ${openingFloat} DA • Caissier: ${cashierName || 'Caissier Principal'} • ID: ${session.id}`,
-        cashierName || 'Caissier',
+        `Fond de caisse initial: ${openingFloat} DA • Caissier: ${effectiveCashier} • ID: ${session.id}`,
+        effectiveCashier,
         false
       );
       audioBus.emit('success');
@@ -59,15 +88,24 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
       return { success: true, session };
     } catch (e: unknown) {
       console.error('Failed to start shift:', e);
-      return { success: false, reason: e instanceof Error ? e.message : 'Erreur ouverture shift' };
+      const code = (e as { code?: string } | null)?.code;
+      const existingSession = (e as { existingSession?: CashSession } | null)?.existingSession;
+      // Double-open: surface the already-open session so the modal can show
+      // who/when instead of silently orphaning the first session's cash.
+      if (code === 'SHIFT_ALREADY_OPEN' && existingSession) {
+        const refreshed = await (await getSqlite()).getActiveShift().catch(() => null);
+        set({ activeShift: refreshed || existingSession });
+        return { success: false, reason: code, session: refreshed || existingSession };
+      }
+      return { success: false, reason: code || (e instanceof Error ? e.message : 'Erreur ouverture shift') };
     }
   },
 
   logCashMovement: async (amount, type, reason, cashierName) => {
     const { activeShift, logSecurityAction } = get();
     try {
-      const movement = await sqliteAdapter.logExpense(amount, type, reason, cashierName, activeShift?.id);
-      const refreshedActive = await sqliteAdapter.getActiveShift();
+      const movement = await (await getSqlite()).logExpense(amount, type, reason, cashierName, activeShift?.id);
+      const refreshedActive = await (await getSqlite()).getActiveShift();
       logSecurityAction(
         type === 'EXPENSE' ? 'Décaissement / Dépense Caisse' : 'Apport de Caisse / Dépôt Manuel',
         `Montant: ${amount} DA • Motif: ${reason} • Shift: ${activeShift?.id || 'Actif'}`,
@@ -86,12 +124,22 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
     }
   },
 
-  closeShift: async (blindCount, closingNote, cashierName) => {
+  // NOTE: 4th param `managerPin` is intentionally extra vs the shared
+  // ShiftSlice type (store/types.ts, owned by another agent): callers pass it
+  // positionally and the adapter enforces the variance gate. Extra trailing
+  // OPTIONAL params keep this implementation assignable to the declared type.
+  closeShift: async (blindCount, closingNote, cashierName, managerPin?: string) => {
     const { activeShift, logSecurityAction } = get();
     try {
-      const closedSession = await sqliteAdapter.closeShift(blindCount, closingNote, cashierName, activeShift?.id);
-      const allShifts = await sqliteAdapter.getAllShifts();
-      const inventoryValuation = await sqliteAdapter.getInventoryValuation();
+      const closedSession = await (await getSqlite()).closeShift(
+        blindCount,
+        closingNote,
+        cashierName,
+        activeShift?.id,
+        managerPin
+      );
+      const allShifts = await (await getSqlite()).getAllShifts();
+      const inventoryValuation = await (await getSqlite()).getInventoryValuation();
 
       logSecurityAction(
         'Clôture Caisse & Rapport Z (Blind Count)',
@@ -110,13 +158,41 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
       return { success: true, session: closedSession };
     } catch (e: unknown) {
       console.error('Failed to close shift:', e);
-      return { success: false, reason: e instanceof Error ? e.message : 'Erreur clôture shift' };
+      // Adapter throws coded errors (NO_OPEN_SHIFT, CLOSING_NOTE_REQUIRED,
+      // MANAGER_PIN_REQUIRED / _INVALID) — propagate the CODE as reason so
+      // the modal can render the matching message/PIN prompt.
+      const code = (e as { code?: string } | null)?.code;
+      return { success: false, reason: code || (e instanceof Error ? e.message : 'Erreur clôture shift') };
+    }
+  },
+
+  // Mid-shift drawer handover: re-points the OPEN session's currentCashier
+  // at the lock-screen cashier without closing the session. Called
+  // fire-and-forget by switchCashier (createUISlice) so drawer attribution
+  // follows the current user. Declared on the shared ShiftSlice interface.
+  setShiftCashier: async (cashierName: string): Promise<{ success: boolean; reason?: string }> => {
+    const { logSecurityAction } = get();
+    try {
+      const updated = await (await getSqlite()).setShiftCashier(cashierName);
+      logSecurityAction(
+        'Passation de Caisse (Mid-Shift)',
+        `Tiroir-caisse repris par : ${updated.cashierName} • Session: ${updated.id}`,
+        updated.cashierName || 'Caissier',
+        false
+      );
+      audioBus.emit('success');
+      set({ activeShift: updated });
+      return { success: true };
+    } catch (e: unknown) {
+      console.error('Failed to hand over shift:', e);
+      const code = (e as { code?: string } | null)?.code;
+      return { success: false, reason: code || (e instanceof Error ? e.message : 'Erreur passation caisse') };
     }
   },
 
   fetchActiveShift: async () => {
     try {
-      const activeShift = await sqliteAdapter.getActiveShift();
+      const activeShift = await (await getSqlite()).getActiveShift();
       set({ activeShift, shiftFloat: activeShift?.openingFloat || get().shiftFloat });
     } catch (e) {
       console.warn('Failed to fetch active shift:', e);
@@ -125,7 +201,7 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
 
   fetchInventoryValuation: async () => {
     try {
-      const inventoryValuation = await sqliteAdapter.getInventoryValuation();
+      const inventoryValuation = await (await getSqlite()).getInventoryValuation();
       set({ inventoryValuation });
     } catch (e) {
       console.warn('Failed to fetch inventory valuation:', e);
@@ -134,7 +210,7 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
 
   fetchAllShifts: async () => {
     try {
-      const allShifts = await sqliteAdapter.getAllShifts();
+      const allShifts = await (await getSqlite()).getAllShifts();
       set({ allShifts });
     } catch (e) {
       console.warn('Failed to fetch all shifts:', e);

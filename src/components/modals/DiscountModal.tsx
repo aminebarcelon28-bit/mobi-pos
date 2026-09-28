@@ -3,22 +3,77 @@ import { X, Percent, Check, DollarSign, Tag } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { getProductPriceForTier } from '../../utils/pricingEngine';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { PROMO_TRACKING } from '../../constants';
 
-const PROMO_CODES: Record<string, { type: 'percent' | 'amount'; value: number; label: string }> = {
-  SOLDES10: { type: 'percent', value: 10, label: 'Remise Soldes 10%' },
-  FIDELITE15: { type: 'percent', value: 15, label: 'Privilège Fidélité 15%' },
-  PROMO500: { type: 'amount', value: 500, label: 'Coupon Réduction 500 DA' },
-  PROMO1000: { type: 'amount', value: 1000, label: 'Coupon VIP 1000 DA' },
+interface PromoCodeDef {
+  type: 'percent' | 'amount';
+  value: number;
+  label: string;
+  /** ISO expiry — past this date the code reads as expired. */
+  expiresAt: string;
+  /** Lifetime redemption cap (tracked in localStorage, see below). */
+  maxRedemptions: number;
+}
+
+// Promo lifecycle (minimal, documented): every code carries an expiry date
+// and a lifetime redemption cap. Counts live in localStorage under
+// PROMO_TRACKING.REDEMPTION_STORAGE_KEY as { CODE: count } and increment when
+// the discount is APPLIED (not when the code is merely typed), so abandoned
+// carts don't burn redemptions. Caps are generous on purpose: existing codes
+// keep working exactly as before until a cap is actually hit. localStorage is
+// per-terminal — a chain-wide cap would need the server ledger (out of scope).
+const PROMO_CODES: Record<string, PromoCodeDef> = {
+  SOLDES10: { type: 'percent', value: 10, label: 'Remise Soldes 10%', expiresAt: '2027-12-31T23:59:59+01:00', maxRedemptions: 2000 },
+  FIDELITE15: { type: 'percent', value: 15, label: 'Privilège Fidélité 15%', expiresAt: '2027-12-31T23:59:59+01:00', maxRedemptions: 2000 },
+  PROMO500: { type: 'amount', value: 500, label: 'Coupon Réduction 500 DA', expiresAt: '2027-06-30T23:59:59+01:00', maxRedemptions: 500 },
+  PROMO1000: { type: 'amount', value: 1000, label: 'Coupon VIP 1000 DA', expiresAt: '2027-06-30T23:59:59+01:00', maxRedemptions: 200 },
 };
 
+/** Best-effort read of the per-code redemption counters ({} on any failure). */
+function readPromoRedemptions(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(PROMO_TRACKING.REDEMPTION_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) out[k] = Math.floor(v);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function getPromoRedemptionCount(code: string): number {
+  return readPromoRedemptions()[code] || 0;
+}
+
+/** Increments the lifetime counter for a code; never throws (tracking). */
+function incrementPromoRedemption(code: string): void {
+  try {
+    const all = readPromoRedemptions();
+    all[code] = (all[code] || 0) + 1;
+    localStorage.setItem(PROMO_TRACKING.REDEMPTION_STORAGE_KEY, JSON.stringify(all));
+  } catch {
+    // Tracking-only: a full/blocked storage must never block the discount.
+  }
+}
+
 export const DiscountModal: React.FC = () => {
-  const { activeModal, closeModal, applyCartDiscountPercent, cart, pricingTier } = usePosStore();
+  const { activeModal, closeModal, applyCartDiscountPercent, cart, pricingTier, verifyManagerPin } = usePosStore();
 
   const [discountMode, setDiscountMode] = useState<'percent' | 'amount'>('percent');
   const [percentValue, setPercentValue] = useState(10);
   const [amountValue, setAmountValue] = useState(500);
   const [promoInput, setPromoInput] = useState('');
   const [promoStatus, setPromoStatus] = useState<string | null>(null);
+  // Code attributed to the pending discount; counted at APPLY time.
+  const [appliedPromoCode, setAppliedPromoCode] = useState<string | null>(null);
+  const [managerPinInput, setManagerPinInput] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
 
   if (activeModal !== 'discount') return null;
 
@@ -38,15 +93,27 @@ export const DiscountModal: React.FC = () => {
 
   const handleApplyPromoCode = () => {
     const clean = promoInput.trim().toUpperCase();
-    if (PROMO_CODES[clean]) {
-      const code = PROMO_CODES[clean];
-      setDiscountMode(code.type);
-      if (code.type === 'percent') setPercentValue(code.value);
-      else setAmountValue(code.value);
-      setPromoStatus(`Code "${clean}" Appliqué : ${code.label}`);
-    } else {
+    const code = PROMO_CODES[clean];
+    if (!code) {
       setPromoStatus('Code promo invalide ou expiré');
+      setAppliedPromoCode(null);
+      return;
     }
+    if (Date.now() > new Date(code.expiresAt).getTime()) {
+      setPromoStatus(`Code "${clean}" expiré depuis le ${new Date(code.expiresAt).toLocaleDateString('fr-DZ')}`);
+      setAppliedPromoCode(null);
+      return;
+    }
+    if (getPromoRedemptionCount(clean) >= code.maxRedemptions) {
+      setPromoStatus(`Code "${clean}" épuisé (plafond de ${code.maxRedemptions} utilisations atteint)`);
+      setAppliedPromoCode(null);
+      return;
+    }
+    setDiscountMode(code.type);
+    if (code.type === 'percent') setPercentValue(code.value);
+    else setAmountValue(code.value);
+    setAppliedPromoCode(clean);
+    setPromoStatus(`Code "${clean}" Appliqué : ${code.label}`);
   };
 
   const handleApply = () => {
@@ -58,9 +125,42 @@ export const DiscountModal: React.FC = () => {
       effectivePercent = cartSubtotal > 0 ? (validAmount / cartSubtotal) * 100 : 0;
     }
     const safePercent = Math.max(0, Math.min(100, effectivePercent));
-    applyCartDiscountPercent(safePercent);
+    // Cart discounts above 10 % need a manager PIN — enforced by the slice;
+    // the modal collects the PIN instead of letting the call fail silently.
+    const applyFn = applyCartDiscountPercent as unknown as (
+      p: number,
+      approved?: boolean
+    ) => { success: boolean; requiresPin?: boolean; reason?: string } | void;
+    if (safePercent > 10) {
+      if (!managerPinInput) {
+        setPinError('Remise > 10% : PIN Manager requis.');
+        return;
+      }
+      if (!verifyManagerPin(managerPinInput)) {
+        setPinError('Code PIN Manager incorrect.');
+        return;
+      }
+      applyFn(safePercent, true);
+    } else {
+      applyFn(safePercent);
+    }
+    // Count the promo redemption now that the discount is really applied.
+    if (appliedPromoCode) {
+      incrementPromoRedemption(appliedPromoCode);
+      setAppliedPromoCode(null);
+    }
+    setManagerPinInput('');
+    setPinError(null);
     closeModal();
   };
+
+  // Live effective percent drives the PIN gate visibility (amount mode converts).
+  const liveEffectivePercent =
+    discountMode === 'percent'
+      ? Math.max(0, Math.min(100, isNaN(percentValue) ? 0 : percentValue))
+      : cartSubtotal > 0
+      ? Math.max(0, Math.min(100, (Math.max(0, isNaN(amountValue) ? 0 : amountValue) / cartSubtotal) * 100))
+      : 0;
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
@@ -131,7 +231,7 @@ export const DiscountModal: React.FC = () => {
                   <button
                     key={p}
                     onClick={() => setPercentValue(p)}
-                    className={`py-2 rounded-xl text-xs font-black border transition ${
+                    className={`min-h-[48px] py-2 rounded-xl text-xs font-black border transition active:scale-95 ${
                       percentValue === p
                         ? 'bg-purple-600 border-purple-400 text-white shadow-md'
                         : 'bg-pos-card border-pos-border text-pos-muted hover:text-pos-text hover:border-purple-400/50'
@@ -147,7 +247,7 @@ export const DiscountModal: React.FC = () => {
                   <button
                     key={a}
                     onClick={() => setAmountValue(a)}
-                    className={`py-2 rounded-xl text-xs font-black border transition ${
+                    className={`min-h-[48px] py-2 rounded-xl text-xs font-black border transition active:scale-95 ${
                       amountValue === a
                         ? 'bg-emerald-500 border-emerald-400 text-slate-950 shadow-md'
                         : 'bg-pos-card border-pos-border text-pos-muted hover:text-pos-text hover:border-emerald-400/50'
@@ -172,7 +272,7 @@ export const DiscountModal: React.FC = () => {
                 min="0"
                 max="100"
                 value={percentValue}
-                onChange={(e) => setPercentValue(parseFloat(e.target.value) || 0)}
+                onChange={(e) => setPercentValue(parseLocalizedAmount(e.target.value) || 0)}
                 className="w-full bg-pos-card border border-pos-border rounded-xl px-3.5 py-2 text-base font-black text-purple-400 focus:border-purple-400 focus:outline-none"
               />
             ) : (
@@ -180,9 +280,9 @@ export const DiscountModal: React.FC = () => {
                 type="number"
                 inputMode="decimal"
                 min="0"
-                step="50"
+                step="any"
                 value={amountValue}
-                onChange={(e) => setAmountValue(parseFloat(e.target.value) || 0)}
+                onChange={(e) => setAmountValue(parseLocalizedAmount(e.target.value) || 0)}
                 className="w-full bg-pos-card border border-pos-border rounded-xl px-3.5 py-2 text-base font-black text-emerald-400 focus:border-emerald-400 focus:outline-none"
               />
             )}
@@ -243,6 +343,29 @@ export const DiscountModal: React.FC = () => {
               <span className="text-lg font-black text-emerald-400 tracking-tight">{formatDZD(finalTotal)}</span>
             </div>
           </div>
+
+          {/* Manager PIN gate for discounts above 10% */}
+          {liveEffectivePercent > 10 && (
+            <div className="bg-red-500/10 border border-red-500/30 rounded-2xl p-3.5 space-y-2">
+              <p className="text-[11px] font-bold text-red-300">
+                Remise de {liveEffectivePercent.toFixed(0)}% &gt; 10% : PIN Manager requis
+              </p>
+              <input
+                type="password"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoComplete="current-password"
+                value={managerPinInput}
+                onChange={(e) => {
+                  setManagerPinInput(e.target.value);
+                  setPinError(null);
+                }}
+                placeholder="Code PIN Manager"
+                className="w-full bg-pos-card border border-red-500/40 rounded-xl px-3 py-2 text-xs text-pos-text focus:outline-none"
+              />
+              {pinError && <p className="text-[10px] text-red-400 font-bold">{pinError}</p>}
+            </div>
+          )}
         </div>
 
         {/* Footer Actions */}

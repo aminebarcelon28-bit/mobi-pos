@@ -30,6 +30,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
     storeExpenses,
     imeiRecords,
     activeShift,
+    logSecurityAction,
   } = usePosStore();
 
   const { showToast } = useToast();
@@ -38,6 +39,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   const [integrity, setIntegrity] = useState<IntegrityReport | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [actionOutput, setActionOutput] = useState<string>('');
+  const [repairTicketId, setRepairTicketId] = useState<string>('');
 
   useEffect(() => {
     if (activeModal === 'db_maintenance') {
@@ -116,6 +118,83 @@ export const DatabaseMaintenanceModal: React.FC = () => {
     }
   };
 
+  // Ticket COGS repair (audit class #REC-20260926-1408ML-02-DJB64): rebuilds
+  // one sale's row + lines + receipt envelope from its frozen allocation
+  // rows. Targeted by ticket id — never a sweep — and refuses voided /
+  // already-exact tickets inside the job. The rewrite is audited like any
+  // manager-grade mutation.
+  const handleRepairTicketCogs = async () => {
+    const ticketId = repairTicketId.trim();
+    if (!ticketId) {
+      showToast('Saisissez un identifiant de ticket à réparer.', 'warning');
+      return;
+    }
+    setIsProcessing(true);
+    try {
+      const { repairSaleCogsFromLedger } = await import('../../db/sqlPluginAdapter');
+      const res = await repairSaleCogsFromLedger(ticketId);
+      if (res.repaired && res.after) {
+        const msg = `Ticket ${ticketId} réparé : coût ${res.before?.costTotal} → ${res.after.costTotal}, profit ${res.before?.profit} → ${res.after.profit}, ledger ${res.after.ledger}.`;
+        setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] ${msg}`);
+        audioBus.emit('success');
+        showToast(msg, 'success');
+        logSecurityAction(
+          'Réparation Coûts Ticket (Audit)',
+          `${msg} Motif: ${res.before ? `lignes au prix catalogue au lieu du FIFO gelé` : 'écart détecté'}.`,
+          'Yacine (Admin)',
+          true
+        );
+      } else {
+        const msg = `Ticket ${ticketId} : aucune réparation (${res.reason}).`;
+        setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] ${msg}`);
+        audioBus.emit('success');
+        showToast(msg, 'info');
+      }
+      setRepairTicketId('');
+      await loadStats();
+    } catch (e) {
+      console.error(e);
+      audioBus.emit('error');
+      showToast("Erreur lors de la réparation des coûts du ticket.", 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // Negative-stock diagnostic (offline double-sell detector): read-only scan
+  // of ledger sums below zero. Files nothing and changes nothing — the
+  // operator decides (recount via stocktake, which books ADJUST deltas, or
+  // restricted sale). Surfaced here, not auto-remediated: silently
+  // "fixing" stock would destroy the evidence of which till oversold.
+  const handleDetectNegativeStock = async () => {
+    setIsProcessing(true);
+    try {
+      const { findNegativeStockProducts } = await import('../../db/sqlPluginAdapter');
+      const rows = await findNegativeStockProducts();
+      if (rows.length === 0) {
+        const msg = 'Stocks négatifs : aucun — tous les soldes comptables sont >= 0.';
+        setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] ${msg}`);
+        audioBus.emit('success');
+        showToast(msg, 'success');
+      } else {
+        const msg = `Stocks négatifs détectés (${rows.length}) : ${rows
+          .slice(0, 12)
+          .map((r) => `${r.productId} (${r.stock})`)
+          .join(', ')}${rows.length > 12 ? ` … +${rows.length - 12} autre(s)` : ''} — recomptez ces références (l'inventaire régularise).`;
+        setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] ${msg}`);
+        audioBus.emit('error');
+        showToast(msg, 'warning', 8000);
+      }
+      await loadStats();
+    } catch (e) {
+      console.error(e);
+      audioBus.emit('error');
+      showToast('Erreur lors de la détection des stocks négatifs.', 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleCreateSnapshot = async () => {
     setIsProcessing(true);
     try {
@@ -157,6 +236,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
     audioBus.emit('success');
     showToast('Sauvegarde JSON intégrale téléchargée.', 'success');
   };
@@ -407,6 +487,51 @@ export const DatabaseMaintenanceModal: React.FC = () => {
                   Génère une copie snapshot conforme et isolée de la base de données avec timestamp.
                 </p>
               </button>
+
+              <button
+                onClick={handleDetectNegativeStock}
+                disabled={isProcessing}
+                className="p-3 bg-pos-bg hover:bg-rose-500/10 border border-pos-border hover:border-rose-500/40 rounded-xl text-left space-y-1 transition cursor-pointer disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2 text-rose-400 font-bold text-xs">
+                  <Activity className="w-4 h-4" />
+                  <span>Stocks Négatifs</span>
+                </div>
+                <p className="text-[10px] text-pos-muted">
+                  Détecte les soldes comptables négatifs (double-vente hors-ligne). Lecture seule.
+                </p>
+              </button>
+            </div>
+
+            {/* Targeted ticket COGS repair */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 bg-pos-bg border border-pos-border rounded-xl p-3">
+              <div className="flex items-center gap-2 text-rose-400 font-bold text-xs shrink-0">
+                <Activity className="w-4 h-4" />
+                <span>Réparer Coûts Ticket :</span>
+              </div>
+              <input
+                type="text"
+                value={repairTicketId}
+                onChange={(e) => setRepairTicketId(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void handleRepairTicketCogs();
+                }}
+                placeholder="N° ticket ou ID (ex. REC-…)"
+                aria-label="Identifiant du ticket à réparer"
+                disabled={isProcessing}
+                className="flex-1 min-w-0 bg-pos-panel border border-pos-border rounded-lg px-3 py-1.5 text-xs font-mono text-pos-text placeholder-pos-muted focus:outline-none focus:border-rose-400 disabled:opacity-50"
+              />
+              <button
+                type="button"
+                onClick={handleRepairTicketCogs}
+                disabled={isProcessing || !repairTicketId.trim()}
+                className="px-4 py-1.5 rounded-lg text-xs font-bold bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/40 text-rose-300 transition cursor-pointer disabled:opacity-50 shrink-0 min-h-[36px]"
+              >
+                Réparer
+              </button>
+              <p className="text-[10px] text-pos-muted sm:max-w-[220px]">
+                Reconstruit la ligne + reçu depuis les lots gelés. Refuse les tickets annulés ou déjà exacts.
+              </p>
             </div>
 
             {/* Action Log Box */}

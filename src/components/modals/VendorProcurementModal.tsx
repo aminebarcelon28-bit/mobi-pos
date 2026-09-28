@@ -47,6 +47,7 @@ export const VendorProcurementModal: React.FC = () => {
     dismissedProcurementIds,
     dismissProcurementProduct,
     restoreDismissedProcurementProducts,
+    receiptSettings,
   } = usePosStore();
 
   const { showToast } = useToast();
@@ -346,36 +347,42 @@ export const VendorProcurementModal: React.FC = () => {
     }
   };
 
-  const handleExportCsv = (vendorName: string, vendorAlerts: StockAlert[]) => {
-    const BOM = '\uFEFF';
-    let csv = `${BOM}Fournisseur: ${vendorName}\nDate: ${new Date().toLocaleDateString('fr-DZ')}\n\n`;
-    csv += 'Référence SKU;Désignation Produit;Stock Actuel;Seuil Alerte;Qté à Commander;Prix Achat Unitaire (DA);Total Ligne (DA)\n';
+  const handleExportXlsx = (vendorName: string, vendorAlerts: StockAlert[]) => {
+    const selected = vendorAlerts.filter((a) => selectedItemsMap[a.productId] !== false);
+    if (selected.length === 0) {
+      showToast('Veuillez sélectionner au moins un article pour exporter.', 'error');
+      return;
+    }
 
-    let totalAmount = 0;
-    vendorAlerts
-      .filter((a) => selectedItemsMap[a.productId] !== false)
-      .forEach((a) => {
-        const prod = productsById.get(a.productId);
-        const unitCost = prod ? prod.costPrice : 1500;
-        const defaultQty = Math.max(1, a.reorderPoint * 2 - a.currentStock);
-        const qty = customQtyMap[a.productId] !== undefined ? customQtyMap[a.productId] : defaultQty;
-        const lineTotal = unitCost * qty;
-        totalAmount += lineTotal;
+    const items = selected.map((a) => {
+      const prod = productsById.get(a.productId);
+      const unitCost = prod ? prod.costPrice : 1500;
+      const defaultQty = Math.max(1, a.reorderPoint * 2 - a.currentStock);
+      const qty = customQtyMap[a.productId] !== undefined ? customQtyMap[a.productId] : defaultQty;
+      return {
+        productId: a.productId,
+        title: a.title,
+        sku: a.sku,
+        suggestedQty: qty,
+        unitCost,
+        totalCost: unitCost * qty,
+      };
+    });
 
-        csv += `"${a.sku}";"${a.title}";${a.currentStock};${a.reorderPoint};${qty};${unitCost};${lineTotal}\n`;
+    try {
+      void import('../../utils/purchaseOrderXlsx').then(({ downloadVendorProcurementXlsx }) => {
+        const filename = downloadVendorProcurementXlsx(vendorName, items, {
+          storeName: receiptSettings?.storeName,
+          address: receiptSettings?.address,
+          phone: receiptSettings?.phone,
+          email: receiptSettings?.email,
+        });
+        showToast(`Bon de commande Excel (.xlsx) téléchargé pour ${vendorName} (${filename}).`, 'success');
       });
-
-    csv += `\n;;;;;TOTAL COMMANDE (DA);${totalAmount}\n`;
-
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `Reapprovisionnement_${vendorName.replace(/\s+/g, '_')}_${Date.now()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast(`Fichier CSV exporté pour ${vendorName}`, 'success');
+    } catch (err) {
+      console.error('Failed to export procurement to Excel:', err);
+      showToast('Échec de l’export Excel du bon de commande.', 'error');
+    }
   };
 
   const generateWhatsAppMessage = (vendorName: string, vendorAlerts: StockAlert[]) => {
@@ -797,12 +804,12 @@ export const VendorProcurementModal: React.FC = () => {
                           <MessageSquare className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">WhatsApp</span>
                         </button>
 
-                        {/* CSV Export Button */}
+                        {/* Excel (.xlsx stylé) Export Button */}
                         <button
                           type="button"
-                          onClick={() => handleExportCsv(vendorName, vendorAlerts)}
-                          className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center justify-center"
-                          title="Télécharger Bon de Commande en CSV (Excel)"
+                          onClick={() => handleExportXlsx(vendorName, vendorAlerts)}
+                          className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-emerald-400 transition cursor-pointer flex items-center justify-center"
+                          title="Télécharger Bon de Commande en Excel (.xlsx stylé avec formules =SUM)"
                         >
                           <Download className="w-3.5 h-3.5" />
                         </button>
@@ -918,7 +925,7 @@ export const VendorProcurementModal: React.FC = () => {
                               <div className="flex items-center gap-1 shrink-0">
                                 <input
                                   type="number"
-                                  step="10000"
+                                  step="any"
                                   value={tempMoqInput}
                                   onChange={(e) => setTempMoqInput(parseInt(e.target.value) || 50000)}
                                   className="w-20 sm:w-24 bg-pos-card border border-emerald-400 rounded px-1.5 py-0.5 text-[10px] text-emerald-400 font-bold focus:outline-none"

@@ -4,6 +4,7 @@
  */
 import type { SaleTransaction, ReceiptSettings } from '../types/pos';
 import { EscPosBuilder } from './escpos';
+import { grossFromTransaction } from './receiptMath';
 
 export class CashReceiptBuilder {
   public static buildCashSaleReceipt(
@@ -17,7 +18,7 @@ export class CashReceiptBuilder {
       : '--------------------------------';
 
     const subtotalFormatted =
-      (transaction.subtotal || transaction.total).toLocaleString('fr-DZ') + ' DA';
+      grossFromTransaction(transaction).toLocaleString('fr-DZ') + ' DA';
     const totalFormatted = transaction.total.toLocaleString('fr-DZ') + ' DA';
     const tenderedFormatted =
       (transaction.cashTendered || transaction.total).toLocaleString('fr-DZ') + ' DA';

@@ -13,7 +13,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# IMPORTANT: keep major.minor in sync with package.json `@tauri-apps/api`
+# (Tauri errors at build time on mismatch: "Found version mismatched Tauri
+# packages"). Both sides are currently on 2.12.
+tauri = { version = "2.12", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
@@ -21,12 +24,28 @@ tauri-plugin-opener = "2"
 url = "2"
 urlencoding = "2"
 parking_lot = "0.12"
+sha2 = "0.10"
+rusqlite = { version = "0.31", features = ["bundled"] }
+sqlite-vec = "0.1"
+bytemuck = "1.16"
+uuid = { version = "1.8", features = ["v4"] }
+regex = "1.10"
+thiserror = "1.0"
+# Local ONNX embedding runtime (384-dim BGE-Small-EN). Optional + off by
+# default: `ort` (via fastembed) needs a C++ toolchain + ~100MB runtime and
+# would break mobile builds + `cargo test` offline. Default resolver uses
+# deterministic 384-dim hashed embeddings (same vec0 schema + Tier
+# thresholds); enable with `--features po-embed` for true BGE semantics.
+fastembed = { version = "3.9", optional = true }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 keyring = { version = "3", features = ["windows-native"] }
+winreg = "0.55"
 
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+# True ONNX BGE-Small-EN semantics via fastembed (see note above).
+po-embed = ["fastembed"]

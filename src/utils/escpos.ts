@@ -1,5 +1,6 @@
 import type { SaleTransaction, ReceiptSettings, CashSession } from '../types/pos';
 import { formatDZD } from '../types/pos';
+import { RECEIPT_BARCODE } from '../constants';
 
 const ESC = 0x1B;
 const GS = 0x1D;
@@ -163,7 +164,7 @@ export function buildReceiptBuffer(
 
   // Numéro de reçu et date
   builder.text(`Ticket: ${transaction.id}`).newline();
-  builder.text(`Date: ${new Date(transaction.createdAt).toLocaleString('fr-FR')}`).newline();
+  builder.text(`Date: ${new Date(transaction.createdAt).toLocaleString('fr-DZ')}`).newline();
   
   // Info client (optionnel)
   if (transaction.customer?.name) {
@@ -184,6 +185,24 @@ export function buildReceiptBuffer(
   });
 
   builder.separator();
+
+  // B-028: print gross REMISE/credit/TVA lines BEFORE TOTAL so the hardware
+  // receipt reconciles with the software ticket (gross − discount = net).
+  const grossForTicket = typeof transaction.subtotal === 'number' && Number.isFinite(transaction.subtotal)
+    ? transaction.subtotal
+    : transaction.total + (transaction.discountTotal || 0);
+  if (transaction.discountTotal && transaction.discountTotal > 0) {
+    builder.align('left').bold(false);
+    builder.text(`SOUS-TOTAL BRUT: ${formatDZD(grossForTicket)}`).newline();
+    builder.text(`REMISE: -${formatDZD(transaction.discountTotal)}`).newline();
+  }
+  if ((transaction as { storeCreditApplied?: number }).storeCreditApplied) {
+    builder.text(`Avoir Client: -${formatDZD((transaction as { storeCreditApplied?: number }).storeCreditApplied || 0)}`).newline();
+  }
+  const txTax = (transaction as { tax?: number }).tax;
+  if (typeof txTax === 'number' && txTax > 0) {
+    builder.text(`TVA: +${formatDZD(txTax)}`).newline();
+  }
 
   // Total Brut (en gras et double hauteur)
   builder.align('right').bold(true).doubleHeight(true);
@@ -211,8 +230,17 @@ export function buildReceiptBuffer(
 
   builder.newline();
 
-  // Code-barres du numéro de reçu
-  builder.barcode(transaction.id.toString().substring(0, 15), 'CODE128');
+  // Code-barres du numéro de reçu : l'identifiant opaque COMPLET est encodé
+  // (CODE128 le supporte ; le scan-to-lookup doit être exact, plus de
+  // troncature à 15 caractères qui rendait les reçus indiscanables en
+  // recherche). Seuls les ids au-delà de RECEIPT_BARCODE.MAX_LENGTH sont
+  // compactés en conservant tête + queue pour préserver l'unicité.
+  const fullBarcodeValue = transaction.id.toString();
+  const receiptBarcodeValue =
+    fullBarcodeValue.length > RECEIPT_BARCODE.MAX_LENGTH
+      ? `${fullBarcodeValue.slice(0, RECEIPT_BARCODE.MAX_LENGTH - 16)}${fullBarcodeValue.slice(-15)}`
+      : fullBarcodeValue;
+  builder.barcode(receiptBarcodeValue, 'CODE128');
   
   builder.newline(2);
   builder.feedCut();
@@ -232,6 +260,12 @@ import { printRawEscpos, openCashDrawer } from '../api/hardware';
 
 function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+function isMobileWebView(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /android|iphone|ipad|ipod/i.test(ua);
 }
 
 /**
@@ -280,11 +314,32 @@ import type { Product, PrinterRoutingConfig } from '../types/pos';
 
 /**
  * Pousse directement le reçu de vente vers l'imprimante matérielle sans aucune boîte de dialogue popup.
+ * Sur mobile (pas de spooler USB) : imprimante Wi-Fi/Bluetooth configurée,
+ * sinon ticket texte via la feuille d'impression Android.
  */
 export async function directPrintReceipt(
   transaction: SaleTransaction,
   settings: ReceiptSettings
 ): Promise<boolean> {
+  if (isMobileWebView()) {
+    try {
+      const { printBytesViaMobilePrinter } = await import('./mobilePrinter');
+      const direct = await printBytesViaMobilePrinter(buildReceiptBuffer(transaction, settings));
+      if (direct.sent) return true;
+      if (direct.reason !== 'disabled') {
+        console.warn('[Mobile Receipt] Network printer failed, falling back to sheet:', direct.reason);
+      }
+      const { receiptText } = await import('./mobileDocPrint');
+      const { openNativePrint } = await import('./phoneUtils');
+      return await openNativePrint(
+        `Ticket ${transaction.receiptNumber}`,
+        receiptText(transaction, settings)
+      );
+    } catch (err) {
+      console.error('[Mobile Receipt Print Error]', err);
+      return false;
+    }
+  }
   const targetPrinter = resolvePrinterForDocument('receipt', settings?.printerRouting);
   const buffer = buildReceiptBuffer(transaction, settings);
   const success = await printViaWindowsSpooler(targetPrinter.printerName, buffer);
@@ -324,13 +379,13 @@ export function buildXReportBuffer(session: CashSession, settings: ReceiptSettin
     .text('*** RAPPORT X (POINT MID-SHIFT) ***')
     .newline()
     .bold(false)
-    .text(`Date & Heure : ${new Date().toLocaleString('fr-FR')}`)
+    .text(`Date & Heure : ${new Date().toLocaleString('fr-DZ')}`)
     .newline()
     .text(`Session : ${session.id}`)
     .newline()
     .text(`Caissier : ${session.cashierName}`)
     .newline()
-    .text(`Ouvert le : ${new Date(session.openedAt).toLocaleString('fr-FR')}`)
+    .text(`Ouvert le : ${new Date(session.openedAt).toLocaleString('fr-DZ')}`)
     .newline()
     .separator('=', width);
 
@@ -387,11 +442,41 @@ export function buildXReportBuffer(session: CashSession, settings: ReceiptSettin
 
 /**
  * Pousse directement le Rapport X vers l'imprimante thermique sans popup.
+ * Sur mobile (pas de spooler USB) : imprimante Wi-Fi/Bluetooth configurée,
+ * sinon texte via la feuille d'impression Android.
  */
 export async function directPrintXReport(
   session: CashSession,
   settings: ReceiptSettings
 ): Promise<boolean> {
+  if (isMobileWebView()) {
+    try {
+      const { printBytesViaMobilePrinter } = await import('./mobilePrinter');
+      const direct = await printBytesViaMobilePrinter(buildXReportBuffer(session, settings));
+      if (direct.sent) return true;
+      if (direct.reason !== 'disabled') {
+        console.warn('[Mobile X-Report] Network printer failed, falling back to sheet:', direct.reason);
+      }
+      const { xReportFromSession } = await import('./mobileDocPrint');
+      const { openNativePrint } = await import('./phoneUtils');
+      return await openNativePrint(
+        `Rapport X ${session.id}`,
+        xReportFromSession(
+          session,
+          {
+            cashSales: session.cashSales ?? 0,
+            refunds: 0,
+            deposits: session.manualDeposits ?? 0,
+            expenses: session.expenses ?? 0,
+          },
+          settings?.storeName
+        )
+      );
+    } catch (err) {
+      console.error('[Mobile X-Report Print Error]', err);
+      return false;
+    }
+  }
   const targetPrinter = resolvePrinterForDocument('receipt', settings?.printerRouting);
   const buffer = buildXReportBuffer(session, settings);
   return await printViaWindowsSpooler(targetPrinter.printerName, buffer);

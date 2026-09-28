@@ -18,13 +18,15 @@ export async function updateCustomerDisplayVfd(
   await invokeCommand(
     'hardware_update_vfd',
     {
+      // B-055: top-level command args must be camelCase (Tauri default).
+      // Nested VfdInterface fields stay snake_case (serde struct names).
       interface: {
         type: 'serial',
         port_name: portName,
         baud_rate: 9600,
       },
-      item_title: line1.slice(0, 20),
-      total_price_formatted: line2.slice(0, 20),
+      itemTitle: line1.slice(0, 20),
+      totalPriceFormatted: line2.slice(0, 20),
     },
     'HARDWARE_ERROR'
   );

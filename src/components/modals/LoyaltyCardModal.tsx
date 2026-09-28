@@ -2,9 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { X, Printer, Award, CreditCard, Sparkles, QrCode, Smartphone, Check, ShieldCheck } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
-import { calculateCustomerTier, calculateNextTierProgress } from '../../utils/loyaltyEngine';
+import { calculateCustomerTier, calculateNextTierProgress, normalizeLoyaltyConfig } from '../../utils/loyaltyEngine';
 import { useToast } from '../ui/Toast';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
+import { printCoordinator } from '../../utils/printCoordinator';
+import { isMobileDevice, isTauriEnvironment } from '../../utils/platform';
 
 export const LoyaltyCardModal: React.FC = () => {
   const { activeModal, closeModal, currentCustomer, receiptSettings } = usePosStore();
@@ -14,8 +16,11 @@ export const LoyaltyCardModal: React.FC = () => {
   const barcodeCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const customer = currentCustomer;
-  const tierInfo = customer ? calculateCustomerTier(customer.totalSpent || 0) : null;
-  const progress = customer ? calculateNextTierProgress(customer.totalSpent || 0) : null;
+  // Dynamic resolution: the cached loyaltyTier string is display-only and
+  // may reference a renamed/deleted tier — always re-resolve from spend.
+  const loyaltyCfg = normalizeLoyaltyConfig(receiptSettings?.loyaltyConfig);
+  const tierInfo = customer ? calculateCustomerTier(customer.totalSpent || 0, loyaltyCfg) : null;
+  const progress = customer ? calculateNextTierProgress(customer.totalSpent || 0, loyaltyCfg) : null;
   const cardCode = customer ? `LOY-${customer.id}` : 'LOY-CUST-000';
 
   useEffect(() => {
@@ -26,12 +31,36 @@ export const LoyaltyCardModal: React.FC = () => {
 
   if (activeModal !== 'loyalty_card' || !customer || !tierInfo || !progress) return null;
 
-  const handlePrintCard = () => {
+  const handlePrintCard = async () => {
+    if (!customer || !tierInfo) return;
+    const inTauri = isTauriEnvironment();
+
+    // Mobile app: send a text pass summary to the Android print sheet.
+    if (inTauri && isMobileDevice()) {
+      const lines = [
+        `${receiptSettings?.storeName || 'MOBI-POS'}`,
+        'CARTE DE FIDELITE',
+        `Titulaire : ${customer.name}`,
+        `Code : ${cardCode}`,
+        `Statut : ${tierInfo.name} (x${tierInfo.pointsMultiplier})`,
+        `Points : ${(customer.loyaltyPoints || 0).toLocaleString('fr-DZ')}`,
+        `Tél : ${receiptSettings?.phone || ''}`,
+      ].join('\n');
+      try {
+        const { openNativePrint } = await import('../../utils/phoneUtils');
+        const ok = await openNativePrint(`Carte ${customer.name}`, lines);
+        showToast(ok ? '🖨️ Feuille d\'impression Android ouverte.' : 'Impression indisponible sur cet appareil.', ok ? 'success' : 'error');
+      } catch {
+        showToast('Impression indisponible sur cet appareil.', 'error');
+      }
+      return;
+    }
+
     showToast('Impression de la Carte PVC de Fidélité lancée...', 'info');
-    if (typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window)) {
-      setTimeout(() => {
-        window.print();
-      }, 150);
+    if (inTauri) {
+      printCoordinator.printChannelDirect('loyalty_card', 200);
+    } else {
+      printCoordinator.printLoyaltyCard(200);
     }
   };
 
@@ -100,13 +129,13 @@ export const LoyaltyCardModal: React.FC = () => {
             <div className="space-y-6">
               
               {/* Printable Target Box */}
-              <div data-printable="true" className="printable-area space-y-6 flex flex-col items-center">
-                
+              <div data-printable="true" className="print-loyalty-target printable-area space-y-6 flex flex-col items-center">
+
                 {/* PVC Card Front Side */}
-                <div className="w-[340px] h-[210px] rounded-2xl p-5 shadow-2xl relative overflow-hidden flex flex-col justify-between border border-amber-500/30 bg-gradient-to-br from-slate-900 via-slate-950 to-amber-950/60 text-white font-sans">
-                  
+                <div className="doc-pvc-front w-[340px] h-[210px] rounded-2xl p-5 shadow-2xl relative overflow-hidden flex flex-col justify-between border border-amber-500/30 bg-gradient-to-br from-slate-900 via-slate-950 to-amber-950/60 text-white font-sans">
+
                   {/* Background Watermark Pattern */}
-                  <div className="absolute -right-10 -bottom-10 w-44 h-44 rounded-full bg-amber-500/10 blur-2xl pointer-events-none" />
+                  <div className="doc-pvc-deco absolute -right-10 -bottom-10 w-44 h-44 rounded-full bg-amber-500/10 blur-2xl pointer-events-none" />
 
                   {/* Top Bar: Store Logo & VIP Badge */}
                   <div className="flex justify-between items-start z-10">
@@ -124,7 +153,7 @@ export const LoyaltyCardModal: React.FC = () => {
                   </div>
 
                   {/* Holographic Chip Simulation */}
-                  <div className="z-10 flex items-center gap-3 my-1">
+                  <div className="doc-pvc-deco z-10 flex items-center gap-3 my-1">
                     <div className="w-9 h-7 rounded-md bg-gradient-to-tr from-amber-300 via-amber-100 to-amber-400 border border-amber-200/50 shadow-inner flex items-center justify-center">
                       <div className="w-5 h-4 border border-amber-600/40 rounded-sm" />
                     </div>

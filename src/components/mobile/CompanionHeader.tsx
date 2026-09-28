@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Smartphone, RefreshCw, WifiOff, Truck, Monitor } from 'lucide-react';
+import { Smartphone, RefreshCw, WifiOff, Truck, Monitor, Camera } from 'lucide-react';
 // P11.3: sync engine is loaded on demand — importing it statically here would
 // drag ~267 kB (turso client + sql adapter) into the entry chunk.
 import type { SyncStatus } from '../../sync/types';
@@ -22,15 +22,20 @@ export const CompanionHeader: React.FC = () => {
   });
 
   useEffect(() => {
+    let cancelled = false;
     let unsubscribe: (() => void) | undefined;
     import('../../sync/SyncManager')
       .then(({ syncManager }) => {
+        if (cancelled) return;
         unsubscribe = syncManager.subscribe((s) => {
           setSyncStatus(s);
         });
       })
       .catch((err: unknown) => console.warn('[header] sync engine unavailable:', err));
-    return () => unsubscribe?.();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   const isSyncing = syncStatus.pushing || syncStatus.pulling;
@@ -71,7 +76,7 @@ export const CompanionHeader: React.FC = () => {
         <button
           type="button"
           onClick={handleSyncClick}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-bold transition active-press min-h-[40px] cursor-pointer shadow-xs ${
+          className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-bold transition active-press min-h-[44px] cursor-pointer shadow-xs ${
             syncStatus.online
               ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400 hover:bg-emerald-500/20'
               : 'bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20'
@@ -102,7 +107,7 @@ export const CompanionHeader: React.FC = () => {
         <button
           type="button"
           onClick={() => openModal('vendor_procurement')}
-          className="relative flex items-center justify-center min-h-[40px] min-w-[40px] rounded-xl bg-pos-card border border-pos-border text-pos-muted hover:text-emerald-400 hover:border-emerald-500/30 active-press transition cursor-pointer"
+          className="relative flex items-center justify-center min-h-[44px] min-w-[44px] rounded-xl bg-pos-card border border-pos-border text-pos-muted hover:text-emerald-400 hover:border-emerald-500/30 active-press transition cursor-pointer"
           title="Réapprovisionnement Fournisseurs JIT"
           aria-label="Réapprovisionnement Fournisseurs JIT"
         >
@@ -110,11 +115,23 @@ export const CompanionHeader: React.FC = () => {
           <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-pos-panel" />
         </button>
 
-        {/* PC Mode Switcher button (discreet, accessible) */}
+        {/* Dedicated Invoice/BL Document Scanner Button */}
+        <button
+          type="button"
+          onClick={() => openModal('invoice_ingestion')}
+          className="relative flex items-center justify-center min-h-[44px] min-w-[44px] rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 active-press transition cursor-pointer shadow-xs"
+          title="Scanner Bon de Livraison / Facture (IA Recon)"
+          aria-label="Scanner Bon de Livraison ou Facture Fournisseur"
+        >
+          <Camera className="w-4 h-4" />
+          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-pos-panel animate-pulse" />
+        </button>
+
+        {/* PC Mode Switcher button (discreet on mobile, accessible on desktop/tablet) */}
         <button
           type="button"
           onClick={() => setRoleMode('pos_primary')}
-          className="hidden sm:flex items-center justify-center min-h-[40px] min-w-[40px] rounded-xl bg-pos-card border border-pos-border text-pos-muted hover:text-cyan-400 hover:border-cyan-500/30 active-press transition cursor-pointer"
+          className="hidden sm:flex items-center justify-center min-h-[44px] min-w-[44px] rounded-xl bg-pos-card border border-pos-border text-pos-muted hover:text-cyan-400 hover:border-cyan-500/30 active-press transition cursor-pointer"
           title="Passer en Mode Caisse PC"
           aria-label="Passer en Mode Caisse PC"
         >

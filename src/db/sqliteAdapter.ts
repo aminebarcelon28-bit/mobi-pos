@@ -9,6 +9,7 @@ import { transactionAdapter } from './adapters/transactionAdapter';
 import { shiftAdapter } from './adapters/shiftAdapter';
 import { operationsAdapter } from './adapters/operationsAdapter';
 import { maintenanceAdapter } from './adapters/maintenanceAdapter';
+import { voucherAdapter } from './adapters/voucherAdapter';
 
 export type { DbStats, IntegrityReport } from './adapters/base';
 export { isTauriEnv } from './adapters/base';
@@ -20,4 +21,5 @@ export const sqliteAdapter = {
   ...transactionAdapter,
   ...shiftAdapter,
   ...operationsAdapter,
+  ...voucherAdapter,
 };

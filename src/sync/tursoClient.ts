@@ -25,7 +25,8 @@ export function closeTursoClient(): void {
 export function withNetworkTimeout<T>(
   promise: Promise<T>,
   timeoutMs = 10000,
-  operationName = 'Opération Cloud Turso'
+  operationName = 'Opération Cloud Turso',
+  invalidateClient = true,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   // Swallow late settlement: after a timeout the abandoned upload's rejection
@@ -33,9 +34,14 @@ export function withNetworkTimeout<T>(
   promise.catch(() => {});
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      // P2: abandon AND invalidate — a wedged multi-MB upload must not keep
-      // holding the radio/heap after we gave up on it.
-      closeTursoClient();
+      // F7: only invalidate the shared client when asked — a keychain/vault
+      // wait timing out must not kill a healthy Turso socket, and the proxy
+      // wrapper below already closes selectively on network-classified errors.
+      if (invalidateClient) {
+        // P2: abandon AND invalidate — a wedged multi-MB upload must not keep
+        // holding the radio/heap after we gave up on it.
+        closeTursoClient();
+      }
       reject(new Error(`[Délai d'attente R5.5] ${operationName} a expiré après ${timeoutMs}ms. Vérifiez la connexion.`));
     }, timeoutMs);
   });
@@ -48,6 +54,9 @@ const NETWORK_ERROR_HINTS = [
   'timeout', 'délai', "d'attente", 'failed to fetch', 'networkerror', 'network error',
   'load failed', 'econn', 'enotfound', 'eai_again', 'epipe', 'esocket', 'socket',
   'abort', 'connection', 'offline', 'unreachable', 'reset by peer',
+  // F7: a timeout-killed shared socket surfaces as 'closed' on the peer op —
+  // classify it as transport (clean retry) instead of a miscategorized error.
+  'closed', 'closing', 'bad connection', 'client is closed',
 ];
 
 /**
@@ -157,8 +166,13 @@ export async function testTursoConnection(url: string, token: string): Promise<C
     ]);
     const latencyMs = Math.round(performance.now() - start);
 
-    // Probe 2: Check schema
-    const schemaStatus = await checkRemoteSchemaStatus(tempClient);
+    // Probe 2: Check schema (bounded — an ailing DB must not hang the UI).
+    const schemaStatus = await withNetworkTimeout(
+      checkRemoteSchemaStatus(tempClient),
+      8000,
+      'Vérification du schéma cloud',
+      false,
+    );
 
     return {
       ok: true,
@@ -205,27 +219,30 @@ export async function testTursoConnection(url: string, token: string): Promise<C
 
 /**
  * Lightweight ping to verify network and remote database availability.
+ * F10: probes on a THROWAWAY client — the old close-and-retry dance killed
+ * the shared cached client (taking down any in-flight push/pull with it)
+ * and doubled worst-case latency. Single attempt, bounded, no side effects.
  */
 export async function probeOnline(timeoutMs = 4000): Promise<boolean> {
+  let probe: Client | null = null;
   try {
-    const client = await getTursoClient();
-    try {
-      await Promise.race([
-        client.execute('SELECT 1'),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs)),
-      ]);
-      return true;
-    } catch {
-      // Socket / connection might be dead on mobile: close cached client and retry once with fresh client
-      closeTursoClient();
-      const freshClient = await getTursoClient();
-      await Promise.race([
-        freshClient.execute('SELECT 1'),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs)),
-      ]);
-      return true;
-    }
+    const creds = await getCloudCredentials();
+    if (!creds?.url || !creds?.token) return false;
+    probe = createClient({ url: creds.url, authToken: creds.token });
+    await Promise.race([
+      probe.execute('SELECT 1'),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs)),
+    ]);
+    return true;
   } catch {
     return false;
+  } finally {
+    if (probe) {
+      try {
+        probe.close();
+      } catch {
+        // Safe to ignore per R5.1: Temporary probe socket may already be terminated.
+      }
+    }
   }
 }

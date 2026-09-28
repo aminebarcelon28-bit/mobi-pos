@@ -5,6 +5,7 @@ import { formatDZD, formatDateTime } from '../../types/pos';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
 import { resolvePrinterForDocument } from '../../utils/printerRoutingEngine';
 import { directPrintReceipt } from '../../utils/escpos';
+import { printCoordinator } from '../../utils/printCoordinator';
 import { grossFromTransaction } from '../../utils/receiptMath';
 
 export const ReceiptModal: React.FC = () => {
@@ -38,7 +39,9 @@ export const ReceiptModal: React.FC = () => {
   if (activeModal !== 'receipt' || !currentTx) return null;
 
   const handlePrintBrowser = () => {
-    void directPrintReceipt(currentTx, receiptSettings);
+    // System dialog / PDF record copy (works in browser AND desktop app).
+    // On mobile this is a no-op — use "Imprimer Thermique" (native sheet).
+    printCoordinator.printChannelDirect('receipt', 120);
   };
 
   const handlePrintThermal = () => {
@@ -155,10 +158,6 @@ export const ReceiptModal: React.FC = () => {
                 const defaultPrice = item.defaultPrice || item.product.price;
                 const grossLinePrice = unitPrice * item.quantity;
                 const netLinePrice = Math.max(0, grossLinePrice - (item.discount || 0));
-                const unitCost = item.unitCostAtSale ?? item.product?.costPrice ?? 0;
-                const lineProfit = item.lineProfit !== undefined
-                  ? item.lineProfit
-                  : (unitPrice - unitCost) * item.quantity;
                 const hasManualDiscount = item.discountAmount !== undefined && item.discountAmount > 0;
 
                 return (
@@ -189,15 +188,6 @@ export const ReceiptModal: React.FC = () => {
                       <div className="flex justify-between text-[9px] text-amber-700 font-semibold italic pl-2">
                         <span>&gt; Remise Manuelle :</span>
                         <span>-{formatDZD((item.discountAmount || 0) * item.quantity)} (-{formatDZD(item.discountAmount || 0)}/u)</span>
-                      </div>
-                    )}
-
-                    {(unitCost > 0 || item.lineProfit !== undefined) && (
-                      <div className="flex justify-between text-[8.5px] text-gray-500 font-mono italic pl-2">
-                        <span>&gt; Marge ligne ({formatDZD(unitPrice - unitCost)}/u) :</span>
-                        <span className={lineProfit >= 0 ? "text-gray-700 font-bold" : "text-rose-700 font-bold"}>
-                          {formatDZD(lineProfit)}
-                        </span>
                       </div>
                     )}
 
@@ -232,29 +222,12 @@ export const ReceiptModal: React.FC = () => {
                 </div>
               )}
 
-              <div className="flex justify-between font-extrabold text-sm pt-1 border-t border-black">
+              <div className="flex justify-between font-extrabold text-sm pt-1.5 pb-1 px-1 -mx-1 mt-1 border-t-2 border-black bg-gray-100 rounded-sm">
                 <span>{currentTx.isRefund ? "TOTAL AVOIR / REMBOURSÉ:" : "TOTAL NET A PAYER:"}</span>
                 <span className={currentTx.isRefund ? "text-purple-900" : ""}>
                   {formatDZD(currentTx.total)}
                 </span>
               </div>
-
-              {!currentTx.isRefund && (currentTx.profit !== undefined || currentTx.costTotal !== undefined) && (
-                <div className="flex justify-between text-[9px] text-gray-600 font-mono font-bold pt-0.5 border-t border-dotted border-gray-300">
-                  <span>MARGE COMMERCIALE TOTALE :</span>
-                  <span>
-                    {formatDZD(
-                      currentTx.profit !== undefined
-                        ? currentTx.profit
-                        : (currentTx.items || []).reduce((acc, it) => {
-                            const uCost = it.unitCostAtSale ?? it.product?.costPrice ?? 0;
-                            const uPrice = it.unitPriceCharged ?? it.appliedPrice ?? it.product?.price ?? 0;
-                            return acc + (it.lineProfit ?? ((uPrice - uCost) * it.quantity));
-                          }, 0)
-                    )}
-                  </span>
-                </div>
-              )}
 
               <div className="pt-2 text-[10px] border-t border-dashed border-gray-400 space-y-0.5">
                 <div className="flex justify-between">

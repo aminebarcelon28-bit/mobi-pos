@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import QRCode from 'qrcode';
 import {
   X,
   MessageSquare,
@@ -11,6 +12,7 @@ import { usePosStore } from '../../store/usePosStore';
 import { RepairNotificationEngine } from '../../utils/repairNotificationEngine';
 import { useToast } from '../ui/Toast';
 import { openUrl } from '../../utils/phoneUtils';
+import { WHATSAPP_QR } from '../../constants';
 
 export const WhatsAppDispatchModal: React.FC = () => {
   const {
@@ -21,30 +23,64 @@ export const WhatsAppDispatchModal: React.FC = () => {
   } = usePosStore();
   const { showToast } = useToast();
   const [copied, setCopied] = useState(false);
+  const [qrError, setQrError] = useState(false);
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const order = selectedRepairOrderForNotification;
-  const messageText = order
-    ? RepairNotificationEngine.generateMessageBody(order, receiptSettings, 'READY_FOR_PICKUP')
+  // QR payload diet (message build happens here — the engine file is owned by
+  // another agent): over-long problem descriptions bloat the wa.me URL past
+  // reliable QR density, so the description is truncated to
+  // WHATSAPP_QR.DESCRIPTION_MAX_CHARS before the body/URL are built.
+  const qrOrder =
+    order && (order.problemDescription || '').length > WHATSAPP_QR.DESCRIPTION_MAX_CHARS
+      ? {
+          ...order,
+          problemDescription: (order.problemDescription || '').slice(
+            0,
+            WHATSAPP_QR.DESCRIPTION_MAX_CHARS
+          ),
+        }
+      : order;
+  const messageText = qrOrder
+    ? RepairNotificationEngine.generateMessageBody(qrOrder, receiptSettings, 'READY_FOR_PICKUP')
     : '';
-  const whatsAppUrl = order
-    ? RepairNotificationEngine.buildWhatsAppUrl(order, receiptSettings, 'READY_FOR_PICKUP')
+  const whatsAppUrl = qrOrder
+    ? RepairNotificationEngine.buildWhatsAppUrl(qrOrder, receiptSettings, 'READY_FOR_PICKUP')
     : '';
 
+  // SECURITY: the QR payload (customer phone + message inside whatsAppUrl) is
+  // rendered LOCALLY via the bundled `qrcode` lib. The previous
+  // https://api.qrserver.com call leaked customer PII in a remote URL and is
+  // removed. Message content is unchanged — only the renderer changed.
   useEffect(() => {
     if (!whatsAppUrl || !qrCanvasRef.current) return;
     const canvas = qrCanvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
-      whatsAppUrl
-    )}`;
-    img.onload = () => {
-      ctx.clearRect(0, 0, 180, 180);
-      ctx.drawImage(img, 0, 0, 180, 180);
+    let cancelled = false;
+    setQrError(false);
+    // Error correction L: the payload is already shrunk above, so maximum
+    // density headroom beats damage tolerance for a counter-top scan.
+    QRCode.toDataURL(whatsAppUrl, { scale: 8, margin: 2, errorCorrectionLevel: 'L' })
+      .then((dataUrl) => {
+        if (cancelled) return;
+        const img = new Image();
+        img.src = dataUrl;
+        img.onload = () => {
+          if (cancelled) return;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+          const size = WHATSAPP_QR.SIZE_PX;
+          ctx.clearRect(0, 0, size, size);
+          ctx.drawImage(img, 0, 0, size, size);
+        };
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn('[WhatsAppDispatch] Local QR generation failed:', err);
+          setQrError(true);
+        }
+      });
+    return () => {
+      cancelled = true;
     };
   }, [whatsAppUrl]);
 
@@ -53,12 +89,27 @@ export const WhatsAppDispatchModal: React.FC = () => {
   const handleCopyText = async () => {
     try {
       await navigator.clipboard.writeText(messageText);
-      setCopied(true);
-      showToast('Texte du message copié dans le presse-papier !', 'success');
-      setTimeout(() => setCopied(false), 2000);
     } catch {
-      showToast('Erreur lors de la copie du texte', 'error');
+      // Non-secure contexts (plain-HTTP LAN access, older webviews): the
+      // async clipboard API is unavailable — legacy execCommand fallback.
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = messageText;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (!ok) throw new Error('execCommand copy failed');
+      } catch {
+        showToast('Erreur lors de la copie du texte', 'error');
+        return;
+      }
     }
+    setCopied(true);
+    showToast('Texte du message copié dans le presse-papier !', 'success');
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const handleOpenDirect = async () => {
@@ -126,8 +177,18 @@ export const WhatsAppDispatchModal: React.FC = () => {
 
               {/* Canvas QR Container */}
               <div className="p-2 bg-white rounded-xl shadow-lg border border-slate-200">
-                <canvas ref={qrCanvasRef} width={180} height={180} className="rounded-lg" />
+                <canvas
+                  ref={qrCanvasRef}
+                  width={WHATSAPP_QR.SIZE_PX}
+                  height={WHATSAPP_QR.SIZE_PX}
+                  className="rounded-lg"
+                />
               </div>
+              {qrError && (
+                <p className="text-[10px] text-rose-400 max-w-[200px] leading-tight">
+                  QR indisponible — utilisez le bouton « Ouvrir WhatsApp » ci-dessous.
+                </p>
+              )}
               <p className="text-[10px] text-pos-muted max-w-[200px] leading-tight">
                 Pointez la caméra du téléphone du magasin pour ouvrir le message instantanément dans
                 WhatsApp.

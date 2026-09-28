@@ -20,8 +20,15 @@ const ProductBackupItemSchema = z.object({
   title: z.string().min(1, 'Product title is required'),
   sku: z.string().optional().default(''),
   barcode: z.string().optional().default(''),
-  price: z.number().nonnegative().optional().default(0),
-  stock: z.number().optional().default(0),
+  // B-050: corrupt money must REJECT the file, not import authority zeros.
+  // nonnegative int (whole DA) — NaN/float/negative all fail.
+  price: z
+    .number()
+    .int('Prix doit être un entier (DA)')
+    .nonnegative('Prix ne peut pas être négatif')
+    .optional()
+    .default(0),
+  stock: z.number().int('Stock doit être un entier').nonnegative().optional().default(0),
 }).passthrough();
 
 const CustomerBackupItemSchema = z.object({
@@ -31,7 +38,14 @@ const CustomerBackupItemSchema = z.object({
 
 const TransactionBackupItemSchema = z.object({
   id: z.string().min(1, 'Transaction id is required'),
-  total: z.number().optional().default(0),
+  // B-050: total must be a finite nonnegative int when present (refunds store
+  // positive total with isRefund flag). Corrupt floats reject the whole file.
+  total: z
+    .number()
+    .int('Total doit être un entier (DA)')
+    .nonnegative('Total ne peut pas être négatif')
+    .optional()
+    .default(0),
 }).passthrough();
 
 const GenericRecordSchema = z.object({
@@ -56,6 +70,12 @@ export interface BackupPayload {
   storeExpenses?: StoreExpense[];
   settings?: AppSettingItem[];
   appSettings?: AppSettingItem[];
+  /** Frozen FIFO allocation rows (sale_batch_allocations mirror). */
+  saleBatchAllocations?: Array<Record<string, unknown>>;
+  /** Raw inventory ledger deltas (recomputes stock + valuation). */
+  inventoryLedger?: Array<Record<string, unknown>>;
+  /** Pending checkout recovery intents (replay-safe via adapter guard). */
+  checkoutRecoveryIntents?: Array<Record<string, unknown>>;
 }
 
 export const BackupPayloadSchema: z.ZodType<BackupPayload> = z.object({
@@ -76,4 +96,7 @@ export const BackupPayloadSchema: z.ZodType<BackupPayload> = z.object({
   storeExpenses: z.array(GenericRecordSchema).optional(),
   settings: z.array(GenericRecordSchema).optional(),
   appSettings: z.array(GenericRecordSchema).optional(),
+  saleBatchAllocations: z.array(GenericRecordSchema).optional(),
+  inventoryLedger: z.array(GenericRecordSchema).optional(),
+  checkoutRecoveryIntents: z.array(GenericRecordSchema).optional(),
 }).passthrough() as unknown as z.ZodType<BackupPayload>;

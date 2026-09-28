@@ -37,8 +37,20 @@ import type { SaleTransaction, ExpenseCategory, PaymentMethodType } from '../../
 import { SalesAnalyticsCharts } from '../reports/SalesAnalyticsCharts';
 import { useToast } from '../ui/Toast';
 import { generateProfessionalExcelXml } from '../../utils/excelExporter';
-import { getEffectiveCostPrice } from '../../utils/pricingEngine';
-import { grossFromTransaction } from '../../utils/receiptMath';
+import { useInventoryValuation } from '../../hooks/useInventoryValuation';
+import { useAllocationCogs } from '../../hooks/useAllocationCogs';
+import { useReceiptLedgerCogs } from '../../hooks/useReceiptLedgerCogs';
+import { computeSalesMetrics, grossFromTransaction, isExchangeSaleTx } from '../../utils/receiptMath';
+import {
+  cashSalesFromTxns,
+  cashRefundsFromTxns,
+  exchangeCashOutFromMovements,
+  standaloneDepositsFromMovements,
+  standaloneExpensesFromMovements,
+} from '../../utils/cashTerms';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { todayLocalKey, toLocalDayKey } from '../../utils/dateUtils';
+import { csvCell } from '../../utils/spreadsheetSafe';
 
 export const ReportsModal: React.FC = () => {
   const {
@@ -83,8 +95,49 @@ export const ReportsModal: React.FC = () => {
   // Transaction Inspector State
   const [inspectingTransaction, setInspectingTransaction] = useState<SaleTransaction | null>(null);
   const [isVoiding, setIsVoiding] = useState(false);
+  // Double-submit guard for the void confirm (isVoiding is the form's
+  // visibility flag, not a submission flag).
+  const [isVoidSubmitting, setIsVoidSubmitting] = useState(false);
   const [voidReason, setVoidReason] = useState('Erreur de caisse / Article erroné');
   const [voidPin, setVoidPin] = useState('');
+
+  // v105 ATOMIC MATERIALIZATION: new sales carry the exact FIFO sum
+  // hardcoded into the row (transactions.ledger_cogs_total) BEFORE commit —
+  // the receipt reads that ONE number and never looks for
+  // sale_batch_allocations. The ledger hook below runs ONLY for legacy rows
+  // whose column is absent (undefined id skips it immediately).
+  const inspectorMaterialized = (() => {
+    const raw = inspectingTransaction as (SaleTransaction & { ledger_cogs_total?: unknown; cost_total?: unknown }) | null;
+    const rawVal = raw?.ledgerCogsTotal ?? raw?.ledger_cogs_total;
+    if (rawVal === undefined || rawVal === null) return undefined;
+    const v = Number(rawVal);
+    return Number.isFinite(v) && v >= 0 ? Math.round(v) : undefined;
+  })();
+  // Strict materialized path: a new sale MUST render exclusively from the
+  // hardcoded row (ledger_cogs_total + per-line unit_cost_at_sale). Catalog
+  // costPrice is legacy-only — consulting it for a materialized ticket is
+  // exactly how the wrong-cost receipt class happened.
+  const isMaterializedReceipt = inspectorMaterialized != null;
+  const { ledgerCogs: inspectorHookCogs, ledgerLoaded: inspectorHookLoaded } = useReceiptLedgerCogs(
+    inspectorMaterialized != null ? undefined : inspectingTransaction?.id
+  );
+  const inspectorLedgerCogs = inspectorMaterialized ?? inspectorHookCogs;
+  // Materialized rows are synchronously known — no loading flash, no hook
+  // wait. Legacy rows keep the pending discipline (never the stored flash).
+  const inspectorLedgerLoaded = inspectorMaterialized != null ? true : inspectorHookLoaded;
+  // Pro-rata frozen unit cost for receipt lines that carry no unitCostAtSale
+  // (display fallback only — the ticket total below always uses the exact
+  // ledger sum, so the split stays exact in aggregate).
+  const inspectorLedgerAvgUnit: number | undefined =
+    inspectorLedgerCogs != null
+      ? (() => {
+          const qty = (inspectingTransaction?.items || []).reduce(
+            (a, it) => a + Math.abs(Number(it.quantity ?? 0)),
+            0
+          );
+          return qty > 0 ? inspectorLedgerCogs / qty : undefined;
+        })()
+      : undefined;
 
   // Search & Filter State in History & Export Tabs
   const [historySearch, setHistorySearch] = useState('');
@@ -97,21 +150,6 @@ export const ReportsModal: React.FC = () => {
   // Export Tab State
   const [exportSuccess, setExportSuccess] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
-
-  // FIFO Inventory Valuation
-  const [fifoValuation, setFifoValuation] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (activeModal === 'reports') {
-      void import('../../db/sqlPluginAdapter').then(({ calculateInventoryValuation }) => {
-        calculateInventoryValuation().then((res) => {
-          if (typeof res === 'number' && res > 0) {
-            setFifoValuation(res);
-          }
-        }).catch(() => {});
-      });
-    }
-  }, [activeModal, products]);
 
   const handleVerifyPin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -140,7 +178,7 @@ export const ReportsModal: React.FC = () => {
       if (isNaN(txDate.getTime())) return true;
 
       if (dateRangeFilter === 'today') {
-        return txDate.toDateString() === now.toDateString();
+        return toLocalDayKey(txDate) === todayLocalKey();
       }
       if (dateRangeFilter === '7days') {
         const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -155,16 +193,51 @@ export const ReportsModal: React.FC = () => {
   }, [transactions, dateRangeFilter]);
 
   const validSales = (dateFilteredTransactions || []).filter((t) => t.status !== 'VOIDED' && !t.isRefund);
-    // Gross revenue = catalog value before discounts (t.subtotal). The previous
-    // code summed t.total (net), which understated "Chiffre d'Affaires Brut" by
-    // exactly the discounts granted and broke the waterfall reconciliation.
-    const totalGrossRevenue = validSales.reduce((acc, t) => acc + grossFromTransaction(t), 0);
-  const totalRefundsValue = (dateFilteredTransactions || []).filter((t) => t.isRefund).reduce((acc, t) => acc + (t.total || 0), 0);
-  const totalRevenue = Math.max(0, totalGrossRevenue - totalRefundsValue);
-  const totalCost = validSales.reduce((acc, t) => acc + (t.costTotal || getEffectiveCostPrice({ price: t.total || 0 })), 0);
-  const totalNetProfit = totalRevenue - totalCost;
-  const netProfitMargin = totalRevenue > 0 ? ((totalNetProfit / totalRevenue) * 100).toFixed(1) : '0';
-  const averageBasket = validSales.length > 0 ? totalGrossRevenue / validSales.length : 0;
+  // Canonical unified metrics (shared with Mobile LiveActivityTab /
+  // ManagementTab): CA Net = Σ net(valid) − Σ refunds(isRefund), NOT gross.
+  // The previous code summed gross(subtotal) here, overstating CA and profit
+  // by exactly Σ discountTotal (reported 2 326 DA gap).
+  // STRICT FIFO LEDGER (v104): COGS comes from the frozen allocation mirror
+  // (Dexie saleBatchAllocations, backfilled on boot/pull). The alloc map
+  // WINS per sale inside computeSalesMetrics, so a stale stored costTotal
+  // (500×2=1000) can never render profit 6,000 instead of 6,100 again.
+  const { allocCogsBySaleId } = useAllocationCogs();
+  // Single display-cost rule shared by the inspector, the history lists and
+  // the CSV/clipboard exports so all three can never disagree:
+  // - pure sales read the frozen ledger (alloc mirror, else the materialized
+  //   row column) — exact batch sum, immune to the ±1 DA blended rounding and
+  //   to stale stored rows;
+  // - exchange receipts (return leg present) read the SIGNED row cost: the
+  //   ledger only freezes the sale leg while the ticket total is signed net,
+  //   so margin must be net − net-cost, i.e. reversal of A's margin plus
+  //   creation of B's.
+  // Returns undefined when nothing exact is known (legacy rows) — callers
+  // keep their previous fallback verbatim in that case.
+  const displayCostBasisFor = (t: SaleTransaction): number | undefined => {
+    const finiteCost = (v: unknown): number | undefined => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? Math.round(n) : undefined;
+    };
+    if (isExchangeSaleTx(t)) {
+      const rowCost = Number(t.costTotal);
+      if (Number.isFinite(rowCost)) return Math.round(rowCost);
+      return finiteCost(allocCogsBySaleId[t.id]);
+    }
+    return finiteCost(allocCogsBySaleId[t.id]) ?? finiteCost(t.ledgerCogsTotal);
+  };
+  // Local alias: the shared exchange rule lives in receiptMath so the
+  // inspector, lists, exports, shift close and computeSalesMetrics agree.
+  const isExchangeSale = isExchangeSaleTx;
+  const salesMetrics = useMemo(
+    () => computeSalesMetrics(dateFilteredTransactions || [], { allocCogsBySaleId }),
+    [dateFilteredTransactions, allocCogsBySaleId]
+  );
+  const totalRefundsValue = salesMetrics.refundsTotal;
+  const totalRevenue = salesMetrics.netRevenue;
+  const totalCost = salesMetrics.costTotal;
+  const totalNetProfit = salesMetrics.profitTotal;
+  const netProfitMargin = salesMetrics.marginPct;
+  const averageBasket = salesMetrics.averageBasket;
 
   // Operating Expenses & True Net Profit (EBITDA)
   const dateFilteredExpenses = useMemo(() => {
@@ -177,7 +250,7 @@ export const ReportsModal: React.FC = () => {
       if (isNaN(eDate.getTime())) return true;
 
       if (dateRangeFilter === 'today') {
-        return eDate.toDateString() === now.toDateString();
+        return toLocalDayKey(eDate) === todayLocalKey();
       }
       if (dateRangeFilter === '7days') {
         const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -196,63 +269,122 @@ export const ReportsModal: React.FC = () => {
   const ebitdaMargin = totalRevenue > 0 ? ((trueEbitdaNetProfit / totalRevenue) * 100).toFixed(1) : '0';
 
   // ── Inventory & Asset Valuation ──
-  const totalStockUnits = useMemo(() => (products || []).reduce((acc, p) => acc + (p.stock || 0), 0), [products]);
-  const totalStockCostValue = useMemo(
-    () => (products || []).reduce((acc, p) => acc + (p.stock || 0) * getEffectiveCostPrice(p), 0),
-    [products]
-  );
-  const totalStockRetailValue = useMemo(() => (products || []).reduce((acc, p) => acc + (p.stock || 0) * p.price, 0), [products]);
+  // Batch-based (useInventoryValuation): Σ(quantity_remaining × unit_cost)
+  // over live batches — SQLite authority, Dexie offline mirror, legacy
+  // stock×cost only as last resort. Units/retail share the same batch basis
+  // so the latent margin (retail − cost) can never mix bases.
+  const valuation = useInventoryValuation(products);
+  const totalStockUnits = valuation.units;
+  const totalStockCostValue = valuation.costValue;
+  const totalStockRetailValue = valuation.retailValue;
   const potentialInventoryProfit = Math.max(0, totalStockRetailValue - totalStockCostValue);
   const potentialMarginPct = totalStockRetailValue > 0 ? ((potentialInventoryProfit / totalStockRetailValue) * 100).toFixed(1) : '0';
   const lowStockCount = useMemo(() => (products || []).filter((p) => p.stock <= (p.reorderPoint || 5)).length, [products]);
   const outOfStockCount = useMemo(() => (products || []).filter((p) => p.stock <= 0).length, [products]);
 
   // ── Cash Drawer Reconciliation (Expected vs Counted) ──
+  // B-047: EVERY inflow and outflow uses the SAME dateRangeFilter window as
+  // cashSales — mixing date-filtered inflows with all-time outflows made the
+  // expected-cash figure wrong whenever a filter other than 'all' was active.
+  const dateInRange = useMemo(() => {
+    if (dateRangeFilter === 'all') return () => true;
+    const now = new Date();
+    return (iso: string | undefined) => {
+      if (!iso) return true;
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return true;
+      if (dateRangeFilter === 'today') return toLocalDayKey(d) === todayLocalKey();
+      if (dateRangeFilter === '7days') return d >= new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      if (dateRangeFilter === '30days') return d >= new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      return true;
+    };
+  }, [dateRangeFilter]);
+
   const openingFloat = activeShift?.openingFloat ?? (allShifts && allShifts.length > 0 ? allShifts[0].openingFloat : 20000);
+  // Cash terms share one definition with booking, the close preview and the
+  // Z report (utils/cashTerms) — this surface differs only in that it feeds
+  // date-range-filtered rows instead of a session window.
   const cashSales = useMemo(() => {
-    return (dateFilteredTransactions || [])
-      .filter((t) => t.status !== 'VOIDED' && !t.isRefund)
-      .reduce((acc, t) => {
-        if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
-          const cashTenderTotal = t.tenders.filter((tender) => tender.method === 'Espèces').reduce((sum, tender) => sum + (tender.amount || 0), 0);
-          return acc + Math.max(0, cashTenderTotal - (t.changeDue || 0));
-        }
-        return t.paymentMethod === 'Espèces' ? acc + (t.total || 0) : acc;
-      }, 0);
+    return cashSalesFromTxns(dateFilteredTransactions);
   }, [dateFilteredTransactions]);
 
   const debtCashCollected = useMemo(() => {
     return (customerDebts || [])
-      .filter((d) => d.type === 'PAYMENT_SETTLED' && d.paymentMethod === 'Espèces')
+      .filter((d) => d.type === 'PAYMENT_SETTLED' && d.paymentMethod === 'Espèces' && dateInRange(d.createdAt))
       .reduce((acc, d) => acc + d.amount, 0);
-  }, [customerDebts]);
+  }, [customerDebts, dateInRange]);
 
+  // Cash collected on repairs = deposits ONLY (cash actually taken at intake,
+  // each auto-logged as a MANUAL_DEPOSIT movement). The unpaid balance of a
+  // 'Prêt / Terminé' ticket is money still owed, NEVER drawer cash — the
+  // repair slice states this invariant explicitly (it broadcasts
+  // REPAIR_BALANCE_DUE_EVENT so the cashier records an explicit deposit when
+  // the customer actually pays). Imputing it here fabricated expected cash
+  // for money that may never arrive, manufacturing false drawer deficits.
   const savCashCollected = useMemo(() => {
     return (repairOrders || [])
-      .reduce(
-        (acc, r) =>
-          acc +
-          (r.depositAmount || 0) +
-          (r.status === 'Prêt / Terminé' ? Math.max(0, r.totalCost - (r.depositAmount || 0)) : 0),
-        0
-      );
-  }, [repairOrders]);
+      .filter((r) => dateInRange(r.createdAt))
+      .reduce((acc, r) => acc + (r.depositAmount || 0), 0);
+  }, [repairOrders, dateInRange]);
+
+  // Cash paid OUT on refunds (shared predicate — see cashTerms).
+  const cashRefundsOut = useMemo(() => {
+    return cashRefundsFromTxns(dateFilteredTransactions);
+  }, [dateFilteredTransactions]);
 
   const cashExpensesOut = useMemo(() => {
     return (dateFilteredExpenses || []).filter((e) => e.paymentMethod === 'Espèces').reduce((acc, e) => acc + (e.amount || 0), 0);
   }, [dateFilteredExpenses]);
 
   const tradeInPayoutsOut = useMemo(() => {
-    return (tradeIns || []).reduce((acc, t) => acc + (t.buybackValue || 0), 0);
-  }, [tradeIns]);
+    // B-048: wallet-credit buybacks never leave the drawer — only cash payouts.
+    return (tradeIns || [])
+      .filter((t) => !t.creditToWallet && dateInRange(t.createdAt))
+      .reduce((acc, t) => acc + (t.buybackValue || 0), 0);
+  }, [tradeIns, dateInRange]);
 
   const cashDropsOut = useMemo(() => {
-    return (cashDrops || []).reduce((acc, d) => acc + d.amount, 0);
-  }, [cashDrops]);
+    return (cashDrops || []).filter((d) => dateInRange(d.timestamp)).reduce((acc, d) => acc + d.amount, 0);
+  }, [cashDrops, dateInRange]);
 
+  // Movement-lane terms (no source-table twin by design): exchange cash-outs
+  // plus twin-less standalone manual movements (generic apports /
+  // décaissements, repair-balance payments). Movements are Dexie-only by
+  // design (no SQLite mirror), which makes Dexie the authority here on both
+  // web and Tauri. Twin movements counted via their source tables (drops,
+  // expenses, trade-ins, debts, SAV deposits) never carry the manual tag, so
+  // they can never double-count. Legacy untagged standalone rows stay
+  // invisible (status quo ante — coverage grows forward from the tag).
+  const [movementTerms, setMovementTerms] = useState({ exchange: 0, manualIn: 0, manualOut: 0 });
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { db: dexieDb } = await import('../../db/database');
+        const rows = await dexieDb.cashMovements.toArray().catch(() => []);
+        if (cancelled) return;
+        const inRange = (rows || []).filter((m) => dateInRange(m.createdAt));
+        setMovementTerms({
+          exchange: exchangeCashOutFromMovements(inRange),
+          manualIn: standaloneDepositsFromMovements(inRange),
+          manualOut: standaloneExpensesFromMovements(inRange),
+        });
+      } catch {
+        if (!cancelled) setMovementTerms({ exchange: 0, manualIn: 0, manualOut: 0 });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dateRangeFilter, dateFilteredTransactions, dateInRange]);
+  const exchangeCashOut = movementTerms.exchange;
+
+  // Unifies with the booking authority (closeShift: openingFloat + cashSales
+  // + deposits - expenses - cashRefunds). Refund outflows were previously
+  // missing here entirely, overstating expected cash by every cash refund.
   const expectedCashInDrawer = Math.max(
     0,
-    openingFloat + cashSales + debtCashCollected + savCashCollected - cashExpensesOut - tradeInPayoutsOut - cashDropsOut
+    openingFloat + cashSales + debtCashCollected + savCashCollected + movementTerms.manualIn - cashExpensesOut - tradeInPayoutsOut - cashDropsOut - cashRefundsOut - exchangeCashOut - movementTerms.manualOut
   );
 
   const actualCountedCash = useMemo(() => {
@@ -293,8 +425,8 @@ export const ReportsModal: React.FC = () => {
 
   const handleAddExpenseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = parseFloat(expenseAmount);
-    if (isNaN(amount) || amount <= 0 || !expenseTitle.trim()) {
+    const amount = Math.round(parseLocalizedAmount(expenseAmount) || 0);
+    if (!(amount > 0) || !expenseTitle.trim()) {
       showToast('Veuillez saisir un titre et un montant valide.', 'warning');
       return;
     }
@@ -317,35 +449,47 @@ export const ReportsModal: React.FC = () => {
     setExpenseNotes('');
   };
 
-  // Filtered Transactions for History List
-  const filteredTransactions = (dateFilteredTransactions || []).filter((t) => {
-    const matchesPayment = paymentFilter === 'Tous' || t.paymentMethod === paymentFilter;
+  // Filtered Transactions for History List — sorted by date DESC (latest first)
+  const filteredTransactions = useMemo(() => {
+    const filtered = (dateFilteredTransactions || []).filter((t) => {
+      const matchesPayment = paymentFilter === 'Tous' || t.paymentMethod === paymentFilter;
 
-    let matchesStatus = true;
-    if (statusFilter === 'COMPLETED') {
-      matchesStatus = t.status !== 'VOIDED' && !t.isRefund;
-    } else if (statusFilter === 'VOIDED') {
-      matchesStatus = t.status === 'VOIDED';
-    } else if (statusFilter === 'REFUNDED') {
-      matchesStatus = t.status === 'REFUNDED' || t.status === 'PARTIALLY_REFUNDED';
-    } else if (statusFilter === 'isRefund') {
-      matchesStatus = Boolean(t.isRefund);
-    }
+      let matchesStatus = true;
+      if (statusFilter === 'COMPLETED') {
+        matchesStatus = t.status !== 'VOIDED' && !t.isRefund;
+      } else if (statusFilter === 'VOIDED') {
+        matchesStatus = t.status === 'VOIDED';
+      } else if (statusFilter === 'REFUNDED') {
+        matchesStatus = t.status === 'REFUNDED' || t.status === 'PARTIALLY_REFUNDED';
+      } else if (statusFilter === 'isRefund') {
+        matchesStatus = Boolean(t.isRefund);
+      }
 
-    const q = historySearch.trim().toLowerCase();
-    const matchesSearch =
-      !q ||
-      (t.receiptNumber && t.receiptNumber.toLowerCase().includes(q)) ||
-      (t.customer?.name && t.customer.name.toLowerCase().includes(q)) ||
-      (t.customer?.phone && t.customer.phone.toLowerCase().includes(q)) ||
-      (t.items || []).some(
-        (item) =>
-          (item.product?.title || '').toLowerCase().includes(q) ||
-          (item.product?.sku || '').toLowerCase().includes(q)
-      );
+      const q = historySearch.trim().toLowerCase();
+      const matchesSearch =
+        !q ||
+        (t.receiptNumber && t.receiptNumber.toLowerCase().includes(q)) ||
+        (t.customer?.name && t.customer.name.toLowerCase().includes(q)) ||
+        (t.customer?.phone && t.customer.phone.toLowerCase().includes(q)) ||
+        (t.items || []).some(
+          (item) =>
+            (item.product?.title || '').toLowerCase().includes(q) ||
+            (item.product?.sku || '').toLowerCase().includes(q)
+        );
 
-    return matchesPayment && matchesStatus && matchesSearch;
-  });
+      return matchesPayment && matchesStatus && matchesSearch;
+    });
+
+    // ORDER BY date DESC — latest receipts first
+    return filtered.sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }, [dateFilteredTransactions, paymentFilter, statusFilter, historySearch]);
+
+  // Reset to first page whenever a history filter changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [historySearch, paymentFilter, statusFilter, dateRangeFilter]);
 
   const totalPages = Math.max(1, Math.ceil((filteredTransactions || []).length / PAGE_SIZE));
   const safeCurrentPage = Math.min(currentPage, totalPages);
@@ -369,19 +513,29 @@ export const ReportsModal: React.FC = () => {
   };
 
   const handleConfirmVoid = async (t: SaleTransaction) => {
+    if (isVoidSubmitting) return;
     if (!verifyManagerPin(voidPin)) {
       showToast('PIN Manager incorrect ! Autorisation requise pour annuler une vente.', 'error');
       return;
     }
 
-    const voidResult = await voidTransaction(t.id, voidReason, 'Manager');
-    if (voidResult.success) {
-      showToast(`Vente #${t.receiptNumber} annulée avec succès. Stocks et fidélité restaurés.`, 'success');
-      setInspectingTransaction(null);
-      setIsVoiding(false);
-      setVoidPin('');
-    } else {
-      showToast(`Erreur lors de l'annulation: ${voidResult.reason}`, 'error');
+    setIsVoidSubmitting(true);
+    try {
+      const voidResult = await voidTransaction(t.id, voidReason, 'Manager');
+      if (voidResult.success) {
+        showToast(`Vente #${t.receiptNumber} annulée avec succès. Stocks et fidélité restaurés.`, 'success');
+        setInspectingTransaction(null);
+        setIsVoiding(false);
+        setVoidPin('');
+      } else if (voidResult.reason === 'VOID_ALREADY_IN_PROGRESS') {
+        showToast(`Annulation déjà en cours sur un autre appareil — synchronisez puis vérifiez le ticket #${t.receiptNumber} avant de réessayer.`, 'warning');
+      } else if (voidResult.reason === 'ALREADY_VOIDED') {
+        showToast(`Vente #${t.receiptNumber} déjà annulée.`, 'warning');
+      } else {
+        showToast(`Erreur lors de l'annulation: ${voidResult.reason}`, 'error');
+      }
+    } finally {
+      setIsVoidSubmitting(false);
     }
   };
 
@@ -401,14 +555,26 @@ export const ReportsModal: React.FC = () => {
         ? '30 Derniers Jours'
         : 'Tout l\'Historique';
 
-    const xmlContent = generateProfessionalExcelXml(dateFilteredTransactions, periodLabel);
+    // The exporter throws { code: 'TOO_LARGE' } when the period exceeds its
+    // row budget — surface that as guidance instead of a crash, and keep the
+    // old behavior (propagate) for every other failure.
+    let xmlContent: string;
+    try {
+      xmlContent = generateProfessionalExcelXml(dateFilteredTransactions, periodLabel, allocCogsBySaleId);
+    } catch (err) {
+      if ((err as { code?: string } | null)?.code === 'TOO_LARGE') {
+        showToast('Export trop volumineux pour Excel : réduisez la période (7/30 jours) puis réessayez.', 'error');
+        return;
+      }
+      throw err;
+    }
     const blob = new Blob([xmlContent], { type: 'application/vnd.ms-excel;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
     link.setAttribute(
       'download',
-      `MOBI_POS_RAPPORT_EXCEL_PRO_${new Date().toISOString().slice(0, 10)}.xls`
+      `MOBI_POS_RAPPORT_EXCEL_PRO_${todayLocalKey()}.xls`
     );
     document.body.appendChild(link);
     link.click();
@@ -438,13 +604,23 @@ export const ReportsModal: React.FC = () => {
         const itemCount = (t.items || []).reduce((acc, i) => acc + i.quantity, 0);
           const subtotal = grossFromTransaction(t);
         const discount = t.discountTotal || 0;
-        const cost = t.status === 'VOIDED' ? 0 : t.costTotal || 0;
+        // STRICT FIFO LEDGER (v104) + unified display basis: frozen
+        // allocation sum wins per row so the CSV matches the Net Profit
+        // card (900/6,100, not 1000/6,000); exchange receipts use the
+        // signed row cost (both legs).
+        const allocRow = (() => {
+          const raw = allocCogsBySaleId[t.id];
+          const v = Number(raw);
+          return Number.isFinite(v) && v >= 0 ? v : undefined;
+        })();
+        const basisRow = displayCostBasisFor(t);
+        const cost = t.status === 'VOIDED' ? 0 : basisRow ?? allocRow ?? t.costTotal ?? 0;
         const netTotal = t.status === 'VOIDED' ? 0 : t.isRefund ? -t.total : t.total;
-        const profit = t.status === 'VOIDED' || t.isRefund ? 0 : t.profit || netTotal - cost;
+        const profit = t.status === 'VOIDED' || t.isRefund ? 0 : netTotal - cost;
         const margin = netTotal > 0 ? ((profit / netTotal) * 100).toFixed(1) : '0';
         const statusLabel = t.status === 'VOIDED' ? 'ANNULÉ' : t.isRefund ? 'AVOIR' : 'VALIDÉ';
 
-        return `"${t.receiptNumber}";"${statusLabel}";"${dateStr}";"${customerName}";${itemCount};${subtotal};${discount};${netTotal};${cost};${profit};${margin}%;"${payment}"`;
+        return `${csvCell(t.receiptNumber)};${csvCell(statusLabel)};${csvCell(dateStr)};${csvCell(customerName)};${itemCount};${subtotal};${discount};${netTotal};${cost};${profit};${margin}%;${csvCell(payment)}`;
       })
       .join('\n');
 
@@ -455,7 +631,7 @@ export const ReportsModal: React.FC = () => {
     link.setAttribute('href', url);
     link.setAttribute(
       'download',
-      `MOBI_POS_EXPORT_CSV_${new Date().toISOString().slice(0, 10)}.csv`
+      `MOBI_POS_EXPORT_CSV_${todayLocalKey()}.csv`
     );
     document.body.appendChild(link);
     link.click();
@@ -472,7 +648,18 @@ export const ReportsModal: React.FC = () => {
       .map((t) => {
         const customerName = t.customer?.name || 'Client de passage';
         const itemCount = (t.items || []).reduce((acc, i) => acc + i.quantity, 0);
-        return `${t.receiptNumber}\t${t.createdAt}\t${customerName}\t${itemCount}\t${t.total}\t${t.profit || 0}\t${t.paymentMethod}\t${t.status}`;
+        // STRICT FIFO LEDGER (v104) + unified display basis: recompute
+        // from the frozen allocation instead of echoing the possibly-stale
+        // stored profit; exchange receipts use the signed row cost.
+        const allocCopy = (() => {
+          const raw = allocCogsBySaleId[t.id];
+          const v = Number(raw);
+          return Number.isFinite(v) && v >= 0 ? v : undefined;
+        })();
+        const copyCost = t.status === 'VOIDED' ? 0 : displayCostBasisFor(t) ?? allocCopy ?? t.costTotal ?? 0;
+        const copyNet = t.status === 'VOIDED' ? 0 : t.isRefund ? -t.total : t.total;
+        const copyProfit = t.status === 'VOIDED' || t.isRefund ? 0 : copyNet - copyCost;
+        return `${t.receiptNumber}\t${t.createdAt}\t${customerName}\t${itemCount}\t${t.total}\t${copyProfit}\t${t.paymentMethod}\t${t.status}`;
       })
       .join('\n');
 
@@ -499,7 +686,7 @@ export const ReportsModal: React.FC = () => {
         
         {/* Modal Header */}
         <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
             <button
               type="button"
               onClick={() => {
@@ -516,12 +703,12 @@ export const ReportsModal: React.FC = () => {
             <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-cyan-500/20 shrink-0">
               <BarChart3 className="w-5 h-5 stroke-[2.5]" />
             </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-sm sm:text-base font-black text-pos-text tracking-wide truncate">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+                <h2 className="text-sm sm:text-base font-black text-pos-text tracking-wide truncate min-w-0">
                   RAPPORTS FINANCIERS
                 </h2>
-                <span className="text-[9px] sm:text-[10px] bg-cyan-500/10 text-cyan-400 font-black px-1.5 py-0.5 rounded border border-cyan-500/30 uppercase">
+                <span className="text-[9px] sm:text-[10px] bg-cyan-500/10 text-cyan-400 font-black px-1.5 py-0.5 rounded border border-cyan-500/30 uppercase shrink-0 whitespace-nowrap">
                   ENTERPRISE
                 </span>
               </div>
@@ -561,6 +748,9 @@ export const ReportsModal: React.FC = () => {
                 <Key className="w-4 h-4 text-pos-muted absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="password"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  autoComplete="current-password"
                   autoFocus
                   placeholder="Code PIN Administrateur"
                   value={pinInput}
@@ -581,7 +771,7 @@ export const ReportsModal: React.FC = () => {
           <div className="flex-1 flex flex-col overflow-hidden">
             
             {/* Top Navigation Tabs */}
-            <div className="flex border-b border-pos-border bg-pos-card px-2.5 sm:px-4 shrink-0 justify-between items-center overflow-x-auto no-scrollbar">
+            <div className="flex border-b border-pos-border bg-pos-card px-2.5 sm:px-4 shrink-0 items-center gap-2 overflow-x-auto no-scrollbar">
               <div className="flex shrink-0">
                 <button
                   onClick={() => setActiveTab('summary')}
@@ -645,15 +835,15 @@ export const ReportsModal: React.FC = () => {
               </div>
 
               {/* Quick Date Range Filter */}
-              <div className="flex items-center gap-1.5 py-1 shrink-0 pl-2">
-                <Calendar className="w-3.5 h-3.5 text-pos-muted" />
-                <span className="text-[10px] font-bold text-pos-muted uppercase mr-1">Période :</span>
+              <div className="flex items-center gap-1.5 py-1 shrink-0 pl-2 ml-auto overflow-x-auto no-scrollbar max-w-full">
+                <Calendar className="w-3.5 h-3.5 text-pos-muted shrink-0" />
+                <span className="text-[10px] font-bold text-pos-muted uppercase mr-1 shrink-0 whitespace-nowrap">Période :</span>
                 {(['all', 'today', '7days', '30days'] as const).map((r) => (
                   <button
                     key={r}
                     type="button"
                     onClick={() => setDateRangeFilter(r)}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer shrink-0 whitespace-nowrap ${
                       dateRangeFilter === r
                         ? 'bg-emerald-500 text-slate-950 shadow-sm'
                         : 'bg-pos-bg border border-pos-border text-pos-muted hover:text-pos-text'
@@ -672,7 +862,7 @@ export const ReportsModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => openModal('shift_zreport')}
-                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 transition cursor-pointer flex items-center gap-1 ml-1"
+                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 transition cursor-pointer flex items-center gap-1 ml-1 shrink-0 whitespace-nowrap"
                   title="Aperçu et Contrôle du Rapport Z de Caisse"
                 >
                   <Receipt className="w-3 h-3 text-amber-400" />
@@ -777,19 +967,29 @@ export const ReportsModal: React.FC = () => {
                         <div className="bg-pos-bg border border-pos-border/80 p-3 rounded-xl">
                           <div className="flex items-center justify-between">
                             <span className="text-[9.5px] font-bold text-pos-muted uppercase block">Valeur au Coût d'Achat (Actif)</span>
-                            {fifoValuation !== null && fifoValuation > 0 && (
+                            {valuation.source === 'sqlite' && (
                               <span className="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono">
                                 FIFO Actif
                               </span>
                             )}
+                            {valuation.source === 'dexie' && (
+                              <span className="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 font-mono">
+                                FIFO · Hors-ligne
+                              </span>
+                            )}
+                            {valuation.source === 'legacy' && (
+                              <span className="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-pos-muted/10 text-pos-muted border border-pos-border font-mono">
+                                Estimé
+                              </span>
+                            )}
                           </div>
                           <span className="text-base font-black font-mono text-pos-text mt-1 block">
-                            {formatDZD(fifoValuation !== null && fifoValuation > 0 ? fifoValuation : totalStockCostValue)}
+                            {formatDZD(totalStockCostValue)}
                           </span>
                           <span className="text-[9px] text-pos-muted">
-                            {fifoValuation !== null && fifoValuation > 0
-                              ? "Valorisation FIFO exacte sur les lots restants"
-                              : "Capital investi dans le stock"}
+                            {valuation.source === 'legacy'
+                              ? 'Estimation (lots indisponibles)'
+                              : "Valorisation FIFO exacte sur les lots restants"}
                           </span>
                         </div>
                         <div className="bg-pos-bg border border-pos-border/80 p-3 rounded-xl">
@@ -885,6 +1085,30 @@ export const ReportsModal: React.FC = () => {
                           <div className="flex justify-between items-center text-purple-400">
                             <span>(-) Écrémages / Dépôts au Coffre :</span>
                             <span className="font-mono font-bold">-{formatDZD(cashDropsOut)}</span>
+                          </div>
+                        )}
+                        {cashRefundsOut > 0 && (
+                          <div className="flex justify-between items-center text-amber-400">
+                            <span>(-) Remboursements Espèces (Avoirs) :</span>
+                            <span className="font-mono font-bold">-{formatDZD(cashRefundsOut)}</span>
+                          </div>
+                        )}
+                        {exchangeCashOut > 0 && (
+                          <div className="flex justify-between items-center text-amber-400">
+                            <span>(-) Retours Échanges (cash rendu) :</span>
+                            <span className="font-mono font-bold">-{formatDZD(exchangeCashOut)}</span>
+                          </div>
+                        )}
+                        {movementTerms.manualIn > 0 && (
+                          <div className="flex justify-between items-center text-emerald-400">
+                            <span>(+) Apports manuels caisse :</span>
+                            <span className="font-mono font-bold">+{formatDZD(movementTerms.manualIn)}</span>
+                          </div>
+                        )}
+                        {movementTerms.manualOut > 0 && (
+                          <div className="flex justify-between items-center text-amber-400">
+                            <span>(-) Dépenses manuelles caisse :</span>
+                            <span className="font-mono font-bold">-{formatDZD(movementTerms.manualOut)}</span>
                           </div>
                         )}
                       </div>
@@ -1056,7 +1280,7 @@ export const ReportsModal: React.FC = () => {
                     </div>
 
                     <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
-                      <span className="text-[9px] text-pos-muted uppercase font-bold">CA Brut Total</span>
+                      <span className="text-[9px] text-pos-muted uppercase font-bold">CA Net Total</span>
                       <p className="text-base font-black text-emerald-400 mt-0.5">{formatDZD(totalRevenue)}</p>
                     </div>
 
@@ -1099,8 +1323,22 @@ export const ReportsModal: React.FC = () => {
                       )}
                     </div>
 
-                    {/* Filters: Status & Payment */}
-                    <div className="flex items-center gap-3">
+                    {/* Filters: Date range, Status & Payment */}
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-pos-muted font-bold">Période:</span>
+                        <select
+                          value={dateRangeFilter}
+                          onChange={(e) => setDateRangeFilter(e.target.value as 'all' | 'today' | '7days' | '30days')}
+                          className="bg-pos-bg border border-pos-border text-pos-text text-xs font-bold rounded-xl px-3 py-2 focus:border-emerald-400 focus:outline-none cursor-pointer"
+                        >
+                          <option value="all">Tout l&apos;historique</option>
+                          <option value="today">Aujourd&apos;hui</option>
+                          <option value="7days">7 derniers jours</option>
+                          <option value="30days">30 derniers jours</option>
+                        </select>
+                      </div>
+
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-pos-muted font-bold">Statut:</span>
                         <select
@@ -1161,6 +1399,13 @@ export const ReportsModal: React.FC = () => {
                             const isRefund = Boolean(t.isRefund);
                             const isRefunded = t.status === 'REFUNDED';
                             const isPartiallyRefunded = t.status === 'PARTIALLY_REFUNDED';
+                            // Ledger-first list profit: matches the inspector,
+                            // KPI cards and exports (never the ±1 DA blended
+                            // rounding or a stale stored row). Legacy rows
+                            // without any frozen basis keep stored profit.
+                            const basisList = displayCostBasisFor(t);
+                            const listProfit =
+                              basisList !== undefined ? Number(t.total ?? 0) - basisList : t.profit;
 
                             return (
                               <tr
@@ -1229,7 +1474,7 @@ export const ReportsModal: React.FC = () => {
                                   {isRefund ? `-${formatDZD(t.total)}` : formatDZD(t.total)}
                                 </td>
                                 <td className="p-3 text-right font-bold text-cyan-400">
-                                  {isVoided || isRefund ? '0 DA' : formatDZD(t.profit)}
+                                  {isVoided || isRefund ? '0 DA' : formatDZD(listProfit)}
                                 </td>
                                 <td className="p-3 text-center">
                                   <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-pos-bg text-pos-text border border-pos-border">
@@ -1340,7 +1585,7 @@ export const ReportsModal: React.FC = () => {
                   <div className="flex flex-wrap items-center justify-between gap-3 bg-pos-card border border-pos-border p-3 rounded-xl">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="text-[10px] font-bold uppercase text-pos-muted mr-1">Catégorie :</span>
-                      {['Tous', 'Loyer', 'Salaires / Avances', 'Électricité / Eau', 'Repas / Pause', 'Emballages / Sachets', 'Transport / Livraison', 'Internet / Téléphonie', 'Maintenance / Travaux', 'Autre Charge'].map((cat) => (
+                      {['Tous', 'Loyer', 'Salaires / Avances', 'Électricité / Eau', 'Repas / Pause', 'Emballages / Sachets', 'Transport / Livraison', 'Internet / Téléphonie', 'Maintenance / Travaux', 'Perte Stock / SAV', 'Autre Charge'].map((cat) => (
                         <button
                           key={cat}
                           type="button"
@@ -1423,8 +1668,22 @@ export const ReportsModal: React.FC = () => {
                                       type="button"
                                       onClick={() => {
                                         if (window.confirm(`Supprimer cette dépense "${exp.title}" (${formatDZD(exp.amount)}) ?`)) {
-                                          deleteStoreExpense(exp.id);
-                                          showToast('Dépense supprimée', 'info');
+                                          void (async () => {
+                                            const res = await deleteStoreExpense(exp.id);
+                                            if (!res.success) {
+                                              showToast(
+                                                res.reason === 'CLOSED_SESSION_IMMUTABLE'
+                                                  ? "Suppression interdite : charge espèces d'une session clôturée (livres immuables)."
+                                                  : 'Suppression impossible — réessayez.',
+                                                'error'
+                                              );
+                                              return;
+                                            }
+                                            showToast(
+                                              res.compensated ? 'Dépense supprimée — caisse contre-passée.' : 'Dépense supprimée',
+                                              'info'
+                                            );
+                                          })();
                                         }
                                       }}
                                       className="p-1 hover:bg-red-500/20 text-pos-muted hover:text-red-400 rounded transition cursor-pointer"
@@ -1581,6 +1840,9 @@ export const ReportsModal: React.FC = () => {
                           {(dateFilteredTransactions || []).slice(0, 15).map((t, idx) => {
                             const isVoided = t.status === 'VOIDED';
                             const isRefund = Boolean(t.isRefund);
+                            const basisRecent = displayCostBasisFor(t);
+                            const recentProfit =
+                              basisRecent !== undefined ? Number(t.total ?? 0) - basisRecent : t.profit;
                             return (
                               <tr
                                 key={t.id}
@@ -1602,7 +1864,7 @@ export const ReportsModal: React.FC = () => {
                                   {isRefund ? `-${formatDZD(t.total)}` : formatDZD(t.total)}
                                 </td>
                                 <td className="p-2.5 text-right font-bold text-emerald-400">
-                                  {isVoided || isRefund ? '0 DA' : formatDZD(t.profit)}
+                                  {isVoided || isRefund ? '0 DA' : formatDZD(recentProfit)}
                                 </td>
                                 <td className="p-2.5 text-center">{t.paymentMethod}</td>
                                 <td className="p-2.5 text-center">
@@ -1700,13 +1962,37 @@ export const ReportsModal: React.FC = () => {
                     {(inspectingTransaction?.items || []).map((item, idx) => {
                       const itemPrice = item.unitPriceCharged || item.appliedPrice || item.product?.price || 0;
                       const defaultPrice = item.defaultPrice || item.product?.price || 0;
-                      const unitCost = item.unitCostAtSale ?? item.product?.costPrice ?? 0;
-                      const lineProfit = item.lineProfit !== undefined
+                      // STRICT LEDGER: frozen line cost wins; when the line
+                      // carries none but the ticket has ledger rows, split the
+                      // frozen COGS pro-rata instead of pricing the live
+                      // catalog cost (which printed 6,200 for a 6,100 ticket).
+                      // Materialized receipts never touch costPrice at all —
+                      // a missing line cost there falls back to the
+                      // pro-rata share (exact in aggregate) or 0, never the
+                      // catalog estimate. While the ledger is still
+                      // resolving, lines without a frozen cost render pending
+                      // — never the stale 6,200 flash from the stored row.
+                      const lineCostPending =
+                        item.unitCostAtSale === undefined &&
+                        inspectorLedgerAvgUnit === undefined &&
+                        !inspectorLedgerLoaded;
+                      const unitCost =
+                        item.unitCostAtSale ??
+                        inspectorLedgerAvgUnit ??
+                        (isMaterializedReceipt ? 0 : item.product?.costPrice ?? 0);
+                      const lineProfit = lineCostPending
+                        ? null
+                        : (item.unitCostAtSale !== undefined || inspectorLedgerAvgUnit !== undefined)
+                        ? (itemPrice - unitCost) * item.quantity
+                        : item.lineProfit !== undefined
                         ? item.lineProfit
                         : (itemPrice - unitCost) * item.quantity;
                       const lineTotal = itemPrice * item.quantity;
                       const discountAmount = item.discountAmount ?? (defaultPrice > itemPrice ? defaultPrice - itemPrice : 0);
-                      const marginPct = lineTotal > 0 ? ((lineProfit / lineTotal) * 100).toFixed(1) : '0';
+                      const marginText =
+                        lineProfit === null
+                          ? '…'
+                          : `${formatDZD(lineProfit)} (${lineTotal > 0 ? ((lineProfit / lineTotal) * 100).toFixed(1) : '0'}%)`;
 
                       return (
                         <div key={idx} className="p-3 flex justify-between items-center text-xs hover:bg-pos-hover/30 transition">
@@ -1719,10 +2005,16 @@ export const ReportsModal: React.FC = () => {
                               {defaultPrice !== itemPrice && (
                                 <span className="line-through text-pos-muted/60">{formatDZD(defaultPrice)}</span>
                               )}
-                              {unitCost > 0 && (
+                              {unitCost > 0 && !lineCostPending && (
                                 <>
                                   <span>•</span>
                                   <span className="text-pos-muted">Coût FIFO: {formatDZD(unitCost)}/u</span>
+                                </>
+                              )}
+                              {lineCostPending && (
+                                <>
+                                  <span>•</span>
+                                  <span className="text-pos-muted">Coût FIFO: …</span>
                                 </>
                               )}
                               {discountAmount > 0 && (
@@ -1734,8 +2026,8 @@ export const ReportsModal: React.FC = () => {
                           </div>
                           <div className="text-right shrink-0">
                             <span className="font-black text-pos-text block">{formatDZD(lineTotal)}</span>
-                            <span className={`text-[10px] font-bold font-mono ${lineProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              Marge: {formatDZD(lineProfit)} ({marginPct}%)
+                            <span className={`text-[10px] font-bold font-mono ${lineProfit === null ? 'text-pos-muted' : lineProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              Marge: {marginText}
                             </span>
                           </div>
                         </div>
@@ -1764,14 +2056,40 @@ export const ReportsModal: React.FC = () => {
                     <div className="flex justify-between text-xs font-bold text-cyan-400 pt-1 border-t border-dashed border-pos-border">
                       <span>Marge Commerciale Nette (FIFO) :</span>
                       <span className="font-mono">
+                        {!inspectorLedgerLoaded
+                          ? '…'
+                          : formatDZD(
+                              inspectorLedgerCogs != null
+                                ? Math.max(0, Number(inspectingTransaction.total ?? 0)) -
+                                  (isExchangeSale(inspectingTransaction) &&
+                                  Number.isFinite(Number(inspectingTransaction.costTotal))
+                                    ? Math.round(Number(inspectingTransaction.costTotal))
+                                    : inspectorLedgerCogs)
+                                : inspectingTransaction.profit !== undefined
+                                ? inspectingTransaction.profit
+                                : (inspectingTransaction.items || []).reduce((acc, it) => {
+                                    const uCost = it.unitCostAtSale ?? (isMaterializedReceipt ? 0 : it.product?.costPrice ?? 0);
+                                    const uCharged = it.unitPriceCharged ?? it.appliedPrice ?? it.product?.price ?? 0;
+                                    return acc + (it.lineProfit ?? ((uCharged - uCost) * it.quantity));
+                                  }, 0)
+                            )}
+                      </span>
+                    </div>
+                  )}
+                  {inspectingTransaction.status !== 'VOIDED' && !inspectingTransaction.isRefund && inspectorLedgerLoaded && inspectorLedgerCogs != null && (
+                    <div className="flex justify-between text-[11px] text-pos-muted">
+                      <span>
+                        {isExchangeSale(inspectingTransaction) &&
+                        Number.isFinite(Number(inspectingTransaction.costTotal))
+                          ? "Coût d'Achat Net (Échange) :"
+                          : "Coût d'Achat (Ledger FIFO) :"}
+                      </span>
+                      <span className="font-mono">
                         {formatDZD(
-                          inspectingTransaction.profit !== undefined
-                            ? inspectingTransaction.profit
-                            : (inspectingTransaction.items || []).reduce((acc, it) => {
-                                const uCost = it.unitCostAtSale ?? it.product?.costPrice ?? 0;
-                                const uCharged = it.unitPriceCharged ?? it.appliedPrice ?? it.product?.price ?? 0;
-                                return acc + (it.lineProfit ?? ((uCharged - uCost) * it.quantity));
-                              }, 0)
+                          isExchangeSale(inspectingTransaction) &&
+                            Number.isFinite(Number(inspectingTransaction.costTotal))
+                            ? Math.round(Number(inspectingTransaction.costTotal))
+                            : inspectorLedgerCogs
                         )}
                       </span>
                     </div>
@@ -1798,6 +2116,9 @@ export const ReportsModal: React.FC = () => {
                       <label className="text-[10px] font-bold text-pos-muted block mb-1">PIN Manager :</label>
                       <input
                         type="password"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        autoComplete="current-password"
                         placeholder="Code PIN Manager"
                         value={voidPin}
                         onChange={(e) => setVoidPin(e.target.value)}
@@ -1815,9 +2136,10 @@ export const ReportsModal: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => handleConfirmVoid(inspectingTransaction)}
-                        className="px-4 py-1.5 bg-red-500 hover:bg-red-400 text-slate-950 font-black text-xs rounded-lg transition"
+                        disabled={isVoidSubmitting}
+                        className="px-4 py-1.5 bg-red-500 hover:bg-red-400 text-slate-950 font-black text-xs rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        Confirmer l'Annulation (Restaurer Stocks)
+                        {isVoidSubmitting ? 'Annulation en cours…' : "Confirmer l'Annulation (Restaurer Stocks)"}
                       </button>
                     </div>
                   </div>
@@ -1911,6 +2233,7 @@ export const ReportsModal: React.FC = () => {
                       'Transport / Livraison',
                       'Internet / Téléphonie',
                       'Maintenance / Travaux',
+                      'Perte Stock / SAV',
                       'Autre Charge',
                     ].map((c) => (
                       <option key={c} value={c}>

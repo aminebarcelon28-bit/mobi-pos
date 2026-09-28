@@ -2,6 +2,7 @@ import React, { useRef, useEffect } from 'react';
 import { usePosStore } from '../store/usePosStore';
 import { formatDZD, formatDateTime } from '../types/pos';
 import { renderBarcodeToCanvas } from '../utils/barcodeGenerator';
+import { grossFromTransaction } from '../utils/receiptMath';
 
 export const SilentReceiptPrinter: React.FC = () => {
   const { lastTransaction, receiptSettings } = usePosStore();
@@ -92,7 +93,7 @@ export const SilentReceiptPrinter: React.FC = () => {
             <>
               <div className="flex justify-between text-gray-700 text-[10px]">
                 <span>SOUS-TOTAL BRUT:</span>
-                <span>{formatDZD(lastTransaction.subtotal + lastTransaction.discountTotal)}</span>
+                  <span>{formatDZD(grossFromTransaction(lastTransaction))}</span>
               </div>
               <div className="flex justify-between text-gray-700 font-bold text-[10px]">
                 <span>REMISE ACCORDÉE:</span>

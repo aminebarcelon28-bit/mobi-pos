@@ -1,16 +1,26 @@
 import type { SaleTransaction } from '../types/pos';
 import { buildExcelStyles } from './excel/styles';
 import {
+  buildCoverWorksheet,
   buildSalesWorksheet,
   buildItemsWorksheet,
+  buildSalesWorksheetAsync,
+  buildItemsWorksheetAsync,
   buildPaymentsWorksheet,
+  MAX_EXCEL_ROWS,
   type ExcelMetrics,
 } from './excel/sheets';
-import { getEffectiveCostPrice } from './pricingEngine';
+
+export { MAX_EXCEL_ROWS };
+import { computeSalesMetrics, type AllocCogsLookup } from './receiptMath';
 
 export { escapeXml } from './excel/sheets';
 
-function computeMetrics(transactions: SaleTransaction[], periodLabel: string): {
+function computeMetrics(
+  transactions: SaleTransaction[],
+  periodLabel: string,
+  allocCogsBySaleId?: AllocCogsLookup
+): {
   metrics: ExcelMetrics;
   paymentBreakdown: Record<string, { count: number; total: number }>;
 } {
@@ -22,13 +32,21 @@ function computeMetrics(transactions: SaleTransaction[], periodLabel: string): {
     minute: '2-digit',
   });
 
-  const validSales = transactions.filter((t) => t.status !== 'VOIDED' && !t.isRefund);
-  const totalGrossRevenue = validSales.reduce((acc, t) => acc + t.total, 0);
-  const totalRefundsValue = transactions.filter((t) => t.isRefund).reduce((acc, t) => acc + t.total, 0);
-  const totalNetRevenue = Math.max(0, totalGrossRevenue - totalRefundsValue);
-  const totalCost = validSales.reduce((acc, t) => acc + (t.costTotal || getEffectiveCostPrice({ price: t.total })), 0);
-  const totalProfit = totalNetRevenue - totalCost;
-  const avgMargin = totalNetRevenue > 0 ? ((totalProfit / totalNetRevenue) * 100).toFixed(1) : '0';
+  // Single source of truth: the SAME canonical computeSalesMetrics() formula
+  // the Desktop ReportsModal and the Mobile LiveActivityTab/ManagementTab use,
+  // so the export can never diverge from the on-screen KPIs (CA Net, profit,
+  // basket, discounts, refunds). STRICT FIFO LEDGER (v104): theUI passes its
+  // frozen allocation map so the export sums ledger COGS (900) instead of a
+  // stale stored costTotal (1000) — 6,100, not 6,000.
+  const sales = computeSalesMetrics(transactions, { allocCogsBySaleId });
+  const totalGrossRevenue = sales.grossRevenue;
+  const totalRefundsValue = sales.refundsTotal;
+  const totalNetRevenue = sales.netRevenue;
+  const totalCost = sales.costTotal;
+  const totalProfit = sales.profitTotal;
+  const avgMargin = sales.marginPct;
+  const validSalesCount = sales.validCount;
+  const averageBasket = sales.averageBasket;
 
   const paymentBreakdown: Record<string, { count: number; total: number }> = {};
   transactions.forEach((t) => {
@@ -52,22 +70,20 @@ function computeMetrics(transactions: SaleTransaction[], periodLabel: string): {
       totalCost,
       totalProfit,
       avgMargin,
-      validSalesCount: validSales.length,
+      validSalesCount,
+      averageBasket,
     },
     paymentBreakdown,
   };
 }
 
-/**
- * Generates an ultra-professional, multi-sheet, color-coded Microsoft Excel XML (SpreadsheetML) file.
- * Compatible with Microsoft Excel (all versions), Apple Numbers, LibreOffice Calc, and Google Sheets.
- */
-export function generateProfessionalExcelXml(
-  transactions: SaleTransaction[],
-  periodLabel: string = 'Toutes les dates'
+function workbookXml(
+  styles: string,
+  coverSheet: string,
+  salesSheet: string,
+  itemsSheet: string,
+  paymentsSheet: string
 ): string {
-  const { metrics, paymentBreakdown } = computeMetrics(transactions, periodLabel);
-
   return `<?xml version="1.0" encoding="UTF-8"?>
 <?mso-application progid="Excel.Sheet"?>
 <Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
@@ -82,9 +98,55 @@ export function generateProfessionalExcelXml(
   <Company>Mobi-POS Algérie</Company>
   <Version>16.00</Version>
  </DocumentProperties>
-${buildExcelStyles()}
-${buildSalesWorksheet(transactions, metrics)}
-${buildItemsWorksheet(transactions)}
-${buildPaymentsWorksheet(paymentBreakdown, metrics.totalNetRevenue, metrics.validSalesCount)}
+${styles}
+${coverSheet}
+${salesSheet}
+${itemsSheet}
+${paymentsSheet}
 </Workbook>`;
+}
+
+/**
+ * Generates an ultra-professional, multi-sheet, color-coded Microsoft Excel XML (SpreadsheetML) file.
+ * Compatible with Microsoft Excel (all versions), Apple Numbers, LibreOffice Calc, and Google Sheets.
+ * Throws `{code:'TOO_LARGE'}` past MAX_EXCEL_ROWS (row cap lives in ./excel/sheets).
+ */
+export function generateProfessionalExcelXml(
+  transactions: SaleTransaction[],
+  periodLabel: string = 'Toutes les dates',
+  allocCogsBySaleId?: AllocCogsLookup
+): string {
+  const { metrics, paymentBreakdown } = computeMetrics(transactions, periodLabel, allocCogsBySaleId);
+
+  return workbookXml(
+    buildExcelStyles(),
+    buildCoverWorksheet(metrics, paymentBreakdown, transactions.length),
+    buildSalesWorksheet(transactions, metrics, allocCogsBySaleId),
+    buildItemsWorksheet(transactions),
+    buildPaymentsWorksheet(paymentBreakdown, metrics.totalNetRevenue, metrics.validSalesCount)
+  );
+}
+
+/**
+ * Chunked async variant: row generation yields to the UI every ~1000 rows.
+ * Byte-identical output to the sync version for the same input.
+ */
+export async function generateProfessionalExcelXmlAsync(
+  transactions: SaleTransaction[],
+  periodLabel: string = 'Toutes les dates',
+  allocCogsBySaleId?: AllocCogsLookup
+): Promise<string> {
+  const { metrics, paymentBreakdown } = computeMetrics(transactions, periodLabel, allocCogsBySaleId);
+  const [salesSheet, itemsSheet] = await Promise.all([
+    buildSalesWorksheetAsync(transactions, metrics, allocCogsBySaleId),
+    buildItemsWorksheetAsync(transactions),
+  ]);
+
+  return workbookXml(
+    buildExcelStyles(),
+    buildCoverWorksheet(metrics, paymentBreakdown, transactions.length),
+    salesSheet,
+    itemsSheet,
+    buildPaymentsWorksheet(paymentBreakdown, metrics.totalNetRevenue, metrics.validSalesCount)
+  );
 }

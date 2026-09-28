@@ -28,6 +28,12 @@
   --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
   --safe-left: max(env(safe-area-inset-left, 0px), 0px);
   --safe-right: max(env(safe-area-inset-right, 0px), 0px);
+
+  /* Centralized shape + status tokens (values already repeated 3+ times
+     across the codebase: rounded-2xl cards, M3 28px sheets, status tints). */
+  --pos-radius-card: 1rem; /* = rounded-2xl, standard card/panel radius */
+  --pos-radius-sheet: 28px; /* M3 bottom-sheet top radius */
+  --pos-focus: #10b981; /* emerald-500, global :focus-visible ring */
 }
 
 html.dark {
@@ -103,6 +109,21 @@ html.dark {
 .border-pos-border { border-color: var(--pos-border); }
 .text-pos-muted { color: var(--pos-muted); }
 .text-pos-text { color: var(--pos-text); }
+
+/* Theme-adaptive accent text (a11y): fixed 400-level hues pass on the dark
+   panel but fail WCAG AA on light surfaces (e.g. emerald-400 on white =
+   1.9:1). These utilities hold ≥4.5:1 in BOTH modes — light uses the
+   700/800 step, dark keeps the vivid 400 step. */
+.text-pos-accent { color: #047857; }
+.text-pos-accent-amber { color: #92400e; }
+.text-pos-accent-purple { color: #6d28d9; }
+.text-pos-accent-cyan { color: #0e7490; }
+.text-pos-accent-indigo { color: #4338ca; }
+html.dark .text-pos-accent { color: #34d399; }
+html.dark .text-pos-accent-amber { color: #fbbf24; }
+html.dark .text-pos-accent-purple { color: #c084fc; }
+html.dark .text-pos-accent-cyan { color: #22d3ee; }
+html.dark .text-pos-accent-indigo { color: #818cf8; }
 
 /* Universal App Shell safe-area utilities */
 @layer utilities {
@@ -182,6 +203,28 @@ html.dark {
     min-width: 48px;
     min-height: 48px;
   }
+  /* Centralized status-tint combos (mirrors the recurring
+     bg-[color]/10 + border-[color]/30 + text-[color]-300/400 patterns used 10+ times).
+     Additive tokens only — existing usages keep their own classes. */
+  .pos-status-danger {
+    background-color: rgb(244 63 94 / 0.1);
+    border-color: rgb(244 63 94 / 0.3);
+    color: #fda4af;
+  }
+  .pos-status-warn {
+    background-color: rgb(245 158 11 / 0.1);
+    border-color: rgb(245 158 11 / 0.3);
+    color: #fcd34d;
+  }
+  .pos-status-ok {
+    background-color: rgb(16 185 129 / 0.1);
+    border-color: rgb(16 185 129 / 0.3);
+    color: #6ee7b7;
+  }
+  /* Centralized card radius alias (same pixels as rounded-2xl). */
+  .rounded-pos-card {
+    border-radius: var(--pos-radius-card);
+  }
 }
 
 /* Custom Scrollbar for POS */
@@ -225,7 +268,36 @@ html.dark .hotkey-badge {
   border-color: rgba(255, 255, 255, 0.1);
 }
 
+/* Global accessible focus ring (emerald accent). One rule — no per-button restyle. */
+:focus-visible {
+  outline: 2px solid var(--pos-focus);
+  outline-offset: 2px;
+}
+
+/* prefers-reduced-motion: kill slide/fade/zoom/scan/shake animation;
+   keep (near-instant) opacity so show/hide logic never breaks layout. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @media print {
+  /* Page formats: A4 documents + 80mm thermal roll */
+  @page mobi-a4 {
+    size: A4;
+    margin: 9mm 9mm 12mm 9mm;
+  }
+  @page mobi-receipt {
+    size: 80mm auto;
+    margin: 0;
+  }
+
   /* Reset global viewport for print */
   html, body {
     background: #ffffff !important;
@@ -295,18 +367,86 @@ html.dark .hotkey-badge {
   }
 
   body[data-print-channel="purchase_order"] .print-po-target {
-    position: fixed !important;
+    position: absolute !important;
     left: 0 !important;
     top: 0 !important;
     width: 100% !important;
     max-width: 210mm !important;
     margin: 0 auto !important;
-    padding: 8mm !important;
+    padding: 0 !important;
     background: #ffffff !important;
     color: #000000 !important;
     box-shadow: none !important;
     border: none !important;
     z-index: 999999 !important;
+    page: mobi-a4 !important;
+  }
+
+  /* Modern A4 purchase-order layout: logo, balanced party cards,
+     edge-to-edge product table, grand total + stamp boxes */
+  :is(.print-po-target) .po-a4 {
+    width: 100% !important;
+  }
+  :is(.print-po-target) .po-banner {
+    align-items: center !important;
+  }
+  :is(.print-po-target) .po-brand {
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    min-width: 0 !important;
+  }
+  :is(.print-po-target) .po-logo {
+    width: 52px !important;
+    height: 52px !important;
+    object-fit: contain !important;
+    background: #ffffff !important;
+    border-radius: 10px !important;
+    padding: 4px !important;
+    flex-shrink: 0 !important;
+  }
+  :is(.print-po-target) .po-parties {
+    grid-template-columns: 1fr 1fr !important;
+  }
+  :is(.print-po-target) .po-card {
+    min-height: 26mm !important;
+  }
+  :is(.print-po-target) table.po-table {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    width: 100% !important;
+  }
+  :is(.print-po-target) .doc-left {
+    text-align: left !important;
+  }
+  :is(.print-po-target) .po-grandtotal {
+    margin-top: 2px !important;
+  }
+  :is(.print-po-target) .po-signboxes {
+    gap: 14px !important;
+  }
+  :is(.print-po-target) .po-stampbox {
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 8px !important;
+    padding: 10px 12px 8px !important;
+    background: #ffffff !important;
+    break-inside: avoid !important;
+  }
+  :is(.print-po-target) .po-stampbox *,
+  :is(.print-po-target) .po-signhint {
+    color: #6b7280 !important;
+    border-color: #cbd5e1 !important;
+  }
+  :is(.print-po-target) .po-stamparea {
+    height: 26mm !important;
+    border: 1px dashed #9ca3af !important;
+    border-radius: 6px !important;
+    margin: 8px 0 6px !important;
+    background: #f8fafc !important;
+  }
+  :is(.print-po-target) .po-signhint {
+    font-size: 8px !important;
+    text-align: center !important;
   }
 
   /* Channel 4: Shift Z-Report / Drawer Reconciliation */
@@ -378,7 +518,11 @@ html.dark .hotkey-badge {
   .print-po-target *,
   .print-zreport-target *,
   .print-repair-target *,
-  .print-tradein-target * {
+  .print-tradein-target *,
+  .print-debt-target *,
+  .print-loyalty-target *,
+  .print-credit-target *,
+  .print-text-target * {
     color: #000000 !important;
     border-color: #333333 !important;
   }
@@ -387,6 +531,369 @@ html.dark .hotkey-badge {
     display: block !important;
     max-width: 100% !important;
     height: auto !important;
+  }
+}
+
+@media print {
+  /* ── Page formats ── */
+  .print-po-target,
+  .print-repair-target,
+  .print-tradein-target,
+  .print-debt-target {
+    page: mobi-a4 !important;
+  }
+  .print-receipt-target,
+  .print-zreport-target {
+    page: mobi-receipt !important;
+  }
+
+  /* ── Channel 7: Debt customer statement (80mm) ── */
+  body[data-print-channel="debt_statement"] .print-debt-target,
+  body[data-print-channel="debt_statement"] .print-debt-target * {
+    visibility: visible !important;
+  }
+  body[data-print-channel="debt_statement"] .print-debt-target {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 80mm !important;
+    max-width: 80mm !important;
+    margin: 0 auto !important;
+    padding: 2mm 3mm !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    z-index: 999999 !important;
+  }
+
+  /* ── Channel 8: Loyalty PVC card (CR80) ── */  body[data-print-channel="loyalty_card"] .print-loyalty-target,
+  body[data-print-channel="loyalty_card"] .print-loyalty-target * {
+    visibility: visible !important;
+  }
+  body[data-print-channel="loyalty_card"] .print-loyalty-target {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 4mm !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    z-index: 999999 !important;
+  }
+  /* PVC front is dark on screen — force ink-safe paper version in print */
+  body[data-print-channel="loyalty_card"] .print-loyalty-target .doc-pvc-front,
+  body[data-print-channel="loyalty_card"] .print-loyalty-target .doc-pvc-front * {
+    background: #ffffff !important;
+    color: #000000 !important;
+    border-color: #333333 !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+  }
+  body[data-print-channel="loyalty_card"] .print-loyalty-target .doc-pvc-deco {
+    display: none !important;
+  }
+
+  /* ── Channel 9: Credit voucher ticket (80mm thermal) ── */
+  body[data-print-channel="credit_voucher"] .print-credit-target,
+  body[data-print-channel="credit_voucher"] .print-credit-target * {
+    visibility: visible !important;
+  }
+  body[data-print-channel="credit_voucher"] .print-credit-target {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 80mm !important;
+    max-width: 80mm !important;
+    margin: 0 auto !important;
+    padding: 2mm 3mm !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    z-index: 999999 !important;
+    page: mobi-receipt !important;
+  }
+
+  /* ── Channel 10: Plain-text document (openNativePrint desktop route, A4) ── */
+  body[data-print-channel="text_doc"] .print-text-target,
+  body[data-print-channel="text_doc"] .print-text-target * {
+    visibility: visible !important;
+  }
+  body[data-print-channel="text_doc"] .print-text-target {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 210mm !important;
+    margin: 0 auto !important;
+    padding: 8mm !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    z-index: 999999 !important;
+    page: mobi-a4 !important;
+  }
+  body[data-print-channel="text_doc"] .print-text-target pre {
+    font: 11px/1.5 "Courier New", monospace !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+  }
+
+  /* ══ Branded document system (.doc-*) — A4 business documents ══
+     Qualified selectors outrank the monochrome blanket rule above,
+     so brand colors survive on paper/PDF. */
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-banner {
+    background: linear-gradient(135deg, #064e3b 0%, #047857 60%, #0d9488 100%) !important;
+    color: #ffffff !important;
+    border-radius: 10px !important;
+    padding: 14px 18px !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: flex-start !important;
+    gap: 12px !important;
+    margin-bottom: 14px !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-banner *,
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-title,
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-sub {
+    color: #ffffff !important;
+    border-color: rgba(255, 255, 255, 0.35) !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-title {
+    font-size: 19px !important;
+    font-weight: 900 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.04em !important;
+    line-height: 1.15 !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-sub {
+    font-size: 10.5px !important;
+    color: #d1fae5 !important;
+    margin-top: 3px !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-refbox {
+    background: #ffffff !important;
+    border-radius: 8px !important;
+    padding: 9px 13px !important;
+    text-align: right !important;
+    min-width: 46mm !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-refbox *,
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-ref,
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-refdate {
+    color: #111827 !important;
+    border-color: #d1d5db !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-reftype {
+    font-size: 10px !important;
+    font-weight: 900 !important;
+    text-transform: uppercase !important;
+    color: #047857 !important;
+    letter-spacing: 0.05em !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-ref {
+    font-size: 14px !important;
+    font-weight: 900 !important;
+    margin-top: 2px !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-refdate {
+    font-size: 9px !important;
+    color: #6b7280 !important;
+    margin-top: 2px !important;
+  }
+
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-grid2 {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 10px !important;
+    margin-bottom: 12px !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-card {
+    background: #f0fdf4 !important;
+    border: 1px solid #a7f3d0 !important;
+    border-radius: 8px !important;
+    padding: 9px 12px !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-card *,
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-label {
+    color: #111827 !important;
+    border-color: #a7f3d0 !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-label {
+    font-size: 8.5px !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+    color: #047857 !important;
+    margin-bottom: 2px !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-value {
+    font-size: 13px !important;
+    font-weight: 800 !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-muted {
+    font-size: 10.5px !important;
+    color: #4b5563 !important;
+  }
+
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) table.doc-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    margin-bottom: 12px !important;
+    font-size: 11px !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) table.doc-table thead {
+    display: table-header-group !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) table.doc-table tr {
+    break-inside: avoid !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) table.doc-table th {
+    background: #047857 !important;
+    color: #ffffff !important;
+    font-size: 9.5px !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.04em !important;
+    padding: 7px 9px !important;
+    text-align: left !important;
+    border: 1px solid #065f46 !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) table.doc-table td {
+    padding: 6px 9px !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    color: #111827 !important;
+    vertical-align: top !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) table.doc-table tbody tr:nth-child(even) td {
+    background: #f8fafc !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-num {
+    text-align: right !important;
+    font-variant-numeric: tabular-nums !important;
+    white-space: nowrap !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-center {
+    text-align: center !important;
+  }
+
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-totalband {
+    background: #064e3b !important;
+    border-radius: 8px !important;
+    padding: 11px 16px !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    gap: 10px !important;
+    margin-bottom: 12px !important;
+    break-inside: avoid !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-totalband *,
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-totallabel {
+    color: #ffffff !important;
+    border-color: rgba(255, 255, 255, 0.3) !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-totallabel {
+    font-size: 11px !important;
+    font-weight: 900 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-totalval {
+    font-size: 19px !important;
+    font-weight: 900 !important;
+    color: #6ee7b7 !important;
+    white-space: nowrap !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-totalsub {
+    font-size: 9.5px !important;
+    color: #d1fae5 !important;
+    text-align: right !important;
+  }
+
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-notebox {
+    background: #f8fafc !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+    padding: 9px 12px !important;
+    font-size: 10px !important;
+    margin-bottom: 12px !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-notebox *,
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-terms,
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-terms * {
+    color: #374151 !important;
+    border-color: #e2e8f0 !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-terms {
+    font-size: 8.5px !important;
+    margin-bottom: 4px !important;
+    break-inside: avoid !important;
+  }
+
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-checkgrid {
+    display: grid !important;
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 6px !important;
+    margin-bottom: 12px !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-chip {
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    border-radius: 6px !important;
+    padding: 4px 8px !important;
+    border: 1px solid !important;
+    text-align: center !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-chip-ok {
+    background: #d1fae5 !important;
+    color: #065f46 !important;
+    border-color: #6ee7b7 !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-chip-ko {
+    background: #fee2e2 !important;
+    color: #991b1b !important;
+    border-color: #fca5a5 !important;
+  }
+
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-sign {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 32px !important;
+    margin-top: 18px !important;
+    padding-top: 10px !important;
+    border-top: 1px dashed #9ca3af !important;
+    text-align: center !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-signlabel {
+    font-size: 9.5px !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    color: #374151 !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-signline {
+    height: 44px !important;
+    border-bottom: 1px solid #6b7280 !important;
+    margin-top: 4px !important;
+  }
+
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-footer {
+    margin-top: 14px !important;
+    padding-top: 8px !important;
+    border-top: 1px solid #d1d5db !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    gap: 8px !important;
+    font-size: 8.5px !important;
+  }
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-footer,
+  :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-footer * {
+    color: #6b7280 !important;
   }
 }
 

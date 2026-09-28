@@ -9,11 +9,68 @@ import {
   utcNowIso,
   enqueueGenericSync,
   syncProductUpsertBulk,
+  isDeviceLocalSettingKey,
+  stripDeviceLocalSettingValue,
   type GenericEntity,
 } from './sqlPluginAdapter';
+import { withBusyRetry } from './busyRetry';
 import type { SaleTransaction, Customer, Product, CartItem } from '../types/pos';
+import { APP_VERSION } from '../types/pos';
 
-const BACKFILL_FLAG = 'sync.backfill_v1';
+/**
+ * One-shot era. Bump when a new divergence era needs re-healing: the flag key
+ * carries the era, so a second era re-runs the (idempotent) backfill instead
+ * of trusting a stale v1 flag forever. The app version is recorded INSIDE the
+ * flag value for forensics, never in the key (a per-version key would
+ * re-enqueue the whole store on every release).
+ */
+const BACKFILL_SCHEMA_ERA = 2;
+// Era 3: remirror now reconciles deletes (evicts Dexie ghosts for rows
+// deleted in SQLite). Bumping forces a one-time re-run so existing
+// divergences (UI 1960 vs SQLite 1010) converge on next boot.
+const REMIRROR_SCHEMA_ERA = 3;
+const BACKFILL_FLAG = `sync.backfill_v${BACKFILL_SCHEMA_ERA}`;
+const REMIRROR_FLAG = `sync.remirror_v${REMIRROR_SCHEMA_ERA}`;
+// Era-independent one-shot: projects the SQLite batches ledger into Dexie so
+// batch-based reporting starts from the truth on upgraded installs (whose
+// Dexie quantities predate the mirror). Independent of REMIRROR_FLAG so it
+// runs even where the v3 remirror already completed.
+const REMIRROR_BATCHES_FLAG = 'sync.remirror_batches_v1';
+// v104 STRICT LEDGER one-shot: backfills sale_batch_allocations from durable
+// transaction_items.fifo_allocations JSON (pre-v104 / offline sales) and
+// projects the frozen ledger into the Dexie saleBatchAllocations mirror the
+// allocation-backed report hooks read. Without this, upgraded installs keep
+// the stale stored costTotal (500×2=1000 → 6,000) on screen while fresh
+// installs correctly show 6,100. Independent of REMIRROR_FLAG like batches.
+const REMIRROR_ALLOCS_FLAG = 'sync.remirror_allocs_v1';
+
+type FlagDb = {
+  select: (s: string, a?: unknown[]) => Promise<unknown>;
+  execute: (s: string, a?: unknown[]) => Promise<unknown>;
+};
+
+async function readFlag(db: FlagDb, key: string): Promise<Record<string, unknown> | null> {
+  try {
+    const rows = (await db.select('SELECT value_json FROM app_settings WHERE key=$1', [key]).catch(() => [])) as Array<{ value_json: string }>;
+    if (!rows?.[0]) return null;
+    try {
+      return JSON.parse(rows[0].value_json as string) as Record<string, unknown>;
+    } catch {
+      return { raw: rows[0].value_json };
+    }
+  } catch {
+    return null;
+  }
+}
+
+async function writeFlag(db: FlagDb, key: string, value: Record<string, unknown>): Promise<void> {
+  const { utcNowIso } = await import('./sqlPluginAdapter');
+  const now = utcNowIso();
+  await db.execute(
+    'INSERT OR REPLACE INTO app_settings (key, value_json, updated_at) VALUES ($1, $2, $3)',
+    [key, JSON.stringify({ ...value, appVersion: APP_VERSION }), now],
+  ).catch(() => {});
+}
 
 async function hasLocalOrder(db: { select: (s: string, a?: unknown[]) => Promise<unknown> }, id: string): Promise<boolean> {
   try {
@@ -26,11 +83,22 @@ async function hasLocalOrder(db: { select: (s: string, a?: unknown[]) => Promise
 }
 
 export async function backfillAllToOutbox(): Promise<{ enqueued: number; skipped: boolean }> {
+  // Retried but NOT outer-locked (house rule: withWriteLock is not
+  // re-entrant): the inner writers self-serialize — enqueueGenericSync owns
+  // the mutex per call — so an outer lock here would deadlock. The direct
+  // boot INSERTs below are idempotent single statements (ON CONFLICT), and a
+  // BUSY anywhere replays the whole idempotent pass via the outer retry.
+  // Idempotent (stable keys + ON CONFLICT), so re-execution is safe.
+  return withBusyRetry(() => backfillAllToOutboxInner(), {
+    attempts: 4,
+    baseDelayMs: 100,
+    label: 'backfill',
+  });
+}
+
+async function backfillAllToOutboxInner(): Promise<{ enqueued: number; skipped: boolean }> {
   const db = await getLocalDb();
-  const flagRows = (await db
-    .select('SELECT value_json FROM app_settings WHERE key=$1', [BACKFILL_FLAG])
-    .catch(() => [])) as Array<{ value_json: string }>;
-  if (flagRows?.[0]) return { enqueued: 0, skipped: true };
+  if (await readFlag(db, BACKFILL_FLAG)) return { enqueued: 0, skipped: true };
 
   let enqueued = 0;
   const now = utcNowIso();
@@ -46,9 +114,9 @@ export async function backfillAllToOutbox(): Promise<{ enqueued: number; skipped
       await db.execute(
         `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
           cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
-          status, created_at, json_payload, device_id, idempotency_key, sync_status, updated_at, deleted)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'backfill',$18,'pending',$19,0)
-         ON CONFLICT(id) DO NOTHING`,
+          status, created_at, json_payload, device_id, idempotency_key, sync_status, version, updated_at, deleted)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'backfill',$18,'pending',1,$19,0)
+          ON CONFLICT(id) DO NOTHING`,
         [t.id, t.receiptNumber ?? t.id, t.customer?.id ?? null, t.subtotal ?? 0, 0,
           t.discountTotal ?? 0, t.total ?? 0, t.costTotal ?? 0, t.profit ?? 0, t.profitMargin ?? 0,
           t.pricingTier ?? 'Retail', t.paymentMethod ?? 'Espèces', t.cashTendered ?? 0, t.changeDue ?? 0,
@@ -66,24 +134,35 @@ export async function backfillAllToOutbox(): Promise<{ enqueued: number; skipped
         const itemId = `${t.id}-item-${idx}`;
         const pid = (ci as { product?: { id?: string } }).product?.id ?? 'unknown';
         const iKey = `legacy-${itemId}`;
+        // P0 thin-payload fix: the outbox payload MUST be the full item shape
+        // (discount/imei/cost/device/version), not a 5-field projection — the
+        // push lane serializes payload_json to the remote row and pull
+        // overwrites local columns from it, so a thin payload permanently
+        // destroys line money on peers. Same object feeds the local row.
+        const itemPayload = { ...(ci as object), id: itemId, transaction_id: t.id };
         await db.execute(
           `INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price, discount,
-            imei_number, cost_price, json_payload, device_id, idempotency_key, sync_status, created_at, updated_at, deleted)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'backfill',$10,'pending',$11,$11,0)
-           ON CONFLICT(id) DO NOTHING`,
+            imei_number, cost_price, unit_price_charged, unit_cost_at_sale, discount_amount, line_profit,
+            json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'backfill',$14,'pending',1,$15,$15,0)
+            ON CONFLICT(id) DO NOTHING`,
           [itemId, t.id, pid, (ci as { quantity?: number }).quantity ?? 1,
             (ci as { appliedPrice?: number }).appliedPrice ?? 0, (ci as { discount?: number }).discount ?? 0,
             (ci as { imeiNumber?: string }).imeiNumber ?? null,
             (ci as { unitCostPrice?: number }).unitCostPrice ?? 0,
-            JSON.stringify({ ...(ci as object), transaction_id: t.id }), iKey, t.createdAt ?? now],
+            (ci as { unitPriceCharged?: number }).unitPriceCharged
+              ?? (ci as { appliedPrice?: number }).appliedPrice ?? 0,
+            (ci as { unitCostAtSale?: number }).unitCostAtSale
+              ?? (ci as { unitCostPrice?: number }).unitCostPrice ?? 0,
+            (ci as { discountAmount?: number }).discountAmount ?? 0,
+            (ci as { lineProfit?: number }).lineProfit ?? 0,
+            JSON.stringify(itemPayload), iKey, t.createdAt ?? now],
         );
         await db.execute(
           `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
            VALUES ($1,'order_item',$2,'UPSERT',$3,'pending')
            ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, updated_at=$4`,
-          [iKey, itemId, JSON.stringify({ id: itemId, transaction_id: t.id, product_id: pid,
-            quantity: (ci as { quantity?: number }).quantity ?? 1,
-            applied_price: (ci as { appliedPrice?: number }).appliedPrice ?? 0 }), now],
+          [iKey, itemId, JSON.stringify(itemPayload), now],
         );
         enqueued++;
       }
@@ -127,6 +206,8 @@ export async function backfillAllToOutbox(): Promise<{ enqueued: number; skipped
     { entity: 'store_expense', table: 'storeExpenses', idOf: (r) => r.id as string },
     { entity: 'cash_session', table: 'cashSessions', idOf: (r) => r.id as string },
     { entity: 'cash_movement', table: 'cashMovements', idOf: (r) => r.id as string },
+    { entity: 'credit_voucher', table: 'creditVouchers', idOf: (r) => (r.id as string) || '' },
+    { entity: 'stock_batches', table: 'stockBatches', idOf: (r) => ((r.batchId ?? r.batch_id ?? r.id) as string) || '' },
   ];
   for (const g of generic) {
     try {
@@ -160,22 +241,20 @@ export async function backfillAllToOutbox(): Promise<{ enqueued: number; skipped
       console.warn(`Backfill skipped ${dexTable}`, e);
     }
   }
-  // settings except per-device sync.* keys
+  // settings except device-local keys (sync.* cursors/state, PIN/credential
+  // material, per-device printer routing stripped from the payload).
   try {
     const settings = (await dexieDb.appSettings.toArray().catch(() => [])) as Array<{ key: string; value: unknown }>;
     for (const s of settings) {
-      if (!s?.key || s.key.startsWith('sync.')) continue;
-      await enqueueGenericSync('setting', s.key, { key: s.key, value: s.value });
+      if (!s?.key || isDeviceLocalSettingKey(s.key)) continue;
+      await enqueueGenericSync('setting', s.key, { key: s.key, value: stripDeviceLocalSettingValue(s.key, s.value) });
       enqueued++;
     }
   } catch (e) {
     console.warn('Backfill skipped settings', e);
   }
 
-  await db.execute(
-    'INSERT OR REPLACE INTO app_settings (key, value_json, updated_at) VALUES ($1, $2, $3)',
-    [BACKFILL_FLAG, JSON.stringify({ at: now, enqueued }), now],
-  ).catch(() => {});
+  await writeFlag(db, BACKFILL_FLAG, { at: now, enqueued, era: BACKFILL_SCHEMA_ERA });
   return { enqueued, skipped: false };
 }
 
@@ -320,6 +399,12 @@ export async function reconstructDexieTransactionsFromSql(
           const itemRows = itemsByTxnId.get(r.id as string) || [];
           for (const it of itemRows) {
             const prod = productMap.get(it.product_id as string);
+            const rowUnitCost = Number(
+              it.unit_cost_at_sale ?? it.cost_price ?? 0,
+            );
+            const rowCharged = Number(
+              it.unit_price_charged ?? it.applied_price ?? 0,
+            );
             items.push({
               product: prod ?? {
                 id: it.product_id as string,
@@ -342,7 +427,13 @@ export async function reconstructDexieTransactionsFromSql(
               quantity: Number(it.quantity ?? 1),
               discount: Number(it.discount ?? 0),
               appliedPrice: Number(it.applied_price ?? 0),
-              unitCostPrice: Number(it.cost_price ?? 0),
+              unitCostPrice: rowUnitCost,
+              unitCostAtSale: rowUnitCost,
+              unitPriceCharged: rowCharged,
+              discountAmount: Number(it.discount_amount ?? 0),
+              lineProfit: Number(
+                it.line_profit ?? (rowCharged - rowUnitCost) * Number(it.quantity ?? 1),
+              ),
               imeiNumber: (it.imei_number as string) ?? undefined,
             });
           }
@@ -366,6 +457,19 @@ export async function reconstructDexieTransactionsFromSql(
           costTotal: Number(r.cost_total ?? parsed.costTotal ?? 0),
           profit: Number(r.profit ?? parsed.profit ?? 0),
           profitMargin: Number(r.profit_margin ?? parsed.profitMargin ?? 0),
+          // v105 ATOMIC MATERIALIZATION: finite column value wins, then the
+          // receipt-JSON envelope (synced peers), else ABSENT (legacy row =
+          // unknown → receipt looks up the ledger, never zero). Never fall
+          // back to costTotal here: that would cement a stale estimate as
+          // "materialized" truth.
+          ...(() => {
+            const rawLedger =
+              (r.ledger_cogs_total as unknown) ??
+              (parsed.ledgerCogsTotal as unknown) ??
+              (parsed.ledger_cogs_total as unknown);
+            const v = Number(rawLedger);
+            return Number.isFinite(v) && v >= 0 ? { ledgerCogsTotal: Math.round(v) } : {};
+          })(),
           pricingTier: (r.pricing_tier as SaleTransaction['pricingTier']) ?? (parsed.pricingTier as SaleTransaction['pricingTier']) ?? 'Retail',
           paymentMethod: (r.payment_method as SaleTransaction['paymentMethod']) ?? (parsed.paymentMethod as SaleTransaction['paymentMethod']) ?? 'Espèces',
           cashTendered: Number(r.cash_tendered ?? parsed.cashTendered ?? 0),
@@ -391,11 +495,44 @@ export async function reconstructDexieTransactionsFromSql(
 
 export async function remirrorToDexie(force = false): Promise<{ mirrored: number; skipped?: boolean }> {
   const db = await getLocalDb();
+  // One-shot batches-ledger healing (own flag, independent of REMIRROR_FLAG):
+  // sales/restitutions depleted SQLite batches without projecting into Dexie
+  // before the mirror existed, so upgraded installs carry overstated Dexie
+  // quantities. Runs once even when the v3 remirror was already done.
+  try {
+    if (force || !(await readFlag(db, REMIRROR_BATCHES_FLAG))) {
+      const { mirrorStockBatchesToDexie } = await import('./sqlPluginAdapter');
+      const n = await mirrorStockBatchesToDexie(db);
+      await writeFlag(db, REMIRROR_BATCHES_FLAG, { at: utcNowIso(), mirrored: n });
+    }
+  } catch (batchErr) {
+    console.warn('[backfill] Batch mirror remirror skipped:', batchErr);
+  }
+  // v104 STRICT LEDGER one-shot (own flag, same independence rationale as
+  // batches): backfill the frozen ledger from line JSON, then mirror it to
+  // Dexie so allocation-backed reports converge on upgraded installs.
+  // Idempotent (ON CONFLICT DO NOTHING) — safe to re-run with force.
+  try {
+    if (force || !(await readFlag(db, REMIRROR_ALLOCS_FLAG))) {
+      const { backfillSaleAllocationsFromItemsWithDb, mirrorSaleAllocationsToDexie } =
+        await import('./sqlPluginAdapter');
+      const inserted = await backfillSaleAllocationsFromItemsWithDb(
+        db as unknown as Parameters<typeof backfillSaleAllocationsFromItemsWithDb>[0]
+      ).catch(() => 0);
+      const mirroredAllocs = await mirrorSaleAllocationsToDexie(
+        db as unknown as Parameters<typeof mirrorSaleAllocationsToDexie>[0]
+      ).catch(() => 0);
+      await writeFlag(db, REMIRROR_ALLOCS_FLAG, {
+        at: utcNowIso(),
+        inserted,
+        mirrored: mirroredAllocs,
+      });
+    }
+  } catch (allocErr) {
+    console.warn('[backfill] Allocation ledger remirror skipped:', allocErr);
+  }
   if (!force) {
-    const flagRows = (await db
-      .select('SELECT value_json FROM app_settings WHERE key=$1', ['sync.remirror_v1'])
-      .catch(() => [])) as Array<{ value_json: string }>;
-    if (flagRows?.[0]) return { mirrored: 0 };
+    if (await readFlag(db, REMIRROR_FLAG)) return { mirrored: 0 };
   }
 
   let mirrored = 0;
@@ -440,16 +577,77 @@ export async function remirrorToDexie(force = false): Promise<{ mirrored: number
       await dexieDb.products.bulkPut(productsToPut);
       mirrored += productsToPut.length;
     }
+    // Reconcile deletes: Dexie-only ghosts (deleted in SQLite, or stale
+    // stability-test rows removed via --remove) would otherwise keep the UI
+    // count above the SQLite truth forever — bulkPut alone never deletes.
+    // Ghost evictions count toward `mirrored` so boot refreshes the UI even
+    // when the live set is unchanged and only ghosts were removed.
+    try {
+      const liveIds = new Set(productsToPut.map((p) => p.id));
+      const allDexie = await dexieDb.products.toArray().catch(() => []);
+      const ghosts = allDexie.filter((dp) => !liveIds.has(dp.id)).map((dp) => dp.id);
+      if (ghosts.length > 0) {
+        await dexieDb.products.bulkDelete(ghosts).catch(() => undefined);
+        mirrored += ghosts.length;
+      }
+    } catch (reconcileErr) {
+      console.warn('[backfill] Product ghost reconcile skipped:', reconcileErr);
+    }
   } catch (err) {
     console.error('[backfill] Error remirroring products to Dexie:', err);
+  }
+
+  try {
+    const custRows = (await db
+      .select('SELECT * FROM customers WHERE deleted = 0')
+      .catch(() => [])) as Array<Record<string, unknown>>;
+    const customersToPut: Customer[] = [];
+    for (const r of custRows) {
+      try {
+        let base: Partial<Customer> = {};
+        if (r.json_payload) {
+          try {
+            base = JSON.parse(r.json_payload as string) as Customer;
+          } catch {}
+        }
+        customersToPut.push({
+          name: String(r.name ?? ''),
+          phone: String(r.phone ?? ''),
+          email: String(r.email ?? ''),
+          loyaltyPoints: Number(r.loyalty_points ?? 0),
+          storeCredit: Number(r.store_credit ?? 0),
+          pricingTier: (r.pricing_tier as Customer['pricingTier']) || 'Retail',
+          totalSpent: Number(r.total_spent ?? 0),
+          registeredDevice: 'local',
+          ...base,
+          id: String(r.id),
+        });
+      } catch (err) {
+        console.warn(`[backfill] Error preparing customer ${r.id} for Dexie:`, err);
+      }
+    }
+    if (customersToPut.length > 0) {
+      await dexieDb.customers.bulkPut(customersToPut);
+      mirrored += customersToPut.length;
+    }
+    try {
+      const liveCustIds = new Set(customersToPut.map((c) => c.id));
+      const allDexieCusts = await dexieDb.customers.toArray().catch(() => []);
+      const custGhosts = allDexieCusts.filter((dc) => !liveCustIds.has(dc.id)).map((dc) => dc.id);
+      if (custGhosts.length > 0) {
+        await dexieDb.customers.bulkDelete(custGhosts).catch(() => undefined);
+        mirrored += custGhosts.length;
+      }
+    } catch (reconcileErr) {
+      console.warn('[backfill] Customer ghost reconcile skipped:', reconcileErr);
+    }
+  } catch (err) {
+    console.error('[backfill] Error remirroring customers to Dexie:', err);
   }
 
   const txMirrored = await reconstructDexieTransactionsFromSql(db);
   mirrored += txMirrored;
 
-  await db.execute(
-    'INSERT OR REPLACE INTO app_settings (key, value_json, updated_at) VALUES ($1, $2, $3)',
-    ['sync.remirror_v1', JSON.stringify({ at: utcNowIso(), mirrored }), utcNowIso()],
-  ).catch(() => {});
+  await writeFlag(db, REMIRROR_FLAG, { at: utcNowIso(), mirrored, era: REMIRROR_SCHEMA_ERA });
   return { mirrored };
 }

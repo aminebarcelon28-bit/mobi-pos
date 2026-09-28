@@ -8,9 +8,13 @@ import {
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
 import type { Customer, PricingTier, SaleTransaction, PaymentMethodType } from '../../types/pos';
-import { calculateNextTierProgress, calculateCustomerTier } from '../../utils/loyaltyEngine';
-import { openWhatsApp } from '../../utils/phoneUtils';
+import { calculateNextTierProgress, calculateCustomerTier, normalizeLoyaltyConfig } from '../../utils/loyaltyEngine';
+import { normalizeAlgerianPhone, openWhatsApp } from '../../utils/phoneUtils';
+import { parseLocalizedAmount } from '../../utils/moneyInput';
 import { useToast } from '../ui/Toast';
+
+const foldForSearch = (s: string | undefined | null): string =>
+  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
 type SortField = 'name' | 'loyaltyPoints' | 'storeCredit' | 'totalSpent';
 type SortDir = 'asc' | 'desc';
@@ -21,12 +25,18 @@ export const CustomersModal: React.FC = () => {
   const { showToast } = useToast();
   const {
     activeModal, closeModal, openModal, customers, currentCustomer, setCurrentCustomer,
-    addCustomer, updateCustomer, deleteCustomer, transactions,
+    addCustomer, updateCustomer, deleteCustomer, transactions, receiptSettings,
     customerDebts, recordCustomerDebtPayment
   } = usePosStore();
 
   const [mainTab, setMainTab] = useState<'directory' | 'debts'>('directory');
   const [searchQuery, setSearchQuery] = useState('');
+  // Debounced scan input: the text field stays instant, list filtering follows 200ms later.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchQuery), 200);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
   const [successMsg, setSuccessMsg] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -116,13 +126,17 @@ export const CustomersModal: React.FC = () => {
 
   // Filtered & Sorted Customers (hook must be above early return)
   const filteredCustomers = useMemo(() => {
-    const lowerQ = searchQuery.toLowerCase();
-    let results = (customers || []).filter(c =>
-      (c.name || '').toLowerCase().includes(lowerQ) ||
-      (c.phone || '').toLowerCase().includes(lowerQ) ||
-      (c.email || '').toLowerCase().includes(lowerQ) ||
-      (c.registeredDevice || '').toLowerCase().includes(lowerQ)
-    );
+    const lowerQ = foldForSearch(debouncedSearch.trim());
+    const rawQ = debouncedSearch.trim();
+    let results = !lowerQ
+      ? [...(customers || [])]
+      : (customers || []).filter(c =>
+        foldForSearch(c.name).includes(lowerQ) ||
+        (c.phone || '').includes(rawQ) ||
+        foldForSearch(c.phone).includes(lowerQ) ||
+        foldForSearch(c.email).includes(lowerQ) ||
+        foldForSearch(c.registeredDevice).includes(lowerQ)
+      );
 
     if (tierFilter !== 'Tous') {
       results = results.filter(c => c.pricingTier === tierFilter);
@@ -145,7 +159,7 @@ export const CustomersModal: React.FC = () => {
     });
 
     return results;
-  }, [customers, searchQuery, tierFilter, sortField, sortDir, customerMetricsMap]);
+  }, [customers, debouncedSearch, tierFilter, sortField, sortDir, customerMetricsMap]);
 
   const showSuccess = (msg: string) => {
     setSuccessMsg(msg);
@@ -162,20 +176,23 @@ export const CustomersModal: React.FC = () => {
 
   // Filtered Indebted Customers
   const indebtedCustomers = useMemo(() => {
-    const lowerQ = searchQuery.toLowerCase();
+    const lowerQ = foldForSearch(debouncedSearch.trim());
+    const rawQ = debouncedSearch.trim();
     return (customers || []).filter(c =>
       (c.currentDebt || 0) > 0 &&
-      ((c.name || '').toLowerCase().includes(lowerQ) ||
-       (c.phone || '').toLowerCase().includes(lowerQ) ||
-       (c.registeredDevice || '').toLowerCase().includes(lowerQ))
+      (!lowerQ ||
+        foldForSearch(c.name).includes(lowerQ) ||
+        (c.phone || '').includes(rawQ) ||
+        foldForSearch(c.phone).includes(lowerQ) ||
+        foldForSearch(c.registeredDevice).includes(lowerQ))
     );
-  }, [customers, searchQuery]);
+  }, [customers, debouncedSearch]);
 
   const handleRecordDebtPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!debtPaymentCustomer) return;
-    const amount = parseFloat(debtPaymentAmount);
-    if (isNaN(amount) || amount <= 0) {
+    const amount = Math.round(parseLocalizedAmount(debtPaymentAmount));
+    if (!Number.isFinite(amount) || amount <= 0) {
       alert('Veuillez saisir un montant valide.');
       return;
     }
@@ -186,7 +203,15 @@ export const CustomersModal: React.FC = () => {
       debtPaymentNotes
     );
     if (debtPaymentResult.success) {
-      showSuccess(`Versement de ${formatDZD(amount)} enregistré avec succès !`);
+      const { appliedAmount, changeDue } = debtPaymentResult as typeof debtPaymentResult & {
+        appliedAmount?: number;
+        changeDue?: number;
+      };
+      showSuccess(
+        (changeDue || 0) > 0
+          ? `Versement enregistré : ${formatDZD(appliedAmount ?? amount)} appliqués — monnaie à rendre : ${formatDZD(changeDue || 0)}.`
+          : `Versement de ${formatDZD(amount)} enregistré avec succès !`
+      );
       setDebtPaymentCustomer(null);
       setDebtPaymentAmount('');
       setDebtPaymentNotes('');
@@ -223,11 +248,17 @@ export const CustomersModal: React.FC = () => {
   const handleSaveCustomer = (e: React.FormEvent) => {
     e.preventDefault();
     if (editingId) {
-      updateCustomer(editingId, { name, phone, email, registeredDevice, pricingTier });
+      const editNorm = normalizeAlgerianPhone(phone);
+      const cleanEditPhone = editNorm.isValid ? editNorm.local : (editNorm.digitsOnly || phone.trim());
+      updateCustomer(editingId, { name, phone: cleanEditPhone, email, registeredDevice, pricingTier });
       showSuccess('Profil client mis à jour avec succès !');
     } else {
+      // Intake normalization: canonical local form when valid, else trimmed
+      // digit-strip fallback so the ledger never stores formatted noise.
+      const norm = normalizeAlgerianPhone(phone);
+      const cleanPhone = norm.isValid ? norm.local : (norm.digitsOnly || phone.trim());
       addCustomer({
-        name, phone, email, registeredDevice, pricingTier, loyaltyPoints: 0, storeCredit: 0
+        name, phone: cleanPhone, email, registeredDevice, pricingTier, loyaltyPoints: 0, storeCredit: 0
       });
       showSuccess('Nouveau client ajouté au CRM !');
     }
@@ -240,8 +271,25 @@ export const CustomersModal: React.FC = () => {
       alert(`⚠️ Impossible de supprimer ce client : une dette active de ${target.currentDebt} DA est en cours sur son compte. Veuillez solder ou transférer la créance avant suppression.`);
       return;
     }
+    // A positive store credit is a customer asset: require an explicit
+    // forfeit note before the delete proceeds (enforced in deleteCustomer).
+    let forfeitNote: string | undefined;
+    if (target && (target.storeCredit || 0) > 0) {
+      const note = window.prompt(
+        `⚠️ Ce client possède un Avoir de ${formatDZD(target.storeCredit || 0)} qui sera DÉFINITIVEMENT perdu.\n\nTapez une note de confiscation (motif) pour confirmer, ou Annuler pour garder le client :`
+      );
+      if (note === null) return;
+      if (!note.trim()) {
+        alert('Suppression annulée : une note de confiscation explicite est requise pour abandonner un avoir client.');
+        return;
+      }
+      forfeitNote = note.trim();
+    }
     if (window.confirm("Êtes-vous sûr de vouloir supprimer définitivement ce client et son historique ?")) {
-      deleteCustomer(id);
+      (deleteCustomer as (deleteId: string, opts?: { forfeitNote?: string }) => Promise<unknown>)(
+        id,
+        forfeitNote ? { forfeitNote } : undefined
+      );
       if (profileCustomer?.id === id) setProfileCustomer(null);
       setViewMode('list');
       showSuccess('Client supprimé du CRM.');
@@ -257,16 +305,21 @@ export const CustomersModal: React.FC = () => {
     const styles: Record<PricingTier, string> = {
       'Retail': 'bg-slate-500/15 text-slate-400 border-slate-500/30',
       'Wholesale': 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-      'VIP': 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+      'VIP': 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
     };
     const icons: Record<PricingTier, React.ReactNode> = {
       'Retail': <User className="w-3 h-3" />,
       'Wholesale': <ShoppingBag className="w-3 h-3" />,
       'VIP': <Crown className="w-3 h-3" />,
     };
+    const labels: Record<PricingTier, string> = {
+      'Retail': 'Détail',
+      'Wholesale': 'Gros',
+      'VIP': 'Demi-Gros',
+    };
     return (
       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border ${styles[tier]}`}>
-        {icons[tier]} {tier}
+        {icons[tier]} {labels[tier] || tier}
       </span>
     );
   };
@@ -485,12 +538,12 @@ export const CustomersModal: React.FC = () => {
                 </div>
                 <div>
                   <label className="text-[10px] text-pos-muted uppercase font-bold block mb-1.5">Niveau de Tarification</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(['Retail', 'Wholesale', 'VIP'] as PricingTier[]).map(tier => (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    {(['Retail', 'VIP', 'Wholesale'] as PricingTier[]).map(tier => (
                       <button key={tier} type="button" onClick={() => setPricingTier(tier)}
-                        className={`p-3 rounded-xl border text-xs font-bold transition-all text-center ${
+                        className={`min-h-[52px] p-3 rounded-xl border text-xs font-bold transition-all text-center active:scale-95 ${
                           pricingTier === tier
-                            ? tier === 'VIP' ? 'bg-amber-500/20 border-amber-500 text-amber-400 shadow-md shadow-amber-500/10'
+                            ? tier === 'VIP' ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400 shadow-md shadow-cyan-500/10'
                             : tier === 'Wholesale' ? 'bg-blue-500/20 border-blue-500 text-blue-400 shadow-md shadow-blue-500/10'
                             : 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-md shadow-emerald-500/10'
                             : 'bg-pos-bg border-pos-border text-pos-muted hover:border-pos-text/30'
@@ -499,7 +552,7 @@ export const CustomersModal: React.FC = () => {
                         {tier === 'VIP' && <Crown className="w-4 h-4 mx-auto mb-1" />}
                         {tier === 'Wholesale' && <ShoppingBag className="w-4 h-4 mx-auto mb-1" />}
                         {tier === 'Retail' && <User className="w-4 h-4 mx-auto mb-1" />}
-                        {tier === 'Retail' ? 'Retail (Public)' : tier === 'Wholesale' ? 'Wholesale (Gros)' : 'VIP (Privilège)'}
+                        {tier === 'Retail' ? 'Détail (Public)' : tier === 'VIP' ? 'Demi-Gros (Réparateur)' : 'Gros (Commerçant)'}
                       </button>
                     ))}
                   </div>
@@ -583,7 +636,7 @@ export const CustomersModal: React.FC = () => {
                 </div>
 
                 {/* Metrics Cards */}
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
                   <div className="bg-pos-card border border-pos-border p-3 rounded-xl text-center">
                     <TrendingUp className="w-5 h-5 text-emerald-400 mx-auto mb-1" />
                     <span className="text-[9px] text-pos-muted uppercase font-bold block">CA Total</span>
@@ -622,8 +675,9 @@ export const CustomersModal: React.FC = () => {
                 <div className="bg-pos-card border border-pos-border rounded-xl p-4">
                   {(() => {
                     const currentSpent = profileCustomer.totalSpent || 0;
-                    const currentTier = calculateCustomerTier(currentSpent);
-                    const progress = calculateNextTierProgress(currentSpent);
+                    const loyaltyCfg = normalizeLoyaltyConfig(receiptSettings?.loyaltyConfig);
+                    const currentTier = calculateCustomerTier(currentSpent, loyaltyCfg);
+                    const progress = calculateNextTierProgress(currentSpent, loyaltyCfg);
                     const nextTier = progress.nextTier;
 
                     return (
@@ -794,7 +848,7 @@ export const CustomersModal: React.FC = () => {
                       </div>
 
                       {/* Metrics Strip */}
-                      <div className="grid grid-cols-4 gap-1.5 bg-pos-bg rounded-lg p-2 border border-pos-border text-xs">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-pos-bg rounded-lg p-2 border border-pos-border text-xs">
                         <div className="flex flex-col items-center">
                           <span className="text-[8px] text-pos-muted uppercase font-bold">Points</span>
                           <span className="font-bold text-amber-400 flex items-center gap-0.5 text-[11px]">
