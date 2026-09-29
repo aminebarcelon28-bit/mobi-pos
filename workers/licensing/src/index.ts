@@ -3,6 +3,8 @@ import {
   hashHmac,
   decryptTursoToken,
   signLicenseJwt,
+  signCanonicalLicense,
+  generateLicenseKey,
   type LicenseTokenClaims,
 } from './crypto';
 
@@ -13,6 +15,24 @@ export interface Env {
   LICENSE_PEPPER: string;
   IP_PEPPER: string;
   LICENSE_ED25519_PRIVATE_JWK: string;
+  /** KV namespace anchoring audit checkpoints, one JSON doc per client_id. */
+  AUDIT_KV: KVNamespace;
+}
+
+interface SignLicenseRequest {
+  customer: string;
+  formula: 'LIFETIME' | 'TRIAL_30D' | 'TRIAL_90D' | 'DEMO' | 'ANNUAL';
+  seats_pos: number;
+  seats_desk: number;
+  /** ISO 8601 UTC string, or null for a lifetime licence. */
+  expires_at: string | null;
+  hwid_bindings: string[];
+}
+
+interface AuditCheckpointRequest {
+  client_id: string;
+  sequence_number: number;
+  head_audit_hash: string;
 }
 
 interface ActivationRequestBody {
@@ -727,6 +747,166 @@ export default {
         status: 'success',
         updated: updateRes.rowsAffected > 0,
       });
+    }
+
+    // 11. Admin: Remote License Signing (vendor Ed25519)
+    if (request.method === 'POST' && path === '/api/v1/admin/licenses/sign') {
+      if (!isAuthorizedAdmin(request)) {
+        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
+      }
+      if (!env.LICENSE_ED25519_PRIVATE_JWK) {
+        return jsonResponse(
+          { error: 'SIGNING_UNAVAILABLE', message: 'Aucune clé de signature configurée sur le worker.' },
+          503
+        );
+      }
+
+      let body: any;
+      try {
+        body = await request.json();
+      } catch {
+        return jsonResponse({ error: 'INVALID_JSON', message: 'Payload JSON invalide.' }, 400);
+      }
+
+      const {
+        customer,
+        formula,
+        seats_pos,
+        seats_desk,
+        expires_at = null,
+        hwid_bindings = [],
+      } = body ?? {};
+
+      if (typeof customer !== 'string' || customer.trim().length === 0) {
+        return jsonResponse({ error: 'MISSING_FIELDS', message: 'customer requis.' }, 400);
+      }
+      const allowedFormulas = ['LIFETIME', 'TRIAL_30D', 'TRIAL_90D', 'DEMO', 'ANNUAL'];
+      if (typeof formula !== 'string' || !allowedFormulas.includes(formula.toUpperCase())) {
+        return jsonResponse(
+          { error: 'INVALID_FORMULA', message: `formula doit être l'un de: ${allowedFormulas.join(', ')}.` },
+          400
+        );
+      }
+      if (!Array.isArray(hwid_bindings)) {
+        return jsonResponse({ error: 'INVALID_HWIDS', message: 'hwid_bindings doit être un tableau.' }, 400);
+      }
+      if (expires_at !== null && typeof expires_at !== 'string') {
+        return jsonResponse({ error: 'INVALID_EXPIRY', message: 'expires_at doit être une chaîne ISO ou null.' }, 400);
+      }
+      if (expires_at !== null && Number.isNaN(Date.parse(expires_at))) {
+        return jsonResponse({ error: 'INVALID_EXPIRY', message: 'expires_at n’est pas une date ISO 8601 valide.' }, 400);
+      }
+
+      const seatsPos = Number.isInteger(seats_pos) ? seats_pos : 0;
+      const seatsDesk = Number.isInteger(seats_desk) ? seats_desk : 0;
+      if (seatsPos < 0 || seatsDesk < 0 || seatsPos > 500 || seatsDesk > 500) {
+        return jsonResponse({ error: 'INVALID_SEATS', message: 'Nombre de postes hors limites (0-500).' }, 400);
+      }
+
+      // Sorted so that binding order cannot change the signature, and so the
+      // same license always produces the same canonical string.
+      const canonicalHwid = [...hwid_bindings]
+        .filter((h): h is string => typeof h === 'string' && h.length > 0)
+        .sort()
+        .join(',');
+      const canonicalData =
+        `${customer.trim()}|${formula.toUpperCase()}|${seatsPos}|${seatsDesk}|` +
+        `${expires_at ?? 'NONE'}|${canonicalHwid}`;
+
+      try {
+        const licenseKey = generateLicenseKey(formula.toUpperCase());
+        const signature = await signCanonicalLicense(env.LICENSE_ED25519_PRIVATE_JWK, canonicalData);
+        return jsonResponse({
+          status: 'success',
+          license_key: licenseKey,
+          token_signature: signature,
+          canonical_data: canonicalData,
+          issued_at: new Date().toISOString(),
+        });
+      } catch (err) {
+        return jsonResponse(
+          { error: 'SIGNING_FAILED', message: `Signature impossible: ${(err as Error).message}` },
+          500
+        );
+      }
+    }
+
+    // 12. Admin: Audit Checkpoint (detects ledger head truncation)
+    if (request.method === 'POST' && path === '/api/v1/admin/audit/checkpoint') {
+      if (!isAuthorizedAdmin(request)) {
+        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
+      }
+      if (!env.AUDIT_KV) {
+        return jsonResponse(
+          { error: 'KV_UNBOUND', message: 'Namespace KV AUDIT_KV non lié sur ce worker.' },
+          503
+        );
+      }
+
+      let body: any;
+      try {
+        body = await request.json();
+      } catch {
+        return jsonResponse({ error: 'INVALID_JSON', message: 'Payload JSON invalide.' }, 400);
+      }
+
+      const { client_id, sequence_number, head_audit_hash } = body ?? {};
+      if (typeof client_id !== 'string' || client_id.length === 0) {
+        return jsonResponse({ error: 'MISSING_FIELDS', message: 'client_id requis.' }, 400);
+      }
+      if (!Number.isInteger(sequence_number) || sequence_number < 0) {
+        return jsonResponse({ error: 'INVALID_SEQUENCE', message: 'sequence_number doit être un entier >= 0.' }, 400);
+      }
+      if (typeof head_audit_hash !== 'string' || !/^[0-9a-f]{64}$/i.test(head_audit_hash)) {
+        return jsonResponse(
+          { error: 'INVALID_HASH', message: 'head_audit_hash doit être un SHA-256 hexadécimal (64 caractères).' },
+          400
+        );
+      }
+
+      const prev = (await env.AUDIT_KV.get(client_id, 'json')) as
+        | { sequence_number: number; head_audit_hash: string }
+        | null;
+
+      // A regression means the local ledger lost records relative to what the
+      // server already anchored -- the exact signature of a truncation attack.
+      if (prev && sequence_number < prev.sequence_number) {
+        return jsonResponse(
+          {
+            error: 'Security Alert: Sequence regression detected. Possible ledger truncation attack.',
+            server_sequence: prev.sequence_number,
+            client_sequence: sequence_number,
+          },
+          409
+        );
+      }
+
+      // A same-sequence checkpoint with a different head hash means the
+      // history was rewritten without being truncated.
+      if (
+        prev &&
+        sequence_number === prev.sequence_number &&
+        prev.head_audit_hash.toLowerCase() !== head_audit_hash.toLowerCase()
+      ) {
+        return jsonResponse(
+          {
+            error: 'Security Alert: Head hash mismatch at identical sequence number. Ledger was rewritten.',
+            server_sequence: prev.sequence_number,
+          },
+          409
+        );
+      }
+
+      await env.AUDIT_KV.put(
+        client_id,
+        JSON.stringify({
+          sequence_number,
+          head_audit_hash: head_audit_hash.toLowerCase(),
+          synced_at: new Date().toISOString(),
+        })
+      );
+
+      return jsonResponse({ status: 'anchored', server_time: new Date().toISOString() });
     }
 
     return jsonResponse({ error: 'NOT_FOUND', message: 'Route non trouvée.' }, 404);

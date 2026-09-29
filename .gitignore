@@ -49,3 +49,18 @@ tmp-*-shim/
 _testall_out.txt
 scripts/_*.mjs
 scripts/_*.txt
+
+# Licensing for MobiPOS - frozen build artifacts
+build/
+licensing_dist/
+
+# Python bytecode. Seven .pyc files were committed under admin_desktop/
+# before this rule existed; they are build output, not source.
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Worker provisioning
+workers/licensing/.dev.vars
+
+

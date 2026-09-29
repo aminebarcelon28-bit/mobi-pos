@@ -188,3 +188,125 @@ export async function signLicenseJwt(
   return `${signingInput}.${sigB64}`;
 }
 
+// ---------------------------------------------------------------------------
+// Canonical license signing (remote admin path)
+// ---------------------------------------------------------------------------
+
+/** Crockford-style alphabet used for human-transcribable license keys. */
+const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+function hexToUint8Array(hex: string): Uint8Array {
+  const clean = hex.trim().replace(/^0x/i, '').replace(/[^0-9a-fA-F]/g, '');
+  if (clean.length === 0 || clean.length % 2 !== 0) {
+    throw new Error('Invalid hex string for key material.');
+  }
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i += 1) {
+    out[i] = parseInt(clean.substr(i * 2, 2), 16);
+  }
+  return out;
+}
+
+function uint8ArrayToHex(bytes: Uint8Array): string {
+  let out = '';
+  for (const byte of bytes) {
+    out += byte.toString(16).padStart(2, '0');
+  }
+  return out;
+}
+
+/**
+ * Generates a vendor license key: MOBI-<TAG>-XXXX-XXXX-XXXX
+ *
+ * Uses crypto.getRandomValues rather than Math.random; the key space must not
+ * be predictable.
+ */
+export function generateLicenseKey(formula: string): string {
+  const tagMap: Record<string, string> = {
+    LIFETIME: 'LIFE',
+    TRIAL_30D: 'T30D',
+    TRIAL_90D: 'T90D',
+    DEMO: 'DEMO',
+    ANNUAL: '1Y',
+  };
+  const tag = tagMap[formula.toUpperCase()] || 'CUST';
+
+  const buf = new Uint8Array(12);
+  crypto.getRandomValues(buf);
+  let body = '';
+  for (const byte of buf) {
+    body += CROCKFORD_ALPHABET[byte % CROCKFORD_ALPHABET.length];
+  }
+  return `MOBI-${tag}-${body.slice(0, 4)}-${body.slice(4, 8)}-${body.slice(8, 12)}`;
+}
+
+/** Exports a public key as JWK, for publishing alongside signed licenses. */
+export async function exportPublicJwk(jwkString: string): Promise<string> {
+  const jwk = JSON.parse(jwkString);
+  if (jwk.alg) delete jwk.alg;
+  const privateKey = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'Ed25519' },
+    true,
+    ['sign']
+  );
+  const publicJwk = await crypto.subtle.exportKey('jwk', privateKey);
+  return JSON.stringify(publicJwk);
+}
+
+/**
+ * Signs a canonical license description with the vendor Ed25519 key.
+ *
+ * The canonical form joins fixed fields with '|' so that no field value can
+ * inject a delimiter and shift the meaning of a later field. HWIDs are sorted
+ * before joining so binding order does not change the signature.
+ *
+ * @param privateKeyJwkString Ed25519 private key JWK
+ * @param canonicalData Pre-built canonical string from the caller
+ */
+export async function signCanonicalLicense(
+  privateKeyJwkString: string,
+  canonicalData: string
+): Promise<string> {
+  const jwk = JSON.parse(privateKeyJwkString);
+  if (jwk.alg) delete jwk.alg;
+  const privateKey = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'Ed25519' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign(
+    { name: 'Ed25519' },
+    privateKey,
+    new TextEncoder().encode(canonicalData)
+  );
+  return uint8ArrayToHex(new Uint8Array(sig));
+}
+
+/** Verifies a hex signature against a canonical string. Used by tests. */
+export async function verifyCanonicalLicense(
+  publicJwk: JsonWebKey,
+  canonicalData: string,
+  signatureHex: string
+): Promise<boolean> {
+  const key = await crypto.subtle.importKey(
+    'jwk',
+    publicJwk,
+    { name: 'Ed25519' },
+    false,
+    ['verify']
+  );
+  return crypto.subtle.verify(
+    { name: 'Ed25519' },
+    key,
+    hexToUint8Array(signatureHex),
+    new TextEncoder().encode(canonicalData)
+  );
+}
+
+export { hexToUint8Array, uint8ArrayToHex };
+
+

@@ -3,3 +3,15 @@ main = "src/index.ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
+
+# Audit checkpoints. One JSON document per client_id holds the highest ledger
+# sequence and head hash the server has ever seen, so a lower sequence on a
+# later call is refused as a truncation.
+#
+# Create once with:
+#   wrangler kv namespace create AUDIT_KV
+# and paste the returned id below.
+[[kv_namespaces]]
+binding = "AUDIT_KV"
+id = "0b871ddfcef1462298a974ca28e8438a"
+preview_id = "c6e8e0ed7e5b44e7bec354f3af407f95"
