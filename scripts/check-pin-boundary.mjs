@@ -16,10 +16,8 @@
  *      (audited): generic catch vars (`err`, `error`, `e`) never carry PIN
  *      material — native errors carry codes/reasons, never the credential.
  *  P3. No PIN material in persisted Zustand state (partialize allowlist).
- *  P4. Login is native-first: the lock screen calls pin_verify under Tauri
- *      and honors mustRotate + native lockout; local verifyPin call sites
- *      are capped per file (interim manager gates + non-Tauri fallback +
- *      rotation distinctness) and may not grow without a deliberate edit.
+ *  P4. Native-first everywhere: auth gates route through utils/pinGate.ts;
+ *      raw verifyPin survives only in the pinned login/uniqueness set.
  *  P5. Credential-key readers frozen: files containing the
  *      'manager_pin'/'cashier_users' literals are exactly the pinned set
  *      (native verify, boot heal, setters, predicate, one legacy shift
@@ -150,8 +148,13 @@ console.log('== P3: persisted state ==');
   );
 }
 
-// ── P4. Native-first login; local verify frozen ──
-console.log('== P4: login path ==');
+// ── P4. Native-first everywhere; single routing module (Phase 1) ──
+// Authentication gates route through utils/pinGate.ts (native pin_verify
+// under Tauri, fail-closed). Raw local verification survives ONLY where it
+// cannot authorize: the login fallback (non-Tauri), the lock screen's
+// native-first flow, and Settings roster UNIQUENESS checks (documented
+// oracle — they reject duplicates, never grant access).
+console.log('== P4: routing module ==');
 {
   const overlay = read('components/LockScreenOverlay.tsx');
   check('lock screen imports the native PIN plane', overlay.includes('../api/pin'));
@@ -159,27 +162,43 @@ console.log('== P4: login path ==');
   check('lock screen honors mustRotate', overlay.includes('mustRotate'));
   check('lock screen surfaces the native lockout', overlay.includes('nativeLockedRemainingMs'));
   check('native verdict is final (no local fallback after it)', /no local fallback/i.test(overlay));
-  // Local verifyPin call-site caps (exclude the definition file itself).
-  const caps = {
-    'store/slices/createUISlice.ts': 4, // verifyManagerPin + unlockScreen(2) + switchCashier
-    'components/LockScreenOverlay.tsx': 4, // non-Tauri fallback(2) + rotation distinctness(2)
-    'components/modals/SettingsModal.tsx': 5, // roster management (manager-privileged)
-    'db/adapters/shiftAdapter.ts': 1, // legacy variance gate (interim)
-  };
-  for (const [f, max] of Object.entries(caps)) {
-    const src = stripComments(read(f));
-    // Count real calls, not the `verifyPin(` substring inside comments/strings.
-    const n = (src.match(/[^a-zA-Z0-9_]verifyPin\s*\(/g) || []).length;
-    check(`local verifyPin frozen in ${f} (<= ${max})`, n <= max, `found ${n}`);
-  }
-  // Manager-gate (verifyManagerPin) call sites may not grow silently either.
-  let gateCount = 0;
+  // verifyManagerPin CALLS live only in the routing module (default weak
+  // fallback) — the store keeps the definition for compat.
+  const gateCallers = [];
   for (const f of tsFiles(SRC)) {
+    const r = rel(f);
+    if (r === 'store/slices/createUISlice.ts') continue; // definition
     const src = stripComments(readFileSync(f, 'utf8'));
-    gateCount += (src.match(/[^a-zA-Z0-9_]verifyManagerPin\s*\(/g) || []).length;
+    if (/[^a-zA-Z0-9_]verifyManagerPin\s*\(/.test(src)) gateCallers.push(r);
   }
-  // 14 call sites + 1 definition.
-  check('manager-gate call sites frozen (<= 15 incl. definition)', gateCount <= 15, `found ${gateCount}`);
+  check(
+    'verifyManagerPin called only from utils/pinGate.ts',
+    gateCallers.length === 1 && gateCallers[0] === 'utils/pinGate.ts',
+    `got [${gateCallers.join(', ')}]`
+  );
+  // Raw verifyPin CALLS: definition + login fallback + lock screen +
+  // roster uniqueness. The shiftAdapter variance gate is gone from this list
+  // (native-routed) — its return would fail the gate below.
+  const allowedRaw = new Set([
+    'utils/security.ts', // definition
+    'store/slices/createUISlice.ts', // login fallback + gate impl (non-Tauri path)
+    'components/LockScreenOverlay.tsx', // native-first login + rotation
+    'components/modals/SettingsModal.tsx', // uniqueness checks (documented oracle, never auth)
+  ]);
+  const rawCallers = [];
+  for (const f of tsFiles(SRC)) {
+    const r = rel(f);
+    const src = stripComments(readFileSync(f, 'utf8'));
+    if (/[^a-zA-Z0-9_]verifyPin\s*\(/.test(src)) rawCallers.push(r);
+  }
+  const rawExtra = rawCallers.filter((r) => !allowedRaw.has(r));
+  check(
+    'raw verifyPin called only in the pinned set (no new local gates)',
+    rawExtra.length === 0,
+    `extra: [${rawExtra.join(', ')}]`
+  );
+  const missingRaw = [...allowedRaw].filter((r) => !rawCallers.includes(r));
+  check('pinned raw callers still present', missingRaw.length === 0, `missing: [${missingRaw.join(', ')}]`);
 }
 
 // ── P5. Credential-key readers frozen ──
@@ -188,8 +207,22 @@ console.log('== P5: credential-key readers ==');
   const allowed = new Set([
     'store/slices/createUISlice.ts', // boot heal + setters + rotation (interim TS mint)
     'db/sqlPluginAdapter.ts', // the device-local predicate itself
-    'db/adapters/shiftAdapter.ts', // legacy variance gate (interim)
     'constants/index.ts', // key constant (unused elsewhere)
+    // Gate-name LABEL only, not a credential read: the literal is composed
+    // into the burst/lockout event name (gateName) after the native verdict
+    // returns. No appSettings read, no hash comparison — pinGate is the
+    // designated native routing module (P4), so this is its own vocabulary.
+    'utils/pinGate.ts',
+    // Credential EXCLUSIONS, never credential reads. Every site is a
+    // deny-direction predicate: backups filter these rows OUT (settings
+    // filter, twice) and the outbox skips them, so a backup's stale (or
+    // another device's) fast hashes can never be exported or synced. The
+    // single get() is the import stash-and-restore: it re-PUTS the LIVE
+    // device-local rows after clear(), which is the "old synced hashes are
+    // exposed" decision — restoring would regress to a backup's PINs.
+    'db/adapters/maintenanceAdapter.ts',
+    // shiftAdapter's Dexie credential read is GONE (Phase 1 native-routed);
+    // its return here would fail the gate below.
   ]);
   let readers = new Set();
   for (const f of tsFiles(SRC)) {

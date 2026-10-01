@@ -159,6 +159,17 @@ html.dark .text-pos-accent-indigo { color: #818cf8; }
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
+  /* Horizontal-scroll affordance: fade the trailing edge so a chip strip or
+     KPI row reads as "more to the right" instead of a hard-clipped wall.
+     Paired with scroll-snap containers, never used on the modal body. */
+  .scroll-fade-x {
+    mask-image: linear-gradient(to right, black 0%, black 85%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, black 0%, black 85%, transparent 100%);
+  }
+  .scroll-fade-x-flush {
+    mask-image: linear-gradient(to right, transparent 0%, black 12%, black 88%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, black 12%, black 88%, transparent 100%);
+  }
   /* Financial tabular numbers */
   .tabular-nums {
     font-variant-numeric: tabular-nums;
@@ -224,6 +235,176 @@ html.dark .text-pos-accent-indigo { color: #818cf8; }
   /* Centralized card radius alias (same pixels as rounded-2xl). */
   .rounded-pos-card {
     border-radius: var(--pos-radius-card);
+  }
+}
+
+/* ── Semantic status palette ────────────────────────────────────────────────
+   The severity/status colours live here as raw values so the `@theme` block
+   below can expose them as real Tailwind utilities with opacity modifiers
+   (bg-pos-danger/10, text-pos-danger, border-pos-danger/20). The light steps
+   are the 600-700 range and the dark steps the 300-400 range, so every
+   pairing clears WCAG AA against --pos-card in its own mode. */
+:root {
+  --pos-danger: #be123c;
+  --pos-warn: #b45309;
+  --pos-ok: #047857;
+  --pos-info: #0369a1;
+  --pos-neutral: #475569;
+  --pos-on-danger: #fff1f2;
+  --pos-on-warn: #fffbeb;
+  --pos-on-ok: #ecfdf5;
+  --pos-on-info: #f0f9ff;
+}
+
+html.dark {
+  --pos-danger: #fda4af;
+  --pos-warn: #fcd34d;
+  --pos-ok: #6ee7b7;
+  --pos-info: #7dd3fc;
+  --pos-neutral: #cbd5e1;
+  --pos-on-danger: #450a12;
+  --pos-on-warn: #451a03;
+  --pos-on-ok: #022c22;
+  --pos-on-info: #082f49;
+}
+
+/* Registering the palette here is what makes `bg-pos-danger/10` resolve:
+   Tailwind v4 derives the utility from `--color-pos-danger` and composes the
+   alpha modifier with color-mix against the var, so the light/dark override
+   above flows through without a second class. */
+@theme {
+  --color-pos-danger: var(--pos-danger);
+  --color-pos-warn: var(--pos-warn);
+  --color-pos-ok: var(--pos-ok);
+  --color-pos-info: var(--pos-info);
+  --color-pos-neutral: var(--pos-neutral);
+  --color-pos-on-danger: var(--pos-on-danger);
+  --color-pos-on-warn: var(--pos-on-warn);
+  --color-pos-on-ok: var(--pos-on-ok);
+  --color-pos-on-info: var(--pos-on-info);
+
+  --font-mono-pos: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono",
+    Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* Micro-badge: the shared shape of every status pill in the audit journal.
+   Kept as a component class so severity, connection state and PIN proof all
+   render at the same optical weight. */
+@layer components {
+  .pos-micro-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.375rem;
+    border: 1px solid transparent;
+    font-size: 0.625rem;
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .pos-micro-badge--danger {
+    background-color: color-mix(in oklab, var(--pos-danger) 12%, transparent);
+    border-color: color-mix(in oklab, var(--pos-danger) 30%, transparent);
+    color: var(--pos-danger);
+  }
+  .pos-micro-badge--warn {
+    background-color: color-mix(in oklab, var(--pos-warn) 12%, transparent);
+    border-color: color-mix(in oklab, var(--pos-warn) 30%, transparent);
+    color: var(--pos-warn);
+  }
+  .pos-micro-badge--ok {
+    background-color: color-mix(in oklab, var(--pos-ok) 12%, transparent);
+    border-color: color-mix(in oklab, var(--pos-ok) 30%, transparent);
+    color: var(--pos-ok);
+  }
+  .pos-micro-badge--info {
+    background-color: color-mix(in oklab, var(--pos-info) 12%, transparent);
+    border-color: color-mix(in oklab, var(--pos-info) 30%, transparent);
+    color: var(--pos-info);
+  }
+  .pos-micro-badge--neutral {
+    background-color: color-mix(in oklab, var(--pos-neutral) 12%, transparent);
+    border-color: color-mix(in oklab, var(--pos-neutral) 30%, transparent);
+    color: var(--pos-neutral);
+  }
+
+  /* Connection-state beacon. The pulse is a separate class so "cooldown"
+     renders the same dot without motion. */
+  .pos-status-dot {
+    width: 0.375rem;
+    height: 0.375rem;
+    border-radius: 9999px;
+    flex-shrink: 0;
+    background-color: currentColor;
+  }
+
+  /* Monospace digest pill for the integrity checksum. */
+  .pos-hash-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    max-width: 100%;
+    padding: 0.375rem 0.5rem 0.375rem 0.625rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--pos-border);
+    background-color: var(--pos-bg);
+    font-family: var(--font-mono-pos);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.6875rem;
+    letter-spacing: 0.02em;
+    color: var(--pos-text);
+  }
+
+  /* The digest itself fills the pill and is allowed to wrap across groups, so
+     the copy affordance stays pinned to the trailing edge. */
+  .pos-hash-pill__value {
+    flex: 1 1 auto;
+    min-width: 0;
+    word-break: break-word;
+    line-height: 1.5;
+  }
+
+  /* Canonical-payload disclosure: the exact preimage an auditor re-hashes. */
+  .pos-code-block {
+    margin: 0;
+    padding: 0.5rem 0.625rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--pos-border);
+    background-color: var(--pos-bg);
+    color: var(--pos-text);
+    font-family: var(--font-mono-pos);
+    font-size: 0.625rem;
+    line-height: 1.6;
+  }
+
+  /* Syntax tinting for the structured payload viewer. */
+  .pos-kv-key {
+    font-family: var(--font-mono-pos);
+    color: var(--pos-info);
+    white-space: nowrap;
+  }
+  .pos-kv-string {
+    font-family: var(--font-mono-pos);
+    color: var(--pos-ok);
+    word-break: break-word;
+  }
+  .pos-kv-number {
+    font-family: var(--font-mono-pos);
+    color: var(--pos-warn);
+    font-variant-numeric: tabular-nums;
+  }
+  .pos-kv-bool {
+    font-family: var(--font-mono-pos);
+    color: var(--pos-danger);
+  }
+  .pos-kv-null {
+    font-family: var(--font-mono-pos);
+    color: var(--pos-muted);
+    font-style: italic;
   }
 }
 
@@ -809,11 +990,13 @@ html.dark .hotkey-badge {
     font-weight: 900 !important;
     color: #6ee7b7 !important;
     white-space: nowrap !important;
+    font-variant-numeric: tabular-nums !important;
   }
   :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-totalsub {
     font-size: 9.5px !important;
     color: #d1fae5 !important;
     text-align: right !important;
+    font-variant-numeric: tabular-nums !important;
   }
 
   :is(.print-po-target, .print-repair-target, .print-tradein-target, .print-debt-target) .doc-notebox {
@@ -915,5 +1098,90 @@ html.dark .hotkey-badge {
 
 .animate-scan-beam {
   animation: scan-beam 2s ease-in-out infinite;
+}
+
+/* ── Journal d'Audit — temps réel ────────────────────────────────────────────
+   The live indicator and the freshly-arrived row highlight both need motion
+   that survives `prefers-reduced-motion`, which is why they are declared here
+   rather than as utility classes. */
+
+/* Pulsing beacon for the live-stream indicator. */
+@keyframes audit-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 currentColor;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 4px transparent;
+    transform: scale(0.82);
+  }
+}
+
+.audit-live-dot {
+  animation: audit-live-pulse 1.8s ease-in-out infinite;
+  color: inherit;
+}
+
+/* One-shot highlight on a row that just arrived from the live feed. */
+@keyframes audit-row-arrive {
+  0% {
+    background-color: color-mix(in oklab, var(--color-emerald-500) 22%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.audit-fresh-row {
+  animation: audit-row-arrive 2.4s ease-out 1;
+}
+
+/* Slide-over inspection drawer. */
+@keyframes audit-drawer-in {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.audit-drawer-in {
+  animation: audit-drawer-in 0.18s ease-out;
+}
+
+@keyframes audit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.audit-spin {
+  animation: audit-spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .audit-live-dot,
+  .audit-fresh-row,
+  .audit-drawer-in,
+  .audit-spin,
+  .animate-lock-shake {
+    animation: none;
+  }
+}
+
+@keyframes lock-shake {
+  0%, 100% { transform: translateX(0); }
+  15%, 45%, 75% { transform: translateX(-6px); }
+  30%, 60%, 90% { transform: translateX(6px); }
+}
+
+.animate-lock-shake {
+  animation: lock-shake 0.35s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
 }
 
