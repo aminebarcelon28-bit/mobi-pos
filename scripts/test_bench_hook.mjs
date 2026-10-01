@@ -188,14 +188,23 @@ function filesWithMarker(dir, marker, out = []) {
 console.log('== release bundle inspection (dist/) ==');
 {
   const distAssets = join(ROOT, 'dist', 'assets');
-  const srcHitsPre = filesWithMarker(SRC, 'checkout:pre-commit').filter(
-    (p) => relative(SRC, p).split(sep).join('/') !== 'db/benchHook.ts'
+  // Marker strings live at the adapter call sites BY DESIGN
+  // (devBenchMark('checkout:…')); pin that surface exactly: 3 labels, all
+  // through devBenchMark, nowhere else. Bundle-absence is proven by the dist
+  // grep below (labels present in src but absent from dist = Vite erased the
+  // DEV branch, dynamic import included).
+  const labelHits = filesWithMarker(SRC, 'checkout:').map((p) => relative(SRC, p).split(sep).join('/'));
+  const outsideHook = labelHits.filter((p) => p !== 'db/benchHook.ts');
+  check(
+    'span labels outside benchHook are exactly the 3 devBenchMark call sites',
+    outsideHook.length === 1 && outsideHook[0] === 'db/sqlPluginAdapter.ts',
+    outsideHook.join(',')
   );
-  check('checkout:pre-commit unique to benchHook in src', srcHitsPre.length === 0, srcHitsPre.join(','));
-  const srcHitsBench = filesWithMarker(SRC, 'MOBI_BENCH').filter(
-    (p) => relative(SRC, p).split(sep).join('/') !== 'db/benchHook.ts'
-  );
-  check('MOBI_BENCH unique to benchHook in src', srcHitsBench.length === 0, srcHitsBench.join(','));
+  {
+    const adapterSrc2 = readFileSync(join(SRC, 'db/sqlPluginAdapter.ts'), 'utf8');
+    const labels = (adapterSrc2.match(/devBenchMark\('checkout:[a-z-]+'\)/g) || []).length;
+    check('exactly 3 devBenchMark span labels in adapter', labels === 3, `found ${labels}`);
+  }
   if (!existsSync(distAssets)) {
     failures += 1;
     console.error('  [FAIL] dist/assets missing — run `npm run build` first, then re-run this gate.');
