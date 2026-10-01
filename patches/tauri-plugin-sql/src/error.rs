@@ -16,6 +16,11 @@ pub enum Error {
     DatabaseNotLoaded(String),
     #[error("unsupported datatype: {0}")]
     UnsupportedDatatype(String),
+    /// 4.4 interim stopgap: `select` rejected a non-read statement.
+    /// The gateway owns statement-class policy; this is a tripwire, not the
+    /// boundary (see wrapper.rs `validate_read_query`).
+    #[error("rejected statement in select: {0}")]
+    RejectedStatement(String),
 }
 
 impl Serialize for Error {
