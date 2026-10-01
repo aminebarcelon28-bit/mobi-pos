@@ -472,16 +472,24 @@ async function mirrorGenericToSqlite(
     );
   } else if (table === 'security_audit_logs') {
     // F7b: audit readers prefer SQLite when non-empty, so peer entries were
-    // invisible on Tauri until mirrored here. Append-only: version guard
-    // orders replays, content never mutates.
+    // invisible on Tauri until mirrored here.
+    //
+    // Phase 4.5 evidence freeze: INSERT-only (ON CONFLICT DO NOTHING). Pulled
+    // rows are PEER evidence, never locally chained — the audit chain binds
+    // only rows written by native audit_append, and verify walks the links,
+    // not the table. Version-guarded DO UPDATE (the norm for merchant-data
+    // lanes) would let a peer — or anyone holding the shared merchant sync
+    // token (Tier B residual: the server validates nothing) — REWRITE an
+    // existing row's action/details, including a locally chained row, which
+    // would then fail chain verification. Audit entries are immutable by
+    // design (same id = same payload), so first-write-wins converges replays
+    // with no loss, and no pulled row can ever mutate local evidence.
     const a = payload;
     const now = utcNowIso();
     await db.execute(
       `INSERT INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, version, device_id, ip_address)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT(id) DO UPDATE SET timestamp=excluded.timestamp, user=excluded.user,
-         action=excluded.action, details=excluded.details, version=excluded.version, device_id=excluded.device_id, ip_address=excluded.ip_address
-         WHERE excluded.version >= security_audit_logs.version`,
+       ON CONFLICT(id) DO NOTHING`,
       [
         id,
         String((a.timestamp as string) ?? now),

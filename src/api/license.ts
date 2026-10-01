@@ -39,6 +39,9 @@ export interface NativeGateState {
    * authoritative detail comes from `audit_verify` — but the UI must not
    * hide it: surface as a security warning, never as verified. */
   audit_boot: string | null;
+  /** Phase 4.5 WP2a native swallowed-audit total (monotonic per boot).
+   * Nonzero = audit writes have been failing; investigate the audit path. */
+  audit_swallowed: number;
 }
 
 /** Read-only coarse gate probe. Callable in every state, grants nothing. */

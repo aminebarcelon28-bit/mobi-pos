@@ -378,6 +378,8 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("emergency_export_ledger", Capability::EmergencyExport),
     // Tier A audit path (Phase 4.4): native append-only writes.
     ("audit_append", Capability::OperationalWrites),
+    // Swallowed-audit surfacing (Phase 4.5 WP2a): same plane as append.
+    ("audit_note_swallowed", Capability::OperationalWrites),
     // Tier A PIN plane (Phase 4.5): device-local verify/rotate. Scoped to
     // LicenseManagement (provisioning plane) so first-boot setup and
     // rotation-while-locked stay reachable; neither grants business caps.
@@ -563,6 +565,10 @@ pub struct GateState {
     /// not reported yet this boot). Surfaces `BROKEN ...` without blocking
     /// startup or checkout; authoritative detail comes from `audit_verify`.
     pub audit_boot: Option<String>,
+    /// Phase 4.5 WP2a native swallowed-audit total (monotonic per boot).
+    /// Nonzero means audit writes have been failing and the funnel is
+    /// swallowing; investigate the audit path, not the primary flows.
+    pub audit_swallowed: u64,
 }
 
 /// UI presentation probe. Callable in every state including UNKNOWN.
@@ -587,6 +593,7 @@ pub fn get_gate_state() -> GateState {
         },
         generation,
         audit_boot: super::audit_append::boot_audit_status(),
+        audit_swallowed: super::audit_append::swallowed_audit_total(),
     }
 }
 
@@ -1001,6 +1008,7 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "trust_reanchor_challenge",
     "trust_reanchor_time",
     "audit_append",
+    "audit_note_swallowed",
     "audit_verify",
     "pin_verify",
     "pin_set",
@@ -1181,6 +1189,12 @@ mod tests {
         assert!(json.get("generation").is_some());
         assert!(json.get("token").is_none());
         assert!(json.get("key").is_none());
+        // Phase 4.5 surfaced fields are present and coarse (status string +
+        // monotonic counter — no chains, hashes, or key material).
+        assert!(json.get("audit_boot").is_some());
+        assert!(json.get("audit_swallowed").is_some());
+        assert!(json.get("entry_hash").is_none());
+        assert!(json.get("mac").is_none());
     }
 
     #[test]

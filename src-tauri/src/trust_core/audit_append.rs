@@ -789,6 +789,52 @@ pub fn chain_status_for_export(
     }
 }
 
+/// TS-side swallowed-failure counter, mirrored natively (Phase 4.5 WP2a).
+/// The WebView funnel swallows audit failures by policy (audit never blocks
+/// primary flows) and counts them in TS; it also best-effort reports each
+/// swallow here so the total is visible inside the trust boundary
+/// (`get_gate_state.audit_swallowed`) even if the WebView is compromised or
+/// reloaded (TS counter is per-session). Monotonic process total; no reset
+/// path exists by design (reset would hide an audit outage).
+static SWALLOWED_AUDIT_FAILURES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Current native swallowed-audit total for `get_gate_state`.
+pub fn swallowed_audit_total() -> u64 {
+    SWALLOWED_AUDIT_FAILURES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Core increment (pure trust-boundary logic; the command wrapper only adds
+/// authorization). Returns the new running total.
+pub fn note_swallowed_audit_failure(context: &str) -> u64 {
+    let ctx: String = context.chars().take(128).collect();
+    let total = SWALLOWED_AUDIT_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    eprintln!("[trust_core] swallowed audit failure #{total} ({ctx})");
+    total
+}
+
+/// `#[tauri::command]`: report one swallowed audit failure from the WebView
+/// funnel. OperationalWrites (same plane as `audit_append`): callable whenever
+/// audit writes are. `context` is a short machine tag (capped, never free
+/// text — it lands in the log). Returns the running native total. Never
+/// fails closed: reporting a swallow must itself be infallible from the
+/// caller's view (validation errors are typed, storage cannot fail — the
+/// counter is in-memory).
+#[tauri::command]
+pub fn audit_note_swallowed(
+    app: tauri::AppHandle,
+    context: String,
+) -> Result<u64, TrustError> {
+    super::ipc_authorizer::authorize_and_execute(
+        "audit_note_swallowed",
+        super::Capability::OperationalWrites,
+        |_| {
+            let _ = &app;
+            Ok(note_swallowed_audit_failure(&context))
+        },
+    )
+}
+
 /// `#[tauri::command]`: full chain verification (ReadOperationalData — it is
 /// a read; locked-state diagnostics keep their dedicated paths). Returns the
 /// rich status; callers map it to UI.
@@ -1506,8 +1552,7 @@ mod tests {
     }
 
     #[test]
-    fn boot_latch_surfaces_through_gate_state() {
-        use super::super::ipc_authorizer::{get_gate_state, global_kernel};
+    fn boot_latch_surfaces_through_gate_state() {        use super::super::ipc_authorizer::{get_gate_state, global_kernel};
         let _g = serial_test_lock();
         global_kernel().reset_for_tests();
         record_boot_audit_status("BROKEN head(seq=3) vs chain(2)".into());
@@ -1517,5 +1562,19 @@ mod tests {
             Some("BROKEN head(seq=3) vs chain(2)".to_string())
         );
         record_boot_audit_status("intact links=3".into());
+    }
+
+    #[test]
+    fn swallowed_counter_is_monotonic_and_capped() {
+        use super::super::ipc_authorizer::global_kernel;
+        let _g = serial_test_lock();
+        global_kernel().reset_for_tests();
+        let before = swallowed_audit_total();
+        let t1 = note_swallowed_audit_failure("op-denied");
+        let t2 = note_swallowed_audit_failure(&"x".repeat(500));
+        assert_eq!(t1, before + 1);
+        assert_eq!(t2, before + 2);
+        assert_eq!(swallowed_audit_total(), before + 2);
+        // No reset path: the total only moves forward.
     }
 }

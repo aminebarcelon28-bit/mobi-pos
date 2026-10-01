@@ -10,6 +10,24 @@ import type { Product } from '../types/pos';
 import { newId } from '../utils/ids';
 import { toLocalDayKey } from '../utils/dateUtils';
 import { withWriteLock } from './writeMutex';
+// Phase 4.5 WP2c: NO static import of './benchHook' — it must stay out of
+// release bundles entirely (bundle-inspected by test_bench_hook.mjs). Timing
+// marks go through devBenchMark below: a DEV-guarded lazy import that Vite
+// erases from production builds (`import.meta.env.DEV` compiles to `false`
+// and the minifier drops the branch, dynamic import included). Marks resolve
+// on a microtask — fine for shape-only dev benches, never on the hot path.
+function devBenchMark(label: string): void {
+  try {
+    if (import.meta.env.DEV) {
+      void import('./benchHook').then(
+        (m) => m.benchMark(label),
+        () => {}
+      );
+    }
+  } catch {
+    // Timing must never break production flows.
+  }
+}
 import { withBusyRetry, isBusyError, isStaleTxnError, isRetryableDbError } from './busyRetry';
 export { isRetryableDbError, isBusyError, isStaleTxnError, withBusyRetry };
 import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL, CUSTOMER_DEBTS_HEAL_PROBE_SQL } from './schemaHeal';
@@ -755,6 +773,7 @@ function normalizeMoneyInput(input: CheckoutWriteInput): void {
 }
 
 async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<CheckoutWriteResult> {
+  devBenchMark('checkout:start');
   const db = await getLocalDb();
   const deviceId = (await getOrCreateDeviceId(db)) || 'default';
   const now = utcNowIso();
@@ -1818,9 +1837,11 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
       }
     }
 
+    devBenchMark('checkout:pre-commit');
     if (useTxn) {
       await db.execute('COMMIT;');
     }
+    devBenchMark('checkout:post-commit');
   } catch (error) {
     if (useTxn) {
       await db.execute('ROLLBACK;').catch(() => {});
@@ -2768,18 +2789,20 @@ async function stableEntityKey(
 
 /**
  * F3-coverage: device-local settings that must NEVER leave the device.
- * `sync.*` are cursors/state; `manager_pin` + `cashier_users` are credential
- * material (PIN hashes) — replicating them puts secrets in the cloud KV and
- * onto every peer. Printer routing (`printerRouting` inside
- * `mobi_pos_receipt_settings`) names per-device printers — syncing it makes
- * peers clobber each other's printer names. Single predicate + payload
- * stripper shared by push (setSetting), backfill, repair, migration, and the
- * pull merge (which additionally preserves the LOCAL routing on apply).
+ * `sync.*` are cursors/state. Phase 4.5: `manager_pin` + `cashier_users`
+ * are credential material (PIN hashes) back in the device-local set —
+ * replicating them puts brute-forceable secrets in the cloud KV and onto
+ * every peer (see report: single-SHA-256 over 4–6 digits). Printer routing
+ * (`printerRouting` inside `mobi_pos_receipt_settings`) names per-device
+ * printers — syncing it makes peers clobber each other's printer names.
+ * Single predicate + payload stripper shared by push (setSetting),
+ * backfill, repair, migration, and the pull merge (which additionally
+ * preserves the LOCAL routing on apply).
  */
-const DEVICE_LOCAL_SETTING_KEYS: ReadonlySet<string> = new Set([]); // manager_pin and cashier_users now sync
-  // 'manager_pin',
-  // 'cashier_users',
-  // ]);
+const DEVICE_LOCAL_SETTING_KEYS: ReadonlySet<string> = new Set([
+  'manager_pin',
+  'cashier_users',
+]);
 
 export function isDeviceLocalSettingKey(key: string): boolean {
   const k = String(key || '');

@@ -11,9 +11,15 @@
  * 2. After each pull (and after each local payout), the detector scans merged
  *    local + peer audit rows. Two CASH payouts for the same payout id from two
  *    distinct devices = the same physical cash handed out twice.
- * 3. The first detector to see it writes ONE deterministic exception audit
- *    entry (`AUDIT-DUP-<id>`, converges via ON CONFLICT) so both devices show
- *    the same exception, and the UI toasts + lists it for the merchant.
+ * 3. The first detector to see it files ONE exception audit entry per
+ *    device via the single audit funnel (native chained append under
+ *    Tauri). The deterministic convergence key (`AUDIT-DUP-<id>` /
+ *    `AUDIT-OVERREFUND-…`) rides in the details text; once-only per device
+ *    is enforced by the processed markers. Direct WebView INSERTs into
+ *    `security_audit_logs` are banned (Phase 4.5, trust tables are
+ *    native-write-only), so both devices show their own chained exception
+ *    row rather than converging on one synced row — still LOUD on both,
+ *    and detection inputs (payout-tagged rows) are unchanged.
  *
  * Non-cash methods (Avoir/Crédit) are convergence-safe by construction and
  * never flagged. Offline-first is untouched: detection is read-only until the
@@ -134,7 +140,7 @@ async function markProcessed(payoutId: string): Promise<void> {
   try {
     const { db: dexieDb } = await import('../db/database');
     await dexieDb.appSettings.put({ key: `sync.payoutwatch.${payoutId}`, value: 1 }).catch(() => {});
-  } catch { /* marker best-effort; deterministic exception id dedupes anyway */ }
+  } catch { /* marker best-effort; the funnel files at most once per marker */ }
 }
 
 /**
@@ -157,19 +163,25 @@ export async function checkDuplicatePayouts(): Promise<DuplicatePayout[]> {  let
       continue;
     }
     try {
-      const { operationsAdapter } = await import('../db/adapters/operationsAdapter');
+      // Phase 4.5: exception entries go through the single audit funnel
+      // (native chained append under Tauri). Direct WebView INSERTs into
+      // security_audit_logs are banned (trust tables are native-write-only):
+      // unchained rows would be invisible to the audit chain while showing
+      // in the register as if audited. The deterministic convergence key
+      // rides in details text; once-only per device is enforced by
+      // alreadyProcessed/markProcessed below.
+      const { usePosStore } = await import('../store/usePosStore');
       const ticket = d.payoutId.replace(/^(REF|VOID):/, '');
-      await operationsAdapter.saveAuditLog({
-        id: `AUDIT-DUP-${d.payoutId.replace(/[^A-Za-z0-9-]/g, '').slice(0, 48)}`,
-        timestamp: new Date().toISOString(),
-        user: 'Système (Sync)',
-        action: DUPLICATE_PAYOUT_ACTION,
-        details:
+      const convergenceKey = `AUDIT-DUP-${d.payoutId.replace(/[^A-Za-z0-9-]/g, '').slice(0, 48)}`;
+      await usePosStore.getState().logSecurityAction(
+        DUPLICATE_PAYOUT_ACTION,
+        `[${convergenceKey}] ` +
           `Ticket ${ticket} remboursé/annulé en ESPÈCES sur ${d.devices.length} appareils ` +
           `(${d.amount} DA constatés ${d.occurrences}×). ` +
           `La caisse a peut-être rendu la monnaie deux fois — contrôlez le fond de caisse.`,
-        requiresPin: false,
-      });
+        'Système (Sync)',
+        false
+      );
       await markProcessed(d.payoutId);
       fresh.push(d);
     } catch (err) {
@@ -260,17 +272,18 @@ export async function checkOverRefundedSales(candidateIds?: string[]): Promise<O
           continue;
         }
         try {
-          const { operationsAdapter } = await import('../db/adapters/operationsAdapter');
-          await operationsAdapter.saveAuditLog({
-            id: `AUDIT-OVERREFUND-${`${oid}-${pid}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 48)}`,
-            timestamp: new Date().toISOString(),
-            user: 'Système (Sync)',
-            action: OVERREFUND_ACTION,
-            details:
+          // Phase 4.5: same funnel rule as above — no direct WebView audit
+          // writes; convergence key in details, once-only via markProcessed.
+          const { usePosStore } = await import('../store/usePosStore');
+          const convergenceKey = `AUDIT-OVERREFUND-${`${oid}-${pid}`.replace(/[^A-Za-z0-9-]/g, '').slice(0, 48)}`;
+          await usePosStore.getState().logSecurityAction(
+            OVERREFUND_ACTION,
+            `[${convergenceKey}] ` +
               `Ticket ${String(orig.receiptNumber ?? oid)} : ${rq} unité(s) remboursée(s) pour ${pq} achetée(s) ` +
               `(article ${pid}). Les remboursements dépassent l'achat — contrôlez les avoirs et le stock.`,
-            requiresPin: false,
-          });
+            'Système (Sync)',
+            false
+          );
           await markProcessed(marker);
           fresh.push({
             originalId: oid,

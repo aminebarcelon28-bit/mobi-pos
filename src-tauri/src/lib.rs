@@ -13,38 +13,57 @@ pub mod gate;
 pub mod db;
 pub mod resolver;
 pub mod commands;
+pub mod emergency_export;
+pub mod trust_core;
+
+use crate::trust_core::{
+    capability_policy::Capability,
+    ipc_authorizer::{authorize_and_execute, TrustError},
+};
 
 use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 #[tauri::command]
-fn sqlite_print_raw_escpos(printer_name: String, data: Vec<u8>) -> Result<(), String> {
-    #[cfg(mobile)]
-    {
-        let _ = (&printer_name, &data);
-        return Err(
-            "Impression non supportée sur mobile (Bluetooth/BLE à brancher). Ticket conservé."
-                .into(),
-        );
-    }
-    #[cfg(not(mobile))]
-    {
-        crate::printer::print_raw_bytes(&printer_name, &data)
-    }
+fn sqlite_print_raw_escpos(printer_name: String, data: Vec<u8>) -> Result<(), TrustError> {
+    authorize_and_execute(
+        "sqlite_print_raw_escpos",
+        Capability::HardwareOperations,
+        |_| {
+            #[cfg(mobile)]
+            {
+                let _ = (&printer_name, &data);
+                return Err(TrustError::op_failed(
+                    "Impression non supportée sur mobile (Bluetooth/BLE à brancher). Ticket conservé.",
+                ));
+            }
+            #[cfg(not(mobile))]
+            {
+                crate::printer::print_raw_bytes(&printer_name, &data).map_err(TrustError::op_failed)
+            }
+        },
+    )
 }
 
 #[tauri::command]
-fn sqlite_open_cash_drawer(printer_name: String) -> Result<(), String> {
-    #[cfg(mobile)]
-    {
-        let _ = &printer_name;
-        return Err("Tiroir-caisse non supporté sur mobile.".into());
-    }
-    #[cfg(not(mobile))]
-    {
-        let pulse_bytes = vec![0x1Bu8, 0x70, 0x00, 0x19, 0xFA];
-        crate::printer::print_raw_bytes(&printer_name, &pulse_bytes)
-    }
+fn sqlite_open_cash_drawer(printer_name: String) -> Result<(), TrustError> {
+    authorize_and_execute(
+        "sqlite_open_cash_drawer",
+        Capability::HardwareOperations,
+        |_| {
+            #[cfg(mobile)]
+            {
+                let _ = &printer_name;
+                return Err(TrustError::op_failed("Tiroir-caisse non supporté sur mobile."));
+            }
+            #[cfg(not(mobile))]
+            {
+                let pulse_bytes = vec![0x1Bu8, 0x70, 0x00, 0x19, 0xFA];
+                crate::printer::print_raw_bytes(&printer_name, &pulse_bytes)
+                    .map_err(TrustError::op_failed)
+            }
+        },
+    )
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -100,96 +119,119 @@ fn delete_vault_file(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_cloud_credentials(app_handle: tauri::AppHandle) -> Result<Option<CloudCredentials>, String> {
-    #[cfg(not(mobile))]
-    {
-        if let Ok(entry) = keyring::Entry::new("mobi-pos-cloud-sync", "credentials") {
-            match entry.get_password() {
-                Ok(secret) => {
-                    if let Ok(creds) = serde_json::from_str::<CloudCredentials>(&secret) {
-                        // B-056 migration: keychain hit — purge any leftover
-                        // plaintext vault so disk no longer holds the token.
-                        let _ = delete_vault_file(&app_handle);
-                        return Ok(Some(creds));
+fn get_cloud_credentials(app_handle: tauri::AppHandle) -> Result<Option<CloudCredentials>, TrustError> {
+    authorize_and_execute(
+        "get_cloud_credentials",
+        Capability::LicenseManagement,
+        |_| {
+            #[cfg(not(mobile))]
+            {
+                if let Ok(entry) = keyring::Entry::new("mobi-pos-cloud-sync", "credentials") {
+                    match entry.get_password() {
+                        Ok(secret) => {
+                            if let Ok(creds) = serde_json::from_str::<CloudCredentials>(&secret) {
+                                // B-056 migration: keychain hit — purge any leftover
+                                // plaintext vault so disk no longer holds the token.
+                                let _ = delete_vault_file(&app_handle);
+                                return Ok(Some(creds));
+                            }
+                        }
+                        Err(keyring::Error::NoEntry) => {
+                            // fall through to legacy vault for one-time migration
+                        }
+                        Err(e) => return Err(TrustError::op_failed(format!("keychain read: {e}"))),
                     }
                 }
-                Err(keyring::Error::NoEntry) => {
-                    // fall through to legacy vault for one-time migration
-                }
-                Err(e) => return Err(format!("keychain read: {e}")),
             }
-        }
-    }
 
-    let from_vault = read_vault_file(&app_handle)?;
+            let from_vault = read_vault_file(&app_handle)?;
 
-    // B-056 migration: desktop found credentials only in the plaintext vault —
-    // move them into the OS keychain and delete the vault file.
-    #[cfg(not(mobile))]
-    if let Some(creds) = &from_vault {
-        let json = serde_json::to_string(creds).map_err(|e| e.to_string())?;
-        match keyring::Entry::new("mobi-pos-cloud-sync", "credentials") {
-            Ok(entry) => match entry.set_password(&json) {
-                Ok(()) => {
-                    delete_vault_file(&app_handle)?;
-                    return Ok(Some(creds.clone()));
+            // B-056 migration: desktop found credentials only in the plaintext vault —
+            // move them into the OS keychain and delete the vault file.
+            #[cfg(not(mobile))]
+            if let Some(creds) = &from_vault {
+                let json = serde_json::to_string(creds).map_err(|e| TrustError::op_failed(e.to_string()))?;
+                match keyring::Entry::new("mobi-pos-cloud-sync", "credentials") {
+                    Ok(entry) => match entry.set_password(&json) {
+                        Ok(()) => {
+                            delete_vault_file(&app_handle)?;
+                            return Ok(Some(creds.clone()));
+                        }
+                        Err(e) => {
+                            // Keychain unavailable — keep reading vault, surface reason.
+                            eprintln!("[cloud-creds] keychain migrate failed: {e}");
+                        }
+                    },
+                    Err(e) => eprintln!("[cloud-creds] keychain entry failed: {e}"),
                 }
-                Err(e) => {
-                    // Keychain unavailable — keep reading vault, surface reason.
-                    eprintln!("[cloud-creds] keychain migrate failed: {e}");
-                }
-            },
-            Err(e) => eprintln!("[cloud-creds] keychain entry failed: {e}"),
-        }
-    }
+            }
 
-    Ok(from_vault)
+            Ok(from_vault)
+        },
+    )
 }
 
 #[tauri::command]
-fn set_cloud_credentials(app_handle: tauri::AppHandle, url: String, token: String) -> Result<(), String> {
-    let creds = CloudCredentials { url, token };
+fn set_cloud_credentials(app_handle: tauri::AppHandle, url: String, token: String) -> Result<(), TrustError> {
+    authorize_and_execute(
+        "set_cloud_credentials",
+        Capability::LicenseManagement,
+        |_| {
+            if url.len() > 8 * 1024 || token.len() > 16 * 1024 {
+                return Err(TrustError::IPCProtocolError {
+                    reason: "cloud credentials oversized",
+                });
+            }
+            let creds = CloudCredentials { url, token };
 
-    #[cfg(not(mobile))]
-    {
-        let json = serde_json::to_string(&creds).map_err(|e| e.to_string())?;
-        let entry = keyring::Entry::new("mobi-pos-cloud-sync", "credentials")
-            .map_err(|e| format!("keychain entry: {e}"))?;
-        entry
-            .set_password(&json)
-            .map_err(|e| format!("keychain save: {e}"))?;
-        // B-056: desktop stores ONLY in the OS keychain — never write the
-        // plaintext vault. Remove any pre-existing vault from older builds.
-        delete_vault_file(&app_handle)?;
-        return Ok(());
-    }
+            #[cfg(not(mobile))]
+            {
+                let json = serde_json::to_string(&creds).map_err(|e| TrustError::op_failed(e.to_string()))?;
+                let entry = keyring::Entry::new("mobi-pos-cloud-sync", "credentials")
+                    .map_err(|e| TrustError::op_failed(format!("keychain entry: {e}")))?;
+                entry
+                    .set_password(&json)
+                    .map_err(|e| TrustError::op_failed(format!("keychain save: {e}")))?;
+                // B-056: desktop stores ONLY in the OS keychain — never write the
+                // plaintext vault. Remove any pre-existing vault from older builds.
+                delete_vault_file(&app_handle)?;
+                return Ok(());
+            }
 
-    // Mobile: no portable keyring — encrypted-at-rest vault is the fallback.
-    #[cfg(mobile)]
-    {
-        save_vault_file(&app_handle, &creds)?;
-        return Ok(());
-    }
+            // Mobile: no portable keyring — encrypted-at-rest vault is the fallback.
+            #[cfg(mobile)]
+            {
+                save_vault_file(&app_handle, &creds)?;
+                return Ok(());
+            }
 
-    #[allow(unreachable_code)]
-    Ok(())
+            #[allow(unreachable_code)]
+            Ok(())
+        },
+    )
 }
 
 #[tauri::command]
-fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), String> {
-    #[cfg(not(mobile))]
-    {
-        match keyring::Entry::new("mobi-pos-cloud-sync", "credentials") {
-            Ok(entry) => match entry.delete_credential() {
-                Ok(()) | Err(keyring::Error::NoEntry) => {}
-                Err(e) => return Err(format!("keychain delete: {e}")),
-            },
-            Err(e) => return Err(format!("keychain entry: {e}")),
-        }
-    }
-    // Always purge any leftover vault (desktop migration + mobile).
-    delete_vault_file(&app_handle)?;
-    Ok(())
+fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustError> {
+    authorize_and_execute(
+        "delete_cloud_credentials",
+        Capability::LicenseManagement,
+        |_| {
+            #[cfg(not(mobile))]
+            {
+                match keyring::Entry::new("mobi-pos-cloud-sync", "credentials") {
+                    Ok(entry) => match entry.delete_credential() {
+                        Ok(()) | Err(keyring::Error::NoEntry) => {}
+                        Err(e) => return Err(TrustError::op_failed(format!("keychain delete: {e}"))),
+                    },
+                    Err(e) => return Err(TrustError::op_failed(format!("keychain entry: {e}"))),
+                }
+            }
+            // Always purge any leftover vault (desktop migration + mobile).
+            delete_vault_file(&app_handle)?;
+            Ok(())
+        },
+    )
 }
 
 /// Highest `PRAGMA user_version` this build knows how to open. Must track the
@@ -260,6 +302,9 @@ fn verify_copy_integrity(src: &std::path::Path, dst: &std::path::Path) -> Result
 
 /// Safety copy of the CURRENT live DB into `backups/` before any destructive
 /// swap. Best-effort on companions, strict on the main file.
+/// Retained (Phase 4.4) for the future PIN+audit restore feature; the swap
+/// commands that used it were removed from the handler.
+#[allow(dead_code)]
 fn backup_current_db_before_swap(
     app_dir: &std::path::Path,
     backups_dir: &std::path::Path,
@@ -292,7 +337,11 @@ fn now_secs() -> u64 {
 }
 
 #[tauri::command]
-fn create_database_backup(app_handle: tauri::AppHandle) -> Result<String, String> {
+fn create_database_backup(app_handle: tauri::AppHandle) -> Result<String, TrustError> {
+    authorize_and_execute(
+        "create_database_backup",
+        Capability::ReadOperationalData,
+        |_| {
     let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
     let db_path = app_dir.join("mobi_pos.db");
     if !db_path.exists() {
@@ -331,62 +380,25 @@ fn create_database_backup(app_handle: tauri::AppHandle) -> Result<String, String
     verify_copy_integrity(&db_path, &backup_path)?;
 
     Ok(backup_path.to_string_lossy().into_owned())
+        },
+    )
 }
 
-#[tauri::command]
-fn restore_database_backup(app_handle: tauri::AppHandle, backup_path: String) -> Result<(), String> {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    let backups_dir = app_dir.join("backups");
-    std::fs::create_dir_all(&backups_dir).map_err(|e| e.to_string())?;
-    let canonical_backups_dir = std::fs::canonicalize(&backups_dir)
-        .map_err(|e| format!("Dossier backups inaccessible: {}", e))?;
-
-    let path = std::path::PathBuf::from(&backup_path);
-    if !path.exists() {
-        return Err("Le fichier de sauvegarde spécifié n'existe pas".into());
-    }
-    let canonical_path = std::fs::canonicalize(&path)
-        .map_err(|e| format!("Chemin invalide: {}", e))?;
-
-    // Guard against path traversal: must strictly be within backups directory
-    if !canonical_path.starts_with(&canonical_backups_dir) {
-        return Err("Accès refusé: le fichier doit provenir du dossier backups autorisé".into());
-    }
-
-    // 1. Validate the SOURCE backup first: refuse a corrupt file before it can
-    // ever touch the live DB (fail loudly, C6).
-    is_plausible_sqlite_copy(&canonical_path)
-        .map_err(|e| format!("Sauvegarde source invalide, restauration refusée: {e}"))?;
-
-    // 2. Back up the CURRENT live DB first so a bad restore is reversible.
-    let timestamp = now_secs();
-    backup_current_db_before_swap(&app_dir, &backups_dir, timestamp)?;
-
-    let db_path = app_dir.join("mobi_pos.db");
-    let target_wal = app_dir.join("mobi_pos.db-wal");
-    let target_shm = app_dir.join("mobi_pos.db-shm");
-
-    // Remove active shared memory to avoid stale index pointers
-    let _ = std::fs::remove_file(&target_shm);
-
-    std::fs::copy(&canonical_path, &db_path).map_err(|e| e.to_string())?;
-
-    // Cleanly restore or clean up companion WAL file
-    let companion_wal = canonical_path.with_extension("db-wal");
-    if companion_wal.exists() {
-        let _ = std::fs::copy(&companion_wal, &target_wal);
-    } else if target_wal.exists() {
-        let _ = std::fs::remove_file(&target_wal);
-    }
-
-    // 3. Verify the swapped-in file before reporting success.
-    verify_copy_integrity(&canonical_path, &db_path)?;
-
-    Ok(())
-}
+// REMOVED (Phase 4.4): `restore_database_backup` and `swap_staging_database`
+// were deleted from the IPC handler. Zero in-app callers, no staging
+// producer, no PIN, no audit row — pure attack surface. Restoring either
+// requires PIN + audit + schema validation, plus pool quiesce (drain
+// in-flight queries, close pool, swap, re-open, integrity_check, resume);
+// that design is deferred until a real restore feature exists. The bodies
+// live in git history. `backup_current_db_before_swap` is retained for that
+// future feature.
 
 #[tauri::command]
-fn list_database_backups(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
+fn list_database_backups(app_handle: tauri::AppHandle) -> Result<Vec<String>, TrustError> {
+    authorize_and_execute(
+        "list_database_backups",
+        Capability::ReadOperationalData,
+        |_| {
     let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
     let backups_dir = app_dir.join("backups");
     if !backups_dir.exists() {
@@ -404,49 +416,8 @@ fn list_database_backups(app_handle: tauri::AppHandle) -> Result<Vec<String>, St
     files.sort();
     files.reverse();
     Ok(files)
-}
-
-#[tauri::command]
-fn swap_staging_database(app_handle: tauri::AppHandle, staging_file: String) -> Result<(), String> {
-    // Guard against path traversal: strictly allow only alphanumeric, underscores, hyphens, and .db extension
-    if staging_file.contains('/') || staging_file.contains('\\') || staging_file.contains("..") {
-        return Err("Nom de fichier de staging invalide (traversée interdite)".into());
-    }
-    if !staging_file.ends_with(".db") {
-        return Err("Le fichier de staging doit porter l'extension .db".into());
-    }
-
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    let staging_path = app_dir.join(&staging_file);
-    if !staging_path.exists() {
-        return Err("Fichier de staging introuvable".into());
-    }
-    // 1. Validate the SOURCE staging file first — never swap in a corrupt DB.
-    is_plausible_sqlite_copy(&staging_path)
-        .map_err(|e| format!("Fichier de staging invalide, échange refusé: {e}"))?;
-
-    // 2. Back up the CURRENT live DB first so a bad swap is reversible.
-    let backups_dir = app_dir.join("backups");
-    std::fs::create_dir_all(&backups_dir).map_err(|e| e.to_string())?;
-    backup_current_db_before_swap(&app_dir, &backups_dir, now_secs())?;
-
-    let db_path = app_dir.join("mobi_pos.db");
-    let wal_path = app_dir.join("mobi_pos.db-wal");
-    let shm_path = app_dir.join("mobi_pos.db-shm");
-
-    // CRITICAL (Contract C6): Delete active WAL and SHM files before swapping in staging DB!
-    // If old WAL frames remain, SQLite will replay stale WAL pages into the new DB,
-    // causing B-Tree header mismatch and irrecoverable corruption (Code 1299 / SQLite Error 26).
-    let _ = std::fs::remove_file(&wal_path);
-    let _ = std::fs::remove_file(&shm_path);
-
-    std::fs::copy(&staging_path, &db_path).map_err(|e| e.to_string())?;
-
-    // 3. Verify the swapped-in file before deleting staging and reporting success.
-    verify_copy_integrity(&staging_path, &db_path)?;
-
-    let _ = std::fs::remove_file(&staging_path);
-    Ok(())
+        },
+    )
 }
 
 #[tauri::command]
@@ -1192,6 +1163,18 @@ pub fn run() {
                         _ => {}
                     }
                 }
+                // Phase 1 trust kernel: resolve the transient UNKNOWN state
+                // from the authenticated snapshot (absent -> UNACTIVATED,
+                // verification failure -> CORRUPTED). Never blocks startup;
+                // the kernel is fail-closed by construction.
+                trust_core::ipc_authorizer::resolve_at_startup(&app_dir);
+                // Phase 4.5: boot audit head-check in the background (O(1)
+                // count+terminal vs keystore head; full verify runs at export
+                // and on explicit audit_verify). Logging only, never blocks.
+                let audit_dir = app_dir.clone();
+                std::thread::spawn(move || {
+                    trust_core::audit_append::boot_audit_check(&audit_dir);
+                });
             }
             Ok(())
         })
@@ -1202,11 +1185,20 @@ pub fn run() {
             set_cloud_credentials,
             delete_cloud_credentials,
             create_database_backup,
-            restore_database_backup,
             list_database_backups,
-            swap_staging_database,
             sqlite_check_db_version,
             sqlite_db_maintenance,
+            emergency_export::emergency_export_ledger,
+            trust_core::ipc_authorizer::get_gate_state,
+            trust_core::ipc_authorizer::trust_sync_license,
+            trust_core::ipc_authorizer::trust_report_revocation,
+            trust_core::reanchor::trust_reanchor_challenge,
+            trust_core::reanchor::trust_reanchor_time,
+            trust_core::audit_append::audit_append,
+            trust_core::audit_append::audit_note_swallowed,
+            trust_core::audit_append::audit_verify,
+            trust_core::pin::pin_verify,
+            trust_core::pin::pin_set,
             intents::launch_dialer,
             intents::launch_call,
             intents::launch_whatsapp,
