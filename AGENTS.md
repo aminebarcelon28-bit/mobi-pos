@@ -70,3 +70,10 @@ TypeScript outbox sync).
   ≤120 s heartbeat re-suspends, wipes the token, propagates revocation
   natively) and by token expiry. Inherent to offline-first; the native
   kernel never reads localStorage and is unaffected.
+- **WebView SQL bypass (OPEN residual):** modified WebView JS holds a
+  writable handle to the live DB (`tauri-plugin-sql`) outside IPC
+  authorization — trust-table guarantees are detection-backed (chain
+  verify, boot latch, export gate), not prevention-backed, until the
+  data-plane gateway lands. Exact paths + Tier A/B holdings:
+  `docs/webview-sql-residual.md`. Inherent to pre-gateway; the native
+  kernel logic itself is unaffected.
