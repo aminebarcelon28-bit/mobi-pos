@@ -119,6 +119,44 @@ export function exchangeCashOutFromMovements(movs: CashMovementLike[] | undefine
     .reduce((acc, m) => acc + toCashAmount(m.amount), 0);
 }
 
+/**
+ * Drawer-availability estimate (Chaos S2 overdraft guard). SAME term set as
+ * the booking authority and the Z reconciler — a single source so the guard
+ * can never disagree with what closeShift will book. All inputs integer DZD;
+ * corrupt rows read as 0, never NaN. Pure (node-testable).
+ */
+export interface DrawerEstimateInput {
+  openingFloat: number;
+  cashSales: number;
+  debtSettled: number;
+  deposits: number;
+  manualIn: number;
+  refunds: number;
+  drops: number;
+  payouts: number;
+  cashExpenses: number;
+  tradeInCashOut: number;
+  exchangeOut: number;
+  manualOut: number;
+}
+
+export function estimateDrawerCash(i: DrawerEstimateInput): number {
+  return (
+    toCashAmount(i.openingFloat) +
+    toCashAmount(i.cashSales) +
+    toCashAmount(i.debtSettled) +
+    toCashAmount(i.deposits) +
+    toCashAmount(i.manualIn) -
+    toCashAmount(i.refunds) -
+    toCashAmount(i.drops) -
+    toCashAmount(i.payouts) -
+    toCashAmount(i.cashExpenses) -
+    toCashAmount(i.tradeInCashOut) -
+    toCashAmount(i.exchangeOut) -
+    toCashAmount(i.manualOut)
+  );
+}
+
 function isStandalone(m: CashMovementLike): boolean {
   return (m.reason || '').includes(MANUAL_MOVEMENT_TAG);
 }

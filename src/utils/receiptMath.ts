@@ -354,6 +354,29 @@ function toInt(n: unknown): number {
   return Number.isFinite(v) ? v : 0;
 }
 
+/**
+ * Chaos S5 trade-in restoration quota for one refund row: pro-rata share of
+ * the deduction by net value reversed, capped by what prior refunds of the
+ * same ticket already restored. Pure (slice + battery share it — one source).
+ */
+export function computeTradeRestoreQuota(
+  tradeDeduction: number,
+  netRefund: number,
+  originalTotal: number,
+  priorRestored: number
+): number {
+  const deduction = Math.max(0, Math.round(Number(tradeDeduction) || 0));
+  if (deduction <= 0) return 0;
+  const share = originalTotal > 0 ? Math.min(1, netRefund / Math.max(1, originalTotal)) : 1;
+  return Math.max(
+    0,
+    Math.min(
+      Math.round(deduction * share),
+      deduction - Math.max(0, Math.round(Number(priorRestored) || 0))
+    )
+  );
+}
+
 export function computeCartTotals(lines: CartItem[], opts: CartTotalsOptions = {}): CartTotals {
   const tier = opts.pricingTier;
   let grossSubtotal = 0;

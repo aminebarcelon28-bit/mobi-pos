@@ -518,6 +518,12 @@ export interface SaleTransaction {
    */
   tradeInSoulte?: { amount: number; method: 'cash' | 'wallet' } | null;
   /**
+   * Chaos S5: trade-in value restored to the wallet BY this refund row.
+   * Bounds cumulative restoration across partial refunds so the same
+   * deduction is never re-credited twice. Absent = no trade restoration.
+   */
+  tradeInRestored?: number;
+  /**
    * Exact cash disbursed through a refund row (funding-split: net of
    * voucher/wallet/debt shares restored to their origins). The drawer lane
    * reads this; revenue lanes read total (value reversed). Absent on legacy

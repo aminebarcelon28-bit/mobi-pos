@@ -73,6 +73,13 @@ window.__harnessSeedCart = (unitPrice: number) => {
   } as unknown as CartItem;
   usePosStore.setState({ cart: [line] });
 };
+(window as unknown as { __harnessSeedSerializedCart: (imei: string) => void }).__harnessSeedSerializedCart = (
+  imei: string
+) => {
+  const product = { ...SEED_PRODUCT(80000), isSerialized: true };
+  const line = { product, quantity: 1, appliedPrice: 80000, imeiNumber: imei } as unknown as CartItem;
+  usePosStore.setState({ cart: [line] });
+};
 window.__harnessOpenPayment = () => {
   usePosStore.getState().openModal('payment');
 };

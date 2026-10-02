@@ -41,16 +41,9 @@ import { useInventoryValuation } from '../../hooks/useInventoryValuation';
 import { useAllocationCogs } from '../../hooks/useAllocationCogs';
 import { useReceiptLedgerCogs } from '../../hooks/useReceiptLedgerCogs';
 import { computeSalesMetrics, grossFromTransaction, isExchangeSaleTx } from '../../utils/receiptMath';
-import {
-  cashSalesFromTxns,
-  cashRefundsFromTxns,
-  exchangeCashOutFromMovements,
-  standaloneDepositsFromMovements,
-  standaloneExpensesFromMovements,
-} from '../../utils/cashTerms';
 import { parseLocalizedAmount } from '../../utils/moneyInput';
 import { todayLocalKey, toLocalDayKey } from '../../utils/dateUtils';
-import { csvCell } from '../../utils/spreadsheetSafe';
+import { verifyManagerGate } from '../../utils/pinGate';
 
 export const ReportsModal: React.FC = () => {
   const {
@@ -58,7 +51,8 @@ export const ReportsModal: React.FC = () => {
     closeModal,
     openModal,
     transactions,
-    verifyManagerPin,
+    // Phase 1: manager checks route through the native gate (no local
+    // verifyManagerPin reads here — see utils/pinGate).
     logSecurityAction,
     reprintReceipt,
     voidTransaction,
@@ -100,6 +94,8 @@ export const ReportsModal: React.FC = () => {
   const [isVoidSubmitting, setIsVoidSubmitting] = useState(false);
   const [voidReason, setVoidReason] = useState('Erreur de caisse / Article erroné');
   const [voidPin, setVoidPin] = useState('');
+
+
 
   // v105 ATOMIC MATERIALIZATION: new sales carry the exact FIFO sum
   // hardcoded into the row (transactions.ledger_cogs_total) BEFORE commit —
@@ -151,9 +147,11 @@ export const ReportsModal: React.FC = () => {
   const [exportSuccess, setExportSuccess] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
 
-  const handleVerifyPin = (e: React.FormEvent) => {
+  const handleVerifyPin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (verifyManagerPin(pinInput)) {
+    // Phase 1: native gate (fail-closed); Locked shows the countdown.
+    const gate = await verifyManagerGate(pinInput);
+    if (gate.ok) {
       setPinVerified(true);
       logSecurityAction(
         'Accès Rapports Financiers Autorisé',
@@ -162,7 +160,12 @@ export const ReportsModal: React.FC = () => {
         true
       );
     } else {
-      showToast('PIN Administrateur incorrect ! Accès refusé.', 'error');
+      showToast(
+        gate.locked
+          ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+          : 'PIN Administrateur incorrect ! Accès refusé.',
+        'error'
+      );
       logSecurityAction('Tentative Accès Rapports Échouée', 'PIN incorrect saisi', 'Caissier', true);
     }
   };
@@ -301,11 +304,16 @@ export const ReportsModal: React.FC = () => {
   }, [dateRangeFilter]);
 
   const openingFloat = activeShift?.openingFloat ?? (allShifts && allShifts.length > 0 ? allShifts[0].openingFloat : 20000);
-  // Cash terms share one definition with booking, the close preview and the
-  // Z report (utils/cashTerms) — this surface differs only in that it feeds
-  // date-range-filtered rows instead of a session window.
   const cashSales = useMemo(() => {
-    return cashSalesFromTxns(dateFilteredTransactions);
+    return (dateFilteredTransactions || [])
+      .filter((t) => t.status !== 'VOIDED' && !t.isRefund)
+      .reduce((acc, t) => {
+        if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
+          const cashTenderTotal = t.tenders.filter((tender) => tender.method === 'Espèces').reduce((sum, tender) => sum + (tender.amount || 0), 0);
+          return acc + Math.max(0, cashTenderTotal - (t.changeDue || 0));
+        }
+        return t.paymentMethod === 'Espèces' ? acc + (t.total || 0) : acc;
+      }, 0);
   }, [dateFilteredTransactions]);
 
   const debtCashCollected = useMemo(() => {
@@ -314,23 +322,17 @@ export const ReportsModal: React.FC = () => {
       .reduce((acc, d) => acc + d.amount, 0);
   }, [customerDebts, dateInRange]);
 
-  // Cash collected on repairs = deposits ONLY (cash actually taken at intake,
-  // each auto-logged as a MANUAL_DEPOSIT movement). The unpaid balance of a
-  // 'Prêt / Terminé' ticket is money still owed, NEVER drawer cash — the
-  // repair slice states this invariant explicitly (it broadcasts
-  // REPAIR_BALANCE_DUE_EVENT so the cashier records an explicit deposit when
-  // the customer actually pays). Imputing it here fabricated expected cash
-  // for money that may never arrive, manufacturing false drawer deficits.
   const savCashCollected = useMemo(() => {
     return (repairOrders || [])
       .filter((r) => dateInRange(r.createdAt))
-      .reduce((acc, r) => acc + (r.depositAmount || 0), 0);
+      .reduce(
+        (acc, r) =>
+          acc +
+          (r.depositAmount || 0) +
+          (r.status === 'Prêt / Terminé' ? Math.max(0, r.totalCost - (r.depositAmount || 0)) : 0),
+        0
+      );
   }, [repairOrders, dateInRange]);
-
-  // Cash paid OUT on refunds (shared predicate — see cashTerms).
-  const cashRefundsOut = useMemo(() => {
-    return cashRefundsFromTxns(dateFilteredTransactions);
-  }, [dateFilteredTransactions]);
 
   const cashExpensesOut = useMemo(() => {
     return (dateFilteredExpenses || []).filter((e) => e.paymentMethod === 'Espèces').reduce((acc, e) => acc + (e.amount || 0), 0);
@@ -347,44 +349,9 @@ export const ReportsModal: React.FC = () => {
     return (cashDrops || []).filter((d) => dateInRange(d.timestamp)).reduce((acc, d) => acc + d.amount, 0);
   }, [cashDrops, dateInRange]);
 
-  // Movement-lane terms (no source-table twin by design): exchange cash-outs
-  // plus twin-less standalone manual movements (generic apports /
-  // décaissements, repair-balance payments). Movements are Dexie-only by
-  // design (no SQLite mirror), which makes Dexie the authority here on both
-  // web and Tauri. Twin movements counted via their source tables (drops,
-  // expenses, trade-ins, debts, SAV deposits) never carry the manual tag, so
-  // they can never double-count. Legacy untagged standalone rows stay
-  // invisible (status quo ante — coverage grows forward from the tag).
-  const [movementTerms, setMovementTerms] = useState({ exchange: 0, manualIn: 0, manualOut: 0 });
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { db: dexieDb } = await import('../../db/database');
-        const rows = await dexieDb.cashMovements.toArray().catch(() => []);
-        if (cancelled) return;
-        const inRange = (rows || []).filter((m) => dateInRange(m.createdAt));
-        setMovementTerms({
-          exchange: exchangeCashOutFromMovements(inRange),
-          manualIn: standaloneDepositsFromMovements(inRange),
-          manualOut: standaloneExpensesFromMovements(inRange),
-        });
-      } catch {
-        if (!cancelled) setMovementTerms({ exchange: 0, manualIn: 0, manualOut: 0 });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [dateRangeFilter, dateFilteredTransactions, dateInRange]);
-  const exchangeCashOut = movementTerms.exchange;
-
-  // Unifies with the booking authority (closeShift: openingFloat + cashSales
-  // + deposits - expenses - cashRefunds). Refund outflows were previously
-  // missing here entirely, overstating expected cash by every cash refund.
   const expectedCashInDrawer = Math.max(
     0,
-    openingFloat + cashSales + debtCashCollected + savCashCollected + movementTerms.manualIn - cashExpensesOut - tradeInPayoutsOut - cashDropsOut - cashRefundsOut - exchangeCashOut - movementTerms.manualOut
+    openingFloat + cashSales + debtCashCollected + savCashCollected - cashExpensesOut - tradeInPayoutsOut - cashDropsOut
   );
 
   const actualCountedCash = useMemo(() => {
@@ -514,8 +481,15 @@ export const ReportsModal: React.FC = () => {
 
   const handleConfirmVoid = async (t: SaleTransaction) => {
     if (isVoidSubmitting) return;
-    if (!verifyManagerPin(voidPin)) {
-      showToast('PIN Manager incorrect ! Autorisation requise pour annuler une vente.', 'error');
+    // Phase 1: native gate (fail-closed); Locked shows the countdown.
+    const gate = await verifyManagerGate(voidPin);
+    if (!gate.ok) {
+      showToast(
+        gate.locked
+          ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+          : 'PIN Manager incorrect ! Autorisation requise pour annuler une vente.',
+        'error'
+      );
       return;
     }
 
@@ -531,6 +505,8 @@ export const ReportsModal: React.FC = () => {
         showToast(`Annulation déjà en cours sur un autre appareil — synchronisez puis vérifiez le ticket #${t.receiptNumber} avant de réessayer.`, 'warning');
       } else if (voidResult.reason === 'ALREADY_VOIDED') {
         showToast(`Vente #${t.receiptNumber} déjà annulée.`, 'warning');
+      } else if (voidResult.reason === 'VOID_EXCHANGE_USE_REFUND') {
+        showToast(`Ticket d’échange : annulation directe interdite (reprise liée) — passez par un remboursement, la valeur reprise sera restaurée en avoir.`, 'warning');
       } else {
         showToast(`Erreur lors de l'annulation: ${voidResult.reason}`, 'error');
       }
@@ -620,7 +596,7 @@ export const ReportsModal: React.FC = () => {
         const margin = netTotal > 0 ? ((profit / netTotal) * 100).toFixed(1) : '0';
         const statusLabel = t.status === 'VOIDED' ? 'ANNULÉ' : t.isRefund ? 'AVOIR' : 'VALIDÉ';
 
-        return `${csvCell(t.receiptNumber)};${csvCell(statusLabel)};${csvCell(dateStr)};${csvCell(customerName)};${itemCount};${subtotal};${discount};${netTotal};${cost};${profit};${margin}%;${csvCell(payment)}`;
+        return `"${t.receiptNumber}";"${statusLabel}";"${dateStr}";"${customerName}";${itemCount};${subtotal};${discount};${netTotal};${cost};${profit};${margin}%;"${payment}"`;
       })
       .join('\n');
 
@@ -670,6 +646,30 @@ export const ReportsModal: React.FC = () => {
     });
   };
 
+  // Escape dismissal: topmost-first (void form → inspector → expense → modal)
+  useEffect(() => {
+    if (activeModal !== 'reports') return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (isVoiding) {
+        setIsVoiding(false);
+        return;
+      }
+      if (inspectingTransaction) {
+        setInspectingTransaction(null);
+        setIsVoiding(false);
+        return;
+      }
+      if (showNewExpenseModal) {
+        setShowNewExpenseModal(false);
+        return;
+      }
+      closeModal();
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [activeModal, isVoiding, inspectingTransaction, showNewExpenseModal, closeModal]);
+
   if (activeModal !== 'reports') return null;
 
   return (
@@ -679,7 +679,7 @@ export const ReportsModal: React.FC = () => {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 h-[94vh] sm:h-[90vh] flex flex-col relative cursor-default"
+        className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col relative cursor-default"
       >
         {/* Mobile drag handle */}
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
@@ -694,13 +694,13 @@ export const ReportsModal: React.FC = () => {
                 setPinInput('');
                 closeModal();
               }}
-              className="p-1.5 px-2.5 sm:px-3 bg-cyan-500/10 hover:bg-cyan-500/20 active:scale-95 border border-cyan-500/30 text-cyan-400 rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer min-h-[38px] shrink-0"
+              className="p-1.5 px-2.5 sm:px-3 bg-emerald-500/10 hover:bg-emerald-500/20 active:scale-95 border border-emerald-500/30 text-emerald-400 rounded-lg font-bold text-xs flex items-center gap-1.5 transition cursor-pointer min-h-[44px] shrink-0"
               title="Retour (Échap)"
             >
               <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
               <span>Retour</span>
             </button>
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-cyan-500/20 shrink-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-bold shadow-lg shadow-emerald-500/20 shrink-0">
               <BarChart3 className="w-5 h-5 stroke-[2.5]" />
             </div>
             <div className="min-w-0 flex-1">
@@ -708,7 +708,7 @@ export const ReportsModal: React.FC = () => {
                 <h2 className="text-sm sm:text-base font-black text-pos-text tracking-wide truncate min-w-0">
                   RAPPORTS FINANCIERS
                 </h2>
-                <span className="text-[9px] sm:text-[10px] bg-cyan-500/10 text-cyan-400 font-black px-1.5 py-0.5 rounded border border-cyan-500/30 uppercase shrink-0 whitespace-nowrap">
+                <span className="text-[9px] sm:text-[10px] bg-emerald-500/10 text-emerald-400 font-black px-1.5 py-0.5 rounded-full border border-emerald-500/30 uppercase shrink-0 whitespace-nowrap">
                   ENTERPRISE
                 </span>
               </div>
@@ -723,8 +723,9 @@ export const ReportsModal: React.FC = () => {
               setPinInput('');
               closeModal();
             }}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0 cursor-pointer"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0 cursor-pointer"
             title="Fermer (Échap)"
+            aria-label="Fermer les rapports"
           >
             <X className="w-5 h-5" />
           </button>
@@ -733,7 +734,7 @@ export const ReportsModal: React.FC = () => {
         {/* Security PIN Gate */}
         {!pinVerified ? (
           <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-8 space-y-4 text-center">
-            <div className="w-16 h-16 rounded-2xl bg-amber-500/15 text-amber-400 flex items-center justify-center border border-amber-500/30 shadow-xl">
+            <div className="w-16 h-16 rounded-2xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center border border-emerald-500/30 shadow-xl">
               <Lock className="w-8 h-8 stroke-[2.5]" />
             </div>
             <div>
@@ -755,12 +756,12 @@ export const ReportsModal: React.FC = () => {
                   placeholder="Code PIN Administrateur"
                   value={pinInput}
                   onChange={(e) => setPinInput(e.target.value)}
-                  className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-3 py-2 text-xs font-bold text-pos-text focus:border-amber-400 focus:outline-none min-h-[42px]"
+                  className="w-full bg-pos-bg border border-pos-border rounded-lg pl-9 pr-3 py-2 text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none min-h-[44px]"
                 />
               </div>
               <button
                 type="submit"
-                className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-xl transition shadow-md cursor-pointer min-h-[42px] active:scale-95"
+                className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-lg transition shadow-md cursor-pointer min-h-[44px] active:scale-95"
               >
                 Déverrouiller
               </button>
@@ -775,7 +776,7 @@ export const ReportsModal: React.FC = () => {
               <div className="flex shrink-0">
                 <button
                   onClick={() => setActiveTab('summary')}
-                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 min-h-[44px] ${
                     activeTab === 'summary'
                       ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5'
                       : 'border-transparent text-pos-muted hover:text-pos-text'
@@ -787,7 +788,7 @@ export const ReportsModal: React.FC = () => {
 
                 <button
                   onClick={() => setActiveTab('history')}
-                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 min-h-[44px] ${
                     activeTab === 'history'
                       ? 'border-emerald-500 text-emerald-400'
                       : 'border-transparent text-pos-muted hover:text-pos-text'
@@ -799,7 +800,7 @@ export const ReportsModal: React.FC = () => {
 
                 <button
                   onClick={() => setActiveTab('analytics')}
-                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 min-h-[44px] ${
                     activeTab === 'analytics'
                       ? 'border-emerald-500 text-emerald-400'
                       : 'border-transparent text-pos-muted hover:text-pos-text'
@@ -811,19 +812,19 @@ export const ReportsModal: React.FC = () => {
 
                 <button
                   onClick={() => setActiveTab('expenses')}
-                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 min-h-[44px] ${
                     activeTab === 'expenses'
-                      ? 'border-amber-500 text-amber-400'
+                      ? 'border-emerald-500 text-emerald-400'
                       : 'border-transparent text-pos-muted hover:text-pos-text'
                   }`}
                 >
-                  <DollarSign className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <DollarSign className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                   <span>Dépenses<span className="hidden sm:inline"> & EBITDA</span></span>
                 </button>
 
                 <button
                   onClick={() => setActiveTab('export')}
-                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs font-black border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 min-h-[44px] ${
                     activeTab === 'export'
                       ? 'border-emerald-500 text-emerald-400'
                       : 'border-transparent text-pos-muted hover:text-pos-text'
@@ -835,7 +836,7 @@ export const ReportsModal: React.FC = () => {
               </div>
 
               {/* Quick Date Range Filter */}
-              <div className="flex items-center gap-1.5 py-1 shrink-0 pl-2 ml-auto overflow-x-auto no-scrollbar max-w-full">
+              <div className="flex items-center gap-1.5 py-1 shrink-0 pl-2 ml-auto">
                 <Calendar className="w-3.5 h-3.5 text-pos-muted shrink-0" />
                 <span className="text-[10px] font-bold text-pos-muted uppercase mr-1 shrink-0 whitespace-nowrap">Période :</span>
                 {(['all', 'today', '7days', '30days'] as const).map((r) => (
@@ -843,7 +844,7 @@ export const ReportsModal: React.FC = () => {
                     key={r}
                     type="button"
                     onClick={() => setDateRangeFilter(r)}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer shrink-0 whitespace-nowrap ${
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer shrink-0 whitespace-nowrap min-h-[44px] inline-flex items-center ${
                       dateRangeFilter === r
                         ? 'bg-emerald-500 text-slate-950 shadow-sm'
                         : 'bg-pos-bg border border-pos-border text-pos-muted hover:text-pos-text'
@@ -862,17 +863,17 @@ export const ReportsModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => openModal('shift_zreport')}
-                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 transition cursor-pointer flex items-center gap-1 ml-1 shrink-0 whitespace-nowrap"
+                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 transition cursor-pointer flex items-center gap-1 ml-1 shrink-0 whitespace-nowrap min-h-[44px]"
                   title="Aperçu et Contrôle du Rapport Z de Caisse"
                 >
-                  <Receipt className="w-3 h-3 text-amber-400" />
+                  <Receipt className="w-3 h-3 text-emerald-400" />
                   <span>Rapport Z</span>
                 </button>
               </div>
             </div>
 
             {/* Scrollable Tab Content Body */}
-            <div className="p-5 overflow-y-auto space-y-5 flex-1 bg-pos-bg">
+            <div className="p-5 overflow-y-auto overscroll-contain space-y-5 flex-1 bg-pos-bg">
               
               {/* ── 1. Financial Summary & Executive Balance Sheet ── */}
               {activeTab === 'summary' && (
@@ -880,7 +881,7 @@ export const ReportsModal: React.FC = () => {
                   {/* Top Executive KPI Cards */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
                     {/* Net Revenue */}
-                    <div className="bg-pos-card border border-pos-border p-4 rounded-2xl relative overflow-hidden shadow-sm">
+                    <div className="bg-pos-card border border-pos-border p-4 rounded-xl relative overflow-hidden shadow-sm">
                       <div className="flex justify-between items-start">
                         <span className="text-[10px] text-pos-muted uppercase font-black tracking-wider">Chiffre d'Affaires Net</span>
                         <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
@@ -895,37 +896,37 @@ export const ReportsModal: React.FC = () => {
                     </div>
 
                     {/* Gross Commercial Margin */}
-                    <div className="bg-pos-card border border-pos-border p-4 rounded-2xl relative overflow-hidden shadow-sm">
+                    <div className="bg-pos-card border border-pos-border p-4 rounded-xl relative overflow-hidden shadow-sm">
                       <div className="flex justify-between items-start">
                         <span className="text-[10px] text-pos-muted uppercase font-black tracking-wider">Marge Commerciale Brute</span>
-                        <div className="p-2 rounded-xl bg-cyan-500/10 text-cyan-400">
+                        <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
                           <TrendingUp className="w-4 h-4" />
                         </div>
                       </div>
-                      <p className="text-2xl font-black font-mono text-cyan-400 mt-2">{formatDZD(totalNetProfit)}</p>
+                      <p className="text-2xl font-black font-mono text-emerald-400 mt-2">{formatDZD(totalNetProfit)}</p>
                       <div className="flex items-center justify-between text-[11px] text-pos-muted mt-2 pt-2 border-t border-pos-border/40 font-medium">
                         <span>Taux de Marge Brute</span>
-                        <span className="font-mono font-bold text-cyan-400">{netProfitMargin}%</span>
+                        <span className="font-mono font-bold text-emerald-400">{netProfitMargin}%</span>
                       </div>
                     </div>
 
                     {/* Operating Expenses (OPEX) */}
-                    <div className="bg-pos-card border border-pos-border p-4 rounded-2xl relative overflow-hidden shadow-sm">
+                    <div className="bg-pos-card border border-pos-border p-4 rounded-xl relative overflow-hidden shadow-sm">
                       <div className="flex justify-between items-start">
                         <span className="text-[10px] text-pos-muted uppercase font-black tracking-wider">Frais & Charges (OPEX)</span>
-                        <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400">
+                        <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
                           <DollarSign className="w-4 h-4" />
                         </div>
                       </div>
-                      <p className="text-2xl font-black font-mono text-amber-400 mt-2">{formatDZD(totalOperatingExpenses)}</p>
+                      <p className="text-2xl font-black font-mono text-emerald-400 mt-2">{formatDZD(totalOperatingExpenses)}</p>
                       <div className="flex items-center justify-between text-[11px] text-pos-muted mt-2 pt-2 border-t border-pos-border/40 font-medium">
                         <span>{dateFilteredExpenses.length} charges enregistrées</span>
-                        <span className="text-amber-300 font-bold">Déduit du bénéfice</span>
+                        <span className="text-emerald-300 font-bold">Déduit du bénéfice</span>
                       </div>
                     </div>
 
                     {/* True Net Profit (EBITDA) */}
-                    <div className="bg-pos-card border-2 border-emerald-500/30 p-4 rounded-2xl relative overflow-hidden shadow-md shadow-emerald-500/5">
+                    <div className="bg-pos-card border border-emerald-500/30 p-4 rounded-xl relative overflow-hidden shadow-sm shadow-emerald-500/5">
                       <div className="flex justify-between items-start">
                         <span className="text-[10px] text-emerald-400 uppercase font-black tracking-wider">Résultat Net (EBITDA)</span>
                         <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-300">
@@ -947,10 +948,10 @@ export const ReportsModal: React.FC = () => {
                   {/* Grid: Inventory Valuation vs Cash Drawer Reconciliation */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     {/* Inventory & Stock Valuation Card */}
-                    <div className="bg-pos-card border border-pos-border rounded-2xl p-4.5 space-y-3.5">
+                    <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3.5 shadow-sm">
                       <div className="flex items-center justify-between pb-2 border-b border-pos-border/60">
                         <div className="flex items-center gap-2">
-                          <div className="p-2 rounded-xl bg-blue-500/10 text-blue-400">
+                          <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
                             <Boxes className="w-4 h-4" />
                           </div>
                           <div>
@@ -958,7 +959,7 @@ export const ReportsModal: React.FC = () => {
                             <p className="text-[10px] text-pos-muted">Capital immobilisé et valorisation marchande en temps réel</p>
                           </div>
                         </div>
-                        <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-400">
+                        <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
                           {totalStockUnits} pièces ({(products || []).length} réf.)
                         </span>
                       </div>
@@ -968,17 +969,17 @@ export const ReportsModal: React.FC = () => {
                           <div className="flex items-center justify-between">
                             <span className="text-[9.5px] font-bold text-pos-muted uppercase block">Valeur au Coût d'Achat (Actif)</span>
                             {valuation.source === 'sqlite' && (
-                              <span className="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono">
+                              <span className="text-[8.5px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-mono">
                                 FIFO Actif
                               </span>
                             )}
                             {valuation.source === 'dexie' && (
-                              <span className="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 font-mono">
+                              <span className="text-[8.5px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 font-mono">
                                 FIFO · Hors-ligne
                               </span>
                             )}
                             {valuation.source === 'legacy' && (
-                              <span className="text-[8.5px] font-bold px-1.5 py-0.5 rounded bg-pos-muted/10 text-pos-muted border border-pos-border font-mono">
+                              <span className="text-[8.5px] font-bold px-1.5 py-0.5 rounded-full bg-pos-muted/10 text-pos-muted border border-pos-border font-mono">
                                 Estimé
                               </span>
                             )}
@@ -999,14 +1000,14 @@ export const ReportsModal: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="bg-gradient-to-r from-blue-950/30 to-indigo-950/30 border border-blue-500/30 rounded-xl p-3 flex items-center justify-between">
+                      <div className="bg-gradient-to-r from-emerald-950/30 to-teal-950/30 border border-emerald-500/30 rounded-xl p-3 flex items-center justify-between">
                         <div>
-                          <span className="text-[10px] font-bold text-blue-300 uppercase block">Marge Brute Potentielle en Rayon</span>
+                          <span className="text-[10px] font-bold text-emerald-300 uppercase block">Marge Brute Potentielle en Rayon</span>
                           <span className="text-xs text-pos-muted">Bénéfice latent après écoulement du stock</span>
                         </div>
                         <div className="text-right">
-                          <span className="text-base font-black font-mono text-blue-400 block">+{formatDZD(potentialInventoryProfit)}</span>
-                          <span className="text-[10px] font-bold text-blue-300 font-mono">Taux : {potentialMarginPct}%</span>
+                          <span className="text-base font-black font-mono text-emerald-400 block">+{formatDZD(potentialInventoryProfit)}</span>
+                          <span className="text-[10px] font-bold text-emerald-300 font-mono">Taux : {potentialMarginPct}%</span>
                         </div>
                       </div>
 
@@ -1025,7 +1026,7 @@ export const ReportsModal: React.FC = () => {
                     </div>
 
                     {/* Cash Drawer Reconciliation (Expected vs Actual) Card */}
-                    <div className="bg-pos-card border border-pos-border rounded-2xl p-4.5 space-y-3.5">
+                    <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3.5 shadow-sm">
                       <div className="flex items-center justify-between pb-2 border-b border-pos-border/60">
                         <div className="flex items-center gap-2">
                           <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400">
@@ -1087,30 +1088,6 @@ export const ReportsModal: React.FC = () => {
                             <span className="font-mono font-bold">-{formatDZD(cashDropsOut)}</span>
                           </div>
                         )}
-                        {cashRefundsOut > 0 && (
-                          <div className="flex justify-between items-center text-amber-400">
-                            <span>(-) Remboursements Espèces (Avoirs) :</span>
-                            <span className="font-mono font-bold">-{formatDZD(cashRefundsOut)}</span>
-                          </div>
-                        )}
-                        {exchangeCashOut > 0 && (
-                          <div className="flex justify-between items-center text-amber-400">
-                            <span>(-) Retours Échanges (cash rendu) :</span>
-                            <span className="font-mono font-bold">-{formatDZD(exchangeCashOut)}</span>
-                          </div>
-                        )}
-                        {movementTerms.manualIn > 0 && (
-                          <div className="flex justify-between items-center text-emerald-400">
-                            <span>(+) Apports manuels caisse :</span>
-                            <span className="font-mono font-bold">+{formatDZD(movementTerms.manualIn)}</span>
-                          </div>
-                        )}
-                        {movementTerms.manualOut > 0 && (
-                          <div className="flex justify-between items-center text-amber-400">
-                            <span>(-) Dépenses manuelles caisse :</span>
-                            <span className="font-mono font-bold">-{formatDZD(movementTerms.manualOut)}</span>
-                          </div>
-                        )}
                       </div>
 
                       {/* Expected vs Actual Totals Banner */}
@@ -1132,10 +1109,10 @@ export const ReportsModal: React.FC = () => {
                   {/* Financial Waterfall Table (Compte de Résultat Simplifié) & Customer Credit Liabilities */}
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                     {/* Waterfall Accounting Table (2 Cols) */}
-                    <div className="lg:col-span-2 bg-pos-card border border-pos-border rounded-2xl p-4.5 space-y-3">
+                    <div className="lg:col-span-2 bg-pos-card border border-pos-border rounded-xl p-4 space-y-3 shadow-sm">
                       <div className="flex items-center justify-between pb-2 border-b border-pos-border/60">
                         <div className="flex items-center gap-2">
-                          <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400">
+                          <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
                             <Scale className="w-4 h-4" />
                           </div>
                           <div>
@@ -1190,7 +1167,7 @@ export const ReportsModal: React.FC = () => {
                                 {totalRevenue > 0 ? ((totalCost / totalRevenue) * 100).toFixed(1) : 0}%
                               </td>
                             </tr>
-                            <tr className="bg-cyan-950/20 font-bold text-cyan-400 border-y border-cyan-500/20">
+                            <tr className="bg-emerald-950/20 font-bold text-emerald-400 border-y border-emerald-500/20">
                               <td className="py-2 px-2 font-sans uppercase text-[11px] font-black">(=) Marge Commerciale Brute</td>
                               <td className="text-right py-2 px-2 text-sm">{formatDZD(totalNetProfit)}</td>
                               <td className="text-right py-2 px-2">{netProfitMargin}%</td>
@@ -1213,10 +1190,10 @@ export const ReportsModal: React.FC = () => {
                     </div>
 
                     {/* Customer Receivables & Liabilities (1 Col) */}
-                    <div className="bg-pos-card border border-pos-border rounded-2xl p-4.5 space-y-4 flex flex-col justify-between">
+                    <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-4 flex flex-col justify-between shadow-sm">
                       <div>
                         <div className="flex items-center gap-2 pb-2 border-b border-pos-border/60">
-                          <div className="p-2 rounded-xl bg-orange-500/10 text-orange-400">
+                          <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
                             <Landmark className="w-4 h-4" />
                           </div>
                           <div>
@@ -1230,7 +1207,7 @@ export const ReportsModal: React.FC = () => {
                           <div className="bg-pos-bg border border-pos-border p-3.5 rounded-xl space-y-1">
                             <div className="flex justify-between items-center text-xs">
                               <span className="font-bold text-orange-400">Crédits Clients en Cours (Kredy)</span>
-                              <span className="text-[10px] px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 font-mono font-bold">
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-300 font-mono font-bold">
                                 {debtCustomerCount} clients
                               </span>
                             </div>
@@ -1242,7 +1219,7 @@ export const ReportsModal: React.FC = () => {
                           <div className="bg-pos-bg border border-pos-border p-3.5 rounded-xl space-y-1">
                             <div className="flex justify-between items-center text-xs">
                               <span className="font-bold text-purple-400">Avoirs & Crédits Magasin Émis</span>
-                              <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 font-mono font-bold">
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-mono font-bold">
                                 Passif
                               </span>
                             </div>
@@ -1274,36 +1251,36 @@ export const ReportsModal: React.FC = () => {
                   
                   {/* Executive KPI Summary Bar */}
                   <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                    <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                    <div className="bg-pos-card border border-pos-border p-3 rounded-xl shadow-sm">
                       <span className="text-[9px] text-pos-muted uppercase font-bold">Total Transactions</span>
                       <p className="text-base font-black text-pos-text mt-0.5">{(dateFilteredTransactions || []).length}</p>
                     </div>
 
-                    <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                    <div className="bg-pos-card border border-pos-border p-3 rounded-xl shadow-sm">
                       <span className="text-[9px] text-pos-muted uppercase font-bold">CA Net Total</span>
                       <p className="text-base font-black text-emerald-400 mt-0.5">{formatDZD(totalRevenue)}</p>
                     </div>
 
-                    <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                    <div className="bg-pos-card border border-pos-border p-3 rounded-xl shadow-sm">
                       <span className="text-[9px] text-pos-muted uppercase font-bold flex items-center gap-1">
-                        <TrendingUp className="w-3 h-3 text-cyan-400" /> Bénéfice Net
+                        <TrendingUp className="w-3 h-3 text-emerald-400" /> Bénéfice Net
                       </span>
-                      <p className="text-base font-black text-cyan-400 mt-0.5">{formatDZD(totalNetProfit)}</p>
+                      <p className="text-base font-black text-emerald-400 mt-0.5">{formatDZD(totalNetProfit)}</p>
                     </div>
 
-                    <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                    <div className="bg-pos-card border border-pos-border p-3 rounded-xl shadow-sm">
                       <span className="text-[9px] text-pos-muted uppercase font-bold">Panier Moyen</span>
-                      <p className="text-base font-black text-amber-400 mt-0.5">{formatDZD(averageBasket)}</p>
+                      <p className="text-base font-black text-emerald-400 mt-0.5">{formatDZD(averageBasket)}</p>
                     </div>
 
-                    <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                    <div className="bg-pos-card border border-pos-border p-3 rounded-xl shadow-sm">
                       <span className="text-[9px] text-pos-muted uppercase font-bold">Marge Nette %</span>
                       <p className="text-base font-black text-pos-text mt-0.5">{netProfitMargin}%</p>
                     </div>
                   </div>
 
-                  {/* Search & Filter Toolbar */}
-                  <div className="bg-pos-card border border-pos-border p-3 rounded-2xl flex flex-wrap items-center justify-between gap-3">
+                  {/* Search & Filter Toolbar — sticky top filter bar (inside scroll container) */}
+                  <div className="sticky top-0 z-10 bg-pos-card/95 backdrop-blur-md border border-pos-border p-3 rounded-xl flex flex-wrap items-center justify-between gap-3 shadow-sm">
                     <div className="relative flex-1 min-w-[280px]">
                       <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
                       <input
@@ -1311,12 +1288,14 @@ export const ReportsModal: React.FC = () => {
                         value={historySearch}
                         onChange={(e) => setHistorySearch(e.target.value)}
                         placeholder="Rechercher N° Ticket, Client, Nom Produit, SKU..."
-                        className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-3 py-2 text-xs text-pos-text placeholder-pos-muted focus:border-emerald-400 focus:outline-none font-medium"
+                        className="w-full bg-pos-bg border border-pos-border rounded-lg pl-9 pr-12 py-2 text-xs text-pos-text placeholder-pos-muted focus:border-emerald-400 focus:outline-none font-medium min-h-[44px]"
                       />
                       {historySearch && (
                         <button
+                          type="button"
                           onClick={() => setHistorySearch('')}
-                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-pos-muted hover:text-pos-text text-xs"
+                          aria-label="Effacer la recherche"
+                          className="absolute right-1 top-1/2 -translate-y-1/2 text-pos-muted hover:text-pos-text text-xs min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg"
                         >
                           ✕
                         </button>
@@ -1330,7 +1309,7 @@ export const ReportsModal: React.FC = () => {
                         <select
                           value={dateRangeFilter}
                           onChange={(e) => setDateRangeFilter(e.target.value as 'all' | 'today' | '7days' | '30days')}
-                          className="bg-pos-bg border border-pos-border text-pos-text text-xs font-bold rounded-xl px-3 py-2 focus:border-emerald-400 focus:outline-none cursor-pointer"
+                          className="bg-pos-bg border border-pos-border text-pos-text text-xs font-bold rounded-lg px-3 py-2 focus:border-emerald-400 focus:outline-none cursor-pointer min-h-[44px]"
                         >
                           <option value="all">Tout l&apos;historique</option>
                           <option value="today">Aujourd&apos;hui</option>
@@ -1344,7 +1323,7 @@ export const ReportsModal: React.FC = () => {
                         <select
                           value={statusFilter}
                           onChange={(e) => setStatusFilter(e.target.value)}
-                          className="bg-pos-bg border border-pos-border text-pos-text text-xs font-bold rounded-xl px-3 py-2 focus:border-emerald-400 focus:outline-none cursor-pointer"
+                          className="bg-pos-bg border border-pos-border text-pos-text text-xs font-bold rounded-lg px-3 py-2 focus:border-emerald-400 focus:outline-none cursor-pointer min-h-[44px]"
                         >
                           <option value="Tous">Tous les statuts</option>
                           <option value="COMPLETED">Ventes Validées</option>
@@ -1359,7 +1338,7 @@ export const ReportsModal: React.FC = () => {
                         <select
                           value={paymentFilter}
                           onChange={(e) => setPaymentFilter(e.target.value)}
-                          className="bg-pos-bg border border-pos-border text-pos-text text-xs font-bold rounded-xl px-3 py-2 focus:border-emerald-400 focus:outline-none cursor-pointer"
+                          className="bg-pos-bg border border-pos-border text-pos-text text-xs font-bold rounded-lg px-3 py-2 focus:border-emerald-400 focus:outline-none cursor-pointer min-h-[44px]"
                         >
                           <option value="Tous">Tous les règlements</option>
                           <option value="Espèces">Espèces (Cash)</option>
@@ -1371,7 +1350,7 @@ export const ReportsModal: React.FC = () => {
                   </div>
 
                   {/* Transactions History Table */}
-                  <div className="bg-pos-card border border-pos-border rounded-2xl overflow-hidden shadow-sm">
+                  <div className="bg-pos-card border border-pos-border rounded-xl overflow-hidden shadow-sm">
                     <table className="w-full text-left text-xs border-collapse">
                       <thead className="bg-pos-bg text-pos-muted text-[10px] uppercase font-bold border-b border-pos-border">
                         <tr>
@@ -1433,23 +1412,23 @@ export const ReportsModal: React.FC = () => {
                                 </td>
                                 <td className="p-3 no-underline">
                                   {isVoided ? (
-                                    <span className="text-[9px] font-black px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">
+                                    <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/30">
                                       ANNULÉ (VOID)
                                     </span>
                                   ) : isRefund ? (
-                                    <span className="text-[9px] font-black px-2 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                                    <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/30">
                                       AVOIR ÉMIS
                                     </span>
                                   ) : isRefunded ? (
-                                    <span className="text-[9px] font-black px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                                    <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
                                       REMBOURSÉ
                                     </span>
                                   ) : isPartiallyRefunded ? (
-                                    <span className="text-[9px] font-black px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                                    <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
                                       PARTIEL REMB.
                                     </span>
                                   ) : (
-                                    <span className="text-[9px] font-black px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                    <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                                       VALIDÉ
                                     </span>
                                   )}
@@ -1473,11 +1452,11 @@ export const ReportsModal: React.FC = () => {
                                 >
                                   {isRefund ? `-${formatDZD(t.total)}` : formatDZD(t.total)}
                                 </td>
-                                <td className="p-3 text-right font-bold text-cyan-400">
+                                <td className="p-3 text-right font-bold text-emerald-400">
                                   {isVoided || isRefund ? '0 DA' : formatDZD(listProfit)}
                                 </td>
                                 <td className="p-3 text-center">
-                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-pos-bg text-pos-text border border-pos-border">
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-pos-bg text-pos-text border border-pos-border">
                                     {t.paymentMethod}
                                   </span>
                                 </td>
@@ -1486,17 +1465,11 @@ export const ReportsModal: React.FC = () => {
                                   <div className="flex items-center justify-center gap-1.5">
                                     <button
                                       onClick={() => setInspectingTransaction(t)}
-                                      className="p-1.5 rounded-lg bg-pos-bg hover:bg-emerald-500/20 text-pos-muted hover:text-emerald-400 border border-pos-border transition cursor-pointer"
+                                      className="min-h-[44px] min-w-[44px] p-1.5 rounded-lg bg-pos-bg hover:bg-emerald-500/20 text-pos-muted hover:text-emerald-400 border border-pos-border transition cursor-pointer flex items-center justify-center"
                                       title="Inspecter le ticket, rembourser ou annuler"
+                                      aria-label={`Inspecter le ticket ${t.receiptNumber}`}
                                     >
                                       <Eye className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button
-                                      onClick={() => handleReprintFromInspector(t)}
-                                      className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/30 transition cursor-pointer"
-                                      title="Réimprimer le ticket"
-                                    >
-                                      <Printer className="w-3.5 h-3.5" />
                                     </button>
                                   </div>
                                 </td>
@@ -1508,9 +1481,9 @@ export const ReportsModal: React.FC = () => {
                     </table>
                   </div>
 
-                  {/* Pagination Controls */}
+                  {/* Pagination Controls — pinned shrink-0 footer */}
                   {filteredTransactions.length > PAGE_SIZE && (
-                    <div className="flex items-center justify-between px-4 py-2.5 bg-pos-card border border-pos-border rounded-xl text-xs font-bold text-pos-text">
+                    <div className="sticky bottom-0 z-10 shrink-0 flex items-center justify-between px-4 py-2.5 bg-pos-card/95 backdrop-blur-md border border-pos-border rounded-lg text-xs font-bold text-pos-text shadow-sm">
                       <span className="text-pos-muted text-[11px]">
                         Affichage {((safeCurrentPage - 1) * PAGE_SIZE) + 1} à {Math.min(safeCurrentPage * PAGE_SIZE, filteredTransactions.length)} sur {filteredTransactions.length} transactions
                       </span>
@@ -1519,7 +1492,7 @@ export const ReportsModal: React.FC = () => {
                           type="button"
                           disabled={safeCurrentPage <= 1}
                           onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                          className="px-2.5 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover disabled:opacity-40 disabled:cursor-not-allowed border border-pos-border text-pos-text transition flex items-center gap-1 cursor-pointer"
+                          className="px-2.5 py-1.5 min-h-[44px] rounded-lg bg-pos-bg hover:bg-pos-hover disabled:opacity-40 disabled:cursor-not-allowed border border-pos-border text-pos-text transition flex items-center gap-1 cursor-pointer"
                         >
                           <ChevronLeft className="w-3.5 h-3.5" />
                           <span>Précédent</span>
@@ -1531,7 +1504,7 @@ export const ReportsModal: React.FC = () => {
                           type="button"
                           disabled={safeCurrentPage >= totalPages}
                           onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                          className="px-2.5 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover disabled:opacity-40 disabled:cursor-not-allowed border border-pos-border text-pos-text transition flex items-center gap-1 cursor-pointer"
+                          className="px-2.5 py-1.5 min-h-[44px] rounded-lg bg-pos-bg hover:bg-pos-hover disabled:opacity-40 disabled:cursor-not-allowed border border-pos-border text-pos-text transition flex items-center gap-1 cursor-pointer"
                         >
                           <span>Suivant</span>
                           <ChevronRight className="w-3.5 h-3.5" />
@@ -1668,22 +1641,8 @@ export const ReportsModal: React.FC = () => {
                                       type="button"
                                       onClick={() => {
                                         if (window.confirm(`Supprimer cette dépense "${exp.title}" (${formatDZD(exp.amount)}) ?`)) {
-                                          void (async () => {
-                                            const res = await deleteStoreExpense(exp.id);
-                                            if (!res.success) {
-                                              showToast(
-                                                res.reason === 'CLOSED_SESSION_IMMUTABLE'
-                                                  ? "Suppression interdite : charge espèces d'une session clôturée (livres immuables)."
-                                                  : 'Suppression impossible — réessayez.',
-                                                'error'
-                                              );
-                                              return;
-                                            }
-                                            showToast(
-                                              res.compensated ? 'Dépense supprimée — caisse contre-passée.' : 'Dépense supprimée',
-                                              'info'
-                                            );
-                                          })();
+                                          deleteStoreExpense(exp.id);
+                                          showToast('Dépense supprimée', 'info');
                                         }
                                       }}
                                       className="p-1 hover:bg-red-500/20 text-pos-muted hover:text-red-400 rounded transition cursor-pointer"
@@ -1904,7 +1863,7 @@ export const ReportsModal: React.FC = () => {
               setPinInput('');
               closeModal();
             }}
-            className="px-5 py-2 rounded-xl bg-pos-hover text-pos-text font-bold hover:bg-pos-border transition cursor-pointer"
+            className="px-5 py-2 min-h-[44px] rounded-lg bg-pos-hover text-pos-text font-bold hover:bg-pos-border transition cursor-pointer"
           >
             Fermer
           </button>
@@ -2199,7 +2158,7 @@ export const ReportsModal: React.FC = () => {
         {/* ═══ New Expense Modal Dialog ═══ */}
         {showNewExpenseModal && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-            <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl animate-in zoom-in-95">
+            <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl animate-in zoom-in-95 max-h-[90dvh] overflow-y-auto overscroll-contain">
               <div className="flex items-center justify-between border-b border-pos-border pb-3">
                 <div className="flex items-center gap-2 text-amber-400">
                   <DollarSign className="w-5 h-5" />

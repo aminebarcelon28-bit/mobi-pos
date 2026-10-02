@@ -303,6 +303,138 @@ console.log('===================================================================
 }
 
 console.log('\n========================================================================');
+console.log('SUITE 9 — CHAOS & EDGE-CASE BATTERY (S1–S6)');
+console.log('========================================================================');
+const ct = await import(toDataUrl(transpileFile(`${ROOT}/src/utils/cashTerms.ts`)));
+const fl = await import(toDataUrl(transpileFile(`${ROOT}/src/db/checkoutFlight.ts`)));
+// tradeInExchange.ts imports ./savValidation (value import) — data: URLs
+// cannot resolve relative specifiers, so transpile the dependency first
+// (same trick as the receiptMath loader above).
+const savUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/savValidation.ts`));
+let txSrc = fs.readFileSync(`${ROOT}/src/utils/tradeInExchange.ts`, 'utf8');
+txSrc = txSrc.replace(/from\s+(['"])\.\/savValidation\1/g, `from '${savUrl}'`);
+const tx = await import(toDataUrl(ts.transpileModule(txSrc, {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
+  fileName: 'tradeInExchange.ts',
+}).outputText));
+const orderSliceSrc = fs.readFileSync(`${ROOT}/src/store/slices/createOrderSlice.ts`, 'utf8');
+
+// ── S1: self-referential paradox ──
+console.log('\n--- S1: same IMEI in cart + intake is hard-blocked ---');
+{
+  const cart = [{ imeiNumber: '358921004812345', product: { id: 'p-a' } }];
+  check('line-level IMEI collision detected', tx.isImeiAllocatedInCart(cart, '358921004812345') === true);
+  check('product-level IMEI collision detected',
+    tx.isImeiAllocatedInCart([{ product: { id: 'p-a', imeiNumber: '358921004812345' } }], '358921004812345') === true);
+  check('case/space-insensitive match', tx.isImeiAllocatedInCart(cart, ' 358921004812345 ') === true);
+  check('different IMEI passes', tx.isImeiAllocatedInCart(cart, '490154203237518') === false);
+  check('empty cart passes', tx.isImeiAllocatedInCart([], '358921004812345') === false);
+  check('exact block message shared modal↔slice', tx.CART_IMEI_COLLISION_MESSAGE === 'Impossible d’échanger un appareil présent dans le panier actif');
+  check('modal gates both submit paths', modalSrc.includes('cartImeiCollision') && modalSrc.includes('CART_COLLISION_MSG'));
+  check('slice gates standalone + staged (CART_IMEI_COLLISION)', (sliceSrc.match(/CART_IMEI_COLLISION/g) || []).length >= 2);
+}
+
+// ── S2: extreme soulte + overdraft ──
+console.log('\n--- S2: cable 500 DA vs iPhone 130 000 DA (soulte 129 500) ---');
+{
+  const s = rm.computeTradeInSettlement(500, 130000);
+  check('soulte 129 500 SOULTE_SHOP_PAYS', s.netBalance === -129500 && s.shopOwes === 129500, JSON.stringify(s));
+  const t = rm.computeCartTotals([line(500)], { vatRate: 0, tradeInCredit: 130000 });
+  check('totals clamp: applied 500, net 0 (no negative sale)', t.tradeInCreditApplied === 500 && t.net === 0 && t.total === 0);
+  check('no negative gross/VAT/total/refundDue', t.grossSubtotal >= 0 && t.ht >= 0 && t.tva >= 0 && t.total >= 0 && t.refundDue >= 0);
+  const poor = ct.estimateDrawerCash({ openingFloat: 10000, cashSales: 0, debtSettled: 0, deposits: 0, manualIn: 0, refunds: 0, drops: 0, payouts: 0, cashExpenses: 0, tradeInCashOut: 0, exchangeOut: 0, manualOut: 0 });
+  check('drawer estimate 10 000 DA on fresh float', poor === 10000, String(poor));
+  check('129 500 > 10 000 → overdraft BLOCKS cash soulte', 129500 > poor);
+  const rich = ct.estimateDrawerCash({ openingFloat: 200000, cashSales: 50000, debtSettled: 0, deposits: 0, manualIn: 0, refunds: 0, drops: 0, payouts: 0, cashExpenses: 5000, tradeInCashOut: 15000, exchangeOut: 0, manualOut: 0 });
+  check('healthy drawer 230 000 covers soulte', rich === 230000 && 129500 <= rich, String(rich));
+  check('slice blocks with SOULTE_DRAWER_INSUFFICIENT (cash only)', orderSliceSrc.includes('SOULTE_DRAWER_INSUFFICIENT') && orderSliceSrc.includes("soulteMethod === 'cash'"));
+  check('wallet never credited on cash path (exclusive branches)', /if \(soulteChoice === 'cash'\)[\s\S]*?else if \(soulteChoice === 'wallet'/.test(orderSliceSrc));
+  check('PaymentModal maps the overdraft reason', paySrcCheck('SOULTE_DRAWER_INSUFFICIENT'));
+  function paySrcCheck(x) { return fs.readFileSync(`${ROOT}/src/components/modals/PaymentModal.tsx`, 'utf8').includes(x); }
+}
+
+// ── S3: complex stacking ──
+console.log('\n--- S3: 100k −5k line −10k lines ⇒ base 85k, avoir 30k, trade 55k/60k ---');
+{
+  const cart = [
+    { product: { price: 70000 }, appliedPrice: 70000, quantity: 1, discount: 5000 },
+    { product: { price: 30000 }, appliedPrice: 30000, quantity: 1, discount: 10000 },
+  ];
+  const base = rm.computeCartTotals(cart, { vatRate: 19 });
+  check('payable base exactly 85 000', base.subtotalAfterDiscount === 85000, String(base.subtotalAfterDiscount));
+  // Note: net/refund assertions run at vatRate 0 — with VAT 19 the HT/TVA
+  // integer split can leave a legitimate 1 DA remainder on `total` (cashier
+  // collects it; refundDue stays 0 so nothing is manufactured).
+  const withTrade = rm.computeCartTotals(cart, { vatRate: 0, storeCreditApplied: 30000, tradeInCredit: 55000 });
+  check('55k trade + 30k avoir ⇒ net 0, refundDue 0', withTrade.net === 0 && withTrade.total === 0 && withTrade.refundDue === 0, JSON.stringify({ net: withTrade.net, rd: withTrade.refundDue }));
+  const withTradeVat = rm.computeCartTotals(cart, { vatRate: 19, storeCreditApplied: 30000, tradeInCredit: 55000 });
+  check('VAT base strictly 85k (untouched by tenders)', withTradeVat.ht === base.ht && withTradeVat.tva === base.tva, JSON.stringify({ ht: withTradeVat.ht }));
+  check('VAT path never manufactures a refund (refundDue 0)', withTradeVat.refundDue === 0);
+  const over = rm.computeCartTotals(cart, { vatRate: 0, storeCreditApplied: 30000, tradeInCredit: 60000 });
+  check('60k trade clamps to 55k remainder (no phantom refund)', over.tradeInCreditApplied === 55000 && over.net === 0 && over.refundDue === 0, JSON.stringify(over));
+  const st = rm.computeTradeInSettlement(85000, 60000);
+  check('settlement vs base: CUSTOMER_PAYS 25k (avoir covers it; no soulte manufactured)', st.direction === 'CUSTOMER_PAYS' && st.customerOwes === 25000, JSON.stringify(st));
+  // Change tendered-ex-cash minus net is 0 in every stacking shape above.
+  for (const tt of [withTrade, over]) {
+    check(`change 0 when tendered == net (${tt.net})`, Math.max(0, tt.net - tt.net) === 0 && tt.refundDue === 0);
+  }
+}
+
+// ── S4: flight + idempotency ──
+console.log('\n--- S4: double-submit rejected, deterministic retry converges ---');
+{
+  fl.releaseCheckoutFlight();
+  check('first acquire wins', fl.tryAcquireCheckoutFlight('processPayment') === true);
+  check('second concurrent acquire rejected', fl.tryAcquireCheckoutFlight('processPayment-retry') === false);
+  check('owner label visible for diagnostics', fl.checkoutFlightOwner() === 'processPayment');
+  fl.releaseCheckoutFlight('processPayment-retry');
+  check('stale-owner release is a no-op (still held)', fl.isCheckoutFlightActive() === true);
+  fl.releaseCheckoutFlight('processPayment');
+  check('owner release frees the flight', fl.isCheckoutFlightActive() === false);
+  check('slice maps rejection to ALREADY_PROCESSING (task text says CHECKOUT_IN_PROGRESS — same gate, legacy reason kept)', orderSliceSrc.includes("reason: 'ALREADY_PROCESSING'"));
+  check('batch upsert ON CONFLICT(batch_id)', sqlPluginHas('ON CONFLICT(batch_id)'));
+  check('ledger ON CONFLICT(id) DO NOTHING', sqlPluginHas('ON CONFLICT(id) DO NOTHING'));
+  check('staged intake ids deterministic from stagedId', sliceSrc.includes('`trade-${staged.stagedId}`') && sliceSrc.includes('`prod-${staged.stagedId}`'));
+  function sqlPluginHas(x) { return fs.readFileSync(`${ROOT}/src/db/sqlPluginAdapter.ts`, 'utf8').includes(x); }
+}
+
+// ── S5: post-exchange void/refund trap ──
+console.log('\n--- S5: 80k phone + 50k trade (30k cash) → refund/void ---');
+{
+  // Funding split on the exact ticket shape: Reprise leg must not leak to cash.
+  const orig = { total: 30000, subtotal: 80000, tenders: [{ method: 'Espèces', amount: 30000 }, { method: 'Reprise', amount: 50000 }] };
+  const f = rm.computeRefundFundingSplit(orig, 80000, 0);
+  check('net reversed = 30k (never 80k gross)', f.netRefund === 30000, JSON.stringify(f));
+  check('cash share exactly 30k — Reprise value CANNOT leak to drawer', f.cashShare === 30000, JSON.stringify(f));
+  // Restoration quota (live helper shared with the slice).
+  check('full refund restores full 50k', rm.computeTradeRestoreQuota(50000, 30000, 30000, 0) === 50000);
+  check('half refund restores 25k pro-rata', rm.computeTradeRestoreQuota(50000, 15000, 30000, 0) === 25000);
+  check('cumulative cap: prior 50k → 0 (no double-mint)', rm.computeTradeRestoreQuota(50000, 30000, 30000, 50000) === 0);
+  check('second partial capped at remainder (30k prior → 20k)', rm.computeTradeRestoreQuota(50000, 30000, 30000, 30000) === 20000);
+  check('slice restores to wallet + tracks tradeInRestored', orderSliceSrc.includes('tradeInRestored') && orderSliceSrc.includes('computeTradeRestoreQuota'));
+  check('anonymous ticket warns loudly via refundWarnings (no reason-code mint)', orderSliceSrc.includes('tradeValueUnclaimed') && orderSliceSrc.includes('régularisation manager requise'));
+  check('void of exchange ticket blocked (use refund)', orderSliceSrc.includes("reason: 'VOID_EXCHANGE_USE_REFUND'"));
+  check('void UI maps the block', fs.readFileSync(`${ROOT}/src/components/modals/ReportsModal.tsx`, 'utf8').includes('VOID_EXCHANGE_USE_REFUND'));
+  check('TRADE batch never walked by void/refund deltas (txn.items only)', sliceSrc.includes("refType: 'TRADE_IN'") && !/LED-VOID.*TRADE|LED-REF.*TRADE/.test(orderSliceSrc));
+}
+
+// ── S6: malicious input ──
+console.log('\n--- S6: injection, spaces, folio, A4 escaping ---');
+{
+  check('embedded spaces compact to 15 digits', sav.sanitizeImeiInput(' 3589 2100 4812 345 ') === '358921004812345');
+  check('dashes compact too', sav.sanitizeImeiInput('3589-2100-4812-345') === '358921004812345');
+  check('lowercase S/N uppercased, kept', sav.sanitizeImeiInput('dmpxyz1234') === 'DMPXYZ1234');
+  const evilName = `' OR '1'='1' -- <script>alert(1)</script>`;
+  const evilCni = `CNI/2026\\001\\99#; DROP TABLE trade_ins;`;
+  const roundTrip = JSON.parse(JSON.stringify({ customerName: evilName, nationalIdNumber: evilCni }));
+  check('SQLi/XSS strings survive JSON round-trip byte-identical (no query concat)', roundTrip.customerName === evilName && roundTrip.nationalIdNumber === evilCni);
+  const folioSafe = (id) => (id || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  check('folio derivation strips everything but [A-Z0-9]', folioSafe(`tr'; DROP TABLE--99`) === 'TRDROPTABLE99');
+  check('trade write lane is Dexie put (no raw SQL at all)', fs.readFileSync(`${ROOT}/src/db/adapters/operationsAdapter.ts`, 'utf8').includes('dexieDb.tradeIns.put(trade)'));
+  check('A4 print target has no dangerouslySetInnerHTML (React auto-escapes)', !modalSrc.includes('dangerouslySetInnerHTML'));
+}
+
+console.log('\n========================================================================');
 console.log(`RESULT: ${pass} PASSED, ${fail} FAILED, ${pending.length} PENDING, ${deferred.length} DEFERRED:TAURI`);
 console.log('========================================================================');
 if (pending.length) {

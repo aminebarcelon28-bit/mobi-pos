@@ -18,7 +18,8 @@ import { newId } from '../../utils/ids';
 import { policeRegistryFolio, SELLER_SWORN_STATEMENT } from '../../utils/tradeInVoucherBuilder';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { generateUniqueEan13Barcode } from '../../utils/barcodeGenerator';
-import { luhnCheckImei, imeiCheckState } from '../../utils/savValidation';
+import { luhnCheckImei, imeiCheckState, sanitizeImeiInput } from '../../utils/savValidation';
+import { isImeiAllocatedInCart, CART_IMEI_COLLISION_MESSAGE } from '../../utils/tradeInExchange';
 import { useToast } from '../ui/Toast';
 import { isMobileDevice } from '../../utils/platform';
 
@@ -52,6 +53,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
   const {
     activeModal, closeModal, processTradeIn, tradeIns, customers, receiptSettings,
     products, imeiRecords, setStagedTradeIn, tradeInExchangeRequest, clearTradeInExchangeRequest,
+    cart,
   } = usePosStore();
   const { showToast } = useToast();
 
@@ -184,7 +186,8 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
   // never blocks. CNI stays warn-only (visible badge, no submit gate) so a
   // missing physical ID never stalls the sale; exchange mode (Phase 2) will
   // additionally hide the +10% bonus and apply buyback 1:1 upstream.
-  const imeiTrimmed = imei.trim();
+  // S6: embedded spaces/dashes compacted (blur + submit); S/N kept verbatim.
+  const imeiTrimmed = sanitizeImeiInput(imei);
   const imeiDigits = imeiTrimmed.replace(/\D/g, '');
   const imeiIs15Digit = /^\d{15}$/.test(imeiDigits);
   const imeiDuplicate = imeiTrimmed
@@ -205,12 +208,23 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
       : null;
   const cniMissing = nationalIdNumber.trim().length === 0;
 
+  // Chaos S1 — self-referential paradox: the inbound unit cannot be a unit
+  // already allocated in the active cart (same IMEI sold + taken back on one
+  // ticket would corrupt both the batch and the cart line).
+  const CART_COLLISION_MSG = CART_IMEI_COLLISION_MESSAGE;
+  const cartImeiCollision = isImeiAllocatedInCart(cart, imeiTrimmed);
+
   const handleSubmitTradeIn = async (e: React.FormEvent) => {
     e.preventDefault();
     if (buybackValue <= 0) return;
     // Hard-block only true 15-digit Luhn failures and duplicates.
     if (imeiHardError) {
       showToast(imeiHardError, 'error');
+      return;
+    }
+    // S1 gate (both modes): same physical unit in cart + intake is rejected.
+    if (cartImeiCollision) {
+      showToast(CART_COLLISION_MSG, 'error');
       return;
     }
 
@@ -532,6 +546,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                       required
                       value={imei}
                       onChange={(e) => setImei(e.target.value.toUpperCase().trim())}
+                      onBlur={() => setImei((v) => sanitizeImeiInput(v))}
                       className={`w-full min-h-[48px] bg-pos-bg border rounded-lg px-3 py-2 text-base sm:text-xs font-mono font-bold text-emerald-400 focus:outline-none ${
                         imeiHardError ? 'border-rose-500/70 focus:border-rose-400' : 'border-pos-border focus:border-emerald-400'
                       }`}
@@ -539,6 +554,9 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                     />
                     {imeiHardError && (
                       <p className="mt-1 text-[11px] font-semibold text-rose-400">{imeiHardError}</p>
+                    )}
+                    {cartImeiCollision && (
+                      <p className="mt-1 text-[11px] font-semibold text-rose-400">{CART_COLLISION_MSG}</p>
                     )}
                     {imeiNeutralHint && (
                       <p className="mt-1 text-[11px] text-amber-300/90">{imeiNeutralHint}</p>

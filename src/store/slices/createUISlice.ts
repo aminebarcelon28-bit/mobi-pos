@@ -21,6 +21,7 @@ import { checkPinLockout, recordPinFailure, resetPinLockout } from '../../utils/
 import { computeEffectiveUnitPrice } from '../../utils/pricingEngine';
 import { generateUniqueEan13Barcode, generateUniqueSku } from '../../utils/barcodeGenerator';
 import { luhnCheckImei } from '../../utils/savValidation';
+import { isImeiAllocatedInCart } from '../../utils/tradeInExchange';
 // P11.3: sqliteAdapter -> adapters -> dexie + libsql is the heaviest static chain
 // left in the entry. initDatabase() runs from a useEffect, so load it on demand.
 // P11.3: repositories each pull sqliteAdapter -> dexie + libsql; all four are only
@@ -742,7 +743,16 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
 
   processTradeIn: async (tradeInput) => {
     try {
-      const { tradeIns, products, customers, currentCustomer, imeiRecords } = get();
+      const { tradeIns, products, customers, currentCustomer, imeiRecords, cart } = get();
+
+      // Chaos S1: reject an intake IMEI already allocated in the active cart
+      // (same unit sold + taken back on one ticket corrupts batch + cart).
+      if (isImeiAllocatedInCart(cart, tradeInput.imei)) {
+        return {
+          success: false as const,
+          reason: 'CART_IMEI_COLLISION:Impossible d’échanger un appareil présent dans le panier actif',
+        };
+      }
 
       const resalePrice = Math.round(tradeInput.buybackValue * (1 + tradeInput.resaleMarginPercent / 100));
 
@@ -988,10 +998,17 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     // Buyback is 1:1 — the +10% wallet bonus never reaches a staged payload
     // (exchange mode hides it upstream).
     try {
-      const { tradeIns, products, imeiRecords } = get();
+      const { tradeIns, products, imeiRecords, cart } = get();
       const buybackCost = Math.max(0, Math.round(Number(staged.buybackValue) || 0));
       if (buybackCost <= 0) {
         return { success: false as const, reason: 'INVALID_BUYBACK' };
+      }
+      // Chaos S1 (staged leg): same cart-collision rule as processTradeIn.
+      if (isImeiAllocatedInCart(cart, staged.imei)) {
+        return {
+          success: false as const,
+          reason: 'CART_IMEI_COLLISION:Impossible d’échanger un appareil présent dans le panier actif',
+        };
       }
       const resalePrice = Math.round(buybackCost * (1 + (Number(staged.resaleMarginPercent) || 0) / 100));
       const realBarcode = staged.barcode?.trim()

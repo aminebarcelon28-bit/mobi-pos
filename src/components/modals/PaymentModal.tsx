@@ -439,6 +439,12 @@ export const PaymentModal: React.FC = () => {
         showToast('Soulte boutique : choisissez Décaisser Espèces ou Créditer Avoir.', 'error');
       } else if (result.reason === 'SOULTE_WALLET_NO_CUSTOMER') {
         showToast('Soulte vers Avoir : sélectionnez d’abord un client.', 'error');
+      } else if (result.reason?.startsWith('SOULTE_DRAWER_INSUFFICIENT')) {
+        const avail = result.reason.includes(':') ? result.reason.slice('SOULTE_DRAWER_INSUFFICIENT:'.length) : '';
+        showToast(
+          `Tiroir insuffisant pour la soulte${avail ? ` (dispo ≈ ${formatDZD(Number(avail) || 0)})` : ''} — choisissez Créditer Avoir ou alimentez la caisse.`,
+          'error'
+        );
       } else if (result.reason?.startsWith('INTAKE_FAILED')) {
         showToast(`Échec d’enregistrement de la reprise (${result.reason}) — vente annulée, panier conservé.`, 'error');
       } else if (result.reason?.startsWith('IMEI_REQUIRED')) {

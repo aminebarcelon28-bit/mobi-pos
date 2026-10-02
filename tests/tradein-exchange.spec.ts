@@ -43,7 +43,10 @@ const imeiInput = (page: Page) => page.getByPlaceholder('358921004812345');
 const cniInput = (page: Page) => page.getByPlaceholder('Ex: 1987-44-112233');
 const nameInput = (page: Page) => page.getByPlaceholder('Ex: Karim Hadj');
 const modelInput = (page: Page) => page.getByPlaceholder('ex: iPhone 14 Pro Max');
-const buybackInput = (page: Page) => page.locator('input[type="number"]').first();
+// Scoped to the modal overlay: CartPanel mounts cart steppers (number
+// inputs) that would otherwise shadow the buyback field in DOM order.
+const tradeInDialog = (page: Page) => page.locator('div.fixed.inset-0').filter({ hasText: 'REPRISE & TRADE-IN' });
+const buybackInput = (page: Page) => tradeInDialog(page).locator('input[type="number"]').first();
 const submitBtn = (page: Page) => page.getByRole('button', { name: /Racheter & Injecter/i });
 
 /** Fill the natively-required fields so submit reaches our handler. */
@@ -102,6 +105,30 @@ test.describe('Suite 3 — IMEI & identity matrix (real component)', () => {
     await expect(page.getByText('Pièce manquante — à compléter')).toBeVisible();
     await cniInput(page).fill('1987-44-112233');
     await expect(page.getByText('Pièce manquante — à compléter')).toHaveCount(0);
+  });
+
+  test('S1 paradox: IMEI already in cart -> hard-block with explicit message', async ({ page }) => {
+    await openTradeIn(page);
+    await page.evaluate(() => {
+      const w = window as unknown as { __harnessSeedSerializedCart: (imei: string) => void };
+      w.__harnessSeedSerializedCart('490154203237518');
+    });
+    await imeiInput(page).fill('490154203237518');
+    await expect(page.getByText('Impossible d’échanger un appareil présent dans le panier actif').first()).toBeVisible();
+    await fillRequired(page);
+    const before = await snapshot(page);
+    await submitBtn(page).click();
+    // Submit gate fires the error toast AND writes nothing.
+    await expect(page.getByRole('alert').getByText(/présent dans le panier actif/)).toBeVisible();
+    expect(await snapshot(page)).toEqual(before);
+  });
+
+  test('S6: spaced IMEI compacts on blur, then validates green', async ({ page }) => {
+    await openTradeIn(page);
+    await imeiInput(page).fill('4901 5420 3237 518');
+    await imeiInput(page).blur();
+    await expect(imeiInput(page)).toHaveValue('490154203237518');
+    await expect(page.getByText('IMEI valide (Luhn OK)')).toBeVisible();
   });
 });
 

@@ -53,7 +53,17 @@ import {
   getEffectiveCostPrice,
   calculateProfit,
 } from '../../utils/pricingEngine';
-import { computeCartTotals, computeRefundFundingSplit, computeTradeInSettlement } from '../../utils/receiptMath';
+import { computeCartTotals, computeRefundFundingSplit, computeTradeInSettlement, computeTradeRestoreQuota } from '../../utils/receiptMath';
+import {
+  cashSalesFromTxns,
+  cashRefundsFromTxns,
+  exchangeCashOutFromMovements,
+  standaloneDepositsFromMovements,
+  standaloneExpensesFromMovements,
+  savDepositsFromRepairs,
+  estimateDrawerCash,
+} from '../../utils/cashTerms';
+import { isTxInCloseScope } from '../../db/adapters/shiftAdapter';
 import { formatDZD } from '../../types/pos';
 import { DRAWER_REASON_PREFIXES } from '../../constants/index';
 import { DEFAULT_CREDIT_LIMIT } from './createCustomerSlice';
@@ -83,6 +93,50 @@ async function persistWithRetryOnce<T>(
 
 function isServiceProductId(pid: string): boolean {
   return pid.startsWith('qt-') || pid.startsWith('prod-misc-');
+}
+
+/**
+ * Chaos S2 drawer-availability estimate for the soulte overdraft guard.
+ * Mirrors the Z reconciler term-for-term (same predicates, same window
+ * rule) so the guard agrees with what closeShift will book. Memory-state
+ * based: stale mirrors fail toward blocking, never toward overdraft.
+ */
+function estimateDrawerCashForSoulte(s: PosState): number {
+  const activeShift = s.activeShift;
+  const openedAt = activeShift?.openedAt ?? null;
+  const inShiftWindow = (iso: string | undefined) => {
+    if (!openedAt) return true;
+    if (!iso) return true;
+    return iso >= openedAt;
+  };
+  const shiftTxns = openedAt
+    ? (s.transactions || []).filter((t) =>
+        isTxInCloseScope(t, { id: activeShift?.id, openedAt })
+      )
+    : s.transactions || [];
+  const sessionMovements = activeShift?.movements || [];
+  return estimateDrawerCash({
+    openingFloat: activeShift?.openingFloat ?? s.shiftFloat ?? 0,
+    cashSales:
+      cashSalesFromTxns(shiftTxns) +
+      savDepositsFromRepairs((s.repairOrders || []).filter((r) => inShiftWindow(r.createdAt))),
+    debtSettled: (s.customerDebts || [])
+      .filter((d) => d.type === 'PAYMENT_SETTLED' && d.paymentMethod === 'Espèces' && inShiftWindow(d.createdAt))
+      .reduce((acc, d) => acc + (d.amount || 0), 0),
+    deposits: 0,
+    manualIn: standaloneDepositsFromMovements(sessionMovements),
+    refunds: cashRefundsFromTxns(shiftTxns),
+    drops: (s.cashDrops || []).filter((d) => inShiftWindow(d.timestamp)).reduce((acc, d) => acc + (d.amount || 0), 0),
+    payouts: (s.payouts || []).filter((p) => inShiftWindow(p.timestamp)).reduce((acc, p) => acc + (p.amount || 0), 0),
+    cashExpenses: (s.storeExpenses || [])
+      .filter((e) => e.paymentMethod === 'Espèces' && inShiftWindow(e.createdAt))
+      .reduce((acc, e) => acc + (e.amount || 0), 0),
+    tradeInCashOut: (s.tradeIns || [])
+      .filter((t) => !t.creditToWallet && inShiftWindow(t.createdAt))
+      .reduce((acc, t) => acc + (t.buybackValue || 0), 0),
+    exchangeOut: exchangeCashOutFromMovements(sessionMovements),
+    manualOut: standaloneExpensesFromMovements(sessionMovements),
+  });
 }
 
 /**
@@ -437,6 +491,19 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         }
         if (soulteMethod === 'wallet' && !currentCustomer) {
           return { success: false, reason: 'SOULTE_WALLET_NO_CUSTOMER' };
+        }
+        // Chaos S2 overdraft guard (cash only — wallet never touches the
+        // drawer): fail closed when the shift float cannot cover the soulte.
+        // Estimate mirrors the Z reconciler so the guard agrees with booking;
+        // the cashier falls back to Créditer Avoir (always available).
+        if (soulteMethod === 'cash') {
+          const drawerEstimate = estimateDrawerCashForSoulte(get());
+          if (soulteDue > drawerEstimate) {
+            return {
+              success: false as const,
+              reason: `SOULTE_DRAWER_INSUFFICIENT:${drawerEstimate}`,
+            };
+          }
         }
       }
 
@@ -1370,6 +1437,21 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     if (txn.status === 'REFUNDED' || txn.status === 'PARTIALLY_REFUNDED') {
       return { success: false, reason: 'TICKET_REFUNDED' };
     }
+    // Chaos S5: void means "never happened" — a lie once a physical device
+    // changed hands. The intake leg (TRADE batch/product) is not part of
+    // txn.items so a void would leave the shop holding the traded-in device
+    // while silently keeping the customer's cash leg unreversed. Force the
+    // refund path, which restores the trade value to the wallet with an
+    // audit trail. No silent evaporation, no free-money cash.
+    if (txn.tradeInId) {
+      get().logSecurityAction(
+        'Annulation Refusée — Ticket Échange',
+        `Ticket #${txn.receiptNumber} lié à la reprise ${txn.tradeInId} : annulation directe interdite, passer par un remboursement.`,
+        cashierName || 'Manager',
+        false
+      );
+      return { success: false, reason: 'VOID_EXCHANGE_USE_REFUND' };
+    }
 
     // Online compensation claim (ad.md §10): when reachable, claim the void
     // BEFORE restoring stock/loyalty. A peer till voiding the same ticket
@@ -1815,6 +1897,27 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     const walletAddBase =
       funding.avoirShare + (refundMethod === 'Avoir Client' ? funding.cashShare : 0);
 
+    // Chaos S5 — exchange reversal: the funding split caps cash at net paid,
+    // so the trade-in value can never leak into cashOut — but without
+    // restoration it would evaporate while the shop keeps the device
+    // (intake stands; the TRADE batch is never touched by refund/void lanes,
+    // which only walk txn.items). Restore pro-rata to the wallet with a
+    // cumulative cap across partial refunds (tracked on each refund row).
+    const tradeDeduction = Math.max(0, Math.round(Number(originalTransaction.tradeInDeduction) || 0));
+    const hasTradeLeg = Boolean(originalTransaction.tradeInId) && tradeDeduction > 0;
+    const priorTradeRestored = (transactions || [])
+      .filter((t) => t.isRefund && t.originalTransactionId === originalTransaction.id)
+      .reduce((acc, t) => acc + Math.max(0, Math.round(Number(t.tradeInRestored) || 0)), 0);
+    const tradeRestoreNow = hasTradeLeg
+      ? computeTradeRestoreQuota(tradeDeduction, netRefund, originalTransaction.total, priorTradeRestored)
+      : 0;
+    // Anonymous exchange ticket: no wallet exists to restore the trade value
+    // into. The value is NOT minted as cash (funding split caps it) — it is
+    // disclosed loudly so a manager regularizes it (policy: no silent
+    // evaporation, no free-money cash).
+    const tradeValueUnclaimed =
+      hasTradeLeg && tradeRestoreNow > 0 && !originalTransaction.customer;
+
     const refundQtyMap = new Map<string, number>();
     for (const item of refundItems) {
       // Services carry no stock identity — restocking them collapses their
@@ -1891,7 +1994,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         newPoints
       );
 
-      const creditToAdd = walletAddBase;
+      const creditToAdd = walletAddBase + tradeRestoreNow;
       const newCredit = (cust.storeCredit || 0) + creditToAdd - claw.totalRevoked;
 
       const ledgerEntries: LoyaltyLedgerEntry[] = [];
@@ -1902,7 +2005,9 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             'conversion',
             0,
             newPoints,
-            `Émission Avoir Client (${creditToAdd} DA) suite au retour Ticket #${originalTransaction.receiptNumber}`,
+            `Émission Avoir Client (${creditToAdd} DA${
+              tradeRestoreNow > 0 ? ` dont reprise ${tradeRestoreNow} DA` : ''
+            }) suite au retour Ticket #${originalTransaction.receiptNumber}`,
             originalTransaction.id,
             creditToAdd
           )
@@ -2015,6 +2120,9 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       // the old total===cash reading via the cashTerms fallback.
       total: netRefund,
       cashDisbursed: cashOut,
+      // Chaos S5 cumulative cap anchor: later partial refunds of the same
+      // ticket subtract this before restoring more trade value.
+      ...(tradeRestoreNow > 0 && !tradeValueUnclaimed ? { tradeInRestored: tradeRestoreNow } : {}),
       costTotal: costRefundTotal,
       profit: 0,
       profitMargin: 0,
@@ -2044,7 +2152,13 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       timestamp: new Date().toISOString(),
       user: cashierName || 'Manager',
       action: 'Remboursement / Avoir Émis',
-      details: `Avoir #${refundReceiptNumber} (net ${netRefund} DA, brut ${refundTotal} DA, espèces ${cashOut} DA en ${refundMethod}) pour Ticket #${originalTransaction.receiptNumber}. Motif: ${refundReason}`,
+      details: `Avoir #${refundReceiptNumber} (net ${netRefund} DA, brut ${refundTotal} DA, espèces ${cashOut} DA en ${refundMethod}${
+        tradeRestoreNow > 0 && !tradeValueUnclaimed
+          ? `, reprise ${tradeRestoreNow} DA restaurée en avoir`
+          : tradeValueUnclaimed
+            ? `, reprise ${tradeRestoreNow} DA NON réclamable (ticket anonyme — régularisation manager requise)`
+            : ''
+      }) pour Ticket #${originalTransaction.receiptNumber}. Motif: ${refundReason}`,
       requiresPin: true,
     };
 
@@ -2069,6 +2183,11 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     // Sync-lane writes for the refund (ledger deltas, batch restitution,
     // outbox rows). Failures here warn explicitly instead of vanishing.
     const refundWarnings: string[] = [];
+    if (tradeValueUnclaimed) {
+      refundWarnings.push(
+        `Valeur reprise ${formatDZD(tradeRestoreNow)} non réclamable (ticket anonyme) — régularisation manager requise.`
+      );
+    }
     try {
       const restocked = refundItems.filter((i) => i.restock && i.quantity > 0 && !isUnstockedProduct(i.productId, products));
       if (restocked.length > 0) {
