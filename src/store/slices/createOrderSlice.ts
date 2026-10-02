@@ -53,7 +53,7 @@ import {
   getEffectiveCostPrice,
   calculateProfit,
 } from '../../utils/pricingEngine';
-import { computeCartTotals, computeRefundFundingSplit } from '../../utils/receiptMath';
+import { computeCartTotals, computeRefundFundingSplit, computeTradeInSettlement } from '../../utils/receiptMath';
 import { formatDZD } from '../../types/pos';
 import { DRAWER_REASON_PREFIXES } from '../../constants/index';
 import { DEFAULT_CREDIT_LIMIT } from './createCustomerSlice';
@@ -140,8 +140,36 @@ async function findAlreadySoldImei(
 }
 // P11.3: receipt printing is fire-and-forget and desktop-only; the escpos
 // chain (spooler + serial + label builder) loads on first use, not at boot.
+// Exchange tickets (tradeInId present) print the revived net receipt
+// (items + reprise deduction + net/soulte) instead of the standard one.
 async function printReceipt(transaction: SaleTransaction, settings: ReceiptSettings): Promise<void> {
   try {
+    if (transaction.tradeInId) {
+      try {
+        const { usePosStore } = await import('../usePosStore');
+        const trade = usePosStore.getState().tradeIns.find((t) => t.id === transaction.tradeInId);
+        if (trade) {
+          const { TradeInVoucherBuilder } = await import('../../utils/tradeInVoucherBuilder');
+          const { printViaWindowsSpooler, openCashDrawerViaSpooler } =
+            await import('../../utils/escpos');
+          const { resolvePrinterForDocument } = await import('../../utils/printerRoutingEngine');
+          const bytes = TradeInVoucherBuilder.buildNetTradeInSaleReceipt(
+            transaction,
+            trade,
+            settings,
+            transaction.tradeInSoulte ?? null
+          );
+          const target = resolvePrinterForDocument('receipt', settings?.printerRouting);
+          await printViaWindowsSpooler(target.printerName, bytes);
+          if (settings?.kickCashDrawerOnCash !== false) {
+            void openCashDrawerViaSpooler(target.printerName);
+          }
+          return;
+        }
+      } catch (err) {
+        console.warn('[print] net exchange receipt failed, falling back:', err);
+      }
+    }
     const { directPrintReceipt } = await import('../../utils/escpos');
     await directPrintReceipt(transaction, settings);
   } catch (err) {
@@ -346,10 +374,36 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           Math.max(0, preCreditTotals.subtotalAfterDiscount - actualStoreCreditApplied)
         )
       );
+      // Two-way exchange leg (Phase 3): the staged buyback (1:1, no bonus)
+      // rides as a payment credit. Mirror the avoir staging-drop guard: with
+      // explicit tenders the Reprise leg is authoritative — a staged trade-in
+      // missing from the tenders aborts loudly instead of charging past the
+      // displayed net. A Reprise tender with nothing staged fails closed.
+      const stagedTradeIn = get().stagedTradeIn;
+      const tradeInBuybackTrue = stagedTradeIn
+        ? Math.max(0, Math.round(Number(stagedTradeIn.buybackValue) || 0))
+        : 0;
+      let tradeInApplied = 0;
+      if (stagedTradeIn) {
+        tradeInApplied = tenders
+          ? tenders
+              .filter((t: PaymentTender) => t.method === 'Reprise')
+              .reduce((acc: number, t: PaymentTender) => acc + t.amount, 0)
+          : tradeInBuybackTrue;
+        if (tenders && tradeInApplied <= 0 && tradeInBuybackTrue > 0) {
+          return { success: false, reason: 'TRADE_STAGING_DROPPED' };
+        }
+      } else if (
+        tenders &&
+        tenders.some((t: PaymentTender) => t.method === 'Reprise' && (Number(t.amount) || 0) > 0)
+      ) {
+        return { success: false, reason: 'TRADE_WITHOUT_STAGING' };
+      }
       const totals = computeCartTotals(cart, {
         pricingTier,
         storeCreditApplied: actualStoreCreditApplied,
         voucherCreditApplied,
+        tradeInCredit: tradeInApplied,
         vatRate,
       });
       // Accounting Invariant: gross catalog value (signed for return/exchange
@@ -361,6 +415,30 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       // B-026: when returns dominate, net is negative and ttc clamps to 0 —
       // the signed shortfall must still leave the drawer as cash-out.
       const refundDue = totals.refundDue;
+
+      // Soulte (Phase 3): true buyback vs payable base — when the shop owes
+      // the difference, the payout choice (cash drawer / wallet) must have
+      // been made explicitly upstream. The trade-in totals leg above is
+      // clamped, so a soulte can NEVER leak into refundDue.
+      const tradeSettlement = stagedTradeIn
+        ? computeTradeInSettlement(totals.subtotalAfterDiscount, tradeInBuybackTrue)
+        : null;
+      const soulteDue =
+        tradeSettlement && tradeSettlement.direction === 'SOULTE_SHOP_PAYS'
+          ? tradeSettlement.shopOwes
+          : 0;
+      // Validated once here; the same value stamps the row (receipt/audit)
+      // and drives the post-commit payout below — never re-read mid-flight.
+      const soulteMethod: 'cash' | 'wallet' | null =
+        soulteDue > 0 ? get().exchangeSoultePayout : null;
+      if (soulteDue > 0) {
+        if (!soulteMethod) {
+          return { success: false, reason: 'SOULTE_CHOICE_REQUIRED' };
+        }
+        if (soulteMethod === 'wallet' && !currentCustomer) {
+          return { success: false, reason: 'SOULTE_WALLET_NO_CUSTOMER' };
+        }
+      }
 
       // C2 oversell hard block (first line of defense): signed quantities vs
       // live stock, listing the short SKUs. The atomic ledger guard inside
@@ -402,10 +480,14 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         }
       }
 
-      // Validate cash is sufficient (excluding credit and store credit)
+      // Validate cash is sufficient (excluding credit, store credit and the
+      // Reprise leg — the buyback is already netted in `total` above).
       const directTendered = tenders
         ? tenders
-            .filter((t: PaymentTender) => t.method !== 'Avoir Client' && t.method !== 'Crédit Client')
+            .filter(
+              (t: PaymentTender) =>
+                t.method !== 'Avoir Client' && t.method !== 'Crédit Client' && t.method !== 'Reprise'
+            )
             .reduce((acc: number, t: PaymentTender) => acc + t.amount, 0)
         : cashTendered;
 
@@ -660,6 +742,21 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         updatedCustomers = customers.map((c) => (c.id === finalCust.id ? finalCust : c));
       }
 
+      // Two-way exchange intake-first commit (after ALL tender/cash gates,
+      // just before the durable write): product + trade + IMEI + FIFO batch.
+      // Deterministic ids (stagedId) make this retry-safe; the recovery
+      // intent parked below already carries the linkage, so a boot replay
+      // converges to sale + intake with no duplicates. Intake failure aborts
+      // cleanly here — nothing else has been written in this flight.
+      let exchangeTradeId: string | null = null;
+      if (stagedTradeIn) {
+        const intake = await get().commitStagedTradeInIntake(stagedTradeIn);
+        if (!intake.success) {
+          return { success: false, reason: `INTAKE_FAILED:${intake.reason}` };
+        }
+        exchangeTradeId = intake.tradeId;
+      }
+
       // P11.3: device id lives in the sync layer; load it lazily at checkout time.
       const { getStableDeviceId } = await import('../../sync/device');
       const currentDeviceId = await getStableDeviceId().catch(() => 'default');
@@ -677,7 +774,11 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         pricingTier,
         paymentMethod: tenders && tenders.length > 0 ? tenders[0].method : 'Espèces',
         tenders,
-        cashTendered: tenders ? tenders.reduce((acc: number, t: PaymentTender) => acc + t.amount, 0) : cashTendered,
+        cashTendered: tenders
+          ? tenders
+              .filter((t: PaymentTender) => t.method !== 'Reprise')
+              .reduce((acc: number, t: PaymentTender) => acc + t.amount, 0)
+          : cashTendered,
         changeDue,
         createdAt: new Date().toISOString(),
         cashierName: activeShift?.cashierName || 'Caisse Principale',
@@ -692,6 +793,17 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // Persisted for void/refund credit-back (not envelope-only): without
         // these on the row, cancelling a voucher-paid sale burns bearer value.
         ...(voucherCode ? { voucherCode, voucherCreditApplied } : {}),
+        // Two-way exchange linkage (not envelope-only): void/refund flows
+        // reverse the intake leg instead of burning it. cashTendered below
+        // excludes the Reprise leg (money actually handed); the deduction
+        // rides here. fullTx (spread below) carries both into the receipt.
+        ...(exchangeTradeId
+          ? { tradeInId: exchangeTradeId, tradeInDeduction: tradeInApplied }
+          : {}),
+        // Soulte settlement stamped for receipt + audit traceability.
+        ...(soulteDue > 0 && soulteMethod
+          ? { tradeInSoulte: { amount: soulteDue, method: soulteMethod } }
+          : {}),
         // At-sale loyalty campaign multiplier (see earn site above): void and
         // refund reversals deduct exactly what was earned. Absent on legacy
         // rows, which fall back to currently-active campaigns.
@@ -860,8 +972,11 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // surface an explicit warning — never .catch(console.error) silence.
         const sqlite = await getSqlite();
         if (updatedCustomer) {
+          // Pin for the closure: soulte credit reassigns updatedCustomer
+          // above, which would otherwise reset narrowing inside the thunk.
+          const custToSave = updatedCustomer;
           const saved = await persistWithRetryOnce(() =>
-            getCustomerRepo().then((repo) => repo.save(updatedCustomer))
+            getCustomerRepo().then((repo) => repo.save(custToSave))
           );
           if (!saved.ok) {
             try {
@@ -1021,6 +1136,56 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         }
       }
 
+      // Soulte boutique (Phase 3): order row is durable — settle the shop's
+      // debt from the exchange. Cash leaves a single net EXPENSE tagged with
+      // the trade id (read by the unified exchange lane); wallet credits the
+      // customer's storeCredit 1:1. Failures warn loudly, never silently drop
+      // (books already show the sale; money must follow).
+      if (soulteDue > 0 && activeShift && soulteMethod) {
+        const soulteChoice = soulteMethod;
+        const soulteLabel = `Soulte échange ${stagedTradeIn?.deviceModel ?? ''} (Reprise ${exchangeTradeId ?? ''}) — ticket ${receiptNumber}`;
+        try {
+          if (soulteChoice === 'cash') {
+            const soulteOut = await get().logCashMovement(
+              soulteDue,
+              'EXPENSE',
+              `${DRAWER_REASON_PREFIXES.SOULTE_CASHOUT} ${soulteLabel}`,
+              activeShift.cashierName
+            );
+            if (!soulteOut.success) {
+              noteWarning(
+                `Soulte ${formatDZD(soulteDue)} DA non décaissée — versez-la manuellement.`
+              );
+            }
+          } else if (soulteChoice === 'wallet' && updatedCustomer) {
+            const credited = {
+              ...updatedCustomer,
+              storeCredit: (updatedCustomer.storeCredit || 0) + soulteDue,
+            };
+            const nextCustomers = (get().customers || []).map((c) =>
+              c.id === credited.id ? credited : c
+            );
+            await (await getCustomerRepo()).save(credited).catch((err: unknown) => {
+              throw err;
+            });
+            updatedCustomers = nextCustomers;
+            if (get().currentCustomer?.id === credited.id) {
+              updatedCustomer = credited;
+            }
+            get().logSecurityAction(
+              'Soulte Échange Créditée (Avoir)',
+              `Client: ${credited.name} — soulte de ${formatDZD(soulteDue)} DA créditée (reprise ${stagedTradeIn?.deviceModel ?? ''}, ticket ${receiptNumber}).`,
+              activeShift.cashierName || 'Système (Échange)',
+              false
+            );
+          }
+        } catch {
+          noteWarning(
+            `Soulte ${formatDZD(soulteDue)} DA non réglée (${soulteChoice === 'cash' ? 'tiroir' : 'avoir'}) — régularisez manuellement.`
+          );
+        }
+      }
+
       // Track sold serialized items in Dexie and store
       const soldImeis = frozenCartItems
         .filter((ci) => Boolean(ci.imeiNumber && ci.imeiNumber.trim()))
@@ -1081,6 +1246,10 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         cart: [],
         cashTendered: 0,
         storeCreditApplied: 0,
+        // Exchange staging is single-use: the intake committed atomically
+        // with this sale, so the slot + soulte choice reset here.
+        stagedTradeIn: null,
+        exchangeSoultePayout: null,
         activeModal: null,
         lastTransaction: transaction,
         hardwareStatus: { ...get().hardwareStatus, cashDrawerOpen: true },
@@ -1090,6 +1259,56 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         voucherCreditApplied: 0,
         voucherCode: null,
       });
+
+      // SAV settlement: any SAV-<ticket> service line commits delivery.
+      // Idempotent — updateRepairOrderStatus no-ops visually if already Livré,
+      // and the sidecar is purged so replays never double-deliver.
+      try {
+        const savLines = frozenCartItems.filter(
+          (ci) =>
+            ci.product?.sku?.startsWith('SAV-') ||
+            ci.product?.id?.startsWith('repair-balance-')
+        );
+        if (savLines.length > 0) {
+          const { repairIdForCartItem, unlinkSavCartItems } = await import('../../utils/savSettlement');
+          const { REPAIR_DELIVERED_EVENT } = await import('./createRepairSlice');
+          const seen = new Set<string>();
+          const deliveredIds: string[] = [];
+          const deliveredTickets: string[] = [];
+          for (const line of savLines) {
+            const repairId =
+              repairIdForCartItem(line.product.id) ??
+              (line.product.id.startsWith('repair-balance-')
+                ? line.product.id.replace(/^repair-balance-/, '')
+                : null);
+            if (!repairId || seen.has(repairId)) continue;
+            seen.add(repairId);
+            try {
+              const target = get().repairOrders.find((r) => r.id === repairId);
+              await get().updateRepairOrderStatus(repairId, 'Livré');
+              deliveredIds.push(repairId);
+              if (target?.ticketNumber) deliveredTickets.push(target.ticketNumber);
+            } catch (e) {
+              console.warn('[checkout] SAV auto-delivery failed:', e);
+            }
+          }
+          unlinkSavCartItems(savLines.map((l) => l.product.id));
+          // Delivery handshake: UI offers [Imprimer Bon de Restitution].
+          if (deliveredIds.length > 0 && typeof window !== 'undefined') {
+            window.dispatchEvent(
+              new CustomEvent(REPAIR_DELIVERED_EVENT, {
+                detail: {
+                  repairIds: deliveredIds,
+                  ticketNumbers: deliveredTickets,
+                  receiptNumber: transaction.receiptNumber,
+                },
+              })
+            );
+          }
+        }
+      } catch (e) {
+        console.warn('[checkout] SAV settlement hook skipped:', e);
+      }
 
       // Audio Feedback
       audioBus.emit('success');
@@ -1114,20 +1333,26 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     // store/voucher credits and VAT): the single tender covers exactly the
     // net due, so change stays zero without hiding a refund.
     const { voucherCreditApplied } = readVoucherStaging(get());
-    const totals = computeCartTotals(cart, {
+    // Carry staged wallet credit AND staged trade-in as explicit tender legs
+    // (mirrors PaymentModal): without them the staging-drop guards abort,
+    // and without the guards the credits would silently vanish.
+    const tradeInLegAmount = Math.max(0, Math.round(Number(get().stagedTradeIn?.buybackValue) || 0));
+    const tradeInLeg =
+      tradeInLegAmount > 0 ? [{ method: 'Reprise' as const, amount: tradeInLegAmount }] : [];
+    const totalsWithTrade = computeCartTotals(cart, {
       pricingTier,
       storeCreditApplied,
       voucherCreditApplied,
+      tradeInCredit: tradeInLegAmount,
       vatRate: readVatRate(get()),
     });
-    // Carry the staged wallet credit as an explicit tender leg (mirrors
-    // PaymentModal): without it the staging-drop guard aborts, and without
-    // the guard the credit would silently vanish from the write.
     const avoirLeg =
       Math.max(0, Math.round(Number(storeCreditApplied) || 0)) > 0
         ? [{ method: 'Avoir Client' as const, amount: Math.max(0, Math.round(Number(storeCreditApplied) || 0)) }]
         : [];
-    return await processPayment([{ method: 'Espèces', amount: totals.total }, ...avoirLeg]);
+    return await processPayment(
+      [{ method: 'Espèces', amount: totalsWithTrade.total }, ...avoirLeg, ...tradeInLeg]
+    );
   },
 
   voidTransaction: async (transactionId, reason, cashierName) => {

@@ -21,7 +21,7 @@ const ShiftZReportModal = React.lazy(() => import('./modals/ShiftZReportModal').
 const ShiftOpenModal = React.lazy(() => import('./modals/ShiftOpenModal').then(m => ({ default: m.ShiftOpenModal })));
 const ShiftMovementModal = React.lazy(() => import('./modals/ShiftMovementModal').then(m => ({ default: m.ShiftMovementModal })));
 const ShiftCloseModal = React.lazy(() => import('./modals/ShiftCloseModal').then(m => ({ default: m.ShiftCloseModal })));
-const VendorProcurementModal = React.lazy(() => import('./modals/VendorProcurementModal').then(m => ({ default: m.VendorProcurementModal })));
+const ReplenishmentContainer = React.lazy(() => import('./replenishment/ReplenishmentContainer').then(m => ({ default: m.ReplenishmentContainer })));
 const PurchaseOrderModal = React.lazy(() => import('./modals/PurchaseOrderModal').then(m => ({ default: m.PurchaseOrderModal })));
 const RepairWorkOrderModal = React.lazy(() => import('./modals/RepairWorkOrderModal').then(m => ({ default: m.RepairWorkOrderModal })));
 const TradeInBuybackModal = React.lazy(() => import('./modals/TradeInBuybackModal').then(m => ({ default: m.TradeInBuybackModal })));
@@ -45,6 +45,7 @@ const CustomItemModal = React.lazy(() => import('./modals/CustomItemModal').then
 
 export const GlobalModalHost: React.FC = () => {
   const activeModal = usePosStore((state) => state.activeModal);
+  const closeModal = usePosStore((state) => state.closeModal);
 
   return (
     <Suspense fallback={null}>
@@ -68,7 +69,9 @@ export const GlobalModalHost: React.FC = () => {
         {activeModal === 'shift_open' && <ShiftOpenModal />}
         {activeModal === 'shift_movement' && <ShiftMovementModal />}
         {activeModal === 'shift_close' && <ShiftCloseModal />}
-        {activeModal === 'vendor_procurement' && <VendorProcurementModal />}
+        {activeModal === 'vendor_procurement' && (
+          <ReplenishmentContainer isOpen onClose={() => closeModal()} />
+        )}
         {activeModal === 'purchase_order' && <PurchaseOrderModal />}
         {activeModal === 'repair_work_order' && <RepairWorkOrderModal />}
         {activeModal === 'trade_in_buyback' && <TradeInBuybackModal />}

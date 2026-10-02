@@ -18,6 +18,7 @@ import type {
   RepairOrder,
   ProductBundle,
   TradeInItem,
+  StagedTradeIn,
   IMEIRecord,
   PaymentTender,
   PaymentMethodType,
@@ -204,28 +205,85 @@ export interface OrderSlice {
   setSelectedTransactionForRefund: (t: SaleTransaction | null) => void;
 }
 
+export type SettleRepairResult =
+  | { action: 'cart'; remainingBalance: number; cartProductId: string }
+  | { action: 'deliverable'; remainingBalance: number };
+
 export interface RepairSlice {
   repairOrders: RepairOrder[];
   selectedRepairOrderForNotification: RepairOrder | null;
+  selectedRepairNotificationTemplate: import('../types/pos').RepairNotificationType | null;
+  /** Cross-modal print handshake (Command archive → Repair modal auto-print). */
+  pendingRepairPrint: import('../types/pos').PendingRepairPrint | null;
+  setPendingRepairPrint: (req: import('../types/pos').PendingRepairPrint | null) => void;
+
+  /**
+   * Inspector → SAV intake handoff (Phase 5, Option A). Lives in the REPAIR
+   * slice (not UI state) so the dossier survives a modal close/reopen and the
+   * SAV form hydrates without retyping the identifier.
+   */
+  intakeDraft: import('../types/pos').IntakeDraft | null;
+  /** Writer. Replaces any previous draft (single-slot handoff). */
+  seedIntakeDraft: (draft: import('../types/pos').IntakeDraft) => void;
+  /** Atomic reader+clearer; returns null for an absent OR stale draft. */
+  consumeIntakeDraft: () => import('../types/pos').IntakeDraft | null;
+  /** Explicit discard (modal cancelled / Escape without save). */
+  clearIntakeDraft: () => void;
 
   createRepairOrder: (order: Omit<RepairOrder, 'id' | 'ticketNumber' | 'totalCost' | 'createdAt'>) => Promise<void>;
   updateRepairOrderStatus: (orderId: string, newStatus: RepairOrder['status']) => Promise<{ remainingBalance: number }>;
   updateRepairOrder: (orderId: string, updates: Partial<RepairOrder>) => Promise<void>;
-  setSelectedRepairOrderForNotification: (order: RepairOrder | null) => void;
+  setSelectedRepairOrderForNotification: (
+    order: RepairOrder | null,
+    template?: import('../types/pos').RepairNotificationType | null
+  ) => void;
+  /** Zero-leakage settlement: cart injection when balance>0, else direct deliverable. */
+  settleAndDeliverRepair: (orderId: string) => Promise<SettleRepairResult>;
+  markRepairDelivered: (orderId: string) => Promise<boolean>;
+  deleteRepairOrderGuarded: (orderId: string) => Promise<{ success: boolean; reason?: string }>;
 }
 
 export interface ProcurementSlice {
   purchaseOrders: PurchaseOrder[];
   activeDraftPO: PurchaseOrder | null;
+  /** Sets or clears the active draft PO. Used by the
+   *  replenishment "Voir Commande" deep-link to route the
+   *  PurchaseOrderModal straight to a specific order. */
+  setActiveDraftPO: (po: PurchaseOrder | null) => void;
+  /** Transient intent: the next PurchaseOrderModal mount opens
+   *  directly on the manual draft builder ("Générer un bon de
+   *  commande" shortcut). Consumed by the modal itself. */
+  poDraftBuilderRequested: boolean;
+  requestPoDraftBuilder: () => void;
+  consumePoDraftBuilder: () => void;
   dismissedProcurementIds: string[];
+  customQtyMap: Record<string, number>;
+  selectedItemsMap: Record<string, boolean>;
+  extraVendorProducts: Record<string, string[]>;
+  customActiveVendors: string[];
+  vendorMoqMap: Record<string, number>;
+  vendorDirectory: Record<string, import('../types/pos').VendorDirectoryEntry>;
 
   dismissProcurementProduct: (productId: string) => void;
   restoreDismissedProcurementProducts: () => void;
+  setCustomQty: (productId: string, qty: number) => void;
+  setCustomQtyBatch: (entries: Record<string, number>) => void;
+  removeCustomQtyForVendor: (productIds: string[]) => void;
+  toggleProcurementItem: (productId: string) => void;
+  setProcurementItemsSelected: (productIds: string[], selected: boolean) => void;
+  addExtraVendorProduct: (vendorName: string, productId: string) => void;
+  removeExtraVendorProduct: (vendorName: string, productId: string) => void;
+  setCustomActiveVendors: (vendors: string[]) => void;
+  addCustomActiveVendor: (vendorName: string) => void;
+  removeCustomActiveVendor: (vendorName: string) => void;
+  setVendorMoq: (vendorName: string, target: number) => void;
+  setVendorContact: (vendorName: string, contact: import('../types/pos').VendorDirectoryEntry) => void;
+  clearProcurementDraft: () => void;
   createDraftPOForVendor: (
     vendorName: string,
     customItems?: Array<{ productId: string; qty: number; unitCost?: number }>,
     status?: PurchaseOrder['status']
-  ) => void;
+  ) => Promise<{ success: boolean; reason?: string }>;
   createWaitingListPO: (
     vendorName: string,
     customItems?: Array<{ productId: string; qty: number; unitCost?: number }>,
@@ -293,6 +351,22 @@ export interface UISlice {
   setActiveImeiDossier: (dossier: ImeiLifecycleDossier | null) => void;
   setReceiptSettings: (settings: ReceiptSettings) => Promise<void>;
   setManagerPin: (newPin: string) => Promise<void>;
+  /**
+   * Phase 4a rotation authority. Under Tauri this mints Argon2id AND writes
+   * natively via `pin_set` (the hash never enters the WebView), then refreshes
+   * memory + Dexie mirror from the SQLite authority. Outside Tauri it
+   * delegates to the legacy TS mint (web preview only). Throws on deny /
+   * transport failure — callers surface the error and MUST NOT fall back to
+   * a local mint under Tauri (that would re-plant a fast hash AND violate
+   * native-write-only). Returns the minted envelope generation (`v2`/`v1`).
+   */
+  rotatePinCredential: (userId: string, newPin: string, isManager: boolean, opts?: { recoveryReset?: boolean }) => Promise<{ format: string }>;
+  /**
+   * Re-read `manager_pin` + `cashier_users` from the SQLite authority into
+   * the Dexie mirror and memory (Tauri only). Used after native `pin_set`,
+   * which bypasses the mirror. No sync: credentials are device-local keys.
+   */
+  refreshCredentialsFromAuthority: () => Promise<void>;
   // P11.3: returns a Promise so callers that need the audit row persisted before
   // proceeding (PIN change, customer delete) can await it. Callers that ignore the
   // return value still compile (fire-and-forget stays valid).
@@ -320,6 +394,40 @@ export interface UISlice {
   deleteBundle: (bundleId: string) => Promise<void>;
   addBundleToCart: (bundleId: string) => { success: boolean; reason?: string };
   processTradeIn: (tradeIn: Omit<TradeInItem, 'id' | 'createdAt' | 'resalePrice'>) => Promise<{ success: true } | { success: false; reason: string }>;
+  /**
+   * Two-way exchange staging (Phase 2): validated trade-in payload held in
+   * memory ONLY — zero DB writes until the atomic checkout flight commits
+   * intake + purchase together. A canceled exchange discards this with no
+   * orphaned rows. Buyback applies 1:1 (no +10% wallet bonus).
+   */
+  stagedTradeIn: StagedTradeIn | null;
+  setStagedTradeIn: (staged: StagedTradeIn | null) => void;
+  clearStagedTradeIn: () => void;
+  /**
+   * Modal request bus for mode="exchange": opener stashes initial data +
+   * nonce here, then opens 'trade_in_buyback'. The modal reads it to
+   * prefill and to decide exchange vs standalone when no direct prop wins.
+   */
+  tradeInExchangeRequest: { initial: Partial<StagedTradeIn>; nonce: number } | null;
+  openTradeInExchange: (initial?: Partial<StagedTradeIn>) => void;
+  clearTradeInExchangeRequest: () => void;
+  /**
+   * Soulte payout choice for a Net<0 exchange (shop owes the customer).
+   * Explicit selection only — no default (a pre-selected default would
+   * disburse cash or mint liability without a cashier decision).
+   */
+  exchangeSoultePayout: 'cash' | 'wallet' | null;
+  setExchangeSoultePayout: (choice: 'cash' | 'wallet' | null) => void;
+  /**
+   * Pure intake commit for the atomic exchange checkout: persists product +
+   * trade + IMEI + FIFO batch + ledger (same shape as processTradeIn) with
+   * NO cash/wallet side effects — those belong to the checkout flight
+   * (tenders / soulte payout). Returns ids for the sale linkage.
+   */
+  commitStagedTradeInIntake: (staged: StagedTradeIn) => Promise<
+    | { success: true; tradeId: string; productId: string }
+    | { success: false; reason: string }
+  >;
   addStoreExpense: (expense: Omit<StoreExpense, 'id' | 'createdAt'>) => Promise<void>;
   deleteStoreExpense: (id: string) => Promise<{ success: boolean; reason?: string; compensated?: boolean }>;
 
@@ -327,11 +435,10 @@ export interface UISlice {
   searchByIMEI: (imei: string) => { product?: Product; po?: PurchaseOrder; transaction?: SaleTransaction } | null;
 
   initDatabase: () => Promise<void>;
-  seedDemoData: () => Promise<void>;
   refreshAfterPull: () => Promise<void>;
   refreshPullTargets: (summary: PullTouchSummary) => Promise<void>;
   exportDatabase: () => void;
-  importDatabase: (jsonString: string) => Promise<{ success: boolean; reason?: string }>;
+  importDatabase: (jsonString: string, actor?: string) => Promise<{ success: boolean; reason?: string; auditOk?: boolean }>;
 }
 
 export type PosState = CartSlice &

@@ -13,6 +13,8 @@ import {
   Check,
   Search,
   RotateCcw,
+  RefreshCw,
+  Wallet,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
@@ -20,7 +22,7 @@ import type { PaymentTender, PaymentMethodType } from '../../types/pos';
 import { useToast } from '../../components/ui/Toast';
 import { getEffectiveDebtLimit } from '../../store/slices/createCustomerSlice';
 import { soundEngine } from '../../utils/audioFeedback';
-import { computeCartTotals } from '../../utils/receiptMath';
+import { computeCartTotals, computeTradeInSettlement } from '../../utils/receiptMath';
 import { parseLocalizedAmount } from '../../utils/moneyInput';
 import { calculateMaxAllowedCredit, calculateCustomerTier, normalizeLoyaltyConfig } from '../../utils/loyaltyEngine';
 
@@ -69,6 +71,12 @@ export const PaymentModal: React.FC = () => {
     usePosStore((s) => (s as unknown as { voucherCode?: string | null }).voucherCode ?? null);
   const vatRate =
     usePosStore((s) => (s.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate ?? 0) || 0;
+  // Phase 3: staged two-way exchange (memory-only until checkout commits).
+  const stagedTradeIn = usePosStore((s) => s.stagedTradeIn);
+  const exchangeSoultePayout = usePosStore((s) => s.exchangeSoultePayout);
+  const setExchangeSoultePayout = usePosStore((s) => s.setExchangeSoultePayout);
+  const clearStagedTradeIn = usePosStore((s) => s.clearStagedTradeIn);
+  const tradeInCredit = Math.max(0, Math.round(Number(stagedTradeIn?.buybackValue) || 0));
 
   // Canonical totals — the same computeCartTotals() base as CartPanel,
   // MobileCheckoutTab and processPayment (signed returns, credits, VAT).
@@ -78,6 +86,7 @@ export const PaymentModal: React.FC = () => {
     pricingTier,
     storeCreditApplied: appliedCredit,
     voucherCreditApplied,
+    tradeInCredit,
     vatRate,
   });
   const grossSubtotal = totals.grossSubtotal;
@@ -85,6 +94,12 @@ export const PaymentModal: React.FC = () => {
   const netSubtotal = totals.subtotalAfterDiscount;
   const netToPay = totals.total;
   const taxAmount = totals.tax;
+  const tradeInCreditApplied = totals.tradeInCreditApplied;
+  // Settlement on the TRUE buyback (unclamped) vs the payable base so the
+  // soulte direction survives the totals clamp.
+  const tradeSettlement = stagedTradeIn ? computeTradeInSettlement(netSubtotal, tradeInCredit) : null;
+  const isSoulte = !!tradeSettlement && tradeSettlement.direction === 'SOULTE_SHOP_PAYS';
+  const soulteDue = isSoulte && tradeSettlement ? tradeSettlement.shopOwes : 0;
   // B-026: net-negative cart → cash owed back; netToPay/ttc is clamped to 0.
   const refundDue = totals.refundDue;
   const isRefundDue = refundDue > 0;
@@ -104,6 +119,7 @@ export const PaymentModal: React.FC = () => {
       // + staged voucher via maxAvailableCredit computed below when modal
       // is open — here we clamp against balance and net only for the effect
       // deps; the render-time maxAvailableCredit is the real ceiling).
+      setExchangeSoultePayout(null);
       const initialCredit = Math.min(
         currentCustomer?.storeCredit || 0,
         storeCreditApplied || 0,
@@ -111,7 +127,7 @@ export const PaymentModal: React.FC = () => {
       );
       setAppliedCredit(initialCredit);
 
-        const initialNet = Math.max(0, netSubtotal - initialCredit);
+        const initialNet = Math.max(0, netToPay - initialCredit);
       setCashTenderAmount(initialNet > 0 ? initialNet.toString() : '0');
 
       setTimeout(() => {
@@ -121,7 +137,9 @@ export const PaymentModal: React.FC = () => {
         }
       }, 50);
     }
-  }, [activeModal, cart.length, grossSubtotal, netSubtotal, currentCustomer, storeCreditApplied, closeModal, showToast]);
+  }, [activeModal, cart.length, grossSubtotal, netSubtotal, netToPay, tradeInCredit, currentCustomer, storeCreditApplied, closeModal, showToast, setExchangeSoultePayout]);
+
+  useEffect(() => { if (activeModal !== 'payment') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
   if (activeModal !== 'payment') return null;
 
@@ -138,13 +156,14 @@ export const PaymentModal: React.FC = () => {
     50
   );
 
-  // Store credit can never exceed the net due after the staged voucher
-  // (gross − discounts − voucher already granted), otherwise a discounted
-  // sale would over-apply customer credit — and never past the guardrail.
+  // Store credit can never exceed the net due after the staged voucher AND
+  // the staged trade-in (gross − discounts − voucher − reprise already
+  // granted), otherwise a discounted sale would over-apply customer credit —
+  // and never past the guardrail.
   const maxAvailableCredit = currentCustomer
     ? Math.min(
         creditGuardrail.maxAllowedCredit,
-        Math.max(0, netSubtotal - voucherCreditApplied)
+        Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied)
       )
     : 0;
   const currentCashGiven = Math.round(parseLocalizedAmount(cashTenderAmount) || 0);
@@ -167,7 +186,7 @@ export const PaymentModal: React.FC = () => {
     if (!currentCustomer || maxAvailableCredit <= 0) return;
     setAppliedCredit(maxAvailableCredit);
     setStoreCreditApplied(maxAvailableCredit);
-      const newNet = Math.max(0, netSubtotal - maxAvailableCredit);
+      const newNet = Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied - maxAvailableCredit);
     setCashTenderAmount(newNet > 0 ? newNet.toString() : '0');
     soundEngine.playSuccess();
     showToast(`🎁 Avoir Client appliqué : -${formatDZD(maxAvailableCredit)}`, 'success');
@@ -177,11 +196,11 @@ export const PaymentModal: React.FC = () => {
     if (!currentCustomer) return;
     const clamped = Math.max(
       0,
-      Math.min(amount, maxAvailableCredit, Math.max(0, netSubtotal - voucherCreditApplied))
+      Math.min(amount, maxAvailableCredit, Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied))
     );
     setAppliedCredit(clamped);
     setStoreCreditApplied(clamped);
-    const newNet = Math.max(0, netSubtotal - clamped);
+    const newNet = Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied - clamped);
     setCashTenderAmount(newNet > 0 ? newNet.toString() : '0');
     setIsCustomCreditOpen(false);
     soundEngine.playKeyBeep?.();
@@ -195,7 +214,8 @@ export const PaymentModal: React.FC = () => {
   const handleRemoveCredit = () => {
     setAppliedCredit(0);
     setStoreCreditApplied(0);
-      setCashTenderAmount(netSubtotal > 0 ? netSubtotal.toString() : '0');
+      const resetNet = Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied);
+      setCashTenderAmount(resetNet > 0 ? resetNet.toString() : '0');
     soundEngine.playKeyBeep?.();
     showToast('Avoir Client retiré de la vente.', 'info');
   };
@@ -252,10 +272,13 @@ export const PaymentModal: React.FC = () => {
       0,
       Number((live.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate) || 0
     );
+    const liveStaged = live.stagedTradeIn;
+    const liveTradeInCredit = Math.max(0, Math.round(Number(liveStaged?.buybackValue) || 0));
     const submitTotals = computeCartTotals(liveCart, {
       pricingTier: live.pricingTier,
       storeCreditApplied: appliedCredit,
       voucherCreditApplied: liveVoucherCredit,
+      tradeInCredit: liveTradeInCredit,
       vatRate: liveVat,
     });
     const submitNet = submitTotals.total;
@@ -287,10 +310,21 @@ export const PaymentModal: React.FC = () => {
     // the cash-out from refundDue. Skip credit/stock payment branches.
     // Staged wallet credit still rides as a leg so slice-side refund math
     // matches the displayed submitRefundDue (net of credit).
+    // Soulte UX gate (slice enforces too): no payout choice, no submit.
+    const liveSettlement = liveStaged
+      ? computeTradeInSettlement(submitTotals.subtotalAfterDiscount, liveTradeInCredit)
+      : null;
+    if (liveSettlement?.direction === 'SOULTE_SHOP_PAYS' && !live.exchangeSoultePayout) {
+      showToast('Soulte boutique : choisissez Décaisser Espèces ou Créditer Avoir.', 'error');
+      setIsProcessing(false);
+      return;
+    }
     if (submitRefundDue > 0) {
       const refundAvoirLeg =
         appliedCredit > 0 ? [{ method: 'Avoir Client' as const, amount: appliedCredit }] : [];
-      const result = (await processPayment([{ method: 'Espèces', amount: 0 }, ...refundAvoirLeg])) as unknown as {
+      const refundRepriseLeg =
+        liveTradeInCredit > 0 ? [{ method: 'Reprise' as const, amount: liveTradeInCredit }] : [];
+      const result = (await processPayment([{ method: 'Espèces', amount: 0 }, ...refundAvoirLeg, ...refundRepriseLeg])) as unknown as {
         success: boolean;
         reason?: string;
         warnings?: string[];
@@ -318,6 +352,17 @@ export const PaymentModal: React.FC = () => {
     // 1. Add Store Credit tender if applied
     if (appliedCredit > 0) {
       finalTenders.push({ method: 'Avoir Client', amount: appliedCredit });
+    }
+
+    // 1b. Soulte-to-wallet needs an identified customer (slice guards too).
+    if (
+      liveSettlement?.direction === 'SOULTE_SHOP_PAYS' &&
+      live.exchangeSoultePayout === 'wallet' &&
+      !currentCustomer
+    ) {
+      showToast('Soulte vers Avoir : sélectionnez d’abord un client.', 'error');
+      setIsProcessing(false);
+      return;
     }
 
     // 2. Handle remaining balance
@@ -353,7 +398,17 @@ export const PaymentModal: React.FC = () => {
       finalTenders.push({ method: 'Espèces', amount: cashAmount });
     }
 
-    const totalTendered = finalTenders.reduce((acc, t) => acc + t.amount, 0);
+    // 3. Reprise leg LAST (informational linkage — already netted in
+    // submitNet). Last position keeps paymentMethod = the money leg, so
+    // cash-sale reporting semantics are unchanged.
+    if (liveTradeInCredit > 0) {
+      finalTenders.push({ method: 'Reprise', amount: liveTradeInCredit });
+    }
+
+    // Change counts money handed (Reprise value is not cash tendered).
+    const totalTendered = finalTenders
+      .filter((t) => t.method !== 'Reprise')
+      .reduce((acc, t) => acc + t.amount, 0);
       const calculatedChange = Math.max(0, totalTendered - submitNet);
 
     const result = (await processPayment(finalTenders)) as unknown as {
@@ -376,6 +431,16 @@ export const PaymentModal: React.FC = () => {
         showToast(`IMEI déjà vendu : ${result.reason.slice('IMEI_ALREADY_SOLD:'.length)}`, 'error');
       } else if (result.reason?.startsWith('VOUCHER')) {
         showToast(`Bon d'avoir refusé (${result.reason}).`, 'error');
+      } else if (result.reason === 'TRADE_STAGING_DROPPED') {
+        showToast('Reprise attachée mais absente des tenders — re-validez le paiement.', 'error');
+      } else if (result.reason === 'TRADE_WITHOUT_STAGING') {
+        showToast('Tender Reprise sans reprise attachée — retirez le tender.', 'error');
+      } else if (result.reason === 'SOULTE_CHOICE_REQUIRED') {
+        showToast('Soulte boutique : choisissez Décaisser Espèces ou Créditer Avoir.', 'error');
+      } else if (result.reason === 'SOULTE_WALLET_NO_CUSTOMER') {
+        showToast('Soulte vers Avoir : sélectionnez d’abord un client.', 'error');
+      } else if (result.reason?.startsWith('INTAKE_FAILED')) {
+        showToast(`Échec d’enregistrement de la reprise (${result.reason}) — vente annulée, panier conservé.`, 'error');
       } else if (result.reason?.startsWith('IMEI_REQUIRED')) {
         showToast('Veuillez saisir les numéros IMEI pour tous les articles sérialisés.', 'warning');
       } else if (result.reason === 'PERSISTENCE_FAILED' || result.reason?.startsWith('PERSISTENCE_FAILED')) {
@@ -437,7 +502,7 @@ export const PaymentModal: React.FC = () => {
         }
       }}
     >
-      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[92vh]">
+      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[92dvh]">
         {/* Mobile Pull Handle */}
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
@@ -452,7 +517,7 @@ export const PaymentModal: React.FC = () => {
                 <h2 className="text-sm sm:text-base font-black text-pos-text truncate">
                   Encaissement & Règlement
                 </h2>
-                <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-[10px] shrink-0">
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-[10px] shrink-0">
                   Caisse Active
                 </span>
               </div>
@@ -461,7 +526,7 @@ export const PaymentModal: React.FC = () => {
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[40px] min-w-[40px] flex items-center justify-center shrink-0"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
             aria-label="Fermer"
           >
             <X className="w-5 h-5" />
@@ -469,7 +534,7 @@ export const PaymentModal: React.FC = () => {
         </div>
 
         {/* Content */}
-        <div className="p-3.5 sm:p-5 overflow-y-auto space-y-3.5 sm:space-y-4 flex-1">
+        <div className="p-3.5 sm:p-5 overflow-y-auto overscroll-contain space-y-3.5 sm:space-y-4 flex-1">
           {/* Total Net Banner & Breakdown */}
           <div className="bg-pos-card border border-pos-border rounded-2xl p-4 shadow-sm space-y-2">
             <div className="flex items-center justify-between">
@@ -495,7 +560,7 @@ export const PaymentModal: React.FC = () => {
             </div>
 
             {/* Subtotal & Store Credit breakdown pill */}
-              {(cartDiscount > 0 || appliedCredit > 0 || voucherCreditApplied > 0 || taxAmount > 0) && (
+              {(cartDiscount > 0 || appliedCredit > 0 || voucherCreditApplied > 0 || tradeInCreditApplied > 0 || taxAmount > 0) && (
               <div className="pt-2 border-t border-pos-border/60 flex items-center justify-between text-xs font-mono">
                 <div className="flex items-center gap-2 text-pos-muted flex-wrap">
                   <span>Sous-total: {formatDZD(grossSubtotal)}</span>
@@ -512,6 +577,11 @@ export const PaymentModal: React.FC = () => {
                       Bon{voucherCode ? ` ${voucherCode}` : ''}: -{formatDZD(voucherCreditApplied)}
                     </span>
                   )}
+                  {tradeInCreditApplied > 0 && (
+                    <span className="text-emerald-400 font-bold flex items-center gap-1">
+                      <RefreshCw className="w-3.5 h-3.5" /> Reprise: -{formatDZD(tradeInCreditApplied)}
+                    </span>
+                  )}
                   {taxAmount > 0 && (
                     <span className="text-cyan-300 font-bold">TVA ({vatRate}%): +{formatDZD(taxAmount)}</span>
                   )}
@@ -526,6 +596,74 @@ export const PaymentModal: React.FC = () => {
               </div>
             )}
           </div>
+
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {/* TWO-WAY EXCHANGE DELTA / SOULTE BOUTIQUE (Phase 3) */}
+          {/* ══════════════════════════════════════════════════════════════ */}
+          {stagedTradeIn && tradeSettlement && !isRefundDue && (
+            <div className="rounded-2xl p-4 space-y-2 border bg-emerald-500/10 border-emerald-500/40">
+              <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wide text-emerald-300">
+                <RefreshCw className="w-4 h-4 shrink-0" />
+                <span>Échange : {stagedTradeIn.deviceModel}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearStagedTradeIn();
+                    setExchangeSoultePayout(null);
+                    showToast('Reprise retirée de la vente.', 'info');
+                  }}
+                  className="ml-auto text-[10px] font-bold text-pos-muted hover:text-red-400 underline cursor-pointer"
+                >
+                  Retirer
+                </button>
+              </div>
+              {tradeSettlement.direction === 'CUSTOMER_PAYS' || tradeSettlement.direction === 'EVEN' ? (
+                <p className="text-sm font-bold text-pos-text">
+                  Total Panier : {formatDZD(netSubtotal)} — Valeur Reprise : {formatDZD(tradeInCredit)} ={' '}
+                  <span className="text-emerald-300 font-black">Reste à Encaisser : {formatDZD(tradeSettlement.customerOwes)}</span>
+                </p>
+              ) : (
+                <div className="space-y-2.5">
+                  <p className="text-sm font-bold text-pos-text">
+                    Valeur Reprise : {formatDZD(tradeInCredit)} — Total Panier : {formatDZD(netSubtotal)} ={' '}
+                    <span className="text-amber-300 font-black">Montant à Verser au Client : {formatDZD(soulteDue)}</span>
+                  </p>
+                  <p className="text-[11px] text-pos-muted font-semibold">Soulte Boutique — choix obligatoire du caissier :</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={exchangeSoultePayout === 'cash'}
+                      onClick={() => setExchangeSoultePayout('cash')}
+                      className={`min-h-[48px] px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer active:scale-[0.98] ${
+                        exchangeSoultePayout === 'cash'
+                          ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                          : 'bg-pos-card text-pos-text border-pos-border hover:border-emerald-500/50'
+                      }`}
+                    >
+                      <Banknote className="w-4 h-4 shrink-0" /> Décaisser Espèces (Tiroir)
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={exchangeSoultePayout === 'wallet'}
+                      onClick={() => setExchangeSoultePayout('wallet')}
+                      className={`min-h-[48px] px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer active:scale-[0.98] ${
+                        exchangeSoultePayout === 'wallet'
+                          ? 'bg-purple-500 text-white border-purple-400'
+                          : 'bg-pos-card text-pos-text border-pos-border hover:border-purple-500/50'
+                      }`}
+                    >
+                      <Wallet className="w-4 h-4 shrink-0" /> Créditer Portefeuille Avoir
+                    </button>
+                  </div>
+                  {!exchangeSoultePayout && (
+                    <p className="text-[11px] font-bold text-amber-300">Sélectionnez un mode de versement pour valider.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ══════════════════════════════════════════════════════════════ */}
           {/* LOYALTY & STORE CREDIT DEDUCTION CARD */}
@@ -729,7 +867,7 @@ export const PaymentModal: React.FC = () => {
           {/* REFUND DUE NOTIFICATION (B-026) */}
           {/* ══════════════════════════════════════════════════════════════ */}
           {isRefundDue ? (
-            <div className="p-4 rounded-2xl bg-gradient-to-br from-rose-950/80 to-red-950/80 border-2 border-rose-500 text-rose-300 shadow-lg space-y-1.5 animate-in fade-in">
+            <div className="p-4 rounded-2xl bg-gradient-to-br from-rose-950/80 to-red-950/80 border border-rose-500 text-rose-300 shadow-lg space-y-1.5 animate-in fade-in">
               <div className="flex items-center gap-2 font-black text-sm text-rose-300">
                 <RotateCcw className="w-5 h-5" />
                 <span>Remboursement espèces dû : {formatDZD(refundDue)}</span>
@@ -740,7 +878,7 @@ export const PaymentModal: React.FC = () => {
               </p>
             </div>
           ) : netToPay === 0 && (appliedCredit > 0 || voucherCreditApplied > 0) ? (
-            <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-950/80 to-emerald-950/80 border-2 border-emerald-500 text-emerald-300 shadow-lg space-y-1.5 animate-in fade-in">
+            <div className="p-4 rounded-2xl bg-gradient-to-br from-purple-950/80 to-emerald-950/80 border border-emerald-500 text-emerald-300 shadow-lg space-y-1.5 animate-in fade-in">
               <div className="flex items-center gap-2 font-black text-sm text-emerald-300">
                 <Sparkles className="w-5 h-5 text-purple-300" />
                 <span>Panier 100% Couvert (Avoir / Bon) !</span>
@@ -786,7 +924,7 @@ export const PaymentModal: React.FC = () => {
                 <div className="space-y-4 animate-in fade-in">
                   {/* Real-time Change Due / Remaining Box */}
                   <div
-                    className={`p-4 rounded-2xl border-2 transition-all duration-150 shadow-lg ${
+                    className={`p-4 rounded-2xl border transition-all duration-150 shadow-lg ${
                       currentCashGiven >= netToPay
                         ? 'bg-gradient-to-br from-emerald-950/80 to-teal-950/80 border-emerald-500 text-emerald-300 shadow-emerald-950/50'
                         : 'bg-red-950/30 border-red-500/60 text-red-300 shadow-red-950/40'
@@ -833,7 +971,7 @@ export const PaymentModal: React.FC = () => {
                         onChange={(e) => setCashTenderAmount(e.target.value)}
                         onWheel={(e) => (e.target as HTMLElement).blur()}
                         placeholder={netToPay.toString()}
-                        className="w-full bg-pos-bg border-2 border-pos-border focus:border-emerald-400 rounded-xl px-4 py-3 text-3xl font-black font-mono text-pos-text focus:outline-none transition"
+                        className="w-full bg-pos-bg border border-pos-border focus:border-emerald-400 rounded-xl px-4 py-3 text-3xl font-black font-mono text-pos-text focus:outline-none transition"
                       />
                       <span className="absolute right-4 top-1/2 -translate-y-1/2 text-base font-black text-pos-muted font-mono pointer-events-none">
                         DA
@@ -1018,7 +1156,11 @@ export const PaymentModal: React.FC = () => {
           <button
             type="button"
             onClick={() => handleProcessPayment(false)}
-            disabled={isProcessing || (selectedMethod === 'Crédit Client' && !currentCustomer && netToPay > 0)}
+            disabled={
+              isProcessing ||
+              (selectedMethod === 'Crédit Client' && !currentCustomer && netToPay > 0) ||
+              (isSoulte && !exchangeSoultePayout)
+            }
             className={`w-full sm:w-auto min-h-[48px] glow-btn px-6 sm:px-8 py-3 rounded-xl text-white font-black text-sm shadow-xl flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 ${
               isRefundDue
                 ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 shadow-rose-600/25'

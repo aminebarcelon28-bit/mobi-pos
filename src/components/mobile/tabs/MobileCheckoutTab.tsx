@@ -25,13 +25,16 @@ import {
   Check,
   RotateCcw,
   FileText,
+  RefreshCw,
+  Wallet,
+  Pencil,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
 import { AppTabContent } from '../AppScreenLayout';
 import type { CartItem, Customer, PricingTier } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
 import { getProductPriceForTier } from '../../../utils/pricingEngine';
-import { computeCartTotals } from '../../../utils/receiptMath';
+import { computeCartTotals, computeTradeInSettlement } from '../../../utils/receiptMath';
 import { parseLocalizedAmount } from '../../../utils/moneyInput';
 import { useFifoPreviewCosts } from '../../../hooks/useFifoPreviewCosts';
 import { soundEngine } from '../../../utils/audioFeedback';
@@ -39,6 +42,7 @@ import { useToast } from '../../ui/Toast';
 import { MobileCameraScanner } from '../MobileCameraScanner';
 import { getEffectiveDebtLimit } from '../../../store/slices/createCustomerSlice';
 import { openWhatsApp } from '../../../utils/phoneUtils';
+import { verifyManagerGate } from '../../../utils/pinGate';
 
 interface MobileCheckoutTabProps {
   onNavigateToCatalog?: () => void;
@@ -60,11 +64,23 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     processPayment,
     openModal,
     overrideCartItemPrice,
-    verifyManagerPin,
+    // Phase 1: manager checks route through the native gate (no local
+    // verifyManagerPin reads here — see utils/pinGate).
     heldSales,
     holdSale,
     storeCreditApplied,
+    logSecurityAction,
+    activeCashier,
+    // Phase 2/3: two-way exchange staging (memory-only until checkout).
+    stagedTradeIn,
+    clearStagedTradeIn,
+    openTradeInExchange,
+    exchangeSoultePayout,
+    setExchangeSoultePayout,
   } = usePosStore();
+  // Same forensic rule as desktop: the signed-in operator's name, never a
+  // hardcoded role; no unearned PIN flag on paths that verify nothing.
+  const operatorName = activeCashier?.name?.trim() || 'Caissier';
 
   const { showToast } = useToast();
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
@@ -119,16 +135,25 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     usePosStore((s) => (s as unknown as { voucherCreditApplied?: number }).voucherCreditApplied ?? 0) || 0;
   const vatRate =
     usePosStore((s) => (s.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate ?? 0) || 0;
+  // Exchange credit (1:1 buyback) as payment credit — never a cart line.
+  const tradeInCredit = Math.max(0, Math.round(Number(stagedTradeIn?.buybackValue) || 0));
   const totals = computeCartTotals(cart, {
     pricingTier,
     storeCreditApplied,
     voucherCreditApplied,
+    tradeInCredit,
     vatRate,
   });
   const grossSubtotal = totals.grossSubtotal;
   const totalDiscount = totals.discountTotal;
   const netTotal = totals.total;
   const taxTotal = totals.tax;
+  const tradeInCreditApplied = totals.tradeInCreditApplied;
+  const tradeSettlement = stagedTradeIn
+    ? computeTradeInSettlement(totals.subtotalAfterDiscount, tradeInCredit)
+    : null;
+  const isSoulte = !!tradeSettlement && tradeSettlement.direction === 'SOULTE_SHOP_PAYS';
+  const soulteDue = isSoulte && tradeSettlement ? tradeSettlement.shopOwes : 0;
   // Signed net (may be negative when returns dominate): shown as a refund
   // due instead of being clamped to 0. Tender logic still floors at 0.
   const signedNet = totals.net;
@@ -165,6 +190,16 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
   const handleQtyChange = (productId: string, newQty: number) => {
     soundEngine.playKeyBeep?.();
     if (newQty <= 0) {
+      // Qty-to-zero removes the line: audit parity with desktop removal.
+      const doomed = cart.find((i) => i.product.id === productId);
+      if (doomed) {
+        void logSecurityAction(
+          'Suppression Article Panier (Mobile)',
+          `Article: ${doomed.product.title} (${doomed.quantity} unités)`,
+          operatorName,
+          false,
+        );
+      }
       removeFromCart(productId);
     } else {
       setCartItemQty(productId, newQty);
@@ -173,6 +208,15 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
 
   const handleRemove = (productId: string) => {
     soundEngine.playKeyBeep?.();
+    const doomed = cart.find((i) => i.product.id === productId);
+    if (doomed) {
+      void logSecurityAction(
+        'Suppression Article Panier (Mobile)',
+        `Article: ${doomed.product.title} (${doomed.quantity} unités)`,
+        operatorName,
+        false,
+      );
+    }
     removeFromCart(productId);
   };
 
@@ -216,7 +260,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     setOverrideError(null);
   };
 
-  const handleApplyPriceOverride = () => {
+  const handleApplyPriceOverride = async () => {
     if (!editingItem) return;
     const newPrice = parseLocalizedAmount(overridePriceInput);
     if (isNaN(newPrice) || newPrice < 0) {
@@ -238,8 +282,13 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
         soundEngine.playError?.();
         return;
       }
-      if (!verifyManagerPin(managerPinInput)) {
-        setOverrideError('Code PIN Manager incorrect.');
+      const gate = await verifyManagerGate(managerPinInput);
+      if (!gate.ok) {
+        setOverrideError(
+          gate.locked
+            ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+            : 'Code PIN Manager incorrect.'
+        );
         soundEngine.playError?.();
         return;
       }
@@ -295,15 +344,36 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       0,
       Number((live.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate) || 0
     );
+    const liveStaged = live.stagedTradeIn;
+    const liveTradeInCredit = Math.max(0, Math.round(Number(liveStaged?.buybackValue) || 0));
     const submitTotals = computeCartTotals(live.cart, {
       pricingTier: live.pricingTier,
       storeCreditApplied: live.storeCreditApplied,
       voucherCreditApplied: liveVoucherCredit,
+      tradeInCredit: liveTradeInCredit,
       vatRate: liveVat,
     });
     const submitNet = submitTotals.total;
     const submitRefundDue = submitTotals.refundDue;
     const tendered = Math.round(parseLocalizedAmount(tenderedStr) || 0);
+    // Soulte gate (slice enforces too): explicit payout choice required.
+    const liveSettlement = liveStaged
+      ? computeTradeInSettlement(submitTotals.subtotalAfterDiscount, liveTradeInCredit)
+      : null;
+    if (liveSettlement?.direction === 'SOULTE_SHOP_PAYS' && !live.exchangeSoultePayout) {
+      soundEngine.playError?.();
+      showToast('Soulte boutique : choisissez Décaisser Espèces ou Créditer Avoir.', 'error');
+      return;
+    }
+    if (
+      liveSettlement?.direction === 'SOULTE_SHOP_PAYS' &&
+      live.exchangeSoultePayout === 'wallet' &&
+      !live.currentCustomer
+    ) {
+      soundEngine.playError?.();
+      showToast('Soulte vers Avoir : sélectionnez d’abord un client.', 'error');
+      return;
+    }
 
     // B-026: refund-due carts disburse cash-out with a zero cash-in tender.
     if (submitRefundDue > 0) {
@@ -317,6 +387,8 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       try {
         // Staged wallet credit rides as an explicit leg so the slice-side
         // refund math matches the displayed submitRefundDue (net of credit).
+        // (A staged trade-in cannot produce refundDue — its leg is clamped —
+        // so no Reprise leg rides here by design.)
         const mobileAvoirRefund = Math.max(0, Math.round(Number(live.storeCreditApplied) || 0));
         const res = (await processPayment([
           { method: 'Espèces', amount: 0 },
@@ -365,11 +437,13 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       // derives and stores changeDue from it instead of dropping the change.
       // Staged wallet credit rides as an explicit leg (mirrors PaymentModal):
       // submitNet above is net of it, and tender-less staging aborts loudly
-      // slice-side instead of charging past the displayed net.
+      // slice-side instead of charging past the displayed net. Reprise leg
+      // LAST so paymentMethod keeps the money-leg semantics.
       const mobileAvoir = Math.max(0, Math.round(Number(live.storeCreditApplied) || 0));
       const res = (await processPayment([
         { method: 'Espèces', amount: tendered },
         ...(mobileAvoir > 0 ? [{ method: 'Avoir Client' as const, amount: mobileAvoir }] : []),
+        ...(liveTradeInCredit > 0 ? [{ method: 'Reprise' as const, amount: liveTradeInCredit }] : []),
       ])) as unknown as { success: boolean; reason?: string; warnings?: string[]; recoveryQueued?: boolean };
       if (res && res.success) {
         soundEngine.playSuccess?.();
@@ -474,10 +548,12 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       0,
       Number((live.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate) || 0
     );
+    const liveTradeInForCredit = Math.max(0, Math.round(Number(live.stagedTradeIn?.buybackValue) || 0));
     const submitNet = computeCartTotals(live.cart, {
       pricingTier: live.pricingTier,
       storeCreditApplied: live.storeCreditApplied,
       voucherCreditApplied: liveVoucherCredit,
+      tradeInCredit: liveTradeInForCredit,
       vatRate: liveVat,
     }).total;
 
@@ -498,11 +574,12 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     setIsSubmitting(true);
     try {
       // Staged wallet credit rides as an explicit leg (mirrors PaymentModal):
-      // submitNet above is net of it.
+      // submitNet above is net of it. Reprise leg LAST (linkage only).
       const mobileAvoirCredit = Math.max(0, Math.round(Number(live.storeCreditApplied) || 0));
       const res = (await processPayment([
         { method: 'Crédit Client', amount: submitNet },
         ...(mobileAvoirCredit > 0 ? [{ method: 'Avoir Client' as const, amount: mobileAvoirCredit }] : []),
+        ...(liveTradeInForCredit > 0 ? [{ method: 'Reprise' as const, amount: liveTradeInForCredit }] : []),
       ])) as unknown as { success: boolean; reason?: string; warnings?: string[]; recoveryQueued?: boolean };
       if (res && res.success) {
         soundEngine.playSuccess?.();
@@ -738,6 +815,12 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                       <span className="font-mono">-{formatDZD(voucherCreditApplied)}</span>
                     </div>
                   )}
+                  {tradeInCreditApplied > 0 && (
+                    <div className="flex justify-between text-emerald-300 font-medium">
+                      <span>Reprise Déduite</span>
+                      <span className="font-mono">-{formatDZD(tradeInCreditApplied)}</span>
+                    </div>
+                  )}
                   {taxTotal > 0 && (
                     <div className="flex justify-between text-cyan-300 font-medium">
                       <span>TVA ({vatRate}%)</span>
@@ -798,6 +881,46 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
         {/* Cart Header & Quick Action Bar */}
         <div className="space-y-2">
           {/* Résumé du total collant : reste visible au-dessus de la ligne de flottaison */}
+          {/* Active exchange chip — compact swipeable, high-contrast delta */}
+          {stagedTradeIn && (
+            <div className="overflow-x-auto no-scrollbar -mx-0.5 px-0.5">
+              <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-xl px-3 py-2 flex items-center gap-2 min-w-max shadow-xs">
+                <RefreshCw className="w-4 h-4 text-emerald-300 shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-[11px] font-black text-emerald-200 truncate">
+                    {stagedTradeIn.deviceModel} <span className="font-mono font-bold text-emerald-300/80">· {stagedTradeIn.imei}</span>
+                  </p>
+                  <p className="text-sm font-mono font-black text-emerald-300 tabular-nums leading-tight">
+                    −{formatDZD(tradeInCredit)}
+                    <span className="text-[10px] font-sans font-bold text-pos-muted"> → Reste {formatDZD(tradeSettlement ? (isSoulte ? 0 : tradeSettlement.customerOwes) : netTotal)}</span>
+                    {isSoulte && tradeSettlement && (
+                      <span className="text-[10px] font-sans font-bold text-amber-300"> · Soulte {formatDZD(tradeSettlement.shopOwes)} à verser</span>
+                    )}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openTradeInExchange({ ...stagedTradeIn })}
+                  className="ml-1 shrink-0 w-9 h-9 min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-pos-card border border-pos-border text-pos-text"
+                  aria-label="Modifier l’évaluation"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearStagedTradeIn();
+                    setExchangeSoultePayout(null);
+                    showToast('Reprise retirée du panier.', 'info');
+                  }}
+                  className="shrink-0 w-9 h-9 min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-pos-card border border-pos-border text-pos-muted"
+                  aria-label="Retirer la reprise"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
           {cart.length > 0 && (
             <div className="sticky top-0 z-10 bg-pos-bg/95 backdrop-blur-sm py-1.5 -mx-0.5 px-0.5">
               <div
@@ -886,12 +1009,29 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 </button>
               )}
 
+              <button
+                type="button"
+                onClick={() => openTradeInExchange()}
+                className="text-[11px] text-emerald-300 hover:text-emerald-200 font-bold flex items-center gap-1 cursor-pointer py-1 px-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 active:scale-95 transition min-h-[36px]"
+                title="Échanger un appareil (Trade-In) — déduit du panier"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> + Ajouter Reprise
+              </button>
+
               {cart.length > 0 && (
                 <button
                   type="button"
                   onClick={() => {
                     const n = cart.reduce((a, i) => a + i.quantity, 0);
                     if (window.confirm(`Vider le panier (${n} article${n > 1 ? 's' : ''}) ? Cette action est irréversible.`)) {
+                      // Audit parity with desktop full-clear ('Annulation
+                      // Complète Panier'): honest operator + no PIN flag.
+                      void logSecurityAction(
+                        'Annulation Complète Panier (Mobile)',
+                        `Panier vidé (${n} unités)`,
+                        operatorName,
+                        false,
+                      );
                       clearCart();
                     }
                   }}
@@ -1485,6 +1625,43 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   </div>
                 );
               })()}
+
+              {/* Soulte Boutique selector (Net<0 exchange): explicit choice only */}
+              {isSoulte && (
+                <div className="bg-amber-500/10 border border-amber-500/40 rounded-2xl p-3 space-y-2">
+                  <p className="text-xs font-black text-amber-200">
+                    Soulte à verser : {formatDZD(soulteDue)} — choisissez le mode :
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={exchangeSoultePayout === 'cash'}
+                      onClick={() => setExchangeSoultePayout('cash')}
+                      className={`min-h-[48px] px-2 rounded-xl border text-[11px] font-black flex items-center justify-center gap-1.5 transition active:scale-[0.98] cursor-pointer ${
+                        exchangeSoultePayout === 'cash'
+                          ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                          : 'bg-pos-card text-pos-text border-pos-border'
+                      }`}
+                    >
+                      <Banknote className="w-4 h-4 shrink-0" /> Décaisser Espèces
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={exchangeSoultePayout === 'wallet'}
+                      onClick={() => setExchangeSoultePayout('wallet')}
+                      className={`min-h-[48px] px-2 rounded-xl border text-[11px] font-black flex items-center justify-center gap-1.5 transition active:scale-[0.98] cursor-pointer ${
+                        exchangeSoultePayout === 'wallet'
+                          ? 'bg-purple-500 text-white border-purple-400'
+                          : 'bg-pos-card text-pos-text border-pos-border'
+                      }`}
+                    >
+                      <Wallet className="w-4 h-4 shrink-0" /> Créditer Avoir
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Algerian Banknote Preset Quick-Chips */}
               <div className="space-y-1">

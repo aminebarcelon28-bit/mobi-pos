@@ -7,13 +7,13 @@
     "tauri": "tauri",
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node scripts/test_pos_math.js && node scripts/test_money_fixes.mjs && node scripts/test_receipt_math.mjs && node scripts/test_cloud_sync_and_migration.mjs && node scripts/test_sync_contract.mjs && node scripts/test_offline_chaos.mjs && node scripts/test_mobile_invariants.mjs && node scripts/test_mobile_release_pipeline.mjs && node scripts/verify-bidirectional-fix.mjs && node scripts/test_mobile_desktop_bidirectional_sync.mjs && node --experimental-strip-types scripts/test_bindings_and_hlc.mjs && node --experimental-strip-types scripts/test_p1_replay_equality.mjs && node --experimental-strip-types scripts/test_full_es_lfp_lifecycle.mjs && node --experimental-strip-types scripts/test_sync_hygiene.mjs && node --experimental-strip-types scripts/test_quota_storage.mjs && npm run test:license && npm run test:audit && npm run test:boundaries",
+    "test": "node scripts/test_pos_math.js && node scripts/test_money_fixes.mjs && node scripts/test_receipt_math.mjs && node scripts/test_cloud_sync_and_migration.mjs && node scripts/test_sync_contract.mjs && node scripts/test_offline_chaos.mjs && node scripts/test_mobile_invariants.mjs && node scripts/test_mobile_release_pipeline.mjs && node scripts/verify-bidirectional-fix.mjs && node scripts/test_mobile_desktop_bidirectional_sync.mjs && node --experimental-strip-types scripts/test_bindings_and_hlc.mjs && node --experimental-strip-types scripts/test_p1_replay_equality.mjs && node --experimental-strip-types scripts/test_full_es_lfp_lifecycle.mjs && node --experimental-strip-types scripts/test_sync_hygiene.mjs && node --experimental-strip-types scripts/test_quota_storage.mjs && npm run test:license && npm run test:audit && npm run test:sav-intake && npm run test:boundaries",
     "test:license": "node --experimental-strip-types scripts/test_license_crypto.mjs && node --experimental-strip-types scripts/test_clock_guard.mjs && node --experimental-strip-types scripts/test_license_flow.mjs && npm run test:license:failclosed",
     "test:license:failclosed": "node --experimental-strip-types scripts/test_licensing_failclosed.mjs",
     "test:boundaries": "node scripts/check-boundaries.mjs && node scripts/check-trust-registry.mjs && node scripts/check-audit-boundary.mjs && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_audit_nofallback.mjs && node scripts/check-pin-boundary.mjs",
     "test:rust:release": "cargo test --release -p mobi-pos --lib",
     "typecheck": "tsc -b",
-    "test:audit": "node --experimental-strip-types scripts/test_audit_intel.mts && node --experimental-strip-types scripts/test_audit_verification_ux.mts",
+    "test:audit": "node --experimental-strip-types scripts/test_audit_intel.mts && node --experimental-strip-types scripts/test_audit_verification_ux.mts && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_audit_gate.mts && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_pin_gate.mts && node --experimental-strip-types scripts/test_pin_rotation.mts && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_audit_wipe.mts && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_audit_export.mts && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_audit_pull_provenance.mts && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_audit_dexie_provenance.mts && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_restore_guard.mts",
     "license:desktop": "python -m licensing_app.app",
     "license:desktop:check": "python scripts/check_licensing_app.py",
     "license:desktop:build": "powershell -ExecutionPolicy Bypass -File build_licensing.ps1",
@@ -89,7 +89,9 @@
     "test:checkout-flight": "node --experimental-strip-types scripts/test_checkout_flight.mts",
     "test:entity-registry": "node scripts/test_entity_registry.mjs",
     "test:e2e:sync": "node scripts/test_e2e_two_device_sync.mjs",
-    "test:outbox-inflight": "node scripts/test_outbox_inflight.mjs"
+    "test:outbox-inflight": "node scripts/test_outbox_inflight.mjs",
+    "test:sav-intake": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_sav_intake_v2.mts",
+    "test:tradein-exchange": "node scripts/test_tradein_exchange.mjs && node scripts/verify-tradein-phase01.mjs"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
@@ -128,6 +130,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.4",
     "canvas": "^3.2.3",
+    "fake-indexeddb": "^6.2.5",
     "oxlint": "^1.75.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.0"

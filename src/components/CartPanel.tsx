@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X, ShoppingBag, AlertTriangle, ArrowLeftRight, RotateCcw, Layers } from 'lucide-react';
+import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X, ShoppingBag, AlertTriangle, ArrowLeftRight, RotateCcw, Layers, RefreshCw, Pencil } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
@@ -7,9 +7,10 @@ import { useToast } from './ui/Toast';
 import { canRedeemPoints, normalizeLoyaltyConfig, isEarnAllowed, isRedeemAllowed } from '../utils/loyaltyEngine';
 import { soundEngine } from '../utils/audioFeedback';
 import { getProductPriceForTier } from '../utils/pricingEngine';
-import { computeCartTotals } from '../utils/receiptMath';
+import { computeCartTotals, computeTradeInSettlement } from '../utils/receiptMath';
 import { parseLocalizedAmount } from '../utils/moneyInput';
 import { useFifoPreviewCosts } from '../hooks/useFifoPreviewCosts';
+import { verifyManagerGate } from '../utils/pinGate';
 
 export const CartPanel: React.FC = () => {
   // Selective subscriptions: whole-store spread re-rendered the cart on every
@@ -33,12 +34,55 @@ export const CartPanel: React.FC = () => {
   const setStoreCreditApplied = usePosStore((s) => s.setStoreCreditApplied);
   const logSecurityAction = usePosStore((s) => s.logSecurityAction);
   const overrideCartItemPrice = usePosStore((s) => s.overrideCartItemPrice);
-  const verifyManagerPin = usePosStore((s) => s.verifyManagerPin);
+  // Phase 1: manager checks route through the native gate (no local
+  // verifyManagerPin reads here — see utils/pinGate).
   const addToCart = usePosStore((s) => s.addToCart);
+  // Phase 2: two-way exchange staging (memory-only until atomic checkout).
+  const stagedTradeIn = usePosStore((s) => s.stagedTradeIn);
+  const clearStagedTradeIn = usePosStore((s) => s.clearStagedTradeIn);
+  const openTradeInExchange = usePosStore((s) => s.openTradeInExchange);
 
   const [isDiscountOpen, setIsDiscountOpen] = useState(false);
   const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
   const [selectedCartIndex, setSelectedCartIndex] = useState<number | null>(null);
+  // Explicit-focus guard for cart keyboard shortcuts (Delete/Backspace/arrows):
+  // destructive keys fire ONLY while focus sits inside the cart list itself.
+  // Loose focus on body, toolbar buttons or unrelated selects must never
+  // delete a line. Rows are focusable (tabIndex) and focus selects, so Tab /
+  // click-then-key flows keep working; stray keypresses elsewhere are ignored.
+  const cartListRef = useRef<HTMLDivElement>(null);
+  // Forensic attribution: removal rows carry the signed-in operator's name,
+  // not a hardcoded role — "Caissier" is the fallback, never the default.
+  // Read at event time (not subscribed) so it is always the current operator.
+  const operatorName = () => usePosStore.getState().activeCashier?.name?.trim() || 'Caissier';
+  // Undo-removal: single-line removals stash a restorable snapshot + a
+  // 10 s strip. Misclicks get recovered instead of minting noise CRIT rows;
+  // the original removal row stands (evidence is never rewritten).
+  type RemovedSnapshot = { product: (typeof cart)[number]['product']; quantity: number; isReturn: boolean };
+  const [lastRemoved, setLastRemoved] = useState<RemovedSnapshot | null>(null);
+  const lastRemovedTimer = useRef<number | null>(null);
+  const rememberRemoved = (item: (typeof cart)[number]) => {
+    if (lastRemovedTimer.current !== null) window.clearTimeout(lastRemovedTimer.current);
+    setLastRemoved({ product: item.product, quantity: item.quantity, isReturn: !!item.isReturn });
+    lastRemovedTimer.current = window.setTimeout(() => {
+      setLastRemoved(null);
+      lastRemovedTimer.current = null;
+    }, 10_000);
+  };
+  const restoreRemoved = () => {
+    if (!lastRemoved) return;
+    addToCart(lastRemoved.product, false, lastRemoved.quantity, lastRemoved.isReturn);
+    if (lastRemovedTimer.current !== null) window.clearTimeout(lastRemovedTimer.current);
+    lastRemovedTimer.current = null;
+    setLastRemoved(null);
+    showToast('Article restauré dans le panier.', 'success');
+  };
+  useEffect(
+    () => () => {
+      if (lastRemovedTimer.current !== null) window.clearTimeout(lastRemovedTimer.current);
+    },
+    [],
+  );
 
   const [editingPriceProductId, setEditingPriceProductId] = useState<string | null>(null);
   const [overridePriceInput, setOverridePriceInput] = useState<string>('');
@@ -130,7 +174,7 @@ export const CartPanel: React.FC = () => {
     setOverrideError(null);
   };
 
-  const handleApplyPriceOverride = (item: typeof cart[0], e: React.MouseEvent) => {
+  const handleApplyPriceOverride = async (item: typeof cart[0], e: React.MouseEvent) => {
     e.stopPropagation();
     const newPrice = parseLocalizedAmount(overridePriceInput);
     if (isNaN(newPrice) || newPrice < 0) {
@@ -150,8 +194,13 @@ export const CartPanel: React.FC = () => {
         setOverrideError(isBelowCost ? 'Vente à perte : PIN Manager requis' : 'Remise > 20% : PIN Manager requis');
         return;
       }
-      if (!verifyManagerPin(managerPinInput)) {
-        setOverrideError('Code PIN Manager incorrect.');
+      const gate = await verifyManagerGate(managerPinInput);
+      if (!gate.ok) {
+        setOverrideError(
+          gate.locked
+            ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+            : 'Code PIN Manager incorrect.'
+        );
         return;
       }
       managerApproved = true;
@@ -170,11 +219,15 @@ export const CartPanel: React.FC = () => {
     setOverrideError(null);
   };
 
-  // Keyboard navigation for cart items (ArrowUp / ArrowDown / + / - / Delete)
+  // Keyboard navigation for cart items (ArrowUp / ArrowDown / + / - / Delete).
+  // Explicit-focus gate: the whole handler — including destructive Delete /
+  // Backspace — runs only when focus is inside the cart list. Typing Delete in
+  // a select, a button-focused toolbar, or bare body must never remove a line.
   useEffect(() => {
     const handleCartKeyNav = (e: KeyboardEvent) => {
       const activeModal = usePosStore.getState().activeModal;
       if (activeModal !== null) return;
+      if (!cartListRef.current?.contains(document.activeElement)) return;
       const activeEl = document.activeElement;
       if (activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement) return;
 
@@ -197,7 +250,19 @@ export const CartPanel: React.FC = () => {
         if (selectedCartIndex !== null && currentCart[selectedCartIndex]) {
           e.preventDefault();
           soundEngine.playScan();
-          updateCartQty(currentCart[selectedCartIndex].product.id, -1);
+          const stepped = currentCart[selectedCartIndex];
+          // Decrement-to-zero removes the line: audit parity with the trash
+          // button — a removal is a removal regardless of the vector.
+          if (stepped.quantity <= 1) {
+            logSecurityAction(
+              'Suppression Article Panier (Clavier)',
+              `Article: ${stepped.product.title} (${stepped.quantity} unités)`,
+              operatorName(),
+              false
+            );
+            rememberRemoved(stepped);
+          }
+          updateCartQty(stepped.product.id, -1);
         }
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedCartIndex !== null && currentCart[selectedCartIndex]) {
@@ -207,9 +272,10 @@ export const CartPanel: React.FC = () => {
           logSecurityAction(
             'Suppression Article Panier (Clavier)',
             `Article: ${itemToRemove.product.title} (${itemToRemove.quantity} unités)`,
-            'Caissier',
+            operatorName(),
             false
           );
+          rememberRemoved(itemToRemove);
           removeFromCart(itemToRemove.product.id);
           setSelectedCartIndex((prev) =>
             prev !== null && prev >= currentCart.length - 1 ? Math.max(0, currentCart.length - 2) : prev
@@ -242,6 +308,13 @@ export const CartPanel: React.FC = () => {
       return;
     }
     soundEngine.playKeyBeep?.();
+    // Audit parity: quick-undo removes a line like any other vector.
+    void usePosStore.getState().logSecurityAction(
+      'Suppression Article Panier (Annulation ajout)',
+      `Article: ${current.product.title} (${current.quantity} unités)`,
+      operatorName(),
+      false
+    );
     removeFromCart(current.product.id);
     showToast(`« ${current.product.title} » retiré du panier (annulation).`, 'info');
     setLastAddedId(null);
@@ -277,10 +350,14 @@ export const CartPanel: React.FC = () => {
 
   // Canonical totals — the same computeCartTotals() base as PaymentModal,
   // MobileCheckoutTab and processPayment (signed returns, credits, VAT).
+  // Exchange credit (1:1 buyback) rides as a payment credit — never a
+  // negative cart line (that would corrupt gross + FIFO).
+  const tradeInCredit = Math.max(0, Math.round(Number(stagedTradeIn?.buybackValue) || 0));
   const totals = computeCartTotals(cart, {
     pricingTier,
     storeCreditApplied,
     voucherCreditApplied,
+    tradeInCredit,
     vatRate,
   });
   const grossTotal = totals.grossSubtotal;
@@ -288,6 +365,11 @@ export const CartPanel: React.FC = () => {
   const subtotal = totals.subtotalAfterDiscount;
   const total = totals.total;
   const taxTotal = totals.tax;
+  const tradeInCreditApplied = totals.tradeInCreditApplied;
+  // Settlement uses the TRUE buyback (unclamped) against the payable base
+  // (post-discount) so a soulte (Net<0) still surfaces when buyback exceeds
+  // what the totals clamp can absorb.
+  const tradeInSettlement = computeTradeInSettlement(subtotal, tradeInCredit);
   // B-026: `total`/`ttc` is clamped to 0 for net-negative carts — branch the
   // refund UI on refundDue (or signed net), never on `total < 0` (dead code).
   const refundDue = totals.refundDue;
@@ -305,11 +387,15 @@ export const CartPanel: React.FC = () => {
       const ok = window.confirm(`Voulez-vous vraiment vider les ${totalItems} articles de la vente en cours ?`);
       if (!ok) return;
     }
+    // Full-clear honesty: no PIN is verified on this path (deliberate — a
+    // routine cart reset must not block the cashier), so the row MUST NOT
+    // carry requiresPin=true: the drawer renders that flag as "PIN validé".
+    // The vector suffix + CRIT category carry the accountability instead.
     logSecurityAction(
       'Annulation Complète Panier',
       `Panier vidé (${totalItems} unités, montant: ${grossTotal} DA)`,
-      'Caissier',
-      true
+      operatorName(),
+      false
     );
     soundEngine.playKeyBeep?.();
     clearCart();
@@ -372,11 +458,15 @@ export const CartPanel: React.FC = () => {
       // Carry staged wallet credit as an explicit tender leg (mirrors
       // PaymentModal): the totals above are net of it, and the slice drops
       // tender-less staging loudly (AVOIR_STAGING_DROPPED) instead of
-      // charging past the displayed net.
+      // charging past the displayed net. Same for a staged trade-in
+      // (Reprise leg) — totals above are already net of it.
       const avoirAmount = Math.max(0, Math.round(Number(storeCreditApplied) || 0));
+      const stagedReprise = usePosStore.getState().stagedTradeIn;
+      const repriseAmount = Math.max(0, Math.round(Number(stagedReprise?.buybackValue) || 0));
       const res = (await processPayment([
         { method: 'Espèces', amount: billAmount },
         ...(avoirAmount > 0 ? [{ method: 'Avoir Client' as const, amount: avoirAmount }] : []),
+        ...(repriseAmount > 0 ? [{ method: 'Reprise' as const, amount: repriseAmount }] : []),
       ])) as unknown as {
         success: boolean;
         reason?: string;
@@ -500,9 +590,14 @@ export const CartPanel: React.FC = () => {
                   />
                   <button
                     type="button"
-                    onClick={() => {
-                      if (!verifyManagerPin(discountPinInput)) {
-                        setDiscountPinError('Code PIN Manager incorrect.');
+                    onClick={async () => {
+                      const gate = await verifyManagerGate(discountPinInput);
+                      if (!gate.ok) {
+                        setDiscountPinError(
+                          gate.locked
+                            ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+                            : 'Code PIN Manager incorrect.'
+                        );
                         return;
                       }
                       runGlobalDiscount(discountPinFor, true);
@@ -528,6 +623,53 @@ export const CartPanel: React.FC = () => {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Two-Way Exchange trigger / staged chip (Phase 2) */}
+        {!stagedTradeIn ? (
+          <button
+            type="button"
+            onClick={() => openTradeInExchange()}
+            className="w-full min-h-[44px] px-3 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer active:scale-[0.99]"
+          >
+            <RefreshCw className="w-4 h-4 shrink-0" />
+            Échanger un appareil (Trade-In)
+          </button>
+        ) : (
+          <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-xl p-2.5 space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-extrabold uppercase tracking-wide text-emerald-300 flex items-center gap-1.5 min-w-0">
+                <RefreshCw className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Reprise : {stagedTradeIn.deviceModel}</span>
+              </span>
+              <span className="text-xs font-black text-emerald-300 whitespace-nowrap">−{formatDZD(tradeInCredit)}</span>
+            </div>
+            <p className="text-[10px] text-pos-muted font-mono truncate">IMEI/SN : {stagedTradeIn.imei}</p>
+            {tradeInSettlement.direction === 'SOULTE_SHOP_PAYS' ? (
+              <p className="text-[10px] font-bold text-amber-300">Soulte boutique : {formatDZD(tradeInSettlement.shopOwes)} à verser au client</p>
+            ) : (
+              <p className="text-[10px] text-pos-muted">Reste à payer : {formatDZD(tradeInSettlement.customerOwes)}</p>
+            )}
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => openTradeInExchange({ ...stagedTradeIn })}
+                className="flex-1 min-h-[36px] px-2 rounded-lg bg-pos-card border border-pos-border text-pos-text text-[11px] font-bold flex items-center justify-center gap-1 hover:border-emerald-500/50 transition cursor-pointer"
+              >
+                <Pencil className="w-3 h-3" /> Modifier l’évaluation
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  clearStagedTradeIn();
+                  showToast('Reprise retirée du panier.', 'info');
+                }}
+                className="flex-1 min-h-[36px] px-2 rounded-lg bg-pos-card border border-pos-border text-pos-muted hover:text-red-400 text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer"
+              >
+                <X className="w-3 h-3" /> Retirer
+              </button>
+            </div>
           </div>
         )}
 
@@ -652,7 +794,42 @@ export const CartPanel: React.FC = () => {
       </div>
 
       {/* Cart Items List */}
-      <div className="flex-1 overflow-y-auto p-2.5 space-y-2 [&_button]:focus-visible:outline-none [&_button]:focus-visible:ring-2 [&_button]:focus-visible:ring-emerald-500">
+      <div
+        ref={cartListRef}
+        role="listbox"
+        aria-label="Lignes du panier — les raccourcis clavier agissent ici uniquement"
+        className="flex-1 overflow-y-auto p-2.5 space-y-2 [&_button]:focus-visible:outline-none [&_button]:focus-visible:ring-2 [&_button]:focus-visible:ring-emerald-500"
+      >
+        {/* Undo-removal: a misclicked line comes back in one tap. The removal
+            audit row stands — restoration is an addition, never an edit. */}
+        {lastRemoved && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/40 rounded-xl px-2.5 py-2 text-[11px]"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
+            <span className="flex-1 min-w-0 text-pos-text truncate">
+              « {lastRemoved.product.title} » retiré
+              <span className="text-pos-muted"> ({lastRemoved.quantity} u.)</span>
+            </span>
+            <button
+              type="button"
+              onClick={restoreRemoved}
+              className="shrink-0 px-2.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold border border-amber-500/40 transition cursor-pointer"
+            >
+              Restaurer
+            </button>
+            <button
+              type="button"
+              onClick={() => setLastRemoved(null)}
+              aria-label="Masquer"
+              className="shrink-0 p-1.5 rounded-lg text-pos-muted hover:text-pos-text hover:bg-pos-hover transition cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
         {cart.length === 0 ? (
           <div role="status" aria-live="polite" className="h-full flex flex-col items-center justify-center p-3 text-center space-y-3">
             <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-inner">
@@ -704,7 +881,14 @@ export const CartPanel: React.FC = () => {
             return (
               <div
                 key={item.product.id}
-                onClick={() => setSelectedCartIndex(idx)}
+                role="option"
+                aria-selected={isSelected}
+                tabIndex={0}
+                onClick={(e) => {
+                  setSelectedCartIndex(idx);
+                  e.currentTarget.focus({ preventScroll: true });
+                }}
+                onFocus={() => setSelectedCartIndex(idx)}
                 className={`bg-pos-card border rounded-xl p-2.5 flex items-start gap-2.5 transition motion-reduce:transition-none group cursor-pointer animate-in fade-in slide-in-from-top-2 motion-reduce:animate-none ${
                   isSelected
                     ? 'border-emerald-500 ring-2 ring-emerald-500/40 bg-emerald-500/[0.04]'
@@ -797,6 +981,17 @@ export const CartPanel: React.FC = () => {
                         onClick={(e) => {
                           e.stopPropagation();
                           soundEngine.playScan();
+                          // Stepper-to-zero removes the line: same audit row as
+                          // every other removal vector.
+                          if (item.quantity <= 1) {
+                            logSecurityAction(
+                              'Suppression Article Panier',
+                              `Article: ${item.product.title} (${item.quantity} unités)`,
+                              operatorName(),
+                              false
+                            );
+                            rememberRemoved(item);
+                          }
                           updateCartQty(item.product.id, -1);
                         }}
                         className="w-7 h-7 rounded-lg bg-pos-card hover:bg-pos-hover active:scale-95 text-pos-muted hover:text-pos-text border border-pos-border/60 flex items-center justify-center transition cursor-pointer"
@@ -877,9 +1072,10 @@ export const CartPanel: React.FC = () => {
                           logSecurityAction(
                             'Suppression Article Panier',
                             `Article: ${item.product.title} (${item.quantity} unités)`,
-                            'Caissier',
+                            operatorName(),
                             false
                           );
+                          rememberRemoved(item);
                           removeFromCart(item.product.id);
                           setSelectedCartIndex(null);
                         }}
@@ -1057,7 +1253,7 @@ export const CartPanel: React.FC = () => {
         )}
 
         {/* Breakdown of Subtotal, Discounts and Store Credit if active */}
-        {(totalDiscount > 0 || (storeCreditApplied || 0) > 0 || voucherCreditApplied > 0 || taxTotal > 0) && (
+        {(totalDiscount > 0 || (storeCreditApplied || 0) > 0 || voucherCreditApplied > 0 || tradeInCreditApplied > 0 || taxTotal > 0) && (
           <div className="space-y-1 pb-1.5 border-b border-pos-border/40 text-xs font-mono">
             <div className="flex justify-between items-center text-pos-muted">
               <span className="text-[11px] font-sans font-semibold">Sous-Total Brut :</span>
@@ -1087,6 +1283,14 @@ export const CartPanel: React.FC = () => {
                 <span className="text-purple-300">-{formatDZD(voucherCreditApplied)}</span>
               </div>
             )}
+            {tradeInCreditApplied > 0 && (
+              <div className="flex justify-between items-center text-emerald-400 font-bold">
+                <span className="text-[11px] font-sans flex items-center gap-1">
+                  <RefreshCw className="w-3 h-3 text-emerald-300" /> Reprise Déduite :
+                </span>
+                <span className="text-emerald-300">-{formatDZD(tradeInCreditApplied)}</span>
+              </div>
+            )}
             {taxTotal > 0 && (
               <div className="flex justify-between items-center text-cyan-300 font-bold">
                 <span className="text-[11px] font-sans">TVA ({vatRate}%) :</span>
@@ -1102,7 +1306,7 @@ export const CartPanel: React.FC = () => {
             <span className={`text-xs font-black tracking-wider uppercase block ${isRefundDue ? 'text-rose-400' : 'text-pos-text'}`}>
               {isRefundDue
                 ? 'Remboursement Dû au Client'
-                : (storeCreditApplied || 0) > 0
+                : (storeCreditApplied || 0) > 0 || tradeInCreditApplied > 0
                 ? 'Net Restant à Payer'
                 : 'Total Net à Payer'}
             </span>

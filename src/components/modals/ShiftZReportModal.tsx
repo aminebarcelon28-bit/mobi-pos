@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Printer, ShieldAlert, CheckCircle2, ArrowDownCircle } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
@@ -12,6 +12,10 @@ import {
   exchangeCashOutFromMovements,
   standaloneDepositsFromMovements,
   standaloneExpensesFromMovements,
+  savDepositsFromRepairs,
+  savSettledFromTxns,
+  zTicketNumber,
+  DRAWER_REASON_PREFIXES,
 } from '../../utils/cashTerms';
 
 export const ShiftZReportModal: React.FC = () => {
@@ -20,6 +24,7 @@ export const ShiftZReportModal: React.FC = () => {
     closeModal,
     shiftFloat,
     activeShift,
+    allShifts,
     transactions,
     cashDrops,
     payouts,
@@ -41,6 +46,8 @@ export const ShiftZReportModal: React.FC = () => {
   const lockScreenCashier =
     (usePosStore.getState() as unknown as { activeCashier?: { name?: string } | null })
       .activeCashier?.name?.trim() || 'Caissier';
+
+  useEffect(() => { if (activeModal !== 'shift_zreport') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
   if (activeModal !== 'shift_zreport') return null;
 
@@ -78,10 +85,12 @@ export const ShiftZReportModal: React.FC = () => {
 
   // SAV deposits actually taken (never imputed unpaid balances) + cash
   // trade-in payouts — both were missing here, understating and overstating
-  // expected cash respectively.
-  const savDeposits = (repairOrders || [])
-    .filter((r) => inShiftWindow(r.createdAt))
-    .reduce((acc, r) => acc + (r.depositAmount || 0), 0);
+  // expected cash respectively. Settled balances are informational only
+  // (cash already inside cashSalesFromTxns — never added to expected cash).
+  const savDeposits = savDepositsFromRepairs((repairOrders || []).filter((r) => inShiftWindow(r.createdAt)));
+  const savSettled = savSettledFromTxns(shiftTxns);
+  const closedShiftCount = (allShifts || []).filter((s) => s.status === 'CLOSED').length;
+  const zNumber = zTicketNumber(closedShiftCount);
   const tradeInCashOut = (tradeIns || [])
     .filter((t) => !t.creditToWallet && inShiftWindow(t.createdAt))
     .reduce((acc, t) => acc + (t.buybackValue || 0), 0);
@@ -91,8 +100,16 @@ export const ShiftZReportModal: React.FC = () => {
 
   // Movement-only terms from the open session's in-store movements (same
   // rows booking reads): exchange cash-outs + twin-less manual movements.
+  // Soulte payouts ride inside the unified exchange lane for expected-cash
+  // math but display on their own Z line (no double-show).
   const sessionMovements = activeShift?.movements || [];
   const exchangeOut = exchangeCashOutFromMovements(sessionMovements);
+  const soulteOut = sessionMovements
+    .filter(
+      (m) => m.type === 'EXPENSE' && (m.reason || '').startsWith(DRAWER_REASON_PREFIXES.SOULTE_CASHOUT)
+    )
+    .reduce((acc, m) => acc + Math.max(0, Math.round(Number(m.amount) || 0)), 0);
+  const exchangeOutPure = Math.max(0, exchangeOut - soulteOut);
   const manualIn = standaloneDepositsFromMovements(sessionMovements);
   const manualOut = standaloneExpensesFromMovements(sessionMovements);
 
@@ -111,18 +128,21 @@ export const ShiftZReportModal: React.FC = () => {
         `Rapport Z ${lockScreenCashier}`,
         zReportText({
           storeName: receiptSettings?.storeName,
+          zNumber,
           cashierName: lockScreenCashier,
           dateStr: new Date().toLocaleString('fr-DZ'),
           openingFloat,
           cashSales: totalCashSales,
           debtSettlements: todayDebtSettlements,
           savDeposits,
+          savSettled,
           refunds: totalCashRefunds,
           expenses: todayCashExpenses,
           tradeIns: tradeInCashOut,
           drops: totalDrops,
           payouts: totalPayouts,
-          exchangeOut,
+          exchangeOut: exchangeOutPure,
+          soulteOut,
           manualIn,
           manualOut,
           expectedCash,
@@ -161,7 +181,7 @@ export const ShiftZReportModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94vh] sm:max-h-[90vh] flex flex-col">
+      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94dvh] sm:max-h-[90dvh] flex flex-col">
         {/* Mobile drag handle */}
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0 print:hidden" />
 
@@ -175,7 +195,7 @@ export const ShiftZReportModal: React.FC = () => {
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
             aria-label="Fermer"
           >
             <X className="w-5 h-5" />
@@ -184,7 +204,7 @@ export const ShiftZReportModal: React.FC = () => {
 
         {/* Scrollable Body */}
         {/* Scrollable Body (screen only — print uses the dedicated doc below) */}
-        <div className="print-zreport-target p-5 overflow-y-auto space-y-5 flex-1 print:hidden">
+        <div className="print-zreport-target p-5 overflow-y-auto overscroll-contain space-y-5 flex-1 print:hidden">
           {/* Shift Cash Summary Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
@@ -225,6 +245,14 @@ export const ShiftZReportModal: React.FC = () => {
               </div>
             )}
 
+            {savSettled > 0 && (
+              <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                <span className="text-[10px] text-pos-muted uppercase font-bold">Soldes SAV Encaissés</span>
+                <p className="text-sm font-bold text-emerald-400 mt-0.5">+{formatDZD(savSettled)}</p>
+                <p className="text-[9px] text-pos-muted mt-0.5">Informatif — déjà compté dans les ventes</p>
+              </div>
+            )}
+
             {tradeInCashOut > 0 && (
               <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
                 <span className="text-[10px] text-pos-muted uppercase font-bold">Rachats Occasions</span>
@@ -232,10 +260,17 @@ export const ShiftZReportModal: React.FC = () => {
               </div>
             )}
 
-            {exchangeOut > 0 && (
+            {exchangeOutPure > 0 && (
               <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
                 <span className="text-[10px] text-pos-muted uppercase font-bold">Retours Échanges</span>
-                <p className="text-sm font-bold text-red-400 mt-0.5">-{formatDZD(exchangeOut)}</p>
+                <p className="text-sm font-bold text-red-400 mt-0.5">-{formatDZD(exchangeOutPure)}</p>
+              </div>
+            )}
+
+            {soulteOut > 0 && (
+              <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
+                <span className="text-[10px] text-pos-muted uppercase font-bold">Soulte Échange (Reprise)</span>
+                <p className="text-sm font-bold text-red-400 mt-0.5">-{formatDZD(soulteOut)}</p>
               </div>
             )}
 
@@ -364,6 +399,7 @@ export const ShiftZReportModal: React.FC = () => {
           <div className="text-center pb-2 border-b border-dashed border-gray-500">
             <p className="font-extrabold text-sm uppercase tracking-wider">{receiptSettings?.storeName || 'MOBI ACCESSORIES'}</p>
             <p className="font-black text-xs uppercase mt-1">*** RAPPORT Z — CLÔTURE DE CAISSE ***</p>
+            <p className="text-[10px] font-bold">Z-TICKET N°: {zNumber}</p>
             <p className="text-[10px]">Caissier: {lockScreenCashier}</p>
             <p className="text-[10px]">{new Date().toLocaleString('fr-DZ')}</p>
           </div>
@@ -375,6 +411,9 @@ export const ShiftZReportModal: React.FC = () => {
             )}
             {savDeposits > 0 && (
               <div className="flex justify-between"><span>Acomptes SAV :</span><span className="font-bold">+{formatDZD(savDeposits)}</span></div>
+            )}
+            {savSettled > 0 && (
+              <div className="flex justify-between"><span>Soldes SAV encaissés :</span><span className="font-bold">+{formatDZD(savSettled)}</span></div>
             )}
             {manualIn > 0 && (
               <div className="flex justify-between"><span>Apports manuels :</span><span className="font-bold">+{formatDZD(manualIn)}</span></div>
@@ -388,8 +427,11 @@ export const ShiftZReportModal: React.FC = () => {
             {tradeInCashOut > 0 && (
               <div className="flex justify-between"><span>Rachats occasions :</span><span className="font-bold">-{formatDZD(tradeInCashOut)}</span></div>
             )}
-            {exchangeOut > 0 && (
-              <div className="flex justify-between"><span>Retours échanges :</span><span className="font-bold">-{formatDZD(exchangeOut)}</span></div>
+            {exchangeOutPure > 0 && (
+              <div className="flex justify-between"><span>Retours échanges :</span><span className="font-bold">-{formatDZD(exchangeOutPure)}</span></div>
+            )}
+            {soulteOut > 0 && (
+              <div className="flex justify-between"><span>Soulte échange :</span><span className="font-bold">-{formatDZD(soulteOut)}</span></div>
             )}
             {manualOut > 0 && (
               <div className="flex justify-between"><span>Dépenses manuelles :</span><span className="font-bold">-{formatDZD(manualOut)}</span></div>
@@ -428,6 +470,7 @@ export const ShiftZReportModal: React.FC = () => {
           )}
           <div className="pt-2 text-center">
             <p className="text-[10px]">Signature caissier : ____________________</p>
+            <p className="text-[10px] mt-1">Signature Responsable / Gérant : ____________________</p>
             <p className="text-[10px] mt-1">Cachet & signature gérant : ____________________</p>
             <p className="text-[9px] text-gray-600 mt-2">Document généré par Mobi-POS</p>
           </div>
@@ -435,7 +478,7 @@ export const ShiftZReportModal: React.FC = () => {
 
         {/* Footer Actions */}
         <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2.5 shrink-0 print:hidden">
-          <span className="text-[11px] text-pos-muted text-center sm:text-left">Shift ID: SHIFT-20260801 • Caissier: {lockScreenCashier}</span>
+          <span className="text-[11px] text-pos-muted text-center sm:text-left">Z-TICKET N°: {zNumber} • Caissier: {lockScreenCashier}</span>
           <div className="flex items-center gap-2">
             <button
               onClick={closeModal}

@@ -17,7 +17,7 @@
  */
 
 import type { SaleTransaction } from '../types/pos';
-import type { CartItem, PricingTier } from '../types/pos';
+import type { CartItem, PricingTier, TradeInDirection } from '../types/pos';
 import { getProductPriceForTier } from './pricingEngine';
 import { computeTax } from './taxEngine';
 
@@ -55,6 +55,50 @@ export function netFromTransaction(tx: SaleTransaction): number {
  */
 export function isValidSale(tx: SaleTransaction): boolean {
   return tx.status !== 'VOIDED' && !tx.isRefund;
+}
+
+export interface FiscalSettingsLike {
+  rc?: string;
+  nif?: string;
+  nis?: string;
+  art?: string;
+  taxNumber?: string;
+}
+
+/**
+ * Official fiscal identifier block. Granular RC/NIF/NIS/ART win; legacy
+ * taxNumber renders as `NIF / RC` compat; null when nothing is configured
+ * (callers fall back cleanly).
+ */
+export function fiscalIdentifierLine(settings?: FiscalSettingsLike | null): string | null {
+  if (!settings) return null;
+  const parts: string[] = [];
+  if ((settings.rc || '').trim()) parts.push(`RC: ${(settings.rc || '').trim()}`);
+  if ((settings.nif || '').trim()) parts.push(`NIF: ${(settings.nif || '').trim()}`);
+  if ((settings.nis || '').trim()) parts.push(`NIS: ${(settings.nis || '').trim()}`);
+  if ((settings.art || '').trim()) parts.push(`ART: ${(settings.art || '').trim()}`);
+  if (parts.length > 0) return parts.join(' | ');
+  if ((settings.taxNumber || '').trim()) return `NIF / RC : ${(settings.taxNumber || '').trim()}`;
+  return null;
+}
+
+export interface TvaSplit {
+  ht: number;
+  tva: number;
+  ttc: number;
+  rate: number;
+}
+
+/**
+ * TVA breakdown derived from the TTC total when a VAT rate is configured.
+ * Integer DZD; null when disabled. HT = TTC / (1 + rate), TVA = TTC − HT.
+ */
+export function tvaSplitFromTotal(total: number, vatRate?: number | null): TvaSplit | null {
+  const rate = Math.max(0, Number(vatRate) || 0);
+  if (!(rate > 0)) return null;
+  const ttc = Math.max(0, Math.round(total || 0));
+  const ht = Math.round(ttc / (1 + rate / 100));
+  return { ht, tva: Math.max(0, ttc - ht), ttc, rate };
 }
 
 /**
@@ -225,7 +269,48 @@ export interface CartTotalsOptions {
   cartDiscountPercent?: number;
   storeCreditApplied?: number;
   voucherCreditApplied?: number;
+  /**
+   * Two-way exchange credit (trade-in buyback value, 1:1 — no +10% bonus).
+   * Payment credit like store/voucher credit: does NOT reduce the VAT base.
+   * Never pushed as a negative-price cart line (corrupts gross + FIFO).
+   */
+  tradeInCredit?: number;
   vatRate?: number;
+}
+
+/**
+ * Two-way exchange settlement:
+ *   Net Balance = Gross Cart Total − Trade-In Buyback Value
+ * - Net > 0 (CUSTOMER_PAYS): customer owes the difference (tender the rest).
+ * - Net < 0 (SOULTE_SHOP_PAYS): shop owes the soulte (cash payout or avoir).
+ * - Net = 0 (EVEN): straight swap, nothing due either way.
+ * Pure + integer DZD. Buyback applies 1:1 (exchange mode hides the +10%
+ * wallet bonus so inventory cost basis and margins stay undistorted).
+ * Direction type lives in types/pos (single source); result shape here.
+ */
+export interface TradeInSettlementResult {
+  netBalance: number;
+  direction: TradeInDirection;
+  /** Amount the customer still owes (>= 0). */
+  customerOwes: number;
+  /** Amount the shop owes back as soulte (>= 0). */
+  shopOwes: number;
+}
+
+export function computeTradeInSettlement(
+  grossCartTotal: number,
+  buybackValue: number
+): TradeInSettlementResult {
+  const gross = Math.max(0, Math.round(Number(grossCartTotal) || 0));
+  const buyback = Math.max(0, Math.round(Number(buybackValue) || 0));
+  const netBalance = gross - buyback;
+  if (netBalance > 0) {
+    return { netBalance, direction: 'CUSTOMER_PAYS', customerOwes: netBalance, shopOwes: 0 };
+  }
+  if (netBalance < 0) {
+    return { netBalance, direction: 'SOULTE_SHOP_PAYS', customerOwes: 0, shopOwes: -netBalance };
+  }
+  return { netBalance: 0, direction: 'EVEN', customerOwes: 0, shopOwes: 0 };
 }
 
 export interface CartTotals {
@@ -242,6 +327,8 @@ export interface CartTotals {
   subtotalAfterDiscount: number;
   storeCreditApplied: number;
   voucherCreditApplied: number;
+  /** Two-way exchange credit applied (trade-in buyback 1:1, >= 0). */
+  tradeInCreditApplied: number;
   /** subtotalAfterDiscount − credits (may be negative → refund due). */
   net: number;
   /** Taxable base: PRE-credit subtotal clamped >= 0 (credits are payment). */
@@ -292,7 +379,18 @@ export function computeCartTotals(lines: CartItem[], opts: CartTotalsOptions = {
   const subtotalAfterDiscount = grossSubtotal - discountTotal;
   const storeCreditApplied = Math.max(0, toInt(opts.storeCreditApplied));
   const voucherCreditApplied = Math.max(0, toInt(opts.voucherCreditApplied));
-  const credits = storeCreditApplied + voucherCreditApplied;
+  // Exchange credit is clamped to the payable remainder AFTER store +
+  // voucher credits (never over-covers into a phantom refund via refundDue;
+  // a true soulte is a post-checkout payout, never a negative net). Credits
+  // can never exceed the pre-credit base in combination.
+  const tradeInCreditApplied = Math.max(
+    0,
+    Math.min(
+      toInt(opts.tradeInCredit),
+      Math.max(0, subtotalAfterDiscount - storeCreditApplied - voucherCreditApplied)
+    )
+  );
+  const credits = storeCreditApplied + voucherCreditApplied + tradeInCreditApplied;
   const net = subtotalAfterDiscount - credits;
   const vatRate = Math.max(0, Number(opts.vatRate) || 0);
   // Credits are payment, not discount: VAT applies to the pre-credit
@@ -307,6 +405,7 @@ export function computeCartTotals(lines: CartItem[], opts: CartTotalsOptions = {
     subtotalAfterDiscount,
     storeCreditApplied,
     voucherCreditApplied,
+    tradeInCreditApplied,
     net,
     ht,
     tva,

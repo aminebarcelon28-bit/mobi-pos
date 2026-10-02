@@ -3,8 +3,27 @@
  * Author: Principal Systems Architect
  */
 import type { TradeInItem, ReceiptSettings, SaleTransaction } from '../types/pos';
+import { faitALine } from '../types/pos';
 import { EscPosBuilder } from './escpos';
 import { grossFromTransaction } from './receiptMath';
+
+/**
+ * Sequential police-registry folio (Livre de Police) derived deterministically
+ * from the trade record: `[ID-YEAR-SEQ]` — stable per trade, printable on
+ * every copy for stolen-goods inspections.
+ */
+export function policeRegistryFolio(trade: Pick<TradeInItem, 'id' | 'createdAt'>): string {
+  const clean = (trade.id || '').replace(/[^A-Z0-9]/gi, '').toUpperCase() || '000000';
+  const year = new Date(trade.createdAt || Date.now()).getFullYear();
+  const idPart = clean.slice(-6).padStart(6, '0');
+  const seqPart = clean.slice(0, 4).padStart(4, '0');
+  return `${idPart}-${year}-${seqPart}`;
+}
+
+/** Formal seller sworn statement (registry wording, shared thermal ↔ A4). */
+export const SELLER_SWORN_STATEMENT =
+  "Je soussigné(e) certifie sur l'honneur être le légitime propriétaire de cet appareil, " +
+  "qu'il est libre de tout engagement ou gage, et qu'il ne provient d'aucun vol ou acte illicite.";
 
 export class TradeInVoucherBuilder {
   public static buildLegalBuybackCertificate(
@@ -38,6 +57,10 @@ export class TradeInVoucherBuilder {
       .newline()
       .text(`Date : ${new Date().toLocaleString('fr-DZ')}`)
       .newline()
+      .bold(true)
+      .text(`Folio Registre Police N°: ${policeRegistryFolio(tradeIn)}`)
+      .newline()
+      .bold(false)
       .text(separator)
       .newline()
       .align('left')
@@ -48,11 +71,11 @@ export class TradeInVoucherBuilder {
       .text(`Nom / Prénom : ${tradeIn.customerName}`)
       .newline()
       .text(`N° Téléphone : ${tradeIn.customerPhone || 'Non spécifié'}`)
-      .newline();
-
-    if (tradeIn.nationalIdNumber) {
-      builder.text(`N° Pièce d'Identité (CNI / Permis) : ${tradeIn.nationalIdNumber}`).newline();
-    }
+      .newline()
+      .bold(true)
+      .text(`N° Pièce d'Identité (CNI/Permis/Passeport) : ${tradeIn.nationalIdNumber || 'Non renseigné — À COMPLÉTER'}`)
+      .newline()
+      .bold(false)
 
     builder
       .text(separator)
@@ -87,12 +110,13 @@ export class TradeInVoucherBuilder {
       .align('left')
       .text('DÉCLARATION SUR L\'HONNEUR :')
       .newline()
-      .text(
-        'Le cédant certifie sur l\'honneur être le propriétaire légitime de l\'appareil ci-dessus et que celui-ci n\'est ni gagé, ni déclaré volé ou perdu.'
-      )
+      .text(SELLER_SWORN_STATEMENT)
       .newline()
       .newline(2)
       .align('center')
+      .text(faitALine(settings))
+      .newline()
+      .newline()
       .text('Signature du Client :                  Signature Magasin :')
       .newline()
       .newline(2)
@@ -104,10 +128,16 @@ export class TradeInVoucherBuilder {
     return builder.build();
   }
 
+  /**
+   * Net exchange ticket (Phase 5 revival): items + gross, trade-in device
+   * summary with IMEI, deduction, and the settled amount. Soulte variant
+   * prints the shop-owed payout + method instead of an amount due.
+   */
   public static buildNetTradeInSaleReceipt(
     transaction: SaleTransaction,
     tradeIn: TradeInItem,
-    settings: ReceiptSettings
+    settings: ReceiptSettings,
+    soulte?: { amount: number; method: 'cash' | 'wallet' } | null
   ): Uint8Array {
     const builder = new EscPosBuilder();
     const is80mm = settings.paperWidth !== '58mm';
@@ -116,8 +146,13 @@ export class TradeInVoucherBuilder {
       : '--------------------------------';
 
     const grossTotal = grossFromTransaction(transaction);
-    const tradeInDeduction = tradeIn.buybackValue;
+    const tradeInDeduction = Math.max(
+      0,
+      Math.round(Number(transaction.tradeInDeduction ?? tradeIn.buybackValue) || 0)
+    );
     const netToPay = Math.max(0, grossTotal - tradeInDeduction - (transaction.discountTotal || 0));
+    const soulteAmount = Math.max(0, Math.round(Number(soulte?.amount) || 0));
+    const isSoulte = soulteAmount > 0;
 
     builder
       .init()
@@ -164,25 +199,41 @@ export class TradeInVoucherBuilder {
       .text(`-${tradeInDeduction.toLocaleString('fr-DZ')} DA`)
       .newline()
       .text(separator)
-      .newline()
-      .align('left')
-      .text(`NET À PAYER EN ESPÈCES :`)
-      .align('right')
-      .text(` ${netToPay.toLocaleString('fr-DZ')} DA`)
-      .newline()
-      .align('left')
-      .bold(false)
-      .text(`Espèces Données :`)
-      .align('right')
-      .text(` ${(transaction.cashTendered || netToPay).toLocaleString('fr-DZ')} DA`)
-      .newline()
-      .align('left')
-      .bold(true)
-      .text(`MONNAIE RENDUE :`)
-      .align('right')
-      .text(` ${(transaction.changeDue || 0).toLocaleString('fr-DZ')} DA`)
-      .newline()
-      .bold(false)
+      .newline();
+    if (isSoulte) {
+      builder
+        .align('left')
+        .bold(true)
+        .text(`SOULTE À VERSER AU CLIENT :`)
+        .align('right')
+        .text(` ${soulteAmount.toLocaleString('fr-DZ')} DA`)
+        .newline()
+        .align('left')
+        .bold(false)
+        .text(`Mode : ${soulte?.method === 'cash' ? 'Espèces (Tiroir)' : 'Avoir Client (Portefeuille)'}`)
+        .newline();
+    } else {
+      builder
+        .align('left')
+        .text(`NET À PAYER EN ESPÈCES :`)
+        .align('right')
+        .text(` ${netToPay.toLocaleString('fr-DZ')} DA`)
+        .newline()
+        .align('left')
+        .bold(false)
+        .text(`Espèces Données :`)
+        .align('right')
+        .text(` ${(transaction.cashTendered || netToPay).toLocaleString('fr-DZ')} DA`)
+        .newline()
+        .align('left')
+        .bold(true)
+        .text(`MONNAIE RENDUE :`)
+        .align('right')
+        .text(` ${(transaction.changeDue || 0).toLocaleString('fr-DZ')} DA`)
+        .newline()
+        .bold(false);
+    }
+    builder
       .text(separator)
       .newline()
       .align('center')

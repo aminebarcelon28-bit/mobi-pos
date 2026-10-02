@@ -403,7 +403,7 @@ export interface HeldSale {
   note?: string;
 }
 
-export type PaymentMethodType = 'Espèces' | 'Avoir Client' | 'BaridiMob' | 'Chèque' | 'Crédit Client' | 'Autre';
+export type PaymentMethodType = 'Espèces' | 'Avoir Client' | 'BaridiMob' | 'Chèque' | 'Crédit Client' | 'Reprise' | 'Autre';
 
 export type TransactionStatus = 'COMPLETED' | 'VOIDED' | 'REFUNDED' | 'PARTIALLY_REFUNDED';
 
@@ -504,6 +504,20 @@ export interface SaleTransaction {
   voucherCode?: string | null;
   voucherCreditApplied?: number;
   /**
+   * Two-way exchange linkage (trade-in + new purchase, net delta).
+   * Persisted on the row (not just the envelope) so void/refund flows can
+   * reverse the intake leg instead of burning it. Absent = no trade-in.
+   * `tradeInDeduction` is the buyback value applied 1:1 against the cart
+   * (no +10% wallet bonus in exchange mode — bonus would inflate cost basis).
+   */
+  tradeInId?: string | null;
+  tradeInDeduction?: number;
+  /**
+   * Soulte boutique settled on this ticket (shop owed the difference).
+   * Persisted for receipt + audit so the payout method is traceable.
+   */
+  tradeInSoulte?: { amount: number; method: 'cash' | 'wallet' } | null;
+  /**
    * Exact cash disbursed through a refund row (funding-split: net of
    * voucher/wallet/debt shares restored to their origins). The drawer lane
    * reads this; revenue lanes read total (value reversed). Absent on legacy
@@ -525,6 +539,8 @@ export interface SaleTransaction {
   milestoneAwards?: MilestoneAward[];
 }
 
+export type StockAlertSeverity = 'rupture' | 'critical' | 'warning';
+
 export interface StockAlert {
   id: string;
   productId: string;
@@ -535,7 +551,15 @@ export interface StockAlert {
   currentStock: number;
   reorderPoint: number;
   dailyVelocity: number;
-  severity: 'critical' | 'warning';
+  severity: StockAlertSeverity;
+}
+
+export interface VendorDirectoryEntry {
+  phone?: string;
+  /** WhatsApp-specific number; falls back to `phone` when unset. */
+  whatsapp?: string;
+  email?: string;
+  updatedAt?: string;
 }
 
 export interface POLineItem {
@@ -552,6 +576,20 @@ export interface POLineItem {
   imeis?: string[];
   status?: 'Pending' | 'Partially Received' | 'Received' | 'Discrepancy' | 'Cancelled';
   discrepancyReason?: string;
+}
+
+/** Snapshot for the supplier reception PV (Bon de Réception & Contrôle). */
+export interface POReceptionSnapshot {
+  /** productId → physically received quantity at control time. */
+  receivedQty: Record<string, number>;
+  /** productId → invoice-verified unit cost (optional). */
+  actualCosts?: Record<string, number>;
+  /** productId → discrepancy note (optional). */
+  reasons?: Record<string, string>;
+  /** Supplier invoice / BL number (optional). */
+  supplierInvoice?: string;
+  /** Reception timestamp ISO (defaults to print time). */
+  receivedAt?: string;
 }
 
 export interface PurchaseOrder {
@@ -588,18 +626,464 @@ export interface ConditionChecklist {
   audioOk?: boolean;
 }
 
+// ── Nuanced physical-intake damage schema (Phase 4.6) ──
+// Replaces the primitive boolean `bodyOk` with an explicit, legally defensible
+// intake record. Every field is optional so legacy records (which only carry
+// `bodyOk`) deserialize without migration; the intake form populates them.
+export type ScreenCondition =
+  | 'intact'
+  | 'scratched'
+  | 'cracked'
+  | 'display_bleed'
+  | 'dead_pixels'
+  | 'no_display';
+
+export const SCREEN_CONDITION_LABELS: Record<ScreenCondition, string> = {
+  intact: 'Intact',
+  scratched: 'Rayé / éraflé',
+  cracked: 'Fissuré',
+  display_bleed: 'Tache / trait d’affichage',
+  dead_pixels: 'Pixels morts',
+  no_display: 'Écran mort / ne s’allume pas',
+};
+
+export const SCREEN_CONDITION_ORDER: ScreenCondition[] = [
+  'intact',
+  'scratched',
+  'cracked',
+  'display_bleed',
+  'dead_pixels',
+  'no_display',
+];
+
+export type ChassisDamage =
+  | 'none'
+  | 'scratches'
+  | 'dents'
+  | 'bent_frame'
+  | 'cracked_back';
+
+export const CHASSIS_DAMAGE_LABELS: Record<ChassisDamage, string> = {
+  none: 'Intact',
+  scratches: 'Rayures',
+  dents: 'Coups / bosses',
+  bent_frame: 'Châssis tordu',
+  cracked_back: 'Dos cassé',
+};
+
+/** Multi-select: `none` is exclusive with every other value. */
+export const CHASSIS_DAMAGE_ORDER: ChassisDamage[] = [
+  'none',
+  'scratches',
+  'dents',
+  'bent_frame',
+  'cracked_back',
+];
+
+export type DeviceLockType = 'none' | 'pin' | 'pattern' | 'account_locked';
+
+export const DEVICE_LOCK_LABELS: Record<DeviceLockType, string> = {
+  none: 'Aucun verrouillage',
+  pin: 'Code PIN',
+  pattern: 'Schéma',
+  account_locked: 'Compte verrouillé (FRP/Activation)',
+};
+
+export const DEVICE_LOCK_ORDER: DeviceLockType[] = ['none', 'pin', 'pattern', 'account_locked'];
+
+export interface DeviceLockState {
+  type: DeviceLockType;
+  /**
+   * NEVER the raw secret. The intake form accepts a lock code, then stores
+   * only whether one was supplied (`[fourni]`); the raw value is discarded so
+   * a stolen database cannot unlock the customer's phone.
+   */
+  provided?: boolean;
+}
+
+/** True when the dossier records a lock the workshop cannot bypass. */
+export function hasDeviceLock(state?: DeviceLockState): boolean {
+  return Boolean(state && state.type && state.type !== 'none');
+}
+
+export interface IntakeDamageAssessment {
+  screenCondition?: ScreenCondition;
+  chassisDamage?: ChassisDamage[];
+  liquidIndicatorTripped?: boolean;
+  deviceLock?: DeviceLockState;
+  /** Free-form technician note on pre-existing damage (printed on the work order only). */
+  preExistingNotes?: string;
+}
+
+/** Aggregate physical-damage severity, used for badge tone + warranty policy. */
+export function intakeDamageSeverity(
+  dmg?: IntakeDamageAssessment
+): 'none' | 'minor' | 'major' {
+  if (!dmg) return 'none';
+  const chassis = (dmg.chassisDamage || []).filter((c) => c !== 'none');
+  const screen = dmg.screenCondition;
+  const screenMajor =
+    screen === 'cracked' ||
+    screen === 'display_bleed' ||
+    screen === 'dead_pixels' ||
+    screen === 'no_display';
+  if (dmg.liquidIndicatorTripped || screenMajor || chassis.includes('bent_frame') || chassis.includes('cracked_back')) {
+    return 'major';
+  }
+  if (screen === 'scratched' || chassis.length > 0) return 'minor';
+  return 'none';
+}
+
+/**
+ * Whether the intake constat voids the REPAIR warranty, as distinct from
+ * `intakeDamageSeverity` (which grades PHYSICAL damage only).
+ *
+ * These are deliberately different questions. A locked device is not physical
+ * damage, so it does not colour the damage badge — but the workshop cannot
+ * verify any function on it, so it cannot certify the repair either. Keeping
+ * the two separate stops a locked phone from being reported as "Conforme"
+ * while still being warranty-eligible, and stops a merely scratched chassis
+ * from being used to void a repair warranty.
+ */
+export function intakeBlocksRepairWarranty(dmg?: IntakeDamageAssessment): boolean {
+  if (!dmg) return false;
+  if (intakeDamageSeverity(dmg) === 'major') return true;
+  if (hasDeviceLock(dmg.deviceLock)) return true;
+  return false;
+}
+
+/** Compact one-line physical-damage summary for tickets and work orders. */
+export function describeIntakeDamage(dmg?: IntakeDamageAssessment): string {
+  if (!dmg) return 'Constat non renseigné';
+  const parts: string[] = [];
+  if (dmg.screenCondition) parts.push(`Écran: ${SCREEN_CONDITION_LABELS[dmg.screenCondition]}`);
+  const chassis = (dmg.chassisDamage || []).filter((c) => c !== 'none');
+  parts.push(
+    `Châssis: ${chassis.length ? chassis.map((c) => CHASSIS_DAMAGE_LABELS[c]).join(', ') : 'Intact'}`
+  );
+  parts.push(`Indicateur liquide: ${dmg.liquidIndicatorTripped ? 'DÉCLENCHÉ' : 'OK'}`);
+  parts.push(`Verrouillage: ${dmg.deviceLock ? DEVICE_LOCK_LABELS[dmg.deviceLock.type] : 'Non renseigné'}`);
+  return parts.join(' • ');
+}
+
+// ── Strict warranty tier policy (Phase 4.6) ──
+// Floating day ranges ("358J", "J-X") are disallowed. Every warranty is one of
+// the immutable tiers below, resolved to an exact calendar expiry date
+// (YYYY-MM-DD) computed at the moment of coverage start. Repair warranty starts
+// at restitution (RESTITUE), never at intake.
+export type WarrantyTier =
+  | 'none'
+  | 'test_7d'
+  | 'repair_30d'
+  | 'repair_90d'
+  | 'repair_180d';
+
+/** Ordered tier list for selectors — the ONLY legal choices, in order. */
+export const WARRANTY_TIER_ORDER: WarrantyTier[] = [
+  'none',
+  'test_7d',
+  'repair_30d',
+  'repair_90d',
+  'repair_180d',
+];
+
+export const WARRANTY_TIER_DAYS: Record<WarrantyTier, number> = {
+  none: 0,
+  test_7d: 7,
+  repair_30d: 30,
+  repair_90d: 90,
+  repair_180d: 180,
+};
+
+export const WARRANTY_TIER_LABELS: Record<WarrantyTier, string> = {
+  none: 'Sans garantie',
+  test_7d: 'Garantie test 7 jours',
+  repair_30d: 'Garantie réparation 30 jours',
+  repair_90d: 'Garantie réparation 90 jours',
+  repair_180d: 'Garantie réparation 180 jours',
+};
+
+/** Resolve a legacy months value to the nearest strict tier (read-only audit). */
+export function warrantyMonthsToTier(months: number | undefined): WarrantyTier {
+  const m = Math.max(0, Math.floor(Number(months) || 0));
+  if (m <= 0) return 'none';
+  if (m <= 1) return 'test_7d';
+  if (m <= 3) return 'repair_30d';
+  if (m <= 6) return 'repair_90d';
+  return 'repair_180d';
+}
+
+export type RepairStatus =
+  | 'Diagnostic'
+  | 'En attente de pièces'
+  | 'En cours'
+  | 'Prêt / Terminé'
+  | 'Livré'
+  | 'Annulé';
+
+export const ACTIVE_REPAIR_STATUSES: RepairStatus[] = [
+  'Diagnostic',
+  'En attente de pièces',
+  'En cours',
+];
+
+/** Single DZD-rounding source for SAV balances. */
+export function repairRemainingBalance(order: Pick<RepairOrder, 'totalCost' | 'depositAmount'>): number {
+  return Math.max(0, Math.round(order.totalCost || 0) - Math.round(order.depositAmount || 0));
+}
+
+/** Current SAV dossier schema version. v2 = strict legal record (Phase 5). */
+export const REPAIR_SCHEMA_VERSION = 2 as const;
+
+export type RepairSchemaVersion = typeof REPAIR_SCHEMA_VERSION;
+
+/** True when the order carries the full v2 legal record (not a legacy dossier). */
+export function isSchemaV2Order(
+  order: Pick<RepairOrder, 'schemaVersion'>
+): boolean {
+  return order.schemaVersion === REPAIR_SCHEMA_VERSION;
+}
+
+/** Pill shown on every legacy (v1 / unmigrated) dossier. */
+export const LEGACY_DOSSIER_PILL = 'Dossier Archivé (Non migré)';
+
+/**
+ * Itemized SAV financials in integer DZD. `balanceDue` is DERIVED, never
+ * stored: a persisted balance can drift from its components and become an
+ * unrecoverable money-flow bug (a paid repair that still reads as unpaid).
+ */
+export interface RepairFinancials {
+  partsCost: number;
+  laborCost: number;
+  totalCost: number;
+  depositAmount: number;
+  balanceDue: number;
+}
+
+/** Single rounding source for every displayed/printed SAV money figure. */
+export function repairFinancials(
+  order: Pick<RepairOrder, 'laborCost' | 'partsCost' | 'depositAmount'>
+): RepairFinancials {
+  const laborCost = Math.max(0, Math.round(Number(order.laborCost) || 0));
+  const partsCost = Math.max(0, Math.round(Number(order.partsCost) || 0));
+  const totalCost = laborCost + partsCost;
+  const depositAmount = Math.max(0, Math.min(totalCost, Math.round(Number(order.depositAmount) || 0)));
+  return {
+    partsCost,
+    laborCost,
+    totalCost,
+    depositAmount,
+    balanceDue: totalCost - depositAmount,
+  };
+}
+
+/** One intake photo: bytes live on the filesystem, only evidence lives here. */
+export interface IntakePhotoRef {
+  /** Relative path under the attachment root — never an absolute path. */
+  relativePath: string;
+  /** SHA-256 (hex) of the stored bytes; the tamper-evidence anchor. */
+  sha256: string;
+  capturedAt: string;
+  /** Free label shown on the work order ("écran", "connecteur"...). */
+  label?: string;
+  byteSize?: number;
+}
+
+export const REPAIR_STATUS_BADGE_TOKENS: Record<RepairStatus, string> = {
+  Diagnostic: 'bg-amber-500/10 text-amber-500 border-amber-500/20',
+  'En attente de pièces': 'bg-cyan-500/10 text-cyan-500 border-cyan-500/20',
+  'En cours': 'bg-blue-500/10 text-blue-500 border-blue-500/20',
+  'Prêt / Terminé': 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
+  // eslint-disable-next-line @typescript-eslint/naming-convention
+  'Livré': 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20',
+  // eslint-disable-next-line @typescript-eslint/naming-convention
+  'Annulé': 'bg-rose-500/10 text-rose-500 border-rose-500/20',
+};
+
+/**
+ * Append a status-transition entry to the order's timeline. Returns a new
+ * array (immutable append); the caller persists the order.
+ */
+export function appendRepairStatusHistory(
+  order: RepairOrder,
+  status: RepairStatus,
+  updatedBy: string,
+  note?: string
+): RepairStatusHistoryEntry[] {
+  const prev = order.statusHistory || [];
+  // Coalesce: if the last entry already matches this status and was recorded
+  // within the same second, don't bloat the timeline with duplicate rows.
+  const last = prev[prev.length - 1];
+  if (last && last.status === status && last.updatedBy === updatedBy) {
+    const sameSecond =
+      Math.abs(new Date(last.timestamp).getTime() - Date.now()) < 2000;
+    if (sameSecond) return prev;
+  }
+  return [
+    ...prev,
+    {
+      status,
+      timestamp: new Date().toISOString(),
+      updatedBy,
+      ...(note ? { note } : {}),
+    },
+  ];
+}
+
+/** Compute an exact calendar expiry date (YYYY-MM-DD) from a start date + tier. */
+export function computeWarrantyExpiryISO(startIso: string, tier: WarrantyTier): string {
+  const days = WARRANTY_TIER_DAYS[tier] || 0;
+  const d = new Date(startIso);
+  if (Number.isNaN(d.getTime())) return new Date().toISOString().slice(0, 10);
+  const utc = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  utc.setUTCDate(utc.getUTCDate() + days);
+  return utc.toISOString().slice(0, 10);
+}
+
+/**
+ * Warranty start marker for repair coverage. Repair warranty always begins at
+ * restitution (device handover), never at intake. The intake form locks this
+ * value; the actual date is stamped when the order transitions to `Livré`.
+ */
+export const REPAIR_WARRANTY_START = 'RESTITUE' as const;
+
+/** Label text for the current REPAIR_SCHEMA_VERSION. */
+export const SCHEMA_VERSION_LABEL: Record<number, string> = {
+  1: 'Legacy (v1)',
+  2: 'Dossier complet (v2)',
+};
+
+/**
+ * Backward-compatible migration helper. Legacy repair orders (pre-4.6) carry
+ * only the primitive `ConditionChecklist` booleans and no signature. This
+ * function applies safe defaults so historical tickets deserialize, display,
+ * and edit without throwing. It is idempotent — calling it on an already
+ * migrated order returns the same object.
+ *
+ * MIGRATION IS NEVER SILENTLY APPLIED AT RUNTIME for legal fields: migrated
+ * copies are render-only (read-only "Dossier Archivé" mode). `schemaVersion`
+ * stays absent on them so no save path can silently "upgrade" history.
+ */
+export function migrateRepairOrder(order: RepairOrder): RepairOrder {
+  if (!order) return order;
+  if (isSchemaV2Order(order)) return order;
+  const hasIntake = !!order.intakeDamage;
+  const hasSignature = !!order.signatureCustomer;
+  const hasTier = !!order.warrantyTier;
+  const hasHistory = Array.isArray(order.statusHistory);
+  if (hasIntake && hasSignature && hasTier && hasHistory) return order;
+
+  const migrated: RepairOrder = { ...order };
+
+  if (!hasTier) {
+    // Derive a strict tier from the legacy warranty snapshot / months.
+    const months = order.warrantySnapshot?.expiryDate
+      ? Math.max(0, Math.ceil((new Date(order.warrantySnapshot.expiryDate).getTime() - new Date(order.createdAt).getTime()) / 86400000))
+      : undefined;
+    migrated.warrantyTier = warrantyMonthsToTier(months);
+  }
+
+  if (!hasIntake) {
+    migrated.intakeDamage = {
+      screenCondition: order.conditionChecklist?.screenOk ? 'intact' : 'cracked',
+      chassisDamage: order.conditionChecklist?.bodyOk ? [] : ['scratches'],
+      liquidIndicatorTripped: false,
+    };
+  }
+
+  if (!hasSignature) {
+    // Legacy ticket: no signature on file. Leave null — the intake form
+    // blocks NEW saves, but we never fabricate a signature for old data.
+    migrated.signatureCustomer = undefined;
+  }
+
+  if (!hasHistory) {
+    migrated.statusHistory = [
+      {
+        status: order.status,
+        timestamp: order.createdAt || new Date().toISOString(),
+        updatedBy: 'Système (Migration)',
+        note: 'Historique migré depuis le format antérieur',
+      },
+    ];
+  }
+
+  return migrated;
+}
+
+export interface WarrantySnapshot {
+  isUnderWarranty: boolean;
+  label: string;
+  expiryDate?: string;
+}
+
+/** Selects which SAV document renders inside the shared print-repair-target. */
+export type RepairPrintKind = 'work_order' | 'restitution' | 'quote';
+
+/** Cross-modal print handshake: Command dashboard arms it, Repair modal consumes it. */
+export interface PendingRepairPrint {
+  orderId: string;
+  kind: Exclude<RepairPrintKind, 'work_order'>;
+}
+
+/** Devis number derived from the ticket (no stored field, no migration). */
+export function repairQuoteNumber(order: Pick<RepairOrder, 'ticketNumber'>): string {
+  return `DEV-${order.ticketNumber}`;
+}
+
+/** Quote validity window in days (computed at print time). */
+export const REPAIR_QUOTE_VALIDITY_DAYS = 15;
+
+/** Invalidation banner for restitution invoked before settlement. */
+export const RESTITUTION_UNSETTLED_BANNER = 'DOCUMENT NON VALIDE — EN ATTENTE DE RÈGLEMENT';
+
+/** Default store city for dated legal signature lines. */
+export const DEFAULT_STORE_CITY = 'Mascara';
+
+/** City for « Fait à …, le … » legal lines (ASCII-safe for thermal). */
+export function storeCityOf(settings?: { city?: string } | null): string {
+  const city = (settings?.city || '').trim();
+  return city || DEFAULT_STORE_CITY;
+}
+
+/** Dated legal location line shared by all A4/thermal signature blocks. */
+export function faitALine(settings?: { city?: string } | null, at?: Date | string): string {
+  const d = at instanceof Date ? at : new Date(typeof at === 'string' ? at : Date.now());
+  return `Fait à ${storeCityOf(settings)}, le ${d.toLocaleDateString('fr-DZ')}`;
+}
+
+/** Harmonized unclaimed-device clause (thermal ↔ A4 identical). */
+export const UNCLAIMED_DEVICE_CLAUSE =
+  "Appareil non réclamé après 90 jours considéré comme abandonné et orienté vers le recyclage/démantèlement (Art. CGV).";
+
+/** Harmonized data-loss disclaimer (thermal 1-line + A4 long form share it). */
+export const DATA_LOSS_DISCLAIMER =
+  "AVIS: Sauvegarde des données à la charge du client. L'atelier décline toute responsabilité en cas de perte logicielle.";
+
 export interface RepairOrder {
   id: string;
   ticketNumber: string;
+  /**
+   * Absent / 1 on historical dossiers (render-only, read-only in the UI).
+   * `2` marks a full legal record: damage matrix, signature, strict tier,
+   * photo evidence, itemized financials.
+   */
+  schemaVersion?: number;
   customerName: string;
   customerPhone: string;
   deviceModel: string;
   imei: string;
+  /** How `imei` was entered (IMEI / serial / none). v2 only. */
+  imeiKind?: 'imei' | 'serial' | 'none';
+  /** Printable French label for the identifier ("IMEI", "N° Série", "Sans ID"). */
+  imeiKindLabel?: string;
   problemDescription: string;
   diagnosticNotes: string;
   conditionChecklist: ConditionChecklist;
   postRepairChecklist?: ConditionChecklist;
-  status: 'Diagnostic' | 'En attente de pièces' | 'En cours' | 'Prêt / Terminé';
+  // Phase 4.6: nuanced intake damage assessment (backward-compatible — all optional).
+  intakeDamage?: IntakeDamageAssessment;
+  status: RepairStatus;
   laborCost: number;
   partsCost: number;
   totalCost: number;
@@ -607,7 +1091,130 @@ export interface RepairOrder {
   estimatedCompletionDate?: string;
   createdAt: string;
   updatedAt?: string;
+  /** Exact RESTITUE date (ISO date) the warranty clock was anchored to. */
+  deliveredAt?: string;
+  warrantySnapshot?: WarrantySnapshot;
+  // Phase 4.6: enterprise-grade SAV enhancements.
+  assignedTechnicianId?: string;
+  technicianNotes?: string;
+  /** @deprecated v1 field name. v2 writes `signatureCustomerIntake`. */
+  signatureCustomer?: string;
+  signatureTechnician?: string;
+  /** Customer touch signature captured at INTAKE (base64 PNG). Required for v2. */
+  signatureCustomerIntake?: string;
+  /** Customer touch signature captured at RESTITUTION (base64 PNG). */
+  signatureCustomerRestitution?: string;
+  signatureIntakeAt?: string;
+  signatureRestitutionAt?: string;
+  /** v1 free-form photo strings; v2 uses filesystem-backed `intakePhotos`. */
+  photos?: string[];
+  /** Filesystem-backed photo evidence (path + SHA-256), never inline bytes. */
+  intakePhotos?: IntakePhotoRef[];
+  /** Customer agreed to the draft SAV terms at intake (v2, boolean + date). */
+  legalTermsAcceptedAt?: string;
+  warrantyTier?: WarrantyTier;
+  warrantyExpiresAt?: string;
+  statusHistory?: RepairStatusHistoryEntry[];
 }
+
+/** Append-only audit trail for status transitions. */
+export interface RepairStatusHistoryEntry {
+  status: RepairStatus;
+  timestamp: string;
+  updatedBy: string;
+  note?: string;
+}
+
+// ── Inspector → SAV intake handoff (Phase 5, Option A) ──
+// Packaged by the Inspector when the operator taps "Créer Prise en Charge SAV"
+// and consumed (then atomically cleared) by the repair modal on mount. Living
+// in the repair slice (not component state) means the handoff survives a modal
+// close/reopen and never requires the technician to retype the identifier.
+//
+// `warrantyDossier` is the FROZEN resolver snapshot: the ticket must record
+// what the operator saw at inspection time, not a re-lookup that could differ.
+export interface IntakeDraft {
+  /** Sanitized identifier: 15 valid digits (IMEI) or an uppercase serial. */
+  sanitizedId: string;
+  idType: 'imei' | 'serial' | 'manual';
+  deviceTitle: string;
+  customer: {
+    name?: string;
+    phone?: string;
+  };
+  warrantyDossier: WarrantyDossierSnapshot;
+  createdAt: string;
+}
+
+/** How long a seeded draft stays actionable before it is treated as stale. */
+export const INTAKE_DRAFT_TTL_MS = 15 * 60 * 1000;
+
+/** Freshness gate — a stale draft must never hydrate a new ticket. */
+export function isIntakeDraftFresh(draft: IntakeDraft | null, nowMs = Date.now()): boolean {
+  if (!draft) return false;
+  const t = new Date(draft.createdAt).getTime();
+  if (Number.isNaN(t)) return false;
+  return nowMs - t <= INTAKE_DRAFT_TTL_MS;
+}
+
+/** Printable French labels for the identifier mode. */
+export const DEVICE_ID_KIND_LABELS: Record<'imei' | 'serial' | 'manual', string> = {
+  imei: 'IMEI',
+  serial: 'N° Série',
+  manual: 'Sans ID',
+};
+
+/**
+ * Stored vocabulary: the form's `manual` mode is persisted as `none`, so a
+ * stored ticket can never contain a UI-only value. Only these three are legal
+ * in `RepairOrder.imeiKind`.
+ */
+export const STORED_ID_KIND_LABELS: Record<'imei' | 'serial' | 'none', string> = {
+  imei: 'IMEI',
+  serial: 'N° Série',
+  none: 'Sans ID',
+};
+
+// ── Conditions Générales de Prise en Charge SAV (v2 legal terms) ──
+// Rendered verbatim on the intake PV and printed on the ticket. The customer
+// signs them at intake; the acceptance timestamp is stored on the order.
+/* PROVISIONAL_LEGAL_TERMS: REQUIRES_OWNER_SIGN_OFF */
+/**
+ * Machine-readable form of the sign-off tag above. The boundary check greps
+ * for the literal, so the two must stay in sync; exporting it also lets a
+ * caller tell the customer that the text is not yet legally reviewed.
+ */
+export const LEGAL_TERMS_PROVISIONAL = 'REQUIRES_OWNER_SIGN_OFF' as const;
+export const SAV_LEGAL_TERMS_FR = [
+  "1. Objet — L'atelier prend l'appareil en charge aux seules fins de diagnostic et de réparation, après constat contradictoire de l'état mentionné ci-dessus.",
+  "2. Pannes cachées — L'atelier ne saurait être tenu responsable des défaillances internes non apparentes (oxydation de carte mère, batterie interne défectueuse, corrosion, humidité interne) constatées après démontage, ni de leurs conséquences en cascade.",
+  "3. Exclusion de garantie — Toute garantie est exclue en cas de choc, casse, infiltration liquide, rupture du sceau d'inviolabilité, intervention d'un tiers, ou non-respect des conditions d'usage.",
+  "4. Responsabilité limitée — La responsabilité de l'atelier est limitée au seul coût de la réparation convenue. Aucun dommage indirect (perte de données, préjudice d'exploitation, perte de revenus) ne pourra lui être imputé.",
+  "5. Données — La sauvegarde des données est à la charge exclusive du client. L'atelier ne garantit aucune restitution de données et décline toute responsabilité en cas de perte logicielle.",
+  "6. Devis — Le devis est gratuit et sans engagement. La réparation ne débute qu'après accord écrit du client sur le montant estimé.",
+  "7. Acompte — L'acompte versé est déduit du solde final. Il n'est remboursable que si la réparation n'est pas exécutée pour cause de pièce indisponible.",
+  "8. Gardiennage / déchéance — Tout appareil non réclamé après 90 jours à compter du dépôt est réputé abandonné et orienté vers le recyclage ou le démantèlement, conformément aux CGV de l'atelier. Le client en est informé lors de la remise.",
+  "9. Restitution — La restitution s'opère contre présentation du ticket et signature du bon de restitution. L'appareil est réputé vérifié fonctionnel au moment de la remise.",
+  "10. Garantie réparation — La garantie réparation court à compter de la RESTITUTION de l'appareil (jamais de la date de dépôt), pour la durée du niveau de garantie choisi, inscrit sur le présent document.",
+] as const;
+
+/* PROVISIONAL_LEGAL_TERMS: REQUIRES_OWNER_SIGN_OFF — ملخص بالعربية */
+export const SAV_LEGAL_TERMS_AR = [
+  '1. موضوع العقد: استلام الجهاز لغرض التشخيص والإصلاح فقط، بعد معاينة حالته الموثقة أعلاه.',
+  '2. الأعطال الخفية: لا يتحمل الورشة مسؤولية الأعطال الداخلية غير الظاهرة (صدأ اللوحة الأم، تلف البطارية، الرطوبة) المكتشفة بعد التفكيك.',
+  '3. استثناء الضمان: يُستثنى الضمان في حالة الصدم أو الكسر أو دخول السوائل أو كسر ختم الأمان أو تدخّل طرف ثالث.',
+  '4. حدود المسؤولية: تقتصر مسؤولية الورشة على كلفة الإصلاح المتفق عليها فقط، ولا تتحمل أي أضرار غير مباشرة.',
+  '5. البيانات: حفظ نسخة من البيانات مسؤولية العميل حصرياً، والورشة غير مسؤولة عن فقدانها.',
+  '6. العروض: العرض مجاني وغير ملزم، ولا يبدأ الإصلاح إلا بعد موافقة العميل كتابياً.',
+  '7. التسبيق: يُخصم التسبيق من المبلغ النهائي.',
+  '8. الحيازة والضياع: كل جهاز لم يُستلم خلال 90 يوماً يُعتبر متروكاً ويُوجَّه إلى إعادة التدوير أو التفكيك.',
+  '9. التسليم: يتم التسليم مقابل تقديم التذكرة والتوقيع على وصل التسليم.',
+  '10. ضمان الإصلاح: يسري الضمان من تاريخ التسليم (وليس من تاريخ الإيداع) ولمدة المستوى المختار.',
+] as const;
+
+/** Single-line intake summary (thermal, 32-col) of the accepted terms. */
+export const SAV_LEGAL_TERMS_SHORT =
+  'CGV SAV: panne cachee exclue • choc/liquide/sceau = garantie exclue • donnees a la charge du client • non reclame sous 90j = recyclage • garantie = RESTITUE.';
 
 export interface ProductBundle {
   id: string;
@@ -659,6 +1266,32 @@ export interface TradeInItem {
   certifiedAt?: string;
 }
 
+/**
+ * Two-way exchange direction for a staged trade-in against a cart total.
+ * Net Balance = Gross Cart Total − Trade-In Buyback Value (1:1, no bonus).
+ */
+export type TradeInDirection = 'CUSTOMER_PAYS' | 'SOULTE_SHOP_PAYS' | 'EVEN';
+
+/**
+ * Validated trade-in payload staged from the cart/payment flow.
+ * Does NOT commit to the DB — the atomic checkout flight persists intake
+ * + purchase together so a canceled exchange leaves zero orphaned records.
+ * The +10% wallet bonus is disabled here: buyback applies 1:1 to avoid
+ * inflating inventory cost basis and distorting margins.
+ */
+export interface StagedTradeIn extends Omit<TradeInItem, 'id' | 'createdAt' | 'resalePrice'> {
+  stagedId: string;
+}
+
+/** Settlement snapshot for the exchange delta banner / soulte view. */
+export interface TradeInSettlement {
+  staged: StagedTradeIn | null;
+  buybackValue: number;
+  grossCartTotal: number;
+  netBalance: number;
+  direction: TradeInDirection;
+}
+
 export type RepairNotificationType =
   | 'READY_FOR_PICKUP'
   | 'QUOTE_APPROVAL_REQUIRED'
@@ -691,6 +1324,27 @@ export interface ImeiLifecycleDossier {
   repairHistoryCount: number;
 }
 
+/**
+ * Frozen warranty resolution carried from the Inspector into a SAV ticket.
+ *
+ * The ticket must record what the operator actually saw at inspection time.
+ * A re-lookup at save time could resolve differently (a concurrent sale, a
+ * device re-registered on another record, a clock change), so the snapshot is
+ * treated as immutable evidence: nothing downstream recomputes it.
+ */
+export interface WarrantyDossierSnapshot {
+  /** Sanitized identifier that was resolved (15 valid digits, serial, or null-ish). */
+  idValue: string;
+  /** Which identifier mode produced `idValue`. */
+  idMode: 'imei' | 'serial' | 'manual';
+  /** The resolved lifecycle dossier at inspection time. */
+  dossier: ImeiLifecycleDossier;
+  /** Which customer-warranty tier the resolver suggested, if any. */
+  suggestedTier: WarrantyTier;
+  /** Monotonic capture timestamp for audit/debugging. */
+  resolvedAt: string;
+}
+
 export type PosDocumentType =
   | 'SALE_RECEIPT'
   | 'REPAIR_CLAIM_STUB'
@@ -698,6 +1352,7 @@ export type PosDocumentType =
   | 'TRADE_IN_VOUCHER'
   | 'PRODUCT_LABEL'
   | 'Z_REPORT'
+  | 'WARRANTY_CERTIFICATE'
   | 'CUSTOMER_DEBT_STATEMENT';
 
 export interface MobileHardwareProfile {
@@ -807,7 +1462,14 @@ export interface ReceiptSettings {
   printerRouting?: PrinterRoutingConfig;
   loyaltyConfig?: LoyaltyProgramConfig;
   paperWidth?: '80mm' | '58mm';
-  taxNumber?: string; // NIF / NIS / RC
+  taxNumber?: string; // NIF / NIS / RC (legacy single field)
+  /** Granular Algerian fiscal identifiers (win over taxNumber when set). */
+  rc?: string;
+  nif?: string;
+  nis?: string;
+  art?: string;
+  /** Store city for dated legal lines (« Fait à … »). Defaults to Mascara. */
+  city?: string;
   footerMessage?: string;
   printerInterface?: 'BROWSER' | 'SPOOLER' | 'NETWORK' | 'SERIAL';
   printerName?: string;
@@ -826,6 +1488,14 @@ export interface SecurityAuditLogEntry {
   requiresPin: boolean;
   deviceId?: string;
   ipAddress?: string;
+  /**
+   * FT-06/C provenance. `'local'` (default) = written on this device through
+   * the native chain; `'imported'` = merged from a backup envelope
+   * (insert-only, carries no chain links). Absent (legacy rows) reads as
+   * `'local'`. The UI must label `'imported'` rows as unverified history,
+   * never as chained evidence.
+   */
+  source?: string;
 }
 
 export interface CashDropEntry {
@@ -866,6 +1536,9 @@ export interface CashSession {
   cashSales?: number;
   manualDeposits?: number;
   expenses?: number;
+  /** Informational X-report splits (never part of expected-cash math). */
+  savDeposits?: number;
+  savSettled?: number;
   expectedCash?: number | null;
   actualCash?: number | null;
   discrepancy?: number;

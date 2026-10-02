@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Search, X, ChevronDown, Store, AlertTriangle, Clock, PackageCheck } from 'lucide-react';
+import { Search, X, ChevronDown, Store, AlertTriangle, Clock, PackageCheck, FilePlus } from 'lucide-react';
 import type { FilterCategory } from './types';
 
 export interface FilterToolbarProps {
@@ -12,6 +12,8 @@ export interface FilterToolbarProps {
   selectedWholesalerId?: string | null;
   onWholesalerChange?: (id: string | null) => void;
   counts?: Partial<Record<FilterCategory, number>>;
+  /** 5th ribbon item: 1-click manual PO creation shortcut. */
+  onGenerateNewPO?: () => void;
 }
 
 interface FilterOptionConfig {
@@ -37,6 +39,7 @@ export const FilterToolbar: React.FC<FilterToolbarProps> = ({
   selectedWholesalerId = null,
   onWholesalerChange,
   counts = {},
+  onGenerateNewPO,
 }) => {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -161,7 +164,7 @@ export const FilterToolbar: React.FC<FilterToolbarProps> = ({
       <div
         className="flex items-center gap-1.5 flex-1 min-w-0 overflow-x-auto whitespace-nowrap py-0.5 no-scrollbar"
         role="tablist"
-        aria-label="Filtres de statut"
+        aria-label="Filtres de statut et actions"
         style={{ WebkitOverflowScrolling: 'touch' }}
       >
         {filterOptions.map(({ value, label, icon }) => {
@@ -198,7 +201,22 @@ export const FilterToolbar: React.FC<FilterToolbarProps> = ({
             </button>
           );
         })}
-      </div>
+
+          {/* 5th item: direct manual PO generation shortcut,
+              positioned directly beside the Commandes pill. */}
+          {onGenerateNewPO && (
+            <button
+              type="button"
+              onClick={onGenerateNewPO}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs sm:text-sm font-semibold transition-all duration-150 cursor-pointer shrink-0 min-h-[44px] active:scale-[0.98] border border-emerald-600 bg-emerald-600/10 hover:bg-emerald-600 hover:text-white text-emerald-700 dark:text-emerald-300 dark:border-emerald-500/50 dark:hover:bg-emerald-600 shadow-sm ml-1"
+              title="Créer un nouveau bon de commande manuel"
+              aria-label="Générer un bon de commande"
+            >
+              <FilePlus aria-hidden="true" className="w-3.5 h-3.5 shrink-0" />
+              <span>Générer un bon de commande</span>
+            </button>
+          )}
+        </div>
     </div>
   );
 };

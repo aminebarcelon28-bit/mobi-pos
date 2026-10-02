@@ -4,6 +4,7 @@ import type {
   Product,
   ProductBundle,
   TradeInItem,
+  StagedTradeIn,
   StoreExpense,
   ReceiptSettings,
   LicenseDetails,
@@ -13,12 +14,13 @@ import type {
   HeldSale,
   IMEIRecord,
 } from '../../types/pos';
-import { INITIAL_PRODUCTS, INITIAL_CUSTOMERS } from '../../data/mockData';
+import { migrateRepairOrder } from '../../types/pos';
 import { newId } from '../../utils/ids';
 import { markBoot, printBootSummary } from '../../utils/bootTimings';
 import { checkPinLockout, recordPinFailure, resetPinLockout } from '../../utils/security';
 import { computeEffectiveUnitPrice } from '../../utils/pricingEngine';
-import { generateUniqueEan13Barcode } from '../../utils/barcodeGenerator';
+import { generateUniqueEan13Barcode, generateUniqueSku } from '../../utils/barcodeGenerator';
+import { luhnCheckImei } from '../../utils/savValidation';
 // P11.3: sqliteAdapter -> adapters -> dexie + libsql is the heaviest static chain
 // left in the entry. initDatabase() runs from a useEffect, so load it on demand.
 // P11.3: repositories each pull sqliteAdapter -> dexie + libsql; all four are only
@@ -39,7 +41,7 @@ async function getBackupRepo() {
   const { backupRepository } = await import('../../db/repositories/backupRepository');
   return backupRepository;
 }
-import { hashPin, verifyPin } from '../../utils/security';
+import { hashPin, verifyPin, hashDeviceLocalPin } from '../../utils/security';
 import { STORAGE_KEYS } from '../../constants';
 import { usePosStore } from '../usePosStore';
 
@@ -167,6 +169,9 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
   bundles: [],
   tradeIns: [],
   imeiRecords: [],
+  stagedTradeIn: null,
+  tradeInExchangeRequest: null,
+  exchangeSoultePayout: null,
   activeImeiDossier: null,
   // SECURITY: unset until first-boot setup (App.tsx blocks the till until set).
   // Never restore a hardcoded default here.
@@ -260,9 +265,13 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
   },
 
   setManagerPin: async (newPin) => {
-    if (!newPin || newPin.length < 4) return;
+    // Phase 4.5: manager minimum is 6 digits (cashiers stay at 4).
+    // Throws on invalid input (never a silent no-op: callers report success).
+    if (!newPin || newPin.length < 6) {
+      throw new Error('MANAGER_PIN_INVALID');
+    }
     try {
-      const hashedPin = hashPin(newPin);
+      const hashedPin = hashDeviceLocalPin(newPin);
       await (await getSettingsRepo()).set('manager_pin', hashedPin);
       set({ managerPin: hashedPin });
       // Single-PIN contract: the primary admin (first role==='admin' in the
@@ -277,7 +286,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       }
       await get().logSecurityAction(
         'Mise à Jour Code PIN Gérant',
-        'Le code PIN administrateur a été chiffré et modifié avec succès (SHA-256/Salt)',
+        'Le code PIN administrateur a été chiffré et modifié avec succès (empreinte appareil v1 — hors Tauri uniquement)',
         'Manager',
         true
       );
@@ -287,6 +296,87 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       console.error('Failed to update manager PIN:', error);
       throw error instanceof Error ? error : new Error('MANAGER_PIN_SAVE_FAILED');
     }
+  },
+
+  refreshCredentialsFromAuthority: async () => {
+    const { isTauriEnv } = await import('../../db/adapters/base');
+    if (!isTauriEnv()) return;
+    const { getLocalDb } = await import('../../db/sqlPluginAdapter');
+    const { db: dexieDb } = await import('../../db/database');
+    const db = await getLocalDb();
+    const rows = (await db
+      .select("SELECT key, value_json FROM app_settings WHERE key IN ('manager_pin','cashier_users')")
+      .catch(() => [])) as Array<{ key: string; value_json: string }>;
+    // The authority MUST answer: callers just committed a native write, so
+    // an unreadable authority means the rotation outcome is genuinely
+    // unknown — throw (the caller reports failure) rather than seeding memory
+    // from a stale mirror and calling it success. Dexie puts below stay
+    // best-effort: the boot rank-merge reconciler converges them.
+    if (!rows || rows.length === 0) {
+      throw new Error('CREDENTIAL_REFRESH_FAILED');
+    }
+    const parseCell = (raw: string): unknown => {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return raw;
+      }
+    };
+    let managerPin = get().managerPin;
+    let users = get().cashierUsers;
+    for (const row of rows || []) {
+      const parsed = parseCell(String(row?.value_json ?? ''));
+      if (row?.key === 'manager_pin' && typeof parsed === 'string') {
+        managerPin = parsed;
+        await dexieDb.appSettings.put({ key: 'manager_pin', value: parsed }).catch(() => {});
+      } else if (row?.key === 'cashier_users' && Array.isArray(parsed)) {
+        users = parsed as CashierUser[];
+        await dexieDb.appSettings.put({ key: 'cashier_users', value: parsed }).catch(() => {});
+      }
+    }
+    // Single-PIN contract: the in-memory primary-admin row follows the master
+    // (native `pin_set` writes the master only for primary admins, so the
+    // mirror row would otherwise stay stale until reboot).
+    const primary = (users || []).find((u) => u.role === 'admin');
+    if (primary && managerPin && primary.pin !== managerPin) {
+      users = (users || []).map((u) => (u.id === primary.id ? { ...u, pin: managerPin } : u));
+      await (await getSettingsRepo()).set('cashier_users', users).catch((err: unknown) => {
+        console.warn('[pin] Failed to persist admin mirror alignment:', err);
+      });
+    }
+    const currentActive = get().activeCashier;
+    set({
+      managerPin,
+      cashierUsers: users,
+      activeCashier: (users || []).find((u) => u.id === currentActive?.id) || users[0] || currentActive,
+    });
+  },
+
+  rotatePinCredential: async (userId, newPin, isManager, opts) => {
+    const { isTauriEnv } = await import('../../db/adapters/base');
+    if (isTauriEnv()) {
+      // Native-first: mint + persist happen behind IPC; the hash never
+      // enters JS. A deny/transport error propagates — the caller shows it
+      // and NEVER falls back to a local mint (fail closed, AGENTS.md §5).
+      // recoveryReset passes straight through (pepper-dead tech-recovery).
+      const { pinSet } = await import('../../api/pin');
+      const res = await pinSet({ userId, newPin, recoveryReset: opts?.recoveryReset });
+      await get().refreshCredentialsFromAuthority();
+      return { format: res.format };
+    }
+    // Non-Tauri only (web preview): legacy device-local mint. Unreachable
+    // under Tauri by construction (branch above).
+    if (isManager) {
+      await get().setManagerPin(newPin);
+    } else {
+      const st = get();
+      await get().setCashierUsers(
+        (st.cashierUsers || []).map((u) =>
+          u.id === userId ? { ...u, pin: hashDeviceLocalPin(newPin) } : u
+        )
+      );
+    }
+    return { format: 'v1' };
   },
 
   logSecurityAction: async (action, details, user = 'Yacine (Admin)', requiresPin = false) => {
@@ -316,6 +406,9 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       action,
       details,
       requiresPin,
+      // FT-06/C: funnel-written rows are local evidence (native chain or the
+      // non-Tauri fallback, which inherits the DB 'local' default).
+      source: 'local',
       ...(deviceId ? { deviceId } : {}),
       ...(ipAddress ? { ipAddress } : {}),
     };
@@ -333,7 +426,40 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     // persist-first ordering is the real protection: on failure the UI never
     // shows an audit row the database rejected.
     try {
-      await (await getSqlite()).saveAuditLog(newEntry);
+      // Phase 4.4 Tier A path: under Tauri the write goes through the native
+      // audit_append command (authorized + hash-chained); otherwise the
+      // direct SQLite write below (web preview, Node tests). Failures stay
+      // swallowed per the contract above — audit never blocks primary flows.
+      // Phase 4.5: on Tauri a native failure NEVER falls back to the direct
+      // write (that would plant unchained rows inside the chain). The swallow
+      // is counted so dropped entries stay visible in diagnostics.
+      if (
+        typeof window !== 'undefined' &&
+        Boolean(
+          (window as unknown as { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown })
+            .__TAURI_INTERNALS__ ||
+            (window as unknown as { __TAURI__?: unknown }).__TAURI__
+        )
+      ) {
+        const { auditAppend, noteSwallowedAuditFailure } = await import('../../api/audit');
+        try {
+          await auditAppend({
+            action,
+            details,
+            user,
+            requiresPin,
+            deviceId,
+            ipAddress,
+          });
+        } catch (nativeErr) {
+          noteSwallowedAuditFailure(
+            nativeErr instanceof Error ? nativeErr.message : String(nativeErr)
+          );
+          return;
+        }
+      } else {
+        await (await getSqlite()).saveAuditLog(newEntry);
+      }
     } catch (err) {
       console.error('[audit] Failed to persist security audit log:', err);
       return;
@@ -637,7 +763,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
 
       const convertedProduct: Product = {
         id: newId('prod-trade'),
-        sku: `TRD-${tradeInput.imei.slice(-6)}`,
+        sku: generateUniqueSku(products, "Téléphones d'Occasion (Reprise)", tradeInput.brand),
         barcode: realBarcode,
         title: `${tradeInput.deviceModel} (${tradeInput.conditionGrade})`,
         brand: tradeInput.brand,
@@ -676,6 +802,71 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         await (await getSqlite()).saveIMEIRecord(imeiRecord);
       } catch (err) {
         console.warn('[processTradeIn] Failed to persist IMEI record:', err);
+      }
+
+      // Phase 1 — FIFO foundation: mint a single-unit batch + ledger RECEIVE
+      // so inventory valuation (stock_batches) sees the intake. Cost basis is
+      // the 1:1 buyback (exchange mode hides the +10% wallet bonus upstream;
+      // standalone wallet bonus still flows via tradeInput.buybackValue).
+      // purchase_order_id convention: TRADE-<tradeId> pseudo-PO (traceable).
+      try {
+        const buybackCost = Math.max(0, Math.round(Number(tradeInput.buybackValue) || 0));
+        const tradeBatchId = `batch-trade-${newTradeIn.id}`;
+        const tradeLedgerKey = `recv-trade-${newTradeIn.id}`;
+        // P11.3: sqlPluginAdapter pulls the libsql/Turso sync graph; load on demand.
+        const { appendInventoryDeltas, insertStockBatch, ensureProductParents } =
+          await import('../../db/sqlPluginAdapter');
+        await ensureProductParents([convertedProduct.id]).catch(() => {});
+        await appendInventoryDeltas([
+          {
+            id: tradeLedgerKey,
+            idempotencyKey: tradeLedgerKey,
+            productId: convertedProduct.id,
+            delta: 1,
+            reason: 'RECEIVE',
+            refType: 'TRADE_IN',
+            refId: newTradeIn.id,
+          },
+        ]);
+        await insertStockBatch({
+          batchId: tradeBatchId,
+          productId: convertedProduct.id,
+          quantityRemaining: 1,
+          unitCost: buybackCost,
+          purchaseOrderId: `TRADE-${newTradeIn.id}`,
+          idempotencyKey: `sb-${tradeBatchId}`,
+        });
+        try {
+          const { dexieDb } = await import('../../db/database');
+          await dexieDb.stockBatches.put({
+            batchId: tradeBatchId,
+            productId: convertedProduct.id,
+            quantityRemaining: 1,
+            unitCost: buybackCost,
+            receivedAt: new Date().toISOString(),
+            purchaseOrderId: `TRADE-${newTradeIn.id}`,
+          });
+        } catch (dexieErr) {
+          console.warn('[processTradeIn] Failed to mirror trade-in batch in Dexie:', dexieErr);
+        }
+        try {
+          const { syncManager } = await import('../../sync/SyncManager');
+          syncManager.notifyLocalWrite();
+        } catch {
+          // Sync kick best-effort.
+        }
+      } catch (batchErr) {
+        console.error('[processTradeIn] FIFO batch mint failed after trade-in save:', batchErr);
+        set({
+          products: updatedProducts,
+          tradeIns: updatedTradeIns,
+          imeiRecords: updatedImeiRecords,
+          activeModal: null,
+        });
+        return {
+          success: false as const,
+          reason: `TRADE_BATCH_FAILED:${batchErr instanceof Error ? batchErr.message : String(batchErr)}`,
+        };
       }
 
       if (!tradeInput.creditToWallet && get().activeShift) {
@@ -767,6 +958,156 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     } catch (error) {
       console.error('Failed to process trade-in:', error);
       return { success: false as const, reason: 'TRADE_IN_FAILED' };
+    }
+  },
+
+  setStagedTradeIn: (staged: StagedTradeIn | null) => {
+    set({ stagedTradeIn: staged });
+  },
+
+  clearStagedTradeIn: () => {
+    set({ stagedTradeIn: null });
+  },
+
+  openTradeInExchange: (initial) => {
+    set({ tradeInExchangeRequest: { initial: initial ?? {}, nonce: Date.now() } });
+    get().openModal('trade_in_buyback');
+  },
+
+  clearTradeInExchangeRequest: () => {
+    set({ tradeInExchangeRequest: null });
+  },
+
+  setExchangeSoultePayout: (choice) => {
+    set({ exchangeSoultePayout: choice });
+  },
+
+  commitStagedTradeInIntake: async (staged: StagedTradeIn) => {
+    // Pure intake for the atomic exchange checkout: product + trade + IMEI +
+    // FIFO batch + ledger, NO cash/wallet legs (checkout flight owns those).
+    // Buyback is 1:1 — the +10% wallet bonus never reaches a staged payload
+    // (exchange mode hides it upstream).
+    try {
+      const { tradeIns, products, imeiRecords } = get();
+      const buybackCost = Math.max(0, Math.round(Number(staged.buybackValue) || 0));
+      if (buybackCost <= 0) {
+        return { success: false as const, reason: 'INVALID_BUYBACK' };
+      }
+      const resalePrice = Math.round(buybackCost * (1 + (Number(staged.resaleMarginPercent) || 0) / 100));
+      const realBarcode = staged.barcode?.trim()
+        ? staged.barcode.trim()
+        : generateUniqueEan13Barcode(products, '613');
+
+      // Deterministic ids from stagedId: intake-first ordering + checkout
+      // retry converge via upsert (no duplicate product/trade rows).
+      const newTradeIn: TradeInItem = {
+        ...staged,
+        barcode: realBarcode,
+        resalePrice,
+        creditToWallet: false,
+        id: `trade-${staged.stagedId}`,
+        createdAt: new Date().toISOString(),
+      };
+
+      const convertedProduct: Product = {
+        id: `prod-${staged.stagedId}`,
+        sku: generateUniqueSku(products, "Téléphones d'Occasion (Reprise)", staged.brand),
+        barcode: realBarcode,
+        title: `${staged.deviceModel} (${staged.conditionGrade})`,
+        brand: staged.brand,
+        compatibleModel: staged.deviceModel,
+        category: "Téléphones d'Occasion (Reprise)",
+        price: resalePrice,
+        wholesalePrice: Math.round(buybackCost * 1.15),
+        costPrice: buybackCost,
+        stock: 1,
+        imageUrl:
+          'https://images.unsplash.com/photo-1592899677977-9c10ca588bbd?w=300&auto=format&fit=crop&q=80',
+        isSerialized: true,
+        imeiNumber: staged.imei.trim(),
+        vendorName: 'Client Buyback',
+        leadTimeDays: 0,
+        dailySalesVelocity: 0.5,
+        reorderPoint: 0,
+      };
+
+      const imeiRecord: IMEIRecord = {
+        imei: staged.imei.trim(),
+        productId: convertedProduct.id,
+        receivedAt: new Date().toISOString(),
+        notes: `Rachat d'occasion (échange): ${staged.deviceModel} - Client: ${newTradeIn.customerName}`,
+        version: 1,
+      };
+
+      await (await getProductRepo()).save(convertedProduct);
+      await (await getSqlite()).saveTradeIn(newTradeIn);
+      try {
+        await (await getSqlite()).saveIMEIRecord(imeiRecord);
+      } catch (err) {
+        console.warn('[commitStagedTradeInIntake] Failed to persist IMEI record:', err);
+      }
+
+      const tradeBatchId = `batch-trade-${newTradeIn.id}`;
+      const tradeLedgerKey = `recv-trade-${newTradeIn.id}`;
+      try {
+        const { appendInventoryDeltas, insertStockBatch, ensureProductParents } =
+          await import('../../db/sqlPluginAdapter');
+        await ensureProductParents([convertedProduct.id]).catch(() => {});
+        await appendInventoryDeltas([
+          {
+            id: tradeLedgerKey,
+            idempotencyKey: tradeLedgerKey,
+            productId: convertedProduct.id,
+            delta: 1,
+            reason: 'RECEIVE',
+            refType: 'TRADE_IN',
+            refId: newTradeIn.id,
+          },
+        ]);
+        await insertStockBatch({
+          batchId: tradeBatchId,
+          productId: convertedProduct.id,
+          quantityRemaining: 1,
+          unitCost: buybackCost,
+          purchaseOrderId: `TRADE-${newTradeIn.id}`,
+          idempotencyKey: `sb-${tradeBatchId}`,
+        });
+        try {
+          const { dexieDb } = await import('../../db/database');
+          await dexieDb.stockBatches.put({
+            batchId: tradeBatchId,
+            productId: convertedProduct.id,
+            quantityRemaining: 1,
+            unitCost: buybackCost,
+            receivedAt: new Date().toISOString(),
+            purchaseOrderId: `TRADE-${newTradeIn.id}`,
+          });
+        } catch (dexieErr) {
+          console.warn('[commitStagedTradeInIntake] Dexie batch mirror skipped:', dexieErr);
+        }
+        try {
+          const { syncManager } = await import('../../sync/SyncManager');
+          syncManager.notifyLocalWrite();
+        } catch {
+          // Sync kick best-effort.
+        }
+      } catch (batchErr) {
+        console.error('[commitStagedTradeInIntake] FIFO batch mint failed:', batchErr);
+        return {
+          success: false as const,
+          reason: `TRADE_BATCH_FAILED:${batchErr instanceof Error ? batchErr.message : String(batchErr)}`,
+        };
+      }
+
+      set({
+        products: [convertedProduct, ...products],
+        tradeIns: [newTradeIn, ...tradeIns],
+        imeiRecords: [imeiRecord, ...imeiRecords.filter((r) => r.imei !== imeiRecord.imei)],
+      });
+      return { success: true as const, tradeId: newTradeIn.id, productId: convertedProduct.id };
+    } catch (error) {
+      console.error('Failed to commit staged trade-in intake:', error);
+      return { success: false as const, reason: 'STAGED_INTAKE_FAILED' };
     }
   },
 
@@ -872,6 +1213,11 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     if (!/^\d{15}$/.test(imei)) {
       return { valid: false, reason: 'L\'IMEI doit contenir exactement 15 chiffres.' };
     }
+    // Phase 1 hardening: 15-digit IMEIs must pass Luhn MOD-10 (dead-device
+    // S/N flows stay in the modal neutral path, never reach this gate).
+    if (!luhnCheckImei(imei)) {
+      return { valid: false, reason: 'IMEI invalide (checksum Luhn).' };
+    }
     const { imeiRecords } = get();
     const duplicate = imeiRecords.find((r) => r.imei === imei);
     if (duplicate) {
@@ -933,11 +1279,87 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           const receiptSettings = await loadReceiptSettings();
           const savedCashiers = await (await getSettingsRepo()).get<CashierUser[]>('cashier_users', DEFAULT_CASHIERS);
           const creditVouchers = await sqlite.getAllCreditVouchers().catch(() => []);
-        const loadedUsers = Array.isArray(savedCashiers) && savedCashiers.length > 0 ? savedCashiers : DEFAULT_CASHIERS;
+        // Phase 4a credential reconciliation (rank-merge). The native
+        // `pin_set` writes SQLite directly; a kill between the native commit
+        // and the TS mirror refresh leaves Dexie stale, and Dexie-first
+        // reads would resurrect the pre-rotation hash on next boot. Rule:
+        // per value, the stronger envelope always wins regardless of which
+        // store holds it; the winner is written back to BOTH stores.
+        const credentialRank = (p: unknown): number => {
+          const s = typeof p === 'string' ? p.trim() : '';
+          if (!s) return -1;
+          if (s.startsWith('v2$')) return s.split('$').length >= 3 ? 3 : 0;
+          if (s.startsWith('v1$')) {
+            const salt = s.split('$')[1] || '';
+            return s.split('$').length === 3 && salt.startsWith('local_') ? 2 : 1;
+          }
+          return 0; // plaintext or unknown: migratable, never authoritative
+        };
+        let reconciledManagerPin: unknown = managerPin;
+        let reconciledCashiers: unknown = savedCashiers;
+        try {
+          const { isTauriEnv } = await import('../../db/adapters/base');
+          if (isTauriEnv()) {
+            const { getLocalDb } = await import('../../db/sqlPluginAdapter');
+            const db = await getLocalDb();
+            const rows = (await db
+              .select("SELECT key, value_json FROM app_settings WHERE key IN ('manager_pin','cashier_users')")
+              .catch(() => [])) as Array<{ key: string; value_json: string }>;
+            const parseCell = (raw: string): unknown => {
+              try {
+                return JSON.parse(raw);
+              } catch {
+                return raw;
+              }
+            };
+            const repo = await getSettingsRepo();
+            for (const row of rows || []) {
+              if (row?.key === 'manager_pin') {
+                const sqlPin = parseCell(String(row.value_json ?? ''));
+                if (credentialRank(sqlPin) > credentialRank(reconciledManagerPin)) {
+                  reconciledManagerPin = sqlPin;
+                  await repo.set('manager_pin', sqlPin).catch(() => {});
+                } else if (credentialRank(reconciledManagerPin) > credentialRank(sqlPin)) {
+                  // Dexie holds the stronger value (should not happen via
+                  // production flows): push it down so the stores converge.
+                  await repo.set('manager_pin', reconciledManagerPin).catch(() => {});
+                }
+              } else if (row?.key === 'cashier_users') {
+                const sqlUsers = parseCell(String(row.value_json ?? ''));
+                if (Array.isArray(sqlUsers) && Array.isArray(reconciledCashiers)) {
+                  const byId = new Map<string, CashierUser>();
+                  for (const u of reconciledCashiers as CashierUser[]) {
+                    if (u && typeof u.id === 'string') byId.set(u.id, u);
+                  }
+                  let changed = false;
+                  for (const su of sqlUsers as CashierUser[]) {
+                    if (!su || typeof su.id !== 'string') continue;
+                    const dex = byId.get(su.id);
+                    if (!dex) {
+                      byId.set(su.id, su);
+                      changed = true;
+                    } else if (credentialRank(su.pin) > credentialRank(dex.pin)) {
+                      byId.set(su.id, { ...dex, pin: su.pin });
+                      changed = true;
+                    }
+                  }
+                  if (changed) {
+                    reconciledCashiers = [...byId.values()];
+                    await repo.set('cashier_users', reconciledCashiers).catch(() => {});
+                  }
+                }
+              }
+            }
+          }
+        } catch {
+          // Reconciliation is best-effort: the lanes below fail closed on
+          // whatever they load (no defaults minted, rotation forced).
+        }
+        const loadedUsers = Array.isArray(reconciledCashiers) && (reconciledCashiers as unknown[]).length > 0 ? reconciledCashiers as CashierUser[] : DEFAULT_CASHIERS;
         // Self-heal for installs that drifted before the single-PIN contract:
         // if a real manager PIN exists but the primary admin row holds a
         // different one, the master wins and is persisted back.
-        const cleanManagerPin = typeof managerPin === 'string' && managerPin.length >= 4 ? managerPin : '';
+        const cleanManagerPin = typeof reconciledManagerPin === 'string' && (reconciledManagerPin as string).length >= 4 ? reconciledManagerPin as string : '';
         const primaryAdmin = loadedUsers.find((u) => u.role === 'admin');
         const healedUsers =
           cleanManagerPin && primaryAdmin && primaryAdmin.pin !== cleanManagerPin
@@ -945,10 +1367,14 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
             : loadedUsers;
         // Plaintext-PIN migration (fail-closed hardening): any cashier PIN or
         // manager PIN stored pre-hash (ancient installs) is hashed in place at
-        // boot. After this, stored PINs are always `v1$` hashes — hashes are
-        // what sync to peer devices, plaintext never rests or travels.
+        // boot. The predicate is plaintext-ONLY: `v2$` Argon2id credentials
+        // must never be wrapped (wrapping one in `v1$` bricks it — no PIN
+        // verifies against a hash-of-a-hash). After this, stored PINs are
+        // `v1$` or `v2$` hashes — hashes are what sync to peer devices,
+        // plaintext never rests or travels.
         let pinRow = { users: healedUsers, managerPin: cleanManagerPin, dirty: healedUsers !== loadedUsers };
-        const needsHash = (p: unknown) => typeof p === 'string' && p.length > 0 && !p.startsWith('v1$');
+        const needsHash = (p: unknown) =>
+          typeof p === 'string' && p.length > 0 && !p.startsWith('v1$') && !p.startsWith('v2$');
         if (pinRow.managerPin && needsHash(pinRow.managerPin)) {
           pinRow = { ...pinRow, managerPin: hashPin(pinRow.managerPin), dirty: true };
           await (await getSettingsRepo()).set('manager_pin', pinRow.managerPin).catch((err: unknown) => {
@@ -1023,7 +1449,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           set({
             customers,
             transactions,
-            repairOrders,
+            repairOrders: repairOrders.map((r) => migrateRepairOrder(r)),
             purchaseOrders,
             tradeIns,
             imeiRecords,
@@ -1056,17 +1482,6 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         initDatabaseInFlight = null;
       });
     return initDatabaseInFlight;
-  },
-
-  seedDemoData: async () => {
-    try {
-      await (await getBackupRepo()).seedDemoData(INITIAL_PRODUCTS, INITIAL_CUSTOMERS);
-      const products = await (await getProductRepo()).getAll();
-      const customers = await (await getCustomerRepo()).getAll();
-      set({ products, customers });
-    } catch (error) {
-      console.error('Failed to seed demo data:', error);
-    }
   },
 
   refreshAfterPull: async () => {
@@ -1124,7 +1539,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         products,
         customers,
         transactions,
-        repairOrders,
+        repairOrders: repairOrders.map((r) => migrateRepairOrder(r)),
         purchaseOrders,
         tradeIns,
         imeiRecords,
@@ -1242,9 +1657,12 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     }
   },
 
-  importDatabase: async (jsonString: string) => {
+  importDatabase: async (jsonString: string, actor?: string) => {
     try {
-      const importResult = await (await getBackupRepo()).importJSON(jsonString);
+      const importResult = await (await getBackupRepo()).importJSON(
+        jsonString,
+        { actor: (actor ?? '').trim() || get().activeCashier?.name || undefined }
+      );
       // A restore replaces live books (transactions, audit, vouchers) — it
       // must itself be auditable, or a tamper-restore erases its own trace.
       // Best-effort AFTER the outcome is known; never fails the restore.

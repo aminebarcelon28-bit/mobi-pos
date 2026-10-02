@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   FileText,
@@ -23,6 +24,7 @@ import {
   Layers,
   Download,
   Eye,
+  MoreHorizontal,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
@@ -53,6 +55,8 @@ export const PurchaseOrderModal: React.FC = () => {
     receiptSettings,
     products,
     createManualPurchaseOrder,
+    poDraftBuilderRequested,
+    consumePoDraftBuilder,
   } = usePosStore();
   const { showToast } = useToast();
 
@@ -97,7 +101,9 @@ export const PurchaseOrderModal: React.FC = () => {
 
   const selectedPO = inspectingPO || activeDraftPO || waitingListOrders[0];
 
-  const handleOpenVerification = (po: PurchaseOrder) => {
+  // Memoized: only stable setters are used, so the deep-link
+  // effect below never re-fires on unrelated re-renders.
+  const handleOpenVerification = useCallback((po: PurchaseOrder) => {
     setInspectingPO(po);
     const initQty: Record<string, number> = {};
     const initCost: Record<string, number> = {};
@@ -119,7 +125,7 @@ export const PurchaseOrderModal: React.FC = () => {
     setDiscrepancyReasons(initReasons);
     setImeisMap({});
     setActiveTab('active_po');
-  };
+  }, []);
 
   const handleVerifyAndReceive = async () => {
     if (!selectedPO) return;
@@ -267,6 +273,117 @@ export const PurchaseOrderModal: React.FC = () => {
       .slice(0, 30);
   }, [products, catalogSearchTerm, catalogFilterMode, lowStockProducts]);
 
+  // Shared portaled meatball menu (one implementation reused per cluster,
+  // anchor per trigger): createPortal to document.body, position:fixed, flip,
+  // clamp, outside/Escape/scroll/resize dismiss. Anchors live inside
+  // overflow scrollers so absolute children would be clipped.
+  const [overflowMenu, setOverflowMenu] = useState<string | null>(null);
+  const overflowAnchorRefs = useRef(new Map<string, HTMLButtonElement>());
+  const overflowMenuRef = useRef<HTMLDivElement>(null);
+  const [overflowPos, setOverflowPos] = useState<{ top: number; left: number; openUp: boolean }>({ top: 0, left: 0, openUp: false });
+
+  useEffect(() => {
+    if (!overflowMenu) return;
+    const MENU_W = 288;
+    const MENU_H_EST = 176;
+    const place = () => {
+      const anchor = overflowAnchorRefs.current.get(overflowMenu);
+      const r = anchor?.getBoundingClientRect();
+      if (!r) return;
+      const spaceBelow = window.innerHeight - r.bottom;
+      const openUp = spaceBelow < MENU_H_EST + 16;
+      const top = openUp
+        ? Math.max(8, r.top - MENU_H_EST - 8)
+        : Math.min(r.bottom + 8, window.innerHeight - 16);
+      const isMobile = window.innerWidth < 640;
+      const left = isMobile
+        ? 8
+        : Math.max(8, Math.min(r.right - MENU_W, window.innerWidth - MENU_W - 8));
+      setOverflowPos({ top, left, openUp });
+    };
+    place();
+    const handleClickOutside = (event: MouseEvent) => {
+      const t = event.target as Node;
+      const anchor = overflowAnchorRefs.current.get(overflowMenu);
+      if (
+        overflowMenuRef.current && !overflowMenuRef.current.contains(t) &&
+        anchor && !anchor.contains(t)
+      ) {
+        setOverflowMenu(null);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setOverflowMenu(null);
+        overflowAnchorRefs.current.get(overflowMenu)?.focus();
+      }
+    };
+    const handleScroll = () => setOverflowMenu(null);
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKey, true);
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', handleScroll, true);
+    overflowMenuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKey, true);
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [overflowMenu]);
+
+  // Escape dismissal for the modal itself (ignored while a meatball menu is open).
+  useEffect(() => {
+    if (activeModal !== 'purchase_order') return;
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !overflowMenu) {
+        closeModal();
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [activeModal, closeModal, overflowMenu]);
+
+  // Deep-link: an externally-set activeDraftPO (replenishment
+  // "Voir Commande" or a container-created draft) selects that
+  // order and opens its contrôle/réception view. The ref records
+  // the last seen id so normal entry points keep landing on the
+  // waiting list and the switch fires exactly once per change.
+  const lastDraftIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const draft = activeDraftPO;
+    const currentId = draft?.id ?? null;
+    if (draft && currentId !== null && currentId !== lastDraftIdRef.current) {
+      lastDraftIdRef.current = currentId;
+      handleOpenVerification(draft);
+    } else {
+      lastDraftIdRef.current = currentId;
+    }
+  }, [activeDraftPO, handleOpenVerification]);
+
+  // Draft-builder intent: the replenishment "Générer un bon de
+  // commande" shortcut requests the manual PO form directly.
+  // Consumed here so the flag never re-fires on re-render.
+  useEffect(() => {
+    if (!poDraftBuilderRequested) return;
+    consumePoDraftBuilder();
+    setInspectingPO(null);
+    setActiveTab('new_po');
+  }, [poDraftBuilderRequested, consumePoDraftBuilder]);
+
+  const setOverflowAnchor = (key: string) => (el: HTMLButtonElement | null) => {
+    if (el) {
+      overflowAnchorRefs.current.set(key, el);
+    } else {
+      overflowAnchorRefs.current.delete(key);
+    }
+  };
+
+  const toggleOverflowMenu = (key: string) => {
+    setOverflowMenu((prev) => (prev === key ? null : key));
+  };
+
   if (activeModal !== 'purchase_order') return null;
 
   const handleAddProductToDraft = (product: Product, customQty?: number) => {
@@ -370,14 +487,14 @@ export const PurchaseOrderModal: React.FC = () => {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[90vh] flex flex-col cursor-default"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-dvh-shell sm:h-[90dvh] flex flex-col cursor-default"
       >
         
         {/* Header */}
         <div className="p-3 sm:p-4 border-b border-pos-border bg-pos-card shrink-0 flex flex-col gap-2.5">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold shrink-0">
+              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold shrink-0">
                 <Truck className="w-4 h-4 sm:w-5 sm:h-5" />
               </div>
               <div className="min-w-0">
@@ -385,7 +502,7 @@ export const PurchaseOrderModal: React.FC = () => {
                   <h2 className="text-sm sm:text-base font-black text-pos-text truncate">
                     Approvisionnement & Réceptions
                   </h2>
-                  <span className="hidden sm:inline-block px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-[10px]">
+                  <span className="hidden sm:inline-block px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-[10px]">
                     Staged Procurement V2
                   </span>
                 </div>
@@ -412,7 +529,7 @@ export const PurchaseOrderModal: React.FC = () => {
                 setActiveTab('waiting_list');
                 setInspectingPO(null);
               }}
-              className={`min-h-[36px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
+              className={`min-h-[44px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
                 activeTab === 'waiting_list'
                   ? 'bg-amber-500 text-slate-950 shadow-md'
                   : 'text-pos-muted hover:text-pos-text'
@@ -428,7 +545,7 @@ export const PurchaseOrderModal: React.FC = () => {
                 setActiveTab('new_po');
                 setInspectingPO(null);
               }}
-              className={`min-h-[36px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
+              className={`min-h-[44px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
                 activeTab === 'new_po'
                   ? 'bg-emerald-500 text-slate-950 shadow-md'
                   : 'text-pos-muted hover:text-pos-text'
@@ -442,7 +559,7 @@ export const PurchaseOrderModal: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setActiveTab('active_po')}
-                className={`min-h-[36px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
+                className={`min-h-[44px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
                   activeTab === 'active_po'
                     ? 'bg-emerald-500 text-slate-950 shadow-md'
                     : 'text-pos-muted hover:text-pos-text'
@@ -457,7 +574,7 @@ export const PurchaseOrderModal: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setActiveTab('preview_a4')}
-                className={`min-h-[36px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
+                className={`min-h-[44px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
                   activeTab === 'preview_a4'
                     ? 'bg-emerald-500 text-slate-950 shadow-md'
                     : 'text-pos-muted hover:text-pos-text'
@@ -471,9 +588,9 @@ export const PurchaseOrderModal: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('completed')}
-              className={`min-h-[36px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
+              className={`min-h-[44px] px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
                 activeTab === 'completed'
-                  ? 'bg-cyan-500 text-slate-950 shadow-md'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md'
                   : 'text-pos-muted hover:text-pos-text'
               }`}
             >
@@ -484,7 +601,7 @@ export const PurchaseOrderModal: React.FC = () => {
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto p-5 bg-pos-bg">
+        <div className="flex-1 overflow-y-auto overscroll-contain p-5 bg-pos-bg">
           {activeTab === 'waiting_list' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
@@ -508,7 +625,7 @@ export const PurchaseOrderModal: React.FC = () => {
               </div>
 
               {waitingListOrders.length === 0 ? (
-                <div className="text-center py-16 text-pos-muted bg-pos-card border border-pos-border rounded-2xl max-w-md mx-auto p-6 space-y-3">
+                <div className="text-center py-16 text-pos-muted bg-pos-card border border-pos-border rounded-xl shadow-sm max-w-md mx-auto p-6 space-y-3">
                   <CheckCircle2 className="w-12 h-12 mx-auto mb-1 opacity-40 text-emerald-400" />
                   <p className="text-sm font-bold text-pos-text">Aucun bon de commande en attente</p>
                   <p className="text-xs text-pos-muted">
@@ -533,7 +650,7 @@ export const PurchaseOrderModal: React.FC = () => {
                     return (
                       <div
                         key={po.id}
-                        className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 shadow-sm hover:border-amber-500/40 transition flex flex-col justify-between"
+                        className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3 shadow-sm hover:border-amber-500/40 transition flex flex-col justify-between"
                       >
                         <div>
                           <div className="flex items-start justify-between gap-2">
@@ -541,7 +658,7 @@ export const PurchaseOrderModal: React.FC = () => {
                               <div className="flex items-center gap-2">
                                 <span className="font-black text-pos-text text-sm">#{po.poNumber}</span>
                                 <span
-                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
                                     isPartial
                                       ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
                                       : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
@@ -567,7 +684,7 @@ export const PurchaseOrderModal: React.FC = () => {
                                 {receivedUnits} / {totalUnits} unités reçues
                               </span>
                             </div>
-                            <div className="max-h-24 overflow-y-auto space-y-1 pt-1">
+                            <div className="max-h-24 overflow-y-auto overscroll-contain space-y-1 pt-1">
                               {(po.items || []).map((item) => (
                                 <div key={item.productId} className="flex justify-between text-[11px]">
                                   <span className="text-pos-text truncate max-w-[200px]">{item.title}</span>
@@ -585,44 +702,29 @@ export const PurchaseOrderModal: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => handleCancelOrder(po.id)}
-                              className="px-2.5 py-1.5 rounded-lg bg-pos-bg hover:bg-rose-500/10 text-pos-muted hover:text-rose-400 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
+                              className="min-h-[44px] px-2.5 py-1.5 rounded-lg bg-pos-bg hover:bg-rose-500/10 text-pos-muted hover:text-rose-400 text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
                               title="Annuler ce bon"
                             >
                               <Ban className="w-3.5 h-3.5" /> Annuler
                             </button>
                             <button
                               type="button"
-                              onClick={() => {
-                                setInspectingPO(po);
-                                setActiveTab('preview_a4');
-                              }}
-                              className="px-2.5 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text text-xs font-bold flex items-center gap-1 transition cursor-pointer"
-                              title="Aperçu A4 Document Pro"
+                              ref={setOverflowAnchor(`waiting-${po.id}`)}
+                              onClick={() => toggleOverflowMenu(`waiting-${po.id}`)}
+                              className="w-8 h-8 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
+                              aria-label={`Plus d'actions pour le bon ${po.poNumber}`}
+                              aria-haspopup="menu"
+                              aria-expanded={overflowMenu === `waiting-${po.id}`}
+                              title="Plus d'actions (Aperçu, Excel, Impression)"
                             >
-                              <Eye className="w-3.5 h-3.5 text-emerald-400" /> Aperçu A4
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleExportExcel(po)}
-                              className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs transition cursor-pointer"
-                              title="Télécharger en Excel (.xlsx stylé)"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handlePrintPO(po)}
-                              className="p-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text text-xs transition cursor-pointer"
-                              title="Imprimer / PDF A4"
-                            >
-                              <Printer className="w-3.5 h-3.5" />
+                              <MoreHorizontal className="w-4 h-4" />
                             </button>
                           </div>
 
                           <button
                             type="button"
                             onClick={() => handleOpenVerification(po)}
-                            className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 transition cursor-pointer"
+                            className="min-h-[44px] px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-md shadow-amber-500/20 transition cursor-pointer"
                           >
                             <PackageCheck className="w-4 h-4" /> Vérifier & Réceptionner
                           </button>
@@ -638,7 +740,7 @@ export const PurchaseOrderModal: React.FC = () => {
           {activeTab === 'new_po' && (
             <div className="space-y-4">
               {/* Header & Vendor Details */}
-              <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3">
+              <div className="bg-pos-card border border-pos-border rounded-xl shadow-sm p-4 space-y-3">
                 <div className="flex items-center justify-between border-b border-pos-border/50 pb-3">
                   <div>
                     <h3 className="text-sm font-black text-pos-text flex items-center gap-2">
@@ -649,7 +751,7 @@ export const PurchaseOrderModal: React.FC = () => {
                       Commandez n'importe quel article du catalogue ou suivez les alertes de réapprovisionnement. Le stock et les lots FIFO ne sont pas impactés avant la réception physique.
                     </p>
                   </div>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
                     Statut : En Attente (Waiting List)
                   </span>
                 </div>
@@ -664,7 +766,7 @@ export const PurchaseOrderModal: React.FC = () => {
                       placeholder="Nom du fournisseur (ex: Grossiste Centre)..."
                       value={newVendorName}
                       onChange={(e) => setNewVendorName(e.target.value)}
-                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:outline-none focus:border-emerald-400"
+                      className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 min-h-[44px] text-xs font-bold text-pos-text focus:outline-none focus:border-emerald-400"
                     />
                     {existingVendors.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1.5">
@@ -673,7 +775,7 @@ export const PurchaseOrderModal: React.FC = () => {
                             key={v}
                             type="button"
                             onClick={() => setNewVendorName(v)}
-                            className="text-[9px] px-1.5 py-0.5 rounded bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-emerald-400 transition cursor-pointer"
+                            className="text-[9px] px-2 py-1 min-h-[36px] rounded bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-emerald-400 transition cursor-pointer"
                           >
                             + {v}
                           </button>
@@ -690,7 +792,7 @@ export const PurchaseOrderModal: React.FC = () => {
                       type="date"
                       value={newOrderDate}
                       onChange={(e) => setNewOrderDate(e.target.value)}
-                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:outline-none focus:border-cyan-400"
+                      className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 min-h-[44px] text-xs font-bold text-pos-text focus:outline-none focus:border-cyan-400"
                     />
                   </div>
 
@@ -703,16 +805,16 @@ export const PurchaseOrderModal: React.FC = () => {
                       placeholder="Instructions, N° devis..."
                       value={newOrderNotes}
                       onChange={(e) => setNewOrderNotes(e.target.value)}
-                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text focus:outline-none focus:border-amber-400"
+                      className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 min-h-[44px] text-xs text-pos-text focus:outline-none focus:border-amber-400"
                     />
                   </div>
                 </div>
               </div>
 
               {/* Product Catalog Search & Selection */}
-              <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3">
+              <div className="bg-pos-card border border-pos-border rounded-xl shadow-sm p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 flex-1 min-w-[260px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 focus-within:border-emerald-400">
+                  <div className="flex items-center gap-2 flex-1 min-w-[260px] bg-pos-bg border border-pos-border rounded-lg px-3 py-2 min-h-[44px] focus-within:border-emerald-400">
                     <Search className="w-4 h-4 text-pos-muted shrink-0" />
                     <input
                       type="text"
@@ -732,11 +834,11 @@ export const PurchaseOrderModal: React.FC = () => {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar max-w-full">
                     <button
                       type="button"
                       onClick={() => setCatalogFilterMode('all')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                      className={`min-h-[44px] px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer shrink-0 ${
                         catalogFilterMode === 'all'
                           ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
                           : 'bg-pos-bg text-pos-muted hover:text-pos-text border border-pos-border'
@@ -747,7 +849,7 @@ export const PurchaseOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setCatalogFilterMode('suggested')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                      className={`min-h-[44px] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
                         catalogFilterMode === 'suggested'
                           ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                           : 'bg-pos-bg text-pos-muted hover:text-pos-text border border-pos-border'
@@ -760,7 +862,7 @@ export const PurchaseOrderModal: React.FC = () => {
                       <button
                         type="button"
                         onClick={handleQuickAddAllSuggested}
-                        className="px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 text-xs font-bold transition cursor-pointer flex items-center gap-1"
+                        className="min-h-[44px] px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 text-xs font-bold transition cursor-pointer flex items-center gap-1 shrink-0"
                         title="Ajouter tous les articles en stock bas en 1 clic"
                       >
                         <Sparkles className="w-3 h-3" /> Tout Ajouter
@@ -770,7 +872,7 @@ export const PurchaseOrderModal: React.FC = () => {
                 </div>
 
                 {/* Quick Add Product Carousel / Grid */}
-                <div className="max-h-48 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 p-1">
+                <div className="max-h-48 overflow-y-auto overscroll-contain grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 p-1">
                   {filteredCatalogProducts.length === 0 ? (
                     <div className="col-span-full text-center py-6 text-xs text-pos-muted">
                       Aucun produit trouvé pour "{catalogSearchTerm}".
@@ -826,7 +928,7 @@ export const PurchaseOrderModal: React.FC = () => {
               </div>
 
               {/* Staged PO Items Table */}
-              <div className="bg-pos-card border border-pos-border rounded-2xl overflow-hidden shadow-sm">
+              <div className="bg-pos-card border border-pos-border rounded-xl shadow-sm overflow-hidden">
                 <div className="p-3 bg-pos-bg border-b border-pos-border flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <ShoppingCart className="w-4 h-4 text-emerald-400" />
@@ -856,7 +958,7 @@ export const PurchaseOrderModal: React.FC = () => {
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-xs border-collapse">
-                      <thead className="bg-pos-bg/60 text-pos-muted text-[10px] uppercase font-bold border-b border-pos-border">
+                      <thead className="sticky top-0 z-10 bg-pos-bg text-pos-muted text-[10px] uppercase font-bold border-b border-pos-border">
                         <tr>
                           <th className="p-3">Produit & SKU</th>
                           <th className="p-3 text-center">Stock Actuel</th>
@@ -885,7 +987,7 @@ export const PurchaseOrderModal: React.FC = () => {
                                   <button
                                     type="button"
                                     onClick={() => handleUpdateDraftQty(item.productId, item.qty - 1)}
-                                    className="p-1 hover:bg-pos-hover rounded text-pos-text transition cursor-pointer"
+                                    className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1 hover:bg-pos-hover rounded-lg text-pos-text transition cursor-pointer"
                                   >
                                     <Minus className="w-3 h-3" />
                                   </button>
@@ -897,13 +999,13 @@ export const PurchaseOrderModal: React.FC = () => {
                                     onChange={(e) =>
                                       handleUpdateDraftQty(item.productId, parseInt(e.target.value) || 1)
                                     }
-                                    className="w-14 text-center bg-pos-bg border border-pos-border rounded-lg text-emerald-400 font-bold font-mono py-1 focus:outline-none focus:border-emerald-400"
+                                    className="w-14 min-h-[44px] text-center bg-pos-bg border border-pos-border rounded-lg text-emerald-400 font-bold font-mono py-1 focus:outline-none focus:border-emerald-400"
                                   />
 
                                   <button
                                     type="button"
                                     onClick={() => handleUpdateDraftQty(item.productId, item.qty + 1)}
-                                    className="p-1 hover:bg-pos-hover rounded text-pos-text transition cursor-pointer"
+                                    className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1 hover:bg-pos-hover rounded-lg text-pos-text transition cursor-pointer"
                                   >
                                     <Plus className="w-3 h-3" />
                                   </button>
@@ -923,7 +1025,7 @@ export const PurchaseOrderModal: React.FC = () => {
                                       // truncated; Math.round lands whole dinars.
                                       handleUpdateDraftCost(item.productId, Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)))
                                     }
-                                    className="w-24 text-right bg-pos-bg border border-pos-border rounded-lg text-pos-text font-bold font-mono py-1 px-1.5 focus:outline-none focus:border-emerald-400"
+                                    className="w-24 min-h-[44px] text-right bg-pos-bg border border-pos-border rounded-lg text-pos-text font-bold font-mono py-1 px-1.5 focus:outline-none focus:border-emerald-400"
                                   />
                                   <span className="text-[10px] text-pos-muted">DA</span>
                                 </div>
@@ -937,7 +1039,7 @@ export const PurchaseOrderModal: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => handleRemoveItemFromDraft(item.productId)}
-                                  className="p-1.5 rounded-lg hover:bg-rose-500/10 text-pos-muted hover:text-rose-400 transition cursor-pointer"
+                                  className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1.5 rounded-lg hover:bg-rose-500/10 text-pos-muted hover:text-rose-400 transition cursor-pointer"
                                   title="Retirer de la commande"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
@@ -1465,6 +1567,67 @@ export const PurchaseOrderModal: React.FC = () => {
           <div className="print-po-target po-a4 hidden print:block bg-white text-black font-sans text-xs">
             <PurchaseOrderA4Document po={selectedPO} receiptSettings={receiptSettings} />
           </div>
+        )}
+        {/* Portaled overflow menu */}
+        {overflowMenu && createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-[9998]"
+              onClick={() => setOverflowMenu(null)}
+              aria-hidden="true"
+            />
+            <div
+              ref={overflowMenuRef}
+              role="menu"
+              style={{ position: 'fixed', top: overflowPos.top, left: overflowPos.left, zIndex: 9999 }}
+              className="w-56 bg-pos-panel border border-pos-border rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 p-1"
+            >
+              {(() => {
+                const poId = overflowMenu.replace('waiting-', '');
+                const po = purchaseOrders.find((p) => p.id === poId);
+                if (!po) return null;
+                return (
+                  <div className="flex flex-col gap-0.5 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInspectingPO(po);
+                        setActiveTab('preview_a4');
+                        setOverflowMenu(null);
+                      }}
+                      className="px-3 py-2 rounded-md hover:bg-pos-hover text-pos-text text-left flex items-center gap-2 cursor-pointer font-bold"
+                    >
+                      <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                      Aperçu Document A4
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleExportExcel(po);
+                        setOverflowMenu(null);
+                      }}
+                      className="px-3 py-2 rounded-md hover:bg-pos-hover text-pos-text text-left flex items-center gap-2 cursor-pointer font-bold"
+                    >
+                      <Download className="w-3.5 h-3.5 text-emerald-400" />
+                      Exporter Excel (.xlsx)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handlePrintPO(po);
+                        setOverflowMenu(null);
+                      }}
+                      className="px-3 py-2 rounded-md hover:bg-pos-hover text-pos-text text-left flex items-center gap-2 cursor-pointer font-bold"
+                    >
+                      <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                      Imprimer Bon A4
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
+          </>,
+          document.body
         )}
       </div>
     </div>

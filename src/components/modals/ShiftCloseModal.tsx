@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   Printer,
@@ -13,16 +14,17 @@ import {
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import type { CloseShiftWithPin } from '../../store/slices/createShiftSlice';
-import { SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD, isTxInCloseScope } from '../../db/adapters/shiftAdapter';
-import { cashSalesFromTxns, cashRefundsFromTxns } from '../../utils/cashTerms';
+import { SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD } from '../../db/adapters/shiftAdapter';
 import { formatDZD, type DenominationCount } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { maintenanceService } from '../../services/maintenanceService';
 import { parseLocalizedAmount } from '../../utils/moneyInput';
 import { isMobileDevice } from '../../utils/platform';
+import { verifyManagerGate } from '../../utils/pinGate';
 import { useAllocationCogs } from '../../hooks/useAllocationCogs';
 import { isExchangeSaleTx } from '../../utils/receiptMath';
+import { DRAWER_REASON_PREFIXES } from '../../utils/cashTerms';
 
 // Lock-screen cashier fallback (createUISlice owns `activeCashier`; absent
 // from the shared PosState type, so read via structural cast).
@@ -55,7 +57,8 @@ export const ShiftCloseModal: React.FC = () => {
     closeShift,
     transactions,
     printXReport,
-    verifyManagerPin,
+    // Phase 1: manager checks route through the native gate (no local
+    // verifyManagerPin reads here — see utils/pinGate).
     logSecurityAction,
   } = usePosStore();
   const { showToast } = useToast();
@@ -118,32 +121,42 @@ export const ShiftCloseModal: React.FC = () => {
   const openedAt = activeShift?.openedAt || new Date().toISOString();
 
   const sessionTxns = useMemo(() => {
-    // Same rule as the booking adapter (isTxInCloseScope): stamped rows
-    // belong to exactly one session, legacy rows keep the window — preview
-    // and booked Z count the same tickets.
     return transactions.filter((t) => {
-      if (t.isRefund) return false;
-      return isTxInCloseScope(t, { id: activeShift?.id, openedAt });
+      return (
+        t.status !== 'VOIDED' &&
+        !t.isRefund &&
+        (!openedAt || t.createdAt >= openedAt)
+      );
     });
-  }, [transactions, openedAt, activeShift?.id]);
+  }, [transactions, openedAt]);
 
   const sessionRefunds = useMemo(() => {
     return transactions.filter((t) => {
-      if (!t.isRefund) return false;
-      return isTxInCloseScope(t, { id: activeShift?.id, openedAt });
+      return (
+        t.status !== 'VOIDED' &&
+        t.isRefund &&
+        (!openedAt || t.createdAt >= openedAt)
+      );
     });
-  }, [transactions, openedAt, activeShift?.id]);
+  }, [transactions, openedAt]);
 
-  // Cash terms share one definition with booking, Reports and the Z report
-  // (utils/cashTerms). This also fixes a latent NaN-poison here: the old
-  // inline tender sum added raw tender.amount, so one undefined amount
-  // zeroed the whole preview.
   const totalCashRefunds = useMemo(() => {
-    return cashRefundsFromTxns(sessionRefunds);
+    return sessionRefunds.reduce((sum, t) => {
+      return (t.refundMethod === 'Espèces' || t.paymentMethod === 'Espèces') ? sum + t.total : sum;
+    }, 0);
   }, [sessionRefunds]);
 
   const totalCashSales = useMemo(() => {
-    return cashSalesFromTxns(sessionTxns);
+    return sessionTxns.reduce((sum, t) => {
+      if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
+        const cashTenderTotal = t.tenders
+          .filter((tender) => tender.method === 'Espèces')
+          .reduce((acc, tender) => acc + tender.amount, 0);
+        const netCash = Math.max(0, cashTenderTotal - (t.changeDue || 0));
+        return sum + netCash;
+      }
+      return t.paymentMethod === 'Espèces' ? sum + Math.max(0, t.total) : sum;
+    }, 0);
   }, [sessionTxns]);
 
   const { allocCogsBySaleId } = useAllocationCogs();
@@ -180,10 +193,87 @@ export const ShiftCloseModal: React.FC = () => {
       .reduce((sum, m) => sum + m.amount, 0);
   }, [activeShift?.movements]);
 
+  // Phase 3: mobile Z must not drop trade-in legs (audit §5c gap) — same
+  // shift-window rule as ShiftZReportModal (source table) + soulte cash
+  // payouts (movement lane, SOULTE_CASHOUT tag).
+  const tradeInCashOut = useMemo(() => {
+    const st = usePosStore.getState();
+    return (st.tradeIns || [])
+      .filter((t) => !t.creditToWallet && (!openedAt || (t.createdAt || '') >= openedAt))
+      .reduce((sum, t) => sum + (t.buybackValue || 0), 0);
+  }, [openedAt]);
+  const soulteCashOut = useMemo(() => {
+    return (activeShift?.movements || [])
+      .filter(
+        (m) =>
+          m.type === 'EXPENSE' &&
+          (m.reason || '').startsWith(DRAWER_REASON_PREFIXES.SOULTE_CASHOUT)
+      )
+      .reduce((sum, m) => sum + m.amount, 0);
+  }, [activeShift?.movements]);
+
   // Formula: opening_float + cash_sales + manual_deposits - expenses - cash_refunds
   const expectedCash = openingFloat + totalCashSales + manualDeposits - expenses - totalCashRefunds;
   const variance = physicalCount - expectedCash;
   const dailyNetProfit = totalSaleMargins - expenses;
+
+  // Portaled recount-PIN popover: the trigger lives in a footer nested inside
+  // an overflow-hidden modal shell, so an absolutely-positioned child would be
+  // clipped. The popover is portaled to document.body with position:fixed,
+  // anchored to its trigger button with auto flip-up when near the bottom
+  // edge, viewport clamped, dismissed on outside click / Escape / scroll /
+  // resize.
+  const recountAnchorRef = useRef<HTMLButtonElement>(null);
+  const recountMenuRef = useRef<HTMLDivElement>(null);
+  const [recountPos, setRecountPos] = useState({ top: 0, left: 0, openUp: false });
+  useEffect(() => {
+    if (!recountPinOpen) return;
+    const MENU_W = 288; // w-72
+    const MENU_H_EST = 260;
+    const place = () => {
+      const r = recountAnchorRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const spaceBelow = window.innerHeight - r.bottom;
+      const openUp = spaceBelow < MENU_H_EST + 16;
+      const top = openUp
+        ? Math.max(8, r.top - MENU_H_EST - 8)
+        : Math.min(r.bottom + 8, window.innerHeight - 16);
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - MENU_W - 8));
+      setRecountPos({ top, left, openUp });
+    };
+    place();
+    const handleClickOutside = (event: MouseEvent) => {
+      const t = event.target as Node;
+      const anchor = recountAnchorRef.current;
+      if (
+        recountMenuRef.current && !recountMenuRef.current.contains(t) &&
+        anchor && !anchor.contains(t)
+      ) {
+        setRecountPinOpen(false);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setRecountPinOpen(false);
+        recountAnchorRef.current?.focus();
+      }
+    };
+    const handleDismiss = () => setRecountPinOpen(false);
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKey);
+    window.addEventListener('resize', handleDismiss);
+    // Capture phase: any inner scroll (modal body) invalidates the anchor.
+    window.addEventListener('scroll', handleDismiss, true);
+    recountMenuRef.current?.querySelector<HTMLInputElement>('input')?.focus();
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKey);
+      window.removeEventListener('resize', handleDismiss);
+      window.removeEventListener('scroll', handleDismiss, true);
+    };
+  }, [recountPinOpen]);
+
+  useEffect(() => { if (activeModal !== 'shift_close') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
   if (activeModal !== 'shift_close') return null;
 
@@ -289,6 +379,8 @@ export const ShiftCloseModal: React.FC = () => {
               debtSettlements,
               refunds: totalCashRefunds,
               expenses: cashExpenses,
+              tradeIns: tradeInCashOut,
+              soulteOut: soulteCashOut,
               drops,
               payouts,
               expectedCash,
@@ -317,13 +409,19 @@ export const ShiftCloseModal: React.FC = () => {
     }
   };
 
-  const handleAuthorizeRecount = () => {
+  const handleAuthorizeRecount = async () => {
     if (!recountPinInput.trim()) {
       setRecountPinError('Veuillez saisir le code PIN.');
       return;
     }
-    if (!verifyManagerPin(recountPinInput.trim())) {
-      setRecountPinError('Code PIN Manager incorrect.');
+    // Phase 1: native gate (fail-closed); Locked shows the countdown.
+    const gate = await verifyManagerGate(recountPinInput.trim());
+    if (!gate.ok) {
+      setRecountPinError(
+        gate.locked
+          ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+          : 'Code PIN Manager incorrect.'
+      );
       showToast('PIN Manager incorrect — Recomptage refusé.', 'error');
       return;
     }
@@ -343,7 +441,7 @@ export const ShiftCloseModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94vh] sm:max-h-[92vh] flex flex-col">
+      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94dvh] sm:max-h-[92dvh] flex flex-col">
         {/* Mobile drag handle */}
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
@@ -362,7 +460,7 @@ export const ShiftCloseModal: React.FC = () => {
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
             aria-label="Fermer"
           >
             <X className="w-5 h-5" />
@@ -370,7 +468,7 @@ export const ShiftCloseModal: React.FC = () => {
         </div>
 
         {/* Body */}
-        <div className="p-5 overflow-y-auto space-y-4 flex-1">
+        <div className="p-5 overflow-y-auto overscroll-contain space-y-4 flex-1">
           {step === 'BLIND_COUNT' ? (
             /* ═══ STEP 1: BLIND RECONCILIATION COUNT ═══ */
             <div className="space-y-4 animate-in fade-in">
@@ -728,10 +826,12 @@ export const ShiftCloseModal: React.FC = () => {
             </>
           ) : (
             <>
-              <div className="relative">
+              <div>
                 <button
+                  ref={recountAnchorRef}
                   type="button"
                   onClick={() => setRecountPinOpen(true)}
+                  aria-expanded={recountPinOpen}
                   className="min-h-[42px] px-3.5 py-2 rounded-xl text-xs font-bold text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition cursor-pointer flex items-center gap-1.5"
                   title="Recompter la caisse (Exige le code PIN Manager)"
                 >
@@ -739,8 +839,22 @@ export const ShiftCloseModal: React.FC = () => {
                   <span>← Recompter (PIN Requis)</span>
                 </button>
 
-                {recountPinOpen && (
-                  <div className="absolute bottom-full left-0 mb-2 p-3 bg-pos-panel border border-amber-500/50 rounded-xl shadow-2xl z-30 w-72 space-y-2 animate-in fade-in">
+                {recountPinOpen && createPortal(
+                  <>
+                    <div
+                      className="fixed inset-0"
+                      style={{ zIndex: 9998 }}
+                      onClick={() => setRecountPinOpen(false)}
+                      aria-hidden="true"
+                    />
+                    <div
+                      ref={recountMenuRef}
+                      role="dialog"
+                      aria-label="Autorisation Manager Requise"
+                      style={{ position: 'fixed', top: recountPos.top, left: recountPos.left, zIndex: 9999 }}
+                      data-open-up={recountPos.openUp ? 'true' : 'false'}
+                      className="p-3 bg-pos-panel border border-amber-500/50 rounded-xl shadow-2xl w-72 space-y-2 animate-in fade-in"
+                    >
                     <div className="flex items-center justify-between text-xs font-bold text-amber-400">
                       <span>Autorisation Manager Requise</span>
                       <button
@@ -790,7 +904,9 @@ export const ShiftCloseModal: React.FC = () => {
                         Déverrouiller
                       </button>
                     </div>
-                  </div>
+                    </div>
+                  </>,
+                  document.body,
                 )}
               </div>
               <div className="flex items-center gap-2">

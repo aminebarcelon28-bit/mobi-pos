@@ -33,6 +33,10 @@ export const DRAWER_REASON_PREFIXES = {
   /** Cash handed back on a net-negative (exchange) ticket. Written by the
    * checkout slice post-commit; read by the exchange term below. */
   EXCHANGE_CASHOUT: 'Remboursement espèces échange',
+  /** Soulte boutique: shop owes the exchange difference, paid from drawer.
+   * Written by the checkout slice post-commit (single net EXPENSE tagged
+   * with the trade id); read by the exchange term below. */
+  SOULTE_CASHOUT: 'Soulte échange (Reprise)',
 } as const;
 
 /** Tag appended to standalone (twin-less) manual movements at write time by
@@ -101,10 +105,17 @@ export function cashRefundsFromTxns(txns: CashTxnLike[] | undefined | null): num
 }
 
 /** Exchange cash-outs: EXPENSE movements written post-commit for
- * net-negative tickets (no source-table twin by design). */
+ * net-negative tickets AND soulte boutique payouts (no source-table twin
+ * by design — a single reader so the lanes cannot drift). */
 export function exchangeCashOutFromMovements(movs: CashMovementLike[] | undefined | null): number {
   return (movs || [])
-    .filter((m) => m && m.type === 'EXPENSE' && (m.reason || '').startsWith(DRAWER_REASON_PREFIXES.EXCHANGE_CASHOUT))
+    .filter(
+      (m) =>
+        m &&
+        m.type === 'EXPENSE' &&
+        ((m.reason || '').startsWith(DRAWER_REASON_PREFIXES.EXCHANGE_CASHOUT) ||
+          (m.reason || '').startsWith(DRAWER_REASON_PREFIXES.SOULTE_CASHOUT))
+    )
     .reduce((acc, m) => acc + toCashAmount(m.amount), 0);
 }
 
@@ -124,4 +135,65 @@ export function standaloneExpensesFromMovements(movs: CashMovementLike[] | undef
   return (movs || [])
     .filter((m) => m && m.type === 'EXPENSE' && isStandalone(m))
     .reduce((acc, m) => acc + toCashAmount(m.amount), 0);
+}
+
+export interface SavRepairLike {
+  depositAmount?: number;
+}
+
+export interface SavTxnItemLike {
+  product?: { sku?: string; id?: string } | null;
+  appliedPrice?: number;
+  quantity?: number;
+  discount?: number;
+}
+
+export interface SavTxnLike {
+  items?: SavTxnItemLike[] | null;
+  status?: string;
+  isRefund?: boolean;
+}
+
+/** SAV deposits actually taken (never imputed unpaid balances). Display-only. */
+export function savDepositsFromRepairs(repairs: SavRepairLike[] | undefined | null): number {
+  return (repairs || []).reduce((acc, r) => acc + toCashAmount(r?.depositAmount), 0);
+}
+
+/**
+ * SAV balances settled through checkout (SAV- service lines, net of line
+ * discounts). Display-only informational split — the cash itself is already
+ * counted inside cashSalesFromTxns, so this must NEVER enter expected-cash
+ * math or drawer totals would double-count.
+ */
+export function savSettledFromTxns(txns: SavTxnLike[] | undefined | null): number {
+  return (txns || [])
+    .filter((t) => t && t.status !== 'VOIDED' && !t.isRefund)
+    .reduce((acc, t) => {
+      const lines = (t.items || []).filter(
+        (i) =>
+          i &&
+          ((i.product?.sku || '').startsWith('SAV-') ||
+            (i.product?.id || '').startsWith('repair-balance-'))
+      );
+      return (
+        acc +
+        lines.reduce((sum, i) => {
+          const net =
+            Math.round(Number(i.appliedPrice) || 0) * Math.max(0, Math.floor(Number(i.quantity) || 0)) -
+            Math.max(0, Math.round(Number(i.discount) || 0));
+          return sum + Math.max(0, net);
+        }, 0)
+      );
+    }, 0);
+}
+
+/**
+ * Sequential Z-ticket number: `[YYYYMMDD]-[SHIFT_SEQUENCE]` where the
+ * sequence is closed-sessions-so-far + 1. Deterministic per (day, count).
+ */
+export function zTicketNumber(closedShiftCount: number, at?: Date | string): string {
+  const d = at instanceof Date ? at : new Date(typeof at === 'string' ? at : Date.now());
+  const day = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  const seq = String(Math.max(1, Math.floor(closedShiftCount || 0) + 1)).padStart(3, '0');
+  return `${day}-${seq}`;
 }
