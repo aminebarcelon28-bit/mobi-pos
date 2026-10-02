@@ -1,79 +1,137 @@
 import React, { useState, useCallback } from 'react';
-import { ReplenishmentModal, mockSuppliers, mockKPIs, type FilterCategory, type SupplierItem, type SupplierActionState } from '.';
+import { ReplenishmentModal, mockSuppliers, mockKPIs, type FilterCategory, type SupplierItem, type SupplierActionState, type ContactDetails } from '.';
+import { usePosStore } from '../../store/usePosStore';
+import { calculateStockAlerts } from '../../utils/alertEngine';
+import { openDialer, openWhatsApp } from '../../utils/phoneUtils';
 
 interface ReplenishmentDemoProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
+/**
+ * Fixture-backed demo of the replenishment UI (superseded on the
+ * Header mount by ReplenishmentContainer, which derives live data
+ * from the POS store). Retained as an isolated UI harness; contact
+ * edits still commit through the real setVendorContact so the demo
+ * never diverges from the native persistence contract.
+ */
 export const ReplenishmentDemo: React.FC<ReplenishmentDemoProps> = ({ isOpen, onClose }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterCategory>('ALL');
   const [suppliers] = useState<SupplierItem[]>(mockSuppliers);
   const [actionStates, setActionStates] = useState<Record<string, SupplierActionState>>({});
 
-  const handleCreatePO = useCallback(async (supplierId: string) => {
-    const supplier = suppliers.find(s => s.id === supplierId);
-    if (!supplier) return;
-    
-    setActionStates(prev => ({ ...prev, [supplierId]: { isCreatingPO: true, isLoadingContact: false } }));
-    
-    try {
-      console.log('Create PO for:', supplier?.name);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      alert(`Créer bon de commande pour ${supplier?.name}`);
-    } finally {
-      setActionStates(prev => ({ ...prev, [supplierId]: { isCreatingPO: false, isLoadingContact: false } }));
-    }
-  }, [suppliers]);
+  // Production stack: the global POS store owns the procurement slice
+  // (SQLite WAL persistence + sync outbox) and the modal router.
+  const { createDraftPOForVendor, openModal, products, setVendorContact } = usePosStore();
 
-  const handleViewDetails = useCallback((supplierId: string) => {
-    const supplier = suppliers.find(s => s.id === supplierId);
-    console.log('View details for:', supplier?.name);
-    alert(`Voir détails de ${supplier?.name}`);
-  }, [suppliers]);
+  const handleCreatePO = useCallback(
+    async (supplierId: string) => {
+      const supplier = suppliers.find((s) => s.id === supplierId);
+      if (!supplier) return;
 
-  const handleContactAction = useCallback(async (supplierId: string, action: 'call' | 'whatsapp' | 'email') => {
-    const supplier = suppliers.find(s => s.id === supplierId);
-    const contact = supplier?.contact;
-    let message = '';
-    
-    setActionStates(prev => ({ ...prev, [supplierId]: { isCreatingPO: false, isLoadingContact: true } }));
-    
-    try {
-      switch (action) {
-        case 'call':
-          message = contact?.phone ? `Appeler ${contact.phone}` : 'Numéro non disponible';
-          break;
-        case 'whatsapp':
-          message = contact?.whatsapp ? `WhatsApp ${contact.whatsapp}` : 
-                    contact?.phone ? `WhatsApp ${contact.phone}` : 'Numéro non disponible';
-          break;
-        case 'email':
-          message = contact?.email ? `Email ${contact.email}` : 'Email non disponible';
-          break;
+      setActionStates((prev) => ({
+        ...prev,
+        [supplierId]: { ...prev[supplierId], isCreatingPO: true, isLoadingContact: false },
+      }));
+
+      try {
+        // Integrity guard: never persist an empty PO. Mock suppliers map onto
+        // real vendors by name; the default "Fournisseur Général" carries the
+        // unassigned stock alerts (same matching rule as createDraftPOForVendor).
+        const alerts = calculateStockAlerts(products).filter(
+          (a) => (a.vendorName || 'Fournisseur Général') === supplier.name
+        );
+        if (alerts.length === 0) {
+          console.warn(`[replenishment] no stock alerts for vendor "${supplier.name}" — PO draft discarded`);
+          return;
+        }
+
+        // Production path: createDraftPOForVendor persists the draft to SQLite
+        // (WAL) FIRST via savePurchaseOrder, then opens the purchase_order
+        // modal with the live draft. Failure returns { success: false, reason }
+        // and the draft is discarded — no phantom order, no dangling state.
+        const result = await createDraftPOForVendor(supplier.name);
+        if (!result.success) {
+          console.error('[replenishment] draft PO persistence failed:', result.reason);
+        }
+      } catch (error) {
+        console.error('Failed to initialize purchase order:', error);
+      } finally {
+        setActionStates((prev) => ({
+          ...prev,
+          [supplierId]: { ...prev[supplierId], isCreatingPO: false, isLoadingContact: false },
+        }));
       }
-      console.log(`${action} for:`, supplier?.name, message);
-      await new Promise(resolve => setTimeout(resolve, 500));
-      alert(message);
-    } finally {
-      setActionStates(prev => ({ ...prev, [supplierId]: { isCreatingPO: false, isLoadingContact: false } }));
-    }
-  }, [suppliers]);
+    },
+    [suppliers, createDraftPOForVendor, products]
+  );
 
-  const handleAddContact = useCallback(async (supplierId: string) => {
-    const supplier = suppliers.find(s => s.id === supplierId);
-    
-    setActionStates(prev => ({ ...prev, [supplierId]: { isCreatingPO: false, isLoadingContact: true } }));
-    
-    try {
-      console.log('Add contact for:', supplier?.name);
-      await new Promise(resolve => setTimeout(resolve, 500));
-      alert(`Ajouter/Modifier contact pour ${supplier?.name}`);
-    } finally {
-      setActionStates(prev => ({ ...prev, [supplierId]: { isCreatingPO: false, isLoadingContact: false } }));
-    }
-  }, [suppliers]);
+  const handleViewOrder = useCallback(
+    (_supplierId: string, _orderReference: string) => {
+      // Demo order references are illustrative fixtures; the honest action is
+      // the real purchase-order dashboard, which lists every persisted PO.
+      openModal('purchase_order');
+    },
+    [openModal]
+  );
+
+  const handleContactAction = useCallback(
+    async (supplierId: string, action: 'call' | 'whatsapp' | 'email') => {
+      const supplier = suppliers.find((s) => s.id === supplierId);
+      if (!supplier) return;
+      const contact = supplier.contact;
+
+      setActionStates((prev) => ({
+        ...prev,
+        [supplierId]: { ...prev[supplierId], isCreatingPO: false, isLoadingContact: true },
+      }));
+
+      try {
+        switch (action) {
+          case 'call':
+            if (contact.phone) {
+              await openDialer(contact.phone);
+            }
+            break;
+          case 'whatsapp': {
+            const phone = contact.whatsapp || contact.phone;
+            if (phone) {
+              await openWhatsApp(phone, `Bonjour, commande de réapprovisionnement (${supplier.name})`);
+            }
+            break;
+          }
+          case 'email':
+            if (contact.email) {
+              window.location.href = `mailto:${contact.email}`;
+            }
+            break;
+        }
+      } catch (error) {
+        console.error('Contact action failed:', error);
+      } finally {
+        setActionStates((prev) => ({
+          ...prev,
+          [supplierId]: { ...prev[supplierId], isCreatingPO: false, isLoadingContact: false },
+        }));
+      }
+    },
+    [suppliers]
+  );
+
+  // Native persistence contract: contact edits commit through the real
+  // vendor directory (localStorage write-through in the procurement slice).
+  const handleSaveContact = useCallback(
+    (supplierId: string, contact: ContactDetails) => {
+      setVendorContact(supplierId, {
+        phone: contact.phone,
+        whatsapp: contact.whatsapp,
+        email: contact.email,
+      });
+    },
+    [setVendorContact]
+  );
 
   const handleResetFilters = useCallback(() => {
     setSearchQuery('');
@@ -91,9 +149,9 @@ export const ReplenishmentDemo: React.FC<ReplenishmentDemoProps> = ({ isOpen, on
       searchQuery={searchQuery}
       onSearchChange={setSearchQuery}
       onCreatePO={handleCreatePO}
-      onViewDetails={handleViewDetails}
+      onViewOrder={handleViewOrder}
       onContactAction={handleContactAction}
-      onAddContact={handleAddContact}
+      onSaveContact={handleSaveContact}
       onResetFilters={handleResetFilters}
       actionStates={actionStates}
     />

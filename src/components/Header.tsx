@@ -37,9 +37,11 @@ import { usePosStore } from '../store/usePosStore';
 import { calculateStockAlerts } from '../utils/alertEngine';
 import { ThemeToggle } from './ThemeToggle';
 import { PinDialog } from './ui/PinDialog';
+import { canSeeJournalLauncher } from '../utils/auditGate';
 import { useToast } from './ui/Toast';
 import { soundEngine } from '../utils/audioFeedback';
 import { formatDZD } from '../types/pos';
+import { ReplenishmentContainer } from './replenishment';
 
 export const Header: React.FC = () => {
   // Selective subscriptions: subscribing to the whole store re-renders the
@@ -68,6 +70,7 @@ export const Header: React.FC = () => {
   // the menu is never clipped by the scrolling toolbar — see below).
   const [toolsMenuPos, setToolsMenuPos] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
   const [isPinOpen, setIsPinOpen] = useState(false);
+  const [isReplenishmentOpen, setIsReplenishmentOpen] = useState(false);
   const { showToast } = useToast();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [localSearch, setLocalSearch] = useState(searchQuery);
@@ -333,9 +336,9 @@ export const Header: React.FC = () => {
             <Wrench className="w-4 h-4" />
           </button>
 
-          {/* Stock Alerts Bell */}
+          {/* Stock Alerts Bell — opens the enhanced FIFO replenishment suite */}
           <button
-            onClick={() => openModal('vendor_procurement')}
+            onClick={() => setIsReplenishmentOpen(true)}
             className="relative p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-emerald-400 hover:text-emerald-300 transition cursor-pointer shrink-0"
             title={`Alertes Réapprovisionnement (${stockAlerts.length} articles en alerte)`}
           >
@@ -348,10 +351,10 @@ export const Header: React.FC = () => {
               >
                 {stockAlerts.length}
               </span>
-            )}
-          </button>
+          )}
+        </button>
 
-          {/* Command Tickets & Waiting List */}
+        {/* Command Tickets & Waiting List */}
           <button
             onClick={() => openModal('command_tickets')}
             className="relative p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-amber-400 hover:text-amber-300 transition cursor-pointer shrink-0"
@@ -519,6 +522,9 @@ export const Header: React.FC = () => {
                   <span>Ouvrir Tiroir Caisse ('No Sale')</span>
                 </button>
 
+                {/* FT-01: journal entry hidden for cashiers (UX only — the
+                    modal gate in SecurityAuditModal is authoritative). */}
+                {canSeeJournalLauncher(activeCashier?.role) && (
                 <button
                   onClick={() => {
                     openModal('security_audit');
@@ -529,6 +535,7 @@ export const Header: React.FC = () => {
                   <ShieldAlert className="w-4 h-4 text-amber-500" />
                   <span>Journal d'Audit Sécurité</span>
                 </button>
+                )}
 
                 <button
                   onClick={() => {
@@ -754,6 +761,10 @@ export const Header: React.FC = () => {
         onCancel={() => setIsPinOpen(false)}
         title="Autorisation Requise"
         description="Saisissez le code PIN Manager pour ouvrir le tiroir-caisse sans vente."
+      />
+      <ReplenishmentContainer
+        isOpen={isReplenishmentOpen}
+        onClose={() => setIsReplenishmentOpen(false)}
       />
     </>
   );

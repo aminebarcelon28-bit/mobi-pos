@@ -9,3 +9,4 @@ export { useBodyScrollLock } from './useBodyScrollLock';
 export { useFocusTrap } from './useFocusTrap';
 export { mockSuppliers, mockKPIs } from './mockData';
 export { ReplenishmentDemo } from './ReplenishmentDemo';
+export { ReplenishmentContainer } from './ReplenishmentContainer';

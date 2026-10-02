@@ -19,12 +19,18 @@ export const ReplenishmentModal: React.FC<ReplenishmentModalProps> = ({
   searchQuery,
   onSearchChange,
   onCreatePO,
-  onViewDetails,
+  onViewOrder,
   onContactAction,
-  onAddContact,
+  onSaveContact,
   onResetFilters,
+  onGenerateNewPO,
   actionStates,
   isSubmitting = false,
+  selectedItems,
+  customQty,
+  onToggleItem,
+  onQtyChange,
+  onToggleSelectAll,
 }) => {
   const focusTrapRef = useFocusTrap({ isActive: isOpen, onEscape: onClose });
 
@@ -35,31 +41,51 @@ export const ReplenishmentModal: React.FC<ReplenishmentModalProps> = ({
   const filterCounts = useMemo<Partial<Record<FilterCategory, number>>>(() => {
     let ruptures = 0;
     let pending = 0;
+    let orders = 0;
     for (const supplier of suppliers) {
       if (supplier.outOfStockCount > 0) {
         ruptures += 1;
       } else if (supplier.totalReferences > 0) {
         pending += 1;
       }
+      if ((supplier.activeOrders?.length ?? 0) > 0) {
+        orders += 1;
+      }
     }
     return {
       ALL: suppliers.length,
       RUPTURES: ruptures,
       PENDING: pending,
-      ORDERS: suppliers.length,
+      ORDERS: orders,
     };
   }, [suppliers]);
 
   const filteredSuppliers = useMemo(() => {
     const needle = deferredSearchQuery.trim().toLowerCase();
+
     return suppliers.filter((supplier) => {
+      // Vector A — wholesaler name.
       const name = supplier.name?.toLowerCase() ?? '';
-      const matchesSearch = !needle || name.includes(needle);
+      const matchesSupplierName = name.includes(needle);
+
+      // Vector B — deep product / SKU / barcode inspection (Stage 2 line items).
+      const matchesProductOrSku = Boolean(
+        supplier.items?.some((item) => {
+          const title = item.title.toLowerCase();
+          const sku = item.sku.toLowerCase();
+          const barcode = (item.barcode ?? '').toLowerCase();
+          return title.includes(needle) || sku.includes(needle) || barcode.includes(needle);
+        })
+      );
+
+      const matchesSearch = !needle || matchesSupplierName || matchesProductOrSku;
+
       const matchesFilter =
         activeFilter === 'ALL' ||
         (activeFilter === 'RUPTURES' && supplier.outOfStockCount > 0) ||
         (activeFilter === 'PENDING' && supplier.outOfStockCount === 0 && supplier.totalReferences > 0) ||
-        (activeFilter === 'ORDERS');
+        (activeFilter === 'ORDERS' && (supplier.activeOrders?.length ?? 0) > 0);
+
       return matchesSearch && matchesFilter;
     });
   }, [suppliers, deferredSearchQuery, activeFilter]);
@@ -108,6 +134,7 @@ export const ReplenishmentModal: React.FC<ReplenishmentModalProps> = ({
           activeFilter={activeFilter}
           onFilterChange={onFilterChange}
           counts={filterCounts}
+          onGenerateNewPO={onGenerateNewPO}
         />
 
         <main
@@ -131,11 +158,19 @@ export const ReplenishmentModal: React.FC<ReplenishmentModalProps> = ({
               <SupplierCard
                 key={supplier.id}
                 supplier={supplier}
+                isOrderView={activeFilter === 'ORDERS'}
                 onCreatePO={() => onCreatePO(supplier.id)}
-                onViewDetails={() => onViewDetails(supplier.id)}
+                onViewOrder={onViewOrder ? (reference) => onViewOrder(supplier.id, reference) : undefined}
                 onContactAction={(action) => onContactAction(supplier.id, action)}
-                onAddContact={() => onAddContact(supplier.id)}
+                onSaveContact={(contact) => onSaveContact(supplier.id, contact)}
                 actionState={actionStates?.[supplier.id]}
+                items={supplier.items}
+                selectedItems={selectedItems}
+                customQty={customQty}
+                onToggleItem={onToggleItem}
+                onQtyChange={onQtyChange}
+                onToggleSelectAll={onToggleSelectAll}
+                searchQuery={searchQuery}
               />
             ))
           )}

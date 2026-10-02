@@ -202,23 +202,26 @@ export const FilterToolbar: React.FC<FilterToolbarProps> = ({
           );
         })}
 
-          {/* 5th item: direct manual PO generation shortcut,
-              positioned directly beside the Commandes pill. */}
-          {onGenerateNewPO && (
-            <button
-              type="button"
-              onClick={onGenerateNewPO}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs sm:text-sm font-semibold transition-all duration-150 cursor-pointer shrink-0 min-h-[44px] active:scale-[0.98] border border-emerald-600 bg-emerald-600/10 hover:bg-emerald-600 hover:text-white text-emerald-700 dark:text-emerald-300 dark:border-emerald-500/50 dark:hover:bg-emerald-600 shadow-sm ml-1"
-              title="Créer un nouveau bon de commande manuel"
-              aria-label="Générer un bon de commande"
-            >
-              <FilePlus aria-hidden="true" className="w-3.5 h-3.5 shrink-0" />
-              <span>Générer un bon de commande</span>
-            </button>
-          )}
         </div>
-    </div>
-  );
-};
+
+        {/* 5th action: 1-click manual PO creation — a shrink-0 sibling of
+            the scrollable ribbon (never a tablist child, so ARIA tablist
+            semantics stay valid and the ribbon's overflow-x-auto can never
+            clip this action). */}
+        {onGenerateNewPO && (
+          <button
+            type="button"
+            onClick={onGenerateNewPO}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs sm:text-sm font-semibold transition-all duration-150 cursor-pointer shrink-0 min-h-[44px] active:scale-[0.98] border border-emerald-600 bg-emerald-600/10 hover:bg-emerald-600 hover:text-white text-emerald-700 dark:text-emerald-300 dark:border-emerald-500/50 dark:hover:bg-emerald-600 shadow-sm"
+            title="Créer un nouveau bon de commande manuel"
+            aria-label="Nouveau bon de commande"
+          >
+            <FilePlus aria-hidden="true" className="w-3.5 h-3.5 shrink-0" />
+            <span className="whitespace-nowrap">+ Nouveau Bon</span>
+          </button>
+        )}
+      </div>
+    );
+  };
 
 export default FilterToolbar;

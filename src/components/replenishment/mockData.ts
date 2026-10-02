@@ -12,6 +12,14 @@ export const mockSuppliers: SupplierItem[] = [
       email: 'commande@fournisseur-general.dz',
     },
     isOfficial: false,
+    activeOrders: [
+      {
+        reference: 'PO-2026-0147',
+        status: 'EN_COURS',
+        date: '2026-09-28',
+        totalFormatted: '1 240 000 DA',
+      },
+    ],
   },
   {
     id: 'sup-002',
@@ -36,6 +44,14 @@ export const mockSuppliers: SupplierItem[] = [
       email: 'achats@grossiste-mobile.dz',
     },
     isOfficial: false,
+    activeOrders: [
+      {
+        reference: 'PO-2026-0152',
+        status: 'PARTIELLE',
+        date: '2026-09-30',
+        totalFormatted: '386 500 DA',
+      },
+    ],
   },
   {
     id: 'sup-004',
@@ -72,6 +88,14 @@ export const mockSuppliers: SupplierItem[] = [
       email: 'sales@anker-belkin-distrib.dz',
     },
     isOfficial: true,
+    activeOrders: [
+      {
+        reference: 'PO-2026-0155',
+        status: 'EXPEDIEE',
+        date: '2026-10-01',
+        totalFormatted: '742 900 DA',
+      },
+    ],
   },
   {
     id: 'sup-007',

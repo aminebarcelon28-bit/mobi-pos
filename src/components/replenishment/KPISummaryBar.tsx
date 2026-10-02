@@ -1,5 +1,5 @@
 import React from 'react';
-import { Truck, AlertTriangle, PackageCheck, DollarSign } from 'lucide-react';
+import { Truck, AlertTriangle, PackageCheck, Coins } from 'lucide-react';
 import type { ReplenishmentKPIs } from './types';
 
 interface KPISummaryBarProps {
@@ -75,7 +75,7 @@ export const KPISummaryBar: React.FC<KPISummaryBarProps> = ({ kpis }) => {
           ariaLabel={`Articles en rupture de stock: ${kpis.outOfStockCount}`}
         />
         <KPIItem
-          icon={<DollarSign className="w-4 h-4" />}
+          icon={<Coins className="w-4 h-4" />}
           label="BUDGET ESTIMÉ"
           value={kpis.totalBudgetFormatted}
           valueColor="text-emerald-700 dark:text-emerald-400"

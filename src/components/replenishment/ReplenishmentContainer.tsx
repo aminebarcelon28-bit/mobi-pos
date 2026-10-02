@@ -137,6 +137,7 @@ export const ReplenishmentContainer: React.FC<ReplenishmentContainerProps> = ({
             productId: alert.productId,
             title: alert.title,
             sku: alert.sku,
+            barcode: prod?.barcode,
             currentStock: alert.currentStock,
             reorderPoint: alert.reorderPoint,
             suggestedQty: suggestedQtyFor(alert),

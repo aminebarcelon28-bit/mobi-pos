@@ -9,7 +9,7 @@ async function getSqlite() {
   const { sqliteAdapter } = await import('../../db/sqliteAdapter');
   return sqliteAdapter;
 }
-import { calculateStockAlerts } from '../../utils/alertEngine';
+import { calculateStockAlerts, getDynamicThreshold } from '../../utils/alertEngine';
 import { newId, newReceiptNumber } from '../../utils/ids';
 
 // P11.3: productRepository pulls sqliteAdapter -> dexie + libsql into the entry.
@@ -34,11 +34,43 @@ const RECEIVE_FLIGHT_TTL_MS = 10 * 60_000;
 import { getEffectiveCostPrice } from '../../utils/pricingEngine';
 import { resolveReferenceCost } from '../../utils/referenceCost';
 import type { LedgerDeltaInput } from '../../db/sqlPluginAdapter';
+import type { VendorDirectoryEntry } from '../../types/pos';
+
+export const VENDOR_DIRECTORY_KEY = 'mobi_vendor_directory_v1';
+
+function loadVendorDirectory(): Record<string, VendorDirectoryEntry> {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const raw = localStorage.getItem(VENDOR_DIRECTORY_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, VendorDirectoryEntry>;
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function saveVendorDirectory(directory: Record<string, VendorDirectoryEntry>): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(VENDOR_DIRECTORY_KEY, JSON.stringify(directory));
+  } catch {
+    // Quota/private-mode — in-memory state still works for the session.
+  }
+}
 
 export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementSlice> = (set, get) => ({
   purchaseOrders: [],
   activeDraftPO: null,
+  poDraftBuilderRequested: false,
   dismissedProcurementIds: [],
+  customQtyMap: {},
+  selectedItemsMap: {},
+  extraVendorProducts: {},
+  customActiveVendors: [],
+  vendorMoqMap: {},
+  vendorDirectory: loadVendorDirectory(),
 
   dismissProcurementProduct: (productId) => {
     const { dismissedProcurementIds } = get();
@@ -49,6 +81,118 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
 
   restoreDismissedProcurementProducts: () => {
     set({ dismissedProcurementIds: [] });
+  },
+
+  setCustomQty: (productId, qty) => {
+    const validQty = Math.max(1, Number.isNaN(qty) ? 1 : Math.floor(qty));
+    set((s) => ({ customQtyMap: { ...s.customQtyMap, [productId]: validQty } }));
+  },
+
+  setCustomQtyBatch: (entries) => {
+    set((s) => ({ customQtyMap: { ...s.customQtyMap, ...entries } }));
+  },
+
+  removeCustomQtyForVendor: (productIds) => {
+    set((s) => {
+      const next = { ...s.customQtyMap };
+      productIds.forEach((id) => {
+        delete next[id];
+      });
+      return { customQtyMap: next };
+    });
+  },
+
+  toggleProcurementItem: (productId) => {
+    set((s) => ({
+      selectedItemsMap: {
+        ...s.selectedItemsMap,
+        [productId]: s.selectedItemsMap[productId] === undefined ? false : !s.selectedItemsMap[productId],
+      },
+    }));
+  },
+
+  setProcurementItemsSelected: (productIds, selected) => {
+    set((s) => {
+      const next = { ...s.selectedItemsMap };
+      productIds.forEach((id) => {
+        next[id] = selected;
+      });
+      return { selectedItemsMap: next };
+    });
+  },
+
+  addExtraVendorProduct: (vendorName, productId) => {
+    set((s) => {
+      const current = s.extraVendorProducts[vendorName] || [];
+      if (current.includes(productId)) return s as Partial<PosState>;
+      return {
+        extraVendorProducts: { ...s.extraVendorProducts, [vendorName]: [...current, productId] },
+        selectedItemsMap: { ...s.selectedItemsMap, [productId]: true },
+      };
+    });
+  },
+
+  removeExtraVendorProduct: (vendorName, productId) => {
+    set((s) => ({
+      extraVendorProducts: {
+        ...s.extraVendorProducts,
+        [vendorName]: (s.extraVendorProducts[vendorName] || []).filter((id) => id !== productId),
+      },
+    }));
+  },
+
+  setCustomActiveVendors: (vendors) => {
+    set({ customActiveVendors: vendors });
+  },
+
+  addCustomActiveVendor: (vendorName) => {
+    const trimmed = vendorName.trim();
+    if (!trimmed) return;
+    set((s) => (s.customActiveVendors.includes(trimmed) ? (s as Partial<PosState>) : { customActiveVendors: [...s.customActiveVendors, trimmed] }));
+  },
+
+  removeCustomActiveVendor: (vendorName) => {
+    set((s) => ({ customActiveVendors: s.customActiveVendors.filter((v) => v !== vendorName) }));
+  },
+
+  setVendorMoq: (vendorName, target) => {
+    if (!(target > 0)) return;
+    set((s) => ({ vendorMoqMap: { ...s.vendorMoqMap, [vendorName]: Math.round(target) } }));
+  },
+
+  setVendorContact: (vendorName, contact) => {
+    const trimmed = vendorName.trim();
+    if (!trimmed) return;
+    set((s) => {
+      const next = {
+        ...s.vendorDirectory,
+        [trimmed]: { ...s.vendorDirectory[trimmed], ...contact, updatedAt: new Date().toISOString() },
+      };
+      saveVendorDirectory(next);
+      return { vendorDirectory: next };
+    });
+  },
+
+  clearProcurementDraft: () => {
+    set({
+      customQtyMap: {},
+      selectedItemsMap: {},
+      extraVendorProducts: {},
+      customActiveVendors: [],
+      vendorMoqMap: {},
+    });
+  },
+
+  setActiveDraftPO: (po) => {
+    set({ activeDraftPO: po });
+  },
+
+  requestPoDraftBuilder: () => {
+    set({ poDraftBuilderRequested: true });
+  },
+
+  consumePoDraftBuilder: () => {
+    set({ poDraftBuilderRequested: false });
   },
 
   // NOTE: declared `void` in ProcurementSlice (owned by another agent) but
@@ -65,7 +209,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
         // B-033: integer DZD unit cost — PO totals feed COGS/expenses.
         const unitCost = Math.max(
           0,
-          Math.round(ci.unitCost !== undefined ? ci.unitCost : p ? p.costPrice : 1500)
+          Math.round(ci.unitCost !== undefined ? ci.unitCost : p ? getEffectiveCostPrice(p) : 0)
         );
         return {
           productId: ci.productId,
@@ -90,7 +234,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
         .map((a) => {
           const p = products.find((prod) => prod.id === a.productId);
           if (!p) return null;
-          const suggestedQty = Math.max(1, (p.reorderPoint || 10) * 2 - p.stock);
+          const suggestedQty = Math.max(1, getDynamicThreshold(p) * 2 - p.stock);
           const unitCost = getEffectiveCostPrice(p);
           return {
             productId: p.id,
@@ -163,7 +307,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
         // B-033: integer DZD unit cost — PO totals feed COGS/expenses.
         const unitCost = Math.max(
           0,
-          Math.round(ci.unitCost !== undefined ? ci.unitCost : p ? p.costPrice : 1500)
+          Math.round(ci.unitCost !== undefined ? ci.unitCost : p ? getEffectiveCostPrice(p) : 0)
         );
         return {
           productId: ci.productId,
@@ -692,7 +836,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
             const prod = updatedProducts.find((p) => p.id === item.productId);
             const qty = Math.max(0, Math.floor(Number(item.qty) || 0));
             if (!prod || qty <= 0) return null;
-            return { productId: item.productId, qty, unitCost: Math.max(0, Math.round(Number(prod.costPrice) || 0)) };
+            return { productId: item.productId, qty, unitCost: Math.max(0, Math.round(getEffectiveCostPrice(prod))) };
           })
           .filter((l): l is { productId: string; qty: number; unitCost: number } => l !== null);
         if (lines.length > 0) {
