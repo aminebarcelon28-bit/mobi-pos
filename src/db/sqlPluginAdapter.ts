@@ -93,6 +93,7 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     await db.select('SELECT version, device_id, terminal_name FROM cash_sessions LIMIT 0;');
     await db.select('SELECT version FROM cash_movements LIMIT 0;');
     await db.select('SELECT key, value_json FROM app_settings LIMIT 0;');
+    await db.select('SELECT key, value_json, version FROM app_settings LIMIT 0;');
     await db.select(CUSTOMER_DEBTS_HEAL_PROBE_SQL);
     return;
   } catch (probeErr) {
@@ -162,6 +163,13 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     'ALTER TABLE inventory_ledger ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
     'ALTER TABLE customers ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
     'ALTER TABLE security_audit_logs ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
+    'ALTER TABLE security_audit_logs ADD COLUMN device_id TEXT;',
+    'ALTER TABLE security_audit_logs ADD COLUMN ip_address TEXT;',
+    // FT-06/C provenance: existing rows read back as 'local' via the default
+    // (SQLite fills pre-existing rows with the column default). Native
+    // appends omit the column and inherit the default; only the backup merge
+    // writes 'imported' explicitly. Duplicate-tolerant like the rest here.
+    "ALTER TABLE security_audit_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'local';",
     'ALTER TABLE repair_orders ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
     'ALTER TABLE purchase_orders ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
     'ALTER TABLE trade_ins ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
@@ -713,17 +721,37 @@ export function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<Checkout
     // was written. Best-effort per product: reconcile must never fail a
     // durable sale. The pull path also triggers reconcile for batches
     // arriving from peers.
+    //
+    // The Dexie batch mirror below is the third valuation sync point
+    // (checkout / restitution / reconcile). `reconcileShadowBatches` only
+    // mirrors when it actually resolved a shadow (`if (reconciledCount > 0)`),
+    // so a sale that consumed real batches mirrored nothing and left the Dexie
+    // `stockBatches` mirror stale — which is exactly what the SQLite → Dexie →
+    // legacy valuation fallback reads. It runs AFTER reconcile so it observes
+    // the resolved state, and strictly OUTSIDE the transaction/lock.
     try {
       const seen = new Set<string>();
+      const soldProductIds: string[] = [];
       for (const item of result?.fifoItems ?? []) {
         const productId = item?.itemId;
         if (!productId || seen.has(productId)) continue;
         seen.add(productId);
+        soldProductIds.push(productId);
         const batch = { productId };
         try {
           await reconcileShadowBatches(batch.productId);
         } catch (reconErr) {
           console.warn('[writeCheckoutAtomic] receipt-time reconcile skipped:', reconErr);
+        }
+      }
+      if (soldProductIds.length > 0) {
+        try {
+          const db = await getLocalDb();
+          await mirrorStockBatchesToDexie(db, soldProductIds);
+        } catch (mirrorErr) {
+          // NEVER fail a durable sale on a mirror failure: SQLite is the
+          // authority and the Dexie copy is a derived fallback lane.
+          console.warn('[writeCheckoutAtomic] Dexie batch mirror skipped:', mirrorErr);
         }
       }
     } catch (reconOuterErr) {
@@ -3094,6 +3122,31 @@ export async function restituteStockBatches(
       );
     }
   }
+
+  // Restitution valuation sync point (#3 of 3: checkout / restitution /
+  // reconcile). Restitution either restores quantity onto the original batch
+  // or mints a `REFUND` batch — both mutate `stock_batches`, and without this
+  // the Dexie mirror went stale after every refund, which is exactly what the
+  // SQLite → Dexie → legacy valuation fallback reads.
+  //
+  // Placed AFTER the loop so every SQLite write has committed (this function
+  // holds no transaction), and scoped to the affected product ids so a large
+  // refund never triggers a full inventory batch dump. Fail-soft: SQLite is
+  // the authority, so a mirror failure must never fail a refund.
+  const restitutedProductIds = [
+    ...new Set(
+      allocations
+        .map((a) => a?.productId)
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+  if (restitutedProductIds.length > 0) {
+    try {
+      await mirrorStockBatchesToDexie(db, restitutedProductIds);
+    } catch (mirrorErr) {
+      console.warn('[restituteStockBatches] Dexie batch mirror skipped:', mirrorErr);
+    }
+  }
 }
 
 /**
@@ -3273,14 +3326,19 @@ async function depleteBatchGuarded(
     device_id?: string;
   }>;
   const rem = Number(read?.[0]?.quantity_remaining);
-  const ver = Number(read?.[0]?.version ?? 1);
+  // Canonical name (owner-set 2026-10-02): the bumped version read back from
+  // SQLite after the depletion UPDATE. `batchVersion` is the domain term for
+  // the version stamped into the stock_batches outbox payload across the
+  // SQLite/Dexie boundary — the sibling sites use `restituteVersion*` and
+  // `insertBatchVersion` for the same field, so this one matches.
+  const batchVersion = Number(read?.[0]?.version ?? 1);
   const unitCost = toFiniteNumber(read?.[0]?.unit_cost ?? batch.unit_cost, 0);
   const receivedAt = read?.[0]?.received_at ?? (batch.received_at as string | undefined) ?? ctx.now;
   const purchaseOrderId = read?.[0]?.purchase_order_id ?? (batch.purchase_order_id as string | undefined) ?? null;
   const createdAt = read?.[0]?.created_at ?? (batch.created_at as string | undefined) ?? receivedAt;
   const outKey = `sb-${batch.batch_id}-${ctx.txId}`;
   const payload = {
-    version: ver,
+    version: batchVersion,
     batch_id: batch.batch_id,
     product_id: ctx.prodId,
     quantity_remaining: rem,

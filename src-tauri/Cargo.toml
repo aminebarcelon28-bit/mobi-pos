@@ -25,7 +25,23 @@ url = "2"
 urlencoding = "2"
 parking_lot = "0.12"
 sha2 = "0.10"
-rusqlite = { version = "0.31", features = ["bundled"] }
+# Phase 4a — Argon2id KDF for device-local PIN storage (trust_core/pin.rs).
+# This is the dependency gate AGENTS.md held open ("Argon2id backend pending
+# `argon2` dependency approval"); owner-approved 2026-10-02, m=64MiB t=3 p=1.
+# `zeroize`/`subtle` are declared EXPLICITLY even though argon2 pulls them in
+# transitively: pin.rs uses both directly, and direct use must never depend on
+# a transitive version. `zeroize_derive` supplies ZeroizeOnDrop for the
+# plaintext-PIN wrappers; argon2's own `zeroize` feature wipes its internals.
+argon2 = { version = "0.5", features = ["zeroize"] }
+# Same resolved version argon2 uses (cargo unifies them — no second copy).
+# Needed explicitly for `getrandom`, which argon2 does not passthrough and
+# which `SaltString::generate` needs for a CSPRNG salt.
+password-hash = { version = "0.5", features = ["getrandom"] }
+zeroize = { version = "1.9", features = ["zeroize_derive"] }
+subtle = "2.6"
+ed25519-dalek = "3"
+base64 = "0.22"
+rusqlite = { version = "0.31", features = ["bundled", "backup"] }
 sqlite-vec = "0.1"
 bytemuck = "1.16"
 uuid = { version = "1.8", features = ["v4"] }
@@ -43,6 +59,13 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 keyring = { version = "3", features = ["windows-native"] }
 winreg = "0.55"
+
+# Phase 2 trusted time: exact sleep-inclusive OS clocks (no std::time::Instant).
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation", "Win32_Storage_FileSystem", "Win32_System_IO"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [features]
 default = ["custom-protocol"]

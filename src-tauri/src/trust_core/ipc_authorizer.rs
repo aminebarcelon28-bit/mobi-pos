@@ -376,6 +376,16 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("trust_reanchor_time", Capability::LicenseManagement),
     // Controlled recovery.
     ("emergency_export_ledger", Capability::EmergencyExport),
+    // SAV intake photo attachments (Phase 5): bytes go to the local
+    // filesystem, never SQLite. Write/purge are OperationalWrites (fail-closed
+    // while locked); read re-verifies the SHA-256 so a swapped image is
+    // DETECTED rather than silently rendered on the work order.
+    ("sav_attachment_write", Capability::OperationalWrites),
+    ("sav_attachment_read", Capability::ReadOperationalData),
+    ("sav_attachment_purge", Capability::OperationalWrites),
+    // Crash-orphan sweep: same plane as purge — it DELETES staged photo bytes
+    // and is refused while the terminal is locked.
+    ("sav_attachment_sweep_stale_drafts", Capability::OperationalWrites),
     // Tier A audit path (Phase 4.4): native append-only writes.
     ("audit_append", Capability::OperationalWrites),
     // Swallowed-audit surfacing (Phase 4.5 WP2a): same plane as append.
@@ -384,6 +394,13 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     // LicenseManagement (provisioning plane) so first-boot setup and
     // rotation-while-locked stay reachable; neither grants business caps.
     ("pin_verify", Capability::LicenseManagement),
+    // F3 (pending merge approval): read-only lockout countdown. Same plane
+    // as pin_verify; loads state, never records or resets.
+    ("pin_lockout_remaining", Capability::LicenseManagement),
+    // Phase 3: snapshot prune destroys recovery points — OperationalWrites
+    // (fail-closed outside Operational) PLUS a fresh manager PIN verified
+    // inside the command through the unmodified pin_verify.
+    ("prune_snapshots", Capability::OperationalWrites),
     ("pin_set", Capability::LicenseManagement),    // Audit verification is a read (locked-state diagnostics keep dedicated paths).
     ("audit_verify", Capability::ReadOperationalData),
     // Hardware / device egress.
@@ -645,6 +662,7 @@ pub fn resolve_at_startup(app_data_dir: &std::path::Path) {
             kernel.restore(LicenseState::Unactivated, 0, 0);
             super::time_engine::global_time_kernel().load_from_snapshot(&empty_time_snapshot());
             eprintln!("[trust_core] fresh install -> UNACTIVATED");
+            persist_to_global_dir();
         }
         ss::LoadVerdict::Verified(d) => {
             kernel.restore(d.state, d.generation, d.counter);
@@ -697,8 +715,12 @@ pub fn persist_snapshot(app_data_dir: &std::path::Path) {
 }
 
 fn persist_to_dir(app_data_dir: &std::path::Path) {
-    use super::secure_storage as ss;
     let (store, _) = select_store(app_data_dir);
+    persist_with_store(app_data_dir, &*store);
+}
+
+fn persist_with_store(app_data_dir: &std::path::Path, store: &dyn super::secure_storage::KeyStore) {
+    use super::secure_storage as ss;
     let kernel = global_kernel();
     let guard = kernel.inner.read();
     let tf = super::time_engine::global_time_kernel().read_fields();
@@ -707,10 +729,10 @@ fn persist_to_dir(app_data_dir: &std::path::Path) {
     // Resolve the sealing key: provision on genuine fresh machines only.
     let file_exists = path.exists();
     let counter_hint = store.load_counter().ok().flatten();
-    let prior = file_exists || counter_hint.is_some() || guard.counter > 0;
-    let key: Vec<u8> = match ss::resolve_mac_key(&*store, prior) {
+    let prior = file_exists || counter_hint.is_some();
+    let key: Vec<u8> = match ss::resolve_mac_key(store, prior) {
         ss::KeyResolution::Active { key, .. } => key,
-        ss::KeyResolution::ProvisionOnFirstPersist => match ss::provision_mac_key(&*store) {
+        ss::KeyResolution::ProvisionOnFirstPersist => match ss::provision_mac_key(store) {
             Ok(k) => {
                 eprintln!("[trust_core] provisioned fresh trust key");
                 k
@@ -737,7 +759,7 @@ fn persist_to_dir(app_data_dir: &std::path::Path) {
         last_server_seq: tf.last_server_seq,
     };
     drop(guard);
-    if let Err(e) = ss::persist_trust_snapshot(&path, &*store, &data, &key) {
+    if let Err(e) = ss::persist_trust_snapshot(&path, store, &data, &key) {
         eprintln!("[trust_core] snapshot persist failed: {e}");
     }
 }
@@ -972,6 +994,11 @@ pub(crate) fn persist_current_snapshot(app: &tauri::AppHandle) {
 /// an unlisted handler fails the build.
 #[cfg(test)]
 pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
+    // SAV intake photo attachments (filesystem + SHA-256; never generic SQL).
+    "sav_attachment_write",
+    "sav_attachment_read",
+"sav_attachment_purge",
+    "sav_attachment_sweep_stale_drafts",
     "sqlite_print_raw_escpos",
     "sqlite_open_cash_drawer",
     "get_cloud_credentials",
@@ -1011,6 +1038,8 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "audit_note_swallowed",
     "audit_verify",
     "pin_verify",
+    "pin_lockout_remaining",
+    "prune_snapshots",
     "pin_set",
 ];
 
@@ -1403,5 +1432,47 @@ mod tests {
         assert!(r.is_err());
         let (state, _) = global_kernel().get();
         assert_eq!(state, LicenseState::Expired, "kernel untouched by forgery");
+    }
+
+    #[test]
+    fn fresh_machine_provisions_key_and_persists_even_with_bumped_counter() {
+        let _g = serial_test_lock();
+        global_kernel().reset_for_tests();
+        set(LicenseState::Operational); // counter is now 1
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "mobi-fresh-persist-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let store = crate::trust_core::secure_storage::test_support::MemKeyStore::new();
+        persist_with_store(&temp_dir, &store);
+
+        // Key must have been provisioned on first persist
+        let key = store.load_mac_key().unwrap();
+        assert!(key.is_some(), "MAC key must be provisioned on first persist");
+
+        // Counter must be stored in keystore
+        let counter = store.load_counter().unwrap();
+        assert_eq!(counter, Some(1), "counter must be stored in keystore");
+
+        // Snapshot file must exist and verify
+        let path = super::super::secure_storage::snapshot_path(&temp_dir);
+        assert!(path.exists(), "snapshot file must exist");
+
+        let verdict = super::super::secure_storage::load_trust_snapshot(&path, &store, key.as_deref());
+        match verdict {
+            super::super::secure_storage::LoadVerdict::Verified(data) => {
+                assert_eq!(data.state, LicenseState::Operational);
+                assert_eq!(data.counter, 1);
+            }
+            other => panic!("expected Verified, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

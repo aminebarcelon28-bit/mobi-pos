@@ -23,9 +23,9 @@ const MobilePairingWizard = React.lazy(() =>
 );
 import { getCloudCredentials } from './sync/keychain';
 import { soundEngine } from './utils/audioFeedback';
-import { hashPin } from './utils/security';
+import { hashDeviceLocalPin } from './utils/security';
 import { checkBootLicense, startLicenseHeartbeat } from './licensing/client';
-import { isDegradedLicenseStatus, setDegradedSaleBlock } from './licensing/degraded';
+import { isLicenseLocked, setDegradedSaleBlock } from './licensing/degraded';
 import { onLicenseRevoked } from './licensing/store';
 import { ActivationGateScreen } from './components/licensing/ActivationGateScreen';
 
@@ -125,6 +125,8 @@ const DbLoadingSplash: React.FC = () => (
 // identity by PIN, so a shared PIN would always unlock as the manager.
 const KNOWN_DEFAULT_PINS = new Set(['1234', '0000', '1111']);
 const PIN_4DIGITS_RE = /^\d{4}$/;
+// Phase 4.5: manager minimum is 6 digits (cashiers stay exactly 4).
+const MANAGER_PIN_RE = /^\d{6,32}$/;
 const CASHIER_COLORS = ['#10b981', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a5'];
 
 interface SetupRow {
@@ -194,9 +196,10 @@ const FirstBootPinSetup: React.FC = () => {
       return;
     }
     if (pinTarget.kind === 'managerNew') {
-      setManagerNew((v) => (v + d).replace(/\D/g, '').slice(0, 4));
+      // Manager PINs are 6+ digits (Phase 4.5); cap at 32 (native limit).
+      setManagerNew((v) => (v + d).replace(/\D/g, '').slice(0, 32));
     } else if (pinTarget.kind === 'managerConfirm') {
-      setManagerConfirm((v) => (v + d).replace(/\D/g, '').slice(0, 4));
+      setManagerConfirm((v) => (v + d).replace(/\D/g, '').slice(0, 32));
     } else {
       setRows((prev) =>
         prev.map((r) =>
@@ -248,17 +251,19 @@ const FirstBootPinSetup: React.FC = () => {
       return;
     }
     const cleanManagerPin = managerNew.trim();
-    if (!PIN_4DIGITS_RE.test(cleanManagerPin)) {
-      setError('Le code PIN gérant doit contenir exactement 4 chiffres.');
+    if (!MANAGER_PIN_RE.test(cleanManagerPin)) {
+      setError('Le code PIN gérant doit contenir au moins 6 chiffres.');
       return;
     }
     if (cleanManagerPin !== managerConfirm.trim()) {
       setError('La confirmation du code PIN gérant ne correspond pas.');
       return;
     }
-    // Fully-empty rows are ignored (lets the merchant abandon a spare row);
-    // half-filled rows are an error, not silently dropped.
-    const activeRows = rows.filter((r) => r.name.trim() !== '' || r.pin !== '');
+    // Pre-seeded suggestions with empty PINs are ignored unless the user actually
+    // enters a PIN for them (or adds a custom cashier row).
+    const activeRows = rows.filter(
+      (r) => r.pin.trim() !== '' || (r.key.startsWith('new-') && r.name.trim() !== '')
+    );
     for (const r of activeRows) {
       if (!r.name.trim()) {
         setError('Chaque ligne caissier doit avoir un nom (ou supprimez la ligne).');
@@ -280,7 +285,7 @@ const FirstBootPinSetup: React.FC = () => {
       // (single-PIN contract) — reuse that exact hash for the new roster so
       // the manager holds one credential, not two hashes of the same code.
       await setManagerPin(cleanManagerPin);
-      const managerHash = usePosStore.getState().managerPin || hashPin(cleanManagerPin);
+      const managerHash = usePosStore.getState().managerPin || hashDeviceLocalPin(cleanManagerPin);
       const users = cashierUsers || [];
       const prevAdmin = users.find((u) => u.role === 'admin') || users[0];
       await setCashierUsers([
@@ -294,7 +299,7 @@ const FirstBootPinSetup: React.FC = () => {
         ...activeRows.map((r, i) => ({
           id: r.key.startsWith('usr-') ? r.key : `usr-${Date.now().toString(36)}-${i}`,
           name: r.name.trim(),
-          pin: hashPin(r.pin.trim()),
+          pin: hashDeviceLocalPin(r.pin.trim()),
           role: 'cashier' as const,
           avatarColor: CASHIER_COLORS[i % CASHIER_COLORS.length] as string,
         })),
@@ -353,7 +358,7 @@ const FirstBootPinSetup: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="text-[11px] font-bold text-pos-muted uppercase tracking-wider block mb-1.5">
-                  PIN gérant (4 chiffres)
+                  PIN gérant (6 chiffres minimum)
                 </label>
                 <input
                   type="password"
@@ -362,11 +367,11 @@ const FirstBootPinSetup: React.FC = () => {
                   autoComplete="new-password"
                   enterKeyHint="next"
                   aria-label="PIN gérant"
-                  maxLength={4}
+                  maxLength={32}
                   value={managerNew}
                   onFocus={() => setPinTarget({ kind: 'managerNew' })}
                   onClick={() => setPinTarget({ kind: 'managerNew' })}
-                  onChange={(e) => setManagerNew(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  onChange={(e) => setManagerNew(e.target.value.replace(/\D/g, '').slice(0, 32))}
                   className={pinInputClass}
                   placeholder="••••"
                 />
@@ -382,11 +387,11 @@ const FirstBootPinSetup: React.FC = () => {
                   autoComplete="new-password"
                   enterKeyHint="done"
                   aria-label="Confirmer le PIN gérant"
-                  maxLength={4}
+                  maxLength={32}
                   value={managerConfirm}
                   onFocus={() => setPinTarget({ kind: 'managerConfirm' })}
                   onClick={() => setPinTarget({ kind: 'managerConfirm' })}
-                  onChange={(e) => setManagerConfirm(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  onChange={(e) => setManagerConfirm(e.target.value.replace(/\D/g, '').slice(0, 32))}
                   className={pinInputClass}
                   placeholder="••••"
                 />
@@ -553,63 +558,78 @@ export const App: React.FC = () => {
   const [showPairingWizard, setShowPairingWizard] = useState(false);
   const [checkedCredentials, setCheckedCredentials] = useState(false);
 
-  // Pre-boot cryptographic licensing gate
+  // Pre-boot cryptographic licensing gate.
+  //
+  // `locked` is the single source of truth for "may the operating app mount".
+  // It is computed from the licence STATUS, not from a `licensed` boolean
+  // produced elsewhere, so an ambiguous or missing status cannot fall through
+  // to "probably fine". See licensing/degraded.ts for the fail-closed policy.
   const [licenseState, setLicenseState] = useState<{
     checked: boolean;
     licensed: boolean;
+    /** Fail-closed: true whenever the status is not affirmatively ACTIVE. */
+    locked: boolean;
+    /** Retained for the choke-point API; always false under current policy. */
     degraded: boolean;
+    /** Status string, surfaced in the gate and recorded in export audits. */
+    status?: string;
     error?: string;
-  }>({ checked: false, licensed: false, degraded: false });
+  }>({ checked: false, licensed: false, locked: true, degraded: false });
 
   useEffect(() => {
     let unmounted = false;
     checkBootLicense({ bootTimeoutMs: 2500 })
       .then((res) => {
         if (unmounted) return;
-        // Degraded mode (availability): billing/admin states (expired,
-        // suspended, grace exceeded) keep the merchant's data and correction
-        // flows (refunds, voids, reports, export) reachable while new sales
-        // are refused at the choke points. Tamper/identity states hard-lock.
-        const degraded =
-          !res.licensed && isDegradedLicenseStatus((res as { status?: string }).status);
-        setDegradedSaleBlock(degraded);
+        const status = (res as { status?: string }).status;
+        // Authoritative: ACTIVE status ⇒ unlocked. Anything else ⇒ locked.
+        const locked = isLicenseLocked(status) || !res.licensed;
+        // Defence in depth: the sale choke is armed whenever the terminal is
+        // not affirmatively licensed, independent of what the render tree does.
+        // (Setting it from `degraded` — always false — would leave the choke
+        // open if a future refactor ever rendered the POS while unlicensed.)
+        setDegradedSaleBlock(locked);
         setLicenseState({
           checked: true,
-          licensed: res.licensed,
-          degraded,
+          licensed: res.licensed && !locked,
+          locked,
+          degraded: false,
+          status,
           error: res.licensed ? undefined : res.message,
         });
       })
       .catch((err) => {
         if (unmounted) return;
-        setDegradedSaleBlock(false);
+        // A verification error is an unlicensed state, full stop.
+        setDegradedSaleBlock(true);
         setLicenseState({
           checked: true,
           licensed: false,
+          locked: true,
           degraded: false,
+          status: 'UNKNOWN',
           error: err.message || 'Erreur de vérification de licence',
         });
       });
 
-    const unsubRevoke = onLicenseRevoked((reason) => {
+    const lockOut = (reason: string, status?: string) => {
+      if (unmounted) return;
+      setDegradedSaleBlock(true);
       setLicenseState({
         checked: true,
         licensed: false,
+        locked: true,
         degraded: false,
+        status: status ?? 'REVOKED',
         error: reason,
       });
-    });
+    };
+
+    const unsubRevoke = onLicenseRevoked((reason) => lockOut(reason, 'REVOKED'));
 
     const stopHeartbeat = startLicenseHeartbeat({
       intervalMs: 120000, // 2 minutes (120 seconds) - ~360 requests/day per active device
-      onRevoked: (reason) => {
-        setLicenseState({
-          checked: true,
-          licensed: false,
-          degraded: false,
-          error: reason,
-        });
-      },
+      onRevoked: (reason) => lockOut(reason, 'REVOKED'),
     });
 
     return () => {
@@ -645,11 +665,17 @@ export const App: React.FC = () => {
             reason: 'Horloge appareil incohérente avec les ventes enregistrées — vérification requise.',
             suspendedAt: Date.now(),
           });
-          setDegradedSaleBlock(false);
+          // Fail-closed: a tampered clock is an unlicensed state. The sale
+          // choke is ARMED here — it previously called
+          // setDegradedSaleBlock(false), which disarmed revenue on exactly the
+          // path that should be locking hardest.
+          setDegradedSaleBlock(true);
           setLicenseState({
             checked: true,
             licensed: false,
+            locked: true,
             degraded: false,
+            status: 'TAMPERED_CLOCK',
             error: 'Horloge appareil incohérente — licence verrouillée.',
           });
         }
@@ -657,6 +683,38 @@ export const App: React.FC = () => {
         // Unreadable DB here must never lock or break a healthy boot.
       }
     })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isDbInitialized, licenseState.checked, licenseState.licensed]);
+
+  // Crash-orphan sweep for staged SAV intake photos (Phase 5 hardening).
+  //
+  // `RepairWorkOrderModal` purges an uncommitted `draft_*` staging set on every
+  // close path, but that path cannot run if the process dies mid-intake — a
+  // power cut, force-quit or crash leaves the bytes on disk forever, and no
+  // order owns the `draft_` prefix so `purgeSavPhotos` can never reach them.
+  //
+  // Gated on the same post-unlock condition as the clock check above, which is
+  // also a correctness requirement: the native sweep is capability-gated
+  // `OperationalWrites` and is REFUSED while the terminal is locked, so
+  // calling it earlier would be a no-op. The native side applies the >24h age
+  // gate and the filename allowlist, so this can never delete committed
+  // evidence or an in-progress intake. Runs once per unlock and never throws.
+  useEffect(() => {
+    if (!isDbInitialized || !licenseState.checked || !licenseState.licensed) return;
+    let cancelled = false;
+    (void (async () => {
+      try {
+        const { sweepStaleSavDrafts } = await import('./utils/savAttachments');
+        const removed = await sweepStaleSavDrafts();
+        if (!cancelled && removed > 0) {
+          console.info(`[boot] swept ${removed} orphaned SAV intake photo(s)`);
+        }
+      } catch {
+        // Housekeeping must never break a healthy boot.
+      }
+    })());
     return () => {
       cancelled = true;
     };
@@ -805,6 +863,9 @@ export const App: React.FC = () => {
                 usePosStore.getState().refreshAfterPull().catch(console.warn);
                 console.info(`[boot] Replayed ${result.replayed} checkout recovery intent(s)`);
               }
+              if (result.evicted > 0) {
+                console.warn(`[boot] Checkout recovery intents evicted: ${result.evicted}`, result.fatalErrors);
+              }
               if (result.remaining > 0) {
                 console.warn('[boot] Checkout recovery intent still pending:', result.lastError);
               }
@@ -889,14 +950,32 @@ export const App: React.FC = () => {
     );
   }
 
-  // 2. Hardware-Locked Activation Gate (skipped in degraded mode: billing
-  // states keep data + corrections reachable, only new sales are refused).
-  if (!licenseState.licensed && !licenseState.degraded) {
+  // 2. Hardware-Locked Activation Gate — fail-closed.
+  //
+  // `locked` is the ONLY condition. It is true for every non-ACTIVE status
+  // (expired, grace exceeded, suspended, revoked, tampered clock, device
+  // mismatch, unknown, null, corrupt) and for any verification error, so the
+  // operating app below is unreachable until an Ed25519-signed token is
+  // presented and verified. There is no degraded bypass.
+  //
+  // Nothing above this line may mount the POS: the store's initDatabase, the
+  // sync effect, the clock tripwire and the pairing-credential check are all
+  // gated on `licenseState.licensed`, and all of them are declared AFTER this
+  // early return is evaluated on every render. Early returns in React are
+  // evaluated top-down on each render, so returning here guarantees the later
+  // `useEffect`s for the unlicensed path never re-run with a licensed value.
+  if (licenseState.locked) {
     return (
       <ActivationGateScreen
         onActivated={() => {
           setDegradedSaleBlock(false);
-          setLicenseState({ checked: true, licensed: true, degraded: false });
+          setLicenseState({
+            checked: true,
+            licensed: true,
+            locked: false,
+            degraded: false,
+            status: 'ACTIVE',
+          });
         }}
         initialError={licenseState.error}
       />
@@ -937,11 +1016,6 @@ export const App: React.FC = () => {
         <ToastProvider>
           <SyncNotificationListener />
           <div className="h-[100dvh] w-full flex flex-col bg-pos-bg text-pos-text overflow-hidden font-sans">
-            {licenseState.degraded && (
-              <div className="bg-amber-500/15 border-b border-amber-500/40 px-3 py-1.5 flex items-center justify-center gap-2 text-[11px] font-bold text-amber-300 shrink-0 select-none z-40">
-                <span>Licence expirée — nouvelles ventes bloquées.</span>
-              </div>
-            )}
             <React.Suspense fallback={<PairingWizardFallback />}>
               <CompanionShell onOpenPairingWizard={() => setShowPairingWizard(true)} />
             </React.Suspense>
@@ -970,15 +1044,6 @@ export const App: React.FC = () => {
       <ToastProvider>
         <SyncNotificationListener />
         <div className={`h-[100dvh] w-full flex flex-col bg-pos-bg text-pos-text overflow-hidden font-sans transition-all duration-200 ${scannerActive ? 'ring-4 ring-inset ring-emerald-500' : ''}`}>
-          {/* Degraded-license banner: billing states block new sales at the
-          choke points — this banner is the visible counterpart so the till
-          never fails silently. Corrections (refunds, voids, reports, export)
-          stay available. */}
-          {licenseState.degraded && (
-            <div className="bg-amber-500/15 border-b border-amber-500/40 px-3 py-1.5 flex items-center justify-center gap-2 text-[11px] font-bold text-amber-300 shrink-0 select-none z-40">
-              <span>Licence expirée — nouvelles ventes bloquées. Remboursements, rapports et exports restent disponibles.</span>
-            </div>
-          )}
           {/* Orientation Guidance on Mobile PC View */}
           {isMobileDevice() && !isLandscape && (
             <div className="bg-gradient-to-r from-indigo-950 via-purple-950 to-slate-900 border-b border-indigo-500/30 px-3 py-1.5 flex items-center justify-between text-[11px] text-indigo-200 shrink-0 select-none z-40">

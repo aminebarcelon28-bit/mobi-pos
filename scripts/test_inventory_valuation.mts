@@ -123,7 +123,7 @@ try {
     const hook = src('src/hooks/useInventoryValuation.ts');
     check('SQLite totals entry point exists', adapter.includes('getInventoryValuationTotals'));
     check('Dexie mirror function exists and never throws',
-      adapter.includes('mirrorStockBatchesToDexie') && adapter.includes('NEVER throws'));
+      adapter.includes('mirrorStockBatchesToDexie') && /never throws/i.test(adapter));
     check('mirror skips SHADOW markers like the pull path',
       adapter.includes(`purchase_order_id != 'SHADOW'`) && adapter.includes('WHERE product_id IN'));
     const mirrorCalls = (adapter.match(/mirrorStockBatchesToDexie\(db/g) ?? []).length;

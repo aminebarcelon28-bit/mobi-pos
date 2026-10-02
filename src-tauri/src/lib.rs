@@ -14,6 +14,8 @@ pub mod db;
 pub mod resolver;
 pub mod commands;
 pub mod emergency_export;
+pub mod snapshot_prune;
+pub mod sav_attachments;
 pub mod trust_core;
 
 use crate::trust_core::{
@@ -329,59 +331,291 @@ fn backup_current_db_before_swap(
     Ok(Some(dst.to_string_lossy().into_owned()))
 }
 
-fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
 #[tauri::command]
-fn create_database_backup(app_handle: tauri::AppHandle) -> Result<String, TrustError> {
+fn create_database_backup(
+    app_handle: tauri::AppHandle,
+    kind: Option<String>,
+) -> Result<BackupMeta, TrustError> {
     authorize_and_execute(
         "create_database_backup",
         Capability::ReadOperationalData,
         |_| {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    let db_path = app_dir.join("mobi_pos.db");
-    if !db_path.exists() {
-        return Err("Fichier mobi_pos.db introuvable".into());
-    }
-    // NOTE (WAL checkpoint): these commands hold no pooled SQLite connection,
-    // so there is nothing to checkpoint from here. The TS caller issues
-    // `PRAGMA wal_checkpoint(TRUNCATE)` via `maintenanceAdapter.checkpointWal()`
-    // BEFORE invoking this command; the file copy below therefore races as
-    // little as possible with a live writer. The db + WAL + journal companions
-    // are copied back-to-back and the main copy is verified afterwards.
-    let backups_dir = app_dir.join("backups");
-    std::fs::create_dir_all(&backups_dir).map_err(|e| e.to_string())?;
-    let timestamp = now_secs();
-    let backup_filename = format!("mobi_pos_backup_{}.db", timestamp);
-    let backup_path = backups_dir.join(&backup_filename);
-    std::fs::copy(&db_path, &backup_path).map_err(|e| e.to_string())?;
-
-    // Also snapshot WAL + rollback-journal companions if non-empty (never copy
-    // volatile .db-shm shared memory: it is a process-local index, copying it
-    // risks replaying stale pages into the backup on open).
-    for suffix in ["-wal", "-journal"] {
-        let companion = app_dir.join(format!("mobi_pos.db{}", suffix));
-        if companion.exists()
-            && std::fs::metadata(&companion)
-                .map(|m| m.len() > 0)
-                .unwrap_or(false)
-        {
-            let backup_companion =
-                backups_dir.join(format!("mobi_pos_backup_{}.db{}", timestamp, suffix));
-            let _ = std::fs::copy(&companion, &backup_companion);
-        }
-    }
-
-    // Fail loudly on a bad copy: size match + SQLite header on the COPY.
-    verify_copy_integrity(&db_path, &backup_path)?;
-
-    Ok(backup_path.to_string_lossy().into_owned())
+            let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+            let db_path = app_dir.join("mobi_pos.db");
+            if !db_path.exists() {
+                return Err("Fichier mobi_pos.db introuvable".into());
+            }
+            let kind = kind.unwrap_or_else(|| "manual".to_string());
+            backup_db_file(&db_path, &backups_dir(&app_handle)?, &kind)
         },
     )
+}
+
+/// Snapshot/backup directory: the OS-LOCAL sandbox, never Roaming.
+///
+/// Decision 5: `app_data_dir` on Windows is `%APPDATA%` (Roaming — synced
+/// by roaming profiles / folder redirection), so snapshots must not live
+/// under it. `app_local_data_dir` is `%LOCALAPPDATA%` on Windows
+/// (non-roaming), `~/.local/share` on Linux, `~/Library/Application
+/// Support` on macOS, app-private internal storage on mobile. Where the
+/// platform exposes no local variant, fall back to the roaming dir rather
+/// than failing (old behavior, documented). Pre-existing files under the
+/// old `<roaming>/backups` are left alone (orphaned, never auto-migrated —
+/// moving user data silently would be worse); the janitor and prune only
+/// manage the location below. The live `mobi_pos.db` itself stays where it
+/// is (relocating it is out of scope; encryption covers it in Phase 4).
+pub(crate) fn backups_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, TrustError> {
+    if let Ok(dir) = app.path().app_local_data_dir() {
+        return Ok(dir.join("backups"));
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| TrustError::op_failed(format!("app dir: {e}")))?;
+    Ok(dir.join("backups"))
+}
+
+/// Result of a snapshot: referenced by FILENAME/ID, never by absolute path,
+/// in every audit row. `path` stays for TS-side display only.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupMeta {
+    pub id: String,
+    pub bytes: u64,
+    pub mtime_ms: u64,
+    pub sha256: String,
+    pub path: String,
+}
+
+/// Snapshot kinds, filing into the filename. Unknown kinds are rejected
+/// (fail closed) rather than filed as manual.
+fn validate_snapshot_kind(kind: &str) -> Result<&'static str, TrustError> {
+    match kind {
+        "wipe" => Ok("wipe"),
+        "restore" => Ok("restore"),
+        "migration" => Ok("migration"),
+        "manual" => Ok("manual"),
+        _ => Err(TrustError::op_failed(format!(
+            "type de snapshot inconnu: {kind}"
+        ))),
+    }
+}
+
+/// Core snapshot routine (no AppHandle — unit-testable): copies the live DB
+/// with the SQLite online backup API into `backups_dir`.
+///
+/// Consistency point (stated): one giant step (`pages_per_step = i32::MAX`,
+/// the largest the rusqlite wrapper accepts — its C-level `-1` "all pages"
+/// convention is rejected by the wrapper's assert) moves everything inside a
+/// SINGLE source read transaction: the copy reflects exactly one committed
+/// instant of the source, never a blend. Concurrent writers either land fully
+/// before that instant or fully after it; a writer holding the source busy
+/// makes the step fail BUSY/LOCKED, which retries below (bounded) instead of
+/// producing a torn image.
+///
+/// What this does NOT do: quiesce writers (see wipeGuard's withWriteLock for
+/// the TS-side hold, and checkpointWalStrict before it). A snapshot that
+/// races a heavy writer may need its retries; exhaustion fails closed.
+/// Raw `fs::copy` is deliberately NOT used here: it has no read transaction,
+/// so main-file and WAL copies can straddle a commit (torn tail). No raw-copy
+/// fallback exists — the backup API works on every target SQLite supports
+/// (all of ours: Windows/macOS/Linux/Android/iOS), so a fallback would only
+/// add an inferior path. If a target ever proves the API unusable, that is a
+/// 1B design item with its own gate, not a silent fallback.
+pub fn backup_db_file(
+    src_db: &std::path::Path,
+    backups_dir: &std::path::Path,
+    kind: &str,
+) -> Result<BackupMeta, TrustError> {
+    let kind = validate_snapshot_kind(kind)?;
+    std::fs::create_dir_all(backups_dir).map_err(|e| e.to_string())?;
+
+    // Disk-space preflight (fail closed, clear message): the copy cannot
+    // exceed source + WAL, plus 1 MiB slack for journal growth mid-copy.
+    let src_len = std::fs::metadata(src_db)
+        .map_err(|e| TrustError::op_failed(format!("Métadonnées source illisibles: {e}")))?
+        .len();
+    if src_len == 0 {
+        return Err("Copie refusée: fichier source vide".into());
+    }
+    let wal_len = std::fs::metadata(src_db.with_extension("db-wal"))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let required = src_len.saturating_add(wal_len).saturating_add(1024 * 1024);
+    let free = crate::trust_core::export_snapshot::dir_available_bytes(backups_dir)?;
+    if free < required {
+        return Err(TrustError::StorageExhausted {
+            detail: format!(
+                "Espace insuffisant pour le snapshot ({kind}): {free} octets libres, {required} requis."
+            ),
+        });
+    }
+
+    // Unique names, atomically reserved: {kind}_mobi_pos_backup_{ms}_{rand8}.db
+    // via create_new (O_EXCL) so a snapshot can never overwrite another —
+    // including a same-millisecond collision.
+    let dst_path = {
+        let mut last_err: Option<String> = None;
+        let mut chosen: Option<std::path::PathBuf> = None;
+        for _ in 0..16 {
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let rand8 = uuid::Uuid::new_v4().as_simple().to_string();
+            let rand8 = &rand8[..8.min(rand8.len())];
+            let name = format!("{kind}_mobi_pos_backup_{ms}_{rand8}.db");
+            let candidate = backups_dir.join(&name);
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&candidate)
+            {
+                Ok(f) => {
+                    drop(f);
+                    chosen = Some(candidate);
+                    break;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    last_err = Some(e.to_string());
+                    break;
+                }
+            }
+        }
+        match chosen {
+            Some(p) => p,
+            None => {
+                return Err(TrustError::op_failed(format!(
+                    "Réservation du fichier snapshot impossible: {}",
+                    last_err.unwrap_or_else(|| "collisions répétées".to_string())
+                )))
+            }
+        }
+    };
+    let id = dst_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "snapshot.db".to_string());
+
+    // Online backup, single step. Bounded retries on BUSY/LOCKED only; every
+    // other failure (IO, full, corrupt source) fails closed immediately
+    // (copy deleted below, typed error out).
+    let map_backup_err = |e: rusqlite::Error| -> TrustError {
+        // SQLITE_FULL surfaces as "database or disk is full".
+        if e.to_string().to_lowercase().contains("is full") {
+            return TrustError::StorageExhausted {
+                detail: "Espace disque insuffisant pendant le snapshot — opération refusée, aucune donnée modifiée.".to_string(),
+            };
+        }
+        TrustError::op_failed(format!("Snapshot SQLite impossible: {e}"))
+    };
+    let is_busy_locked = |e: &rusqlite::Error| -> bool {
+        matches!(e, rusqlite::Error::SqliteFailure(err, _)
+            if matches!(err.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked))
+    };
+    let src_conn = rusqlite::Connection::open_with_flags(
+        src_db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|e| TrustError::op_failed(format!("Ouverture source impossible: {e}")))?;
+    let dst_conn = rusqlite::Connection::open(&dst_path)
+        .map_err(|e| TrustError::op_failed(format!("Ouverture destination impossible: {e}")))?;
+    let mut dst_conn = dst_conn;
+    let backup = rusqlite::backup::Backup::new(&src_conn, &mut dst_conn)
+        .map_err(|e| TrustError::op_failed(format!("Initialisation du snapshot impossible: {e}")))?;
+    let mut attempts = 0u32;
+    loop {
+        match backup.run_to_completion(i32::MAX, std::time::Duration::ZERO, None) {
+            Ok(()) => break,
+            Err(e) if is_busy_locked(&e) && attempts < 10 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&dst_path);
+                return Err(map_backup_err(e));
+            }
+        }
+    }
+    drop(backup);
+    drop(src_conn);
+    drop(dst_conn);
+
+    // Durability + verification on the RESULT (never trust the copy blindly):
+    // fsync, integrity_check via a fresh read-only handle (a torn image
+    // fails here loudly), then SHA-256 computed AFTER completion over the
+    // finished bytes — never streamed mid-copy. Any failure deletes the copy.
+    if let Err(e) = fsync_path(&dst_path) {
+        let _ = std::fs::remove_file(&dst_path);
+        return Err(e);
+    }
+    let ro = rusqlite::Connection::open_with_flags(
+        &dst_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|e| TrustError::op_failed(format!("Réouverture du snapshot impossible: {e}")))?;
+    if let Err(e) = crate::trust_core::export_snapshot::integrity_check(&ro) {
+        drop(ro);
+        let _ = std::fs::remove_file(&dst_path);
+        return Err(e);
+    }
+    drop(ro);
+    let bytes = std::fs::read(&dst_path).map_err(|e| {
+        let _ = std::fs::remove_file(&dst_path);
+        if e.kind() == std::io::ErrorKind::StorageFull {
+            TrustError::StorageExhausted {
+                detail: "Espace disque insuffisant pendant la vérification du snapshot.".to_string()
+            }
+        } else {
+            TrustError::op_failed(format!("Relecture du snapshot impossible: {e}"))
+        }
+    })?;
+    {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(&bytes);
+        let digest: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        let meta = std::fs::metadata(&dst_path).map_err(|e| TrustError::op_failed(format!("Métadonnées snapshot illisibles: {e}")))?;
+        let mtime_ms = meta
+            .modified()
+            .map_err(|e| TrustError::op_failed(format!("Horodatage snapshot illisible: {e}")))?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        // Restrictive permissions (Unix 0600). Windows inherits the
+        // per-user app-data ACL (profile-private by default) — documented,
+        // not modified here. Snapshots are NOT encrypted (explicit: same
+        // posture as the live DB; see the decision list — encrypt in 1B or
+        // record acceptance).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dst_path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| TrustError::op_failed(format!("Permissions snapshot impossibles: {e}")))?;
+        }
+        return Ok(BackupMeta {
+            id,
+            bytes: bytes.len() as u64,
+            mtime_ms: mtime_ms,
+            sha256: digest,
+            path: dst_path.to_string_lossy().into_owned(),
+        });
+    }
+}
+
+/// fsync a finished file (read+write handle: Windows FlushFileBuffers needs
+/// GENERIC_WRITE; Unix fsync works on any fd. No bytes written).
+fn fsync_path(path: &std::path::Path) -> Result<(), TrustError> {
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| TrustError::op_failed(format!("fsync open ({}): {e}", path.display())))?;
+    f.sync_all()
+        .map_err(|e| TrustError::op_failed(format!("fsync ({}): {e}", path.display())))?;
+    Ok(())
 }
 
 // REMOVED (Phase 4.4): `restore_database_backup` and `swap_staging_database`
@@ -399,16 +633,17 @@ fn list_database_backups(app_handle: tauri::AppHandle) -> Result<Vec<String>, Tr
         "list_database_backups",
         Capability::ReadOperationalData,
         |_| {
-    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    let backups_dir = app_dir.join("backups");
+    let backups_dir = backups_dir(&app_handle).map_err(|e| e.to_string())?;
     if !backups_dir.exists() {
         return Ok(Vec::new());
     }
     let mut files = Vec::new();
-    let entries = std::fs::read_dir(backups_dir).map_err(|e| e.to_string())?;
+    let entries = std::fs::read_dir(&backups_dir).map_err(|e| e.to_string())?;
     for entry in entries.flatten() {
         if let Some(name) = entry.file_name().to_str() {
-            if name.starts_with("mobi_pos_backup_") && name.ends_with(".db") {
+            // Kind-scoped names ({kind}_mobi_pos_backup_…) plus legacy
+            // unscoped ones still sitting in an old dir.
+            if name.contains("_mobi_pos_backup_") && name.ends_with(".db") {
                 files.push(entry.path().to_string_lossy().into_owned());
             }
         }
@@ -629,6 +864,7 @@ fn base_schema_migrations() -> Vec<Migration> {
             );
             CREATE INDEX IF NOT EXISTS idx_bundles_barcode ON product_bundles(barcode);
             CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1);
             CREATE TABLE IF NOT EXISTS cash_sessions (
                 id TEXT PRIMARY KEY, opened_at TEXT NOT NULL, closed_at TEXT,
                 opening_float INTEGER NOT NULL, expected_cash INTEGER, actual_cash INTEGER,
@@ -1175,6 +1411,25 @@ pub fn run() {
                 std::thread::spawn(move || {
                     trust_core::audit_append::boot_audit_check(&audit_dir);
                 });
+                // Phase 3: snapshot janitor in the background (native-only,
+                // constant policy, no IPC). Startup placement is deliberate:
+                // no wipe/restore/migration is in flight this early, so the
+                // janitor can never run mid-operation. Best-effort — a
+                // failure is logged, never fails boot. It sweeps the LOCAL
+                // backups dir (see backups_dir); pre-existing Roaming files
+                // are left alone, never auto-migrated.
+                let janitor_app = app.handle().clone();
+                std::thread::spawn(move || {
+                    use tauri::Manager;
+                    let Ok(app_dir) = janitor_app.path().app_data_dir() else {
+                        return;
+                    };
+                    let Ok(backups) = backups_dir(&janitor_app) else {
+                        return;
+                    };
+                    let live_db = app_dir.join("mobi_pos.db");
+                    let _ = snapshot_prune::janitor_sweep_backups_at(&live_db, &backups);
+                });
             }
             Ok(())
         })
@@ -1189,6 +1444,10 @@ pub fn run() {
             sqlite_check_db_version,
             sqlite_db_maintenance,
             emergency_export::emergency_export_ledger,
+            sav_attachments::sav_attachment_write,
+            sav_attachments::sav_attachment_read,
+            sav_attachments::sav_attachment_purge,
+            sav_attachments::sav_attachment_sweep_stale_drafts,
             trust_core::ipc_authorizer::get_gate_state,
             trust_core::ipc_authorizer::trust_sync_license,
             trust_core::ipc_authorizer::trust_report_revocation,
@@ -1198,7 +1457,9 @@ pub fn run() {
             trust_core::audit_append::audit_note_swallowed,
             trust_core::audit_append::audit_verify,
             trust_core::pin::pin_verify,
+            trust_core::pin::pin_lockout_remaining,
             trust_core::pin::pin_set,
+            snapshot_prune::prune_snapshots,
             intents::launch_dialer,
             intents::launch_call,
             intents::launch_whatsapp,
@@ -1229,6 +1490,139 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_names_are_unique_kind_scoped_and_never_overwrite() {
+        // Stage 1/E: two rapid snapshots of the same kind must differ, carry
+        // the kind, and the second create must not clobber the first (O_EXCL
+        // reservation — proven by the on-disk pair below).
+        let dir = std::env::temp_dir().join(format!(
+            "mobi-snap-names-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let live = dir.join("live.db");
+        {
+            let c = rusqlite::Connection::open(&live).unwrap();
+            c.execute_batch("CREATE TABLE t(v TEXT); INSERT INTO t(v) VALUES ('a');").unwrap();
+        }
+        let m1 = backup_db_file(&live, &dir, "wipe").unwrap();
+        let m2 = backup_db_file(&live, &dir, "wipe").unwrap();
+        assert_ne!(m1.id, m2.id, "same-millisecond snapshots must differ");
+        assert!(m1.id.starts_with("wipe_mobi_pos_backup_"), "kind scoped: {}", m1.id);
+        assert!(m1.id.ends_with(".db"));
+        assert!(std::path::Path::new(&m1.path).exists());
+        assert!(std::path::Path::new(&m2.path).exists());
+        // Unknown kinds fail closed, never filed as manual.
+        assert!(backup_db_file(&live, &dir, "oops").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn backup_result_is_verified_and_hashed() {
+        // integrity_check on the RESULT, SHA-256 AFTER completion, bytes and
+        // mtime reported. A second backup of the same content hashes equal
+        // (deterministic content) with a different id (unique names).
+        let dir = std::env::temp_dir().join(format!(
+            "mobi-snap-verify-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let live = dir.join("live.db");
+        {
+            let c = rusqlite::Connection::open(&live).unwrap();
+            c.execute_batch("CREATE TABLE t(v TEXT); INSERT INTO t(v) VALUES ('hello');").unwrap();
+        }
+        let m1 = backup_db_file(&live, &dir, "migration").unwrap();
+        assert!(m1.id.starts_with("migration_mobi_pos_backup_"));
+        assert!(m1.bytes > 0);
+        assert!(m1.mtime_ms > 0);
+        assert_eq!(m1.sha256.len(), 64);
+        // Recomputed independently: the reported hash matches the file bytes.
+        let raw = std::fs::read(&m1.path).unwrap();
+        {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(&raw);
+            let expect: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+            assert_eq!(expect, m1.sha256);
+        }
+        // The copy opens read-only and passes integrity_check on its own.
+        let ro = rusqlite::Connection::open_with_flags(
+            std::path::Path::new(&m1.path),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        assert!(crate::trust_core::export_snapshot::integrity_check(&ro).is_ok());
+        drop(ro);
+        let m2 = backup_db_file(&live, &dir, "migration").unwrap();
+        assert_ne!(m1.id, m2.id);
+        assert_eq!(m1.sha256, m2.sha256, "same content hashes equal");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&m1.path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "snapshots are owner-only, got {mode:o}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn backup_under_concurrent_writer_never_silent() {
+        // Same contract as export_snapshot's copyrace, on the new backup-API
+        // path: every outcome is a verified snapshot or a typed error.
+        let dir = std::env::temp_dir().join(format!(
+            "mobi-snap-race-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let live = dir.join("live.db");
+        {
+            let c = rusqlite::Connection::open(&live).unwrap();
+            c.execute_batch("CREATE TABLE t(v TEXT);").unwrap();
+        }
+        let writer_path = live.clone();
+        let handle = std::thread::spawn(move || {
+            let conn = rusqlite::Connection::open(&writer_path).unwrap();
+            conn.busy_timeout(std::time::Duration::from_secs(10)).unwrap();
+            for i in 0..200u64 {
+                let _ = conn.execute("INSERT INTO t(v) VALUES (?1)", rusqlite::params![format!("c-{i}")]);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        });
+        let mut clean = 0u32;
+        let mut refused = 0u32;
+        for _ in 0..8u32 {
+            match backup_db_file(&live, &dir, "manual") {
+                Ok(m) => {
+                    // Verified by construction (integrity_check ran inside);
+                    // re-verify here to prove the returned file stands alone.
+                    let ro = rusqlite::Connection::open_with_flags(
+                        std::path::Path::new(&m.path),
+                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                    )
+                    .unwrap();
+                    assert!(crate::trust_core::export_snapshot::integrity_check(&ro).is_ok());
+                    drop(ro);
+                    clean += 1;
+                }
+                Err(_) => refused += 1,
+            }
+        }
+        handle.join().unwrap();
+        assert!(clean + refused == 8, "every round resolves typed");
+        eprintln!("[test] backup-under-write: {clean}/8 verified, {refused}/8 refused-typed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_cloud_credentials_redaction_and_serialization() {
