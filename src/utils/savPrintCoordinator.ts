@@ -155,18 +155,23 @@ export class SavPrintCoordinator {
    */
   public static async printRepairRestitution(
     order: RepairOrder,
-    settings: ReceiptSettings
+    settings: ReceiptSettings,
+    paidToday?: number
   ): Promise<boolean> {
+    // paidToday = session tender collected at handover (B5 ledger). Omit
+    // when unknown: the slip then shows Net payé ce jour 0 and reste =
+    // balance, never a fabricated echo of the cumulative deposit.
+    const seller = await shiftSeller();
     try {
       if (isMobileDevice()) {
         const { openNativePrint } = await import('./phoneUtils');
         const { repairRestitutionText } = await import('./mobileDocPrint');
         return await openNativePrint(
           `Bon Restitution ${order.ticketNumber}`,
-          repairRestitutionText(order, settings, await shiftSeller())
+          repairRestitutionText(order, settings, seller, paidToday)
         );
       }
-      const payload = SavRestitutionBuilder.buildSavRestitutionTicket(order, settings, await shiftSeller());
+      const payload = SavRestitutionBuilder.buildSavRestitutionTicket(order, settings, seller, paidToday);
       return await MobilePosRoutingEngine.dispatchDocument('REPAIR_CLAIM_STUB', payload);
     } catch (e) {
       console.warn('[SAV] restitution thermal print failed:', e);

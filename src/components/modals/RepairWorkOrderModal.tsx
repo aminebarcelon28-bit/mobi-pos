@@ -823,7 +823,7 @@ export const RepairWorkOrderModal: React.FC = () => {
       );
       const steps = [
         { kind: 'voucher' as const, medium: 'mobileSheet' as const, title: `Bon SAV ${order.ticketNumber}`, text: repairVoucherEscPosText(order, receiptSettings, savSeller) },
-        { kind: 'workshop' as const, medium: 'mobileSheet' as const, title: `Fiche Atelier ${order.ticketNumber}`, text: workshopSlipText(order, savSeller, order.assignedTechnicianId ?? null) },
+        { kind: 'workshop' as const, medium: 'mobileSheet' as const, title: `Fiche Atelier ${order.ticketNumber}`, text: workshopSlipText(order, savSeller, order.assignedTechnicianId ?? null, receiptSettings) },
         { kind: 'chassisTag' as const, medium: 'mobileSheet' as const, title: `Étiquette ${order.ticketNumber}`, text: chassisTagEscPosText(order) },
       ];
       const outcomes: string[] = [];

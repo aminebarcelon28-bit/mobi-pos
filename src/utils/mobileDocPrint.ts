@@ -26,7 +26,9 @@ import {
   STORE_RETURN_POLICY,
   TRADE_IN_LEGAL_STATEMENT,
   buildReceiptViewModel,
+  buildSavViewModel,
   formatReceiptDateTime,
+  savCheckCell,
 } from './receiptViewModel';
 
 const WIDTH = 42;
@@ -46,6 +48,23 @@ function row(left: string, right: string): string {
   const maxLeft = Math.max(0, WIDTH - r.length - 1);
   const l = (left || '').slice(0, maxLeft);
   return l + ' '.repeat(WIDTH - l.length - r.length) + r;
+}
+
+/** Word-wrap for 42-col twins (same rule as the ESC/POS fold helpers). */
+function fold42(text: string, width: number = WIDTH): string[] {
+  const words = (text || '').split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    if ((cur + (cur ? ' ' : '') + w).length > width) {
+      if (cur) out.push(cur);
+      cur = w.length > width ? w.slice(0, width) : w;
+    } else {
+      cur = cur ? `${cur} ${w}` : w;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
 }
 
 function storeNameOf(settings?: ReceiptSettings | null): string {
@@ -423,39 +442,42 @@ function row32(left: string, right: string): string {
   return l + ' '.repeat(32 - l.length - r.length) + r;
 }
 
-/** Customer claim voucher — 58mm variant (mirrors SavTicketBuilder voucher). */
+/** Customer claim voucher — 42-col twin, unified on buildSavViewModel (B4). */
 export function repairVoucherEscPosText(
   order: RepairOrder,
   settings?: ReceiptSettings | null,
   seller?: string | null
 ): string {
-  const remaining = Math.max(0, order.totalCost - (order.depositAmount || 0));
-  const lines = [
-    center32(storeNameOf(settings)),
-    center32('BON DE DEPOT SAV'),
-    center32(`Ticket ${order.ticketNumber}`),
-    center32(formatDateTime(order.createdAt)),
-    ...(seller && seller.trim() ? [center32(`Vendeur: ${seller.trim()}`.slice(0, 32))] : []),
-    '-'.repeat(32),
-    `Client: ${(order.customerName || '').slice(0, 24)}`,
-    `Tel: ${(order.customerPhone || '-').slice(0, 25)}`,
-    `App: ${(order.deviceModel || '').slice(0, 26)}`,
-    `IMEI: ${(order.imei || 'N/A').slice(0, 25)}`,
-    `Panne: ${(order.problemDescription || '').slice(0, 64)}`,
-    '-'.repeat(32),
-    row32('Total:', formatDZD(order.totalCost)),
-    row32('Acompte:', formatDZD(order.depositAmount || 0)),
-    row32('RESTE DU:', formatDZD(remaining)),
-    '-'.repeat(32),
-    center32('*' + order.ticketNumber + '*'),
-    center32('Bon obligatoire retrait'),
-    center32('Non reclame 90j: abandon +'),
-    center32('recyclage (Art. CGV)'),
-    center32('AVIS: sauvegarde donnees'),
-    center32('a la charge du client'),
-    center32(faitALine(settings)),
+  const vm = buildSavViewModel(order, (settings || {}) as ReceiptSettings, { kind: 'depot', seller });
+  const lines: string[] = [
+    center(storeNameOf(settings)),
+    ...(vm.store.tagline ? [center(vm.store.tagline)] : []),
+    center('BON DE DÉPÔT SAV'),
+    center(`Ticket ${vm.ticketNumber}`),
+    center(vm.createdAt),
+    center(`Vendeur: ${vm.sellerName}`.slice(0, WIDTH)),
+    rule('='),
+    `Client: ${vm.customerName}`,
+    `Tél: ${vm.customerPhone || '-'}`,
+    `Appareil: ${vm.deviceModel}`,
+    `IMEI: ${vm.imei || 'N/A'}`,
+    ...fold42(`Panne: ${vm.problem}`),
   ];
-  return lines.slice(0, MAX_LINES).join('\n');
+  if (vm.diagnosticNotes) lines.push(...fold42(`Diag: ${vm.diagnosticNotes}`));
+  lines.push(
+    rule(),
+    row('Devis estimé:', formatDZD(vm.totalCost)),
+    row('Acompte versé:', formatDZD(vm.depositAmount)),
+    row('RESTE DÛ:', formatDZD(vm.balanceDue)),
+    rule('='),
+    center(`*${vm.ticketNumber}*`),
+    center('Bon obligatoire retrait'),
+    ...fold42('Non réclamé 90j: abandon + recyclage (Art. CGV)'),
+    ...fold42('AVIS: sauvegarde données à la charge du client'),
+    center(faitALine(settings)),
+    center('Signature client : __________')
+  );
+  return clip(lines);
 }
 
 /** Chassis tag — 58mm barcode fallback (Ticket#, IMEI, device, customer). */
@@ -565,60 +587,65 @@ export function xReportFromSession(
   );
 }
 
-/** SAV restitution handover — 58mm text twin (mirrors SavRestitutionBuilder). */
+/** SAV restitution handover — 42-col twin, unified on buildSavViewModel (B5). */
 export function repairRestitutionText(
   order: RepairOrder,
   settings?: ReceiptSettings | null,
-  seller?: string | null
+  seller?: string | null,
+  paidToday?: number
 ): string {
-  const total = Math.round(order.totalCost || 0);
-  const deposit = Math.round(order.depositAmount || 0);
-  const remaining = Math.max(0, total - deposit);
-  const cl = order.postRepairChecklist || order.conditionChecklist;
-  const chk = (label: string, ok?: boolean): string => `${label}:${ok ? 'OK' : 'KO'}`;
-  const deliveredAt = order.updatedAt || order.createdAt;
+  const vm = buildSavViewModel(order, (settings || {}) as ReceiptSettings, {
+    kind: 'restitution',
+    seller,
+    paidToday,
+  });
+  const cl = vm.checklist;
+  const chk = (label: string, ok?: boolean): string => `${label}:${savCheckCell(ok)}`;
   const lines: string[] = [
-    center32(storeNameOf(settings)),
-    center32('BON DE RESTITUTION SAV'),
-    center32(`Ticket ${order.ticketNumber}`),
-    center32(formatDateTime(deliveredAt)),
-    ...(seller && seller.trim() ? [center32(`Vendeur: ${seller.trim()}`.slice(0, 32))] : []),
-    '-'.repeat(32),
+    center(storeNameOf(settings)),
+    ...(vm.store.tagline ? [center(vm.store.tagline)] : []),
+    center('BON DE RESTITUTION SAV'),
+    center(`Ticket ${vm.ticketNumber}`),
+    center(vm.deliveredAt),
+    center(`Vendeur: ${vm.sellerName}`.slice(0, WIDTH)),
+    ...(vm.technicianName ? [center(`Tech: ${vm.technicianName}`.slice(0, WIDTH))] : []),
+    rule('='),
   ];
-  if (remaining > 0) {
-    lines.push(center32('DOCUMENT NON VALIDE'));
-    lines.push(center32('EN ATTENTE DE REGLEMENT'));
-    lines.push('-'.repeat(32));
+  if (vm.unsettled) {
+    lines.push(center(`!! RESTE DÛ : ${formatDZD(vm.balanceDue)} !!`));
+    lines.push(center('DOCUMENT NON VALIDE'));
+    lines.push(center('EN ATTENTE DE RÈGLEMENT'));
+    lines.push(rule());
+  } else {
+    lines.push(center('*** SOLDE RÉGLÉ ***'));
+    lines.push(rule());
   }
   lines.push(
-    `Client: ${(order.customerName || '').slice(0, 24)}`,
-    `Tel: ${(order.customerPhone || '-').slice(0, 25)}`,
-    `App: ${(order.deviceModel || '').slice(0, 26)}`,
-    `IMEI: ${(order.imei || 'N/A').slice(0, 25)}`,
-    '-'.repeat(32),
-    row32("Main d'oeuvre:", formatDZD(order.laborCost)),
-    row32('Pieces:', formatDZD(order.partsCost)),
-    row32('TOTAL:', formatDZD(total)),
-    row32('Acompte:', formatDZD(deposit)),
-    row32('Solde regle:', formatDZD(total - remaining)),
-    row32('RESTE:', formatDZD(remaining)),
-    '-'.repeat(32),
-    [chk('Ecran', cl.screenOk), chk('Cam', cl.cameraOk), chk('Charge', cl.chargingOk)].join(' '),
+    `Client: ${vm.customerName}`,
+    `Tél: ${vm.customerPhone || '-'}`,
+    `Appareil: ${vm.deviceModel}`,
+    `IMEI: ${vm.imei || 'N/A'}`,
+    rule(),
+    row("Main d'œuvre:", formatDZD(vm.laborCost)),
+    row('Pièces détachées:', formatDZD(vm.partsCost)),
+    row('TOTAL:', formatDZD(vm.totalCost)),
+    row('Acompte déjà versé:', formatDZD(vm.depositAmount)),
+    row('Net payé ce jour:', formatDZD(vm.paidToday)),
+    row('RESTE DÛ:', formatDZD(vm.balanceDue)),
+    rule(),
+    [chk('Écran', cl.screenOk), chk('Cam', cl.cameraOk), chk('Charge', cl.chargingOk)].join(' '),
     [chk('FaceID', cl.faceIdOk), chk('Audio', cl.audioOk)].join(' '),
-    '-'.repeat(32),
-    center32('Garantie 30j pieces'),
-    center32('(hors chocs/eau/demontage)'),
-    center32('AVIS: sauvegarde donnees'),
-    center32('a la charge du client'),
-    center32('Non reclame 90j: abandon +'),
-    center32('recyclage (Art. CGV)'),
-    center32('Appareil verifie fonctionnel'),
-    center32('*' + order.ticketNumber + '*'),
-    center32(faitALine(settings)),
-    center32('Atelier: ____ Client: ____'),
-    center32('(Lu et approuve)')
+    rule(),
+    center('Garantie 30j pièces (hors chocs/eau)'),
+    center('AVIS: sauvegarde données client'),
+    center('Non réclamé 90j: abandon+recyclage'),
+    center('Appareil vérifié fonctionnel'),
+    center(`*${vm.ticketNumber}*`),
+    center(faitALine(settings)),
+    center('Atelier: ____ Client: ____'),
+    center('(Lu et approuvé)')
   );
-  return lines.slice(0, MAX_LINES).join('\n');
+  return clip(lines);
 }
 
 /** Pre-owned warranty certificate — 58mm text twin (mirrors WarrantyCertificateBuilder). */
@@ -694,80 +721,72 @@ export function debtStatementText(
   return lines.slice(0, MAX_LINES).join('\n');
 }
 
-/** Technician routing slip — 32-col text twin (mirrors buildWorkshopJobSlip). */
+/** Technician routing slip — 42-col text twin (mirrors buildWorkshopJobSlip). */
 export function workshopSlipText(
   order: RepairOrder,
   seller?: string | null,
-  technician?: string | null
+  technician?: string | null,
+  settings?: ReceiptSettings | null
 ): string {
-  const cl = order.conditionChecklist || {
-    screenOk: true,
-    faceIdOk: true,
-    cameraOk: true,
-    chargingOk: true,
-    bodyOk: true,
-    batteryOk: true,
-    audioOk: true,
-  };
-  const chk = (label: string, ok?: boolean): string => `${label}:${ok ? 'OK' : 'KO'}`;
-  const tech = (technician || order.assignedTechnicianId || '').trim();
+  const vm = buildSavViewModel(order, (settings || {}) as ReceiptSettings, {
+    kind: 'workshop',
+    seller,
+    technician,
+  });
+  const cl = vm.checklist;
+  const chk = (label: string, ok?: boolean): string => `${label}:${savCheckCell(ok)}`;
   const lines: string[] = [
-    center32('*** FICHE ATELIER ***'),
-    center32(`TICKET ${order.ticketNumber}`),
-    center32(formatDateTime(order.createdAt)),
-    ...(seller && seller.trim() ? [center32(`Vendeur: ${seller.trim()}`.slice(0, 32))] : []),
-    ...(tech ? [center32(`Tech: ${tech}`.slice(0, 32))] : []),
-    '-'.repeat(32),
-    `App: ${(order.deviceModel || '').slice(0, 26)}`,
-    `Client: ${(order.customerName || '').slice(0, 21)}`,
-    `Tel: ${(order.customerPhone || '-').slice(0, 25)}`,
-    `IMEI: ${(order.imei || 'N/A').slice(0, 25)}`,
-    `Prevue: ${(order.estimatedCompletionDate || 'Non specifiee').slice(0, 24)}`,
-    '-'.repeat(32),
-    `Panne: ${(order.problemDescription || '').slice(0, 64)}`,
+    center('*** FICHE ATELIER ***'),
+    center(`TICKET ${vm.ticketNumber}`),
+    center(vm.createdAt),
+    center(`Vendeur: ${vm.sellerName}`.slice(0, WIDTH)),
+    ...(vm.technicianName ? [center(`Tech: ${vm.technicianName}`.slice(0, WIDTH))] : []),
+    rule(),
+    `Appareil: ${vm.deviceModel}`,
+    `Client: ${vm.customerName}`,
+    `Tél: ${vm.customerPhone || '-'}`,
+    `IMEI: ${vm.imei || 'N/A'}`,
+    ...fold42(`Panne: ${vm.problem}`),
   ];
-  if (order.diagnosticNotes) lines.push(`Notes: ${order.diagnosticNotes.slice(0, 64)}`);
+  if (vm.diagnosticNotes) lines.push(...fold42(`Notes: ${vm.diagnosticNotes}`));
   lines.push(
-    '-'.repeat(32),
-    [chk('Ecran', cl.screenOk), chk('FaceID', cl.faceIdOk), chk('Cam', cl.cameraOk)].join(' '),
+    rule(),
+    [chk('Écran', cl.screenOk), chk('FaceID', cl.faceIdOk), chk('Cam', cl.cameraOk)].join(' '),
     [chk('Charge', cl.chargingOk), chk('Batt.', cl.batteryOk), chk('Audio', cl.audioOk)].join(' ')
   );
-  return lines.slice(0, MAX_LINES).join('\n');
+  return clip(lines);
 }
 
-/** SAV repair quotation — 58mm text twin (mirrors SavQuoteBuilder). */
+/** SAV repair quotation — 42-col twin, unified on buildSavViewModel. */
 export function repairQuoteText(
   order: RepairOrder,
   settings?: ReceiptSettings | null,
   seller?: string | null
 ): string {
-  const total = Math.round(order.totalCost || 0);
-  const emittedAt = new Date();
-  const validUntil = new Date(emittedAt);
-  validUntil.setDate(validUntil.getDate() + 15);
+  const vm = buildSavViewModel(order, (settings || {}) as ReceiptSettings, { kind: 'quote', seller });
   const lines: string[] = [
-    center32(storeNameOf(settings)),
-    center32('DEVIS ESTIMATIF SAV'),
-    center32(`Devis DEV-${order.ticketNumber}`),
-    center32(`Ticket ${order.ticketNumber}`),
-    center32(formatDateTime(emittedAt.toISOString())),
-    ...(seller && seller.trim() ? [center32(`Vendeur: ${seller.trim()}`.slice(0, 32))] : []),
-    center32(`Validite 15j jusqu'au`),
-    center32(validUntil.toLocaleDateString('fr-DZ')),
-    '-'.repeat(32),
-    `Client: ${(order.customerName || '').slice(0, 24)}`,
-    `App: ${(order.deviceModel || '').slice(0, 26)}`,
-    `IMEI: ${(order.imei || 'N/A').slice(0, 25)}`,
-    `Panne: ${(order.problemDescription || '').slice(0, 64)}`,
-    '-'.repeat(32),
-    row32("M.O. estimee:", formatDZD(order.laborCost)),
-    row32('Pieces estimees:', formatDZD(order.partsCost)),
-    row32('TOTAL ESTIME:', formatDZD(total)),
-    row32('Acompte requis:', formatDZD(Math.round(total / 2))),
-    '-'.repeat(32),
-    center32('Devis gratuit, sans engagement'),
-    center32('Bon pour accord: ________'),
-    center32('*' + order.ticketNumber + '*')
+    center(storeNameOf(settings)),
+    ...(vm.store.tagline ? [center(vm.store.tagline)] : []),
+    center('DEVIS ESTIMATIF SAV'),
+    center(`Devis ${vm.quoteNumber}`),
+    center(`Ticket ${vm.ticketNumber}`),
+    center(vm.createdAt),
+    center(`Vendeur: ${vm.sellerName}`.slice(0, WIDTH)),
+    center(`Validité 15j jusqu'au ${vm.validUntil}`.slice(0, WIDTH)),
+    rule(),
+    `Client: ${vm.customerName}`,
+    `Appareil: ${vm.deviceModel}`,
+    `IMEI: ${vm.imei || 'N/A'}`,
+    ...fold42(`Panne: ${vm.problem}`),
+    rule(),
+    row("M.O. estimée:", formatDZD(vm.laborCost)),
+    row('Pièces estimées:', formatDZD(vm.partsCost)),
+    row('TOTAL ESTIMÉ:', formatDZD(vm.totalCost)),
+    row('Acompte requis:', formatDZD(Math.round(vm.totalCost / 2))),
+    rule(),
+    center('Devis gratuit, sans engagement'),
+    center('Bon pour accord: ________'),
+    center(`*${vm.ticketNumber}*`)
   ];
-  return lines.slice(0, MAX_LINES).join('\n');
+  return clip(lines);
 }

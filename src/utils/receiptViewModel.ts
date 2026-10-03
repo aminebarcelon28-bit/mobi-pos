@@ -1,9 +1,15 @@
 import type {
   CashSession,
   ReceiptSettings,
+  RepairOrder,
   SaleTransaction,
   StagedTradeIn,
   TradeInItem,
+} from '../types/pos';
+import {
+  repairFinancials,
+  repairQuoteNumber,
+  REPAIR_QUOTE_VALIDITY_DAYS,
 } from '../types/pos';
 import {
   discountsFromTransaction,
@@ -175,6 +181,143 @@ export function tenderDisplayLabel(method: string, reference?: string): string {
 function toInt(n: unknown): number {
   const v = Math.round(Number(n) || 0);
   return Number.isFinite(v) ? Math.max(0, v) : 0;
+}
+
+// ── SAV (B4 dépôt / B5 restitution / devis) unified view model ─────────────
+// One definition feeding the thermal ESC/POS builders AND the mobile text
+// twins, so the two can never drift (the failure mode the receipt fix
+// removed from sales tickets). The A4 HTML legal masters (`doc-*` system
+// with signatures/CNI/folio) intentionally stay byte-identical — they are a
+// different standard (A4 papier, not 80mm thermal) and SAV e2e specs pin
+// their content.
+
+export type SavDocKind = 'depot' | 'workshop' | 'restitution' | 'quote';
+
+export interface SavChecklistView {
+  screenOk?: boolean;
+  faceIdOk?: boolean;
+  cameraOk?: boolean;
+  chargingOk?: boolean;
+  bodyOk?: boolean;
+  batteryOk?: boolean;
+  audioOk?: boolean;
+}
+
+export interface SavViewModel {
+  store: ReceiptStoreInfo;
+  kind: SavDocKind;
+  ticketNumber: string;
+  /** `DEV-<ticket>` (quotes only, derived — never stored). */
+  quoteNumber: string;
+  createdAt: string;
+  deliveredAt: string;
+  /** Quote validity end (render time + 15 days, DD/MM/YYYY HH:mm:ss). */
+  validUntil: string;
+  /** Shift opener (Vendeur) — resolved by the caller (coordinator/modal). */
+  sellerName: string;
+  /** Technician id when assigned (no name directory exists in the store). */
+  technicianName: string;
+  customerName: string;
+  customerPhone: string;
+  deviceModel: string;
+  imei: string;
+  problem: string;
+  diagnosticNotes: string;
+  /** Post-repair checklist wins, intake checklist is the fallback. */
+  checklist: SavChecklistView;
+  partsCost: number;
+  laborCost: number;
+  totalCost: number;
+  /** Cumulative acompte on the row (history, NOT today's collection). */
+  depositAmount: number;
+  /**
+   * Collected during THIS pickup session only. Explicit opt-in, default 0 —
+   * never fabricated: the persisted row cannot distinguish an old deposit
+   * from money just tendered, so unknown means 0 (Case A) rather than an
+   * echo of the cumulative deposit (the B5 bug: settledAmount mirroring).
+   */
+  paidToday: number;
+  /**
+   * `max(0, total − deposit − paidToday)`. Derived, never stored.
+   * Case A (unpaid pickup): paidToday 0 → reste = balance (INVALID banner).
+   * Case B (partial today): reste shrinks by exactly today's tender.
+   * Case C (fully settled today): reste 0 → SOLDE RÉGLÉ banner.
+   */
+  balanceDue: number;
+  /** Cumulative settled to date (total − balance, history included). */
+  settledAmount: number;
+  unsettled: boolean;
+}
+
+export interface BuildSavViewModelOptions {
+  kind?: SavDocKind;
+  seller?: string | null;
+  technician?: string | null;
+  /** Session tender collected at handover (B5 only). Omit when unknown. */
+  paidToday?: number;
+}
+
+export function buildSavViewModel(
+  order: RepairOrder,
+  settings: ReceiptSettings,
+  opts: BuildSavViewModelOptions = {}
+): SavViewModel {
+  const fin = repairFinancials(order);
+  // repairFinancials() itself is correct (balance = total − clamped deposit);
+  // today's collection layers on top and can only shrink what is still due.
+  const paidToday = Math.max(0, Math.round(Number(opts.paidToday) || 0));
+  const balanceDue = Math.max(0, fin.balanceDue - paidToday);
+  const cl = order.postRepairChecklist || order.conditionChecklist || {};
+  const validUntilDate = new Date();
+  validUntilDate.setDate(validUntilDate.getDate() + REPAIR_QUOTE_VALIDITY_DAYS);
+  return {
+    store: {
+      name: (settings.storeName || 'MAGASIN').trim() || 'MAGASIN',
+      tagline: (settings.storeSubheader || settings.customHeaderMsg || '').trim(),
+      address: (settings.address || '').trim(),
+      phone: (settings.phone || '').trim(),
+      email: (settings.email || '').trim(),
+      footerMessage: (settings.footerMessage || settings.customFooterMsg || '').trim(),
+    },
+    kind: opts.kind ?? 'depot',
+    ticketNumber: order.ticketNumber,
+    quoteNumber: repairQuoteNumber(order),
+    createdAt: formatReceiptDateTime(order.createdAt),
+    deliveredAt: formatReceiptDateTime(order.updatedAt || order.createdAt),
+    validUntil: formatReceiptDateTime(validUntilDate.toISOString()),
+    sellerName: (opts.seller || '').trim() || 'Caisse Principale',
+    technicianName: (opts.technician || order.assignedTechnicianId || '').trim(),
+    customerName: (order.customerName || 'Client Comptoir').trim() || 'Client Comptoir',
+    customerPhone: (order.customerPhone || '').trim(),
+    deviceModel: (order.deviceModel || '').trim(),
+    imei: (order.imei || '').trim(),
+    problem: (order.problemDescription || '').trim(),
+    diagnosticNotes: (order.diagnosticNotes || '').trim(),
+    checklist: {
+      screenOk: cl.screenOk,
+      faceIdOk: cl.faceIdOk,
+      cameraOk: cl.cameraOk,
+      chargingOk: cl.chargingOk,
+      bodyOk: cl.bodyOk,
+      batteryOk: cl.batteryOk,
+      audioOk: cl.audioOk,
+    },
+    partsCost: fin.partsCost,
+    laborCost: fin.laborCost,
+    totalCost: fin.totalCost,
+    depositAmount: fin.depositAmount,
+    paidToday,
+    balanceDue,
+    settledAmount: Math.max(0, fin.totalCost - balanceDue),
+    unsettled: balanceDue > 0,
+  };
+}
+
+/** Tri-state checklist cell: OK / KO / — (never fabricate KO from unknown). */
+export function savCheckCell(ok: boolean | undefined): string {
+  if (ok === true) return 'OK';
+  if (ok === false) return 'KO';
+  return '—';
 }
 
 export interface BuildReceiptViewModelOptions {
