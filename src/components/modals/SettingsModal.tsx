@@ -18,7 +18,6 @@ import { verifyManagerGate, verifyUserGate } from '../../utils/pinGate';
 import { friendlyPinSetError } from '../../api/pin';
 import { canSeeJournalLauncher } from '../../utils/auditGate';
 import { PinDialog } from '../ui/PinDialog';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
 import { normalizeLoyaltyConfig, calculateFinancialProfitImpact } from '../../utils/loyaltyEngine';
 import type { LoyaltyProgramConfig } from '../../types/pos';
 // P11.3: maintenanceService -> maintenanceAdapter -> backupSchema pulls the whole
@@ -1610,25 +1609,9 @@ export const SettingsModal: React.FC = () => {
                       className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text"
                     />
                   </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-pos-muted block mb-1">Taux TVA applicable aux ventes (%) :</label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.5"
-                      value={(receiptDraft as unknown as { vatRate?: number }).vatRate ?? 0}
-                      onChange={(e) => {
-                        // Localized parsing: parseFloat("19,5") silently yields 19 (FR decimals).
-                        const v = Math.max(0, Math.min(100, parseLocalizedAmount(e.target.value) || 0));
-                        scheduleReceiptSave({ ...receiptDraft, vatRate: v } as typeof receiptDraft);
-                      }}
-                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text"
-                    />
-                    <p className="text-[10px] text-pos-muted mt-1">
-                      0 = TVA désactivée (comportement inchangé). Sinon la TVA s&apos;ajoute au net et est persistée dans la colonne « tax » du ticket.
-                    </p>
-                  </div>
+                  {/* TVA REMOVED (no-TVA product, Gate Addendum A): the rate
+                      setting is gone — every sale is HT-only. Any legacy
+                      stored vatRate is ignored by readVatRate/computeTax. */}
                 </div>
               </div>
             </div>

@@ -62,10 +62,13 @@ export function readVoucherStaging(s: PosState): { voucherCreditApplied: number;
   return { voucherCreditApplied: Math.max(0, Math.round(amount)), voucherCode: code };
 }
 
-/** Defensive read of the VAT rate (another agent may add `vatRate` to ReceiptSettings). */
-export function readVatRate(s: PosState): number {
-  const v = (s.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate;
-  return Math.max(0, Number(v) || 0);
+/**
+ * DEPRECATED (no-TVA product, Gate Addendum A): always returns 0. The
+ * `vatRate` receipt setting is ignored — every sale is HT-only. Kept so
+ * existing call sites compile until Phase 1b removes the plumbing.
+ */
+export function readVatRate(_s: PosState): number {
+  return 0;
 }
 
 function refreshCartItemPricing(item: CartItem, newQty: number, pricingTier?: PricingTier): CartItem {

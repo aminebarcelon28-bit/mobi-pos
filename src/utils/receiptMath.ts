@@ -90,15 +90,13 @@ export interface TvaSplit {
 }
 
 /**
- * TVA breakdown derived from the TTC total when a VAT rate is configured.
- * Integer DZD; null when disabled. HT = TTC / (1 + rate), TVA = TTC − HT.
+ * TVA breakdown — REMOVED (owner-confirmed no-TVA product, Gate Addendum A).
+ * Always returns null so every receipt/print path renders HT-only. The `rate`
+ * argument is ignored. Kept (not deleted) until the Phase 1b schema drop
+ * removes the `tax` column and `vatRate` plumbing in lockstep.
  */
-export function tvaSplitFromTotal(total: number, vatRate?: number | null): TvaSplit | null {
-  const rate = Math.max(0, Number(vatRate) || 0);
-  if (!(rate > 0)) return null;
-  const ttc = Math.max(0, Math.round(total || 0));
-  const ht = Math.round(ttc / (1 + rate / 100));
-  return { ht, tva: Math.max(0, ttc - ht), ttc, rate };
+export function tvaSplitFromTotal(_total: number, _vatRate?: number | null): TvaSplit | null {
+  return null;
 }
 
 /**
@@ -256,13 +254,13 @@ export function computeSalesMetrics(
  * - `cartDiscountPercent`: % applied on the post-line-discount base when > 0
  *   (no-op on a negative base — a net return gets no extra discount).
  * - `storeCreditApplied` / `voucherCreditApplied`: payment-method credits.
- *   They do NOT reduce the VAT base — tax is computed on the pre-credit
- *   subtotal (an avoir pays the ticket, it is not a commercial discount).
- *   Identical to the old formula when vatRate is 0.
- * - Tax via taxEngine.computeTax(preCreditSubtotal, vatRate) (default 0).
+ *   They are payment, not discount (an avoir pays the ticket, it is not a
+ *   commercial discount).
+ * - NO TAX (no-TVA product, Gate Addendum A): tva is always 0,
+ *   ht = pre-credit subtotal, ttc = ht − credits.
  *
- * Money stays integer DZD: inputs rounded on entry, the two percent
- * multiplications (cart %, VAT) are the only rounding points.
+ * Money stays integer DZD: inputs rounded on entry, the cart-% multiplication
+ * is the only rounding point.
  */
 export interface CartTotalsOptions {
   pricingTier?: PricingTier;
@@ -271,10 +269,14 @@ export interface CartTotalsOptions {
   voucherCreditApplied?: number;
   /**
    * Two-way exchange credit (trade-in buyback value, 1:1 — no +10% bonus).
-   * Payment credit like store/voucher credit: does NOT reduce the VAT base.
-   * Never pushed as a negative-price cart line (corrupts gross + FIFO).
+   * Payment credit like store/voucher credit. Never pushed as a negative-price
+   * cart line (corrupts gross + FIFO).
    */
   tradeInCredit?: number;
+  /**
+   * DEPRECATED (no-TVA product, Gate Addendum A): ignored — every sale is
+   * HT-only. Kept so existing call sites compile until Phase 1b removes it.
+   */
   vatRate?: number;
 }
 
@@ -415,11 +417,10 @@ export function computeCartTotals(lines: CartItem[], opts: CartTotalsOptions = {
   );
   const credits = storeCreditApplied + voucherCreditApplied + tradeInCreditApplied;
   const net = subtotalAfterDiscount - credits;
-  const vatRate = Math.max(0, Number(opts.vatRate) || 0);
-  // Credits are payment, not discount: VAT applies to the pre-credit
-  // subtotal (OBS-A2). At vatRate 0 this is exactly the old formula.
-  const { ht, tva } = computeTax(Math.max(0, subtotalAfterDiscount), vatRate);
-  const ttc = Math.max(0, ht + tva - credits);
+  // NO-TVA (Gate Addendum A): opts.vatRate is ignored — every sale is
+  // HT-only. computeTax is a zero shim (tva 0, ttc ht).
+  const { ht, tva } = computeTax(Math.max(0, subtotalAfterDiscount), 0);
+  const ttc = Math.max(0, ht - credits);
   return {
     grossSubtotal,
     lineDiscountTotal,

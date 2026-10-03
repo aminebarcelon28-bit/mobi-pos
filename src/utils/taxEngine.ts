@@ -1,26 +1,23 @@
 /**
- * VAT / tax engine — single home for tax math (integer DZD minor units).
+ * VAT / tax engine — REMOVED (owner-confirmed no-TVA product, Gate Addendum A).
  *
- * CONVENTION (documented, 2026-09-20): the `net` input is treated as the
- * HT (pre-tax) base: net = gross − discounts − store/voucher credits.
- *   tva = round(net × vatRate / 100)   (rounded once, at the boundary)
- *   ttc = net + tva
- * `vatRate` is a percent (e.g. 19 for 19 %). Default 0 → identity
- * (ht = net, tva = 0, ttc = net), so behavior is unchanged until a merchant
- * configures a rate in Settings (receiptSettings.vatRate).
+ * This module is kept as a zero-tax shim so existing imports keep compiling
+ * until the Phase 1b schema drop removes the `tax` column and the `vatRate`
+ * plumbing in lockstep (local DDL + remote schema + adapters + projections).
  *
- * Money stays integer: inputs are rounded to whole DA on entry, the rate
- * multiplication is the single rounding point. No floats for money.
+ * Semantics: the rate argument is IGNORED. Every sale is HT-only:
+ *   ht = net (clamped >= 0), tva = 0, ttc = ht.
+ * There is no rounding point here anymore — inputs are rounded on entry.
  */
 
 export interface TaxBreakdown {
   /** Taxable base actually used (net clamped to >= 0 — a refund owes no VAT). */
   ht: number;
-  /** VAT amount persisted into the `tax` column of the order row. */
+  /** Always 0 — no TVA in this product. Persisted into `tax` until Phase 1b drops it. */
   tva: number;
-  /** Total due: ht + tva. This is the amount the tender must cover. */
+  /** Total due: ht + 0. This is the amount the tender must cover. */
   ttc: number;
-  /** Echo of the applied rate (percent). */
+  /** Always 0 — the caller's rate is ignored. */
   vatRate: number;
 }
 
@@ -29,9 +26,7 @@ function toInt(n: unknown): number {
   return Number.isFinite(v) ? v : 0;
 }
 
-export function computeTax(net: number, vatRate: number): TaxBreakdown {
+export function computeTax(net: number, _vatRate?: number): TaxBreakdown {
   const ht = Math.max(0, toInt(net));
-  const rate = Math.max(0, Number(vatRate) || 0);
-  const tva = Math.round((ht * rate) / 100);
-  return { ht, tva, ttc: ht + tva, vatRate: rate };
+  return { ht, tva: 0, ttc: ht, vatRate: 0 };
 }
