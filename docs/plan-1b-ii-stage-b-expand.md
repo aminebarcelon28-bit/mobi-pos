@@ -50,22 +50,15 @@ Ratios/percents (B3 — NOT minor units, documented separately):
 unit-free ratios; converted to exact integer basis points ONLY where
 arithmetic needs them (decision at expand review, listed in the diff).
 
-## B2. Integer-island audit (cents-vs-santeem, verify at expand)
+## B2. Integer-island audit — verdict table (SB-2)
 
-- `p_products.price_cents`, `p_transactions.total_cents`,
-  `p_transaction_items.qty/unit_cents`: written via `Math.round(x*100)`
-  (`sqlPluginAdapter.ts:1771-1781`) — already minor units under exponent 2.
-  VERDICT: keep as-is, rename only if the team wants `_minor` uniformity
-  (rename = churn; default NO rename, document equivalence).
-- `inventory_ledger.delta` INTEGER: quantity units (writers pass whole-unit
-  `delta:-qty` — `createOrderSlice.ts:943-968`). VERDICT: add
-  `delta_milli` (= delta × 1000 exact, whole units only) alongside; contract
-  later. Any fractional-qty delta found in the wild follows PD-8 + report.
-- `cash_sessions` / `cash_movements` INTEGER (`opening_float`,
-  `expected_cash`, `actual_cash`, `discrepancy`, `amount`): whole dinars.
-  VERDICT: add `*_minor` (= ×100 exact); contract later.
-- `loyalty_ledger.points/balance_after`, `customers.loyalty_points`:
-  points, not money — untouched, cited so nobody "migrates" them.
+| Island | Current unit (verified) | Verdict |
+|---|---|---|
+| `p_products.price_cents`, `p_transactions.total_cents`, `p_transaction_items.qty/unit_cents` | Minor units already (written `Math.round(x*100)`, `sqlPluginAdapter.ts:1771-1781`) | KEEP, no rename (document equivalence to `*_minor`) |
+| `inventory_ledger.delta` INTEGER | Whole-unit qty (`delta:-qty`, `createOrderSlice.ts:943-968`) | REPLACE-path: add `delta_milli` (= ×1000 exact); SB-1: fractional movements REQUIRE milli — a ledger that cannot hold 0.5 units cannot record fractional sales (PD-2) |
+| `cash_sessions` / `cash_movements` INTEGER (`opening_float`, `expected_cash`, `actual_cash`, `discrepancy`, `amount`) | Whole dinars | REPLACE-path: add `*_minor` (= ×100 exact) |
+| `loyalty_ledger.points/balance_after`, `customers.loyalty_points` | Points, not money | UNTOUCHED — cited so nobody "migrates" them |
+| Loyalty points→credit math (`convertPointsToCredit`, `loyaltyEngine.ts`) | Integer-exact (50 pts × 10 = 500) | KEEP values; file enters the Stage E lint set |
 
 ## B3. CHECKs and guards
 
@@ -90,6 +83,35 @@ Remote v14 (or next free): mirror every B1 column + CHECKs in
 PD-20/21 (MIN_SUPPORTED/ KNOWN_MAX bump again). Dual-write begins in
 Stage D, not here — expand is ADDITIVE and non-breaking: old readers ignore
 new columns, new readers fall back to REAL columns until Stage E.
+
+## B7. Gate-decision preconditions SB-1..SB-5 (folded in, planning approved)
+
+- SB-1 (`delta` milli): closed in B2 table — `delta_milli` is REQUIRED, not
+  optional; fractional sales cannot be ledgered without it.
+- SB-2 (island table): B2 above is the table (unit + verdict per island).
+- SB-3 (unit-conversion ratios): enumerated — NO carton↔unit product ratio
+  exists in code. `pack_size` is an OCR-extracted informational field
+  (`intelligentScanEngine.ts:236-253`, unwired to pricing); loyalty
+  "conversion" entries are points→credit ledger event types, integer-exact.
+  Nothing to integer-scale; if a pack ratio ever lands, it enters the lint
+  scope by rule. `intelligentScanEngine.ts:238` `parseInt(packMatch)` is
+  digit-string parsing (exact) — cited, not flagged.
+- SB-4 (Dexie mirror PD-3): `database.ts` stores (v3–v9, max `version(9)`)
+  are INDEX-ONLY (`transactions: 'id, receiptNumber, createdAt'`, same shape
+  all versions) — Dexie stores full JS objects, so there is no column to
+  redefine and NO Dexie version bump for the value migration. The mirrored
+  money/qty FIELDS inside those objects convert with their SQLite twins at
+  Stage D dual-write: `SaleTransaction` totals (`subtotal/discountTotal/
+  total/costTotal/profit/...`), `Product` prices, `stockBatches`
+  (`quantityRemaining/unitCost` + PD-6 counters), `customerDebts`,
+  `storeExpenses`, `cashSessions`, `creditVouchers`, `tradeIns` amounts —
+  integers (`*_minor`/`*_milli`) or JSON strings per PD-3, never JS floats.
+  Mirror writers (`mirrorStockBatchesToDexie` et al.) copy the new columns;
+  the C5 grep proof extends to `new Number(` float revivals in mirror code.
+- SB-5 (sequencing): EXPAND EXECUTES ONLY AFTER 1b-i LANDS — one schema
+  migration in flight at a time. Remote takes v14 (next free after 1b-i's
+  v13). PD-20 constants (`MIN_SUPPORTED_REMOTE_VERSION`, `KNOWN_MAX`) bump
+  at their single location as part of the expand diff, not earlier.
 
 ## B6. Verification of expand (before Stage C backfill)
 

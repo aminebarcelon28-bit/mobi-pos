@@ -135,12 +135,13 @@ impl Money {
         self.0.to_string()
     }
 
-    /// PD-23 display: dinars with ALWAYS two decimals, integer div/rem +
-    /// zero-pad. 13050 → "130.50 DA", 10000 → "100.00 DA", 10 → "0.10 DA".
+    /// PD-23 display (+ C-2a grouping): dinars with ALWAYS two decimals,
+    /// integer div/rem + zero-pad, whole part grouped with ASCII spaces
+    /// (escpos-safe). 13050 → "130.50 DA", 4500000 → "45 000.00 DA".
     pub fn format(self) -> String {
         let neg = self.0 < 0;
         let abs = self.0.unsigned_abs();
-        let whole = abs / MINOR_PER_UNIT as u64;
+        let whole = group_ascii(&(abs / MINOR_PER_UNIT as u64).to_string());
         let frac = abs % MINOR_PER_UNIT as u64;
         if neg {
             format!("-{whole}.{frac:02} DA")
@@ -258,6 +259,25 @@ fn is_fr_grouped_int(s: &str) -> bool {
         groups += 1;
     }
     groups > 0 && i == bytes.len()
+}
+
+/// C-2a: ASCII-space thousands grouping (escpos-safe). Pure string ops.
+fn group_ascii(digits: &str) -> String {
+    if digits.len() <= 3 {
+        return digits.to_string();
+    }
+    let head = match digits.len() % 3 {
+        0 => 3,
+        n => n,
+    };
+    let mut out = digits[..head].to_string();
+    let mut i = head;
+    while i < digits.len() {
+        out.push(' ');
+        out.push_str(&digits[i..i + 3]);
+        i += 3;
+    }
+    out
 }
 
 fn parse_exact_i64(digits: &str) -> Result<i64, MoneyError> {

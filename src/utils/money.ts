@@ -36,6 +36,21 @@ function fail(what: string): never {
   throw new Error(`[Money] ${what}`);
 }
 
+/**
+ * C-2a: ASCII-space thousands grouping (escpos-safe, one implementation
+ * point — all callers inherit). Pure string ops, no float.
+ * "45000" → "45 000", "1000000" → "1 000 000", "130" → "130".
+ */
+function groupAscii(digits: string): string {
+  if (digits.length <= 3) return digits;
+  const head = digits.length % 3 || 3;
+  const parts = [digits.slice(0, head)];
+  for (let i = head; i < digits.length; i += 3) {
+    parts.push(digits.slice(i, i + 3));
+  }
+  return parts.join(' ');
+}
+
 function assertSafeInteger(n: number, what: string): void {
   if (!Number.isSafeInteger(n)) fail(`${what}: not a safe integer`);
 }
@@ -154,9 +169,9 @@ export class Money {
     // large values (float division can round a true n+0.99 quotient up to n+1).
     const neg = this.minor < 0;
     const digits = String(neg ? -this.minor : this.minor);
-    const whole = digits.length > MAX_FRACTION_DIGITS ? digits.slice(0, -MAX_FRACTION_DIGITS) : '0';
+    const rawWhole = digits.length > MAX_FRACTION_DIGITS ? digits.slice(0, -MAX_FRACTION_DIGITS) : '0';
     const frac = digits.slice(-MAX_FRACTION_DIGITS).padStart(MAX_FRACTION_DIGITS, '0');
-    return `${neg ? '-' : ''}${whole}.${frac} ${CURRENCY.label}`;
+    return `${neg ? '-' : ''}${groupAscii(rawWhole)}.${frac} ${CURRENCY.label}`;
   }
 
   add(other: Money): Money {

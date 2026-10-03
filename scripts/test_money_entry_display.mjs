@@ -126,13 +126,14 @@ console.log('\n--- J7: live canonical echo (C-2, extends PD-23) ---');
 // before money moves. These vectors pin the echo contract the Stage E entry
 // fields implement.
 const echoCases = [
-  ['45.000', '45000.00 DA'],
+  ['45.000', '45 000.00 DA'],
   ['130,5', '130.50 DA'],
-  ['130.555', '130555.00 DA'],
+  ['130.555', '130 555.00 DA'],
   ['4.35', '4.35 DA'],
-  ['12.500,50', '12500.50 DA'],
+  ['12.500,50', '12 500.50 DA'],
   ['0.5', '0.50 DA'],
   ['130', '130.00 DA'],
+  ['1000000', '1 000 000.00 DA'],
 ];
 for (const [input, want] of echoCases) {
   const got = Money.fromUserInput(input).format();

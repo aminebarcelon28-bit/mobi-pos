@@ -42,6 +42,53 @@ jobs:
       - name: Run Automated Test Suite (Business Invariants)
         run: npm test
 
+      - name: Production Build & Prod-Fold Proof (FT-06/B)
+        run: |
+          npm run build
+          node scripts/check-audit-boundary.mjs
+
+  # C-1a: audit-owned money gates run as an ISOLATED job that does NOT depend
+  # on quality-gates. Rationale (gate decision): the shared tree is red from
+  # other lanes (tsc 53 pre-existing errors, licensing boundary) and fail-fast
+  # ordering must never prevent the money gates from running. This job is
+  # green today and is the blocking gate for the Zero-Drift Definition of
+  # Done. The licensing lane's red stays quarantined in quality-gates.
+  audit-money-gates:
+    name: Audit Money Gates (Zero-Drift, isolated)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Money boundary gate (PD-22/PD-23)
+        run: node scripts/check-money-boundary.mjs
+
+      - name: Test J — money entry & display
+        run: node scripts/test_money_entry_display.mjs
+
+      - name: Test E — zero-tax consistency
+        run: node scripts/test_zero_tax.mjs
+
+      - name: Install Linux Tauri dependencies (Rust lib build)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
+
+      - name: Setup Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Money suite + shared display fixture
+        run: cargo test -p mobi-pos --lib money::
+
   build-desktop:
     name: Desktop Build (${{ matrix.platform }})
     needs: quality-gates

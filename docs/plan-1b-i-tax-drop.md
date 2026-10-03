@@ -177,7 +177,22 @@ column-error stall/quarantine above. This is the declared rehearsal for
 is the dangerous case. Anything structurally unconvertible fails closed
 (`LEDGER_COGS_MISMATCH` posture unchanged).
 
-## 8. STOP gates (no destructive step before ALL clear)
+## 8. STOP gates (no destructive step before ALL clear) + C-1b baseline pin
+
+BASELINE (measured, path-normalized — C-1b): parent base `ce9460d` vs audit
+HEAD `5447d1e` → tsc errors 53 == 53, all other-lane (committed consumers
+reference uncommitted lane modules: `pinGate`, `auditGate`,
+`technicianRecovery`, `emergencyExporter`, missing security exports; ZERO
+from audit commits — proven by set-diff ignoring worktree paths). oxlint:
+0 errors (warnings pre-existing). Audit CI lane
+(`check-money-boundary`, Test J, `test_zero_tax`, Rust `money::`) green from
+a clean worktree. Full `test:boundaries` is red at the first licensing script
+(pre-existing, unrelated files) — hence the isolated audit lane (C-1a).
+
+**1b-i exit criterion:** from a clean worktree — tsc error count == 53
+(normalized method above), oxlint 0 errors, audit CI lane green. No merge to
+any protected branch while the baseline is non-zero unless the owner
+explicitly waives (other lanes must land or revert their half-work first).
 
 1. Owner approves this plan doc as amended (§10 Addendum B + C1–C5;
    §2.3 test rewrite-or-delete choices left to execution).
