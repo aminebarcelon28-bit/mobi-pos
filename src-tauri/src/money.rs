@@ -313,6 +313,22 @@ mod tests {
         assert_eq!(Money::from_minor(0).format(), "0.00 DA");
     }
 
+    /// C-4 cross-language consistency: TS Test J reads the SAME fixture
+    /// file, so the two exponent constants can never silently disagree.
+    #[test]
+    fn shared_display_fixture() {
+        let raw = include_str!("../../tests/fixtures/money_display_vectors.json");
+        let v: serde_json::Value =
+            serde_json::from_str(raw).expect("fixture must parse");
+        let vectors = v["vectors"].as_array().expect("vectors must be an array");
+        assert!(!vectors.is_empty());
+        for row in vectors {
+            let minor = row[0].as_i64().expect("minor must be an integer");
+            let want = row[1].as_str().expect("display must be a string");
+            assert_eq!(Money::from_minor(minor).format(), want);
+        }
+    }
+
     #[test]
     fn half_dinar_pl() {
         // Buy 10 @ 130.5 → cost 130,500; sell 3 @ 150.0 → revenue 45,000;

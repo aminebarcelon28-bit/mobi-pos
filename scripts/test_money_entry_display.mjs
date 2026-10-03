@@ -77,16 +77,14 @@ for (const input of rejectCases) {
   check('Money gives exact 435', Money.fromUserInput('4.35').toMinor() === 435);
 }
 
-console.log('\n--- J2: display vectors (always two decimals) ---');
-const displayCases = [
-  [13050, '130.50 DA'], [10000, '100.00 DA'], [10, '0.10 DA'],
-  [0, '0.00 DA'], [5, '0.05 DA'], [100000000, '1000000.00 DA'],
-];
-for (const [minor, want] of displayCases) {
+console.log('\n--- J2: display vectors (C-4 shared fixture, always two decimals) ---');
+// C-4: this file is shared with Rust money::tests (same path, same vectors).
+const fixture = JSON.parse(fs.readFileSync(`${ROOT}/tests/fixtures/money_display_vectors.json`, 'utf8'));
+check('fixture loads with vectors', Array.isArray(fixture.vectors) && fixture.vectors.length > 0);
+for (const [minor, want] of fixture.vectors) {
   const got = Money.fromMinor(minor).format();
   check(`${minor} → "${want}"`, got === want, `got "${got}"`);
 }
-check('negative formats with sign', Money.fromMinor(-5850).format() === '-58.50 DA');
 
 console.log('\n--- J3: end-to-end half-dinar ---');
 {
@@ -122,6 +120,25 @@ console.log('\n--- J5: fractional qty x santeem price ---');
   check('cumulative target step1 = 166,667 s', step1.toMinor() === 166667, String(step1.toMinor()));
 }
 
+console.log('\n--- J7: live canonical echo (C-2, extends PD-23) ---');
+// Every money input must display fromUserInput(value).format() while typing /
+// before commit: a mis-parse (esp. the 1000x grouping ambiguity) is VISIBLE
+// before money moves. These vectors pin the echo contract the Stage E entry
+// fields implement.
+const echoCases = [
+  ['45.000', '45000.00 DA'],
+  ['130,5', '130.50 DA'],
+  ['130.555', '130555.00 DA'],
+  ['4.35', '4.35 DA'],
+  ['12.500,50', '12500.50 DA'],
+  ['0.5', '0.50 DA'],
+  ['130', '130.00 DA'],
+];
+for (const [input, want] of echoCases) {
+  const got = Money.fromUserInput(input).format();
+  check(`echo "${input}" → "${want}"`, got === want, `got "${got}"`);
+}
+
 console.log('\n--- J6: UI sweep (no raw integers, no santeem word) ---');
 {
   const { execFileSync } = await import('node:child_process');
@@ -135,7 +152,7 @@ console.log('\n--- J6: UI sweep (no raw integers, no santeem word) ---');
   };
   const santeemHits = grep('santeem', ['src/components', 'src/utils', 'src/store', 'src/db'])
     .filter((l) => !l.includes('(grep unavailable)'));
-  check('no "santeem" in user-facing code (money.ts + test only)', santeemHits.length === 0, santeemHits.slice(0, 3).join(' | '));
+  check('no "santeem" in components/store/db/utils (unit word never user-facing)', santeemHits.length === 0, santeemHits.slice(0, 3).join(' | '));
   const minorRender = grep('\\.toMinor\\(\\)', ['src/components', 'src/utils/escpos.ts', 'src/utils/mobileDocPrint.ts', 'src/utils/receiptViewModel.ts', 'src/components/receipt'])
     .filter((l) => !l.includes('(grep unavailable)'));
   check('no .toMinor() in display paths (format() only)', minorRender.length === 0, minorRender.slice(0, 3).join(' | '));

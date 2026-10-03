@@ -15,6 +15,10 @@
  *   precision) with a safe-integer range check on the way into `number`.
  * - Transitional callers (receiptMath, adapters, UI) still use toIntMoney
  *   until Stage E migrates them. New code MUST use Money.
+ * - ENTRY-ECHO NORM (C-2, extends PD-23): every money input field must
+ *   render `Money.fromUserInput(value).format()` live while typing and
+ *   before commit, so a grouping mis-parse (the 1000x ambiguity) is VISIBLE
+ *   before money moves. Test J section J7 pins the echo vectors.
  */
 
 export const CURRENCY = {
