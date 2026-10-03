@@ -3,6 +3,7 @@ members = [
     "src-tauri",
     "crates/pos-core",
     "crates/pos-peripherals",
+    "crates/money-gate",
 ]
 resolver = "2"
 

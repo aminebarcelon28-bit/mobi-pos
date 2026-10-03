@@ -252,6 +252,12 @@ transactions(id) ON DELETE CASCADE` (`lib.rs:990`) survives a RENAME
 (SQLite retargets on rename) but if the fallback rebuilds the child table the
 FK is re-declared; `imei_records.sale_transaction_id` has no FK (index only,
 `:1283`). Views: recreate `orders` (and `order_items` iff child rebuilt).
+ORDERING LAW (rehearsal-caught, `scripts/rehearse-1b-i-local.mjs`): with FK
+enforcement ON (the app sets it at boot), `ALTER TABLE ... RENAME` aborts
+with "error in view orders: no such table" if a dependent view dangles
+mid-swap. The fallback MUST drop dependent views FIRST (before CREATE new),
+then swap, rebuild indexes, recreate views, commit — verified end to end
+on the live-DB copy (603/603 rows, 8/8 indexes, 3/3 views).
 
 **C5 — post-drop proof method (executed post-drop, stated here):** repo-wide
 grep for `tax` (case-insensitive, whole-word + `vatRate` + `tva`) returns
@@ -291,5 +297,32 @@ build fails.
   terminology. Fixture `:1017` KEEP (verified skip-assert: rows==5 at
   `:1049-1053`, total 128000 at `:1046`, subtotal at `:1104-1105`, zero tax
   assertions). If execution finds totals need no skip grammar at all →
-  prefer full removal, whitelist stays empty, fixture rewritten without the
-  TVA line.
+   prefer full removal, whitelist stays empty, fixture rewritten without the
+   TVA line.
+
+## 12. Tracked items R-1..R-3 + §3 local rehearsal (record)
+
+- R-1 (external debt — other lanes): audit CI lane's full-crate Rust step
+  cannot pass on clean checkout until they land `snapshot_prune.rs`
+  (committed `lib.rs` declares the module; E0583 + 2 cascade E0433 + proc-macro
+  panic) and `hardware::native_hwid_hash` (E0425 from an uncommitted hunk).
+  File-level proof, zero intersection with audit diff. Close-out: lanes land
+  → full-crate step verified green on clean checkout → flip `continue-on-error`
+  off. Checked at the next gate.
+- R-2 (closed): `crates/money-gate` re-hosts `src-tauri/src/money.rs` by
+  `#[path]` (self-contained: zero `crate::` refs, serde/serde_json/std only)
+  with its in-module tests incl. the C-4 fixture. `cargo test -p money-gate`
+  8/8 green incl. `--offline`; runs in the audit CI lane as the blocking Rust
+  step. If money.rs ever gains a `crate::` dep, the gate crate fails to
+  compile BY DESIGN.
+- R-3 (closed): `origin/feature/tradein-exchange` pushed through `c315508`
+  and follow-ups (network flaky — retry or owner-push if a commit is left
+  local-only at any gate).
+- §3 rehearsal (`scripts/rehearse-1b-i-local.mjs`, 22/22 on a VACUUM INTO
+  copy of the live 603-transaction DB; live data untouched): pre-counts
+  (total 603, tax!=0 = 0, tax SUM = 0); Path A native DROP COLUMN (indexes
+  survive, counts/sums/view intact; ADD COLUMN rollback restores all-zero);
+  Path B create-copy-drop with the §C4 ordering law (views dropped FIRST —
+  the naive order aborts mid-RENAME under FK enforcement; caught and fixed
+  here, not in production); rollback B verified. Reconciliation: every
+  mutation ran on temp copies; workdir retained in report output.

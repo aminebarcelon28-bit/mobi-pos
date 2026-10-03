@@ -78,15 +78,19 @@ jobs:
       - name: Test E — zero-tax consistency
         run: node scripts/test_zero_tax.mjs
 
-      - name: Install Linux Tauri dependencies (Rust lib build)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
-
       - name: Setup Rust Stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Rust Money suite + shared display fixture
+      # R-2: standalone gate crate — green on clean checkout TODAY,
+      # independent of other lanes' breakage (money.rs is self-contained).
+      - name: Rust Money suite + shared display fixture (money-gate)
+        run: cargo test -p money-gate
+
+      # R-1 (external debt): full-crate money suite, informational until other
+      # lanes land their files (E0583 snapshot_prune / E0425 native_hwid_hash).
+      # Flips to required (remove continue-on-error) when the tree compiles.
+      - name: Rust Money suite, full crate (informational, R-1)
+        continue-on-error: true
         run: cargo test -p mobi-pos --lib money::
 
   build-desktop:

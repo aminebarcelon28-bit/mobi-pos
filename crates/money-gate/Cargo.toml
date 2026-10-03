@@ -1,0 +1,9 @@
+[package]
+name = "money-gate"
+version = "1.6.8"
+edition = "2021"
+description = "Standalone gate for the Money primitive (R-2): compiles src-tauri/src/money.rs in isolation so the money proof stays green on clean checkout regardless of other lanes' breakage"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
