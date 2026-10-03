@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Lock, Shield, User, AlertCircle } from 'lucide-react';
+import { Lock, Shield, User, AlertCircle, Wrench, Copy, Check, RotateCw, X } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import type { CashierUser } from '../types/pos';
 import { soundEngine } from '../utils/audioFeedback';
-import { verifyPin, checkPinLockout, recordPinFailure, resetPinLockout, needsPinRotation, hashPin } from '../utils/security';
+import { verifyPin, checkPinLockout, recordPinFailure, resetPinLockout, needsPinRotation, isCommonPin } from '../utils/security';
 import { getDeviceRole, isCompanionTrusted, markCompanionTrusted, isEditableKeyTarget } from '../utils/platform';
+import { generateTechnicianChallenge, verifyTechnicianRecoveryCode, getActiveChallenge } from '../utils/technicianRecovery';
 
 export const LockScreenOverlay: React.FC = () => {
   // Selective subscriptions: whole-store spread re-rendered the lock screen
@@ -27,12 +28,48 @@ export const LockScreenOverlay: React.FC = () => {
     userId: string;
     name: string;
     isManager: boolean;
+    // Same-session binding (OWASP re-auth pattern): the legacy verify that
+    // parked this rotation expires after 5 min — a stale park must not mint.
+    parkedAt: number;
   } | null>(null);
   const [rotationNew, setRotationNew] = useState('');
   const [rotationConfirm, setRotationConfirm] = useState('');
   const [rotationError, setRotationError] = useState('');
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
+
+  // Technician Challenge-Response Recovery State (Model 1)
+  const [showTechRecovery, setShowTechRecovery] = useState(false);
+  const [recoveryChallenge, setRecoveryChallenge] = useState('');
+  const [recoveryStep, setRecoveryStep] = useState<'enter_code' | 'set_new_pin'>('enter_code');
+  const [recoveryOtpInput, setRecoveryOtpInput] = useState('');
+  const [recoveryNewPin, setRecoveryNewPin] = useState('');
+  const [recoveryConfirmPin, setRecoveryConfirmPin] = useState('');
+  const [recoveryError, setRecoveryError] = useState('');
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [copiedChallenge, setCopiedChallenge] = useState(false);
+  const [isShaking, setIsShaking] = useState(false);
+  // F3 consumer: remaining native lockout for the manager credential,
+  // polled (never attempting) so the user is not silently stuck. Null =
+  // unknown/unavailable — never shown as unlocked.
+  const [nativeLockRemainingMs, setNativeLockRemainingMs] = useState<number | null>(null);
+
+  const isManagerProfile = Boolean(
+    selectedUser?.role === 'admin' ||
+    selectedUser?.id === 'usr-admin' ||
+    selectedUser?.id === 'manager' ||
+    (cashierUsers.find((u) => u.role === 'admin')?.id && selectedUser?.id === cashierUsers.find((u) => u.role === 'admin')?.id)
+  );
+  const targetPinLength = isManagerProfile ? 6 : 4;
+  // Uniform policy (native validate_pin): manager 6–8, cashier exactly 4.
+  // Length is ambiguous for managers, so auto-submit fires ONLY for the
+  // fixed-length cashier PIN — managers always confirm with Valider. An
+  // auto-submit at 6 would make 7–8-digit manager PINs untypeable
+  // (self-lockout on a valid credential).
+  const maxPinLength = isManagerProfile ? 8 : 4;
+  const showManualSubmit =
+    (isManagerProfile && pinInput.length >= 6) ||
+    (!isManagerProfile && pinInput.length >= 4 && pinInput.length < targetPinLength);
 
   // Clock updater — gated on the locked state so an unlocked register does not
   // burn a 1 s wakeup for the app's whole lifetime (the overlay returns null
@@ -53,17 +90,58 @@ export const LockScreenOverlay: React.FC = () => {
     return () => clearInterval(interval);
   }, [isScreenLocked]);
 
-  // Pre-select active cashier when locked
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Rotation-park expiry: the parked legacy verify is a live re-auth proof
+  // for 5 minutes only. Past that the user re-enters their PIN (fresh
+  // verify → fresh park) instead of minting on a stale proof.
+  const ROTATION_PARK_TTL_MS = 5 * 60_000;
   useEffect(() => {
-    if (isScreenLocked) {
-      setSelectedUser(activeCashier || cashierUsers[0] || null);
-      setPinInput('');
-      setErrorMsg('');
+    if (!rotationFor) return;
+    const remaining = rotationFor.parkedAt + ROTATION_PARK_TTL_MS - Date.now();
+    if (remaining <= 0) {
       setRotationFor(null);
       setRotationNew('');
       setRotationConfirm('');
-      setRotationError('');
+      setRotationError('Session expirée — ressaisissez votre code PIN.');
+      setPinInput('');
+      return;
     }
+    const timer = window.setTimeout(() => {
+      setRotationFor(null);
+      setRotationNew('');
+      setRotationConfirm('');
+      setRotationError('Session expirée — ressaisissez votre code PIN.');
+      setPinInput('');
+    }, remaining);
+    return () => window.clearTimeout(timer);
+  }, [rotationFor]);
+
+  // Pre-select active cashier when locked. Guarded by profile identity:
+  // roster reference churn (background sync, Dexie remirror) must NOT wipe an
+  // in-flight PIN entry or steal focus — only an actual profile change (or a
+  // fresh lock) resets the entry form.
+  const selectedProfileIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isScreenLocked) {
+      selectedProfileIdRef.current = null;
+      return;
+    }
+    const next = activeCashier || cashierUsers[0] || null;
+    const nextId = next?.id ?? null;
+    if (nextId !== null && selectedProfileIdRef.current === nextId) {
+      setSelectedUser(next);
+      return;
+    }
+    selectedProfileIdRef.current = nextId;
+    setSelectedUser(next);
+    setPinInput('');
+    setErrorMsg('');
+    setRotationFor(null);
+    setRotationNew('');
+    setRotationConfirm('');
+    setRotationError('');
+    setTimeout(() => inputRef.current?.focus(), 60);
   }, [isScreenLocked, activeCashier, cashierUsers]);
 
   // PIN submit defined before the key effects so no effect reads it before
@@ -83,38 +161,23 @@ export const LockScreenOverlay: React.FC = () => {
   // lock the manager out; the single burned attempt on manager-override is
   // the documented cost (lockouts are per-profile, so blast radius is one
   // card).
-  const handleSubmitPin = async () => {
-    if (!pinInput) return;
-    // Re-entry guard: a double-tap on Valider must not issue two native
+  const handleSubmitPin = async (candidate?: string) => {
+    const raw = typeof candidate === 'string' ? candidate : pinInput;
+    if (!raw) return;
+    // Re-entry guard: a double-tap must not issue two native
     // verifies (each failure burns lockout budget).
     if (submittingRef.current) return;
     submittingRef.current = true;
     try {
-      await submitPinInner();
+      await submitPinInner(raw);
     } finally {
       submittingRef.current = false;
     }
   };
 
-  const submitPinInner = async () => {
-    const clean = pinInput.trim();
+  const submitPinInner = async (rawPin: string) => {
+    const clean = rawPin.trim();
     const { logSecurityAction } = usePosStore.getState();
-
-    // Brute-force lockout (same choke as unlockScreen/switchCashier): the
-    // selected-profile branch below used to verify raw PINs with no attempt
-    // counter — unlimited guesses at a 4-digit code.
-    const lock = checkPinLockout();
-    if (lock.isLocked) {
-      soundEngine.playError();
-      setErrorMsg(`Trop de tentatives — réessayez dans ${lock.remainingSeconds}s`);
-      setPinInput('');
-      return;
-    }
-
-    let success = false;
-    let loggedInUser: CashierUser | null = null;
-    let mustRotate = false;
-    let nativeLockedRemainingMs = 0;
 
     const isTauri =
       typeof window !== 'undefined' &&
@@ -124,6 +187,24 @@ export const LockScreenOverlay: React.FC = () => {
           (window as unknown as { __TAURI__?: unknown }).__TAURI__
       );
 
+    // Brute-force lockout: on non-Tauri (web preview/Node tests), local counter
+    // governs. Under Tauri, native lockout is authoritative (escalating ladder
+    // checked inside pin_verify).
+    if (!isTauri) {
+      const lock = checkPinLockout();
+      if (lock.isLocked) {
+        soundEngine.playError();
+        setErrorMsg(`Trop de tentatives — réessayez dans ${lock.remainingSeconds}s`);
+        setPinInput('');
+        return;
+      }
+    }
+
+    let success = false;
+    let loggedInUser: CashierUser | null = null;
+    let mustRotate = false;
+    let nativeLockedRemainingMs = 0;
+
     if (isTauri && selectedUser) {
       // Native-first: the hash never enters JS for the verdict.
       const { pinVerify } = await import('../api/pin');
@@ -131,12 +212,20 @@ export const LockScreenOverlay: React.FC = () => {
       const adminUser =
         st.cashierUsers.find((u) => u.role === 'admin') || st.cashierUsers[0] || selectedUser;
       // Selected profile first, manager override second (see ordering note).
-      const attempts: Array<{ userId: string; user: CashierUser }> = [
-        { userId: selectedUser.id, user: selectedUser },
-      ];
-      if (adminUser.id !== selectedUser.id) {
+      const attempts: Array<{ userId: string; user: CashierUser }> = [];
+      if (selectedUser.role === 'admin' || selectedUser.id === adminUser.id || selectedUser.id === 'usr-admin') {
+        // Admin profile: try manager credential (where manager PIN lives), then profile ID if distinct
+        attempts.push({ userId: 'manager', user: adminUser });
+        if (selectedUser.id !== 'manager') {
+          attempts.push({ userId: selectedUser.id, user: selectedUser });
+        }
+      } else {
+        // Cashier profile: try cashier first, then manager override
+        attempts.push({ userId: selectedUser.id, user: selectedUser });
         attempts.push({ userId: 'manager', user: adminUser });
       }
+
+      let transportFailureCount = 0;
       for (const a of attempts) {
         let res;
         try {
@@ -145,11 +234,9 @@ export const LockScreenOverlay: React.FC = () => {
           // Transport failure under Tauri: fail closed (deny). Never fall
           // back to local verification here — the native kernel is the
           // authority when present; a silent fallback would bypass its
-          // lockout exactly when something is wrong.
-          soundEngine.playError();
-          setErrorMsg('Vérification indisponible — réessayez');
-          setPinInput('');
-          return;
+          // lockout exactly when something is wrong. No local fallback.
+          transportFailureCount++;
+          continue;
         }
         if (res.locked) {
           nativeLockedRemainingMs = res.lockedRemainingMs;
@@ -164,6 +251,12 @@ export const LockScreenOverlay: React.FC = () => {
         // res.ok === false, not locked: try the next profile (manager
         // override) — the burned attempt on this profile is per-profile
         // bounded and documented above.
+      }
+      if (!success && nativeLockedRemainingMs === 0 && transportFailureCount === attempts.length) {
+        soundEngine.playError();
+        setErrorMsg('Vérification indisponible — réessayez');
+        setPinInput('');
+        return;
       }
     } else if (selectedUser) {
       // Non-Tauri only (web preview / Node tests): local verification. Under
@@ -204,12 +297,12 @@ export const LockScreenOverlay: React.FC = () => {
       const st = usePosStore.getState();
       const isManager = loggedInUser.role === 'admin' ||
         loggedInUser.id === (st.cashierUsers.find((u) => u.role === 'admin')?.id || '');
-      setRotationFor({ userId: loggedInUser.id, name: loggedInUser.name, isManager });
+      setRotationFor({ userId: loggedInUser.id, name: loggedInUser.name, isManager, parkedAt: Date.now() });
       setRotationNew('');
       setRotationConfirm('');
       setRotationError('');
       setPinInput('');
-      soundEngine.playError();
+      soundEngine.playKeyBeep?.();
       return;
     }
 
@@ -235,16 +328,26 @@ export const LockScreenOverlay: React.FC = () => {
         true
       );
       soundEngine.playError();
-      // Native lockout is authoritative under Tauri (persisted, escalating,
-      // not resettable from JS); the TS counter above is the cosmetic echo.
-      setErrorMsg(
+      setIsShaking(true);
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate([60, 40, 60]);
+      }
+      setTimeout(() => setIsShaking(false), 500);
+
+      const attemptsLeft = after.attemptsLeft;
+      const msg =
         nativeLockedRemainingMs > 0
-          ? `Verrouillé — réessayez dans ${Math.ceil(nativeLockedRemainingMs / 1000)}s`
+          ? `Accès verrouillé — réessayez dans ${Math.ceil(nativeLockedRemainingMs / 1000)}s`
           : after.isLocked
             ? `Trop de tentatives — verrouillé ${after.remainingSeconds}s`
-            : 'Code PIN incorrect'
-      );
-      setPinInput('');
+            : attemptsLeft <= 3
+              ? `Code d'accès incorrect • ${attemptsLeft} tentative${attemptsLeft > 1 ? 's' : ''} restante${attemptsLeft > 1 ? 's' : ''}`
+              : 'Code d\'accès incorrect';
+      setErrorMsg(msg);
+      setTimeout(() => {
+        setPinInput('');
+        inputRef.current?.focus();
+      }, 400);
     }
   };
 
@@ -252,8 +355,19 @@ export const LockScreenOverlay: React.FC = () => {
   // credential just verified). New PIN rules: manager 6+ digits, cashiers
   // exactly 4 digits, digits only, distinct from every other profile. Entry
   // fields cap at 8 digits (native ceiling is 32 — see report).
+  const rotationSubmittingRef = useRef(false);
   const handleSubmitRotation = async () => {
-    if (!rotationFor) return;
+    if (!rotationFor || rotationSubmittingRef.current) return;
+    // Park expiry, checked at submit as well as by the timer: a stale park
+    // fails closed back to PIN entry.
+    if (Date.now() - rotationFor.parkedAt > ROTATION_PARK_TTL_MS) {
+      setRotationFor(null);
+      setRotationNew('');
+      setRotationConfirm('');
+      setRotationError('Session expirée — ressaisissez votre code PIN.');
+      setPinInput('');
+      return;
+    }
     const cleanNew = rotationNew.trim();
     const cleanConfirm = rotationConfirm.trim();
     const minLen = rotationFor.isManager ? 6 : 4;
@@ -270,26 +384,29 @@ export const LockScreenOverlay: React.FC = () => {
       setRotationError('Les deux codes saisis ne correspondent pas.');
       return;
     }
+    // Banal-PIN screen (NIST 800-63B-4): instant feedback here, authoritative
+    // enforcement natively in pin_set — a bypass still cannot mint.
+    if (isCommonPin(cleanNew)) {
+      setRotationError('Code trop simple (suite, répétition ou code banal) — choisissez un code moins prévisible.');
+      return;
+    }
     const st = usePosStore.getState();
     // Distinctness across profiles (same rule as SettingsModal).
     const others = (st.cashierUsers || []).filter((u) => u.id !== rotationFor.userId);
-    if (
-      others.some((u) => verifyPin(cleanNew, u.pin)) ||
-      (st.managerPin && verifyPin(cleanNew, st.managerPin))
-    ) {
+    const conflictsWithOther = others.some((u) => verifyPin(cleanNew, u.pin));
+    const conflictsWithManager =
+      !rotationFor.isManager && Boolean(st.managerPin && verifyPin(cleanNew, st.managerPin));
+    if (conflictsWithOther || conflictsWithManager) {
       setRotationError('Chaque personne doit avoir un code PIN différent (code déjà utilisé).');
       return;
     }
+    rotationSubmittingRef.current = true;
     try {
-      if (rotationFor.isManager) {
-        await st.setManagerPin(cleanNew);
-      } else {
-        await st.setCashierUsers(
-          (st.cashierUsers || []).map((u) =>
-            u.id === rotationFor.userId ? { ...u, pin: hashPin(cleanNew) } : u
-          )
-        );
-      }
+      // Phase 4a: rotation mints through the native KDF under Tauri
+      // (`pin_set` → Argon2id v2, hash never enters the WebView). The legacy
+      // TS mint survives only outside Tauri (web preview) inside
+      // rotatePinCredential — never as a fallback here.
+      const rotated = await st.rotatePinCredential(rotationFor.userId, cleanNew, rotationFor.isManager);
       const refreshed = usePosStore.getState();
       const loggedInUser =
         refreshed.cashierUsers.find((u) => u.id === rotationFor.userId) ||
@@ -298,7 +415,7 @@ export const LockScreenOverlay: React.FC = () => {
       usePosStore.setState({ isScreenLocked: false, sessionLockRequested: false, activeCashier: loggedInUser });
       void usePosStore.getState().logSecurityAction(
         'Rotation PIN Sécurité',
-        `Ancien hash pré-Argon2id remplacé pour ${rotationFor.name} (rotation forcée à la connexion)`,
+        `Credential renouvelée pour ${rotationFor.name} (rotation forcée à la connexion, format ${rotated.format})`,
         rotationFor.name,
         true
       );
@@ -308,8 +425,11 @@ export const LockScreenOverlay: React.FC = () => {
       setRotationConfirm('');
       setRotationError('');
       setPinInput('');
-    } catch {
-      setRotationError("Échec de l'enregistrement du nouveau PIN. Réessayez.");
+    } catch (e: unknown) {
+      const { friendlyPinSetError } = await import('../api/pin');
+      setRotationError(friendlyPinSetError(e));
+    } finally {
+      rotationSubmittingRef.current = false;
     }
   };
 
@@ -322,39 +442,186 @@ export const LockScreenOverlay: React.FC = () => {
   useEffect(() => {
     submitRef.current = handleSubmitPin;
   });
-  // Keyboard handler for quick PIN entry when no field owns the keystroke.
-  // When the native PIN field is focused, the OS owns digits, Backspace and
-  // Enter natively — intercepting here as well would double-apply digits and
-  // kill native Backspace deletion on mobile soft keyboards.
+  const handleDigit = (d: string) => {
+    if (submittingRef.current) return;
+    setErrorMsg('');
+    soundEngine.playKeyBeep?.();
+    setPinInput((prev) => {
+      if (prev.length >= maxPinLength) return prev;
+      const next = prev + d;
+      // Fixed-length cashier PIN only: manager length is ambiguous (6–8).
+      if (!isManagerProfile && next.length === targetPinLength) {
+        void handleSubmitPin(next);
+      }
+      return next;
+    });
+  };
+
+  const handleBackspace = () => {
+    if (submittingRef.current) return;
+    setErrorMsg('');
+    soundEngine.playKeyBeep?.();
+    setPinInput((prev) => prev.slice(0, -1));
+  };
+
+  const handleClear = () => {
+    if (submittingRef.current) return;
+    setErrorMsg('');
+    soundEngine.playKeyBeep?.();
+    setPinInput('');
+  };
+
+  const handleOpenTechRecovery = async () => {
+    setErrorMsg('');
+    setRecoveryError('');
+    setRecoveryOtpInput('');
+    setRecoveryNewPin('');
+    setRecoveryConfirmPin('');
+    setRecoveryStep('enter_code');
+    setNativeLockRemainingMs(null);
+    // Read-only countdown: does not attempt, does not burn budget. A
+    // rotation here replaces the LOCAL credential only — the native
+    // lockout below still runs to expiry.
+    try {
+      const w = window as unknown as { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown };
+      if (w.__TAURI_INTERNALS__ || (w as unknown as { __TAURI__?: unknown }).__TAURI__) {
+        const { pinLockoutRemaining } = await import('../api/pin');
+        const st = await pinLockoutRemaining('manager');
+        if (st.locked) setNativeLockRemainingMs(st.lockedRemainingMs);
+      }
+    } catch {
+      // Unavailable — the panel works without the countdown.
+    }
+    const existing = getActiveChallenge();
+    const ch = existing || (await generateTechnicianChallenge());
+    setRecoveryChallenge(ch);
+    setShowTechRecovery(true);
+  };
+
+  const handleRefreshChallenge = async () => {
+    setRecoveryLoading(true);
+    try {
+      const fresh = await generateTechnicianChallenge();
+      setRecoveryChallenge(fresh);
+      setRecoveryOtpInput('');
+      setRecoveryError('');
+    } finally {
+      setRecoveryLoading(false);
+    }
+  };
+
+  const handleVerifyTechOtp = async () => {
+    if (!recoveryOtpInput || recoveryOtpInput.length !== 6) {
+      setRecoveryError('Veuillez saisir le code à 6 chiffres fourni par le technicien.');
+      return;
+    }
+    setRecoveryLoading(true);
+    setRecoveryError('');
+    try {
+      const res = await verifyTechnicianRecoveryCode(recoveryChallenge, recoveryOtpInput);
+      if (res.ok) {
+        soundEngine.playSuccess?.();
+        setRecoveryStep('set_new_pin');
+      } else {
+        soundEngine.playError?.();
+        setRecoveryError(res.error || 'Code technicien invalide ou expiré.');
+      }
+    } finally {
+      setRecoveryLoading(false);
+    }
+  };
+
+  const handleSubmitNewManagerPin = async () => {
+    const cleanNew = recoveryNewPin.trim();
+    const cleanConfirm = recoveryConfirmPin.trim();
+    if (!/^[0-9]+$/.test(cleanNew) || cleanNew.length < 6 || cleanNew.length > 8) {
+      setRecoveryError('Le nouveau code PIN gérant doit comporter 6 à 8 chiffres.');
+      return;
+    }
+    if (cleanNew !== cleanConfirm) {
+      setRecoveryError('Les deux codes saisis ne correspondent pas.');
+      return;
+    }
+    if (isCommonPin(cleanNew)) {
+      setRecoveryError('Code trop simple (suite, répétition ou code banal) — choisissez un code moins prévisible.');
+      return;
+    }
+    if (recoveryLoading) return;
+    setRecoveryLoading(true);
+    try {
+      const st = usePosStore.getState();
+      // Same native-first rule as forced rotation: tech recovery re-keys to
+      // Argon2id under Tauri, never to a locally-minted fast hash.
+      // Pepper-dead unboxing: if the device pepper is gone (all v2 fail
+      // closed), the plain rotation fails with a pepper-absent error — then
+      // exactly one retry with recoveryReset re-provisions the pepper and
+      // re-keys the master. Never preemptive (a healthy install rejects it).
+      try {
+        await st.rotatePinCredential('manager', cleanNew, true);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!/pepper absent/i.test(msg)) throw e;
+        await st.rotatePinCredential('manager', cleanNew, true, { recoveryReset: true });
+      }
+      resetPinLockout();
+      const refreshed = usePosStore.getState();
+      const adminUser =
+        refreshed.cashierUsers.find((u) => u.role === 'admin') || refreshed.cashierUsers[0];
+      usePosStore.setState({ isScreenLocked: false, sessionLockRequested: false, activeCashier: adminUser });
+      void usePosStore.getState().logSecurityAction(
+        'Récupération PIN Gérant',
+        'Accès réinitialisé avec succès via code de secours technicien (Challenge-Response)',
+        adminUser?.name || 'Manager',
+        true
+      );
+      soundEngine.playSuccess?.();
+      setShowTechRecovery(false);
+      setPinInput('');
+      setErrorMsg('');
+    } catch (e: unknown) {
+      const { friendlyPinSetError } = await import('../api/pin');
+      setRecoveryError(friendlyPinSetError(e));
+    } finally {
+      setRecoveryLoading(false);
+    }
+  };
+
+  // Keyboard handler for quick PIN entry.
   useEffect(() => {
     if (!isScreenLocked) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (isEditableKeyTarget(e)) return;
+      if (showTechRecovery) return;
+      if (isEditableKeyTarget(e) && e.target !== inputRef.current) return;
       if (e.key >= '0' && e.key <= '9') {
         e.preventDefault();
-        setErrorMsg('');
-        soundEngine.playKeyBeep?.();
-        setPinInput((prev) => (prev.length < 8 ? prev + e.key : prev));
+        handleDigit(e.key);
       } else if (e.key === 'Backspace') {
         e.preventDefault();
-        setErrorMsg('');
-        soundEngine.playKeyBeep?.();
-        setPinInput((prev) => prev.slice(0, -1));
+        handleBackspace();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        handleClear();
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        submitRef.current();
+        if (pinInput.length > 0) {
+          void handleSubmitPin();
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isScreenLocked]);
+  }, [isScreenLocked, pinInput, showTechRecovery]);
 
-  // Phase 4.5: NO length-based auto-submit. Auto-submitting at 4 digits
-  // would fire a wrong attempt (burning lockout budget) while a 6+ digit
-  // manager PIN is still being typed. Every login is explicitly validated
-  // via the Valider button or Enter — one extra tap, zero misfires.
+  useEffect(() => {
+    if (isScreenLocked && !rotationFor && !showTechRecovery) {
+      const timer = setTimeout(() => {
+        inputRef.current?.focus();
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [isScreenLocked, rotationFor, selectedUser, showTechRecovery]);
 
   if (!isScreenLocked) return null;
 
@@ -369,9 +636,6 @@ export const LockScreenOverlay: React.FC = () => {
   // Salutation selon l'heure (affichage seul — aucune logique d'authentification touchée).
   const hourNow = new Date().getHours();
   const greeting = hourNow >= 18 || hourNow < 5 ? 'Bonsoir' : 'Bonjour';
-  // Les points suivent la longueur réelle du PIN (4 points minimum) pour rester
-  // cohérents avec le bouton Valider, qui apparaît dès 5 chiffres.
-  const dotCount = Math.max(4, pinInput.length);
 
   return (
     <div className="fixed inset-0 z-[100] bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-between p-6 select-none animate-in fade-in duration-200">
@@ -414,6 +678,7 @@ export const LockScreenOverlay: React.FC = () => {
                     setPinInput('');
                     setErrorMsg('');
                     soundEngine.playKeyBeep?.();
+                    inputRef.current?.focus();
                   }}
                   className={`p-3 rounded-2xl border transition-all flex flex-col items-center gap-1.5 cursor-pointer ${
                     isSelected
@@ -437,42 +702,16 @@ export const LockScreenOverlay: React.FC = () => {
           </div>
         </div>
 
-        {/* Target Cashier Greeting & PIN Display */}
+        {/* Target Cashier Greeting */}
         <div className="text-center mb-4">
           <div className="text-sm font-semibold text-slate-300">
             {greeting}, <span className="font-black text-amber-400">{selectedUser?.name || 'Caissier'}</span>
           </div>
-          <div className="text-[11px] text-slate-400 mt-0.5">Saisissez votre code PIN puis validez</div>
-
-          {/* PIN Dots Display — suit la longueur réelle du PIN */}
-          <div
-            className="flex items-center justify-center gap-3 my-4"
-            role="status"
-            aria-label={pinInput.length === 0 ? 'PIN vide' : `${pinInput.length} chiffre${pinInput.length > 1 ? 's' : ''} saisi${pinInput.length > 1 ? 's' : ''}`}
-          >
-            {Array.from({ length: dotCount }).map((_, idx) => {
-              const isFilled = pinInput.length > idx;
-              return (
-                <div
-                  key={idx}
-                  aria-hidden="true"
-                  className={`w-4 h-4 rounded-full border-2 transition-all ${
-                    isFilled
-                      ? 'bg-amber-400 border-amber-400 scale-110 shadow-lg shadow-amber-400/50'
-                      : 'border-slate-700 bg-slate-900'
-                  }`}
-                />
-              );
-            })}
-          </div>
-
-          {errorMsg && (
-            <div
-              role="alert"
-              className="text-rose-400 text-xs font-bold flex items-center justify-center gap-1 animate-in fade-in duration-150"
-            >
-              <AlertCircle className="w-3.5 h-3.5" />
-              <span>{errorMsg}</span>
+          {!rotationFor && (
+            <div className="text-[11px] text-slate-400 mt-0.5">
+              {isManagerProfile
+                ? 'Saisissez votre code PIN gérant (6 à 8 chiffres)'
+                : 'Saisissez votre code PIN caissier (4 chiffres)'}
             </div>
           )}
         </div>
@@ -537,55 +776,313 @@ export const LockScreenOverlay: React.FC = () => {
             </button>
           </div>
         ) : (
-        <>
-        {/* Native PIN field — the OS (incl. mobile soft keyboards) owns
-            entry: digits, Backspace deletion and Enter validation are native. */}
-        <form
-          className="w-full max-w-[280px]"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void handleSubmitPin();
-          }}
-        >
-          <input
-            type="password"
-            inputMode="numeric"
-            pattern="[0-9]*"
-            autoComplete="current-password"
-            enterKeyHint="go"
-            aria-label="Code PIN de connexion"
-            maxLength={8}
-            value={pinInput}
-            onChange={(e) => {
-              setErrorMsg('');
-              setPinInput(e.target.value.replace(/[^0-9]/g, '').slice(0, 8));
-            }}
-            placeholder="••••"
-            autoFocus
-            className="w-full min-h-[56px] bg-slate-900 border border-slate-700 rounded-2xl px-4 text-center text-2xl font-mono font-black tracking-[0.5em] text-white placeholder:text-slate-700 focus:outline-none focus:border-amber-400 transition"
-          />
-        </form>
+          <div className="w-full flex flex-col items-center">
+            {/* Dynamic Slot PIN Input UI */}
+            <div
+              className={`relative flex items-center justify-center gap-2 sm:gap-3 cursor-pointer py-3 px-2 touch-manipulation ${
+                isShaking ? 'animate-lock-shake' : ''
+              }`}
+              onClick={() => inputRef.current?.focus()}
+            >
+              <input
+                ref={inputRef}
+                type="password"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoComplete="one-time-code"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                aria-label={`Code PIN de connexion (${isManagerProfile ? '6 à 8' : '4'} chiffres)`}
+                maxLength={maxPinLength}
+                value={pinInput}
+                onChange={(e) => {
+                  if (submittingRef.current) return;
+                  const val = e.target.value.replace(/[^0-9]/g, '').slice(0, maxPinLength);
+                  if (val === pinInput) return;
+                  setErrorMsg('');
+                  soundEngine.playKeyBeep?.();
+                  setPinInput(val);
+                  if (!isManagerProfile && val.length === targetPinLength) {
+                    void handleSubmitPin(val);
+                  }
+                }}
+                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full text-transparent bg-transparent z-10 touch-manipulation caret-transparent"
+                autoFocus
+              />
 
-        {/* Valider explicite uniquement (Phase 4.5 : plus de validation
-            auto à 4 chiffres — une soumission prématurée brûlerait le quota
-            de tentatives pendant la saisie d'un PIN gérant à 6+ chiffres). */}
-        {pinInput.length > 0 && (
-          <button
-            type="button"
-            onClick={() => void handleSubmitPin()}
-            className="mt-3 px-8 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm transition active:scale-95 min-h-[48px]"
-          >
-            Valider
-          </button>
-        )}
-        </>
+              {Array.from({ length: maxPinLength }).map((_, idx) => {
+                const isFilled = pinInput.length > idx;
+                const isActive = pinInput.length === idx;
+                const hasError = Boolean(errorMsg);
+
+                return (
+                  <div
+                    key={idx}
+                    className={`w-11 h-14 sm:w-14 sm:h-16 rounded-xl sm:rounded-2xl border-2 flex items-center justify-center transition-all duration-150 select-none ${
+                      hasError
+                        ? 'border-rose-500/80 bg-rose-950/30 text-rose-400 shadow-lg shadow-rose-950/30'
+                        : isFilled
+                          ? 'border-amber-400 bg-amber-500/10 text-amber-400 shadow-md shadow-amber-500/10 scale-102'
+                          : isActive
+                            ? 'border-amber-400/90 bg-slate-900 ring-4 ring-amber-400/20 text-white'
+                            : 'border-slate-800 bg-slate-900/60 text-slate-600 hover:border-slate-700'
+                    }`}
+                  >
+                    {isFilled ? (
+                      <div className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-amber-400 shadow-md shadow-amber-400/60" />
+                    ) : isActive ? (
+                      <div className="w-0.5 h-6 bg-amber-400 rounded-full animate-pulse" />
+                    ) : (
+                      <div className="w-2 h-2 rounded-full bg-slate-700/60" />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Error or Auto-submit Hint */}
+            {errorMsg ? (
+              <div
+                role="alert"
+                className="mt-3 px-3.5 py-1.5 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-semibold flex items-center justify-center gap-1.5 animate-in fade-in duration-150 min-h-[28px]"
+              >
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span>{errorMsg}</span>
+              </div>
+            ) : (
+              <div className="mt-3 text-[11px] text-slate-400 font-medium min-h-[28px] flex items-center justify-center">
+                {isManagerProfile ? (
+                  <span>Saisissez 6 à 8 chiffres puis Valider</span>
+                ) : (
+                  <span>Déverrouillage instantané dès {targetPinLength} chiffres</span>
+                )}
+              </div>
+            )}
+
+            {/* Manual submit: required for managers (variable length), escape
+                hatch for cashiers */}
+            {showManualSubmit && (
+              <button
+                type="button"
+                onClick={() => void handleSubmitPin()}
+                className="mt-3 px-6 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold transition active:scale-95 cursor-pointer"
+              >
+                Valider ({pinInput.length} chiffres)
+              </button>
+            )}
+
+            {/* Technician Recovery Link */}
+            <button
+              type="button"
+              onClick={() => void handleOpenTechRecovery()}
+              className="mt-4 text-xs text-slate-400 hover:text-amber-400 transition underline underline-offset-4 cursor-pointer flex items-center gap-1.5"
+            >
+              <Wrench className="w-3.5 h-3.5" />
+              <span>Code PIN oublié ? Assistance technicien</span>
+            </button>
+          </div>
         )}
       </div>
 
       {/* Footer Info */}
-      <div className="text-center text-[11px] text-slate-400 font-mono">
-        Saisissez votre code PIN au clavier ou sur l'écran tactile, puis validez
+      <div className="text-center text-[11px] text-slate-500 font-mono">
+        Saisissez votre code PIN au clavier
       </div>
+
+      {/* Technician Recovery Modal (Model 1: Dynamic Challenge-Response) */}
+      {showTechRecovery && (
+        <div className="fixed inset-0 z-[110] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-slate-900 border border-amber-500/40 rounded-3xl p-6 shadow-2xl relative">
+            <button
+              type="button"
+              onClick={() => setShowTechRecovery(false)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-white transition p-1 cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center font-black">
+                <Wrench className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-white">Assistance Technicien</h3>
+                <p className="text-xs text-slate-400">Récupération d'accès sécurisée sans mot de passe universel</p>
+              </div>
+            </div>
+
+            {recoveryStep === 'enter_code' ? (
+              <div className="space-y-4">
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Si vous avez oublié le code PIN gérant, contactez votre distributeur / technicien (par téléphone ou WhatsApp) et communiquez-lui ce code de défi :
+                </p>
+
+                {/* Challenge Badge */}
+                <div className="bg-slate-950 border border-amber-500/50 rounded-2xl p-4 flex items-center justify-between shadow-inner">
+                  <div>
+                    <div className="text-[10px] text-amber-400 font-bold uppercase tracking-wider">Code de défi caisse</div>
+                    <div className="text-xl sm:text-2xl font-mono font-black text-white tracking-widest mt-0.5 select-all">
+                      {recoveryChallenge || 'Chargement...'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (recoveryChallenge) {
+                          navigator.clipboard?.writeText(recoveryChallenge);
+                          setCopiedChallenge(true);
+                          setTimeout(() => setCopiedChallenge(false), 2000);
+                        }
+                      }}
+                      className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                    >
+                      {copiedChallenge ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedChallenge ? 'Copié' : 'Copier'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleRefreshChallenge()}
+                      title="Générer un nouveau code"
+                      className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
+                    >
+                      <RotateCw className={`w-4 h-4 ${recoveryLoading ? 'animate-spin' : ''}`} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="text-[11px] text-slate-400 bg-slate-800/40 rounded-xl p-3 border border-slate-800 leading-relaxed">
+                  Le technicien calcule un code de déverrouillage temporaire (6 chiffres) signé pour votre terminal.
+                  {nativeLockRemainingMs !== null && nativeLockRemainingMs > 0 && (
+                    <span className="block mt-1.5 text-amber-300 font-bold">
+                      Verrouillage natif actif : {Math.max(1, Math.ceil(nativeLockRemainingMs / 1000))}s restantes.
+                      La récupération remplace le PIN local mais ne lève pas ce verrou avant son expiration.
+                    </span>
+                  )}
+                </div>
+
+                {/* Input for the 6-digit technician code */}
+                <div>
+                  <label className="text-[11px] font-bold text-slate-300 block mb-1.5">
+                    Code de secours technicien (6 chiffres)
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={6}
+                    value={recoveryOtpInput}
+                    onChange={(e) => {
+                      setRecoveryError('');
+                      setRecoveryOtpInput(e.target.value.replace(/[^0-9]/g, '').slice(0, 6));
+                    }}
+                    placeholder="ex: 137680"
+                    autoFocus
+                    className="w-full h-12 bg-slate-950 border border-slate-700 rounded-xl px-4 text-center text-2xl font-mono font-black tracking-widest text-amber-400 placeholder:text-slate-700 focus:outline-none focus:border-amber-400 transition"
+                  />
+                </div>
+
+                {recoveryError && (
+                  <div role="alert" className="text-rose-400 text-xs font-bold flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{recoveryError}</span>
+                  </div>
+                )}
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowTechRecovery(false)}
+                    className="flex-1 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition cursor-pointer"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="button"
+                    disabled={recoveryLoading || recoveryOtpInput.length !== 6}
+                    onClick={() => void handleVerifyTechOtp()}
+                    className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-xs transition cursor-pointer"
+                  >
+                    {recoveryLoading ? 'Vérification...' : 'Valider le code'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-emerald-950/30 border border-emerald-500/40 rounded-2xl p-3.5 text-emerald-300 text-xs font-semibold leading-relaxed flex items-center gap-2">
+                  <Check className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span>Code technicien validé ! Veuillez définir votre nouveau code PIN gérant :</span>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                    Nouveau code PIN gérant (6 à 8 chiffres)
+                  </label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={8}
+                    value={recoveryNewPin}
+                    onChange={(e) => {
+                      setRecoveryError('');
+                      setRecoveryNewPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 8));
+                    }}
+                    placeholder="••••••"
+                    autoFocus
+                    className="w-full h-12 bg-slate-950 border border-slate-700 rounded-xl px-4 text-center text-xl font-mono font-black tracking-widest text-white placeholder:text-slate-700 focus:outline-none focus:border-amber-400 transition"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                    Confirmer le nouveau code PIN
+                  </label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={8}
+                    value={recoveryConfirmPin}
+                    onChange={(e) => {
+                      setRecoveryError('');
+                      setRecoveryConfirmPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 8));
+                    }}
+                    placeholder="••••••"
+                    className="w-full h-12 bg-slate-950 border border-slate-700 rounded-xl px-4 text-center text-xl font-mono font-black tracking-widest text-white placeholder:text-slate-700 focus:outline-none focus:border-amber-400 transition"
+                  />
+                </div>
+
+                {recoveryError && (
+                  <div role="alert" className="text-rose-400 text-xs font-bold flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{recoveryError}</span>
+                  </div>
+                )}
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowTechRecovery(false)}
+                    className="flex-1 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition cursor-pointer"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="button"
+                    disabled={recoveryLoading || recoveryNewPin.length < 6}
+                    onClick={() => void handleSubmitNewManagerPin()}
+                    className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-xs transition cursor-pointer"
+                  >
+                    {recoveryLoading ? 'Enregistrement...' : 'Enregistrer et déverrouiller'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

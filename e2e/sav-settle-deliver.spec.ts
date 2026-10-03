@@ -192,9 +192,10 @@ test.describe('SAV settle-and-deliver live loop', () => {
     const lockPrompt = page.getByText('SÉLECTIONNEZ VOTRE COMPTE CAISSIER');
     await lockPrompt.waitFor({ state: 'visible', timeout: 30000 }).catch(() => {});
     if ((await lockPrompt.count()) > 0) {
-    // Native PIN field owns entry (autofocused) — the field auto-submits once
-    // it reaches targetPinLength, which is 6 for a manager profile.
+    // Managers never auto-submit (variable 6–8 digit PINs) — the Valider
+    // button must be clicked or the overlay stays mounted indefinitely.
     await page.getByLabel('Code PIN de connexion').fill('789012');
+    await page.getByRole('button', { name: /Valider/ }).click();
       await expect(lockPrompt).toHaveCount(0, { timeout: 20000 });
     }
     log('lock', 'ui', 'till unlocked', await lockPrompt.count(), 0);
