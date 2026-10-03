@@ -6,7 +6,9 @@ import {
   STORE_RETURN_POLICY,
   TRADE_IN_LEGAL_STATEMENT,
   buildReceiptViewModel,
+  formatReceiptDateTime,
 } from './receiptViewModel';
+import type { ZReportSnapshot } from '../components/receipt/ZReportPaper';
 
 const ESC = 0x1B;
 const GS = 0x1D;
@@ -177,10 +179,14 @@ function foldThermal(text: string, width: number): string[] {
 export function buildReceiptBuffer(
   transaction: SaleTransaction,
   settings: ReceiptSettings,
-  tradeIn?: TradeInItem | StagedTradeIn | null
+  tradeIn?: TradeInItem | StagedTradeIn | null,
+  shiftOpener?: string | CashSession | null
 ): Uint8Array {
   const builder = new EscPosBuilder();
-  const vm = buildReceiptViewModel(transaction, settings, { tradeIn: tradeIn ?? null });
+  const vm = buildReceiptViewModel(transaction, settings, {
+    tradeIn: tradeIn ?? null,
+    shiftOpener: shiftOpener ?? null,
+  });
   // 80mm = 42 colonnes (font A), 58mm = 32. Every money row stays ONE paired
   // line: label left, value right — never two independent columns.
   const cols = settings?.paperWidth === '58mm' ? 32 : 42;
@@ -201,6 +207,7 @@ export function buildReceiptBuffer(
   if (vm.store.tagline) builder.text(vm.store.tagline).newline();
   if (vm.store.address) builder.text(vm.store.address).newline();
   if (vm.store.phone) builder.text(`Tél: ${vm.store.phone}`).newline();
+  if (vm.store.email) builder.text(`Email: ${vm.store.email}`).newline();
   // Official fiscal block (RC/NIF/NIS/ART, legacy taxNumber fallback).
   const fiscalLine = fiscalIdentifierLine(settings);
   if (fiscalLine) builder.text(fiscalLine).newline();
@@ -312,8 +319,10 @@ export function buildReceiptBuffer(
     builder.text(pair(`${tender.label}:`, formatDZD(tender.amount))).newline();
   }
   if (!vm.isRefund) {
-    builder.text(pair('Rendu Monnaie:', formatDZD(vm.changeDue))).newline();
+    builder.text(pair('TOTAL PERÇU:', formatDZD(vm.tenderedTotal))).newline();
+    builder.text(pair('MONNAIE RENDUE:', formatDZD(vm.changeDue))).newline();
   }
+  builder.text(`Articles remis: ${vm.itemCount} - Appareils repris: ${vm.tradeInCount}`).newline();
   // Soulte boutique (shop owed the difference) — traçabilité du versement.
   if (transaction.tradeInSoulte && transaction.tradeInSoulte.amount > 0) {
     builder.text(
@@ -338,18 +347,15 @@ export function buildReceiptBuffer(
   builder.align('center').newline();
   builder.separator('-', cols);
 
-  // Politique de retour (identique au papier) + pied de page personnalisé.
-  for (const ln of foldThermal(STORE_RETURN_POLICY, cols)) {
+  // Footer policy: custom message wins (primary block), otherwise the
+  // default return policy — identical to the paper, never both, never blank.
+  for (const ln of foldThermal(
+    vm.store.footerMessage ? vm.store.footerMessage : STORE_RETURN_POLICY,
+    cols
+  )) {
     builder.text(ln).newline();
   }
-  // Message de pied de page personnalisé
-  if (settings.customFooterMsg) {
-    for (const ln of foldThermal(settings.customFooterMsg, cols)) {
-      builder.text(ln).newline();
-    }
-  } else {
-    builder.text('Merci de votre visite !').newline();
-  }
+  builder.text('Merci de votre visite et à bientôt !').newline();
 
   builder.newline();
 
@@ -443,12 +449,15 @@ import type { Product, PrinterRoutingConfig } from '../types/pos';
 export async function directPrintReceipt(
   transaction: SaleTransaction,
   settings: ReceiptSettings,
-  tradeIn?: TradeInItem | StagedTradeIn | null
+  tradeIn?: TradeInItem | StagedTradeIn | null,
+  shiftOpener?: string | CashSession | null
 ): Promise<boolean> {
   if (isMobileWebView()) {
     try {
       const { printBytesViaMobilePrinter } = await import('./mobilePrinter');
-      const direct = await printBytesViaMobilePrinter(buildReceiptBuffer(transaction, settings, tradeIn));
+      const direct = await printBytesViaMobilePrinter(
+        buildReceiptBuffer(transaction, settings, tradeIn, shiftOpener)
+      );
       if (direct.sent) return true;
       if (direct.reason !== 'disabled') {
         console.warn('[Mobile Receipt] Network printer failed, falling back to sheet:', direct.reason);
@@ -465,7 +474,7 @@ export async function directPrintReceipt(
     }
   }
   const targetPrinter = resolvePrinterForDocument('receipt', settings?.printerRouting);
-  const buffer = buildReceiptBuffer(transaction, settings, tradeIn);
+  const buffer = buildReceiptBuffer(transaction, settings, tradeIn, shiftOpener);
   const success = await printViaWindowsSpooler(targetPrinter.printerName, buffer);
   if (settings?.kickCashDrawerOnCash !== false) {
     void openCashDrawerViaSpooler(targetPrinter.printerName);
@@ -619,5 +628,94 @@ export async function directPrintXReport(
   const targetPrinter = resolvePrinterForDocument('receipt', settings?.printerRouting);
   const buffer = buildXReportBuffer(session, settings);
   return await printViaWindowsSpooler(targetPrinter.printerName, buffer);
+}
+
+/**
+ * ESC/POS twin of `ZReportPaper` — same frozen snapshot, same paired-row
+ * discipline (one `label/value` line each, never decoupled align blocks), so
+ * the hardware Z can never drift from the HTML close ticket. 42 cols on
+ * 80mm, 32 on 58mm.
+ */
+export function buildZReportBuffer(s: ZReportSnapshot, settings: ReceiptSettings): Uint8Array {
+  const b = new EscPosBuilder();
+  const cols = settings?.paperWidth === '58mm' ? 32 : 42;
+  const pair = (label: string, value: string): string => {
+    const v = value || '';
+    const maxLabel = Math.max(0, cols - v.length - 1);
+    const l = label.length > maxLabel ? label.slice(0, maxLabel) : label;
+    return `${l}${' '.repeat(Math.max(1, cols - l.length - v.length))}${v}`;
+  };
+  const money = (label: string, amount: number, sign = ''): void => {
+    b.text(pair(label, `${sign}${formatDZD(amount)}`)).newline();
+  };
+
+  b.init()
+    .align('center')
+    .bold(true)
+    .text(settings?.storeName || s.storeName || 'MOBI-POS')
+    .newline()
+    .bold(false)
+    .text('*** RAPPORT Z DE CLOTURE ***')
+    .newline()
+    .text(`Z-Ticket: ${s.zNumber}`)
+    .newline()
+    .align('left')
+    .separator('-', cols);
+  b.text(pair('Ouvert le:', formatReceiptDateTime(s.openedAtISO))).newline();
+  b.text(pair('Cloture le:', formatReceiptDateTime(s.closedAtISO))).newline();
+  b.text(pair('Caisse:', s.registerLabel)).newline();
+  b.text(pair('Responsable Caisse:', s.responsibleName)).newline();
+  b.separator('-', cols);
+
+  b.bold(true).text("CHIFFRE D'AFFAIRES:").newline().bold(false);
+  money('Ventes Especes:', s.cashSales);
+  if (s.cardSales > 0) money('Ventes TPE / Carte:', s.cardSales);
+  if (s.creditSales > 0) money('Ventes a Credit:', s.creditSales);
+  if (s.repriseTake > 0) money('Reprises (Trade-in):', s.repriseTake, '-');
+  b.bold(true);
+  money('TOTAL VENTES NETTES:', s.netSales);
+  b.bold(false).separator('-', cols);
+
+  b.bold(true).text('MOUVEMENTS DE CAISSE (ESPECES):').newline().bold(false);
+  money('Fond de caisse initial:', s.openingFloat);
+  money('Encaissements especes:', s.cashSales, '+');
+  if (s.debtSettlements > 0) money('Reglements dettes recus:', s.debtSettlements, '+');
+  if (s.savDeposits > 0) money('Acomptes SAV:', s.savDeposits, '+');
+  if (s.savSettled > 0) money('Soldes SAV encaisses:', s.savSettled, '+');
+  if (s.manualIn > 0) money('Apports manuels:', s.manualIn, '+');
+  if (s.refunds > 0) money('Remboursements client:', s.refunds, '-');
+  if (s.expenses > 0) money('Depenses de caisse:', s.expenses, '-');
+  if (s.tradeInCashOut > 0) money('Rachats occasions:', s.tradeInCashOut, '-');
+  if (s.exchangeOut > 0) money('Retours echanges:', s.exchangeOut, '-');
+  if (s.soulteOut > 0) money('Soulte reprise decaissee:', s.soulteOut, '-');
+  if (s.manualOut > 0) money('Depenses manuelles:', s.manualOut, '-');
+  if (s.drops > 0) money('Depots coffre:', s.drops, '-');
+  if (s.payouts > 0) money('Decaissements:', s.payouts, '-');
+  b.separator('-', cols);
+
+  b.bold(true).doubleHeight(true);
+  money('ESPECES THEORIQUES:', s.expectedCash);
+  money('COMPTE EN CAISSE:', s.countedCash);
+  b.doubleHeight(false);
+  b.bold(true);
+  b.text(pair('ECART:', `${s.variance >= 0 ? '+' : ''}${formatDZD(s.variance)}`)).newline();
+  b.bold(false).separator('=', cols);
+
+  for (const drop of s.dropsList || []) {
+    b.text(pair(`Coffre: ${drop.reason}`.slice(0, cols), formatDZD(drop.amount))).newline();
+  }
+
+  b.align('center').newline();
+  b.text('Signature Caissier: ____________________').newline();
+  b.text('Signature Gerant: ____________________').newline();
+  b.newline();
+  // CODE128 is ASCII-safe; the Z number is the scan key (may contain dashes).
+  try {
+    b.barcode(s.zNumber, 'CODE128');
+  } catch {
+    b.text(`*${s.zNumber}*`).newline();
+  }
+  b.newline(2).feedCut();
+  return b.build();
 }
 

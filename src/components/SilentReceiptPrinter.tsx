@@ -4,15 +4,18 @@ import { buildReceiptViewModel } from '../utils/receiptViewModel';
 import { ReceiptPaper } from './receipt/ReceiptPaper';
 
 export const SilentReceiptPrinter: React.FC = () => {
-  const { activeModal, lastTransaction, receiptSettings, tradeIns } = usePosStore();
+  const { activeModal, activeShift, lastTransaction, receiptSettings, tradeIns } = usePosStore();
 
   const viewModel = useMemo(() => {
     if (!lastTransaction) return null;
     const tradeIn = lastTransaction.tradeInId
       ? ((tradeIns || []).find((t) => t.id === lastTransaction.tradeInId) ?? null)
       : null;
-    return buildReceiptViewModel(lastTransaction, receiptSettings, { tradeIn });
-  }, [lastTransaction, receiptSettings, tradeIns]);
+    return buildReceiptViewModel(lastTransaction, receiptSettings, {
+      tradeIn,
+      shiftOpener: activeShift?.openedBy ?? activeShift?.cashierName ?? null,
+    });
+  }, [lastTransaction, receiptSettings, tradeIns, activeShift]);
 
   // Single-print-target invariant: while the receipt modal is open its own
   // ReceiptPaper owns the `receipt` print channel. Rendering a second

@@ -17,7 +17,13 @@ export const VoucherModal: React.FC = () => {
     createCreditVoucher,
     fetchCreditVouchers,
     receiptSettings,
+    activeShift,
   } = usePosStore();
+  // Part 1 seller rule for the voucher slip (shift opener, never fallback).
+  const voucherSeller =
+    (activeShift?.openedBy || '').trim() ||
+    (activeShift?.cashierName || '').trim() ||
+    'Caisse Principale';
 
   const [activeTab, setActiveTab] = useState<'create' | 'list'>('create');
   const [amountInput, setAmountInput] = useState('');
@@ -70,6 +76,8 @@ export const VoucherModal: React.FC = () => {
     }
   }, [printingVoucher]);
 
+  useEffect(() => { if (activeModal !== 'credit_voucher') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
   if (activeModal !== 'credit_voucher') return null;
 
   const handleCreateVoucher = async () => {
@@ -101,7 +109,7 @@ export const VoucherModal: React.FC = () => {
     if (isMobileDevice()) {
       const { openNativePrint } = await import('../../utils/phoneUtils');
       const { voucherText } = await import('../../utils/mobileDocPrint');
-      const ok = await openNativePrint(`Avoir ${voucher.code}`, voucherText(voucher, receiptSettings));
+      const ok = await openNativePrint(`Avoir ${voucher.code}`, voucherText(voucher, receiptSettings, voucherSeller));
       showToast(
         ok ? '🖨️ Feuille d’impression Android ouverte.' : 'Impression indisponible sur cet appareil.',
         ok ? 'success' : 'error'
@@ -141,7 +149,7 @@ export const VoucherModal: React.FC = () => {
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-black text-pos-text">Bons d'Avoir & Crédits d'Échange</h2>
-                <span className="text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded font-mono font-bold">
+                <span className="text-[10px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded-full font-mono font-bold">
                   Code-Barres Scannable
                 </span>
               </div>
@@ -187,7 +195,7 @@ export const VoucherModal: React.FC = () => {
         </div>
 
         {/* Tab Content */}
-        <div className="p-5 overflow-y-auto flex-1">
+        <div className="p-5 overflow-y-auto overscroll-contain flex-1">
           {activeTab === 'create' ? (
             !issuedVoucher ? (
               <div className="space-y-4 max-w-lg mx-auto">
@@ -311,7 +319,7 @@ export const VoucherModal: React.FC = () => {
                 <h3 className="text-base font-black text-pos-text">Bon d'Avoir Émis avec Succès !</h3>
 
                 {/* Printable Voucher Ticket Card */}
-                <div className="bg-white text-slate-900 rounded-2xl p-5 shadow-2xl text-left font-mono border-2 border-dashed border-slate-300">
+                <div className="bg-white text-slate-900 rounded-2xl p-5 shadow-2xl text-left font-mono border border-dashed border-slate-300">
                   <div className="text-center pb-3 border-b border-slate-200">
                     <div className="text-xs font-black tracking-wider uppercase">
                       {receiptSettings.storeName || 'ACCESSOIRES MOBI'}
@@ -511,12 +519,13 @@ export const VoucherModal: React.FC = () => {
 
         {/* Dedicated 80mm Voucher Ticket Print Template */}
         {printingVoucher && (
-          <div className="print-credit-target hidden print:block bg-white text-black p-1 font-mono text-[11px] leading-snug">
+          <div className="print-credit-target hidden print:block bg-white text-black p-1 font-mono tabular-nums text-[11px] leading-snug">
             <div className="text-center pb-2 border-b border-dashed border-gray-500">
               <p className="font-extrabold text-sm uppercase tracking-wider">{receiptSettings?.storeName || 'MOBI ACCESSORIES'}</p>
               <p className="font-black text-xs uppercase mt-1">*** BON D'AVOIR ***</p>
               <p className="font-black text-base tracking-widest mt-1">{printingVoucher.code}</p>
               <p className="text-[10px]">{formatDateTime(printingVoucher.createdAt)}</p>
+              <p className="text-[10px]">Caisse: {activeShift?.id ? `Caisse ${activeShift.id.slice(-8)}` : 'Caisse Principale'} • Vendeur: {voucherSeller}</p>
             </div>
             <div className="py-2 border-b border-dashed border-gray-500">
               <div className="flex justify-between font-extrabold text-[13px]">
@@ -542,7 +551,8 @@ export const VoucherModal: React.FC = () => {
             </div>
             <div className="pt-2 text-center">
               <p className="text-[10px]">Présentez ce ticket pour déduire ce montant de votre prochain achat.</p>
-              <p className="text-[9px] text-gray-600 mt-1">Document généré par Mobi-POS</p>
+              <p className="text-[10px] mt-1">Échange sous 48h avec ticket original.</p>
+              <p className="text-[9px] text-gray-600 mt-1">Document généré par Mobi-POS • *{printingVoucher.code}*</p>
             </div>
           </div>
         )}

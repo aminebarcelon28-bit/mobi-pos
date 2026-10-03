@@ -93,6 +93,75 @@ export function cashSalesFromTxns(txns: CashTxnLike[] | undefined | null): numbe
     }, 0);
 }
 
+/** Tender-rail turnover split for the Z turnover section (reference layout).
+ * Same conventions as `cashSalesFromTxns` (tenders first, paymentMethod
+ * fallback, VOIDED/refunds excluded): card = TPE rails (Autre, BaridiMob,
+ * Chèque), credit = 'Crédit Client', avoir = 'Avoir Client', reprise =
+ * 'Reprise' deduction legs. Pure + additive (no existing term touched). */
+export interface TenderTurnoverSplit {
+  cash: number;
+  card: number;
+  credit: number;
+  avoir: number;
+  reprise: number;
+}
+
+function railOf(t: { method?: string } | null | undefined, fallbackMethod?: string): string {
+  const m = (t?.method || fallbackMethod || '').trim();
+  return m;
+}
+
+export function tenderSplitFromTxns(txns: CashTxnLike[] | undefined | null): TenderTurnoverSplit {
+  const split: TenderTurnoverSplit = { cash: 0, credit: 0, card: 0, avoir: 0, reprise: 0 };
+  for (const t of txns || []) {
+    if (!t || t.status === 'VOIDED' || t.isRefund) continue;
+    // Mirror cashSalesFromTxns: change handed back was never collected, so it
+    // nets once against the summed Espèces legs (split.cash then equals
+    // cashSalesFromTxns on the same input — one number, never two).
+    const change = Math.max(0, Math.round(Number(t.changeDue) || 0));
+    let cashLegs = 0;
+    const legs =
+      t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0
+        ? t.tenders
+        : [{ method: t.paymentMethod || 'Espèces', amount: Number(t.total) || 0 }];
+    for (const leg of legs) {
+      if (railOf(leg, t.paymentMethod) === 'Espèces') {
+        cashLegs += Math.max(0, Math.round(Number(leg?.amount) || 0));
+      }
+    }
+    split.cash += Math.max(0, cashLegs - change);
+    for (const leg of legs) {
+      const amount = Math.max(0, Math.round(Number(leg?.amount) || 0));
+      if (amount <= 0) continue;
+      switch (railOf(leg, t.paymentMethod)) {
+        case 'Espèces':
+          // Already counted above (net of change) — skip here.
+          break;
+        case 'Crédit Client':
+          split.credit += amount;
+          break;
+        case 'Reprise':
+          split.reprise += amount;
+          break;
+        case 'Avoir Client':
+          split.avoir += amount;
+          break;
+        case 'Autre':
+        case 'BaridiMob':
+        case 'Chèque':
+          split.card += amount;
+          break;
+        default:
+          // Unknown rail (legacy rows): count as card-present volume rather
+          // than vanishing it from turnover. Never NaN, never negative.
+          split.card += amount;
+          break;
+      }
+    }
+  }
+  return split;
+}
+
 /** Cash handed back on refund rows. */
 export function cashRefundsFromTxns(txns: CashTxnLike[] | undefined | null): number {
   return (txns || [])

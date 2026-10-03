@@ -13,6 +13,8 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
+import { ZReportPaper, type ZReportSnapshot } from '../receipt/ZReportPaper';
+import { buildZSnapshot } from '../../utils/zReportSnapshot';
 import type { CloseShiftWithPin } from '../../store/slices/createShiftSlice';
 import { SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD } from '../../db/adapters/shiftAdapter';
 import { formatDZD, type DenominationCount } from '../../types/pos';
@@ -53,6 +55,7 @@ export const ShiftCloseModal: React.FC = () => {
   const {
     activeModal,
     closeModal,
+    openModal,
     activeShift,
     closeShift,
     transactions,
@@ -87,6 +90,10 @@ export const ShiftCloseModal: React.FC = () => {
   // Double-submit guard: closing twice fires two Z-reports and two close
   // writes — the button locks while the adapter call is in flight.
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Frozen close-ticket snapshot (B3 blank-page fix): captured BEFORE the
+  // slice nulls the session/modal, then printed from a remounted print-only
+  // view so the `z_report` channel always has a mounted target.
+  const [zSnapshot, setZSnapshot] = useState<ZReportSnapshot | null>(null);
 
   const [denominations, setDenominations] = useState<DenominationCount>({
     qty2000: 0,
@@ -275,6 +282,40 @@ export const ShiftCloseModal: React.FC = () => {
 
   useEffect(() => { if (activeModal !== 'shift_close') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
+  // Reopen-print effect: once the frozen snapshot is armed, the print-only
+  // view below is mounted — print first, then dismiss (channel cleanup rides
+  // printCoordinator's afterprint + fallback timers).
+  useEffect(() => {
+    if (!zSnapshot || activeModal !== 'shift_close') return;
+    const t1 = setTimeout(() => {
+      printCoordinator.printChannelDirect('z_report', 120);
+    }, 250);
+    const t2 = setTimeout(() => {
+      setZSnapshot(null);
+      setIsSubmitting(false);
+      closeModal();
+    }, 1600);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [zSnapshot, activeModal, closeModal]);
+
+  // Print-only view: mounted (via reopen below) with the frozen snapshot so
+  // the desktop Z print can never fire on an empty target (blank page).
+  if (zSnapshot) {
+    return (
+      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
+        <div className="flex flex-col items-center gap-3">
+          <div className="bg-slate-950 p-6 flex justify-center max-h-[70vh] overflow-y-auto">
+            <ZReportPaper snapshot={zSnapshot} />
+          </div>
+          <p className="text-[11px] text-emerald-400 font-bold">Impression du rapport Z…</p>
+        </div>
+      </div>
+    );
+  }
+
   if (activeModal !== 'shift_close') return null;
 
   const handleDenomChange = (key: keyof DenominationCount, val: string) => {
@@ -338,6 +379,13 @@ export const ShiftCloseModal: React.FC = () => {
     }
 
     setIsSubmitting(true);
+    // B3 blank-page fix: freeze the Z identity BEFORE the slice nulls the
+    // session + modal on success (zNumber, opener, counted, closed-at).
+    const shiftBefore = activeShift;
+    const preClosedCount = (usePosStore.getState().allShifts || []).filter(
+      (s) => s.status === 'CLOSED'
+    ).length;
+    const closedAtISO = new Date().toISOString();
     try {
       const closeShiftResult = await (closeShift as CloseShiftWithPin)(
         physicalCount,
@@ -393,8 +441,32 @@ export const ShiftCloseModal: React.FC = () => {
             ok ? 'success' : 'warning'
           );
         } else {
-          printCoordinator.printZReport(40);
+          // Desktop: arm the frozen snapshot and remount in print-only mode
+          // BEFORE firing the channel — the target is therefore mounted when
+          // window.print runs (never a blank page). Dismissal rides the
+          // reopen-print effect above, not an immediate closeModal().
+          const st = usePosStore.getState();
+          setZSnapshot(
+            buildZSnapshot({
+              settings: st.receiptSettings,
+              shift: shiftBefore,
+              shiftFloat: st.shiftFloat ?? openingFloat,
+              transactions: st.transactions,
+              customerDebts: st.customerDebts ?? [],
+              storeExpenses: st.storeExpenses ?? [],
+              repairOrders: st.repairOrders ?? [],
+              tradeIns: st.tradeIns ?? [],
+              cashDrops: st.cashDrops ?? [],
+              payouts: st.payouts ?? [],
+              countedCash: physicalCount,
+              closedAtISO,
+              closedShiftCount: preClosedCount,
+              fallbackCashier: cashierName.trim() || readLockScreenCashierName(),
+            })
+          );
           showToast('Session caisse clôturée avec succès. Rapport Z imprimé.', 'success');
+          openModal('shift_close');
+          return;
         }
         closeModal();
       } else {

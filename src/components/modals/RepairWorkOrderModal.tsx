@@ -17,6 +17,7 @@ import {
   Zap,
   MessageSquare,
   Check,
+  AlertTriangle,
   FileCheck,
   FileText,
   ScanLine,
@@ -75,7 +76,7 @@ import WarrantyBadge from '../ui/WarrantyBadge';
 import { QRCodeImage } from '../ui/QRCodeImage';
 import { isMobileDevice } from '../../utils/platform';
 import { cancelSavPrints, enqueueSavPrint } from '../../utils/savPrintQueue';
-import { saveSavPhoto } from '../../utils/savAttachments';
+import { purgeSavPhotos, saveSavPhoto } from '../../utils/savAttachments';
 import { validateRepairIntake } from '../../store/slices/createRepairSlice';
 import {
   formatDzPhoneDisplay,
@@ -150,7 +151,13 @@ export const RepairWorkOrderModal: React.FC = () => {
     setPendingRepairPrint,
     consumeIntakeDraft,
     clearIntakeDraft,
+    activeShift,
   } = usePosStore();
+  // Part 1 seller rule for the mobile-sheet twins (shift opener).
+  const savSeller =
+    (activeShift?.openedBy || '').trim() ||
+    (activeShift?.cashierName || '').trim() ||
+    null;
 
   const { showToast } = useToast();
 
@@ -246,6 +253,8 @@ export const RepairWorkOrderModal: React.FC = () => {
   const [printingOrder, setPrintingOrder] = useState<RepairOrder | null>(null);
   // Phase 3: intake validation + warranty auto-hook (warn-only, never blocks save).
   const [imeiTouched, setImeiTouched] = useState(false);
+  /** Operator-facing explanation when blur rewrote the identifier. */
+  const [imeiSanitizeNote, setImeiSanitizeNote] = useState<string | null>(null);
   const [phoneTouched, setPhoneTouched] = useState(false);
   // v2 legal record state.
   const [intakeDamage, setIntakeDamage] = useState<IntakeDamageAssessment>(EMPTY_DAMAGE);
@@ -255,6 +264,19 @@ export const RepairWorkOrderModal: React.FC = () => {
   const [suggestedTier, setSuggestedTier] = useState<WarrantyTier | null>(null);
   const [intakePhotos, setIntakePhotos] = useState<IntakePhotoRef[]>([]);
   const [photosBusy, setPhotosBusy] = useState(false);
+  /**
+   * Id under which a NOT-YET-COMMITTED intake stages its photo bytes.
+   *
+   * A new ticket is written to `sav_attachments/draft_<ts>_<n>.webp` because
+   * the store mints the real `rep_*` id at commit time (createRepairSlice
+   * `newId('rep')`), so the staged id can never be the order id. Without a
+   * sweep, every abandoned intake would leak its photos to disk forever — and
+   * `purgeSavPhotos(orderId)` can never reach them, since no order owns that
+   * prefix. Cleared WITHOUT purging on a successful commit (those bytes are
+   * the ticket's evidence); purged on close/reset when nothing was committed.
+   */
+  const stagedDraftIdRef = useRef<string | null>(null);
+  const photosCommittedRef = useRef(false);
   const [warrantyDossier, setWarrantyDossier] = useState<WarrantyDossierSnapshot | null>(null);
   const [warrantyLoading, setWarrantyLoading] = useState(false);
   const [warrantySnapshot, setWarrantySnapshot] = useState<WarrantySnapshot | undefined>(undefined);
@@ -332,6 +354,8 @@ export const RepairWorkOrderModal: React.FC = () => {
   const handleImeiChange = (raw: string) => {
     setImei(raw);
     setImeiTouched(true);
+    // Any new keystroke supersedes the previous blur explanation.
+    setImeiSanitizeNote(null);
     setWarrantyLoading(raw.trim().length >= 8);
     if (warrantyTimer.current) window.clearTimeout(warrantyTimer.current);
     warrantyTimer.current = window.setTimeout(() => {
@@ -344,11 +368,19 @@ export const RepairWorkOrderModal: React.FC = () => {
     if (imeiKind === 'manual') {
       setImei('');
       setWarrantyDossier(null);
+      setImeiSanitizeNote(null);
       return;
     }
     const normalized = (imei || '').trim().toUpperCase();
     const sanitized = sanitizeDeviceIdentifier(normalized, imeiKind);
     setImei(sanitized.value);
+    // Blur silently REWRITES the field (letters stripped from an IMEI, spacing
+    // normalized). The sanitizer returns a `note` explaining exactly that, but
+    // it was being discarded — the operator saw characters vanish with no
+    // cause. Surface it whenever the stored value differs from what was typed.
+    setImeiSanitizeNote(
+      sanitized.value !== normalized && sanitized.note ? sanitized.note : null
+    );
     runWarrantyLookup(sanitized.value, imeiKind);
   };
 
@@ -478,6 +510,7 @@ export const RepairWorkOrderModal: React.FC = () => {
     setDeviceModel('');
     setImei('');
     setImeiKind('imei');
+    setImeiSanitizeNote(null);
     setProblemDescription('');
     setDiagnosticNotes('');
     setLaborCost(0);
@@ -507,7 +540,12 @@ export const RepairWorkOrderModal: React.FC = () => {
     const list = Array.from(files || []);
     if (list.length === 0) return;
     setPhotosBusy(true);
-    const orderId = editingId || `draft_${Date.now()}`;
+    // One staging id per intake session, so a single purge can sweep every
+    // file this draft produced. Editing an existing ticket writes under the
+    // real order id and is never swept.
+    const orderId =
+      editingId || (stagedDraftIdRef.current ??= `draft_${Date.now()}`);
+    if (!editingId) photosCommittedRef.current = false;
     const added: IntakePhotoRef[] = [];
     let rejected = 0;
     for (const file of list) {
@@ -667,6 +705,12 @@ export const RepairWorkOrderModal: React.FC = () => {
       ...(warrantySnapshot ? { warrantySnapshot } : {}),
     };
 
+    // The ticket is committed from here on: the staged photo bytes are now
+    // evidence referenced by a real order, so disarm the abort sweep instead
+    // of letting it delete them on the next close.
+    photosCommittedRef.current = true;
+    stagedDraftIdRef.current = null;
+
     if (editingId) {
       await updateRepairOrder(editingId, {
         ...shared,
@@ -778,8 +822,8 @@ export const RepairWorkOrderModal: React.FC = () => {
         '../../utils/mobileDocPrint'
       );
       const steps = [
-        { kind: 'voucher' as const, medium: 'mobileSheet' as const, title: `Bon SAV ${order.ticketNumber}`, text: repairVoucherEscPosText(order, receiptSettings) },
-        { kind: 'workshop' as const, medium: 'mobileSheet' as const, title: `Fiche Atelier ${order.ticketNumber}`, text: workshopSlipText(order) },
+        { kind: 'voucher' as const, medium: 'mobileSheet' as const, title: `Bon SAV ${order.ticketNumber}`, text: repairVoucherEscPosText(order, receiptSettings, savSeller) },
+        { kind: 'workshop' as const, medium: 'mobileSheet' as const, title: `Fiche Atelier ${order.ticketNumber}`, text: workshopSlipText(order, savSeller, order.assignedTechnicianId ?? null) },
         { kind: 'chassisTag' as const, medium: 'mobileSheet' as const, title: `Étiquette ${order.ticketNumber}`, text: chassisTagEscPosText(order) },
       ];
       const outcomes: string[] = [];
@@ -902,6 +946,22 @@ export const RepairWorkOrderModal: React.FC = () => {
     return ticket ? `https://mobi-pos.app/sav/${encodeURIComponent(ticket)}` : '';
   }, [justDelivered?.tickets]);
 
+  // Abort sweep: an intake that is closed, cancelled or reset BEFORE its
+  // photos are committed to a ticket must not leave bytes on disk. Fires on
+  // every close path (Escape, header X, reset, till switch) because all of
+  // them clear activeModal. A committed draft clears its ref without purging,
+  // so saved evidence is never deleted by a later close.
+  useEffect(() => {
+    if (activeModal === 'repair_work_order') return;
+    const draftId = stagedDraftIdRef.current;
+    stagedDraftIdRef.current = null;
+    if (!draftId || photosCommittedRef.current) return;
+    photosCommittedRef.current = false;
+    void purgeSavPhotos(draftId).catch(() => {
+      /* best-effort sweep: a failure must never block the UI close */
+    });
+  }, [activeModal]);
+
   if (activeModal !== 'repair_work_order') return null;
 
   return (
@@ -980,7 +1040,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                 setActiveTab('Nouveau');
                 if (!editingId) resetForm();
               }}
-              className={`min-h-[44px] px-3.5 sm:px-4 py-2.5 text-xs font-bold border-b-2 transition-colors shrink-0 active:scale-95 ${activeTab === 'Nouveau' ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'border-transparent text-pos-muted hover:text-pos-text'}`}
+              className={`min-h-[44px] px-3.5 sm:px-4 py-2.5 text-xs font-bold border-b-2 transition-colors shrink-0 active:scale-95 ${activeTab === 'Nouveau' ? 'border-emerald-500 text-emerald-700 dark:text-emerald-400' : 'border-transparent text-pos-muted hover:text-pos-text'}`}
             >
               <span className="flex items-center gap-2">
                 <Plus className="w-4 h-4" aria-hidden="true" />{' '}
@@ -990,7 +1050,7 @@ export const RepairWorkOrderModal: React.FC = () => {
             <button
               type="button"
               onClick={() => setActiveTab('Historique')}
-              className={`min-h-[44px] px-3.5 sm:px-4 py-2.5 text-xs font-bold border-b-2 transition-colors shrink-0 active:scale-95 ${activeTab === 'Historique' ? 'border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'border-transparent text-pos-muted hover:text-pos-text'}`}
+              className={`min-h-[44px] px-3.5 sm:px-4 py-2.5 text-xs font-bold border-b-2 transition-colors shrink-0 active:scale-95 ${activeTab === 'Historique' ? 'border-emerald-500 text-emerald-700 dark:text-emerald-400' : 'border-transparent text-pos-muted hover:text-pos-text'}`}
             >
               <span className="flex items-center gap-2">
                 <History className="w-4 h-4" aria-hidden="true" />{' '}
@@ -1016,7 +1076,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                 id="sav-status"
                 value={status}
                 onChange={(e) => setStatus(e.target.value as RepairOrder['status'])}
-                className="flex-1 sm:flex-none min-h-[44px] min-w-[48px] bg-pos-card border border-pos-border rounded-xl px-3 py-2 text-sm sm:text-xs font-bold text-pos-text focus:outline-none cursor-pointer"
+                className="flex-1 sm:flex-none min-h-[44px] min-w-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-base sm:text-xs font-medium text-pos-text focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
               >
                 <option value="Diagnostic">Diagnostic</option>
                 <option value="En attente de pièces">En attente de pièces</option>
@@ -1146,7 +1206,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                   {customers.length > 0 && (
                     <select
                       onChange={(e) => handleSelectCustomer(e.target.value)}
-                      className="w-full sm:w-auto min-h-[44px] bg-pos-card border border-pos-border text-pos-text text-sm sm:text-xs rounded-lg px-2.5 py-1 focus:border-emerald-400 focus:outline-none"
+                      className="w-full sm:w-auto min-h-[44px] bg-pos-card border border-pos-border text-pos-text text-base sm:text-xs font-normal rounded-lg px-2.5 py-1 focus:border-emerald-500 focus:outline-none"
                     >
                       <option value="">Sélectionner un client existant...</option>
                       {(customers || []).map(c => (
@@ -1156,8 +1216,13 @@ export const RepairWorkOrderModal: React.FC = () => {
                   )}
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  <div>
+                {/* `[&>*]:min-w-0`: grid items default to `min-width:auto`, which resolves a
+                    `1fr` track to `minmax(auto,1fr)`. An <input>'s intrinsic
+                    min-content width is ~20ch, so the Client Name / Téléphone /
+                    IMEI tracks pushed past the card and the field bled outside
+                    the modal. Zeroing every direct child removes that floor. */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 [&>*]:min-w-0">
+                  <div className="min-w-0">
                     <label htmlFor="sav-customer" className="text-xs font-medium text-pos-text block mb-1">Nom du client</label>
                     <input
                       id="sav-customer"
@@ -1185,7 +1250,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                       className={`w-full h-10 sm:h-9 bg-pos-card border rounded-lg px-3 py-1.5 text-base sm:text-xs font-normal font-mono tabular-nums tracking-normal text-pos-text placeholder:font-sans placeholder:text-pos-muted focus:outline-none focus:ring-1 focus:ring-emerald-500 ${showPhoneHint ? 'border-amber-500' : 'border-pos-border'}`}
                     />
                     {showPhoneHint && (
-                      <p className="text-[10px] text-amber-600 dark:text-amber-400 font-medium mt-1">
+                      <p className="text-[10px] text-amber-800 dark:text-amber-400 font-medium mt-1">
                         Format DZ attendu : 05/06/07 XX XX XX XX ou 213… — enregistré tel quel.
                       </p>
                     )}
@@ -1306,6 +1371,16 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <span className="hidden sm:inline">Scanner</span>
                   </button>
                 </div>
+                {imeiSanitizeNote && (
+                  <p
+                    role="status"
+                    data-imei-note="true"
+                    className="text-[10px] text-amber-800 dark:text-amber-300 font-medium mt-1 flex items-start gap-1"
+                  >
+                    <AlertTriangle className="w-3 h-3 mt-px shrink-0" aria-hidden="true" />
+                    <span>Identifiant corrigé à la sortie du champ — {imeiSanitizeNote}</span>
+                  </p>
+                )}
                 <p className="text-[10px] text-pos-muted">
                   {imeiKind === 'imei'
                     ? 'IMEI : 15 chiffres, clé de contrôle Luhn vérifiée à la sortie.'
@@ -1319,7 +1394,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                   itself lives in the polymorphic block above; this row pairs
                   its verdict with the free-text fault report. */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <div>
+                <div className="min-w-0">
                   <span className="text-xs font-medium text-pos-text block mb-1">
                     {DEVICE_ID_KIND_LABELS[imeiKind]} de l&apos;appareil
                   </span>
@@ -1329,7 +1404,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     </p>
                   )}
                   {imeiState === 'invalid' && (
-                    <p className="text-[10px] text-amber-700 dark:text-amber-400 font-medium mt-1">
+                    <p className="text-[10px] text-amber-800 dark:text-amber-400 font-medium mt-1">
                       Clé de contrôle IMEI invalide — corrigez la saisie pour ouvrir un dossier SAV.
                     </p>
                   )}
@@ -1537,7 +1612,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setMobileChecklistTab('pre')}
-                  className={`flex-1 min-h-[44px] rounded-lg text-xs font-medium transition active:scale-95 ${mobileChecklistTab === 'pre' ? 'bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/40' : 'text-pos-muted'}`}
+                  className={`flex-1 min-h-[44px] rounded-lg text-xs font-medium transition active:scale-95 ${mobileChecklistTab === 'pre' ? 'bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/40' : 'text-pos-muted'}`}
                 >
                   Réception (Amber)
                 </button>
@@ -1559,7 +1634,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => handleSetAllChecklistOk('pre')}
-                      className="text-[10px] bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 px-2.5 py-1.5 min-h-[36px] rounded font-bold transition border border-emerald-500/30 cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 active:scale-95"
+                      className="text-[10px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 px-2.5 py-1.5 min-h-[36px] rounded-lg font-medium transition border border-emerald-500/30 cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 active:scale-95"
                     >
                       <Check className="w-3 h-3" /> Tout Conforme
                     </button>
@@ -1637,7 +1712,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => handleSetAllChecklistOk('post')}
-                      className="text-[10px] bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 px-2.5 py-1.5 min-h-[36px] rounded font-bold transition border border-emerald-500/30 cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 active:scale-95"
+                      className="text-[10px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 px-2.5 py-1.5 min-h-[36px] rounded-lg font-medium transition border border-emerald-500/30 cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 active:scale-95"
                     >
                       <Check className="w-3 h-3" /> Tout Conforme
                     </button>
@@ -1714,7 +1789,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                 <h3 className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-pos-muted">
                   Montants de l&apos;intervention
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 [&>*]:min-w-0">
                   <div>
                     <label htmlFor="sav-labor" className="text-xs font-medium text-pos-text mb-1 block">
                       Main d&apos;Œuvre (DA)
@@ -1887,7 +1962,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                     value={historySearch}
                     onChange={(e) => setHistorySearch(e.target.value)}
                     placeholder="Rechercher par N° Ticket, Client, Tél, Modèle, IMEI..."
-                    className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-3 py-2 text-xs text-pos-text placeholder-pos-muted focus:border-emerald-400 focus:outline-none"
+                    className="w-full h-11 sm:h-10 bg-pos-bg border border-pos-border rounded-lg pl-9 pr-3 py-1.5 text-base sm:text-xs font-normal text-pos-text placeholder:text-pos-muted focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                   />
                   {historySearch && (
                     <button
@@ -1963,7 +2038,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                         <select
                           value={order.status}
                           onChange={(e) => handleStatusChange(order.id, e.target.value as RepairOrder['status'])}
-                          className={`text-xs font-bold px-3 py-1 rounded-lg border focus:outline-none cursor-pointer ${REPAIR_STATUS_BADGE_TOKENS[order.status] ?? 'bg-pos-bg text-pos-text border-pos-border'}`}
+                          className={`text-base sm:text-xs font-medium px-3 py-1 rounded-lg border focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer ${REPAIR_STATUS_BADGE_TOKENS[order.status] ?? 'bg-pos-bg text-pos-text border-pos-border'}`}
                         >
                           <option value="Diagnostic">Diagnostic</option>
                           <option value="En attente de pièces">En attente de pièces</option>

@@ -26,6 +26,7 @@ import {
   STORE_RETURN_POLICY,
   TRADE_IN_LEGAL_STATEMENT,
   buildReceiptViewModel,
+  formatReceiptDateTime,
 } from './receiptViewModel';
 
 const WIDTH = 42;
@@ -95,6 +96,10 @@ export function receiptText(tx: SaleTransaction, settings?: ReceiptSettings | nu
   lines.push(center(storeNameOf(settings)));
   if (settings?.address) lines.push(center(settings.address));
   if (settings?.phone) lines.push(center(`Tél: ${settings.phone}`));
+  // Optional email — omitted entirely when blank (no ghost label/line).
+  if (settings?.email && settings.email.trim()) {
+    lines.push(center(`Email: ${settings.email.trim()}`.slice(0, WIDTH)));
+  }
   const fiscalLine = fiscalIdentifierLine(settings);
   if (fiscalLine) lines.push(center(fiscalLine));
   lines.push(rule('='));
@@ -167,8 +172,10 @@ export function receiptText(tx: SaleTransaction, settings?: ReceiptSettings | nu
     lines.push(cell(`${tender.label}:`, formatDZD(tender.amount)));
   }
   if (!tx.isRefund) {
+    lines.push(cell('TOTAL PERÇU:', formatDZD(vm.tenderedTotal)));
     lines.push(cell('Rendu:', formatDZD(vm.changeDue)));
   }
+  lines.push(`Articles:${vm.itemCount} Repris:${vm.tradeInCount}`.slice(0, WIDTH));
   if ((tx.customer?.storeCredit || 0) > 0) {
     lines.push(cell('Avoir client dispo:', `+${formatDZD(tx.customer?.storeCredit || 0)}`));
   }
@@ -180,8 +187,12 @@ export function receiptText(tx: SaleTransaction, settings?: ReceiptSettings | nu
   }
   if (tx.isRefund && tx.refundReason) lines.push(`Motif: ${tx.refundReason}`.slice(0, WIDTH));
   lines.push(rule('='));
-  for (const ln of banner(STORE_RETURN_POLICY)) lines.push(ln);
-  lines.push(center('Merci de votre visite !'));
+  // Footer policy: custom message wins (primary block), otherwise the default
+  // return policy — identical to the paper, never both, never blank.
+  for (const ln of banner(vm.store.footerMessage ? vm.store.footerMessage : STORE_RETURN_POLICY)) {
+    lines.push(ln);
+  }
+  lines.push(center('Merci de votre visite et à bientôt !'));
   return clip(lines);
 }
 
@@ -244,6 +255,16 @@ export interface ZReportTextData {
   storeName?: string;
   /** Sequential Z-ticket number (YYYYMMDD-SEQ). Optional for legacy callers. */
   zNumber?: string;
+  /** Turnover rails (reference layout). Optional: lines print only when set. */
+  cardSales?: number;
+  creditSales?: number;
+  repriseTake?: number;
+  netSales?: number;
+  /** Shift window + register (reference telemetry). Optional. */
+  openedAtISO?: string;
+  closedAtISO?: string;
+  registerLabel?: string;
+  responsibleName?: string;
   cashierName: string;
   dateStr: string;
   openingFloat: number;
@@ -274,17 +295,34 @@ export interface ZReportTextData {
 
 /** End-of-day Z report (mirrors the Z print document). */
 export function zReportText(d: ZReportTextData): string {
+  const ref = (iso?: string): string =>
+    iso ? formatReceiptDateTime(iso) : '';
   const lines: string[] = [
     center(d.storeName || 'MOBI-POS'),
     center('*** RAPPORT Z — CLOTURE ***'),
     ...(d.zNumber ? [center(`Z-TICKET N°: ${d.zNumber}`)] : []),
+    ...(ref(d.openedAtISO) ? [center(`Ouvert le: ${ref(d.openedAtISO)}`)] : []),
+    ...(ref(d.closedAtISO) ? [center(`Clôturé le: ${ref(d.closedAtISO)}`)] : []),
     center(d.dateStr),
     rule('='),
-    row('Caissier:', (d.cashierName || '').slice(0, 28)),
+    ...(d.registerLabel ? [row('Caisse:', d.registerLabel.slice(0, 28))] : []),
+    row(d.responsibleName ? 'Resp. Caisse:' : 'Caissier:', ((d.responsibleName || d.cashierName) || '').slice(0, 28)),
     rule(),
     row('Fond initial:', formatDZD(d.openingFloat)),
     row('Ventes espèces:', `+${formatDZD(d.cashSales)}`),
   ];
+  if (d.cardSales !== undefined && d.cardSales > 0) {
+    lines.push(row('Ventes TPE/Carte:', `+${formatDZD(d.cardSales)}`));
+  }
+  if (d.creditSales !== undefined && d.creditSales > 0) {
+    lines.push(row('Ventes à crédit:', `+${formatDZD(d.creditSales)}`));
+  }
+  if (d.repriseTake !== undefined && d.repriseTake > 0) {
+    lines.push(row('Reprises:', `-${formatDZD(d.repriseTake)}`));
+  }
+  if (d.netSales !== undefined) {
+    lines.push(row('VENTES NETTES:', formatDZD(d.netSales)));
+  }
   if (d.debtSettlements > 0) lines.push(row('Règl. dettes:', `+${formatDZD(d.debtSettlements)}`));
   if ((d.savDeposits || 0) > 0) lines.push(row('Acomptes SAV:', `+${formatDZD(d.savDeposits || 0)}`));
   if ((d.savSettled || 0) > 0) lines.push(row('Soldes SAV:', `+${formatDZD(d.savSettled || 0)}`));
@@ -386,13 +424,18 @@ function row32(left: string, right: string): string {
 }
 
 /** Customer claim voucher — 58mm variant (mirrors SavTicketBuilder voucher). */
-export function repairVoucherEscPosText(order: RepairOrder, settings?: ReceiptSettings | null): string {
+export function repairVoucherEscPosText(
+  order: RepairOrder,
+  settings?: ReceiptSettings | null,
+  seller?: string | null
+): string {
   const remaining = Math.max(0, order.totalCost - (order.depositAmount || 0));
   const lines = [
     center32(storeNameOf(settings)),
     center32('BON DE DEPOT SAV'),
     center32(`Ticket ${order.ticketNumber}`),
     center32(formatDateTime(order.createdAt)),
+    ...(seller && seller.trim() ? [center32(`Vendeur: ${seller.trim()}`.slice(0, 32))] : []),
     '-'.repeat(32),
     `Client: ${(order.customerName || '').slice(0, 24)}`,
     `Tel: ${(order.customerPhone || '-').slice(0, 25)}`,
@@ -461,12 +504,19 @@ export function tradeInText(trade: TradeInItem, settings?: ReceiptSettings | nul
 }
 
 /** Credit voucher thermal ticket (mirrors the HTML voucher doc). */
-export function voucherText(voucher: CreditVoucher, settings?: ReceiptSettings | null): string {
+export function voucherText(
+  voucher: CreditVoucher,
+  settings?: ReceiptSettings | null,
+  seller?: string | null
+): string {
   const lines: string[] = [
     center(storeNameOf(settings)),
     center("*** BON D'AVOIR ***"),
     center(`Code: ${voucher.code}`),
     center(formatDateTime(voucher.createdAt)),
+    ...(seller && seller.trim()
+      ? [center(`Vendeur: ${seller.trim()}`.slice(0, WIDTH))]
+      : []),
     rule('='),
     row('Montant:', formatDZD(voucher.initialAmount)),
   ];
@@ -474,6 +524,8 @@ export function voucherText(voucher: CreditVoucher, settings?: ReceiptSettings |
   if (voucher.expiresAt) lines.push(row('Valable jusqu’au:', formatDateTime(voucher.expiresAt)));
   lines.push(rule());
   lines.push(center('Présentez ce ticket en caisse.'));
+  lines.push(center('Échange sous 48h avec ticket.'));
+  lines.push(center(`*${voucher.code}*`.slice(0, WIDTH)));
   return clip(lines);
 }
 
@@ -514,7 +566,11 @@ export function xReportFromSession(
 }
 
 /** SAV restitution handover — 58mm text twin (mirrors SavRestitutionBuilder). */
-export function repairRestitutionText(order: RepairOrder, settings?: ReceiptSettings | null): string {
+export function repairRestitutionText(
+  order: RepairOrder,
+  settings?: ReceiptSettings | null,
+  seller?: string | null
+): string {
   const total = Math.round(order.totalCost || 0);
   const deposit = Math.round(order.depositAmount || 0);
   const remaining = Math.max(0, total - deposit);
@@ -526,6 +582,7 @@ export function repairRestitutionText(order: RepairOrder, settings?: ReceiptSett
     center32('BON DE RESTITUTION SAV'),
     center32(`Ticket ${order.ticketNumber}`),
     center32(formatDateTime(deliveredAt)),
+    ...(seller && seller.trim() ? [center32(`Vendeur: ${seller.trim()}`.slice(0, 32))] : []),
     '-'.repeat(32),
   ];
   if (remaining > 0) {
@@ -569,17 +626,24 @@ export function warrantyCertificateText(
   tx: SaleTransaction,
   item: CartItem,
   months: number,
-  settings?: ReceiptSettings | null
+  settings?: ReceiptSettings | null,
+  seller?: string | null
 ): string {
   const imei = item.imeiNumber || item.serialNumber || 'Non specifie';
   const start = new Date(tx.createdAt);
   const expiry = new Date(start);
   expiry.setMonth(expiry.getMonth() + months);
+  const vendeur =
+    (tx.shiftOpenedByName || '').trim() ||
+    (seller || '').trim() ||
+    (tx.cashierName || '').trim() ||
+    'Caisse Principale';
   const lines: string[] = [
     center32(storeNameOf(settings)),
     center32('CERTIFICAT DE GARANTIE'),
     center32('APPAREIL OCCASION'),
     center32(`Ref GAR-${tx.receiptNumber}`),
+    center32(`Vendeur: ${vendeur}`.slice(0, 32)),
     '-'.repeat(32),
     `Modele: ${(item.product.title || '').slice(0, 24)}`,
     `IMEI: ${imei.slice(0, 25)}`,
@@ -602,12 +666,14 @@ export function warrantyCertificateText(
 export function debtStatementText(
   customer: Customer,
   debts: CustomerDebtEntry[],
-  settings?: ReceiptSettings | null
+  settings?: ReceiptSettings | null,
+  seller?: string | null
 ): string {
   const lines: string[] = [
     center32(storeNameOf(settings)),
     center32('RELEVE DE COMPTE (KREDY)'),
     center32(new Date().toLocaleDateString('fr-DZ')),
+    ...(seller && seller.trim() ? [center32(`Vendeur: ${seller.trim()}`.slice(0, 32))] : []),
     '-'.repeat(32),
     `Client: ${(customer.name || '').slice(0, 24)}`,
     `Tel: ${(customer.phone || '-').slice(0, 25)}`,
@@ -629,7 +695,11 @@ export function debtStatementText(
 }
 
 /** Technician routing slip — 32-col text twin (mirrors buildWorkshopJobSlip). */
-export function workshopSlipText(order: RepairOrder): string {
+export function workshopSlipText(
+  order: RepairOrder,
+  seller?: string | null,
+  technician?: string | null
+): string {
   const cl = order.conditionChecklist || {
     screenOk: true,
     faceIdOk: true,
@@ -640,10 +710,13 @@ export function workshopSlipText(order: RepairOrder): string {
     audioOk: true,
   };
   const chk = (label: string, ok?: boolean): string => `${label}:${ok ? 'OK' : 'KO'}`;
+  const tech = (technician || order.assignedTechnicianId || '').trim();
   const lines: string[] = [
     center32('*** FICHE ATELIER ***'),
     center32(`TICKET ${order.ticketNumber}`),
     center32(formatDateTime(order.createdAt)),
+    ...(seller && seller.trim() ? [center32(`Vendeur: ${seller.trim()}`.slice(0, 32))] : []),
+    ...(tech ? [center32(`Tech: ${tech}`.slice(0, 32))] : []),
     '-'.repeat(32),
     `App: ${(order.deviceModel || '').slice(0, 26)}`,
     `Client: ${(order.customerName || '').slice(0, 21)}`,
@@ -663,7 +736,11 @@ export function workshopSlipText(order: RepairOrder): string {
 }
 
 /** SAV repair quotation — 58mm text twin (mirrors SavQuoteBuilder). */
-export function repairQuoteText(order: RepairOrder, settings?: ReceiptSettings | null): string {
+export function repairQuoteText(
+  order: RepairOrder,
+  settings?: ReceiptSettings | null,
+  seller?: string | null
+): string {
   const total = Math.round(order.totalCost || 0);
   const emittedAt = new Date();
   const validUntil = new Date(emittedAt);
@@ -674,6 +751,7 @@ export function repairQuoteText(order: RepairOrder, settings?: ReceiptSettings |
     center32(`Devis DEV-${order.ticketNumber}`),
     center32(`Ticket ${order.ticketNumber}`),
     center32(formatDateTime(emittedAt.toISOString())),
+    ...(seller && seller.trim() ? [center32(`Vendeur: ${seller.trim()}`.slice(0, 32))] : []),
     center32(`Validite 15j jusqu'au`),
     center32(validUntil.toLocaleDateString('fr-DZ')),
     '-'.repeat(32),

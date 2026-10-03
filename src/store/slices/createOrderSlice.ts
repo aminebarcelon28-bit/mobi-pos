@@ -201,7 +201,8 @@ async function printReceipt(transaction: SaleTransaction, settings: ReceiptSetti
     if (transaction.tradeInId) {
       try {
         const { usePosStore } = await import('../usePosStore');
-        const trade = usePosStore.getState().tradeIns.find((t) => t.id === transaction.tradeInId);
+        const liveState = usePosStore.getState();
+        const trade = liveState.tradeIns.find((t) => t.id === transaction.tradeInId);
         if (trade) {
           const { TradeInVoucherBuilder } = await import('../../utils/tradeInVoucherBuilder');
           const { printViaWindowsSpooler, openCashDrawerViaSpooler } =
@@ -211,7 +212,8 @@ async function printReceipt(transaction: SaleTransaction, settings: ReceiptSetti
             transaction,
             trade,
             settings,
-            transaction.tradeInSoulte ?? null
+            transaction.tradeInSoulte ?? null,
+            liveState.activeShift?.openedBy ?? liveState.activeShift?.cashierName ?? null
           );
           const target = resolvePrinterForDocument('receipt', settings?.printerRouting);
           await printViaWindowsSpooler(target.printerName, bytes);
@@ -225,7 +227,16 @@ async function printReceipt(transaction: SaleTransaction, settings: ReceiptSetti
       }
     }
     const { directPrintReceipt } = await import('../../utils/escpos');
-    await directPrintReceipt(transaction, settings);
+    // Live opener backs snapshot-less (legacy) rows on reprint hardware
+    // paths; the commit-time snapshot always wins when present.
+    const { usePosStore: liveStore } = await import('../usePosStore');
+    const liveShift = liveStore.getState().activeShift;
+    await directPrintReceipt(
+      transaction,
+      settings,
+      undefined,
+      liveShift?.openedBy ?? liveShift?.cashierName ?? null
+    );
   } catch (err) {
     console.warn('[print] receipt printing skipped:', err);
   }
@@ -827,6 +838,15 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       // P11.3: device id lives in the sync layer; load it lazily at checkout time.
       const { getStableDeviceId } = await import('../../sync/device');
       const currentDeviceId = await getStableDeviceId().catch(() => 'default');
+      // Part 1 seller rule: the receipt seller is ALWAYS the shift opener
+      // (`openedBy`, immutable) — never the handover cashier that
+      // `setShiftCashier` may have re-pointed onto `cashierName` mid-shift.
+      // Both the display name and the `shiftOpenedByName` snapshot are stamped
+      // here so reprints stay correct weeks later (rides json_payload free).
+      const shiftOpenerName =
+        (activeShift?.openedBy || '').trim() ||
+        (activeShift?.cashierName || '').trim() ||
+        undefined;
       const transaction: SaleTransaction = {
         id: transactionId,
         receiptNumber: receiptNumber,
@@ -848,7 +868,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           : cashTendered,
         changeDue,
         createdAt: new Date().toISOString(),
-        cashierName: activeShift?.cashierName || 'Caisse Principale',
+        cashierName: shiftOpenerName || 'Caisse Principale',
         debtAdded: creditDebtAmount > 0 ? creditDebtAmount : undefined,
         debtRemainingTotal: updatedCustomer?.currentDebt,
         deviceId: currentDeviceId,
@@ -857,6 +877,8 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // NO_ACTIVE_SHIFT gate above guarantees one). Closes scope by window
         // with this id as the attribution tiebreak.
         shiftId: activeShift?.id ?? undefined,
+        // Immutable shift-opener identity (see above): reprint-proof seller.
+        ...(shiftOpenerName ? { shiftOpenedByName: shiftOpenerName } : {}),
         // Persisted for void/refund credit-back (not envelope-only): without
         // these on the row, cancelling a voucher-paid sale burns bearer value.
         ...(voucherCode ? { voucherCode, voucherCreditApplied } : {}),
@@ -2083,11 +2105,22 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       console.warn('[refund:claim] claim skipped, proceeding offline-first:', claimErr);
     }
 
+    // Part 1 seller rule (refunds too): snapshot the live shift opener so the
+    // avoir slip prints the drawer-responsible cashier, not a blank fallback.
+    // The performing manager stays on the audit entry (user field below).
+    const refundShift = get().activeShift;
+    const refundShiftOpener =
+      (refundShift?.openedBy || '').trim() ||
+      (refundShift?.cashierName || '').trim() ||
+      undefined;
     const refundTransaction: SaleTransaction = {
       id: refundTxnId,
       receiptNumber: refundReceiptNumber,
       status: 'COMPLETED',
       isRefund: true,
+      cashierName: (cashierName || '').trim() || refundShiftOpener || 'Manager',
+      shiftId: refundShift?.id ?? originalTransaction.shiftId ?? undefined,
+      ...(refundShiftOpener ? { shiftOpenedByName: refundShiftOpener } : {}),
       originalReceiptNumber: originalTransaction.receiptNumber,
       originalTransactionId: originalTransaction.id,
       refundReason,

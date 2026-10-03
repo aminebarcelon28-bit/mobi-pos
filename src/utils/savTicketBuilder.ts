@@ -3,10 +3,15 @@
  * Author: Principal Systems Architect
  */
 import type { RepairOrder, ReceiptSettings } from '../types/pos';
+import { DATA_LOSS_DISCLAIMER, UNCLAIMED_DEVICE_CLAUSE } from '../types/pos';
 import { EscPosBuilder } from './escpos';
 
 export class SavTicketBuilder {
-  public static buildCustomerVoucher(order: RepairOrder, settings: ReceiptSettings): Uint8Array {
+  public static buildCustomerVoucher(
+    order: RepairOrder,
+    settings: ReceiptSettings,
+    seller?: string | null
+  ): Uint8Array {
     const builder = new EscPosBuilder();
     const remaining = Math.max(0, order.totalCost - (order.depositAmount || 0));
 
@@ -29,8 +34,11 @@ export class SavTicketBuilder {
       .text(`Ticket N° : ${order.ticketNumber}`)
       .newline()
       .text(`Date : ${new Date(order.createdAt).toLocaleString('fr-DZ')}`)
-      .newline()
-      .separator()
+      .newline();
+    if ((seller || '').trim()) {
+      builder.text(`Vendeur (Caisse) : ${seller!.trim()}`).newline();
+    }
+    builder.separator()
       .align('left')
       .bold(true)
       .text(`Client : ${order.customerName}`)
@@ -64,9 +72,11 @@ export class SavTicketBuilder {
       .newline()
       .text('1. Présentation obligatoire de ce bon pour retrait.')
       .newline()
-      .text('2. Appareils non réclamés après 30 jours recyclés.')
+      .text(`2. ${UNCLAIMED_DEVICE_CLAUSE}`)
       .newline()
       .text('3. Garantie 30 jours sur pièces remplacées.')
+      .newline()
+      .text(`4. ${DATA_LOSS_DISCLAIMER}`)
       .newline()
       .newline(2)
       .cut(false);
@@ -74,7 +84,11 @@ export class SavTicketBuilder {
     return builder.build();
   }
 
-  public static buildWorkshopJobSlip(order: RepairOrder): Uint8Array {
+  public static buildWorkshopJobSlip(
+    order: RepairOrder,
+    seller?: string | null,
+    technician?: string | null
+  ): Uint8Array {
     const builder = new EscPosBuilder();
     const cl = order.conditionChecklist || {
       screenOk: true,
@@ -96,8 +110,14 @@ export class SavTicketBuilder {
       .newline()
       .bold(false)
       .text(`Date Dépôt : ${new Date(order.createdAt).toLocaleString('fr-DZ')}`)
-      .newline()
-      .separator()
+      .newline();
+    if ((seller || '').trim()) {
+      builder.text(`Vendeur (Caisse) : ${seller!.trim()}`).newline();
+    }
+    if ((technician || order.assignedTechnicianId || '').trim()) {
+      builder.text(`Technicien : ${(technician || order.assignedTechnicianId || '').trim()}`).newline();
+    }
+    builder.separator()
       .align('left')
       .bold(true)
       .text(`Appareil : ${order.deviceModel}`)

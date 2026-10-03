@@ -72,6 +72,7 @@ export const ReceiptPaper: React.FC<ReceiptPaperProps> = ({
           <p className="text-[10px] text-gray-600">{vm.store.address}</p>
         ) : null}
         {vm.store.phone ? <p className="text-[10px] text-gray-600">Tél: {vm.store.phone}</p> : null}
+        {vm.store.email ? <p className="text-[10px] text-gray-600">Email: {vm.store.email}</p> : null}
         {fiscal ? <p className="text-[9px] font-bold text-gray-700">{fiscal}</p> : null}
 
         {/* ── Transaction nature (derived header label) ── */}
@@ -255,11 +256,20 @@ export const ReceiptPaper: React.FC<ReceiptPaperProps> = ({
             </div>
           ))}
           {!vm.isRefund ? (
-            <div className="flex justify-between gap-2 font-bold">
-              <span>Rendu Monnaie:</span>
-              <span className="whitespace-nowrap">{formatDZD(vm.changeDue)}</span>
-            </div>
+            <>
+              <div className="flex justify-between gap-2">
+                <span>TOTAL PERÇU:</span>
+                <span className="font-bold whitespace-nowrap">{formatDZD(vm.tenderedTotal)}</span>
+              </div>
+              <div className="flex justify-between gap-2 font-bold">
+                <span>MONNAIE RENDUE:</span>
+                <span className="whitespace-nowrap">{formatDZD(vm.changeDue)}</span>
+              </div>
+            </>
           ) : null}
+          <p className="text-[9px] text-gray-700 font-bold pt-1">
+            Articles remis: {vm.itemCount} · Appareils repris: {vm.tradeInCount}
+          </p>
           {(() => {
             const wMax = Math.max(0, ...vm.items.map((l) => l.warrantyMonths || 0));
             return wMax > 0 ? (
@@ -271,11 +281,15 @@ export const ReceiptPaper: React.FC<ReceiptPaperProps> = ({
         </div>
       </div>
 
-      {/* ── Footer: policy + barcode ── */}
+      {/* ── Footer: primary custom policy or default, then barcode ── */}
       <div className="text-center pt-2 border-t border-dashed border-gray-400 flex flex-col items-center space-y-1">
-        <p className="text-[8px] font-bold uppercase tracking-wider text-gray-700">
-          • {STORE_RETURN_POLICY} •
-        </p>
+        {vm.store.footerMessage ? (
+          <p className="text-[8px] text-gray-700 leading-snug whitespace-pre-line">{vm.store.footerMessage}</p>
+        ) : (
+          <p className="text-[8px] font-bold uppercase tracking-wider text-gray-700">
+            • {STORE_RETURN_POLICY} •
+          </p>
+        )}
         {showBarcodeBlock ? (
           <>
             <canvas ref={barcodeRef} className="h-10 my-1 mix-blend-multiply max-w-[90%]" aria-hidden="true" />
@@ -284,10 +298,7 @@ export const ReceiptPaper: React.FC<ReceiptPaperProps> = ({
         ) : (
           <p className="text-[9px] font-mono tracking-widest text-black">*{vm.ticketId}*</p>
         )}
-        {settings.customFooterMsg ? (
-          <p className="text-[8px] text-gray-600">{settings.customFooterMsg}</p>
-        ) : null}
-        <p className="text-[8px] text-gray-500">Merci de votre visite !</p>
+        <p className="text-[8px] text-gray-500">Merci de votre visite et à bientôt !</p>
       </div>
     </div>
   );

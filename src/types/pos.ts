@@ -497,6 +497,15 @@ export interface SaleTransaction {
    */
   shiftId?: string;
   /**
+   * Shift-opener snapshot (Part 1 seller rule): the immutable identity of the
+   * cashier who opened the owning shift (`CashSession.openedBy`) at commit
+   * time. Historical reprints read THIS first, so the printed `Vendeur`
+   * survives handovers (`setShiftCashier` re-points `cashierName`, never this)
+   * and stays correct weeks later. Rides `json_payload` — no migration.
+   * Absent on legacy rows, which fall back through the resolution chain.
+   */
+  shiftOpenedByName?: string;
+  /**
    * Staged voucher tender captured at checkout (code + applied amount).
    * Persisted on the row (not just the envelope) so void/refund flows can
    * credit the bearer value back instead of burning it. Absent = no voucher.
@@ -1455,11 +1464,14 @@ export interface MobilePrinterConfig {
 
 export interface ReceiptSettings {
   storeName: string;
-  storeSubheader: string;
+  /** Activity tagline (e.g. "Commerce & Vente Téléphonie"). Optional: omitted when blank. */
+  storeSubheader?: string;
   logoUrl: string;
-  address: string;
-  phone: string;
-  email: string;
+  /** Optional: header lines render only when non-blank (never a ghost label). */
+  address?: string;
+  phone?: string;
+  /** Optional contact email — printed as `Email: <email>`, omitted when blank. */
+  email?: string;
   customHeaderMsg: string;
   customFooterMsg: string;
   showBarcode: boolean;
@@ -1476,6 +1488,12 @@ export interface ReceiptSettings {
   art?: string;
   /** Store city for dated legal lines (« Fait à … »). Defaults to Mascara. */
   city?: string;
+  /**
+   * Custom bottom note / policy — PRIMARY footer. When set it replaces the
+   * default return policy block on every slip; `customFooterMsg` stays as the
+   * legacy fallback (the settings modal mirrors both on save). Empty (or
+   * whitespace-only) falls back cleanly — never a blank policy block.
+   */
   footerMessage?: string;
   printerInterface?: 'BROWSER' | 'SPOOLER' | 'NETWORK' | 'SERIAL';
   printerName?: string;

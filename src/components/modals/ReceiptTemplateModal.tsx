@@ -2,6 +2,33 @@ import React, { useState, useEffect } from 'react';
 import { X, Sliders, Check, Upload, Image, Trash2 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import type { ReceiptSettings } from '../../types/pos';
+import { STORE_RETURN_POLICY } from '../../utils/receiptViewModel';
+
+const FOOTER_MAX = 280;
+
+/** 42-col ASCII fold for the live ticket preview (mirrors foldThermal). */
+function fold42(text: string, width = 42): string[] {
+  const words = (text || '').split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    if ((cur + (cur ? ' ' : '') + w).length > width) {
+      if (cur) lines.push(cur);
+      cur = w.length > width ? w.slice(0, width) : w;
+    } else {
+      cur = cur ? `${cur} ${w}` : w;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+function center42(text: string, width = 42): string {
+  const s = (text || '').slice(0, width);
+  const pad = Math.max(0, width - s.length);
+  const left = Math.floor(pad / 2);
+  return ' '.repeat(left) + s + ' '.repeat(pad - left);
+}
 
 export const ReceiptTemplateModal: React.FC = () => {
   const { activeModal, closeModal, receiptSettings, setReceiptSettings } = usePosStore();
@@ -9,7 +36,12 @@ export const ReceiptTemplateModal: React.FC = () => {
 
   useEffect(() => {
     if (activeModal === 'receipt_template') {
-      setFormData(receiptSettings);
+      // Migrate legacy customFooterMsg into the primary footerMessage field
+      // once (never blank the merchant's existing policy text).
+      setFormData({
+        ...receiptSettings,
+        footerMessage: receiptSettings.footerMessage || receiptSettings.customFooterMsg || '',
+      });
     }
   }, [activeModal, receiptSettings]);
 
@@ -65,9 +97,27 @@ export const ReceiptTemplateModal: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setReceiptSettings(formData);
+    // Mirror the primary footer into the legacy field so every reader
+    // (current view-model chain + older synced peers) sees one message.
+    const footer = (formData.footerMessage || '').trim();
+    setReceiptSettings({ ...formData, footerMessage: footer, customFooterMsg: footer });
     closeModal();
   };
+
+  // Live 42-col ticket preview: header + footer update as the merchant types.
+  // Optional lines (address/phone/email/footer) vanish when blank — the same
+  // omission rule the three print engines apply, so the preview never lies.
+  const previewHeader: string[] = [
+    center42((formData.storeName || 'NOM MAGASIN').toUpperCase()),
+    ...((formData.storeSubheader || formData.customHeaderMsg || '').trim()
+      ? [center42((formData.storeSubheader || formData.customHeaderMsg || '').trim())]
+      : []),
+    ...((formData.address || '').trim() ? fold42((formData.address || '').trim()).map((l) => center42(l)) : []),
+    ...((formData.phone || '').trim() ? [center42(`Tél: ${(formData.phone || '').trim()}`)] : []),
+    ...((formData.email || '').trim() ? [center42(`Email: ${(formData.email || '').trim()}`.slice(0, 42))] : []),
+  ];
+  const footerText = (formData.footerMessage || '').trim();
+  const previewFooter: string[] = footerText ? fold42(footerText) : fold42(STORE_RETURN_POLICY);
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
@@ -151,8 +201,9 @@ export const ReceiptTemplateModal: React.FC = () => {
           </div>
 
           <div>
-            <label className="text-xs text-pos-muted block mb-1 font-semibold">Nom du Magasin</label>
+            <label htmlFor="receipt-storename" className="text-xs text-pos-muted block mb-1 font-semibold">Nom du Magasin</label>
             <input
+              id="receipt-storename"
               type="text"
               value={formData.storeName}
               onChange={(e) => setFormData({ ...formData, storeName: e.target.value })}
@@ -162,23 +213,40 @@ export const ReceiptTemplateModal: React.FC = () => {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-pos-muted block mb-1 font-semibold">Adresse Physique</label>
+              <label htmlFor="receipt-address" className="text-xs text-pos-muted block mb-1 font-semibold">Adresse Physique</label>
               <input
+                id="receipt-address"
                 type="text"
-                value={formData.address}
+                value={formData.address ?? ''}
                 onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                placeholder="Optionnel — omis du ticket si vide"
                 className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
               />
             </div>
             <div>
-              <label className="text-xs text-pos-muted block mb-1 font-semibold">Téléphone / Contact</label>
+              <label htmlFor="receipt-phone" className="text-xs text-pos-muted block mb-1 font-semibold">Téléphone / Contact</label>
               <input
+                id="receipt-phone"
                 type="text"
-                value={formData.phone}
+                value={formData.phone ?? ''}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                placeholder="Optionnel"
                 className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
               />
             </div>
+          </div>
+
+          <div>
+            <label htmlFor="receipt-email" className="text-xs text-pos-muted block mb-1 font-semibold">Email du Magasin (optionnel)</label>
+            <input
+              id="receipt-email"
+              type="email"
+              value={formData.email ?? ''}
+              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              placeholder="Ex: contact@boutique.dz"
+              className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
+            />
+            <p className="text-[10px] text-pos-muted mt-1">Imprimé comme « Email: … » — ligne totalement omise si vide.</p>
           </div>
 
           <div>
@@ -205,13 +273,22 @@ export const ReceiptTemplateModal: React.FC = () => {
           </div>
 
           <div>
-            <label className="text-xs text-pos-muted block mb-1 font-semibold">Message de Pied de Page (Conditions de retour)</label>
-            <input
-              type="text"
-              value={formData.customFooterMsg}
-              onChange={(e) => setFormData({ ...formData, customFooterMsg: e.target.value })}
-              className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs text-pos-text focus:border-emerald-400 focus:outline-none"
+            <div className="flex items-baseline justify-between mb-1">
+              <label htmlFor="receipt-footer" className="text-xs text-pos-muted font-semibold">Message de Pied de Page (politique / note gérant)</label>
+              <span className="text-[10px] text-pos-muted font-mono" aria-live="polite">
+                {(formData.footerMessage || '').length}/{FOOTER_MAX}
+              </span>
+            </div>
+            <textarea
+              id="receipt-footer"
+              rows={3}
+              maxLength={FOOTER_MAX}
+              value={formData.footerMessage ?? ''}
+              onChange={(e) => setFormData({ ...formData, footerMessage: e.target.value })}
+              placeholder="Ex: Garantie 3 mois sur les réparations. Aucun remboursement sans ticket."
+              className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs text-pos-text focus:border-emerald-400 focus:outline-none resize-y"
             />
+            <p className="text-[10px] text-pos-muted mt-1">Prioritaire sur le texte par défaut. Vide = politique de retour standard.</p>
           </div>
 
           {/* Auto-Print Toggle */}
@@ -237,10 +314,10 @@ export const ReceiptTemplateModal: React.FC = () => {
             </button>
           </div>
 
-          {/* Ticket Header Live Preview */}
+          {/* Ticket Live 42-Column Preview (header + footer, same omission rules as print) */}
           <div className="bg-slate-950 p-3 rounded-xl border border-pos-border">
-            <p className="text-[10px] text-pos-muted uppercase font-bold mb-2">Aperçu en-tête du ticket :</p>
-            <div className="bg-white text-black p-3 rounded font-mono text-[10px] text-center leading-tight">
+            <p className="text-[10px] text-pos-muted uppercase font-bold mb-2">Aperçu ticket 42 colonnes :</p>
+            <div className="bg-white text-black p-3 rounded font-mono text-[10px] leading-tight">
               {formData.logoUrl && (
                 <img
                   src={formData.logoUrl}
@@ -248,9 +325,12 @@ export const ReceiptTemplateModal: React.FC = () => {
                   className="max-h-10 max-w-[140px] object-contain mx-auto mb-1 mix-blend-multiply"
                 />
               )}
-              <p className="font-extrabold uppercase">{formData.storeName || 'NOM MAGASIN'}</p>
-              <p className="text-[9px] text-gray-600">{formData.address || 'Adresse'}</p>
-              <p className="text-[9px] text-gray-600">Tél: {formData.phone || '0000000000'}</p>
+              <pre className="whitespace-pre-wrap text-center" aria-label="Aperçu en-tête du ticket">
+                {['='.repeat(42), ...previewHeader, '='.repeat(42)].join('\n')}
+              </pre>
+              <pre className="whitespace-pre-wrap text-center mt-2" aria-label="Aperçu pied de page du ticket">
+                {[...previewFooter, 'Merci de votre visite et à bientôt !'].join('\n')}
+              </pre>
             </div>
           </div>
 

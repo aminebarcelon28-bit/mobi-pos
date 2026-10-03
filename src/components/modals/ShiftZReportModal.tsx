@@ -17,6 +17,8 @@ import {
   zTicketNumber,
   DRAWER_REASON_PREFIXES,
 } from '../../utils/cashTerms';
+import { ZReportPaper, type ZReportSnapshot } from '../receipt/ZReportPaper';
+import { buildZSnapshot } from '../../utils/zReportSnapshot';
 
 export const ShiftZReportModal: React.FC = () => {
   const {
@@ -119,6 +121,29 @@ export const ShiftZReportModal: React.FC = () => {
     - totalCashRefunds - totalDrops - totalPayouts - todayCashExpenses - tradeInCashOut - exchangeOut - manualOut;
   const variance = actualCountedCash - expectedCash;
 
+  // Frozen print snapshot — single definition shared with the close ticket,
+  // the ESC/POS twin and the mobile text (see utils/zReportSnapshot). Preview
+  // locals above stay untouched; this feeds print paths only.
+  const zSnapshot: ZReportSnapshot = buildZSnapshot({
+    settings: receiptSettings,
+    shift: activeShift,
+    shiftFloat,
+    transactions: safeTransactions,
+    customerDebts: customerDebts || [],
+    storeExpenses: storeExpenses || [],
+    repairOrders: repairOrders || [],
+    tradeIns: tradeIns || [],
+    cashDrops: cashDrops || [],
+    payouts: payouts || [],
+    countedCash: actualCountedCash,
+    closedAtISO: new Date().toISOString(),
+    closedShiftCount,
+    fallbackCashier: lockScreenCashier,
+  });
+  const responsibleName = zSnapshot.responsibleName;
+  const turnover = { card: zSnapshot.cardSales, credit: zSnapshot.creditSales, reprise: zSnapshot.repriseTake };
+  const netSales = zSnapshot.netSales;
+
   const handlePrintZReport = async () => {
     // Mobile: no window.print dialog — text Z via the Android print sheet.
     if (isMobileDevice()) {
@@ -130,9 +155,17 @@ export const ShiftZReportModal: React.FC = () => {
           storeName: receiptSettings?.storeName,
           zNumber,
           cashierName: lockScreenCashier,
+          responsibleName,
+          registerLabel: zSnapshot.registerLabel,
+          openedAtISO: zSnapshot.openedAtISO,
+          closedAtISO: zSnapshot.closedAtISO,
           dateStr: new Date().toLocaleString('fr-DZ'),
           openingFloat,
           cashSales: totalCashSales,
+          cardSales: turnover.card,
+          creditSales: turnover.credit,
+          repriseTake: turnover.reprise,
+          netSales,
           debtSettlements: todayDebtSettlements,
           savDeposits,
           savSettled,
@@ -196,9 +229,10 @@ export const ShiftZReportModal: React.FC = () => {
           <button
             onClick={closeModal}
             className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
-            aria-label="Fermer"
+            aria-label="Fermer — fermer le rapport Z"
+            title="Fermer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -394,86 +428,9 @@ export const ShiftZReportModal: React.FC = () => {
           </div>
         </div>
 
-        {/* Print-only Z document (thermal 80mm) */}
-        <div className="print-zreport-target hidden print:block bg-white text-black p-1 font-mono text-[11px] leading-snug">
-          <div className="text-center pb-2 border-b border-dashed border-gray-500">
-            <p className="font-extrabold text-sm uppercase tracking-wider">{receiptSettings?.storeName || 'MOBI ACCESSORIES'}</p>
-            <p className="font-black text-xs uppercase mt-1">*** RAPPORT Z — CLÔTURE DE CAISSE ***</p>
-            <p className="text-[10px] font-bold">Z-TICKET N°: {zNumber}</p>
-            <p className="text-[10px]">Caissier: {lockScreenCashier}</p>
-            <p className="text-[10px]">{new Date().toLocaleString('fr-DZ')}</p>
-          </div>
-          <div className="py-2 space-y-0.5 border-b border-dashed border-gray-500">
-            <div className="flex justify-between"><span>Fond initial :</span><span className="font-bold">{formatDZD(openingFloat)}</span></div>
-            <div className="flex justify-between"><span>Ventes espèces :</span><span className="font-bold">+{formatDZD(totalCashSales)}</span></div>
-            {todayDebtSettlements > 0 && (
-              <div className="flex justify-between"><span>Règlements dettes :</span><span className="font-bold">+{formatDZD(todayDebtSettlements)}</span></div>
-            )}
-            {savDeposits > 0 && (
-              <div className="flex justify-between"><span>Acomptes SAV :</span><span className="font-bold">+{formatDZD(savDeposits)}</span></div>
-            )}
-            {savSettled > 0 && (
-              <div className="flex justify-between"><span>Soldes SAV encaissés :</span><span className="font-bold">+{formatDZD(savSettled)}</span></div>
-            )}
-            {manualIn > 0 && (
-              <div className="flex justify-between"><span>Apports manuels :</span><span className="font-bold">+{formatDZD(manualIn)}</span></div>
-            )}
-            {totalCashRefunds > 0 && (
-              <div className="flex justify-between"><span>Remboursements :</span><span className="font-bold">-{formatDZD(totalCashRefunds)}</span></div>
-            )}
-            {todayCashExpenses > 0 && (
-              <div className="flex justify-between"><span>Dépenses espèces :</span><span className="font-bold">-{formatDZD(todayCashExpenses)}</span></div>
-            )}
-            {tradeInCashOut > 0 && (
-              <div className="flex justify-between"><span>Rachats occasions :</span><span className="font-bold">-{formatDZD(tradeInCashOut)}</span></div>
-            )}
-            {exchangeOutPure > 0 && (
-              <div className="flex justify-between"><span>Retours échanges :</span><span className="font-bold">-{formatDZD(exchangeOutPure)}</span></div>
-            )}
-            {soulteOut > 0 && (
-              <div className="flex justify-between"><span>Soulte échange :</span><span className="font-bold">-{formatDZD(soulteOut)}</span></div>
-            )}
-            {manualOut > 0 && (
-              <div className="flex justify-between"><span>Dépenses manuelles :</span><span className="font-bold">-{formatDZD(manualOut)}</span></div>
-            )}
-            {totalDrops > 0 && (
-              <div className="flex justify-between"><span>Dépôts coffre :</span><span className="font-bold">-{formatDZD(totalDrops)}</span></div>
-            )}
-            {totalPayouts > 0 && (
-              <div className="flex justify-between"><span>Décaissements :</span><span className="font-bold">-{formatDZD(totalPayouts)}</span></div>
-            )}
-          </div>
-          <div className="py-2 border-b border-dashed border-gray-500">
-            <div className="flex justify-between font-extrabold text-[13px]">
-              <span>ESPÈCES THÉORIQUES :</span>
-              <span>{formatDZD(expectedCash)}</span>
-            </div>
-            <div className="flex justify-between mt-0.5">
-              <span>Compté physique :</span>
-              <span className="font-bold">{formatDZD(actualCountedCash)}</span>
-            </div>
-            <div className="flex justify-between font-extrabold">
-              <span>ÉCART :</span>
-              <span>{variance >= 0 ? `+${formatDZD(variance)}` : formatDZD(variance)}</span>
-            </div>
-          </div>
-          {(cashDrops || []).length > 0 && (
-            <div className="py-2 border-b border-dashed border-gray-500">
-              <p className="font-bold text-[10px] uppercase mb-1">Dépôts coffre-fort :</p>
-              {(cashDrops || []).map((drop) => (
-                <div key={drop.id} className="flex justify-between text-[10px]">
-                  <span>{drop.reason}</span>
-                  <span className="font-bold">{formatDZD(drop.amount)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="pt-2 text-center">
-            <p className="text-[10px]">Signature caissier : ____________________</p>
-            <p className="text-[10px] mt-1">Signature Responsable / Gérant : ____________________</p>
-            <p className="text-[10px] mt-1">Cachet & signature gérant : ____________________</p>
-            <p className="text-[9px] text-gray-600 mt-2">Document généré par Mobi-POS</p>
-          </div>
+        {/* Print-only Z document — shared paper (single print target). */}
+        <div className="hidden print:flex print:justify-center print:bg-white">
+          <ZReportPaper snapshot={zSnapshot} />
         </div>
 
         {/* Footer Actions */}
@@ -488,9 +445,10 @@ export const ShiftZReportModal: React.FC = () => {
             </button>
             <button
               onClick={handlePrintZReport}
+              aria-label="Imprimer Rapport Z (F9) — imprimer le ticket de clôture 80mm"
               className="flex-2 sm:flex-none min-h-[42px] px-4 sm:px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 active:scale-95 transition cursor-pointer"
             >
-              <Printer className="w-4 h-4" />
+              <Printer className="w-4 h-4" aria-hidden="true" />
               <span>Imprimer Rapport Z (F9)</span>
             </button>
           </div>

@@ -42,6 +42,7 @@ import { openWhatsApp } from '../../utils/phoneUtils';
 import { soundEngine } from '../../utils/audioFeedback';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { isMobileDevice, isTauriEnvironment } from '../../utils/platform';
+import { verifyManagerGate } from '../../utils/pinGate';
 
 export const DebtLedgerModal: React.FC = () => {
   const {
@@ -51,9 +52,16 @@ export const DebtLedgerModal: React.FC = () => {
     customerDebts,
     recordCustomerDebtPayment,
     updateCustomer,
-    verifyManagerPin,
+    // Phase 1: manager checks route through the native gate (no local
+    // verifyManagerPin reads here — see utils/pinGate).
     receiptSettings,
+    activeShift,
   } = usePosStore();
+  // Part 1 seller rule for the statement slip (shift opener, never fallback).
+  const debtSeller =
+    (activeShift?.openedBy || '').trim() ||
+    (activeShift?.cashierName || '').trim() ||
+    'Caisse Principale';
 
   const { showToast } = useToast();
 
@@ -128,6 +136,8 @@ export const DebtLedgerModal: React.FC = () => {
     return list.sort((a, b) => (b.currentDebt || 0) - (a.currentDebt || 0));
   }, [allIndebted, debouncedSearch, filterType]);
 
+  useEffect(() => { if (activeModal !== 'debt_ledger') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
   if (activeModal !== 'debt_ledger') return null;
 
   // ══════════════════════════════════════════════════════════════
@@ -193,29 +203,20 @@ export const DebtLedgerModal: React.FC = () => {
     const inTauri = isTauriEnvironment();
     const onMobile = isMobileDevice();
 
-    // Mobile app: no window.print route — send a text statement to the
-    // Android system print sheet (Wi-Fi/Bluetooth printer, PDF).
+    // Mobile app: no window.print route — thermal ESC/POS bytes first
+    // (BT/Wi-Fi), Android sheet fallback via the shared text twin.
     if (inTauri && onMobile) {
-      const debt = customer.currentDebt || 0;
-      const limit = customer.debtLimit ?? DEFAULT_CREDIT_LIMIT;
-      const lines = [
-        `${receiptSettings?.storeName || 'MOBI-POS'}`,
-        'RELEVE DE COMPTE CLIENT',
-        `Client : ${customer.name}`,
-        `Tél : ${customer.phone || '—'}`,
-        `Date : ${new Date().toLocaleString('fr-DZ')}`,
-        '--------------------------------',
-        `Dette actuelle : ${formatDZD(debt)}`,
-        `Plafond autorisé : ${formatDZD(limit)}`,
-        '--------------------------------',
-        'Merci de régulariser votre situation.',
-      ].join('\n');
       try {
-        const { openNativePrint } = await import('../../utils/phoneUtils');
-        const ok = await openNativePrint(`Relevé ${customer.name}`, lines);
+        const { SavPrintCoordinator } = await import('../../utils/savPrintCoordinator');
+        const debts = (customerDebts || []).filter((d) => d.customerId === customer.id);
+        const via = await SavPrintCoordinator.printDebtStatement(customer, debts, receiptSettings);
         showToast(
-          ok ? `🖨️ Feuille d'impression Android ouverte pour ${customer.name}.` : `Impression indisponible sur cet appareil.`,
-          ok ? 'success' : 'error'
+          via === 'thermal'
+            ? `Relevé thermique imprimé pour ${customer.name}.`
+            : via === 'sheet'
+              ? `🖨️ Feuille d'impression Android ouverte pour ${customer.name}.`
+              : `Impression indisponible sur cet appareil.`,
+          via === 'failed' ? 'error' : 'success'
         );
       } catch {
         showToast(`Impression indisponible sur cet appareil.`, 'error');
@@ -223,6 +224,15 @@ export const DebtLedgerModal: React.FC = () => {
       return;
     }
 
+    // Thermal ticket first (activates DebtStatementTicketBuilder); fall back
+    // to the existing A4 debt_statement channel when no thermal route answers.
+    const { SavPrintCoordinator } = await import('../../utils/savPrintCoordinator');
+    const debts = (customerDebts || []).filter((d) => d.customerId === customer.id);
+    const via = await SavPrintCoordinator.printDebtStatement(customer, debts, receiptSettings);
+    if (via === 'thermal') {
+      showToast(`Relevé thermique imprimé pour ${customer.name}.`, 'success');
+      return;
+    }
     // Browser: coordinated channel print. Desktop app: direct channel print
     // (the coordinator stays silent in Tauri — no hardware route exists for
     // statements — so bypass it and call window.print ourselves).
@@ -237,8 +247,15 @@ export const DebtLedgerModal: React.FC = () => {
   const handleSaveNewLimit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!adjustingCustomer) return;
-    if (!verifyManagerPin(managerPin)) {
-      showToast('Code PIN Manager incorrect.', 'error');
+    // Phase 1: native gate (fail-closed); Locked shows the countdown.
+    const gate = await verifyManagerGate(managerPin);
+    if (!gate.ok) {
+      showToast(
+        gate.locked
+          ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+          : 'Code PIN Manager incorrect.',
+        'error'
+      );
       soundEngine.playError();
       return;
     }
@@ -269,15 +286,12 @@ export const DebtLedgerModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-6xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 flex flex-col h-[94vh] sm:h-[90vh]">
-        {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
-
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/50 backdrop-blur-sm select-none">
+      <div className="w-full max-w-5xl max-h-[90vh] flex flex-col rounded-2xl bg-pos-panel border border-pos-border shadow-2xl overflow-hidden animate-in zoom-in-95">
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* HEADER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+        <div className="px-6 py-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
             <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-red-500 to-rose-600 flex items-center justify-center text-white shadow-lg shadow-rose-500/20 shrink-0">
               <CreditCard className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
@@ -298,7 +312,7 @@ export const DebtLedgerModal: React.FC = () => {
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
             aria-label="Fermer"
           >
             <X className="w-5 h-5" />
@@ -308,7 +322,7 @@ export const DebtLedgerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* TOP METRICS CARDS */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-4 border-b border-pos-border bg-pos-bg grid grid-cols-2 sm:grid-cols-4 gap-3 shrink-0">
+        <div className="px-6 py-4 border-b border-pos-border bg-pos-bg grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
           <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
             <div>
               <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
@@ -361,8 +375,8 @@ export const DebtLedgerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* SEARCH & FILTER CONTROLS */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-3 border-b border-pos-border bg-pos-panel flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs w-full sm:w-auto">
+        <div className="px-6 py-3.5 border-b border-pos-border bg-pos-panel flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div className="flex items-center gap-1.5 overflow-x-auto overscroll-contain pb-1 text-xs w-full sm:w-auto">
             <button
               onClick={() => setFilterType('all')}
               className={`px-3 py-1.5 rounded-xl font-bold border transition cursor-pointer ${
@@ -410,7 +424,7 @@ export const DebtLedgerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* DEBTORS LIST */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex-1 overflow-y-auto overscroll-contain p-6 space-y-6">
           {filteredDebtors.length === 0 ? (
             <div className="p-12 text-center bg-pos-card border border-pos-border rounded-2xl space-y-3">
               <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto opacity-60" />
@@ -452,7 +466,7 @@ export const DebtLedgerModal: React.FC = () => {
                             <Phone className="w-3 h-3" /> {customer.phone}
                           </span>
                           {isOver && (
-                            <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase bg-red-500/20 border border-red-500/40 text-red-300 animate-pulse">
+                            <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-red-500/20 border border-red-500/40 text-red-300 animate-pulse">
                               Plafond Atteint
                             </span>
                           )}
@@ -546,7 +560,7 @@ export const DebtLedgerModal: React.FC = () => {
                       {customerHistory.length === 0 ? (
                         <p className="text-xs text-pos-muted py-2 italic">Aucun mouvement enregistré dans le grand livre.</p>
                       ) : (
-                        <div className="divide-y divide-pos-border/40 font-mono text-xs max-h-48 overflow-y-auto pr-1">
+                        <div className="divide-y divide-pos-border/40 font-mono text-xs max-h-48 overflow-y-auto overscroll-contain pr-1">
                           {customerHistory.map((h) => (
                             <div key={h.id} className="py-1.5 flex items-center justify-between">
                               <div>
@@ -584,7 +598,7 @@ export const DebtLedgerModal: React.FC = () => {
         {/* PAYMENT SUB-MODAL */}
         {/* ══════════════════════════════════════════════════════════════ */}
         {payingCustomer && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-60 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4">
             <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col">
               <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
                 <div className="flex items-center gap-2">
@@ -703,7 +717,7 @@ export const DebtLedgerModal: React.FC = () => {
         {/* CREDIT LIMIT ADJUSTMENT SUB-MODAL */}
         {/* ══════════════════════════════════════════════════════════════ */}
         {adjustingCustomer && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-60 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4">
             <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col">
               <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
                 <div className="flex items-center gap-2">
@@ -779,7 +793,7 @@ export const DebtLedgerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* FOOTER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between shrink-0 print:hidden">
+        <div className="px-6 py-3.5 bg-pos-card border-t border-pos-border flex items-center justify-between shrink-0 print:hidden">
           <span className="text-xs text-pos-muted">
             • Tous les versements mettent à jour automatiquement le journal comptable et la balance client.
           </span>
@@ -793,11 +807,12 @@ export const DebtLedgerModal: React.FC = () => {
 
         {/* Dedicated 80mm Customer Statement Print Template */}
         {printingCustomer && (
-          <div className="print-debt-target hidden print:block bg-white text-black p-1 font-mono text-[11px] leading-snug">
+          <div className="print-debt-target hidden print:block bg-white text-black p-1 font-mono tabular-nums text-[11px] leading-snug">
             <div className="text-center pb-2 border-b border-dashed border-gray-500">
               <p className="font-extrabold text-sm uppercase tracking-wider">{receiptSettings?.storeName || 'MOBI ACCESSORIES'}</p>
               <p className="font-black text-xs uppercase mt-1">*** RELEVÉ DE COMPTE CLIENT ***</p>
               <p className="text-[10px]">{new Date().toLocaleString('fr-DZ')}</p>
+              <p className="text-[10px]">Caisse: {activeShift?.id ? `Caisse ${activeShift.id.slice(-8)}` : 'Caisse Principale'} • Vendeur: {debtSeller}</p>
             </div>
             <div className="py-2 border-b border-dashed border-gray-500">
               <div className="flex justify-between"><span>Client :</span><span className="font-bold">{printingCustomer.name}</span></div>
@@ -829,7 +844,7 @@ export const DebtLedgerModal: React.FC = () => {
             <div className="pt-2 text-center">
               <p className="text-[10px]">Merci de régulariser votre situation.</p>
               <p className="text-[10px] mt-1">Signature : ____________________</p>
-              <p className="text-[9px] text-gray-600 mt-2">Document généré par Mobi-POS</p>
+              <p className="text-[9px] text-gray-600 mt-2">Document généré par Mobi-POS • Vendeur: {debtSeller}</p>
             </div>
           </div>
         )}

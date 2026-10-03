@@ -18,6 +18,7 @@ export const ReceiptModal: React.FC = () => {
     selectedTransactionForRefund,
     receiptSettings,
     tradeIns,
+    activeShift,
   } = usePosStore();
   const targetPrinter = resolvePrinterForDocument('receipt', receiptSettings.printerRouting);
   const { showToast } = useToast();
@@ -33,9 +34,14 @@ export const ReceiptModal: React.FC = () => {
   const viewModel = useMemo(
     () =>
       currentTx
-        ? buildReceiptViewModel(currentTx, receiptSettings, { tradeIn: tradeInRecord })
+        ? buildReceiptViewModel(currentTx, receiptSettings, {
+            tradeIn: tradeInRecord,
+            // Live opener backs snapshot-less rows; the commit-time
+            // `shiftOpenedByName` snapshot always wins when present.
+            shiftOpener: activeShift?.openedBy ?? activeShift?.cashierName ?? null,
+          })
         : null,
-    [currentTx, receiptSettings, tradeInRecord],
+    [currentTx, receiptSettings, tradeInRecord, activeShift],
   );
 
   // Explicit store warranty (or pre-owned device) + IMEI → certificate eligible.
@@ -57,15 +63,19 @@ export const ReceiptModal: React.FC = () => {
     );
   };
 
+  // Live opener for the thermal path (snapshot-less rows fall back here;
+  // the commit-time snapshot always wins when present).
+  const liveOpener = activeShift?.openedBy ?? activeShift?.cashierName ?? null;
+
   useEffect(() => {
     if (activeModal === 'receipt' && currentTx?.receiptNumber) {
       // Immediate direct hardware print if enabled in settings — same unified
       // ReceiptPaper content (trade-in record forwarded for device lines).
       if (receiptSettings.autoPrintEnabled !== false) {
-        void directPrintReceipt(currentTx, receiptSettings, tradeInRecord);
+        void directPrintReceipt(currentTx, receiptSettings, tradeInRecord, liveOpener);
       }
     }
-  }, [activeModal, currentTx, receiptSettings, tradeInRecord]);
+  }, [activeModal, currentTx, receiptSettings, tradeInRecord, liveOpener]);
 
   useEffect(() => { if (activeModal !== 'receipt') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
@@ -78,7 +88,7 @@ export const ReceiptModal: React.FC = () => {
   };
 
   const handlePrintThermal = () => {
-    void directPrintReceipt(currentTx, receiptSettings, tradeInRecord);
+    void directPrintReceipt(currentTx, receiptSettings, tradeInRecord, liveOpener);
   };
 
   const warrantyItems = (currentTx.items || []).filter((i) => warrantyMonthsFor(i) > 0);

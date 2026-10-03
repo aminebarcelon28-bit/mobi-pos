@@ -10,7 +10,8 @@ export class WarrantyCertificateBuilder {
     transaction: SaleTransaction,
     item: CartItem,
     settings: ReceiptSettings,
-    warrantyMonths: number = 3
+    warrantyMonths: number = 3,
+    seller?: string | null
   ): Uint8Array {
     const builder = new EscPosBuilder();
     const is80mm = settings.paperWidth !== '58mm';
@@ -44,6 +45,15 @@ export class WarrantyCertificateBuilder {
       .newline()
       .bold(false)
       .text(`Réf Garantie : GAR-${transaction.receiptNumber}`)
+      .newline();
+    // Seller = commit-time snapshot first (reprint-proof), live param next.
+    const vendeur =
+      (transaction.shiftOpenedByName || '').trim() ||
+      (seller || '').trim() ||
+      (transaction.cashierName || '').trim() ||
+      'Caisse Principale';
+    builder
+      .text(`Vendeur (Caisse) : ${vendeur}`)
       .newline()
       .text(separator)
       .newline()

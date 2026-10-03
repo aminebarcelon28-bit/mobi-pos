@@ -3,9 +3,10 @@
  * Author: Principal Systems Architect
  */
 import type { TradeInItem, ReceiptSettings, SaleTransaction } from '../types/pos';
-import { faitALine } from '../types/pos';
+import { faitALine, formatDZD } from '../types/pos';
 import { EscPosBuilder } from './escpos';
 import { grossFromTransaction } from './receiptMath';
+import { STORE_RETURN_POLICY, formatReceiptDateTime } from './receiptViewModel';
 
 /**
  * Sequential police-registry folio (Livre de Police) derived deterministically
@@ -28,7 +29,8 @@ export const SELLER_SWORN_STATEMENT =
 export class TradeInVoucherBuilder {
   public static buildLegalBuybackCertificate(
     tradeIn: TradeInItem,
-    settings: ReceiptSettings
+    settings: ReceiptSettings,
+    seller?: string | null
   ): Uint8Array {
     const builder = new EscPosBuilder();
     const is80mm = settings.paperWidth !== '58mm';
@@ -60,7 +62,11 @@ export class TradeInVoucherBuilder {
       .bold(true)
       .text(`Folio Registre Police N°: ${policeRegistryFolio(tradeIn)}`)
       .newline()
-      .bold(false)
+      .bold(false);
+    if ((seller || '').trim()) {
+      builder.text(`Vendeur (Caisse) : ${seller!.trim()}`).newline();
+    }
+    builder
       .text(separator)
       .newline()
       .align('left')
@@ -137,13 +143,38 @@ export class TradeInVoucherBuilder {
     transaction: SaleTransaction,
     tradeIn: TradeInItem,
     settings: ReceiptSettings,
-    soulte?: { amount: number; method: 'cash' | 'wallet' } | null
+    soulte?: { amount: number; method: 'cash' | 'wallet' } | null,
+    seller?: string | null
   ): Uint8Array {
     const builder = new EscPosBuilder();
-    const is80mm = settings.paperWidth !== '58mm';
-    const separator = is80mm
-      ? '------------------------------------------------'
-      : '--------------------------------';
+    // 42-col professional standard (32 on 58mm). Every money row is ONE
+    // paired line — the old build printed labels (align:left) and values
+    // (align:right) on SEPARATE lines, decoupling them on any paper slip.
+    const cols = settings.paperWidth === '58mm' ? 32 : 42;
+    const separator = '-'.repeat(cols);
+    const pair = (label: string, value: string): string => {
+      const v = value || '';
+      const maxLabel = Math.max(0, cols - v.length - 1);
+      const l = label.length > maxLabel ? label.slice(0, maxLabel) : label;
+      return `${l}${' '.repeat(Math.max(1, cols - l.length - v.length))}${v}`;
+    };
+    const fold = (text: string): void => {
+      const words = (text || '').split(/\s+/).filter(Boolean);
+      let cur = '';
+      for (const w of words) {
+        if ((cur + (cur ? ' ' : '') + w).length > cols) {
+          if (cur) {
+            builder.text(cur).newline();
+            cur = w.length > cols ? w.slice(0, cols) : w;
+          } else {
+            cur = w;
+          }
+        } else {
+          cur = cur ? `${cur} ${w}` : w;
+        }
+      }
+      if (cur) builder.text(cur).newline();
+    };
 
     const grossTotal = grossFromTransaction(transaction);
     const tradeInDeduction = Math.max(
@@ -153,6 +184,12 @@ export class TradeInVoucherBuilder {
     const netToPay = Math.max(0, grossTotal - tradeInDeduction - (transaction.discountTotal || 0));
     const soulteAmount = Math.max(0, Math.round(Number(soulte?.amount) || 0));
     const isSoulte = soulteAmount > 0;
+    // Seller = commit-time snapshot first (reprint-proof), live param next.
+    const vendeur =
+      (transaction.shiftOpenedByName || '').trim() ||
+      (seller || '').trim() ||
+      (transaction.cashierName || '').trim() ||
+      'Caisse Principale';
 
     builder
       .init()
@@ -163,80 +200,71 @@ export class TradeInVoucherBuilder {
       .bold(false)
       .text(settings.address || 'Boulevard Mohamed V, Alger Centre')
       .newline()
-      .text(`TICKET : ${transaction.receiptNumber}`)
+      .text(`Tél : ${settings.phone || '0550 00 00 00'}`)
       .newline()
-      .text(separator)
-      .newline()
-      .align('left');
-
-    transaction.items.forEach((item) => {
-      const itemTitle = item.product.title.slice(0, is80mm ? 26 : 16);
-      const unitPrice = item.appliedPrice;
-      const lineTotal = item.appliedPrice * item.quantity;
-      builder
-        .bold(true)
-        .text(itemTitle)
-        .newline()
-        .bold(false)
-        .text(`  ${item.quantity} x ${unitPrice.toLocaleString('fr-DZ')} DA`)
-        .align('right')
-        .text(`  ${lineTotal.toLocaleString('fr-DZ')} DA`)
-        .newline()
-        .align('left');
-    });
-
-    builder
-      .text(separator)
-      .newline()
-      .text(`Sous-total Articles :`)
-      .align('right')
-      .text(`${grossTotal.toLocaleString('fr-DZ')} DA`)
-      .newline()
-      .align('left')
       .bold(true)
-      .text(`Reprise ${tradeIn.deviceModel} (IMEI: ${tradeIn.imei.slice(-6)}) :`)
-      .align('right')
-      .text(`-${tradeInDeduction.toLocaleString('fr-DZ')} DA`)
+      .text('*** VENTE + REPRISE APPAREIL (TRADE-IN) ***')
       .newline()
+      .bold(false)
+      .align('left')
       .text(separator)
       .newline();
+    builder.text(pair('Ticket:', transaction.receiptNumber || transaction.id)).newline();
+    builder.text(pair('Date:', formatReceiptDateTime(transaction.createdAt))).newline();
+    builder.text(pair('Caisse:', transaction.shiftId ? `Caisse ${transaction.shiftId.slice(-8)}` : 'Caisse Principale')).newline();
+    builder.text(pair('Vendeur:', vendeur)).newline();
+    builder.text(separator).newline();
+
+    transaction.items.forEach((item) => {
+      const itemTitle = (item.product?.title || 'Article').slice(0, cols - 8);
+      const unitPrice = Number(item.appliedPrice ?? item.product?.price ?? 0);
+      const lineTotal = unitPrice * Number(item.quantity || 0);
+      builder.bold(true).text(itemTitle).newline().bold(false);
+      builder.text(pair(`  ${item.quantity} x ${formatDZD(unitPrice)}`, formatDZD(lineTotal))).newline();
+      if (item.imeiNumber) {
+        builder.text(`  IMEI: ${item.imeiNumber}`.slice(0, cols)).newline();
+      }
+    });
+
+    builder.text(separator).newline();
+    builder.text(pair('SOUS-TOTAL ARTICLES:', formatDZD(grossTotal))).newline();
+    if ((transaction.discountTotal || 0) > 0) {
+      builder.text(pair('REMISE ACCORDÉE:', `-${formatDZD(transaction.discountTotal || 0)}`)).newline();
+    }
+    builder.bold(true);
+    builder.text('[APPAREIL REPRIS / TRADE-IN]').newline();
+    builder.bold(false);
+    builder.text(pair('Modèle:', tradeIn.deviceModel)).newline();
+    builder.text(pair('IMEI:', tradeIn.imei)).newline();
+    if (tradeIn.conditionGrade) {
+      builder.text(pair('État:', tradeIn.conditionGrade)).newline();
+    }
+    builder.text(pair('DÉDUCTION REPRISE:', `-${formatDZD(tradeInDeduction)}`)).newline();
+    builder.text(separator).newline();
     if (isSoulte) {
+      builder.bold(true);
+      builder.text(pair('SOULTE À VERSER AU CLIENT :', formatDZD(soulteAmount))).newline();
+      builder.bold(false);
       builder
-        .align('left')
-        .bold(true)
-        .text(`SOULTE À VERSER AU CLIENT :`)
-        .align('right')
-        .text(` ${soulteAmount.toLocaleString('fr-DZ')} DA`)
-        .newline()
-        .align('left')
-        .bold(false)
-        .text(`Mode : ${soulte?.method === 'cash' ? 'Espèces (Tiroir)' : 'Avoir Client (Portefeuille)'}`)
+        .text(
+          pair(
+            'Mode :',
+            soulte?.method === 'cash' ? 'Espèces (Tiroir)' : 'Avoir Client (Portefeuille)'
+          )
+        )
         .newline();
     } else {
+      builder.text(pair('NET À PAYER EN ESPÈCES :', formatDZD(netToPay))).newline();
       builder
-        .align('left')
-        .text(`NET À PAYER EN ESPÈCES :`)
-        .align('right')
-        .text(` ${netToPay.toLocaleString('fr-DZ')} DA`)
-        .newline()
-        .align('left')
-        .bold(false)
-        .text(`Espèces Données :`)
-        .align('right')
-        .text(` ${(transaction.cashTendered || netToPay).toLocaleString('fr-DZ')} DA`)
-        .newline()
-        .align('left')
-        .bold(true)
-        .text(`MONNAIE RENDUE :`)
-        .align('right')
-        .text(` ${(transaction.changeDue || 0).toLocaleString('fr-DZ')} DA`)
-        .newline()
-        .bold(false);
+        .text(pair('Espèces Données :', formatDZD(transaction.cashTendered || netToPay)))
+        .newline();
+      builder.bold(true);
+      builder.text(pair('MONNAIE RENDUE :', formatDZD(transaction.changeDue || 0))).newline();
+      builder.bold(false);
     }
+    builder.text(separator).newline().align('center');
+    fold(STORE_RETURN_POLICY);
     builder
-      .text(separator)
-      .newline()
-      .align('center')
       .text('Merci de votre visite !')
       .newline()
       .newline(2)

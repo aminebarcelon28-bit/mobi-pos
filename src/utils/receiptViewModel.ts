@@ -1,10 +1,10 @@
 import type {
+  CashSession,
   ReceiptSettings,
   SaleTransaction,
   StagedTradeIn,
   TradeInItem,
 } from '../types/pos';
-import { formatDateTime } from '../types/pos';
 import {
   discountsFromTransaction,
   grossFromTransaction,
@@ -54,6 +54,66 @@ export interface ReceiptStoreInfo {
   tagline: string;
   address: string;
   phone: string;
+  /** Optional contact email — renderers omit the line entirely when blank. */
+  email: string;
+  /**
+   * Effective footer policy: `footerMessage` wins, `customFooterMsg` is the
+   * legacy fallback, empty means "print the default return policy". Never
+   * whitespace-only (trimmed at build so no blank policy block can print).
+   */
+  footerMessage: string;
+}
+
+/**
+ * Receipt telemetry timestamp: DD/MM/YYYY HH:mm:ss (24h, local). Deliberately
+ * NOT `formatDateTime` (fr-DZ long form) — every slip in the fleet prints
+ * this one compact shape so tickets, Z reports and vouchers sort visually.
+ */
+export function formatReceiptDateTime(dateStr?: string): string {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function cleanName(v: unknown): string | null {
+  const s = typeof v === 'string' ? v.trim() : '';
+  return s ? s : null;
+}
+
+/**
+ * Strict seller resolution (shift-opener rule). The printed `Vendeur` is
+ * ALWAYS the cashier who opened the owning shift — the person legally and
+ * financially responsible for the drawer — never a handover cashier, a stale
+ * session user, or a hardcoded fallback:
+ *
+ *   1. `tx.shiftOpenedByName` — immutable commit-time snapshot (reprints
+ *      stay correct weeks later, even by an admin on another shift);
+ *   2. live `shiftOpener` — `activeShift.openedBy` (handover-proof);
+ *   3. `activeShift.cashierName` — pre-handover / legacy sessions;
+ *   4. `tx.cashierName` — legacy rows without any shift linkage;
+ *   5. `'Caisse Principale'` — last resort, never blank.
+ *
+ * NOTE: the originating prompt named `openedByName` / `openedBy.name` — those
+ * fields do not exist on `CashSession` (AGENTS.md report-first). The schema
+ * carries immutable `openedBy?: string`, which is what step 2 reads.
+ */
+export function resolveSellerName(
+  tx: Pick<SaleTransaction, 'shiftOpenedByName' | 'cashierName'> | null | undefined,
+  shiftOpener?: string | CashSession | null,
+): string {
+  const live =
+    typeof shiftOpener === 'string'
+      ? shiftOpener
+      : (shiftOpener as CashSession | null | undefined)?.openedBy ??
+        (shiftOpener as CashSession | null | undefined)?.cashierName;
+  return (
+    cleanName(tx?.shiftOpenedByName) ||
+    cleanName(live) ||
+    cleanName(tx?.cashierName) ||
+    'Caisse Principale'
+  );
 }
 
 export interface ReceiptViewModel {
@@ -62,7 +122,7 @@ export interface ReceiptViewModel {
   dateTime: string;
   /** Register / terminal identifier (Caisse). */
   registerId: string;
-  /** Cashier display name (Vendeur). */
+  /** Cashier display name (Vendeur) — ALWAYS the shift opener (see above). */
   cashierName: string;
   natureKind: ReceiptNatureKind;
   /** Dynamic header label (VENTE AU COMPTANT / VENTE + REPRISE … / …). */
@@ -80,6 +140,12 @@ export interface ReceiptViewModel {
   tenders: ReceiptTender[];
   changeDue: number;
   isRefund: boolean;
+  /** Sum of all tender legs (TOTAL PERÇU on the reference layout). */
+  tenderedTotal: number;
+  /** Signed article count (Articles remis on the reference layout). */
+  itemCount: number;
+  /** 1 when a trade-in device was taken back, else 0. */
+  tradeInCount: number;
 }
 
 export const TRADE_IN_LEGAL_STATEMENT =
@@ -116,6 +182,12 @@ export interface BuildReceiptViewModelOptions {
   tradeIn?: TradeInItem | StagedTradeIn | null;
   /** Override register label (defaults to shift/device linkage). */
   registerId?: string;
+  /**
+   * Live shift opener (`activeShift.openedBy`, or the shift row). Second in
+   * the seller chain — the commit-time `tx.shiftOpenedByName` snapshot wins
+   * whenever present so reprints never follow a later handover.
+   */
+  shiftOpener?: string | CashSession | null;
 }
 
 function resolveTradeInInfo(
@@ -168,6 +240,8 @@ export function buildReceiptViewModel(
     tagline: (settings.storeSubheader || settings.customHeaderMsg || '').trim(),
     address: (settings.address || '').trim(),
     phone: (settings.phone || '').trim(),
+    email: (settings.email || '').trim(),
+    footerMessage: (settings.footerMessage || settings.customFooterMsg || '').trim(),
   };
 
   const isRefund = Boolean(tx.isRefund);
@@ -279,9 +353,9 @@ export function buildReceiptViewModel(
   return {
     store,
     ticketId: tx.receiptNumber || tx.id,
-    dateTime: formatDateTime(tx.createdAt),
+    dateTime: formatReceiptDateTime(tx.createdAt),
     registerId,
-    cashierName: (tx.cashierName || '').trim() || 'Vendeur',
+    cashierName: resolveSellerName(tx, opts.shiftOpener ?? null),
     natureKind,
     natureLabel,
     items,
@@ -296,5 +370,11 @@ export function buildReceiptViewModel(
     tenders,
     changeDue: Math.max(0, Math.round(Number(tx.changeDue) || 0)),
     isRefund,
+    tenderedTotal: toInt(tenders.reduce((acc, t) => acc + t.amount, 0)),
+    itemCount: (tx.items || []).reduce(
+      (acc, l) => acc + Math.abs(Math.round(Number(l.quantity) || 0)),
+      0,
+    ),
+    tradeInCount: tradeIn ? 1 : 0,
   };
 }

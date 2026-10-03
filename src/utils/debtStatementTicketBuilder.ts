@@ -3,16 +3,17 @@
  * Author: Principal Systems Architect
  */
 import type { Customer, CustomerDebtEntry, ReceiptSettings } from '../types/pos';
+import { formatDZD } from '../types/pos';
 import { EscPosBuilder } from './escpos';
 
 export class DebtStatementTicketBuilder {
   public static buildStatementVoucher(
     customer: Customer,
     debts: CustomerDebtEntry[],
-    settings: ReceiptSettings
+    settings: ReceiptSettings,
+    seller?: string | null
   ): Uint8Array {
     const builder = new EscPosBuilder();
-    const currentDebtFormatted = (customer.currentDebt || 0).toLocaleString('fr-DZ');
 
     builder
       .init()
@@ -31,8 +32,11 @@ export class DebtStatementTicketBuilder {
       .newline()
       .bold(false)
       .text(`Date d'Édition : ${new Date().toLocaleString('fr-DZ')}`)
-      .newline()
-      .separator()
+      .newline();
+    if ((seller || '').trim()) {
+      builder.text(`Vendeur (Caisse) : ${seller!.trim()}`).newline();
+    }
+    builder.separator()
       .align('left')
       .bold(true)
       .text(`Client : ${customer.name}`)
@@ -40,7 +44,7 @@ export class DebtStatementTicketBuilder {
       .bold(false)
       .text(`Téléphone : ${customer.phone}`)
       .newline()
-      .text(`Plafond de Crédit Autorisé : ${(customer.debtLimit || 100000).toLocaleString('fr-DZ')} DA`)
+      .text(`Plafond de Crédit Autorisé : ${formatDZD(customer.debtLimit || 100000)}`)
       .newline()
       .separator()
       .bold(true)
@@ -51,16 +55,14 @@ export class DebtStatementTicketBuilder {
     (debts || []).slice(0, 5).forEach((d) => {
       const typeLabel = d.type === 'DEBT_ACQUIRED' ? '(+) Achat Crédit' : '(-) Règlement';
       const dateStr = new Date(d.createdAt).toLocaleDateString('fr-DZ');
-      builder
-        .text(`${dateStr} | ${typeLabel} : ${d.amount.toLocaleString('fr-DZ')} DA`)
-        .newline();
+      builder.text(`${dateStr} | ${typeLabel} : ${formatDZD(d.amount)}`).newline();
     });
 
     builder
       .separator()
       .align('center')
       .bold(true)
-      .text(`SOLDE ACTUEL DÛ : ${currentDebtFormatted} DA`)
+      .text(`SOLDE ACTUEL DÛ : ${formatDZD(customer.currentDebt || 0)}`)
       .newline()
       .bold(false)
       .separator()
