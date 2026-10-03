@@ -13,6 +13,8 @@ export const ReceiptTemplateModal: React.FC = () => {
     }
   }, [activeModal, receiptSettings]);
 
+  useEffect(() => { if (activeModal !== 'receipt_template') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
   if (activeModal !== 'receipt_template') return null;
 
   const handleLogoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -69,30 +71,33 @@ export const ReceiptTemplateModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col max-h-[92vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col max-h-[92dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
         <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
           <div className="flex items-center gap-2 text-emerald-400 min-w-0">
-            <Sliders className="w-5 h-5 shrink-0" />
+            <Sliders className="w-5 h-5 shrink-0" aria-hidden="true" />
             <h2 className="text-sm font-bold text-pos-text truncate">
               Personnalisation du Ticket & Logo Magasin
             </h2>
           </div>
           <button
+            type="button"
             onClick={closeModal}
+            aria-label="Fermer — fermer la personnalisation du ticket"
+            title="Fermer"
             className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex-1 p-4 sm:p-5 space-y-4 overflow-y-auto">
+        <form onSubmit={handleSubmit} className="flex-1 p-4 sm:p-5 space-y-4 overflow-y-auto overscroll-contain">
           
           {/* Logo Upload Section */}
           <div className="bg-pos-card border border-pos-border p-3.5 rounded-xl space-y-3">
             <label className="text-xs text-pos-text font-bold flex items-center gap-1.5">
-              <Image className="w-4 h-4 text-emerald-400" /> Logo du Magasin sur le Ticket
+              <Image className="w-4 h-4 text-emerald-400" aria-hidden="true" /> Logo du Magasin sur le Ticket
             </label>
 
             {formData.logoUrl ? (
@@ -111,17 +116,18 @@ export const ReceiptTemplateModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setFormData({ ...formData, logoUrl: '' })}
-                  className="p-1.5 bg-red-950 text-red-400 hover:bg-red-900 rounded-lg transition"
+                  aria-label="Supprimer le logo — retirer le logo du ticket"
+                  className="p-1.5 bg-red-950 text-red-400 hover:bg-red-900 rounded-lg transition min-h-[44px] min-w-[44px] flex items-center justify-center"
                   title="Supprimer le logo"
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <Trash2 className="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
             ) : (
               <div className="space-y-2">
                 <div className="flex gap-2 items-center">
                   <label className="flex-1 cursor-pointer bg-pos-bg hover:bg-emerald-950/30 border border-dashed border-emerald-500/50 hover:border-emerald-400 p-3 rounded-lg flex items-center justify-center gap-2 text-xs font-semibold text-emerald-400 transition">
-                    <Upload className="w-4 h-4" /> Choisir une Image Logo (PNG/JPG)
+                    <Upload className="w-4 h-4" aria-hidden="true" /> Choisir une Image Logo (PNG/JPG)
                     <input
                       type="file"
                       accept="image/*"
@@ -176,6 +182,29 @@ export const ReceiptTemplateModal: React.FC = () => {
           </div>
 
           <div>
+            <label className="text-xs text-pos-muted block mb-1 font-semibold">Identifiants Fiscaux (RC / NIF / NIS / ART — imprimés sur tickets)</label>
+            <div className="grid grid-cols-2 gap-3">
+              {([
+                ['rc', 'RC N°'],
+                ['nif', 'NIF'],
+                ['nis', 'NIS'],
+                ['art', 'Article d’Imposition'],
+              ] as const).map(([key, label]) => (
+                <div key={key}>
+                  <label className="text-xs text-pos-muted block mb-1 font-semibold">{label}</label>
+                  <input
+                    type="text"
+                    value={formData[key] || ''}
+                    onChange={(e) => setFormData({ ...formData, [key]: e.target.value })}
+                    placeholder="—"
+                    className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs font-mono text-pos-text focus:border-emerald-400 focus:outline-none"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
             <label className="text-xs text-pos-muted block mb-1 font-semibold">Message de Pied de Page (Conditions de retour)</label>
             <input
               type="text"
@@ -194,6 +223,8 @@ export const ReceiptTemplateModal: React.FC = () => {
             <button
               type="button"
               onClick={() => setFormData({ ...formData, autoPrintEnabled: formData.autoPrintEnabled === false ? true : false })}
+              aria-label="Impression Automatique — activer ou désactiver l'impression au paiement"
+              aria-pressed={formData.autoPrintEnabled !== false}
               className={`w-12 h-6 rounded-full transition-colors relative flex items-center px-0.5 ${
                 formData.autoPrintEnabled !== false ? 'bg-emerald-500' : 'bg-slate-700'
               }`}
@@ -227,15 +258,17 @@ export const ReceiptTemplateModal: React.FC = () => {
             <button
               type="button"
               onClick={closeModal}
+              aria-label="Annuler — fermer sans enregistrer le modèle"
               className="px-4 py-2.5 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition min-h-[44px] flex items-center justify-center active-press"
             >
               Annuler
             </button>
             <button
               type="submit"
+              aria-label="Enregistrer le Modèle — sauvegarder le ticket magasin"
               className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 min-h-[44px] active-press"
             >
-              <Check className="w-4 h-4" /> Enregistrer le Modèle
+              <Check className="w-4 h-4" aria-hidden="true" /> Enregistrer le Modèle
             </button>
           </div>
         </form>

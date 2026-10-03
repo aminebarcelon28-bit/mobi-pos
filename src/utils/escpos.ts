@@ -1,6 +1,12 @@
-import type { SaleTransaction, ReceiptSettings, CashSession } from '../types/pos';
+import type { SaleTransaction, ReceiptSettings, CashSession, StagedTradeIn, TradeInItem } from '../types/pos';
 import { formatDZD } from '../types/pos';
 import { RECEIPT_BARCODE } from '../constants';
+import { fiscalIdentifierLine, tvaSplitFromTotal } from './receiptMath';
+import {
+  STORE_RETURN_POLICY,
+  TRADE_IN_LEGAL_STATEMENT,
+  buildReceiptViewModel,
+} from './receiptViewModel';
 
 const ESC = 0x1B;
 const GS = 0x1D;
@@ -140,90 +146,207 @@ export class EscPosBuilder {
   }
 }
 
+/** Fold a long sentence onto printer-width lines (word boundaries). */
+function foldThermal(text: string, width: number): string[] {
+  const words = (text || '').split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    if ((cur + (cur ? ' ' : '') + w).length > width) {
+      if (cur) lines.push(cur);
+      cur = w.length > width ? w.slice(0, width) : w;
+    } else {
+      cur = cur ? `${cur} ${w}` : w;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines.length > 0 ? lines : [''];
+}
+
 /**
  * Construit un tampon complet pour l'impression d'un reçu thermique.
+ *
+ * UNIFIED PRINT TARGET: every section mirrors `ReceiptPaper` through the
+ * shared `buildReceiptViewModel` (nature header, session telemetry, paired
+ * ledger rows, multi-tender breakdown, conditional trade-in block, policy
+ * footer) so the hardware ticket can never drift from the on-screen paper.
+ * The optional `tradeIn` record (looked up by tradeInId at the call site)
+ * feeds the device detail lines; without it the deduction still prints from
+ * the persisted tender/deduction legs.
  */
 export function buildReceiptBuffer(
   transaction: SaleTransaction,
-  settings: ReceiptSettings
+  settings: ReceiptSettings,
+  tradeIn?: TradeInItem | StagedTradeIn | null
 ): Uint8Array {
   const builder = new EscPosBuilder();
+  const vm = buildReceiptViewModel(transaction, settings, { tradeIn: tradeIn ?? null });
+  // 80mm = 42 colonnes (font A), 58mm = 32. Every money row stays ONE paired
+  // line: label left, value right — never two independent columns.
+  const cols = settings?.paperWidth === '58mm' ? 32 : 42;
+  const pair = (label: string, value: string): string => {
+    const v = value || '';
+    const maxLabel = Math.max(0, cols - v.length - 1);
+    const l = label.length > maxLabel ? label.slice(0, maxLabel) : label;
+    return `${l}${' '.repeat(Math.max(1, cols - l.length - v.length))}${v}`;
+  };
 
   builder.init();
 
   // En-tête du magasin
   builder.align('center').bold(true);
-  if (settings.storeName) builder.text(settings.storeName).newline();
-  
-  builder.bold(false);
-  if (settings.address) builder.text(settings.address).newline();
-  if (settings.phone) builder.text(settings.phone).newline();
-  
-  builder.newline().align('left');
-  builder.separator();
+  if (vm.store.name) builder.text(vm.store.name).newline();
 
-  // Numéro de reçu et date
-  builder.text(`Ticket: ${transaction.id}`).newline();
-  builder.text(`Date: ${new Date(transaction.createdAt).toLocaleString('fr-DZ')}`).newline();
-  
+  builder.bold(false);
+  if (vm.store.tagline) builder.text(vm.store.tagline).newline();
+  if (vm.store.address) builder.text(vm.store.address).newline();
+  if (vm.store.phone) builder.text(`Tél: ${vm.store.phone}`).newline();
+  // Official fiscal block (RC/NIF/NIS/ART, legacy taxNumber fallback).
+  const fiscalLine = fiscalIdentifierLine(settings);
+  if (fiscalLine) builder.text(fiscalLine).newline();
+
+  // Nature de la transaction (dérivée du payload, comme le papier écran).
+  builder.bold(true);
+  builder.text(`*** ${vm.natureLabel} ***`).newline();
+  builder.bold(false);
+
+  builder.align('left');
+  builder.separator('-', cols);
+
+  // Télémétrie de session : lignes appariées (jamais de colonnes découplées).
+  builder.text(pair('Ticket:', vm.ticketId)).newline();
+  builder.text(pair('Date:', vm.dateTime)).newline();
+  builder.text(pair('Caisse:', vm.registerId)).newline();
+  builder.text(pair('Vendeur:', vm.cashierName)).newline();
+
   // Info client (optionnel)
   if (transaction.customer?.name) {
-    builder.text(`Client: ${transaction.customer.name}`).newline();
+    builder.text(pair('Client:', transaction.customer.name)).newline();
   }
 
-  builder.separator();
+  builder.separator('-', cols);
 
-  // Liste des articles
-  transaction.items.forEach((item) => {
-    builder.text(item.product.title).newline();
-    const qtyPrice = `${item.quantity} x ${formatDZD(item.appliedPrice)}`;
-    const lineTotal = formatDZD(item.quantity * item.appliedPrice);
-    
-    // Calcul de l'espacement pour aligner le total à droite (largeur par défaut de 32 caractères)
-    const spaces = Math.max(0, 32 - qtyPrice.length - lineTotal.length);
-    builder.text(`${qtyPrice}${' '.repeat(spaces)}${lineTotal}`).newline();
-  });
+  // Liste des articles (warranted lines get a (*) marker, legend below).
+  let warrantyMonthsMax = 0;
+  for (const line of vm.items) {
+    const wMonths = line.warrantyMonths || 0;
+    if (wMonths > 0) warrantyMonthsMax = Math.max(warrantyMonthsMax, wMonths);
+    builder.text(line.name + (wMonths > 0 ? ' (*)' : '')).newline();
+    const qtyPrice = `${line.quantity} x ${formatDZD(line.unitPrice)}`;
+    const lineTotal = formatDZD(line.total);
+    builder.text(pair(qtyPrice, lineTotal)).newline();
+    if (line.discount > 0) {
+      builder.text(pair('  Remise:', `-${formatDZD(line.discount)}`)).newline();
+    }
+    if (line.imei) {
+      builder.text(`  IMEI: ${line.imei}`).newline();
+    }
+    if (wMonths > 0) {
+      builder.text(`  Garantie ${wMonths} mois incluse (*)`).newline();
+    }
+  }
 
-  builder.separator();
+  builder.separator('-', cols);
+
+  // Bloc reprise (conditionnel, comme le papier) : le crédit a déjà été
+  // déduit du net ; on l'affiche pour réconcilier le ticket.
+  if (vm.tradeIn) {
+    builder.bold(true);
+    builder.text('[APPAREIL REPRIS / TRADE-IN]').newline();
+    builder.bold(false);
+    builder.text(pair('Catégorie:', vm.tradeIn.category)).newline();
+    builder.text(pair('Modèle:', vm.tradeIn.model)).newline();
+    if (vm.tradeIn.imei) {
+      builder.text(pair('IMEI:', vm.tradeIn.imei)).newline();
+    }
+    if (vm.tradeIn.grade) {
+      builder.text(pair('État:', vm.tradeIn.grade)).newline();
+    }
+    builder.text(pair('Crédit Reprise:', `-${formatDZD(vm.tradeIn.valuation)}`)).newline();
+    for (const ln of foldThermal(TRADE_IN_LEGAL_STATEMENT, cols)) {
+      builder.text(ln).newline();
+    }
+    builder.separator('-', cols);
+  }
 
   // B-028: print gross REMISE/credit/TVA lines BEFORE TOTAL so the hardware
   // receipt reconciles with the software ticket (gross − discount = net).
-  const grossForTicket = typeof transaction.subtotal === 'number' && Number.isFinite(transaction.subtotal)
-    ? transaction.subtotal
-    : transaction.total + (transaction.discountTotal || 0);
-  if (transaction.discountTotal && transaction.discountTotal > 0) {
-    builder.align('left').bold(false);
-    builder.text(`SOUS-TOTAL BRUT: ${formatDZD(grossForTicket)}`).newline();
-    builder.text(`REMISE: -${formatDZD(transaction.discountTotal)}`).newline();
+  builder.align('left').bold(false);
+  builder.text(pair('SOUS-TOTAL BRUT:', formatDZD(vm.grossSubtotal))).newline();
+  if (vm.discounts > 0) {
+    builder.text(pair('REMISE ACCORDÉE:', `-${formatDZD(vm.discounts)}`)).newline();
   }
-  if ((transaction as { storeCreditApplied?: number }).storeCreditApplied) {
-    builder.text(`Avoir Client: -${formatDZD((transaction as { storeCreditApplied?: number }).storeCreditApplied || 0)}`).newline();
+  if (vm.tradeInCredit > 0) {
+    builder.text(pair('CRÉDIT REPRISE DÉDUIT:', `-${formatDZD(vm.tradeInCredit)}`)).newline();
+  }
+  if (vm.voucherCredit > 0) {
+    const voucherLabel = vm.voucherCode ? `BON ÉCHANGE (${vm.voucherCode}):` : 'BON ÉCHANGE DÉDUIT:';
+    builder.text(pair(voucherLabel, `-${formatDZD(vm.voucherCredit)}`)).newline();
+  }
+  if (vm.avoirCredit > 0) {
+    builder.text(pair('AVOIR CLIENT DÉDUIT:', `-${formatDZD(vm.avoirCredit)}`)).newline();
   }
   const txTax = (transaction as { tax?: number }).tax;
   if (typeof txTax === 'number' && txTax > 0) {
-    builder.text(`TVA: +${formatDZD(txTax)}`).newline();
+    builder.text(pair('TVA:', `+${formatDZD(txTax)}`)).newline();
+  }
+  // Explicit TVA breakdown table when a VAT rate is configured.
+  const tva = tvaSplitFromTotal(vm.netDue, settings.vatRate);
+  if (tva) {
+    builder.text(pair('HT:', formatDZD(tva.ht))).newline();
+    builder.text(pair(`TVA ${tva.rate}%:`, `+${formatDZD(tva.tva)}`)).newline();
+    builder.text(pair('TTC:', formatDZD(tva.ttc))).newline();
   }
 
-  // Total Brut (en gras et double hauteur)
+  // Total Net (en gras et double hauteur)
   builder.align('right').bold(true).doubleHeight(true);
-  builder.text(`TOTAL: ${formatDZD(transaction.total)}`).newline();
+  builder.text(`${vm.isRefund ? 'TOTAL AVOIR:' : 'TOTAL NET A PAYER:'} ${formatDZD(vm.netDue)}`).newline();
   builder.bold(false).doubleHeight(false);
-  
+
   builder.newline();
-  
-  // Paiement en espèces
-  builder.align('right');
-  builder.text(`Espèces: ${formatDZD(transaction.cashTendered || transaction.total)}`).newline();
-  if (transaction.changeDue !== undefined && transaction.changeDue > 0) {
-    builder.text(`Rendu: ${formatDZD(transaction.changeDue)}`).newline();
+
+  // Règlement multi-tender (chaque jambe appariée sur une seule ligne).
+  builder.align('left');
+  builder.text(vm.isRefund ? 'Modes de Remboursement:' : 'Modes de Règlement:').newline();
+  for (const tender of vm.tenders) {
+    builder.text(pair(`${tender.label}:`, formatDZD(tender.amount))).newline();
+  }
+  if (!vm.isRefund) {
+    builder.text(pair('Rendu Monnaie:', formatDZD(vm.changeDue))).newline();
+  }
+  // Soulte boutique (shop owed the difference) — traçabilité du versement.
+  if (transaction.tradeInSoulte && transaction.tradeInSoulte.amount > 0) {
+    builder.text(
+      pair(
+        transaction.tradeInSoulte.method === 'cash' ? 'Soulte versée (espèces):' : 'Soulte créditée (avoir):',
+        formatDZD(transaction.tradeInSoulte.amount)
+      )
+    ).newline();
+  }
+
+  // Customer account reminder (single-line summaries, no extra modal).
+  if ((transaction.customer?.storeCredit || 0) > 0) {
+    builder.text(pair('Avoir client disponible:', formatDZD(transaction.customer?.storeCredit || 0))).newline();
+  }
+  if ((transaction.customer?.currentDebt || 0) > 0) {
+    builder.text(pair('Dette client restante:', formatDZD(transaction.customer?.currentDebt || 0))).newline();
+  }
+  if (warrantyMonthsMax > 0) {
+    builder.text(`Garantie: ${warrantyMonthsMax} mois sur articles signalés (*)`).newline();
   }
 
   builder.align('center').newline();
-  builder.separator();
+  builder.separator('-', cols);
 
+  // Politique de retour (identique au papier) + pied de page personnalisé.
+  for (const ln of foldThermal(STORE_RETURN_POLICY, cols)) {
+    builder.text(ln).newline();
+  }
   // Message de pied de page personnalisé
   if (settings.customFooterMsg) {
-    builder.text(settings.customFooterMsg).newline();
+    for (const ln of foldThermal(settings.customFooterMsg, cols)) {
+      builder.text(ln).newline();
+    }
   } else {
     builder.text('Merci de votre visite !').newline();
   }
@@ -319,12 +442,13 @@ import type { Product, PrinterRoutingConfig } from '../types/pos';
  */
 export async function directPrintReceipt(
   transaction: SaleTransaction,
-  settings: ReceiptSettings
+  settings: ReceiptSettings,
+  tradeIn?: TradeInItem | StagedTradeIn | null
 ): Promise<boolean> {
   if (isMobileWebView()) {
     try {
       const { printBytesViaMobilePrinter } = await import('./mobilePrinter');
-      const direct = await printBytesViaMobilePrinter(buildReceiptBuffer(transaction, settings));
+      const direct = await printBytesViaMobilePrinter(buildReceiptBuffer(transaction, settings, tradeIn));
       if (direct.sent) return true;
       if (direct.reason !== 'disabled') {
         console.warn('[Mobile Receipt] Network printer failed, falling back to sheet:', direct.reason);
@@ -341,7 +465,7 @@ export async function directPrintReceipt(
     }
   }
   const targetPrinter = resolvePrinterForDocument('receipt', settings?.printerRouting);
-  const buffer = buildReceiptBuffer(transaction, settings);
+  const buffer = buildReceiptBuffer(transaction, settings, tradeIn);
   const success = await printViaWindowsSpooler(targetPrinter.printerName, buffer);
   if (settings?.kickCashDrawerOnCash !== false) {
     void openCashDrawerViaSpooler(targetPrinter.printerName);
@@ -406,8 +530,23 @@ export function buildXReportBuffer(session: CashSession, settings: ReceiptSettin
     .text(padLine('Apports / Dépôts Manuels :', `+${formatDZD(session.manualDeposits || 0)}`))
     .newline()
     .text(padLine('Dépenses / Sorties Caisse :', `-${formatDZD(session.expenses || 0)}`))
-    .newline()
-    .separator('-', width);
+    .newline();
+  // SAV atelier splits (informational — cash already inside Total Ventes).
+  const xSavDeposits = Math.max(0, Math.round(session.savDeposits || 0));
+  const xSavSettled = Math.max(0, Math.round(session.savSettled || 0));
+  if (xSavDeposits > 0) {
+    b.text(padLine('Acomptes SAV perçus :', `+${formatDZD(xSavDeposits)}`)).newline();
+  }
+  if (xSavSettled > 0) {
+    b.text(padLine('Soldes SAV encaissés :', `+${formatDZD(xSavSettled)}`)).newline();
+  }
+  if (xSavDeposits + xSavSettled > 0) {
+    b.bold(true)
+      .text(padLine('Total Encaissé Atelier :', `+${formatDZD(xSavDeposits + xSavSettled)}`))
+      .newline()
+      .bold(false);
+  }
+  b.separator('-', width);
 
   const theoreticalCash =
     session.expectedCash !== undefined && session.expectedCash !== null

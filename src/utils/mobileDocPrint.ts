@@ -21,8 +21,12 @@ import type {
   TradeInItem,
 } from '../types/pos';
 import { formatDZD, formatDateTime, faitALine } from '../types/pos';
-import { grossFromTransaction, fiscalIdentifierLine, tvaSplitFromTotal } from './receiptMath';
-import { extractWarrantyMonths, hasExplicitWarranty } from './warrantyResolver';
+import { fiscalIdentifierLine, tvaSplitFromTotal } from './receiptMath';
+import {
+  STORE_RETURN_POLICY,
+  TRADE_IN_LEGAL_STATEMENT,
+  buildReceiptViewModel,
+} from './receiptViewModel';
 
 const WIDTH = 42;
 const MAX_LINES = 50;
@@ -51,8 +55,42 @@ function clip(lines: string[]): string {
   return lines.slice(0, MAX_LINES).join('\n');
 }
 
-/** Sales ticket / refund slip (mirrors the 80mm HTML receipt content). */
+/**
+ * Sales ticket / refund slip — UNIFIED PRINT TARGET: every section is derived
+ * from the shared `buildReceiptViewModel` (the same model behind ReceiptPaper
+ * and the ESC/POS buffer) so the Android-sheet ticket, the hardware ticket
+ * and the on-screen paper can never drift apart. Every money row stays ONE
+ * paired 42-col line via `cell()` (labels are never split from values).
+ */
 export function receiptText(tx: SaleTransaction, settings?: ReceiptSettings | null): string {
+  const vm = buildReceiptViewModel(
+    tx,
+    (settings || {}) as ReceiptSettings,
+    // The sheet path receives no intake record: device detail lines fall back
+    // to the persisted deduction leg (same rule as the ESC/POS buffer).
+    { tradeIn: null },
+  );
+  // `row()` clips the LEFT side only — clip the right side too so long
+  // ticket ids can never push a line past 42 cols (or throw on repeat()).
+  const cell = (left: string, right: string): string =>
+    row(left, String(right || '').slice(0, WIDTH));
+  // Centered, word-wrapped banner lines (nature labels can exceed 42 cols).
+  const banner = (text: string): string[] => {
+    const words = (text || '').split(/\s+/).filter(Boolean);
+    const out: string[] = [];
+    let cur = '';
+    for (const w of words) {
+      if ((cur + (cur ? ' ' : '') + w).length > WIDTH) {
+        if (cur) out.push(center(cur));
+        cur = w.length > WIDTH ? w.slice(0, WIDTH) : w;
+      } else {
+        cur = cur ? `${cur} ${w}` : w;
+      }
+    }
+    if (cur) out.push(center(cur));
+    return out;
+  };
+
   const lines: string[] = [];
   lines.push(center(storeNameOf(settings)));
   if (settings?.address) lines.push(center(settings.address));
@@ -60,75 +98,89 @@ export function receiptText(tx: SaleTransaction, settings?: ReceiptSettings | nu
   const fiscalLine = fiscalIdentifierLine(settings);
   if (fiscalLine) lines.push(center(fiscalLine));
   lines.push(rule('='));
-  lines.push(center(tx.isRefund ? "*** BON D'AVOIR ***" : `Ticket N° ${tx.receiptNumber}`));
-  if (tx.isRefund) lines.push(center(`N° Avoir: ${tx.receiptNumber}`));
-  lines.push(center(formatDateTime(tx.createdAt)));
+  // Transaction nature (derived header label, comme le papier écran).
+  lines.push(...banner(`*** ${vm.natureLabel} ***`));
+  // Session telemetry — paired rows, never decoupled columns.
+  lines.push(cell('Ticket:', vm.ticketId));
+  lines.push(cell('Date:', vm.dateTime));
+  lines.push(cell('Caisse:', vm.registerId));
+  lines.push(cell('Vendeur:', vm.cashierName));
   lines.push(rule());
-  if (tx.customer?.name) lines.push(`Client: ${tx.customer.name}`);
+  if (tx.customer?.name) lines.push(cell('Client:', tx.customer.name));
   let warrantyMonthsMax = 0;
-  for (const item of tx.items || []) {
-    const title = item.product?.title || 'Article';
-    const wMonths = item.imeiNumber
-      ? hasExplicitWarranty(item.product)
-        ? extractWarrantyMonths(item.product)
-        : item.product?.category === "Téléphones d'Occasion (Reprise)"
-          ? 3
-          : 0
-      : 0;
+  for (const line of vm.items) {
+    const wMonths = line.warrantyMonths || 0;
     if (wMonths > 0) warrantyMonthsMax = Math.max(warrantyMonthsMax, wMonths);
-    const unit = item.unitPriceCharged ?? item.appliedPrice ?? item.product?.price ?? 0;
-    const gross = unit * item.quantity;
-    const net = Math.max(0, gross - (item.discount || 0));
-    lines.push(`${item.quantity}x ${title.slice(0, 28)}${wMonths > 0 ? ' (*)' : ''}`);
-    lines.push(row(`  @ ${formatDZD(unit)}`, formatDZD(net)));
-    if (item.discount > 0) lines.push(row('  Remise:', `-${formatDZD(item.discount)}`));
+    lines.push(`${line.quantity}x ${(line.name || 'Article').slice(0, 28)}${wMonths > 0 ? ' (*)' : ''}`);
+    lines.push(cell(`  @ ${formatDZD(line.unitPrice)}`, formatDZD(line.total)));
+    if (line.discount > 0) lines.push(cell('  Remise:', `-${formatDZD(line.discount)}`));
+    if (line.imei) lines.push(`  IMEI: ${line.imei}`.slice(0, WIDTH));
   }
   lines.push(rule());
   // B-028: always print SOUS-TOTAL BRUT from the gross invariant so the
   // ticket reconciles even when discountTotal === 0 (legacy rows / credits).
-  {
-    const gross = grossFromTransaction(tx);
-    lines.push(row('SOUS-TOTAL:', formatDZD(gross)));
-    if (tx.discountTotal > 0) {
-      lines.push(row('REMISE:', `-${formatDZD(tx.discountTotal)}`));
-    }
+  lines.push(cell('SOUS-TOTAL BRUT:', formatDZD(vm.grossSubtotal)));
+  if (vm.discounts > 0) {
+    lines.push(cell('REMISE ACCORDEE:', `-${formatDZD(vm.discounts)}`));
   }
-  const tva = tvaSplitFromTotal(tx.total, settings?.vatRate);
+  if (vm.tradeInCredit > 0) {
+    lines.push(cell('CREDIT REPRISE DEDUIT:', `-${formatDZD(vm.tradeInCredit)}`));
+  }
+  if (vm.voucherCredit > 0) {
+    lines.push(
+      cell(vm.voucherCode ? `BON (${vm.voucherCode}):` : 'BON ECHANGE:', `-${formatDZD(vm.voucherCredit)}`)
+    );
+  }
+  if (vm.avoirCredit > 0) {
+    lines.push(cell('AVOIR CLIENT DEDUIT:', `-${formatDZD(vm.avoirCredit)}`));
+  }
+  const tva = tvaSplitFromTotal(vm.netDue, settings?.vatRate);
   if (tva) {
-    lines.push(row('HT:', formatDZD(tva.ht)));
-    lines.push(row(`TVA ${tva.rate}%:`, `+${formatDZD(tva.tva)}`));
-    lines.push(row('TTC:', formatDZD(tva.ttc)));
+    lines.push(cell('HT:', formatDZD(tva.ht)));
+    lines.push(cell(`TVA ${tva.rate}%:`, `+${formatDZD(tva.tva)}`));
+    lines.push(cell('TTC:', formatDZD(tva.ttc)));
   }
-  lines.push(row(tx.isRefund ? 'TOTAL REMBOURSE:' : 'TOTAL:', formatDZD(tx.total)));
+  lines.push(cell(tx.isRefund ? 'TOTAL REMBOURSE:' : 'TOTAL NET A PAYER:', formatDZD(vm.netDue)));
   // Two-way exchange leg (never a cart line): print the deduction + soulte
   // so the thermal ticket reconciles like the desktop net receipt.
   if (tx.tradeInId && (tx.tradeInDeduction || 0) > 0) {
-    lines.push(row('Reprise deduite:', `-${formatDZD(tx.tradeInDeduction || 0)}`));
+    lines.push(cell('Reprise deduite:', `-${formatDZD(tx.tradeInDeduction || 0)}`));
+  }
+  if (vm.tradeIn) {
+    lines.push(center('[APPAREIL REPRIS / TRADE-IN]'));
+    lines.push(cell('Modele:', vm.tradeIn.model));
+    if (vm.tradeIn.imei) lines.push(cell('IMEI:', vm.tradeIn.imei));
+    if (vm.tradeIn.grade) lines.push(cell('Etat:', vm.tradeIn.grade));
+    for (const ln of banner(TRADE_IN_LEGAL_STATEMENT)) lines.push(ln);
   }
   if (tx.tradeInSoulte && tx.tradeInSoulte.amount > 0) {
     lines.push(
-      row(
+      cell(
         tx.tradeInSoulte.method === 'cash' ? 'Soulte versee (esp.):' : 'Soulte en avoir:',
         formatDZD(tx.tradeInSoulte.amount)
       )
     );
   }
-  lines.push(row('Règlement:', tx.paymentMethod || 'Espèces'));
-  if (!tx.isRefund && tx.cashTendered > 0) {
-    lines.push(row('Reçu:', formatDZD(tx.cashTendered)));
-    lines.push(row('Rendu:', formatDZD(tx.changeDue || 0)));
+  // Multi-tender settlement — one paired row per leg.
+  lines.push(tx.isRefund ? 'Modes de Remboursement:' : 'Modes de Reglement:');
+  for (const tender of vm.tenders) {
+    lines.push(cell(`${tender.label}:`, formatDZD(tender.amount)));
+  }
+  if (!tx.isRefund) {
+    lines.push(cell('Rendu:', formatDZD(vm.changeDue)));
   }
   if ((tx.customer?.storeCredit || 0) > 0) {
-    lines.push(row('Avoir client dispo:', `+${formatDZD(tx.customer?.storeCredit || 0)}`));
+    lines.push(cell('Avoir client dispo:', `+${formatDZD(tx.customer?.storeCredit || 0)}`));
   }
   if ((tx.customer?.currentDebt || 0) > 0) {
-    lines.push(row('Dette restante:', formatDZD(tx.customer?.currentDebt || 0)));
+    lines.push(cell('Dette restante:', formatDZD(tx.customer?.currentDebt || 0)));
   }
   if (warrantyMonthsMax > 0) {
     lines.push(`Garantie: ${warrantyMonthsMax} mois sur articles (*)`);
   }
-  if (tx.isRefund && tx.refundReason) lines.push(`Motif: ${tx.refundReason}`);
+  if (tx.isRefund && tx.refundReason) lines.push(`Motif: ${tx.refundReason}`.slice(0, WIDTH));
   lines.push(rule('='));
+  for (const ln of banner(STORE_RETURN_POLICY)) lines.push(ln);
   lines.push(center('Merci de votre visite !'));
   return clip(lines);
 }
