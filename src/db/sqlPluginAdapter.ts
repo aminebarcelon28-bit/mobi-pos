@@ -3010,6 +3010,29 @@ export async function restituteStockBatches(
   allocations: Array<{ batchId?: string; productId: string; quantity: number; unitCost: number }>,
   opts?: { batchKeySeed?: string }
 ): Promise<void> {
+  // F04: same defense stack as checkout/void/refund — same-window
+  // withWriteLock + cross-tab BEGIN IMMEDIATE + pool BUSY retry. The SQLite
+  // writes run inside restituteStockBatchesInner's transaction; the Dexie
+  // mirror stays outside the lock (Dexie I/O must never hold the SQLite
+  // writer chain).
+  const productIds = await withBusyRetry(
+    () => withWriteLock(() => restituteStockBatchesInner(allocations, opts)),
+    { attempts: 8, baseDelayMs: 120, label: 'restitute' }
+  );
+  if (productIds.length > 0) {
+    try {
+      const db = await getLocalDb();
+      await mirrorStockBatchesToDexie(db, productIds);
+    } catch (mirrorErr) {
+      console.warn('[restituteStockBatches] Dexie batch mirror skipped:', mirrorErr);
+    }
+  }
+}
+
+async function restituteStockBatchesInner(
+  allocations: Array<{ batchId?: string; productId: string; quantity: number; unitCost: number }>,
+  opts?: { batchKeySeed?: string }
+): Promise<string[]> {
   const db = await getLocalDb();
   const deviceId = (await getOrCreateDeviceId(db)) || 'default';
   const now = utcNowIso();
@@ -3018,6 +3041,8 @@ export async function restituteStockBatches(
   // second execution converges via ON CONFLICT instead of double-restoring.
   // Without a seed the legacy wall-clock keys are kept (same as before).
   const seed = String(opts?.batchKeySeed ?? '').trim();
+  const useTxn = await beginImmediate(db, 'db:restitute');
+  try {
 
   for (const [allocIdx, alloc] of allocations.entries()) {
     const qty = Math.max(0, alloc.quantity);
@@ -3037,47 +3062,89 @@ export async function restituteStockBatches(
       // Missing/deleted rows fall through to the REFUND batch below.
       const existing = (await db
         .select(
-          'SELECT batch_id, quantity_remaining, unit_cost FROM stock_batches WHERE batch_id = $1 AND (deleted = 0 OR deleted IS NULL)',
+          'SELECT batch_id, quantity_remaining, unit_cost, version FROM stock_batches WHERE batch_id = $1 AND (deleted = 0 OR deleted IS NULL)',
           [alloc.batchId]
         )
-        .catch(() => [])) as Array<{ batch_id: string; quantity_remaining: number; unit_cost: number }>;
+        .catch(rethrowBusy)) as Array<{ batch_id: string; quantity_remaining: number; unit_cost: number; version: number }>;
 
       if (existing.length > 0) {
-        const newQty = Number(existing[0].quantity_remaining) + qty;
-        await db.execute(
+        const baseQty = Number(existing[0].quantity_remaining);
+        const baseVersion = Number(existing[0].version ?? 0);
+        const newQty = baseQty + qty;
+        const upd = await db.execute(
           `UPDATE stock_batches
            SET quantity_remaining = $1,
                version = version + 1,
                updated_at = $2,
                sync_status = 'pending'
-           WHERE batch_id = $3`,
-          [newQty, now, alloc.batchId]
-        );
-        // H27: stamp the bumped version so the remote guard + isGuardedUpsert work
-        const restituteVersion0 = ((await db
-          .select('SELECT version FROM stock_batches WHERE batch_id = $1', [alloc.batchId])
-          .catch(() => [{ version: 1 }])) as Array<{ version: number }>)[0]?.version ?? 1;
+           WHERE batch_id = $3 AND version = $4`,
+          [newQty, now, alloc.batchId, baseVersion]
+        ).catch(rethrowBusy);
+        const rowsAffected = Number((upd as { rowsAffected?: number })?.rowsAffected ?? 0);
+        let finalQty = newQty;
+        let finalUnitCost = Number(existing[0].unit_cost);
+        let tombstonedMidOp = false;
+        if (rowsAffected === 0) {
+          // Lost the OCC race against a concurrent deplete/restitute on the
+          // same batch: re-read once and retry on the fresh version. A second
+          // miss means sustained contention — throw retryable so the outer
+          // withBusyRetry re-runs the whole (idempotent) operation.
+          const fresh = (await db
+            .select(
+              'SELECT batch_id, quantity_remaining, unit_cost, version FROM stock_batches WHERE batch_id = $1 AND (deleted = 0 OR deleted IS NULL)',
+              [alloc.batchId]
+            )
+            .catch(rethrowBusy)) as Array<{ batch_id: string; quantity_remaining: number; unit_cost: number; version: number }>;
+          if (fresh.length === 0) {
+            // Batch was tombstoned mid-operation: fall through to REFUND mint.
+            tombstonedMidOp = true;
+          } else {
+            const freshQty = Number(fresh[0].quantity_remaining) + qty;
+            const freshVersion = Number(fresh[0].version ?? 0);
+            const upd2 = await db.execute(
+              `UPDATE stock_batches
+               SET quantity_remaining = $1,
+                   version = version + 1,
+                   updated_at = $2,
+                   sync_status = 'pending'
+               WHERE batch_id = $3 AND version = $4`,
+              [freshQty, now, alloc.batchId, freshVersion]
+            ).catch(rethrowBusy);
+            const rows2 = Number((upd2 as { rowsAffected?: number })?.rowsAffected ?? 0);
+            if (rows2 === 0) {
+              throw Object.assign(new Error('RESTITUTE_VERSION_CONFLICT'), { code: 5 });
+            }
+            finalQty = freshQty;
+            finalUnitCost = Number(fresh[0].unit_cost);
+          }
+        }
+        if (!tombstonedMidOp) {
+          // H27: stamp the bumped version so the remote guard + isGuardedUpsert work
+          const restituteVersion0 = ((await db
+            .select('SELECT version FROM stock_batches WHERE batch_id = $1', [alloc.batchId])
+            .catch(rethrowBusy)) as Array<{ version: number }>)[0]?.version ?? 1;
 
-        const batchOutboxKey = seed ? `sb-${seed}-${alloc.batchId}` : `sb-${alloc.batchId}-${now}`;
-        await db.execute(
-          `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-           VALUES ($1, 'stock_batches', $2, 'UPSERT', $3, 'pending')
-           ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, status='pending', updated_at=$4`,
-          [
-            batchOutboxKey,
-            alloc.batchId,
-            JSON.stringify({
-          version: restituteVersion0,
-              batch_id: alloc.batchId,
-              product_id: alloc.productId,
-              quantity_remaining: newQty,
-              unit_cost: Number(existing[0].unit_cost),
-              updated_at: now,
-            }),
-            now,
-          ]
-        );
-        restored = true;
+          const batchOutboxKey = seed ? `sb-${seed}-${alloc.batchId}` : `sb-${alloc.batchId}-${now}`;
+          await db.execute(
+            `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+             VALUES ($1, 'stock_batches', $2, 'UPSERT', $3, 'pending')
+             ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, status='pending', updated_at=$4`,
+            [
+              batchOutboxKey,
+              alloc.batchId,
+              JSON.stringify({
+                version: restituteVersion0,
+                batch_id: alloc.batchId,
+                product_id: alloc.productId,
+                quantity_remaining: finalQty,
+                unit_cost: finalUnitCost,
+                updated_at: now,
+              }),
+              now,
+            ]
+          ).catch(rethrowBusy);
+          restored = true;
+        }
       }
     }
 
@@ -3123,30 +3190,24 @@ export async function restituteStockBatches(
     }
   }
 
-  // Restitution valuation sync point (#3 of 3: checkout / restitution /
-  // reconcile). Restitution either restores quantity onto the original batch
-  // or mints a `REFUND` batch — both mutate `stock_batches`, and without this
-  // the Dexie mirror went stale after every refund, which is exactly what the
-  // SQLite → Dexie → legacy valuation fallback reads.
-  //
-  // Placed AFTER the loop so every SQLite write has committed (this function
-  // holds no transaction), and scoped to the affected product ids so a large
-  // refund never triggers a full inventory batch dump. Fail-soft: SQLite is
-  // the authority, so a mirror failure must never fail a refund.
-  const restitutedProductIds = [
+    if (useTxn) {
+      await db.execute('COMMIT;').catch(rethrowBusy);
+    }
+  } catch (txnErr) {
+    if (useTxn) {
+      await db.execute('ROLLBACK;').catch(() => {});
+    }
+    throw txnErr;
+  }
+  // Returned to the outer wrapper which mirrors to Dexie OUTSIDE the write
+  // lock (mirror is Dexie I/O, never SQLite-writer-chained).
+  return [
     ...new Set(
       allocations
         .map((a) => a?.productId)
         .filter((id): id is string => Boolean(id))
     ),
   ];
-  if (restitutedProductIds.length > 0) {
-    try {
-      await mirrorStockBatchesToDexie(db, restitutedProductIds);
-    } catch (mirrorErr) {
-      console.warn('[restituteStockBatches] Dexie batch mirror skipped:', mirrorErr);
-    }
-  }
 }
 
 /**
