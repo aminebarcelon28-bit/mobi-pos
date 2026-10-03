@@ -557,7 +557,6 @@ export async function remirrorToDexie(force = false): Promise<{ mirrored: number
           price: Number(r.price ?? 0),
           wholesalePrice: Number(r.wholesale_price ?? 0),
           costPrice: Number(r.cost_price ?? 0),
-          stock: Number(r.stock ?? 0),
           imageUrl: String(r.image_url ?? ''),
           isSerialized: Boolean(r.is_serialized),
           imeiNumber: r.imei_number ? String(r.imei_number) : undefined,
@@ -568,6 +567,12 @@ export async function remirrorToDexie(force = false): Promise<{ mirrored: number
           compatibleModel: String(r.compatible_model ?? ''),
           ...base,
           id: String(r.id),
+          // Row-column authority (double-count fix): ledger recomputes
+          // (appendInventoryDeltas et al.) UPDATE products.stock WITHOUT
+          // touching json_payload, so a stale blob must never win for stock.
+          // Column-first with blob fallback, mirroring the transactions
+          // reconstructor's `r.x ?? parsed.x` precedence below.
+          stock: Number(r.stock ?? (base as { stock?: unknown }).stock ?? 0),
         });
       } catch (err) {
         console.warn(`[backfill] Error preparing product ${r.id} for Dexie:`, err);

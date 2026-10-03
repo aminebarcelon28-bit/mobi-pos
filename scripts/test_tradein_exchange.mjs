@@ -435,6 +435,120 @@ console.log('\n--- S6: injection, spaces, folio, A4 escaping ---');
 }
 
 console.log('\n========================================================================');
+console.log('SUITE 10 — EXTREME NUMBERS (T2/T3/T5-exact, T6 invisibles)');
+console.log('========================================================================');
+{
+  // T5-exact: 100k gross / 60k net / 40k trade — the brief's ticket shape.
+  const orig5 = { total: 60000, subtotal: 100000, tenders: [{ method: 'Espèces', amount: 60000 }, { method: 'Reprise', amount: 40000 }] };
+  const leg1 = rm.computeRefundFundingSplit(orig5, 60000, 0);
+  check('T5 leg1: net 36k, cash 36k (never 60k gross)', leg1.netRefund === 36000 && leg1.cashShare === 36000, JSON.stringify(leg1));
+  check('T5 leg1 restore 24k (60% of 40k)', rm.computeTradeRestoreQuota(40000, 36000, 60000, 0) === 24000);
+  check('T5 leg2 restore 16k, capped remainder', rm.computeTradeRestoreQuota(40000, 24000, 60000, 24000) === 16000);
+  // Cross-leg conservation: both cash legs + both wallet legs each sum to
+  // exactly what the customer gave (60k cash, 40k trade) — zero leak.
+  const soulteT2 = rm.computeTradeInSettlement(35000, 100000);
+  const leg2 = rm.computeRefundFundingSplit(orig5, 40000, leg1.netRefund);
+  const cashSum = leg1.cashShare + leg2.cashShare;
+  check('T5 totals: cash legs sum to 60k paid', cashSum === 60000, String(cashSum));
+  // Scenario 4-exact: 80k gross / 50k net = 30k BaridiMob + 20k cash + 30k trade.
+  // Item-A return (50k gross): cash 12 500 ONLY — the 18 750 digital share
+  // reverses on its rail, never from the drawer.
+  const s4 = { total: 50000, subtotal: 80000, tenders: [{ method: 'Espèces', amount: 20000 }, { method: 'BaridiMob', amount: 30000 }, { method: 'Reprise', amount: 30000 }] };
+  const s4leg1 = rm.computeRefundFundingSplit(s4, 50000, 0);
+  check('S4 leg1: net 31 250 (pro-rata of net-paid base)', s4leg1.netRefund === 31250, JSON.stringify(s4leg1));
+  check('S4 leg1: cash strictly 12 500 (drawer-safe)', s4leg1.cashShare === 12500, JSON.stringify(s4leg1));
+  check('S4 leg1: digital 18 750 fenced off cash', s4leg1.digitalShare === 18750, JSON.stringify(s4leg1));
+  check('S4 leg1: wallet restore 18 750 (trade pro-rata)', rm.computeTradeRestoreQuota(30000, 31250, 50000, 0) === 18750);
+  check('S4 leg1: 12 500 + 18 750 + 18 750 = 50 000 reversed, zero leak',
+    s4leg1.cashShare + s4leg1.digitalShare + rm.computeTradeRestoreQuota(30000, 31250, 50000, 0) === 50000);
+  // Legacy identity: no digital rails → byte-identical legacy behavior.
+  const leg = { total: 40000, subtotal: 40000, paymentMethod: 'Espèces' };
+  const legSplit = rm.computeRefundFundingSplit(leg, 40000, 0);
+  check('legacy cash row unchanged (cash 40k, digital 0)', legSplit.cashShare === 40000 && legSplit.digitalShare === 0, JSON.stringify(legSplit));
+  const legDig = { total: 50000, subtotal: 50000, paymentMethod: 'BaridiMob' };
+  const legDigSplit = rm.computeRefundFundingSplit(legDig, 50000, 0);
+  check('legacy digital row: cash 0, digital 50k (no drawer drain)', legDigSplit.cashShare === 0 && legDigSplit.digitalShare === 50000, JSON.stringify(legDigSplit));
+  // T2-exact: wallet +65 000 on soulte, drawer untouched by construction.
+  check('T2 wallet math: soulte fully credited', soulteT2.shopOwes - 0 === 65000);
+  check('T2 settlement SOULTE 65 000', soulteT2.direction === 'SOULTE_SHOP_PAYS' && soulteT2.shopOwes === 65000);
+  // T3-exact (pure percent path): 88 350 base, 15k + 10k + 63 350 = EVEN.
+  // (In the UI, applyCartDiscountPercent distributes onto lines and replaces
+  // the seeded line discount — the browser spec pins that engine truth.)
+  const hydra = rm.computeCartTotals(
+    [{ product: { price: 100000 }, appliedPrice: 100000, quantity: 1, discount: 7000 }],
+    { vatRate: 0, cartDiscountPercent: 5, storeCreditApplied: 15000, voucherCreditApplied: 10000, tradeInCredit: 63350 }
+  );
+  check('T3 base 88 350 (100k − 7k − 5%)', hydra.subtotalAfterDiscount === 88350, String(hydra.subtotalAfterDiscount));
+  check('T3 net EVEN 0, refundDue 0', hydra.net === 0 && hydra.total === 0 && hydra.refundDue === 0, JSON.stringify({ net: hydra.net }));
+  check('T3 trade clamped exactly 63 350', hydra.tradeInCreditApplied === 63350);
+  const hydraVat = rm.computeCartTotals(
+    [{ product: { price: 100000 }, appliedPrice: 100000, quantity: 1, discount: 7000 }],
+    { vatRate: 19, cartDiscountPercent: 5 }
+  );
+  check('T3 VAT base on 88 350 (ht 88 350, tva 16 787)', hydraVat.ht === 88350 && hydraVat.tva === 16787, JSON.stringify({ ht: hydraVat.ht, tva: hydraVat.tva }));
+  // T6 invisibles: bidi overrides + zero-width stripped before Luhn.
+  check('U+202E stripped', sav.sanitizeImeiInput('‮490154203237518') === '490154203237518');
+  check('U+200B stripped', sav.sanitizeImeiInput('4901542032375​18') === '490154203237518');
+  check('mixed hostile whitespace compacts', sav.sanitizeImeiInput(' 4901 \t5420 \n3237 \r518 ') === '490154203237518');
+  check('sanitized valid vector passes Luhn', sav.luhnCheckImei(sav.sanitizeImeiInput('‮4901 \t5420 \n3237 \r518​')) === true);
+}
+
+console.log('\n========================================================================');
+console.log('SUITE 11 — DOUBLE-COUNT REGRESSION (ledger-first invariant)');
+console.log('========================================================================');
+{
+  // Static order gate: RECEIVE delta must precede the product save in BOTH
+  // intake paths, else syncProductUpsert mints a spurious ADJUST/manual +1
+  // (wantStock 1 − empty-ledger baseline 0) and SUM lands at 2.
+  const uiSlice = fs.readFileSync(`${ROOT}/src/store/slices/createUISlice.ts`, 'utf8');
+  const procSpan = uiSlice.slice(uiSlice.indexOf('processTradeIn: async'), uiSlice.indexOf('addStoreExpense: async'));
+  const stagedSpan = uiSlice.slice(uiSlice.indexOf('commitStagedTradeInIntake: async'), uiSlice.indexOf('addStoreExpense: async'));
+  for (const [name, span] of [['processTradeIn', procSpan], ['commitStagedTradeInIntake', stagedSpan]]) {
+    const ledgerAt = span.indexOf('appendInventoryDeltas');
+    const saveAt = span.indexOf('getProductRepo()).save(convertedProduct)');
+    check(`${name}: ledger RECEIVE precedes product save`, ledgerAt > 0 && saveAt > 0 && ledgerAt < saveAt);
+  }
+  // Mechanism mirror on equivalent schema: replicate syncProductUpsert's
+  // baseline rule (ADJUST = wantStock − SUM, iff nonzero).
+  const mdb = new DatabaseSync(':memory:');
+  mdb.exec(`CREATE TABLE products (id TEXT PRIMARY KEY, stock REAL NOT NULL DEFAULT 0);
+            CREATE TABLE inventory_ledger (id TEXT PRIMARY KEY, product_id TEXT NOT NULL, delta REAL NOT NULL, reason TEXT NOT NULL);
+            CREATE TABLE stock_batches (batch_id TEXT PRIMARY KEY, product_id TEXT NOT NULL, quantity_remaining REAL NOT NULL);`);
+  const seedUpsert = (pid, wantStock) => {
+    const row = mdb.prepare(`SELECT COALESCE(SUM(delta),0) AS s, COUNT(*) AS n FROM inventory_ledger WHERE product_id = ?`).get(pid);
+    mdb.prepare(`INSERT INTO products (id, stock) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET stock=excluded.stock`).run(pid, wantStock);
+    if (wantStock - row.s !== 0) {
+      mdb.prepare(`INSERT INTO inventory_ledger (id, product_id, delta, reason) VALUES (?,?,?,'ADJUST')`).run(`seed-${pid}-${Date.now()}${Math.random()}`, pid, wantStock - row.s);
+    }
+  };
+  const receive = (pid, key) => {
+    mdb.prepare(`INSERT INTO inventory_ledger (id, product_id, delta, reason) VALUES (?,?,?,'RECEIVE')`).run(key, pid, 1);
+    mdb.prepare(`UPDATE products SET stock = (SELECT COALESCE(SUM(delta),0) FROM inventory_ledger WHERE product_id = ?) WHERE id = ?`).run(pid, pid);
+  };
+  const sumOf = (pid) => mdb.prepare(`SELECT COALESCE(SUM(delta),0) AS s FROM inventory_ledger WHERE product_id = ?`).get(pid).s;
+  // OLD (buggy) order: save-then-receive.
+  seedUpsert('old', 1); receive('old', 'recv-old');
+  const oldStock = mdb.prepare(`SELECT stock FROM products WHERE id='old'`).get().stock;
+  check('OLD order reproduces stock=2 (documents the bug shape)', oldStock === 2 && sumOf('old') === 2, `stock=${oldStock}`);
+  // Merge precedence (row authority over stale blob): the products mirror
+  // must take stock from the SQLite column, falling back to the blob only
+  // when the column is absent — ledger recomputes touch the column alone.
+  const bfSrc = fs.readFileSync(`${ROOT}/src/db/backfill.ts`, 'utf8');
+  const prodPush = bfSrc.slice(bfSrc.indexOf('productsToPut.push({'), bfSrc.indexOf('const txMirrored'));
+  const baseAt = prodPush.indexOf('...base');
+  const stockAt = prodPush.lastIndexOf('stock:');
+  check('remirror: row stock authoritative over json blob', baseAt > 0 && stockAt > baseAt && prodPush.includes('r.stock'), `base@${baseAt} stock@${stockAt}`);
+  // NEW order: receive-then-save.
+  receive('new', 'recv-new');
+  seedUpsert('new', 1);
+  const newStock = mdb.prepare(`SELECT stock FROM products WHERE id='new'`).get().stock;
+  const newRows = mdb.prepare(`SELECT COUNT(*) AS n FROM inventory_ledger WHERE product_id='new'`).get().n;
+  const newAdjust = mdb.prepare(`SELECT COUNT(*) AS n FROM inventory_ledger WHERE product_id='new' AND reason='ADJUST'`).get().n;
+  check('NEW order lands stock=1, single ledger row, zero ADJUST', newStock === 1 && newRows === 1 && newAdjust === 0 && sumOf('new') === 1,
+    `stock=${newStock} rows=${newRows} adjust=${newAdjust}`);
+}
+
+console.log('\n========================================================================');
 console.log(`RESULT: ${pass} PASSED, ${fail} FAILED, ${pending.length} PENDING, ${deferred.length} DEFERRED:TAURI`);
 console.log('========================================================================');
 if (pending.length) {
