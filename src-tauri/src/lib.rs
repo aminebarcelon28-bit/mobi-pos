@@ -10,6 +10,7 @@ pub mod hardware;
 pub mod scanner;
 pub mod geometry;
 pub mod gate;
+pub mod money;
 pub mod db;
 pub mod resolver;
 pub mod commands;
