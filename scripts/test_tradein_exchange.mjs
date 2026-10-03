@@ -116,14 +116,15 @@ console.log('\n--- 3. Split: cart 130 000, buyback 50 000 -> reste 80 000 ---');
   markDeferred('Suite1-3 live processPayment Reprise split', 'Reprise legs on all 5 submit paths + TRADE_STAGING_DROPPED/WITHOUT_STAGING guards (Suite 8); run once on-device');
 }
 
-// ── 4. VAT & discount non-corruption ──
-console.log('\n--- 4. VAT: subtotal 100 000, -10% = 90 000, trade-in 40 000 ---');
+// ── 4. NO-TVA & discount non-corruption (Gate Addendum A) ──
+console.log('\n--- 4. NO-TVA: subtotal 100 000, -10% = 90 000, trade-in 40 000 ---');
 {
   const base = rm.computeCartTotals([line(100000)], { vatRate: 19, cartDiscountPercent: 10 });
   check('discounted base 90 000', base.subtotalAfterDiscount === 90000, String(base.subtotalAfterDiscount));
+  check('no-TVA: vatRate ignored (tva 0, total = base)', base.tva === 0 && base.tax === 0 && base.total === 90000, JSON.stringify({ tva: base.tva, total: base.total }));
   const withTrade = rm.computeCartTotals([line(100000)], { vatRate: 19, cartDiscountPercent: 10, tradeInCredit: 40000 });
   check('trade-in applies after discount: net 50 000', withTrade.net === 50000, String(withTrade.net));
-  check('VAT base on discounted 90 000, unreduced by trade-in', withTrade.ht === base.ht && withTrade.tva === base.tva, JSON.stringify({ ht: withTrade.ht, tva: withTrade.tva }));
+  check('no-TVA: ht 90 000 unreduced by trade-in, tva 0', withTrade.ht === 90000 && withTrade.tva === 0 && withTrade.ht === base.ht, JSON.stringify({ ht: withTrade.ht, tva: withTrade.tva }));
   check('gross subtotal untouched (100 000)', withTrade.grossSubtotal === 100000);
 }
 
@@ -362,14 +363,13 @@ console.log('\n--- S3: 100k −5k line −10k lines ⇒ base 85k, avoir 30k, tra
   ];
   const base = rm.computeCartTotals(cart, { vatRate: 19 });
   check('payable base exactly 85 000', base.subtotalAfterDiscount === 85000, String(base.subtotalAfterDiscount));
-  // Note: net/refund assertions run at vatRate 0 — with VAT 19 the HT/TVA
-  // integer split can leave a legitimate 1 DA remainder on `total` (cashier
-  // collects it; refundDue stays 0 so nothing is manufactured).
+  // NO-TVA: vatRate ignored — ht equals the base exactly, tva 0, no remainder.
+  check('no-TVA: ht 85k, tva 0, total 85k', base.ht === 85000 && base.tva === 0 && base.total === 85000, JSON.stringify(base));
   const withTrade = rm.computeCartTotals(cart, { vatRate: 0, storeCreditApplied: 30000, tradeInCredit: 55000 });
   check('55k trade + 30k avoir ⇒ net 0, refundDue 0', withTrade.net === 0 && withTrade.total === 0 && withTrade.refundDue === 0, JSON.stringify({ net: withTrade.net, rd: withTrade.refundDue }));
   const withTradeVat = rm.computeCartTotals(cart, { vatRate: 19, storeCreditApplied: 30000, tradeInCredit: 55000 });
-  check('VAT base strictly 85k (untouched by tenders)', withTradeVat.ht === base.ht && withTradeVat.tva === base.tva, JSON.stringify({ ht: withTradeVat.ht }));
-  check('VAT path never manufactures a refund (refundDue 0)', withTradeVat.refundDue === 0);
+  check('no-TVA: ht strictly 85k (untouched by tenders), tva 0', withTradeVat.ht === 85000 && withTradeVat.tva === 0, JSON.stringify({ ht: withTradeVat.ht }));
+  check('no-TVA path never manufactures a refund (refundDue 0)', withTradeVat.refundDue === 0);
   const over = rm.computeCartTotals(cart, { vatRate: 0, storeCreditApplied: 30000, tradeInCredit: 60000 });
   check('60k trade clamps to 55k remainder (no phantom refund)', over.tradeInCreditApplied === 55000 && over.net === 0 && over.refundDue === 0, JSON.stringify(over));
   const st = rm.computeTradeInSettlement(85000, 60000);
@@ -485,7 +485,7 @@ console.log('===================================================================
     [{ product: { price: 100000 }, appliedPrice: 100000, quantity: 1, discount: 7000 }],
     { vatRate: 19, cartDiscountPercent: 5 }
   );
-  check('T3 VAT base on 88 350 (ht 88 350, tva 16 787)', hydraVat.ht === 88350 && hydraVat.tva === 16787, JSON.stringify({ ht: hydraVat.ht, tva: hydraVat.tva }));
+  check('T3 no-TVA on 88 350 (ht 88 350, tva 0, total 88 350)', hydraVat.ht === 88350 && hydraVat.tva === 0 && hydraVat.total === 88350, JSON.stringify({ ht: hydraVat.ht, tva: hydraVat.tva }));
   // T6 invisibles: bidi overrides + zero-width stripped before Luhn.
   check('U+202E stripped', sav.sanitizeImeiInput('‮490154203237518') === '490154203237518');
   check('U+200B stripped', sav.sanitizeImeiInput('4901542032375​18') === '490154203237518');

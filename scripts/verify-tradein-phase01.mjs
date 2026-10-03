@@ -59,11 +59,12 @@ check('clamp: 200k credit on 120k cart -> applied 120k, net 0', t2.tradeInCredit
 // Combined with avoir + voucher
 const t3 = rm.computeCartTotals([line(120000)], { vatRate: 0, storeCreditApplied: 10000, voucherCreditApplied: 5000, tradeInCredit: 50000 });
 check('stacked credits: 120k-10k-5k-50k = 55k', t3.net === 55000, JSON.stringify(t3));
-// VAT base invariance: tradeIn is payment, not discount
+// NO-TVA (Gate Addendum A): vatRate is ignored — every sale is HT-only.
+// tradeIn is payment, not discount: ht unchanged, credit reduces ttc.
 const v0 = rm.computeCartTotals([line(100000)], { vatRate: 19 });
 const v1 = rm.computeCartTotals([line(100000)], { vatRate: 19, tradeInCredit: 40000 });
-check('VAT base unchanged by tradeIn (ht/tva equal)', v0.ht === v1.ht && v0.tva === v1.tva, JSON.stringify({ v0, v1 }));
-check('VAT ttc reduced by credit', v1.ttc === Math.max(0, v0.ht + v0.tva - 40000), JSON.stringify(v1));
+check('no-TVA: vatRate 19 ignored (tva 0, ht 100k)', v0.tva === 0 && v0.ht === 100000 && v0.ttc === 100000, JSON.stringify({ v0 }));
+check('no-TVA: ht unchanged by tradeIn, ttc reduced by credit', v1.ht === v0.ht && v1.tva === 0 && v1.ttc === 60000, JSON.stringify(v1));
 
 console.log('=== Phase 1: generateUniqueSku OCC ===');
 const bcSrc = fs.readFileSync(`${ROOT}/src/utils/barcodeGenerator.ts`, 'utf8');
