@@ -318,6 +318,21 @@ build fails.
 - R-3 (closed): `origin/feature/tradein-exchange` pushed through `c315508`
   and follow-ups (network flaky — retry or owner-push if a commit is left
   local-only at any gate).
+- **PF-1 crash atomicity (verified by construction + drill):** every phase
+  is a single transaction, so a power cut at ANY point leaves old-or-new,
+  never half. Path A DROP COLUMN and both rollbacks (ADD COLUMN) are single
+  DDL statements — SQLite DDL is transactional, hence atomic. The Path B
+  fallback runs inside one explicit `BEGIN IMMEDIATE...COMMIT` (rehearsal +
+  production migration alike). Remote v13 is a single DDL statement
+  (atomic server-side; runbook `docs/remote-leg-runbook.md`). No phase spans
+  transactions; recovery after a kill is: reopen (WAL/journal rollback) and
+  the DB is old-schema (re-run migration) or new-schema (done) — asserted
+  per boundary by `scripts/drill-1b-i-abort.mjs` (39/39).
+- R-1 flip condition (for the owning lanes' definition of done): when
+  `snapshot_prune.rs` + `hardware::native_hwid_hash` land, verify the
+  full-crate money suite green on a CLEAN checkout, then remove
+  `continue-on-error` from the CI step. Until then it stays informational;
+  a red informational step is re-checked at every gate, never wallpaper.
 - §3 rehearsal (`scripts/rehearse-1b-i-local.mjs`, 22/22 on a VACUUM INTO
   copy of the live 603-transaction DB; live data untouched): pre-counts
   (total 603, tax!=0 = 0, tax SUM = 0); Path A native DROP COLUMN (indexes
