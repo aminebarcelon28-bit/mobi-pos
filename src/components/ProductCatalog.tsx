@@ -72,7 +72,7 @@ const ProductTile = React.memo(({
       role="button"
       tabIndex={0}
       title={isOutOfStock ? `Rupture de stock — « ${product.title} » : ajout possible avec PIN manager (vente forcée)` : `« ${product.title} » — ${formatDZD(activePrice)} (${product.stock} en stock)`}
-      aria-label={isOutOfStock ? `${product.title}, rupture de stock, ajout possible avec PIN manager` : `${product.title}, ${formatDZD(activePrice)}, ${product.stock} en stock`}
+      aria-label={isOutOfStock ? `${product.title}, Rupture de stock, ajout possible avec PIN manager` : isService ? `${product.title}, Prestation, ${formatDZD(activePrice)}` : `${product.title}, ${product.stock} dispo, ${formatDZD(activePrice)}`}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();

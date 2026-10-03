@@ -13,7 +13,11 @@ import {
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
 import { formatDZD, APP_VERSION, type CashierUser } from '../../types/pos';
-import { verifyPin, hashPin } from '../../utils/security';
+import { verifyPin, hashDeviceLocalPin, isCommonPin, needsPinRotation } from '../../utils/security';
+import { verifyManagerGate, verifyUserGate } from '../../utils/pinGate';
+import { friendlyPinSetError } from '../../api/pin';
+import { canSeeJournalLauncher } from '../../utils/auditGate';
+import { PinDialog } from '../ui/PinDialog';
 import { parseLocalizedAmount } from '../../utils/moneyInput';
 import { normalizeLoyaltyConfig, calculateFinancialProfitImpact } from '../../utils/loyaltyEngine';
 import type { LoyaltyProgramConfig } from '../../types/pos';
@@ -507,20 +511,45 @@ export const SettingsModal: React.FC = () => {
     importDatabase,
     receiptSettings,
     setReceiptSettings,
-    setManagerPin,
-    verifyManagerPin,
+    // Phase 4a: all credential mints route through rotatePinCredential
+    // (native Argon2id under Tauri); setManagerPin is no longer called here.
+    // Phase 1: no verifyManagerPin reads here — auth routes through
+    // utils/pinGate (native); raw verifyPin below is uniqueness-only.
     cashierUsers,
     setCashierUsers,
     activeCashier,
+    managerPin,
     securityAuditLog,
     themeMode,
     toggleTheme,
   } = usePosStore();
   const { showToast } = useToast();
+  // Format-aware credential badge: the label must describe the ACTUAL stored
+  // envelope (v2 Argon2id vs legacy v1), never a hardcoded algorithm claim.
+  const managerKdfLabel = (() => {
+    const h = (managerPin || '').trim();
+    if (!h) return 'Non configuré';
+    if (h.startsWith('v2$')) return 'Actif (Argon2id)';
+    if (!needsPinRotation(h)) return 'Actif (local)';
+    return 'Hérité (rotation requise)';
+  })();
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Restore is a destructive tamper primitive (replaces transactions, audit,
   // vouchers): manager PIN required before the picker even opens.
   const [restorePinInput, setRestorePinInput] = useState('');
+  // Phase 2: two-step restore — the file is picked and VALIDATED first (no
+  // PIN burned on malformed input), then the fresh-PIN guard executes it.
+  const [stagedRestore, setStagedRestore] = useState<{
+    content: string;
+    sha256: string;
+    version?: string;
+    counts?: Record<string, number>;
+  } | null>(null);
+  const [isRestoring, setIsRestoring] = useState(false);
+  // Decision 2: the full-JSON export leaves the device — fresh manager PIN
+  // per download (native gate via PinDialog, fail-closed), even though
+  // credential rows no longer ride in the file.
+  const [showExportPin, setShowExportPin] = useState(false);
   const updater = useAppUpdater();
 
   const handleCheckUpdates = async () => {
@@ -656,23 +685,51 @@ export const SettingsModal: React.FC = () => {
       const isAttemptingPinChange = cleanPrev.length > 0 || cleanNew.length > 0 || cleanConfirm.length > 0;
 
       if (isAttemptingPinChange) {
+        const isTargetManager = cashierRoleInput === 'admin' || existing.role === 'admin';
+        const minLen = isTargetManager ? 6 : 4;
+        const maxLen = isTargetManager ? 8 : 4;
+
         if (!cleanPrev) {
-          showToast("Sécurité : veuillez saisir l'ancien code PIN du caissier (ou le PIN Manager).", 'error');
+          showToast(
+            isTargetManager
+              ? "Sécurité : veuillez saisir l'ancien code PIN gérant (ou le PIN Manager actuel)."
+              : "Sécurité : veuillez saisir l'ancien code PIN du caissier (ou le PIN Manager).",
+            'error'
+          );
           return;
         }
 
-        const isAuthorized =
-          verifyPin(cleanPrev, existing.pin) ||
-          cleanPrev === existing.pin ||
-          verifyManagerPin(cleanPrev);
+        // Phase 1: old-PIN authorization is native (fail-closed), composed
+        // explicitly — the user's own credential OR the manager credential.
+        // No plaintext leg: legacy plaintexts are hashed at boot, and the
+        // kernel rejects them fail-closed. Locked shows the countdown.
+        const ownGate = await verifyUserGate(existing.id, cleanPrev);
+        const managerGate =
+          ownGate.ok ? null : await verifyManagerGate(cleanPrev);
+        const isAuthorized = ownGate.ok || managerGate?.ok === true;
+        if (managerGate?.locked || ownGate.locked) {
+          showToast(
+            `Verrouillé — réessayez dans ${Math.max(
+              1,
+              Math.ceil((managerGate?.remainingMs ?? ownGate.remainingMs) / 1000)
+            )}s.`,
+            'error'
+          );
+          return;
+        }
 
         if (!isAuthorized) {
           showToast("L'ancien code PIN est incorrect (ou PIN Manager invalide).", 'error');
           return;
         }
 
-        if (!/^[0-9]{4}$/.test(cleanNew)) {
-          showToast("Le nouveau code PIN doit comporter exactement 4 chiffres.", 'error');
+        if (!/^[0-9]+$/.test(cleanNew) || cleanNew.length < minLen || cleanNew.length > maxLen) {
+          showToast(
+            isTargetManager
+              ? "Le nouveau code PIN gérant doit comporter 6 à 8 chiffres."
+              : "Le nouveau code PIN caissier doit comporter exactement 4 chiffres.",
+            'error'
+          );
           return;
         }
 
@@ -690,14 +747,26 @@ export const SettingsModal: React.FC = () => {
           showToast('Chaque personne doit avoir un code PIN différent (code déjà utilisé).', 'error');
           return;
         }
+        // Banal-PIN screen (NIST 800-63B-4): instant feedback; native
+        // pin_set enforces authoritatively (a bypass still cannot mint).
+        if (isCommonPin(cleanNew)) {
+          showToast('Code trop simple (suite, répétition ou code banal) — choisissez un code moins prévisible.', 'error');
+          return;
+        }
 
         // Single-PIN contract: the primary admin (first role==='admin') IS the
         // manager — their PIN change goes through the master flow, which
         // mirrors it back onto this user row. Secondary admins keep their own.
         const primaryAdminId = cashierUsers.find((u) => u.role === 'admin')?.id;
         if (existing.id === primaryAdminId) {
-          await setManagerPin(cleanNew);
-          targetPin = usePosStore.getState().managerPin || hashPin(cleanNew);
+          // Phase 4a: master rotation mints natively under Tauri (Argon2id);
+          // the store refreshes memory + mirror from the authority.
+          await usePosStore.getState().rotatePinCredential('manager', cleanNew, true);
+          targetPin = usePosStore.getState().managerPin;
+          if (!targetPin) {
+            showToast("Échec de l'enregistrement du nouveau PIN. Réessayez.", 'error');
+            return;
+          }
           showToast('Code PIN du gérant mis à jour (PIN Manager synchronisé).', 'success');
         } else {
           const managerHash = usePosStore.getState().managerPin;
@@ -705,7 +774,14 @@ export const SettingsModal: React.FC = () => {
             showToast('Chaque personne doit avoir un code PIN différent (code gérant réservé).', 'error');
             return;
           }
-          targetPin = hashPin(cleanNew);
+          // Non-primary cashier: native rotation writes their own roster row
+          // (secondary admins keep their own credential — never the master).
+          await usePosStore.getState().rotatePinCredential(existing.id, cleanNew, false);
+          targetPin = usePosStore.getState().cashierUsers.find((u) => u.id === existing.id)?.pin || '';
+          if (!targetPin) {
+            showToast("Échec de l'enregistrement du nouveau PIN. Réessayez.", 'error');
+            return;
+          }
         }
       } else {
         // Conserver le code PIN existant sans modification
@@ -715,9 +791,17 @@ export const SettingsModal: React.FC = () => {
       // Création d'un nouveau caissier
       const cleanNew = cashierPinInput.trim();
       const cleanConfirm = confirmCashierPinInput.trim();
+      const isTargetManager = cashierRoleInput === 'admin';
+      const minLen = isTargetManager ? 6 : 4;
+      const maxLen = isTargetManager ? 8 : 4;
 
-      if (!/^[0-9]{4}$/.test(cleanNew)) {
-        showToast("Le code PIN caissier doit comporter exactement 4 chiffres (ex: 1234).", 'error');
+      if (!/^[0-9]+$/.test(cleanNew) || cleanNew.length < minLen || cleanNew.length > maxLen) {
+        showToast(
+          isTargetManager
+            ? "Le code PIN gérant doit comporter 6 à 8 chiffres."
+            : "Le code PIN caissier doit comporter exactement 4 chiffres (ex: 1234).",
+          'error'
+        );
         return;
       }
 
@@ -736,8 +820,62 @@ export const SettingsModal: React.FC = () => {
         showToast('Chaque personne doit avoir un code PIN différent (code déjà utilisé).', 'error');
         return;
       }
+      if (isCommonPin(cleanNew)) {
+        showToast('Code trop simple (suite, répétition ou code banal) — choisissez un code moins prévisible.', 'error');
+        return;
+      }
 
-      targetPin = hashPin(cleanNew);
+      // New profile: the credential row must exist before the native KDF can
+      // own it (`pin_set` refuses unknown ids rather than inventing rows), so
+      // create with an empty PIN, rotate natively, and roll the row back if
+      // rotation fails — an admin row with an empty PIN would alias the
+      // manager credential, which must never survive a failed creation.
+      const newId = `usr-${Date.now().toString(36)}`;
+      const { isTauriEnv } = await import('../../db/adapters/base');
+      if (isTauriEnv()) {
+        // Inert placeholder, never a usable credential: non-digit, random,
+        // unverifiable anywhere (native Unknown → deny, TS verifyPin false).
+        // An empty PIN would alias an admin row to the MASTER credential; a
+        // kill between this persist and the rotation below must orphan a
+        // visible-but-dead row, never a phantom manager.
+        const placeholder = `PENDING-${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+        const skeleton: CashierUser = {
+          id: newId,
+          name: cleanName,
+          pin: placeholder,
+          role: cashierRoleInput,
+          avatarColor: cashierColorInput,
+        };
+        await setCashierUsers([...cashierUsers, skeleton]);
+        try {
+          await usePosStore.getState().rotatePinCredential(newId, cleanNew, cashierRoleInput === 'admin');
+        } catch (e: unknown) {
+          await setCashierUsers(cashierUsers).catch(() => {});
+          showToast(`Création refusée (${friendlyPinSetError(e)}).`, 'error');
+          setIsSavingCashier(false);
+          return;
+        }
+        targetPin = usePosStore.getState().cashierUsers.find((u) => u.id === newId)?.pin || '';
+        if (!targetPin) {
+          await setCashierUsers(cashierUsers).catch(() => {});
+          showToast("Échec de l'enregistrement du nouveau PIN. Réessayez.", 'error');
+          setIsSavingCashier(false);
+          return;
+        }
+        // The roster row already exists (skeleton + native rotation above):
+        // finalize name/role/color on it instead of appending a duplicate.
+        await setCashierUsers(
+          usePosStore.getState().cashierUsers.map((u) =>
+            u.id === newId ? { ...u, name: cleanName, role: cashierRoleInput, avatarColor: cashierColorInput } : u
+          )
+        );
+        setIsCashierModalOpen(false);
+        soundEngine.playSuccess?.();
+        showToast(`Caissier "${cleanName}" ajouté à l'équipe !`, 'success');
+        return;
+      } else {
+        targetPin = hashDeviceLocalPin(cleanNew);
+      }
     }
 
     setIsSavingCashier(true);
@@ -798,7 +936,10 @@ export const SettingsModal: React.FC = () => {
       );
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      showToast(`Erreur : ${msg}`, 'error');
+      // PIN-engine failures get the friendly text (no wire internals);
+      // anything else keeps the raw message for debuggability.
+      const friendly = friendlyPinSetError(e);
+      showToast(friendly !== "Échec de l'enregistrement du nouveau PIN. Réessayez." ? friendly : `Erreur : ${msg}`, 'error');
     } finally {
       setIsSavingCashier(false);
     }
@@ -845,33 +986,46 @@ export const SettingsModal: React.FC = () => {
       showToast('Veuillez saisir votre code PIN actuel.', 'error');
       return;
     }
-    if (!verifyManagerPin(currentPinInput)) {
-      showToast('Le code PIN actuel est incorrect.', 'error');
+    // Phase 1: current-PIN check is native (fail-closed); Locked shows the
+    // countdown. Legacy shorter codes verify natively once for migration.
+    const gate = await verifyManagerGate(currentPinInput);
+    if (!gate.ok) {
+      showToast(
+        gate.locked
+          ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+          : 'Le code PIN actuel est incorrect.',
+        'error'
+      );
       return;
     }
-    // New manager PINs are exactly 4 digits (aligns setup + lock-screen
-    // auto-submit at 4). Existing longer PINs are NOT broken: the current-PIN
-    // verification above (verifyManagerPin) accepts any length, and the
-    // current-PIN input below keeps maxLength 8 so legacy codes stay enterable.
-    if (!/^[0-9]{4}$/.test(newPinInput)) {
-      showToast('Le nouveau code PIN doit comporter exactement 4 chiffres (ex: 1234).', 'error');
+    // Phase 4.5 + 4a: manager PINs are 6–8 digits (uniform mint policy —
+    // longer would be untypeable at login). Legacy shorter manager codes
+    // verify natively once for migration before the mandatory lock-screen
+    // rotation; the current-PIN input keeps maxLength 8 so legacy codes stay
+    // enterable.
+    if (!/^[0-9]{6,8}$/.test(newPinInput)) {
+      showToast('Le nouveau code PIN gérant doit comporter 6 à 8 chiffres.', 'error');
       return;
     }
     if (newPinInput !== confirmPinInput) {
       showToast('Les deux nouveaux codes PIN saisis ne correspondent pas.', 'error');
       return;
     }
+    if (isCommonPin(newPinInput)) {
+      showToast('Code trop simple (suite, répétition ou code banal) — choisissez un code moins prévisible.', 'error');
+      return;
+    }
     setIsUpdatingPin(true);
     try {
-      await setManagerPin(newPinInput);
+      // Phase 4a: master rotation mints natively under Tauri (Argon2id v2).
+      await usePosStore.getState().rotatePinCredential('manager', newPinInput, true);
       setCurrentPinInput('');
       setNewPinInput('');
       setConfirmPinInput('');
       soundEngine.playSuccess?.();
       showToast('Nouveau Code PIN Manager enregistré avec succès.', 'success');
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      showToast(`Erreur : ${msg}`, 'error');
+      showToast(friendlyPinSetError(e), 'error');
     } finally {
       setIsUpdatingPin(false);
     }
@@ -1109,16 +1263,14 @@ export const SettingsModal: React.FC = () => {
 
   if (activeModal !== 'settings') return null;
 
-  // ── File Upload Handler ──
-  // Manager-PIN gate: a restore REPLACES live books (transactions, audit
-  // trail, voucher balances) with an older export — without a gate any
-  // cashier could resurrect voided sales or wipe the audit. The PIN is
-  // verified before the picker opens, never after the file is read.
+  // ── File Upload Handler (Phase 2, two-step) ──
+  // Step 1 (no PIN): pick the file, validate the envelope, stage it. A
+  // malformed file burns no PIN and is rejected here with its reason.
+  // Step 2: fresh native PIN executes requestDataRestore (re-validates,
+  // checkpoints, snapshots current state, writes DATA_RESTORE_BEFORE, then
+  // imports). Any refusal aborts before the point of no return.
   const handleRestoreClick = () => {
-    if (!verifyManagerPin(restorePinInput)) {
-      showToast('Code PIN Manager requis pour restaurer une sauvegarde.', 'error');
-      return;
-    }
+    setStagedRestore(null);
     fileInputRef.current?.click();
   };
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1127,20 +1279,69 @@ export const SettingsModal: React.FC = () => {
     const reader = new FileReader();
     reader.onload = async (event) => {
       const content = event.target?.result as string;
-      if (content) {
-        const importResult = await importDatabase(content);
-        if (importResult.success) {
-          setRestorePinInput('');
-          showToast('Base de données restaurée avec succès !', 'success');
-          closeModal();
-        } else {
-          showToast(importResult.reason || 'Échec de la restauration', 'error');
-        }
+      if (!content) return;
+      const { validateImportPayload } = await import('../../db/adapters/maintenanceAdapter');
+      const { sha256Hex } = await import('../../utils/auditIntel');
+      const checked = validateImportPayload(content);
+      if (!checked.ok) {
+        showToast(checked.reason || 'Sauvegarde invalide.', 'error');
+        setStagedRestore(null);
+        return;
       }
+      const sha = (await sha256Hex(content).catch(() => null))?.hex ?? '?';
+      setStagedRestore({
+        content,
+        sha256: sha,
+        version: checked.summary?.version,
+        counts: checked.summary?.counts,
+      });
+      const tableCount = Object.keys(checked.summary?.counts ?? {}).length;
+      showToast(
+        `Sauvegarde vérifiée (v${checked.summary?.version ?? '?'} — ${tableCount} table(s)). Saisissez le PIN Manager puis lancez la restauration.`,
+        'success'
+      );
     };
     reader.readAsText(file);
     // Reset the picker so the same file can be re-chosen after a fix.
     e.target.value = '';
+  };
+  const handleExecuteRestore = async () => {
+    if (!stagedRestore || isRestoring) return;
+    setIsRestoring(true);
+    try {
+      const { requestDataRestore } = await import('../../db/restoreGuard');
+      const { validateImportPayload } = await import('../../db/adapters/maintenanceAdapter');
+      const actor = activeCashier?.name;
+      const staged = stagedRestore;
+      const res = await requestDataRestore(
+        {
+          source: 'json-import',
+          sourceSha256: staged.sha256,
+          payloadSummary: { version: staged.version, counts: staged.counts },
+          actor,
+          validate: async () => validateImportPayload(staged.content),
+          proceed: () => importDatabase(staged.content, actor),
+        },
+        restorePinInput
+      );
+      if (res.ok) {
+        setRestorePinInput('');
+        setStagedRestore(null);
+        if (res.auditOk === false) {
+          showToast(res.message || 'Base restaurée MAIS traçabilité finale impossible.', 'warning', 8000);
+        } else {
+          showToast('Base de données restaurée avec succès !', 'success');
+        }
+        closeModal();
+      } else if (res.reason === 'invalid-payload') {
+        showToast(res.message, 'error');
+        setStagedRestore(null);
+      } else {
+        showToast(res.message, 'error');
+      }
+    } finally {
+      setIsRestoring(false);
+    }
   };
 
   // ── Manual Status Toggle ──
@@ -1209,7 +1410,7 @@ export const SettingsModal: React.FC = () => {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[90vh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(0.5rem,var(--safe-bottom))] sm:pb-0"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-dvh-shell sm:h-[90dvh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(0.5rem,var(--safe-bottom))] sm:pb-0"
       >
 
         {/* ═══ Header ═══ */}
@@ -1299,7 +1500,7 @@ export const SettingsModal: React.FC = () => {
         </div>
 
         {/* ═══ Tab Navigation (horizontally scrollable on mobile) ═══ */}
-        <div ref={tabStripRef} className="flex flex-nowrap gap-1 px-2.5 sm:px-4 pt-2 sm:pt-3 pb-0 shrink-0 overflow-x-auto overflow-y-hidden no-scrollbar whitespace-nowrap border-b border-pos-border/40 min-w-0 max-w-full">
+        <div ref={tabStripRef} className="flex flex-nowrap gap-1 px-2.5 sm:px-4 pt-2 sm:pt-3 pb-0 shrink-0 overflow-x-auto overscroll-contain overflow-y-hidden no-scrollbar whitespace-nowrap border-b border-pos-border/40 min-w-0 max-w-full">
           {tabs.map(tab => (
             <button
               key={tab.key}
@@ -1673,7 +1874,7 @@ export const SettingsModal: React.FC = () => {
                             <span className="text-[9px] text-pos-muted uppercase font-bold block mb-1.5">Fonctionnalités</span>
                             <div className="flex flex-wrap gap-1.5">
                               {(device.capabilities || []).map((cap, i) => (
-                                <span key={i} className="px-2 py-0.5 rounded-md bg-pos-bg border border-pos-border text-[10px] font-semibold text-pos-text">
+                                <span key={i} className="px-2 py-0.5 rounded-full bg-pos-bg border border-pos-border text-[10px] font-semibold text-pos-text">
                                   {cap}
                                 </span>
                               ))}
@@ -1691,7 +1892,7 @@ export const SettingsModal: React.FC = () => {
                                 <span className="text-[9px] text-pos-muted uppercase font-bold block mb-1">Marques Supportées</span>
                                 <div className="flex flex-wrap gap-1">
                                   {(compat?.brands || []).map((b, i) => (
-                                    <span key={i} className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${b === device.brand ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-pos-card text-pos-muted border-pos-border'}`}>
+                                    <span key={i} className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold border ${b === device.brand ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-pos-card text-pos-muted border-pos-border'}`}>
                                       {b === device.brand && <span className="mr-0.5">✓</span>}{b}
                                     </span>
                                   ))}
@@ -1701,7 +1902,7 @@ export const SettingsModal: React.FC = () => {
                                 <span className="text-[9px] text-pos-muted uppercase font-bold block mb-1">Protocoles de Communication</span>
                                 <div className="flex flex-wrap gap-1">
                                   {(compat?.protocols || []).map((p, i) => (
-                                    <span key={i} className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${p === device.protocol || (device.protocol || '').includes(p) ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' : 'bg-pos-card text-pos-muted border-pos-border'}`}>
+                                    <span key={i} className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold border ${p === device.protocol || (device.protocol || '').includes(p) ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30' : 'bg-pos-card text-pos-muted border-pos-border'}`}>
                                       {(p === device.protocol || (device.protocol || '').includes(p)) && <span className="mr-0.5">●</span>}{p}
                                     </span>
                                   ))}
@@ -1881,6 +2082,8 @@ export const SettingsModal: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* FT-01: hidden for cashiers (UX only — modal gate is authoritative). */}
+                  {canSeeJournalLauncher(activeCashier?.role) && (
                   <button
                     type="button"
                     onClick={() => openModal('security_audit')}
@@ -1889,6 +2092,7 @@ export const SettingsModal: React.FC = () => {
                     <ShieldAlert className="w-4 h-4 text-amber-400" />
                     <span>Journal d'Audit ({securityAuditLog.length})</span>
                   </button>
+                  )}
                 </div>
               </div>
 
@@ -1910,7 +2114,7 @@ export const SettingsModal: React.FC = () => {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="text-[10px] text-pos-muted bg-pos-bg px-2.5 py-1 rounded-lg border border-pos-border">
-                      Statut : <strong className="text-emerald-400 font-mono">Actif (Salé SHA-256)</strong>
+                      Statut : <strong className="text-emerald-400 font-mono">{managerKdfLabel}</strong>
                     </span>
                     <button
                       type="button"
@@ -1932,7 +2136,7 @@ export const SettingsModal: React.FC = () => {
                       pattern="[0-9]*"
                       autoComplete="current-password"
                       enterKeyHint="next"
-                      aria-label="PIN gérant actuel"
+                      aria-label="PIN Actuel (Obligatoire)"
                       maxLength={8}
                       value={currentPinInput}
                       onChange={(e) => setCurrentPinInput(e.target.value.replace(/[^0-9]/g, ''))}
@@ -1941,34 +2145,38 @@ export const SettingsModal: React.FC = () => {
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] text-pos-muted font-bold block mb-1">Nouveau PIN (4 chiffres)</label>
+                    <label className="text-[10px] text-pos-muted font-bold block mb-1">
+                      Nouveau PIN Gérant (6 à 8 chiffres)
+                    </label>
                     <input
                       type={showManagerPin ? 'text' : 'password'}
                       inputMode="numeric"
                       pattern="[0-9]*"
                       autoComplete="new-password"
                       enterKeyHint="next"
-                      aria-label="Nouveau PIN gérant"
-                      maxLength={4}
+                      aria-label="Nouveau PIN Gérant (6 à 8 chiffres)"
+                      maxLength={8}
                       value={newPinInput}
-                      onChange={(e) => setNewPinInput(e.target.value.replace(/[^0-9]/g, ''))}
-                      placeholder="Nouveau Code PIN"
+                      onChange={(e) => setNewPinInput(e.target.value.replace(/[^0-9]/g, '').slice(0, 8))}
+                      placeholder="6 à 8 chiffres"
                       className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] text-pos-muted font-bold block mb-1">Confirmer le Nouveau PIN (4 chiffres)</label>
+                    <label className="text-[10px] text-pos-muted font-bold block mb-1">
+                      Confirmer le Nouveau PIN (6 à 8 chiffres)
+                    </label>
                     <input
                       type={showManagerPin ? 'text' : 'password'}
                       inputMode="numeric"
                       pattern="[0-9]*"
                       autoComplete="new-password"
                       enterKeyHint="done"
-                      aria-label="Confirmer le nouveau PIN gérant"
-                      maxLength={4}
+                      aria-label="Confirmer le Nouveau PIN (6 à 8 chiffres)"
+                      maxLength={8}
                       value={confirmPinInput}
-                      onChange={(e) => setConfirmPinInput(e.target.value.replace(/[^0-9]/g, ''))}
-                      placeholder="Confirmer Code PIN"
+                      onChange={(e) => setConfirmPinInput(e.target.value.replace(/[^0-9]/g, '').slice(0, 8))}
+                      placeholder="6 à 8 chiffres"
                       className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
                     />
                   </div>
@@ -2001,7 +2209,7 @@ export const SettingsModal: React.FC = () => {
                         Équipe de Caisse & Codes PIN Vendeurs
                       </h4>
                       <span className="text-[10px] text-pos-muted">
-                        Chaque employé possède son propre nom, couleur et code PIN à 4 chiffres pour la passation de caisse (Ctrl+L)
+                        Chaque employé possède son profil, couleur et code PIN sécurisé (4 chiffres caissiers, 6 à 8 gérants) pour la passation de caisse (Ctrl+L)
                       </span>
                     </div>
                   </div>
@@ -2018,12 +2226,12 @@ export const SettingsModal: React.FC = () => {
 
                 {/* Inline Cashier Add / Edit Modal Drawer */}
                 {isCashierModalOpen && (
-                  <div className="bg-pos-panel border-2 border-emerald-500/40 rounded-2xl p-4 space-y-4 shadow-xl animate-in fade-in zoom-in-95">
+                  <div className="bg-pos-panel border border-emerald-500/40 rounded-2xl p-4 space-y-4 shadow-xl animate-in fade-in zoom-in-95">
                     <div className="flex items-center justify-between border-b border-pos-border pb-2">
                       <div className="flex items-center gap-2">
                         {editingCashierId ? <Edit3 className="w-4 h-4 text-amber-400" /> : <UserPlus className="w-4 h-4 text-emerald-400" />}
                         <h5 className="text-xs font-bold text-pos-text">
-                          {editingCashierId ? 'Modifier les informations du caissier' : 'Ajouter un nouveau membre d\'équipe'}
+                          {editingCashierId ? 'Modifier les informations du collaborateur' : 'Ajouter un nouveau membre d\'équipe'}
                         </h5>
                       </div>
                       <button
@@ -2035,230 +2243,254 @@ export const SettingsModal: React.FC = () => {
                       </button>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {/* Name input */}
-                      <div>
-                        <label className="text-[10px] text-pos-muted font-bold block mb-1">
-                          Nom de l'employé ou Identifiant Caisse *
-                        </label>
-                        <input
-                          type="text"
-                          value={cashierNameInput}
-                          onChange={(e) => setCashierNameInput(e.target.value)}
-                          placeholder="Ex: Samir, Karim (Shift Soir), Caisse 2"
-                          className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:outline-none focus:border-emerald-400"
-                        />
-                      </div>
+                    {(() => {
+                      const isTargetAdmin =
+                        cashierRoleInput === 'admin' ||
+                        (editingCashierId ? cashierUsers.find((u) => u.id === editingCashierId)?.role === 'admin' : false);
+                      const maxPinLen = isTargetAdmin ? 8 : 4;
+                      const edited = cashierUsers.find((u) => u.id === editingCashierId);
+                      const isPrimary =
+                        Boolean(edited && edited.role === 'admin' && cashierUsers.find((u) => u.role === 'admin')?.id === edited.id);
 
-                      {/* PIN Inputs (Requires previous PIN if editing) */}
-                      {editingCashierId ? (
-                        <div className="sm:col-span-2 bg-pos-bg/80 border border-pos-border rounded-xl p-3 space-y-2.5">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[11px] font-bold text-pos-text flex items-center gap-1.5">
-                              <Lock className="w-3.5 h-3.5 text-amber-400" />
-                              <span>Modifier le Code PIN de cet Employé</span>
-                            </span>
-                            <span className="text-[10px] text-pos-muted italic">
-                              (Laissez vide si vous souhaitez conserver le code PIN actuel)
-                            </span>
-                          </div>
-                          {(() => {
-                            const edited = cashierUsers.find((u) => u.id === editingCashierId);
-                            const isPrimary =
-                              !!edited && edited.role === 'admin' && cashierUsers.find((u) => u.role === 'admin')?.id === edited.id;
-                            return isPrimary ? (
-                              <p className="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2 leading-relaxed">
-                                Cet employé est le gérant : son nouveau PIN deviendra aussi le PIN Manager (un seul code pour les deux).
-                              </p>
-                            ) : null;
-                          })()}
-
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                      return (
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            {/* Name input */}
                             <div>
-                              <div className="flex items-center justify-between mb-1">
-                                <label className="text-[10px] text-pos-muted font-bold">
-                                  Ancien PIN (ou PIN Manager)
-                                </label>
+                              <label className="text-[10px] text-pos-muted font-bold block mb-1">
+                                Nom de l'employé ou Identifiant Caisse *
+                              </label>
+                              <input
+                                type="text"
+                                value={cashierNameInput}
+                                onChange={(e) => setCashierNameInput(e.target.value)}
+                                placeholder="Ex: Samir, Karim (Shift Soir), Caisse 2"
+                                className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:outline-none focus:border-emerald-400"
+                              />
+                            </div>
+
+                            {/* Role selection */}
+                            <div>
+                              <label className="text-[10px] text-pos-muted font-bold block mb-1">
+                                Rôle & Niveau d'Autorisation
+                              </label>
+                              <div className="grid grid-cols-2 gap-2">
                                 <button
                                   type="button"
-                                  onClick={() => setShowCashierPin(!showCashierPin)}
-                                  className="text-[10px] text-pos-muted hover:text-pos-text cursor-pointer"
-                                  title={showCashierPin ? 'Masquer' : 'Afficher'}
+                                  onClick={() => setCashierRoleInput('cashier')}
+                                  className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                                    cashierRoleInput === 'cashier'
+                                      ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+                                      : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
+                                  }`}
                                 >
-                                  {showCashierPin ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                  <User className="w-3.5 h-3.5" />
+                                  <span>Caissier Standard</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setCashierRoleInput('admin')}
+                                  className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                                    cashierRoleInput === 'admin'
+                                      ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                                      : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
+                                  }`}
+                                >
+                                  <Shield className="w-3.5 h-3.5" />
+                                  <span>Gérant / Admin</span>
                                 </button>
                               </div>
-                              <input
-                                type={showCashierPin ? 'text' : 'password'}
-                                inputMode="numeric"
-                                pattern="[0-9]*"
-                                autoComplete="current-password"
-                                enterKeyHint="next"
-                                aria-label="Ancien PIN du caissier ou PIN Manager"
-                                maxLength={8}
-                                value={previousCashierPinInput}
-                                onChange={(e) => setPreviousCashierPinInput(e.target.value.replace(/[^0-9]/g, ''))}
-                                placeholder="PIN Actuel ou Manager"
-                                className="w-full min-h-[48px] bg-pos-panel border border-pos-border rounded-xl px-3 py-1.5 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-amber-400"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="text-[10px] text-pos-muted font-bold block mb-1">
-                                Nouveau PIN (4 chiffres)
-                              </label>
-                              <input
-                                type={showCashierPin ? 'text' : 'password'}
-                                inputMode="numeric"
-                                pattern="[0-9]*"
-                                autoComplete="new-password"
-                                enterKeyHint="next"
-                                aria-label="Nouveau PIN du caissier"
-                                maxLength={4}
-                                value={cashierPinInput}
-                                onChange={(e) => setCashierPinInput(e.target.value.replace(/[^0-9]/g, ''))}
-                                placeholder="Ex: 4892"
-                                className="w-full min-h-[48px] bg-pos-panel border border-pos-border rounded-xl px-3 py-1.5 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400 tracking-widest"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="text-[10px] text-pos-muted font-bold block mb-1">
-                                Confirmer Nouveau PIN
-                              </label>
-                              <input
-                                type={showCashierPin ? 'text' : 'password'}
-                                inputMode="numeric"
-                                pattern="[0-9]*"
-                                autoComplete="new-password"
-                                enterKeyHint="done"
-                                aria-label="Confirmer le nouveau PIN du caissier"
-                                maxLength={4}
-                                value={confirmCashierPinInput}
-                                onChange={(e) => setConfirmCashierPinInput(e.target.value.replace(/[^0-9]/g, ''))}
-                                placeholder="Ex: 4892"
-                                className="w-full min-h-[48px] bg-pos-panel border border-pos-border rounded-xl px-3 py-1.5 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400 tracking-widest"
-                              />
                             </div>
                           </div>
-                        </div>
-                      ) : (
-                        <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          <div>
-                            <div className="flex items-center justify-between mb-1">
-                              <label className="text-[10px] text-pos-muted font-bold">
-                                Code PIN Personnel (4 chiffres) *
-                              </label>
-                              <button
-                                type="button"
-                                onClick={() => setShowCashierPin(!showCashierPin)}
-                                className="text-[10px] text-pos-muted hover:text-pos-text flex items-center gap-1 cursor-pointer"
-                              >
-                                {showCashierPin ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                                <span>{showCashierPin ? 'Masquer' : 'Afficher'}</span>
-                              </button>
-                            </div>
-                            <input
-                              type={showCashierPin ? 'text' : 'password'}
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              autoComplete="new-password"
-                              enterKeyHint="next"
-                              aria-label="Code PIN du nouveau caissier"
-                              maxLength={4}
-                              value={cashierPinInput}
-                              onChange={(e) => setCashierPinInput(e.target.value.replace(/[^0-9]/g, ''))}
-                              placeholder="Ex: 2580"
-                              className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400 tracking-widest"
-                            />
-                          </div>
 
+                          {/* Role description note */}
+                          {isTargetAdmin && (
+                            <div className="text-[11px] text-purple-300/90 bg-purple-500/10 border border-purple-500/30 rounded-xl px-3 py-2 leading-relaxed flex items-center gap-2">
+                              <Shield className="w-4 h-4 text-purple-400 shrink-0" />
+                              <span>
+                                {isPrimary
+                                  ? 'Gérant Principal : le code PIN (6 à 8 chiffres) est synchronisé avec le PIN Manager maître du système.'
+                                  : 'Privilèges Superviseur : accès aux paramètres, remises et clôtures. PIN de 6 à 8 chiffres requis.'}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* PIN Inputs (Requires previous PIN if editing) */}
+                          {editingCashierId ? (
+                            <div className="bg-pos-bg/80 border border-pos-border rounded-xl p-3.5 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-bold text-pos-text flex items-center gap-1.5">
+                                  <Lock className="w-3.5 h-3.5 text-amber-400" />
+                                  <span>Modifier le Code PIN ({isTargetAdmin ? '6 à 8 chiffres' : '4 chiffres'})</span>
+                                </span>
+                                <span className="text-[10px] text-pos-muted italic">
+                                  (Laissez vide si vous souhaitez conserver le code PIN actuel)
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                                <div>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <label className="text-[10px] text-pos-muted font-bold truncate">
+                                      {isTargetAdmin ? 'Ancien PIN (ou PIN Manager)' : 'Ancien PIN (ou PIN Manager)'}
+                                    </label>
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowCashierPin(!showCashierPin)}
+                                      className="text-[10px] text-pos-muted hover:text-pos-text cursor-pointer"
+                                      title={showCashierPin ? 'Masquer' : 'Afficher'}
+                                    >
+                                      {showCashierPin ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                    </button>
+                                  </div>
+                                  <input
+                                    type={showCashierPin ? 'text' : 'password'}
+                                    inputMode="numeric"
+                                    pattern="[0-9]*"
+                                    autoComplete="current-password"
+                                    enterKeyHint="next"
+                                    aria-label="Ancien PIN (ou PIN Manager)"
+                                    maxLength={8}
+                                    value={previousCashierPinInput}
+                                    onChange={(e) => setPreviousCashierPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                                    placeholder="PIN Actuel ou Manager"
+                                    className="w-full min-h-[48px] bg-pos-panel border border-pos-border rounded-xl px-3 py-1.5 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-amber-400"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="text-[10px] text-pos-muted font-bold block mb-1 truncate">
+                                    {isTargetAdmin ? 'Nouveau PIN (6 à 8 ch.)' : 'Nouveau PIN (4 ch.)'}
+                                  </label>
+                                  <input
+                                    type={showCashierPin ? 'text' : 'password'}
+                                    inputMode="numeric"
+                                    pattern="[0-9]*"
+                                    autoComplete="new-password"
+                                    enterKeyHint="next"
+                                    aria-label={isTargetAdmin ? 'Nouveau PIN (6 à 8 ch.)' : 'Nouveau PIN (4 ch.)'}
+                                    maxLength={maxPinLen}
+                                    value={cashierPinInput}
+                                    onChange={(e) =>
+                                      setCashierPinInput(e.target.value.replace(/[^0-9]/g, '').slice(0, maxPinLen))
+                                    }
+                                    placeholder={isTargetAdmin ? 'Ex: 729410' : 'Ex: 4892'}
+                                    className="w-full min-h-[48px] bg-pos-panel border border-pos-border rounded-xl px-3 py-1.5 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400 tracking-widest"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="text-[10px] text-pos-muted font-bold block mb-1 truncate">
+                                    Confirmer Nouveau PIN
+                                  </label>
+                                  <input
+                                    type={showCashierPin ? 'text' : 'password'}
+                                    inputMode="numeric"
+                                    pattern="[0-9]*"
+                                    autoComplete="new-password"
+                                    enterKeyHint="done"
+                                    aria-label="Confirmer Nouveau PIN"
+                                    maxLength={maxPinLen}
+                                    value={confirmCashierPinInput}
+                                    onChange={(e) =>
+                                      setConfirmCashierPinInput(e.target.value.replace(/[^0-9]/g, '').slice(0, maxPinLen))
+                                    }
+                                    placeholder={isTargetAdmin ? 'Ex: 729410' : 'Ex: 4892'}
+                                    className="w-full min-h-[48px] bg-pos-panel border border-pos-border rounded-xl px-3 py-1.5 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400 tracking-widest"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              <div>
+                                <div className="flex items-center justify-between mb-1">
+                                  <label className="text-[10px] text-pos-muted font-bold">
+                                    {isTargetAdmin ? 'Code PIN Gérant (6 à 8 chiffres) *' : 'Code PIN Personnel (4 chiffres) *'}
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowCashierPin(!showCashierPin)}
+                                    className="text-[10px] text-pos-muted hover:text-pos-text flex items-center gap-1 cursor-pointer"
+                                  >
+                                    {showCashierPin ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                    <span>{showCashierPin ? 'Masquer' : 'Afficher'}</span>
+                                  </button>
+                                </div>
+                                <input
+                                  type={showCashierPin ? 'text' : 'password'}
+                                  inputMode="numeric"
+                                  pattern="[0-9]*"
+                                  autoComplete="new-password"
+                                  enterKeyHint="next"
+                                  aria-label={isTargetAdmin ? 'Code PIN Gérant (6 à 8 chiffres) *' : 'Code PIN Personnel (4 chiffres) *'}
+                                  maxLength={maxPinLen}
+                                  value={cashierPinInput}
+                                  onChange={(e) =>
+                                    setCashierPinInput(e.target.value.replace(/[^0-9]/g, '').slice(0, maxPinLen))
+                                  }
+                                  placeholder={isTargetAdmin ? 'Ex: 729410' : 'Ex: 2580'}
+                                  className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400 tracking-widest"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="text-[10px] text-pos-muted font-bold block mb-1">
+                                  {isTargetAdmin ? 'Confirmer Code PIN Gérant *' : 'Confirmer le Code PIN (4 chiffres) *'}
+                                </label>
+                                <input
+                                  type={showCashierPin ? 'text' : 'password'}
+                                  inputMode="numeric"
+                                  pattern="[0-9]*"
+                                  autoComplete="new-password"
+                                  enterKeyHint="done"
+                                  aria-label={isTargetAdmin ? 'Confirmer Code PIN Gérant *' : 'Confirmer le Code PIN (4 chiffres) *'}
+                                  maxLength={maxPinLen}
+                                  value={confirmCashierPinInput}
+                                  onChange={(e) =>
+                                    setConfirmCashierPinInput(e.target.value.replace(/[^0-9]/g, '').slice(0, maxPinLen))
+                                  }
+                                  placeholder={isTargetAdmin ? 'Ex: 729410' : 'Ex: 2580'}
+                                  className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400 tracking-widest"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Avatar color picker */}
                           <div>
                             <label className="text-[10px] text-pos-muted font-bold block mb-1">
-                              Confirmer le Code PIN (4 chiffres) *
+                              Couleur d'Avatar Visuelle
                             </label>
-                            <input
-                              type={showCashierPin ? 'text' : 'password'}
-                              inputMode="numeric"
-                              pattern="[0-9]*"
-                              autoComplete="new-password"
-                              enterKeyHint="done"
-                              aria-label="Confirmer le code PIN du nouveau caissier"
-                              maxLength={4}
-                              value={confirmCashierPinInput}
-                              onChange={(e) => setConfirmCashierPinInput(e.target.value.replace(/[^0-9]/g, ''))}
-                              placeholder="Ex: 2580"
-                              className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400 tracking-widest"
-                            />
+                            <div className="flex items-center gap-2 pt-1">
+                              {[
+                                { color: '#3b82f6', label: 'Bleu' },
+                                { color: '#10b981', label: 'Émeraude' },
+                                { color: '#f59e0b', label: 'Ambre' },
+                                { color: '#8b5cf6', label: 'Violet' },
+                                { color: '#ec4899', label: 'Rose' },
+                                { color: '#06b6d4', label: 'Cyan' },
+                                { color: '#ef4444', label: 'Rouge' },
+                                { color: '#64748b', label: 'Ardoise' },
+                              ].map((c) => (
+                                <button
+                                  key={c.color}
+                                  type="button"
+                                  onClick={() => setCashierColorInput(c.color)}
+                                  className={`w-6 h-6 rounded-full transition-transform cursor-pointer flex items-center justify-center ${
+                                    cashierColorInput === c.color ? 'scale-125 ring-2 ring-white ring-offset-2 ring-offset-pos-panel' : 'opacity-80 hover:opacity-100'
+                                  }`}
+                                  style={{ backgroundColor: c.color }}
+                                  title={c.label}
+                                >
+                                  {cashierColorInput === c.color && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         </div>
-                      )}
-
-                      {/* Role selection */}
-                      <div>
-                        <label className="text-[10px] text-pos-muted font-bold block mb-1">
-                          Rôle & Niveau d'Autorisation
-                        </label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setCashierRoleInput('cashier')}
-                            className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                              cashierRoleInput === 'cashier'
-                                ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
-                                : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
-                            }`}
-                          >
-                            <User className="w-3.5 h-3.5" />
-                            <span>Caissier Standard</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setCashierRoleInput('admin')}
-                            className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
-                              cashierRoleInput === 'admin'
-                                ? 'bg-purple-500/20 border-purple-500 text-purple-300'
-                                : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
-                            }`}
-                          >
-                            <Shield className="w-3.5 h-3.5" />
-                            <span>Gérant / Admin</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Avatar color picker */}
-                      <div>
-                        <label className="text-[10px] text-pos-muted font-bold block mb-1">
-                          Couleur d'Avatar Visuelle
-                        </label>
-                        <div className="flex items-center gap-2 pt-1">
-                          {[
-                            { color: '#3b82f6', label: 'Bleu' },
-                            { color: '#10b981', label: 'Émeraude' },
-                            { color: '#f59e0b', label: 'Ambre' },
-                            { color: '#8b5cf6', label: 'Violet' },
-                            { color: '#ec4899', label: 'Rose' },
-                            { color: '#06b6d4', label: 'Cyan' },
-                            { color: '#ef4444', label: 'Rouge' },
-                            { color: '#64748b', label: 'Ardoise' },
-                          ].map((c) => (
-                            <button
-                              key={c.color}
-                              type="button"
-                              onClick={() => setCashierColorInput(c.color)}
-                              className={`w-6 h-6 rounded-full transition-transform cursor-pointer flex items-center justify-center ${
-                                cashierColorInput === c.color ? 'scale-125 ring-2 ring-white ring-offset-2 ring-offset-pos-panel' : 'opacity-80 hover:opacity-100'
-                              }`}
-                              style={{ backgroundColor: c.color }}
-                              title={c.label}
-                            >
-                              {cashierColorInput === c.color && <Check className="w-3.5 h-3.5 text-white stroke-[3]" />}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
+                      );
+                    })()}
 
                     <div className="flex justify-end gap-2 pt-2 border-t border-pos-border">
                       <button
@@ -2268,14 +2500,43 @@ export const SettingsModal: React.FC = () => {
                       >
                         Annuler
                       </button>
-                      <button
-                        type="button"
-                        onClick={handleSaveCashier}
-                        disabled={isSavingCashier || !cashierNameInput.trim() || cashierPinInput.length !== 4}
-                        className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition cursor-pointer shadow-md disabled:opacity-40 active:scale-95"
-                      >
-                        {isSavingCashier ? 'Enregistrement...' : editingCashierId ? 'Mettre à jour' : 'Ajouter le Caissier'}
-                      </button>
+                      {(() => {
+                        const isTargetAdmin =
+                          cashierRoleInput === 'admin' ||
+                          (editingCashierId ? cashierUsers.find((u) => u.id === editingCashierId)?.role === 'admin' : false);
+                        const minPinLen = isTargetAdmin ? 6 : 4;
+                        const maxPinLen = isTargetAdmin ? 8 : 4;
+                        const isPinChanging = Boolean(previousCashierPinInput || cashierPinInput || confirmCashierPinInput);
+                        const isPinValidForEdit =
+                          !isPinChanging ||
+                          (previousCashierPinInput.trim().length > 0 &&
+                            cashierPinInput.length >= minPinLen &&
+                            cashierPinInput.length <= maxPinLen &&
+                            cashierPinInput === confirmCashierPinInput);
+                        const isPinValidForAdd =
+                          cashierPinInput.length >= minPinLen &&
+                          cashierPinInput.length <= maxPinLen &&
+                          cashierPinInput === confirmCashierPinInput;
+                        const canSave =
+                          !isSavingCashier &&
+                          Boolean(cashierNameInput.trim()) &&
+                          (editingCashierId ? isPinValidForEdit : isPinValidForAdd);
+
+                        return (
+                          <button
+                            type="button"
+                            onClick={handleSaveCashier}
+                            disabled={!canSave}
+                            className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition cursor-pointer shadow-md disabled:opacity-40 active:scale-95"
+                          >
+                            {isSavingCashier
+                              ? 'Enregistrement...'
+                              : editingCashierId
+                                ? 'Mettre à jour'
+                                : 'Ajouter le Caissier'}
+                          </button>
+                        );
+                      })()}
                     </div>
                   </div>
                 )}
@@ -2284,17 +2545,22 @@ export const SettingsModal: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                   {cashierUsers.map((cashier) => {
                     const isActive = activeCashier?.id === cashier.id;
+                    const isPrimaryAdmin =
+                      cashier.role === 'admin' &&
+                      cashierUsers.find((u) => u.role === 'admin')?.id === cashier.id;
                     return (
                       <div
                         key={cashier.id}
-                        className={`bg-pos-bg border rounded-2xl p-3.5 flex flex-col justify-between space-y-3 transition relative group ${
-                          isActive ? 'border-amber-500/50 shadow-md shadow-amber-500/5' : 'border-pos-border hover:border-pos-border/80'
+                        className={`bg-pos-bg border rounded-2xl p-4 flex flex-col justify-between space-y-3.5 transition relative group ${
+                          isActive
+                            ? 'border-amber-500/60 shadow-lg shadow-amber-500/10 ring-1 ring-amber-500/30'
+                            : 'border-pos-border hover:border-pos-border/80 hover:shadow-md'
                         }`}
                       >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="flex items-start justify-between gap-2.5">
+                          <div className="flex items-center gap-3 min-w-0">
                             <div
-                              className="w-10 h-10 rounded-full flex items-center justify-center font-black text-sm text-slate-950 shadow shrink-0"
+                              className="w-11 h-11 rounded-2xl flex items-center justify-center font-black text-sm text-slate-950 shadow-md shrink-0 relative"
                               style={{ backgroundColor: cashier.avatarColor || '#3b82f6' }}
                             >
                               {cashier.role === 'admin' ? (
@@ -2302,43 +2568,60 @@ export const SettingsModal: React.FC = () => {
                               ) : (
                                 <User className="w-5 h-5 text-white" />
                               )}
+                              {isActive && (
+                                <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-pos-bg flex items-center justify-center">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                                </span>
+                              )}
                             </div>
                             <div className="min-w-0">
-                              <span className="font-bold text-xs text-pos-text block truncate">
-                                {cashier.name}
-                              </span>
-                              <div className="flex items-center gap-1.5 mt-0.5">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-black text-xs text-pos-text truncate">
+                                  {cashier.name}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1">
                                 <span
-                                  className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${
+                                  className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md flex items-center gap-1 ${
                                     cashier.role === 'admin'
                                       ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
                                       : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                                   }`}
                                 >
-                                  {cashier.role === 'admin' ? 'Gérant' : 'Caissier'}
+                                  {cashier.role === 'admin' ? (
+                                    <>
+                                      <Shield className="w-2.5 h-2.5" />
+                                      <span>{isPrimaryAdmin ? 'Gérant Principal' : 'Superviseur'}</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <User className="w-2.5 h-2.5" />
+                                      <span>Caissier</span>
+                                    </>
+                                  )}
                                 </span>
                                 {isActive && (
-                                  <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-bold px-1.5 py-0.5 rounded">
-                                    Session Active
+                                  <span className="bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9px] font-bold px-1.5 py-0.5 rounded-md">
+                                    En Service
                                   </span>
                                 )}
                               </div>
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1 shrink-0">
                             <button
                               type="button"
                               onClick={() => handleOpenEditCashier(cashier)}
-                              className="p-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-                              title="Modifier nom, rôle, PIN"
+                              className="p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer active:scale-95"
+                              title="Modifier nom, rôle ou code PIN"
                             >
                               <Edit3 className="w-3.5 h-3.5" />
                             </button>
                             <button
                               type="button"
                               onClick={() => handleDeleteCashier(cashier.id)}
-                              className="p-1.5 rounded-lg bg-pos-card hover:bg-red-500/20 border border-pos-border text-pos-muted hover:text-red-400 transition cursor-pointer"
+                              className="p-1.5 rounded-xl bg-pos-card hover:bg-rose-500/20 border border-pos-border text-pos-muted hover:text-rose-400 transition cursor-pointer active:scale-95"
                               title="Supprimer l'employé"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -2346,10 +2629,11 @@ export const SettingsModal: React.FC = () => {
                           </div>
                         </div>
 
-                        <div className="flex items-center justify-between text-[11px] pt-2 border-t border-pos-border/40 text-pos-muted font-mono">
-                          <span>Code PIN :</span>
-                          <span className="bg-pos-card px-2 py-0.5 rounded border border-pos-border text-pos-text font-bold tracking-wider">
-                            ••••
+                        <div className="flex items-center justify-between text-[11px] pt-2.5 border-t border-pos-border/40 text-pos-muted font-mono">
+                          <span className="text-[10px] uppercase font-bold tracking-wider">Format PIN</span>
+                          <span className="bg-pos-card px-2.5 py-0.5 rounded-lg border border-pos-border text-pos-text font-bold tracking-wider flex items-center gap-1.5">
+                            <Lock className="w-3 h-3 text-pos-muted" />
+                            <span>{cashier.role === 'admin' ? '•••••• (6-8 ch.)' : '•••• (4 ch.)'}</span>
                           </span>
                         </div>
                       </div>
@@ -2494,7 +2778,7 @@ export const SettingsModal: React.FC = () => {
                           <div>
                             <div className="flex items-center gap-2">
                               <span className="text-xs font-bold text-pos-text">{test.testName}</span>
-                              {device && <span className="text-[9px] text-pos-muted bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">{device.brand} {device.model}</span>}
+                              {device && <span className="text-[9px] text-pos-muted bg-pos-bg px-1.5 py-0.5 rounded-full border border-pos-border">{device.brand} {device.model}</span>}
                             </div>
                             <p className="text-[10px] text-pos-muted mt-0.5">{test.description}</p>
                           </div>
@@ -2542,7 +2826,7 @@ export const SettingsModal: React.FC = () => {
                   <div>
                     <h3 className="text-sm font-bold text-pos-text flex items-center gap-2">
                       Studio de Configuration du Programme de Fidélité & Modèle Financier
-                      <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded border ${cfg.enabled ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-slate-500/10 text-slate-400 border-slate-500/30'}`}>
+                      <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full border ${cfg.enabled ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-slate-500/10 text-slate-400 border-slate-500/30'}`}>
                         {cfg.enabled ? 'Actif' : 'Désactivé'}
                       </span>
                     </h3>
@@ -3102,7 +3386,7 @@ export const SettingsModal: React.FC = () => {
                   </div>
                   <button
                     type="button"
-                    onClick={exportDatabase}
+                    onClick={() => setShowExportPin(true)}
                     className="w-full py-2 px-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-500/20 cursor-pointer"
                   >
                     <Download className="w-4 h-4" /> Télécharger Sauvegarde JSON
@@ -3131,20 +3415,48 @@ export const SettingsModal: React.FC = () => {
                       placeholder="PIN Manager requis"
                       className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:border-blue-400 focus:outline-none"
                     />
+                    {stagedRestore && (
+                      <p className="text-[10px] text-emerald-300 font-mono break-all">
+                        Prêt : v{stagedRestore.version ?? '?'} — {Object.keys(stagedRestore.counts ?? {}).length} table(s) — sha {stagedRestore.sha256.slice(0, 16)}…
+                      </p>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleRestoreClick}
-                    className="w-full py-2 px-3 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-400 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition cursor-pointer"
-                  >
-                    <Upload className="w-4 h-4" /> Sélectionner un Fichier JSON
-                  </button>
+                  {!stagedRestore ? (
+                    <button
+                      type="button"
+                      onClick={handleRestoreClick}
+                      className="w-full py-2 px-3 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 text-blue-400 font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition cursor-pointer"
+                    >
+                      <Upload className="w-4 h-4" /> Sélectionner un Fichier JSON
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleExecuteRestore}
+                      disabled={isRestoring}
+                      className="w-full py-2 px-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition cursor-pointer"
+                    >
+                      <Upload className="w-4 h-4" /> {isRestoring ? 'Restauration…' : 'Restaurer (PIN Manager requis)'}
+                    </button>
+                  )}
                   <input
                     ref={fileInputRef}
                     type="file"
                     accept=".json"
                     onChange={handleFileUpload}
                     className="hidden"
+                  />
+                  {/* Decision 2: full-JSON export leaves the device — fresh
+                      manager PIN per download via the native gate. */}
+                  <PinDialog
+                    isOpen={showExportPin}
+                    title="Export de sauvegarde"
+                    description="Saisissez le code PIN Manager pour télécharger la sauvegarde JSON complète."
+                    onSuccess={() => {
+                      setShowExportPin(false);
+                      void exportDatabase();
+                    }}
+                    onCancel={() => setShowExportPin(false)}
                   />
                 </div>
               </div>
@@ -3173,7 +3485,7 @@ export const SettingsModal: React.FC = () => {
                         <span className="px-2.5 py-0.5 rounded-full bg-purple-500/20 border border-purple-500/40 text-purple-300 font-mono font-black text-xs">
                           v{APP_VERSION}
                         </span>
-                        <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">
                           Canal Stable
                         </span>
                       </div>
@@ -3209,7 +3521,7 @@ export const SettingsModal: React.FC = () => {
 
               {/* Update Action Panel (If Update Available) */}
               {updater.isUpdateAvailable && updater.updateInfo && (
-                <div className="bg-pos-card border-2 border-purple-500/60 rounded-2xl p-5 space-y-4 animate-in fade-in zoom-in-95">
+                <div className="bg-pos-card border border-purple-500/60 rounded-2xl p-5 space-y-4 animate-in fade-in zoom-in-95">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2.5">
                       <div className="w-8 h-8 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center border border-purple-500/40">

@@ -352,7 +352,7 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
                   disabled={isSyncing}
                   className="px-2.5 py-1 rounded-xl bg-pos-panel hover:bg-pos-hover text-pos-muted hover:text-cyan-400 border border-pos-border transition cursor-pointer flex items-center gap-1.5 text-[10px] font-bold active-press shadow-xs min-h-[38px]"
                   title="Synchroniser immédiatement avec la caisse"
-                  aria-label="Actualiser les données"
+                  aria-label="Sync — Actualiser les données"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncing ? 'animate-spin' : ''}`} />
                   <span className="text-[10px] font-mono text-cyan-300">Sync</span>

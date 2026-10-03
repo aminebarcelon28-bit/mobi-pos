@@ -1678,7 +1678,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                         key={preset}
                         type="button"
                         aria-pressed={isSelected}
-                        aria-label={isExact ? `Montant exact : ${formatDZD(preset)}` : `Encaisser ${formatDZD(preset)}`}
+                        aria-label={isExact ? `Exact (${formatDZD(preset)}) — Montant exact` : `${formatDZD(preset)} — Encaisser`}
                         onClick={() => {
                           soundEngine.playKeyBeep?.();
                           setTenderedStr(String(preset));

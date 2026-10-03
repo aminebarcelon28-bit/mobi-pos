@@ -1297,7 +1297,7 @@ export const ReportsModal: React.FC = () => {
                           aria-label="Effacer la recherche"
                           className="absolute right-1 top-1/2 -translate-y-1/2 text-pos-muted hover:text-pos-text text-xs min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg"
                         >
-                          ✕
+                          <span aria-hidden="true">✕</span>
                         </button>
                       )}
                     </div>

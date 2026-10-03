@@ -40,6 +40,14 @@ export const CompanionHeader: React.FC = () => {
 
   const isSyncing = syncStatus.pushing || syncStatus.pulling;
 
+  const syncVisibleText = isSyncing
+    ? 'Sync…'
+    : syncStatus.pendingCount > 0
+    ? `${syncStatus.pendingCount} attente`
+    : syncStatus.online
+    ? 'En ligne'
+    : 'Hors ligne';
+
   const handleSyncClick = () => {
     if (!syncStatus.online) {
       openModal('settings');
@@ -82,7 +90,7 @@ export const CompanionHeader: React.FC = () => {
               : 'bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20'
           }`}
           title={syncStatus.online ? "Synchronisation Turso Cloud — toucher pour forcer" : "Hors ligne — toucher pour les paramètres"}
-          aria-label="Statut de synchronisation"
+          aria-label={`${syncVisibleText} — statut de synchronisation`}
         >
           {isSyncing ? (
             <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
@@ -93,13 +101,7 @@ export const CompanionHeader: React.FC = () => {
           )}
 
           <span className="text-[10px] font-mono font-bold tracking-tight">
-            {isSyncing
-              ? 'Sync…'
-              : syncStatus.pendingCount > 0
-              ? `${syncStatus.pendingCount} attente`
-              : syncStatus.online
-              ? 'En ligne'
-              : 'Hors ligne'}
+            {syncVisibleText}
           </span>
         </button>
 

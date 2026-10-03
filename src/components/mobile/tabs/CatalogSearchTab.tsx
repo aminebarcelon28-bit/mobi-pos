@@ -243,7 +243,7 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                     key={term}
                     type="button"
                     onClick={() => setSearchTerm(term)}
-                    aria-label={`Rechercher ${term}`}
+                    aria-label={`${term} — Rechercher`}
                     className="min-h-[44px] px-3 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-[11px] font-bold whitespace-nowrap active-press transition hover:border-cyan-400/50 cursor-pointer shrink-0"
                   >
                     {term}

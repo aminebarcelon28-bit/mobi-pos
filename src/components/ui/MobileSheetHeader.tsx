@@ -20,7 +20,7 @@ export const MobileSheetHeader: React.FC<MobileSheetHeaderProps> = ({
         <button
           type="button"
           onClick={onBack}
-          aria-label="Revenir en arrière"
+          aria-label="Retour"
           title="Revenir en arrière"
           className="p-2 -ml-1 rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center gap-1 font-bold text-xs min-h-[44px] min-w-[44px]"
         >

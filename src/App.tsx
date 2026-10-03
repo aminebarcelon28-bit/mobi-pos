@@ -23,7 +23,8 @@ const MobilePairingWizard = React.lazy(() =>
 );
 import { getCloudCredentials } from './sync/keychain';
 import { soundEngine } from './utils/audioFeedback';
-import { hashDeviceLocalPin } from './utils/security';
+import { hashDeviceLocalPin, isCommonPin } from './utils/security';
+import type { CashierUser } from './types/pos';
 import { checkBootLicense, startLicenseHeartbeat } from './licensing/client';
 import { isLicenseLocked, setDegradedSaleBlock } from './licensing/degraded';
 import { onLicenseRevoked } from './licensing/store';
@@ -126,7 +127,9 @@ const DbLoadingSplash: React.FC = () => (
 const KNOWN_DEFAULT_PINS = new Set(['1234', '0000', '1111']);
 const PIN_4DIGITS_RE = /^\d{4}$/;
 // Phase 4.5: manager minimum is 6 digits (cashiers stay exactly 4).
-const MANAGER_PIN_RE = /^\d{6,32}$/;
+// Uniform mint policy (native validate_pin): manager 6–8, never wider — a
+// 9+-digit credential would be untypeable at login (manual entry caps at 8).
+const MANAGER_PIN_RE = /^\d{6,8}$/;
 const CASHIER_COLORS = ['#10b981', '#f59e0b', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a5'];
 
 interface SetupRow {
@@ -197,9 +200,9 @@ const FirstBootPinSetup: React.FC = () => {
     }
     if (pinTarget.kind === 'managerNew') {
       // Manager PINs are 6+ digits (Phase 4.5); cap at 32 (native limit).
-      setManagerNew((v) => (v + d).replace(/\D/g, '').slice(0, 32));
+      setManagerNew((v) => (v + d).replace(/\D/g, '').slice(0, 8));
     } else if (pinTarget.kind === 'managerConfirm') {
-      setManagerConfirm((v) => (v + d).replace(/\D/g, '').slice(0, 32));
+      setManagerConfirm((v) => (v + d).replace(/\D/g, '').slice(0, 8));
     } else {
       setRows((prev) =>
         prev.map((r) =>
@@ -252,7 +255,7 @@ const FirstBootPinSetup: React.FC = () => {
     }
     const cleanManagerPin = managerNew.trim();
     if (!MANAGER_PIN_RE.test(cleanManagerPin)) {
-      setError('Le code PIN gérant doit contenir au moins 6 chiffres.');
+      setError('Le code PIN gérant doit comporter 6 à 8 chiffres.');
       return;
     }
     if (cleanManagerPin !== managerConfirm.trim()) {
@@ -279,8 +282,45 @@ const FirstBootPinSetup: React.FC = () => {
       setError("Chaque personne doit avoir un code PIN différent, sinon l'écran verrouillé ne pourra pas distinguer les utilisateurs.");
       return;
     }
+    // Banal-PIN screen (NIST 800-63B-4): instant feedback; native pin_set
+    // enforces authoritatively under Tauri.
+    if (isCommonPin(cleanManagerPin) || activeRows.some((r) => isCommonPin(r.pin.trim()))) {
+      setError('Code trop simple (suite, répétition ou code banal) — choisissez des codes moins prévisibles.');
+      return;
+    }
     setSaving(true);
     try {
+      const { isTauriEnv } = await import('./db/adapters/base');
+      if (isTauriEnv()) {
+        // Native-first setup: skeleton rows (inert placeholders, never
+        // empty — an empty admin PIN would alias the master), then one
+        // Argon2id rotation per profile. A failure leaves the setup gate up
+        // with the error; nothing half-minted is kept.
+        const st = usePosStore.getState();
+        const prevAdmin = (cashierUsers || []).find((u) => u.role === 'admin') || (cashierUsers || [])[0];
+        const skeleton: CashierUser[] = [
+          {
+            id: prevAdmin?.id || 'usr-admin',
+            name: cleanManagerName,
+            pin: `PENDING-${Math.random().toString(36).slice(2, 10).toUpperCase()}`,
+            role: 'admin' as const,
+            avatarColor: prevAdmin?.avatarColor || '#3b82f6',
+          },
+          ...activeRows.map((r, i) => ({
+            id: r.key.startsWith('usr-') ? r.key : `usr-${Date.now().toString(36)}-${i}`,
+            name: r.name.trim(),
+            pin: `PENDING-${Math.random().toString(36).slice(2, 10).toUpperCase()}`,
+            role: 'cashier' as const,
+            avatarColor: CASHIER_COLORS[i % CASHIER_COLORS.length] as string,
+          })),
+        ];
+        await setCashierUsers(skeleton);
+        await st.rotatePinCredential('manager', cleanManagerPin, true);
+        for (const r of activeRows) {
+          const row = usePosStore.getState().cashierUsers.find((u) => u.name === r.name.trim());
+          if (row) await st.rotatePinCredential(row.id, r.pin.trim(), false);
+        }
+      } else {
       // setManagerPin mirrors the hash onto the primary admin row
       // (single-PIN contract) — reuse that exact hash for the new roster so
       // the manager holds one credential, not two hashes of the same code.
@@ -304,6 +344,7 @@ const FirstBootPinSetup: React.FC = () => {
           avatarColor: CASHIER_COLORS[i % CASHIER_COLORS.length] as string,
         })),
       ]);
+      }
       showToast(`Équipe enregistrée : ${cleanManagerName} + ${activeRows.length} caissier(s). Accès caisse déverrouillé.`, 'success');
     } catch {
       setError("Échec de l'enregistrement de l'équipe. Réessayez.");
@@ -366,12 +407,12 @@ const FirstBootPinSetup: React.FC = () => {
                   pattern="[0-9]*"
                   autoComplete="new-password"
                   enterKeyHint="next"
-                  aria-label="PIN gérant"
-                  maxLength={32}
+                  aria-label="PIN gérant (6 chiffres minimum)"
+                  maxLength={8}
                   value={managerNew}
                   onFocus={() => setPinTarget({ kind: 'managerNew' })}
                   onClick={() => setPinTarget({ kind: 'managerNew' })}
-                  onChange={(e) => setManagerNew(e.target.value.replace(/\D/g, '').slice(0, 32))}
+                  onChange={(e) => setManagerNew(e.target.value.replace(/\D/g, '').slice(0, 8))}
                   className={pinInputClass}
                   placeholder="••••"
                 />
@@ -386,12 +427,12 @@ const FirstBootPinSetup: React.FC = () => {
                   pattern="[0-9]*"
                   autoComplete="new-password"
                   enterKeyHint="done"
-                  aria-label="Confirmer le PIN gérant"
-                  maxLength={32}
+                  aria-label="Confirmer le PIN"
+                  maxLength={8}
                   value={managerConfirm}
                   onFocus={() => setPinTarget({ kind: 'managerConfirm' })}
                   onClick={() => setPinTarget({ kind: 'managerConfirm' })}
-                  onChange={(e) => setManagerConfirm(e.target.value.replace(/\D/g, '').slice(0, 32))}
+                  onChange={(e) => setManagerConfirm(e.target.value.replace(/\D/g, '').slice(0, 8))}
                   className={pinInputClass}
                   placeholder="••••"
                 />
@@ -483,7 +524,7 @@ const FirstBootPinSetup: React.FC = () => {
                   aria-label={`Chiffre ${d}`}
                   className="h-12 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-xl font-bold transition active:scale-95 active:border-amber-500"
                 >
-                  {d}
+                  <span aria-hidden="true">{d}</span>
                 </button>
               ))}
               <button
@@ -492,7 +533,7 @@ const FirstBootPinSetup: React.FC = () => {
                 aria-label="Tout effacer"
                 className="h-12 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-base font-bold transition active:scale-95"
               >
-                C
+                <span aria-hidden="true">C</span>
               </button>
               <button
                 type="button"
@@ -500,7 +541,7 @@ const FirstBootPinSetup: React.FC = () => {
                 aria-label="Chiffre 0"
                 className="h-12 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-xl font-bold transition active:scale-95 active:border-amber-500"
               >
-                0
+                <span aria-hidden="true">0</span>
               </button>
               <button
                 type="button"
@@ -508,7 +549,7 @@ const FirstBootPinSetup: React.FC = () => {
                 aria-label="Effacer le dernier chiffre"
                 className="h-12 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-xl font-bold transition active:scale-95"
               >
-                ⌫
+                <span aria-hidden="true">⌫</span>
               </button>
             </div>
           </div>

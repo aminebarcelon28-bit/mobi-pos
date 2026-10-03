@@ -139,7 +139,7 @@ test.describe('Réapprovisionnement — live store wiring (Stage 2)', () => {
   test('KPIs and supplier cards derive from the seeded store', async ({ page }) => {
     await openHarness(page, true, LG, 900);
     await expect(page.getByLabel('Nombre de grossistes: 3')).toBeVisible();
-    await expect(page.getByLabel('Articles sous seuil de réapprovisionnement: 6')).toBeVisible();
+    await expect(page.getByLabel('Articles sous seuil de réapprovisionnement: 7')).toBeVisible();
     await expect(page.getByLabel('Articles en rupture de stock: 1')).toBeVisible();
     const cards = page.locator('main[aria-label="Liste des fournisseurs"] article');
     await expect(cards).toHaveCount(3);
@@ -147,17 +147,17 @@ test.describe('Réapprovisionnement — live store wiring (Stage 2)', () => {
     await expect(page.getByText('Distributeur Officiel')).toBeVisible();
   });
 
-  test('budget KPI sums suggested qty × unit cost (92 450 DA)', async ({ page }) => {
+  test('budget KPI sums suggested qty × unit cost (95 750 DA)', async ({ page }) => {
     await openHarness(page, true, XL, 900);
     const budget = page.getByLabel(/Budget estimé pour le réapprovisionnement/);
     await expect(budget).toBeVisible();
     const label = (await budget.getAttribute('aria-label')) ?? '';
-    expect(label.replace(/[\s  ]/g, '')).toContain('92450DA');
+    expect(label.replace(/[\s   ]/g, '')).toContain('95750DA');
   });
 
   test('"Voir détails" expands live line items with stock vs threshold', async ({ page }) => {
     await openHarness(page, true, LG, 900);
-    await page.getByRole('button', { name: /voir les détails/i }).first().click();
+    await page.getByRole('button', { name: /voir détails de/i }).first().click();
     await expect(page.getByText('SKU: VC-0001')).toBeVisible();
     await expect(page.getByText(/Stock:/).first()).toBeVisible();
     await expect(page.getByText(/Seuil:/).first()).toBeVisible();
@@ -167,7 +167,7 @@ test.describe('Réapprovisionnement — live store wiring (Stage 2)', () => {
 
   test('quantity stepper writes the live customQtyMap in the store', async ({ page }) => {
     await openHarness(page, true, LG, 900);
-    await page.getByRole('button', { name: /voir les détails/i }).first().click();
+    await page.getByRole('button', { name: /voir détails de/i }).first().click();
     // First line item is the rupture (VC-0001, suggested qty = max(1, 2×10−0) = 20).
     await page.getByRole('button', { name: 'Augmenter la quantité' }).first().click();
     const qty = await page.evaluate(() => {
@@ -179,7 +179,7 @@ test.describe('Réapprovisionnement — live store wiring (Stage 2)', () => {
 
   test('inline contact editor persists to the vendor directory', async ({ page }) => {
     await openHarness(page, true, LG, 900);
-    await page.getByRole('button', { name: 'Modifier les coordonnées de Grossiste Algerien Mobile' }).first().click();
+    await page.getByRole('button', { name: 'Ajouter contact pour Grossiste Algerien Mobile' }).first().click();
     await page.getByLabel('Téléphone de Grossiste Algerien Mobile').fill('0550 12 34 56');
     await page.getByLabel('WhatsApp de Grossiste Algerien Mobile').fill('0550 12 34 56');
     await page.getByLabel('E-mail de Grossiste Algerien Mobile').fill('commandes@gam.dz');
@@ -222,7 +222,7 @@ test.describe('Réapprovisionnement — live store wiring (Stage 2)', () => {
   test('"Voir Commande" deep-links the waiting-list PO into the PO review', async ({ page }) => {
     await openHarness(page, true, LG, 900);
     await page.getByRole('tab', { name: /commandes/i }).click();
-    const viewOrder = page.getByRole('button', { name: /voir la commande po-2026-0147/i });
+    const viewOrder = page.getByRole('button', { name: /voir commande po-2026-0147/i });
     await expect(viewOrder).toBeVisible();
     await viewOrder.click();
     await page.waitForFunction(() => {
@@ -304,7 +304,7 @@ test.describe('Réapprovisionnement — toolbar bounds & deep search (Directive 
     await expect(cards).toHaveCount(1);
     await expect(page.getByText('Fournisseur Général')).toBeVisible();
     // Expand the line-item panel: the matching product renders, highlighted.
-    await page.getByRole('button', { name: /voir les détails/i }).first().click();
+    await page.getByRole('button', { name: /voir détails de/i }).first().click();
     await expect(page.getByText('Kit Nettoyage Ecran')).toBeVisible();
     await expect(page.locator('mark', { hasText: 'Nettoyage' })).toBeVisible();
   });

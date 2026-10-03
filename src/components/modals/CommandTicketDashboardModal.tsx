@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   Clock,
@@ -12,7 +13,6 @@ import {
   PackageCheck,
   ChevronDown,
   ChevronUp,
-  Boxes,
   Trash2,
   ExternalLink,
   Play,
@@ -20,9 +20,10 @@ import {
   ShoppingBag,
   FileText,
   Eye,
+  MoreHorizontal,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import { formatDZD, formatDateTime } from '../../types/pos';
+import { formatDZD, formatDateTime, REPAIR_STATUS_BADGE_TOKENS, repairRemainingBalance } from '../../types/pos';
 import type { PurchaseOrder, PaymentMethodType } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { buildWhatsAppUrl } from '../../utils/phoneUtils';
@@ -90,9 +91,24 @@ export const CommandTicketDashboardModal: React.FC = () => {
     deletePO,
     updateRepairOrderStatus,
     receiptSettings,
+    setPendingRepairPrint,
   } = usePosStore();
-
   const { showToast } = useToast();
+  const [showRepairArchive, setShowRepairArchive] = useState(false);
+
+  const handleSettleAndDeliver = async (orderId: string, ticketNumber: string) => {
+    const { settleAndDeliverRepair, markRepairDelivered } = usePosStore.getState();
+    const res = await settleAndDeliverRepair(orderId);
+    if (res.action === 'cart') {
+      showToast(`Solde ${formatDZD(res.remainingBalance)} injecté au panier — encaissez pour livrer ${ticketNumber}.`, 'success');
+      closeModal();
+      return;
+    }
+    if (window.confirm(`Livrer ${ticketNumber} ? Solde à zéro confirmé.`)) {
+      const ok = await markRepairDelivered(orderId);
+      showToast(ok ? `Ticket ${ticketNumber} livré.` : 'Livraison impossible — solde restant.', ok ? 'success' : 'warning');
+    }
+  };
 
   // Navigation Tabs
   const [activeTab, setActiveTab] = useState<'waiting_pos' | 'held_sales' | 'repairs'>('waiting_pos');
@@ -109,12 +125,31 @@ export const CommandTicketDashboardModal: React.FC = () => {
   const [verifiedQtyMap, setVerifiedQtyMap] = useState<Record<string, number>>({});
   const [verifiedCostMap, setVerifiedCostMap] = useState<Record<string, number>>({});
   const [discrepancyReasons, setDiscrepancyReasons] = useState<Record<string, string>>({});
+  const [supplierInvoiceNo, setSupplierInvoiceNo] = useState<string>('');
+  const [receptionSnapshot, setReceptionSnapshot] = useState<import('../../types/pos').POReceptionSnapshot | null>(null);
   const [autoRecordExpense, setAutoRecordExpense] = useState<boolean>(true);
   const [expensePaymentMethod, setExpensePaymentMethod] = useState<PaymentMethodType>('Espèces');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Rafraîchit les anciennetés « il y a X min » toutes les 30 s (affichage seul).
   const [, setAgeTick] = useState(0);
+
+  // Portaled overflow menus — meatball triggers live inside cards that sit in
+  // an overflow-y-auto scroller, so an absolutely-positioned child would be
+  // clipped. Menus are portaled to document.body with position:fixed.
+  // Keys: `po:<id>` (row actions), `repair:<id>` (SAV), `header:waiting`, `preview:<poNumber>`.
+  const [overflowKey, setOverflowKey] = useState<string | null>(null);
+  const overflowAnchorRefs = useRef(new Map<string, HTMLButtonElement>());
+  const overflowMenuRef = useRef<HTMLDivElement>(null);
+  const [overflowPos, setOverflowPos] = useState<{ top: number; left: number; openUp: boolean }>({
+    top: 0,
+    left: 0,
+    openUp: false,
+  });
+  const setOverflowAnchor = (key: string) => (el: HTMLButtonElement | null) => {
+    if (el) overflowAnchorRefs.current.set(key, el);
+    else overflowAnchorRefs.current.delete(key);
+  };
 
   useEffect(() => {
     if (activeModal !== 'command_tickets') return;
@@ -128,14 +163,75 @@ export const CommandTicketDashboardModal: React.FC = () => {
   useEffect(() => {
     if (activeModal !== 'command_tickets') return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (e.key !== 'Escape') return;
+      // Overflow menu handles its own Escape (focus back to anchor).
+      if (overflowKey) return;
+      if (previewingPO) {
         e.preventDefault();
-        closeModal();
+        setPreviewingPO(null);
+        return;
       }
+      if (receivingPO) {
+        e.preventDefault();
+        setReceivingPO(null);
+        return;
+      }
+      e.preventDefault();
+      closeModal();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeModal, closeModal]);
+  }, [activeModal, closeModal, overflowKey, previewingPO, receivingPO]);
+
+  // Portaled overflow menu: compute fixed position from the meatball anchor
+  // with auto flip (open upward when near the bottom viewport edge), clamp to
+  // the viewport, and dismiss on outside click / Escape / scroll / resize.
+  useEffect(() => {
+    if (!overflowKey || activeModal !== 'command_tickets') return;
+    const MENU_W = 288;
+    const MENU_H_EST = 264;
+    const place = () => {
+      const anchor = overflowAnchorRefs.current.get(overflowKey);
+      const r = anchor?.getBoundingClientRect();
+      if (!r) return;
+      const spaceBelow = window.innerHeight - r.bottom;
+      const openUp = spaceBelow < MENU_H_EST + 16;
+      const top = openUp
+        ? Math.max(8, r.top - MENU_H_EST - 8)
+        : Math.min(r.bottom + 8, window.innerHeight - 16);
+      const isMobile = window.innerWidth < 640;
+      const left = isMobile ? 8 : Math.max(8, Math.min(r.right - MENU_W, window.innerWidth - MENU_W - 8));
+      setOverflowPos({ top, left, openUp });
+    };
+    place();
+    const handleClickOutside = (event: MouseEvent) => {
+      const t = event.target as Node;
+      const anchor = overflowAnchorRefs.current.get(overflowKey);
+      if (overflowMenuRef.current && !overflowMenuRef.current.contains(t) && anchor && !anchor.contains(t)) {
+        setOverflowKey(null);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOverflowKey(null);
+        overflowAnchorRefs.current.get(overflowKey)?.focus();
+      }
+    };
+    const handleScroll = () => setOverflowKey(null);
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKey);
+    window.addEventListener('resize', place);
+    // Capture phase: any inner scroll (card list) invalidates the anchor.
+    window.addEventListener('scroll', handleScroll, true);
+    overflowMenuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKey);
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [overflowKey, activeModal]);
 
   useEffect(() => {
     if (activeModal !== 'command_tickets') return;
@@ -200,8 +296,10 @@ export const CommandTicketDashboardModal: React.FC = () => {
     );
   });
 
-  // Filtered Repair Orders
+  // Filtered Repair Orders — active lane excludes Livré/Annulé (archive toggle).
   const filteredRepairs = (repairOrders || []).filter((r) => {
+    const isArchived = r.status === 'Livré' || r.status === 'Annulé';
+    if (isArchived !== showRepairArchive) return false;
     return (
       r.ticketNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
       r.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -215,6 +313,8 @@ export const CommandTicketDashboardModal: React.FC = () => {
   // ══════════════════════════════════════════════════════════════
   const handleOpenReceivingModal = (po: PurchaseOrder) => {
     setReceivingPO(po);
+    setSupplierInvoiceNo('');
+    setReceptionSnapshot(null);
     const initQty: Record<string, number> = {};
     const initCost: Record<string, number> = {};
     const initReasons: Record<string, string> = {};
@@ -320,6 +420,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
   };
 
   const handlePrintPO = async (po: PurchaseOrder) => {
+    setReceptionSnapshot(null);
     setPrintingPO(po);
     const { printCoordinator } = await import('../../utils/printCoordinator');
     const printed = printCoordinator.printPurchaseOrder(100);
@@ -375,17 +476,14 @@ export const CommandTicketDashboardModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-6xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 flex flex-col h-[94vh] sm:h-[90vh]">
-        {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
-
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/50 backdrop-blur-sm select-none">
+      <div className="w-full max-w-5xl max-h-[90vh] flex flex-col rounded-2xl bg-pos-panel border border-pos-border overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95">
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* MODAL HEADER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
+        <div className="px-6 py-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white shadow-lg shadow-amber-500/20 shrink-0">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 shadow-lg shadow-emerald-500/20 shrink-0">
               <Clock className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
             </div>
             <div className="min-w-0">
@@ -404,7 +502,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition shrink-0 cursor-pointer"
             aria-label="Fermer"
           >
             <X className="w-5 h-5" />
@@ -412,67 +510,40 @@ export const CommandTicketDashboardModal: React.FC = () => {
         </div>
 
         {/* ══════════════════════════════════════════════════════════════ */}
-        {/* TOP KPI SUMMARY METRICS */}
+        {/* TOP KPI SUMMARY — compact strip (divide-x, label+value baseline) */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-4 border-b border-pos-border bg-pos-bg grid grid-cols-2 sm:grid-cols-4 gap-3 shrink-0">
-          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
-                Bons en File d'Attente
-              </span>
-              <span className="text-xl font-black text-amber-400 font-mono">{waitingPOs.length}</span>
-            </div>
-            <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
-              <Clock className="w-5 h-5" />
-            </div>
+        <div
+          className="grid grid-cols-2 md:grid-cols-4 divide-x divide-pos-border py-3 bg-pos-card/50 border-b border-pos-border shrink-0 select-none"
+          role="status"
+          aria-label={`${waitingPOs.length} bons en attente, ${totalWaitingUnits} unités, budget ${formatDZD(totalEstimatedCost)}, ${heldSales.length} paniers suspendus`}
+        >
+          <div className="flex-1 min-w-0 px-2 sm:px-4 py-1.5 flex items-baseline justify-center gap-1.5" title={`${waitingPOs.length} bons en file d'attente`}>
+            <span className="text-[10px] uppercase font-bold text-pos-muted truncate">Bons</span>
+            <span className="text-sm font-black text-amber-300 tabular-nums">{waitingPOs.length}</span>
           </div>
-
-          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
-                Unités Attendues
-              </span>
-              <span className="text-xl font-black text-cyan-400 font-mono">+{totalWaitingUnits} pcs</span>
-            </div>
-            <div className="w-9 h-9 rounded-xl bg-cyan-500/10 text-cyan-400 flex items-center justify-center">
-              <Boxes className="w-5 h-5" />
-            </div>
+          <div className="flex-1 min-w-0 px-2 sm:px-4 py-1.5 flex items-baseline justify-center gap-1.5" title={`${totalWaitingUnits} unités attendues`}>
+            <span className="text-[10px] uppercase font-bold text-pos-muted truncate">Unités</span>
+            <span className="text-sm font-black text-emerald-400 tabular-nums">+{totalWaitingUnits}</span>
           </div>
-
-          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
-                Budget Réappro Estimé
-              </span>
-              <span className="text-xl font-black text-emerald-400 font-mono">{formatDZD(totalEstimatedCost)}</span>
-            </div>
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
-              <Truck className="w-5 h-5" />
-            </div>
+          <div className="flex-1 min-w-0 px-2 sm:px-4 py-1.5 flex items-baseline justify-center gap-1.5" title={`Budget estimé : ${formatDZD(totalEstimatedCost)}`}>
+            <span className="text-[10px] uppercase font-bold text-pos-muted truncate">Budget</span>
+            <span className="text-sm font-black text-emerald-400 tabular-nums truncate">{formatDZD(totalEstimatedCost)}</span>
           </div>
-
-          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
-                Paniers Suspendus (F6)
-              </span>
-              <span className="text-xl font-black text-teal-400 font-mono">{heldSales.length}</span>
-            </div>
-            <div className="w-9 h-9 rounded-xl bg-teal-500/10 text-teal-400 flex items-center justify-center">
-              <ShoppingBag className="w-5 h-5" />
-            </div>
+          <div className="flex-1 min-w-0 px-2 sm:px-4 py-1.5 flex items-baseline justify-center gap-1.5" title={`${heldSales.length} paniers suspendus`}>
+            <span className="text-[10px] uppercase font-bold text-pos-muted truncate">Paniers</span>
+            <span className="text-sm font-black text-emerald-400 tabular-nums">{heldSales.length}</span>
           </div>
         </div>
 
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* NAVIGATION TABS & SEARCH CONTROLS */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-2.5 sm:p-3 border-b border-pos-border bg-pos-panel flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-3 shrink-0">
-          {/* Tab Selection */}
-          <div className="flex items-center gap-1.5 bg-pos-bg p-1 rounded-xl border border-pos-border w-full sm:w-auto overflow-x-auto no-scrollbar whitespace-nowrap">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-6 pt-4 pb-3 border-b border-pos-border bg-pos-panel shrink-0">
+          {/* Tab Selection — scroll row on mobile */}
+          <div className="flex items-center gap-1.5 bg-pos-bg p-1 rounded-lg border border-pos-border w-full sm:w-auto overflow-x-auto no-scrollbar whitespace-nowrap overscroll-contain">
             <button
               onClick={() => setActiveTab('waiting_pos')}
-              className={`min-h-[40px] px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center gap-2 transition cursor-pointer shrink-0 active:scale-95 ${
+              className={`min-h-[44px] px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center gap-2 transition cursor-pointer shrink-0 active:scale-95 ${
                 activeTab === 'waiting_pos'
                   ? 'bg-amber-500 text-slate-950 shadow-md'
                   : 'text-pos-muted hover:text-pos-text'
@@ -484,9 +555,9 @@ export const CommandTicketDashboardModal: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('held_sales')}
-              className={`min-h-[40px] px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center gap-2 transition cursor-pointer shrink-0 active:scale-95 ${
+              className={`min-h-[44px] px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center gap-2 transition cursor-pointer shrink-0 active:scale-95 ${
                 activeTab === 'held_sales'
-                  ? 'bg-teal-500 text-slate-950 shadow-md'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md'
                   : 'text-pos-muted hover:text-pos-text'
               }`}
             >
@@ -496,7 +567,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('repairs')}
-              className={`min-h-[40px] px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center gap-2 transition cursor-pointer shrink-0 active:scale-95 ${
+              className={`min-h-[44px] px-3.5 py-1.5 rounded-lg text-xs font-black flex items-center gap-2 transition cursor-pointer shrink-0 active:scale-95 ${
                 activeTab === 'repairs'
                   ? 'bg-emerald-500 text-slate-950 shadow-md'
                   : 'text-pos-muted hover:text-pos-text'
@@ -518,7 +589,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Rechercher bon, fournisseur, SKU..."
                 aria-label="Rechercher dans la file d'attente"
-                className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-3 py-1.5 text-xs text-pos-text focus:outline-none focus:border-amber-400"
+                className="w-full bg-pos-bg border border-pos-border rounded-lg pl-9 pr-3 py-1.5 text-xs text-pos-text focus:outline-none focus:border-amber-400 min-h-[44px]"
               />
             </div>
 
@@ -526,18 +597,22 @@ export const CommandTicketDashboardModal: React.FC = () => {
               <>
                 <button
                   onClick={() => openModal('vendor_procurement')}
-                  className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-emerald-900/20 transition cursor-pointer shrink-0"
+                  className="min-h-[44px] px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-bold text-xs rounded-lg flex items-center gap-1.5 shadow-md shadow-emerald-900/20 transition cursor-pointer shrink-0"
                 >
                   <PlusCircle className="w-4 h-4" />
                   <span>+ Réapprovisionnement</span>
                 </button>
                 <button
-                  onClick={() => openModal('purchase_order')}
-                  className="px-3 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/40 text-xs font-bold rounded-xl flex items-center gap-1.5 transition cursor-pointer shrink-0"
-                  title="Inspecter le Bon de Commande Détaillé"
+                  type="button"
+                  ref={setOverflowAnchor('header:waiting')}
+                  onClick={() => setOverflowKey((k) => (k === 'header:waiting' ? null : 'header:waiting'))}
+                  className="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text font-bold text-sm flex items-center justify-center transition cursor-pointer shrink-0"
+                  aria-expanded={overflowKey === 'header:waiting'}
+                  aria-haspopup="menu"
+                  aria-label="Plus d'actions bons fournisseur"
+                  title="Plus d'actions bons fournisseur"
                 >
-                  <FileText className="w-4 h-4" />
-                  <span>Bons Détaillés</span>
+                  <MoreHorizontal className="w-4 h-4" />
                 </button>
               </>
             )}
@@ -547,17 +622,17 @@ export const CommandTicketDashboardModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* MAIN CONTENT AREA */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="overflow-y-auto overscroll-contain p-6 space-y-3 flex-1 min-h-0">
           {/* TAB 1: PURCHASE ORDERS & WAITING LIST */}
           {activeTab === 'waiting_pos' && (
             <div className="space-y-3">
-              {/* Status Filter Pills */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+              {/* Status Filter Pills — scroll row on mobile */}
+              <div className="flex items-center gap-2 pb-2 overflow-x-auto no-scrollbar overscroll-contain text-xs">
                 {(['all', 'Waiting List', 'Draft', 'Partially Received', 'Completed'] as const).map((st) => (
                   <button
                     key={st}
                     onClick={() => setStatusFilter(st)}
-                    className={`px-3 py-1 rounded-xl font-bold border transition cursor-pointer ${
+                    className={`min-h-[44px] px-3 py-1 rounded-lg font-bold border transition cursor-pointer shrink-0 flex items-center ${
                       statusFilter === st
                         ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
                         : 'bg-pos-card text-pos-muted hover:text-pos-text border-pos-border'
@@ -577,7 +652,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
               </div>
 
               {filteredPOs.length === 0 ? (
-                <div className="p-12 text-center bg-pos-card border border-pos-border rounded-2xl space-y-3">
+                <div className="p-12 text-center bg-pos-card border border-pos-border rounded-xl shadow-sm space-y-3">
                   <Clock className="w-12 h-12 text-pos-muted mx-auto opacity-40" />
                   <h3 className="font-bold text-sm text-pos-text">Aucun bon de commande trouvé</h3>
                   <p className="text-xs text-pos-muted max-w-sm mx-auto">
@@ -586,7 +661,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                   </p>
                   <button
                     onClick={() => openModal('vendor_procurement')}
-                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl transition cursor-pointer min-h-[44px]"
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-lg transition cursor-pointer min-h-[44px]"
                   >
                     Lancer un Réapprovisionnement Intelligent
                   </button>
@@ -605,7 +680,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                   return (
                     <div
                       key={po.id}
-                      className={`bg-pos-card border rounded-2xl overflow-hidden transition-all duration-150 shadow-sm ${
+                      className={`bg-pos-card border border-pos-border rounded-xl overflow-hidden transition-all duration-150 shadow-sm ${
                         isWaiting ? 'border-amber-500/40 hover:border-amber-500/60' : 'border-pos-border'
                       }`}
                     >
@@ -613,26 +688,26 @@ export const CommandTicketDashboardModal: React.FC = () => {
                       <div className="p-4 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 bg-pos-panel/60">
                         <div className="flex items-center gap-3">
                           <div
-                            className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm ${
+                            className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold text-sm ${
                               po.status === 'Completed' || po.status === 'Received'
                                 ? 'bg-emerald-500/20 text-emerald-400'
                                 : po.status === 'Partially Received'
-                                ? 'bg-blue-500/20 text-blue-400'
+                                ? 'bg-emerald-500/15 text-emerald-300'
                                 : 'bg-amber-500/20 text-amber-400'
                             }`}
                           >
                             <Truck className="w-5 h-5" />
                           </div>
                           <div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-mono font-black text-sm text-pos-text">{po.poNumber}</span>
                               <span className="font-extrabold text-sm text-amber-300">• {po.vendorName}</span>
                               <span
-                                className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider ${
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
                                   po.status === 'Completed' || po.status === 'Received'
                                     ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-300'
                                     : po.status === 'Partially Received'
-                                    ? 'bg-blue-500/15 border border-blue-500/30 text-blue-300'
+                                    ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-300'
                                     : 'bg-amber-500/15 border border-amber-500/30 text-amber-300 animate-pulse'
                                 }`}
                               >
@@ -640,7 +715,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                               </span>
                               {poAgeLabel && (
                                 <span
-                                  className={`px-2 py-0.5 rounded-md text-[10px] font-bold border whitespace-nowrap ${AGE_TONE_CLASSES[poAgeTone]}`}
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold border whitespace-nowrap ${AGE_TONE_CLASSES[poAgeTone]}`}
                                   title={`Créé le ${formatDateTime(po.createdAt)}`}
                                 >
                                   🕓 {poAgeLabel}
@@ -653,7 +728,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Cost & Actions */}
+                        {/* Cost & Actions — primary Réceptionner kept visible, 5 icon actions in portaled ••• */}
                         <div className="flex items-center gap-2 w-full lg:w-auto justify-between lg:justify-end">
                           <div className="text-right pr-2">
                             <span className="text-[9px] uppercase font-bold text-pos-muted block">Total Estimé</span>
@@ -666,63 +741,35 @@ export const CommandTicketDashboardModal: React.FC = () => {
                           {isWaiting && (
                             <button
                               onClick={() => handleOpenReceivingModal(po)}
-                              className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-black rounded-xl flex items-center gap-1.5 shadow-md shadow-emerald-900/20 transition cursor-pointer"
+                              className="min-h-[44px] px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white text-xs font-black rounded-lg flex items-center gap-1.5 shadow-md shadow-emerald-900/20 transition cursor-pointer"
                               title="Vérifier et Réceptionner les marchandises en stock"
+                              aria-label={`Réceptionner le bon ${po.poNumber}`}
                             >
                               <PackageCheck className="w-4 h-4" />
                               <span>Réceptionner</span>
                             </button>
                           )}
 
-                          {/* WhatsApp dispatch */}
+                          {/* Compact 32px visual / 44px hitbox meatball — portaled menu, never clipped */}
                           <button
-                            onClick={() => handleSendWhatsApp(po)}
-                            className="p-2 bg-pos-bg hover:bg-emerald-500/20 border border-pos-border hover:border-emerald-500/40 text-emerald-400 rounded-xl transition cursor-pointer"
-                            title="Envoyer le bon au fournisseur via WhatsApp"
+                            type="button"
+                            ref={setOverflowAnchor(`po:${po.id}`)}
+                            onClick={() => setOverflowKey((k) => (k === `po:${po.id}` ? null : `po:${po.id}`))}
+                            className="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text font-bold text-sm flex items-center justify-center transition cursor-pointer shrink-0"
+                            aria-expanded={overflowKey === `po:${po.id}`}
+                            aria-haspopup="menu"
+                            aria-label={`Plus d'actions pour le bon ${po.poNumber}`}
+                            title={`Plus d'actions pour le bon ${po.poNumber}`}
                           >
-                            <MessageSquare className="w-4 h-4" />
-                          </button>
-
-                          {/* Aperçu A4 Pro */}
-                          <button
-                            onClick={() => setPreviewingPO(po)}
-                            className="p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-emerald-400 rounded-xl transition cursor-pointer"
-                            title="Aperçu Bon de Commande A4 Officiel"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-
-                          {/* Print PO */}
-                          <button
-                            onClick={() => handlePrintPO(po)}
-                            className="p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
-                            title="Imprimer le bon de commande (A4 PDF)"
-                          >
-                            <Printer className="w-4 h-4" />
-                          </button>
-
-                          {/* Export Excel (.xlsx stylé) */}
-                          <button
-                            onClick={() => handleExportExcel(po)}
-                            className="p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
-                            title="Télécharger en Excel (.xlsx stylé)"
-                          >
-                            <Download className="w-4 h-4" />
-                          </button>
-
-                          {/* Delete PO */}
-                          <button
-                            onClick={() => handleDeleteOrCancelPO(po)}
-                            className="p-2 bg-pos-bg hover:bg-red-500/20 border border-pos-border hover:border-red-500/40 text-pos-muted hover:text-red-400 rounded-xl transition cursor-pointer"
-                            title="Annuler / Supprimer le bon"
-                          >
-                            <Trash2 className="w-4 h-4" />
+                            <MoreHorizontal className="w-4 h-4" />
                           </button>
 
                           {/* Toggle expand */}
                           <button
                             onClick={() => setExpandedPoId(isExpanded ? null : po.id)}
-                            className="p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+                            className="min-h-[44px] min-w-[44px] flex items-center justify-center bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer shrink-0"
+                            aria-label={isExpanded ? `Replier le détail du bon ${po.poNumber}` : `Déplier le détail du bon ${po.poNumber}`}
+                            title={isExpanded ? 'Replier le détail' : 'Déplier le détail'}
                           >
                             {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                           </button>
@@ -760,11 +807,11 @@ export const CommandTicketDashboardModal: React.FC = () => {
                                     <td className="py-2 px-3 text-right font-black text-pos-text">{formatDZD(item.unitCost * item.suggestedQty)}</td>
                                     <td className="py-2 px-3 text-center font-sans">
                                       <span
-                                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                                           item.status === 'Received'
                                             ? 'bg-emerald-500/20 text-emerald-400'
                                             : item.status === 'Partially Received'
-                                            ? 'bg-blue-500/20 text-blue-400'
+                                            ? 'bg-emerald-500/15 text-emerald-300'
                                             : item.status === 'Discrepancy'
                                             ? 'bg-red-500/20 text-red-400'
                                             : 'bg-amber-500/20 text-amber-300'
@@ -791,7 +838,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
           {activeTab === 'held_sales' && (
             <div className="space-y-3">
               {filteredHeldSales.length === 0 ? (
-                <div className="p-12 text-center bg-pos-card border border-pos-border rounded-2xl space-y-3">
+                <div className="p-12 text-center bg-pos-card border border-pos-border rounded-xl shadow-sm space-y-3">
                   <ShoppingBag className="w-12 h-12 text-pos-muted mx-auto opacity-40" />
                   <h3 className="font-bold text-sm text-pos-text">Aucun panier en attente</h3>
                   <p className="text-xs text-pos-muted max-w-sm mx-auto">
@@ -815,20 +862,20 @@ export const CommandTicketDashboardModal: React.FC = () => {
                     return (
                       <div
                         key={hs.id}
-                        className="bg-pos-card border border-teal-500/30 hover:border-teal-500/60 rounded-2xl p-4 space-y-3 shadow-sm transition"
+                        className="bg-pos-card border border-pos-border border-emerald-500/30 hover:border-emerald-500/60 rounded-xl p-4 space-y-3 shadow-sm transition"
                       >
                         <div className="flex items-center justify-between pb-2 border-b border-pos-border">
                           <div className="flex items-center gap-2">
-                            <div className="w-8 h-8 rounded-xl bg-teal-500/20 text-teal-400 flex items-center justify-center font-bold">
+                            <div className="w-8 h-8 rounded-lg bg-emerald-500/15 text-emerald-400 flex items-center justify-center font-bold">
                               <ShoppingBag className="w-4 h-4" />
                             </div>
                             <div>
                               <h4 className="font-black text-sm text-pos-text">{custName}</h4>
                               <span className="text-[10px] text-pos-muted flex items-center gap-1 flex-wrap">
-                                <Clock className="w-3 h-3 text-teal-400" /> {hs.timestamp}
+                                <Clock className="w-3 h-3 text-emerald-400" /> {hs.timestamp}
                                 {hsAgeLabel && (
                                   <span
-                                    className={`px-1.5 py-px rounded text-[9px] font-bold border whitespace-nowrap ${AGE_TONE_CLASSES[hsAgeTone]}`}
+                                    className={`px-1.5 py-px rounded-full text-[9px] font-bold border whitespace-nowrap ${AGE_TONE_CLASSES[hsAgeTone]}`}
                                     title="Ancienneté du ticket suspendu"
                                   >
                                     {hsAgeLabel}
@@ -841,7 +888,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                         </div>
 
                         {/* Items list preview */}
-                        <div className="space-y-1 max-h-32 overflow-y-auto pr-1 text-xs">
+                        <div className="space-y-1 max-h-32 overflow-y-auto overscroll-contain pr-1 text-xs">
                           {(hs.items || []).map((it) => (
                             <div key={it.product.id} className="flex justify-between text-pos-muted">
                               <span className="truncate pr-2 font-medium">
@@ -856,13 +903,13 @@ export const CommandTicketDashboardModal: React.FC = () => {
                         <div className="flex items-center justify-between pt-2 border-t border-pos-border">
                           <button
                             onClick={() => handleDeleteHeldSaleClick(hs.id)}
-                            className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-xl transition cursor-pointer"
+                            className="min-h-[44px] px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-lg transition cursor-pointer"
                           >
                             Supprimer
                           </button>
                             <button
                               onClick={() => handleRestoreHeldSaleClick(hs.id)}
-                              className="px-4 py-2 bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-500 hover:to-emerald-500 text-white font-black text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-teal-900/30 transition cursor-pointer"
+                              className="min-h-[44px] px-4 py-2 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-black text-xs rounded-lg flex items-center gap-1.5 shadow-md shadow-emerald-900/30 transition cursor-pointer"
                             >
                               <Play className="w-3.5 h-3.5" />
                               <span>Reprendre la Vente (F6)</span>
@@ -879,10 +926,26 @@ export const CommandTicketDashboardModal: React.FC = () => {
           {/* TAB 3: SAV & REPAIR WORK ORDERS IN QUEUE */}
           {activeTab === 'repairs' && (
             <div className="space-y-3">
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                <button
+                  type="button"
+                  onClick={() => setShowRepairArchive(false)}
+                  className={`min-h-[44px] px-3 rounded-lg text-xs font-bold border transition shrink-0 ${!showRepairArchive ? 'bg-emerald-500 text-slate-950 border-emerald-400' : 'bg-pos-card text-pos-muted border-pos-border'}`}
+                >
+                  File active
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowRepairArchive(true)}
+                  className={`min-h-[44px] px-3 rounded-lg text-xs font-bold border transition shrink-0 ${showRepairArchive ? 'bg-emerald-500 text-slate-950 border-emerald-400' : 'bg-pos-card text-pos-muted border-pos-border'}`}
+                >
+                  Archive (Livrés / Annulés)
+                </button>
+              </div>
               {filteredRepairs.length === 0 ? (
-                <div className="p-12 text-center bg-pos-card border border-pos-border rounded-2xl space-y-3">
+                <div className="p-12 text-center bg-pos-card border border-pos-border rounded-xl shadow-sm space-y-3">
                   <Wrench className="w-12 h-12 text-pos-muted mx-auto opacity-40" />
-                  <h3 className="font-bold text-sm text-pos-text">Aucun ticket SAV en attente</h3>
+                  <h3 className="font-bold text-sm text-pos-text">{showRepairArchive ? 'Archive vide' : 'Aucun ticket SAV en attente'}</h3>
                   <p className="text-xs text-pos-muted max-w-sm mx-auto">
                     Créez des ordres de réparation et imprimez les étiquettes SAV depuis le bouton Réparation du menu supérieur.
                     Les tickets « En cours » et « En attente de pièces » apparaissent ici avec leur ancienneté.
@@ -898,7 +961,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                     return (
                     <div
                       key={repair.id}
-                      className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 shadow-sm hover:border-emerald-500/40 transition"
+                      className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3 shadow-sm hover:border-emerald-500/40 transition"
                     >
                       <div className="flex items-center justify-between pb-2 border-b border-pos-border">
                         <div>
@@ -909,19 +972,13 @@ export const CommandTicketDashboardModal: React.FC = () => {
                         </div>
                         <div className="flex flex-col items-end gap-1 shrink-0">
                         <span
-                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold ${
-                            repair.status === 'Prêt / Terminé'
-                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                              : repair.status === 'En cours'
-                              ? 'bg-blue-500/20 text-blue-400 border border-blue-500/40'
-                              : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                          }`}
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${REPAIR_STATUS_BADGE_TOKENS[repair.status] ?? 'bg-amber-500/20 text-amber-300 border-amber-500/40'}`}
                         >
                           {repair.status}
                         </span>
                         {repAgeLabel && (
                           <span
-                            className={`px-2 py-px rounded-md text-[9px] font-bold border whitespace-nowrap ${AGE_TONE_CLASSES[repAgeTone]}`}
+                            className={`px-2 py-px rounded-full text-[9px] font-bold border whitespace-nowrap ${AGE_TONE_CLASSES[repAgeTone]}`}
                             title="Ancienneté du ticket SAV"
                           >
                             🕓 {repAgeLabel}
@@ -946,27 +1003,45 @@ export const CommandTicketDashboardModal: React.FC = () => {
                         <div>
                           <span className="text-[9px] uppercase font-bold text-pos-muted block">Devis Total</span>
                           <span className="font-mono font-black text-sm text-pos-text">{formatDZD(repair.totalCost)}</span>
+                          {repair.status === 'Prêt / Terminé' && repairRemainingBalance(repair) > 0 && (
+                            <span className="text-[10px] text-amber-300 font-bold block">Reste: {formatDZD(repairRemainingBalance(repair))}</span>
+                          )}
                         </div>
 
-                        {/* Status change actions */}
-                        <div className="flex items-center gap-1.5">
-                          {repair.status !== 'Prêt / Terminé' && (
+                        {/* Status actions — primary kept visible, archive/secondary in portaled ••• */}
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                          {repair.status === 'Prêt / Terminé' && (
+                            <button
+                              onClick={() => void handleSettleAndDeliver(repair.id, repair.ticketNumber)}
+                              className="min-h-[44px] px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg text-xs font-black transition cursor-pointer active:scale-95"
+                              title="Injecter le solde au panier ou livrer si soldé"
+                              aria-label={`Régler & Livrer le ticket ${repair.ticketNumber}`}
+                            >
+                              Régler & Livrer
+                            </button>
+                          )}
+                          {repair.status !== 'Prêt / Terminé' && repair.status !== 'Livré' && repair.status !== 'Annulé' && (
                             <button
                               onClick={() => {
                                 updateRepairOrderStatus(repair.id, 'Prêt / Terminé');
                                 showToast(`Ticket SAV #${repair.ticketNumber} marqué comme Prêt / Terminé !`, 'success');
                               }}
-                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+                              className="min-h-[44px] px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition cursor-pointer"
                             >
                               Marquer Prêt
                             </button>
                           )}
                           <button
-                            onClick={() => openModal('repair_work_order')}
-                            className="p-1.5 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
-                            title="Ouvrir le dossier SAV complet"
+                            type="button"
+                            ref={setOverflowAnchor(`repair:${repair.id}`)}
+                            onClick={() => setOverflowKey((k) => (k === `repair:${repair.id}` ? null : `repair:${repair.id}`))}
+                            className="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text font-bold text-sm flex items-center justify-center transition cursor-pointer shrink-0"
+                            aria-expanded={overflowKey === `repair:${repair.id}`}
+                            aria-haspopup="menu"
+                            aria-label={`Plus d'actions pour le ticket SAV ${repair.ticketNumber}`}
+                            title={`Plus d'actions pour le ticket SAV ${repair.ticketNumber}`}
                           >
-                            <ExternalLink className="w-4 h-4" />
+                            <MoreHorizontal className="w-4 h-4" />
                           </button>
                         </div>
                       </div>
@@ -983,11 +1058,11 @@ export const CommandTicketDashboardModal: React.FC = () => {
         {/* RECEPTION VERIFICATION SUB-MODAL */}
         {/* ══════════════════════════════════════════════════════════════ */}
         {receivingPO && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-60 flex items-center justify-center p-4">
-            <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]">
-              <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
+          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4">
+            <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90dvh]">
+              <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
                     <PackageCheck className="w-5 h-5" />
                   </div>
                   <div>
@@ -999,16 +1074,29 @@ export const CommandTicketDashboardModal: React.FC = () => {
                 </div>
                 <button
                   onClick={() => setReceivingPO(null)}
-                  className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+                  className="min-h-[44px] min-w-[44px] flex items-center justify-center hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer shrink-0"
+                  aria-label="Fermer la réception"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              <div className="p-4 overflow-y-auto space-y-3">
+              <div className="p-4 overflow-y-auto overscroll-contain space-y-3">
                 <p className="text-xs text-pos-muted">
                   Vérifiez les quantités réelles livrées et ajustez les prix d'achat en cas de fluctuation fournisseur. Les stocks de la caisse seront automatiquement incrémentés.
                 </p>
+
+                <div className="bg-pos-card border border-pos-border rounded-xl p-3 text-xs">
+                  <label className="text-[9px] uppercase font-bold text-pos-muted block">N° Facture / BL Fournisseur :</label>
+                  <input
+                    type="text"
+                    value={supplierInvoiceNo}
+                    onChange={(e) => setSupplierInvoiceNo(e.target.value)}
+                    placeholder="Ex: FA-2026-0451"
+                    aria-label="N° Facture / BL Fournisseur"
+                    className="mt-1 w-full bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-500 min-h-[44px]"
+                  />
+                </div>
 
                 <div className="space-y-2">
                   {(receivingPO?.items || []).map((item) => {
@@ -1043,7 +1131,8 @@ export const CommandTicketDashboardModal: React.FC = () => {
                                 const val = parseInt(e.target.value) || 0;
                                 setVerifiedQtyMap((prev) => ({ ...prev, [item.productId]: val }));
                               }}
-                              className="w-full bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-500"
+                              aria-label={`Qté Reçue pour ${item.title}`}
+                              className="w-full bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-500 min-h-[44px]"
                             />
                           </div>
 
@@ -1057,7 +1146,8 @@ export const CommandTicketDashboardModal: React.FC = () => {
                                 const val = parseFloat(e.target.value) || 0;
                                 setVerifiedCostMap((prev) => ({ ...prev, [item.productId]: val }));
                               }}
-                              className="w-full bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-500"
+                              aria-label={`Prix Achat Réel (DA) pour ${item.title}`}
+                              className="w-full bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-500 min-h-[44px]"
                             />
                           </div>
                         </div>
@@ -1068,7 +1158,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
 
                 {/* Expense recording toggle */}
                 <div className="bg-pos-card border border-pos-border rounded-xl p-3 space-y-2 text-xs">
-                  <label className="flex items-center gap-2 cursor-pointer">
+                  <label className="flex items-center gap-2 cursor-pointer min-h-[44px]">
                     <input
                       type="checkbox"
                       checked={autoRecordExpense}
@@ -1081,14 +1171,14 @@ export const CommandTicketDashboardModal: React.FC = () => {
                   </label>
 
                   {autoRecordExpense && (
-                    <div className="flex items-center gap-2 pt-2 border-t border-pos-border/40">
+                    <div className="flex items-center gap-2 pt-2 border-t border-pos-border/40 flex-wrap">
                       <span className="text-[10px] text-pos-muted font-bold">Règlement Dépense :</span>
                       {(['Espèces', 'BaridiMob', 'Chèque'] as PaymentMethodType[]).map((meth) => (
                         <button
                           key={meth}
                           type="button"
                           onClick={() => setExpensePaymentMethod(meth)}
-                          className={`px-2.5 py-1 rounded-lg text-[10.5px] font-bold border transition cursor-pointer ${
+                          className={`min-h-[44px] px-2.5 py-1 rounded-lg text-[10.5px] font-bold border transition cursor-pointer ${
                             expensePaymentMethod === meth
                               ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-sm'
                               : 'bg-pos-bg text-pos-muted border-pos-border'
@@ -1102,17 +1192,47 @@ export const CommandTicketDashboardModal: React.FC = () => {
                 </div>
               </div>
 
-              <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between">
+              <div className="p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 shrink-0">
                 <button
                   onClick={() => setReceivingPO(null)}
-                  className="px-4 py-2 text-xs font-bold text-pos-muted hover:text-pos-text transition cursor-pointer"
+                  className="min-h-[44px] px-4 py-2 text-xs font-bold text-pos-muted hover:text-pos-text transition cursor-pointer rounded-lg"
                 >
                   Annuler
                 </button>
                 <button
+                  type="button"
+                  onClick={async () => {
+                    if (!receivingPO) return;
+                    setReceptionSnapshot({
+                      receivedQty: { ...verifiedQtyMap },
+                      actualCosts: { ...verifiedCostMap },
+                      reasons: { ...discrepancyReasons },
+                      supplierInvoice: supplierInvoiceNo.trim() || undefined,
+                      receivedAt: new Date().toISOString(),
+                    });
+                    setPrintingPO(receivingPO);
+                    const { printCoordinator } = await import('../../utils/printCoordinator');
+                    const printed = printCoordinator.printPurchaseOrder(100);
+                    if (!printed) {
+                      const { openNativePrint } = await import('../../utils/phoneUtils');
+                      const { purchaseOrderText } = await import('../../utils/mobileDocPrint');
+                      await openNativePrint(
+                          `PV Réception ${receivingPO.poNumber}`,
+                          purchaseOrderText(receivingPO, receiptSettings)
+                        );
+                      }
+                      showToast(`PV de réception Bon #${receivingPO.poNumber} lancé.`, 'info');
+                  }}
+                  className="min-h-[44px] px-4 py-2 rounded-lg bg-transparent hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5"
+                  title="Imprimer le Bon de Réception et Contrôle (quantités vérifiées, sans valider le stock)"
+                  aria-label={`PV Réception — Imprimer le PV de réception du bon ${receivingPO.poNumber}`}
+                >
+                  <Printer className="w-4 h-4" /> PV Réception
+                </button>
+                <button
                   onClick={handleConfirmReception}
                   disabled={isProcessing}
-                  className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs rounded-xl shadow-lg transition cursor-pointer disabled:opacity-50 flex items-center gap-2"
+                  className="min-h-[44px] px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-black text-xs rounded-lg shadow-lg transition cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   <span>{isProcessing ? 'Validation...' : 'Valider Entrée en Stock'}</span>
@@ -1125,13 +1245,13 @@ export const CommandTicketDashboardModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* MODAL FOOTER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between shrink-0">
+        <div className="px-6 py-3.5 bg-pos-card/80 border-t border-pos-border flex items-center justify-between shrink-0">
           <span className="text-xs text-pos-muted">
             • Tous les tickets et bons de commande sont synchronisés en temps réel avec la base SQLite WAL.
           </span>
           <button
             onClick={closeModal}
-            className="px-5 py-2 rounded-xl text-xs font-bold bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text transition cursor-pointer"
+            className="min-h-[44px] px-5 py-2 rounded-lg text-xs font-bold bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text transition cursor-pointer shrink-0"
           >
             Fermer (Échap)
           </button>
@@ -1142,8 +1262,8 @@ export const CommandTicketDashboardModal: React.FC = () => {
       {/* INTERACTIVE A4 DOCUMENT PREVIEW MODAL */}
       {/* ══════════════════════════════════════════════════════════════ */}
       {previewingPO && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex flex-col items-center justify-center p-3 sm:p-6 animate-in fade-in">
-          <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+        <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-md flex flex-col items-center justify-center p-3 sm:p-6 animate-in fade-in">
+          <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-4xl max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden">
             {/* Header bar */}
             <div className="p-4 border-b border-pos-border bg-pos-card flex flex-wrap items-center justify-between gap-3 shrink-0">
               <div className="flex items-center gap-2.5">
@@ -1160,24 +1280,32 @@ export const CommandTicketDashboardModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handlePrintPO(previewingPO)}
-                  className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1.5 transition cursor-pointer shadow-md"
+                  className="min-h-[44px] px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center gap-1.5 transition cursor-pointer shadow-md"
+                  aria-label={`Imprimer / PDF A4 le bon ${previewingPO.poNumber}`}
                 >
                   <Printer className="w-3.5 h-3.5" />
                   <span>Imprimer / PDF A4</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleExportExcel(previewingPO)}
-                  className="px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                  ref={setOverflowAnchor(`preview:${previewingPO.poNumber}`)}
+                  onClick={() =>
+                    setOverflowKey((k) => (k === `preview:${previewingPO.poNumber}` ? null : `preview:${previewingPO.poNumber}`))
+                  }
+                  className="min-h-[44px] min-w-[44px] w-11 h-11 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text font-bold text-sm flex items-center justify-center transition cursor-pointer shrink-0"
+                  aria-expanded={overflowKey === `preview:${previewingPO.poNumber}`}
+                  aria-haspopup="menu"
+                  aria-label={`Plus d'exports pour le bon ${previewingPO.poNumber}`}
+                  title={`Plus d'exports pour le bon ${previewingPO.poNumber}`}
                 >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Excel (.xlsx)</span>
+                  <MoreHorizontal className="w-4 h-4" />
                 </button>
                 <button
                   type="button"
                   onClick={() => setPreviewingPO(null)}
-                  className="p-1.5 text-pos-muted hover:text-pos-text rounded-lg hover:bg-pos-hover transition cursor-pointer"
+                  className="min-h-[44px] min-w-[44px] flex items-center justify-center text-pos-muted hover:text-pos-text rounded-lg hover:bg-pos-hover transition cursor-pointer shrink-0"
                   title="Fermer l'aperçu"
+                  aria-label="Fermer l'aperçu du bon de commande"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -1185,7 +1313,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
             </div>
 
             {/* Body containing the realistic A4 paper */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-slate-950/60 flex justify-center">
+            <div className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-8 bg-slate-950/60 flex justify-center">
               <div className="w-full max-w-[210mm]">
                 <PurchaseOrderA4Document po={previewingPO} receiptSettings={receiptSettings} previewMode={true} />
               </div>
@@ -1197,9 +1325,164 @@ export const CommandTicketDashboardModal: React.FC = () => {
       {/* Modern full-page A4 Purchase Order (Bon de commande) — print / Save as PDF */}
       {printingPO && (
         <div className="print-po-target po-a4 hidden print:block bg-white text-black font-sans text-xs">
-          <PurchaseOrderA4Document po={printingPO} receiptSettings={receiptSettings} />
+          <PurchaseOrderA4Document po={printingPO} receiptSettings={receiptSettings} reception={receptionSnapshot} />
         </div>
       )}
+
+      {/* Portaled overflow menus — fixed to viewport, never clipped by cards */}
+      {overflowKey &&
+        createPortal(
+          <>
+            <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => setOverflowKey(null)} aria-hidden="true" />
+            <div
+              ref={overflowMenuRef}
+              role="menu"
+              aria-label={overflowKey.startsWith('po:') ? `Actions bon ${overflowKey.slice(3)}` : overflowKey.startsWith('repair:') ? 'Actions ticket SAV' : overflowKey.startsWith('preview:') ? 'Exports bon de commande' : 'Plus d’actions'}
+              style={{ position: 'fixed', top: overflowPos.top, left: overflowPos.left, zIndex: 9999 }}
+              className="w-[calc(100vw-16px)] sm:w-72 bg-pos-panel border border-pos-border rounded-lg shadow-md overflow-hidden animate-in fade-in zoom-in-95"
+              data-open-up={overflowPos.openUp ? 'true' : 'false'}
+            >
+              {overflowKey.startsWith('po:') &&
+                (() => {
+                  const po = (purchaseOrders || []).find((p) => `po:${p.id}` === overflowKey);
+                  if (!po) return null;
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setOverflowKey(null);
+                          handleSendWhatsApp(po);
+                        }}
+                        className="w-full min-h-[48px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-emerald-400 hover:bg-emerald-500/10 transition text-left"
+                        aria-label={`WhatsApp fournisseur — Envoyer le bon ${po.poNumber} via WhatsApp`}
+                      >
+                        <MessageSquare className="w-4 h-4 shrink-0" /> WhatsApp fournisseur
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setOverflowKey(null);
+                          setPreviewingPO(po);
+                        }}
+                        className="w-full min-h-[48px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left"
+                        aria-label={`Aperçu A4 Pro du bon ${po.poNumber}`}
+                      >
+                        <Eye className="w-4 h-4 shrink-0" /> Aperçu A4 Pro
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          const target = po;
+                          setOverflowKey(null);
+                          void handlePrintPO(target);
+                        }}
+                        className="w-full min-h-[48px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left"
+                        aria-label={`Imprimer (A4 PDF) le bon ${po.poNumber}`}
+                      >
+                        <Printer className="w-4 h-4 shrink-0" /> Imprimer (A4 PDF)
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          const target = po;
+                          setOverflowKey(null);
+                          handleExportExcel(target);
+                        }}
+                        className="w-full min-h-[48px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left"
+                        aria-label={`Export Excel (.xlsx) — Exporter le bon ${po.poNumber} en Excel`}
+                      >
+                        <Download className="w-4 h-4 shrink-0" /> Export Excel (.xlsx)
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          const target = po;
+                          setOverflowKey(null);
+                          void handleDeleteOrCancelPO(target);
+                        }}
+                        className="w-full min-h-[48px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-red-400 hover:bg-red-500/10 transition text-left"
+                        aria-label={`Annuler / Supprimer le bon ${po.poNumber}`}
+                      >
+                        <Trash2 className="w-4 h-4 shrink-0" /> Annuler / Supprimer
+                      </button>
+                    </>
+                  );
+                })()}
+              {overflowKey === 'header:waiting' && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOverflowKey(null);
+                    openModal('purchase_order');
+                  }}
+                  className="w-full min-h-[48px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left"
+                  aria-label="Bons Détaillés — Ouvrir les bons de commande détaillés"
+                >
+                  <FileText className="w-4 h-4 shrink-0" /> Bons Détaillés
+                </button>
+              )}
+              {overflowKey.startsWith('repair:') &&
+                (() => {
+                  const repair = (repairOrders || []).find((r) => `repair:${r.id}` === overflowKey);
+                  if (!repair) return null;
+                  return (
+                    <>
+                      {repair.status === 'Livré' && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setOverflowKey(null);
+                            setPendingRepairPrint({ orderId: repair.id, kind: 'restitution' });
+                            openModal('repair_work_order');
+                          }}
+                          className="w-full min-h-[48px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left"
+                          aria-label={`Fiche Restitution du ticket ${repair.ticketNumber}`}
+                        >
+                          <Printer className="w-4 h-4 shrink-0" /> Fiche Restitution
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setOverflowKey(null);
+                          openModal('repair_work_order');
+                        }}
+                        className="w-full min-h-[48px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left"
+                        aria-label={`Dossier SAV complet — Ouvrir le dossier SAV du ticket ${repair.ticketNumber}`}
+                      >
+                        <ExternalLink className="w-4 h-4 shrink-0" /> Dossier SAV complet
+                      </button>
+                    </>
+                  );
+                })()}
+              {overflowKey.startsWith('preview:') && previewingPO && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const target = previewingPO;
+                    setOverflowKey(null);
+                    handleExportExcel(target);
+                  }}
+                  className="w-full min-h-[48px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left"
+                  aria-label={`Excel (.xlsx stylé) — Exporter le bon ${previewingPO.poNumber} en Excel`}
+                >
+                  <Download className="w-4 h-4 shrink-0" /> Excel (.xlsx stylé)
+                </button>
+              )}
+            </div>
+          </>,
+          document.body,
+        )}
     </div>
   );
 };

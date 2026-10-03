@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Phone, MessageCircle, Mail, AlertTriangle, PackageCheck, Plus, ChevronRight, ChevronDown, Edit3, Loader2, MoreHorizontal, ClipboardList, Minus, CheckSquare, Square } from 'lucide-react';
 import type { SupplierItem, SupplierActionState, ActiveOrderStatus, ContactDetails, ReplenishmentLineItem } from './types';
 import { formatDZD } from '../../types/pos';
+import { stripAccents, stripAccentsWithMap } from './searchText';
 
 interface SupplierCardProps {
   supplier: SupplierItem;
@@ -47,25 +48,33 @@ const SEVERITY_LABELS: Record<string, string> = {
   warning: 'Sous seuil',
 };
 
-/** Case-insensitive match highlighting; needles shorter than 2 chars render plain. */
+/**
+ * Accent/case-insensitive match highlighting (§2.3): "ecran" highlights
+ * "Écran". Literal indexOf scanning only — no RegExp construction, so
+ * metacharacter payloads (§2.1) cannot compile or hang the thread. All
+ * segments render as React text children — never dangerouslySetInnerHTML
+ * (§2.2: XSS payloads in titles/SKUs stay inert).
+ */
 const HighlightedText: React.FC<{ text: string; needle: string }> = ({ text, needle }) => {
-  const n = needle.trim().toLowerCase();
+  const n = stripAccents(needle);
   if (n.length < 2) return <>{text}</>;
-  const lower = text.toLowerCase();
+  const { stripped, origin } = stripAccentsWithMap(text);
   const parts: React.ReactNode[] = [];
-  let idx = 0;
-  let hit = lower.indexOf(n);
+  let cursor = 0; // index into the original display text
+  let hit = stripped.indexOf(n);
   while (hit !== -1) {
-    if (hit > idx) parts.push(text.slice(idx, hit));
+    const origStart = origin[hit];
+    const origEnd = origin[hit + n.length - 1] + 1;
+    if (origStart > cursor) parts.push(text.slice(cursor, origStart));
     parts.push(
       <mark key={hit} className="bg-emerald-200/70 dark:bg-emerald-500/30 rounded-sm px-0.5">
-        {text.slice(hit, hit + n.length)}
+        {text.slice(origStart, origEnd)}
       </mark>
     );
-    idx = hit + n.length;
-    hit = lower.indexOf(n, idx);
+    cursor = origEnd;
+    hit = stripped.indexOf(n, hit + n.length);
   }
-  if (idx < text.length) parts.push(text.slice(idx));
+  if (cursor < text.length) parts.push(text.slice(cursor));
   return <>{parts}</>;
 };
 
@@ -359,7 +368,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
             <button
               type="button"
               onClick={saveContact}
-              aria-label={`Enregistrer les coordonnées de ${name}`}
+              aria-label={`OK — Enregistrer les coordonnées de ${name}`}
               className="min-h-[44px] px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold cursor-pointer"
             >
               OK
@@ -429,7 +438,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
                 disabled={isLoadingContact}
                 className="flex items-center gap-1.5 font-mono hover:text-emerald-600 dark:hover:text-emerald-400 transition cursor-pointer min-h-[44px] min-w-[44px] px-2 rounded-lg shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                 title={`Appeler ${contact.phone}`}
-                aria-label={`Appeler ${name} au ${contact.phone}`}
+                aria-label={`${contact.phone} — Appeler ${name}`}
                 aria-busy={isLoadingContact}
               >
                 <Phone aria-hidden="true" className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
@@ -443,7 +452,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
                 disabled={isLoadingContact}
                 className="flex items-center gap-1.5 font-mono hover:text-emerald-600 dark:hover:text-emerald-400 transition cursor-pointer min-h-[44px] min-w-[44px] px-2 rounded-lg shrink-0 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 disabled:opacity-50 disabled:cursor-not-allowed"
                 title={`WhatsApp ${contact.whatsapp || contact.phone}`}
-                aria-label={`Commander via WhatsApp chez ${name}`}
+                aria-label={`WhatsApp — Commander chez ${name}`}
                 aria-busy={isLoadingContact}
               >
                 <MessageCircle aria-hidden="true" className="w-4 h-4 shrink-0" />
@@ -469,7 +478,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
               onClick={startContactEdit}
               disabled={isLoadingContact}
               className="flex items-center gap-1 text-xs font-medium text-gray-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 underline min-h-[44px] min-w-[44px] px-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              aria-label={`Modifier les coordonnées de ${name}`}
+              aria-label={hasContact ? `Modifier les coordonnées de ${name}` : `Ajouter contact pour ${name}`}
               aria-busy={isLoadingContact}
             >
               <Edit3 aria-hidden="true" className="w-3.5 h-3.5" />
@@ -630,7 +639,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
             <ActionButton
               onClick={() => setDetailsOpen((v) => !v)}
               variant="secondary"
-              aria-label={`Voir les détails de ${name}`}
+              aria-label={detailsOpen ? `Masquer les lignes de ${name}` : `Voir les détails de ${name}`}
             >
               <ChevronDown aria-hidden="true" className="w-4 h-4" />
               {detailsOpen ? 'Masquer' : 'Voir'}
@@ -639,7 +648,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
               onClick={startContactEdit}
               variant="secondary"
               loading={isLoadingContact}
-              aria-label={`Ajouter ou modifier les coordonnées de ${name}`}
+              aria-label={`Contact — Ajouter ou modifier les coordonnées de ${name}`}
             >
               <Plus aria-hidden="true" className="w-4 h-4" />
               Contact
@@ -651,7 +660,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
             <ActionButton
               onClick={() => setDetailsOpen((v) => !v)}
               variant="secondary"
-              aria-label={`Voir les détails de ${name}`}
+              aria-label={detailsOpen ? `Masquer lignes de ${name}` : `Voir détails de ${name}`}
               className="w-auto"
             >
               <ChevronDown aria-hidden="true" className={`w-4 h-4 transition-transform ${detailsOpen ? 'rotate-180' : ''}`} />
@@ -661,7 +670,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
               onClick={startContactEdit}
               variant="secondary"
               loading={isLoadingContact}
-              aria-label={`Ajouter ou modifier les coordonnées de ${name}`}
+              aria-label={`Ajouter contact — Modifier les coordonnées de ${name}`}
               className="w-auto"
             >
               <Plus aria-hidden="true" className="w-4 h-4" />
@@ -681,7 +690,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
               }
             }}
             variant="primary"
-            aria-label={`Voir la commande ${latestOrder.reference} pour ${name}, passée le ${latestOrder.date}, total ${latestOrder.totalFormatted}`}
+            aria-label={`Voir Commande ${latestOrder.reference} pour ${name}, passée le ${latestOrder.date}, total ${latestOrder.totalFormatted}`}
             className="w-full sm:w-auto sm:flex-initial sm:shrink-0"
           >
             <ClipboardList aria-hidden="true" className="w-4 h-4" />
@@ -697,7 +706,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
             variant="primary"
             loading={isCreatingPO}
             disabled={isCreatingPO}
-            aria-label={`Créer un bon de commande pour ${name}, ${totalReferences} référence${totalReferences > 1 ? 's' : ''}`}
+            aria-label={`Créer PO pour ${name}, ${totalReferences} référence${totalReferences > 1 ? 's' : ''}`}
             className="w-full sm:w-auto sm:flex-initial sm:shrink-0"
           >
             <Plus aria-hidden="true" className="w-4 h-4" />

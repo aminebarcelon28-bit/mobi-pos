@@ -723,8 +723,8 @@ export const CustomersModal: React.FC = () => {
             return (
               <div className="max-w-3xl mx-auto w-full space-y-4">
                 {/* Back Button */}
-                <button onClick={() => { dismissMenus(); setViewMode('list'); }} aria-label="Retour à la liste des clients" className="min-h-[44px] px-1 rounded-lg text-xs text-pos-muted hover:text-pos-text flex items-center gap-1 font-semibold transition self-start">
-                  ← Retour à la Liste
+                <button onClick={() => { dismissMenus(); setViewMode('list'); }} aria-label="Retour à la Liste" className="min-h-[44px] px-1 rounded-lg text-xs text-pos-muted hover:text-pos-text flex items-center gap-1 font-semibold transition self-start">
+                  <span aria-hidden="true">←</span> Retour à la Liste
                 </button>
 
                 {/* Profile Header Card */}
@@ -761,7 +761,7 @@ export const CustomersModal: React.FC = () => {
                           closeModal();
                         }
                       }}
-                      aria-label={currentCustomer?.id === profileCustomer.id ? `Désélectionner ${profileCustomer.name}` : `Sélectionner ${profileCustomer.name} pour la vente`}
+                      aria-label={currentCustomer?.id === profileCustomer.id ? `Sélectionné — Désélectionner ${profileCustomer.name}` : `Sélectionner ${profileCustomer.name} pour la vente`}
                       className={`px-4 py-2 min-h-[44px] rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
                         currentCustomer?.id === profileCustomer.id
                           ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
@@ -1017,7 +1017,7 @@ export const CustomersModal: React.FC = () => {
                                 showSuccess(`Avoir de ${formatDZD(customer.storeCredit)} activé pour ${customer.name}. Choisissez un produit dans le catalogue.`);
                                 closeModal();
                               }}
-                              aria-label={`Utiliser l'avoir de ${customer.name} (${formatDZD(customer.storeCredit)})`}
+                              aria-label={`Utiliser Avoir — l'avoir de ${customer.name} (${formatDZD(customer.storeCredit)})`}
                               title="Activer l'avoir client et choisir un produit dans le catalogue"
                               className="px-2.5 min-h-[44px] rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/40 text-xs font-extrabold flex items-center gap-1 transition cursor-pointer shadow-sm shadow-emerald-500/10"
                             >
@@ -1035,7 +1035,7 @@ export const CustomersModal: React.FC = () => {
                                 closeModal();
                               }
                             }}
-                            aria-label={isSelected ? `Désélectionner ${customer.name}` : `Sélectionner ${customer.name} pour la vente`}
+                            aria-label={isSelected ? `Actif — Désélectionner ${customer.name}` : `Sélectionner ${customer.name} pour la vente`}
                             className={`px-3 min-h-[44px] rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
                               isSelected
                                 ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
@@ -1212,7 +1212,7 @@ export const CustomersModal: React.FC = () => {
                                 setWhatsappCopied(false);
                               }}
                               className="px-3 py-2 min-h-[44px] rounded-lg bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
-                              aria-label={`Envoyer le relevé WhatsApp à ${customer.name}`}
+                              aria-label={`WhatsApp — Envoyer le relevé à ${customer.name}`}
                               title="Envoyer relevé WhatsApp au client"
                             >
                               <MessageSquare className="w-4 h-4" /> WhatsApp
@@ -1500,7 +1500,7 @@ export const CustomersModal: React.FC = () => {
                     setCardMenuId(null);
                   }}
                   className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left"
-                  aria-label={menuSelected ? `Désélectionner ${menuCustomer.name}` : `Sélectionner ${menuCustomer.name} pour la vente`}
+                  aria-label={menuSelected ? `Désélectionner (Actif) — ${menuCustomer.name}` : `Sélectionner pour la vente — ${menuCustomer.name}`}
                 >
                   <Check className="w-4 h-4 shrink-0" /> {menuSelected ? 'Désélectionner (Actif)' : 'Sélectionner pour la vente'}
                 </button>
@@ -1515,7 +1515,7 @@ export const CustomersModal: React.FC = () => {
                       setCardMenuId(null);
                     }}
                     className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-emerald-400 hover:bg-emerald-500/10 transition text-left"
-                    aria-label={`Utiliser l'avoir de ${menuCustomer.name} (${formatDZD(menuCustomer.storeCredit)})`}
+                    aria-label={`Utiliser l'Avoir — ${menuCustomer.name} (${formatDZD(menuCustomer.storeCredit)})`}
                   >
                     <CreditCard className="w-4 h-4 shrink-0" /> Utiliser l'Avoir
                   </button>
@@ -1579,7 +1579,7 @@ export const CustomersModal: React.FC = () => {
                   openModal('loyalty_card');
                 }}
                 className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-amber-400 hover:bg-amber-500/10 transition text-left"
-                aria-label={`Carte PVC de ${profileCustomer.name}`}
+                aria-label={`Carte PVC / Pass Digital — ${profileCustomer.name}`}
               >
                 <CreditCard className="w-4 h-4 shrink-0" /> Carte PVC / Pass Digital
               </button>

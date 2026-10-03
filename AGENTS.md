@@ -36,6 +36,28 @@ TypeScript outbox sync).
 - Report-first on architectural conflicts (STOP and report, do not
   improvise). Evidence is `file:line`, never speculation.
 
+### Accessibility & locators (WCAG 2.5.3 Label in Name — binding)
+
+- **Label-in-Name requirement:** never use `aria-label` to replace
+  visible button/link/input text with a synonym or expansion (e.g. do
+  NOT put `aria-label="Créer un bon de commande…"` on a button showing
+  "Créer PO").
+- **Prefix rule:** when dynamic context must be added to `aria-label`,
+  the string must begin verbatim with the visible label:
+  `aria-label="${visibleText} — ${context}"`. State-dependent visible
+  text (ternaries like "Voir détails"/"Masquer lignes") requires a
+  state-aware `aria-label` using the same ternary.
+- **Glyph-only controls** (⌫, ‹, ›, ✕, bare digits): mark the glyph
+  text node `aria-hidden="true"` and keep the descriptive
+  `aria-label` — no visible label remains, so 2.5.3 no longer applies.
+- **Prefer descriptions:** auxiliary state (supplier names, counts,
+  statuses) may alternatively go into an `aria-describedby`
+  `.sr-only` element instead of overloading the accessible name.
+- **Locator testability:** every interactive component must be locatable
+  via `getByRole('<role>', { name: /<visibleText>/i })`. When a fix
+  changes an accessible name, update the dependent Playwright locators
+  in the same change and run the suite.
+
 ## Tracked gates (Phase 4.4, owner-set)
 
 - **Tier B residual (accepted):** `sync_outbox` / `entity_keys` stay
