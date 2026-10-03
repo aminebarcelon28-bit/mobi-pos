@@ -184,14 +184,29 @@ export const RepairWorkOrderModal: React.FC = () => {
   // delivered ticket with a direct [Imprimer Bon de Restitution] banner.
   // Listener lives on the always-mounted host, so it fires even though the
   // settle path closed this modal.
-  const [justDelivered, setJustDelivered] = useState<{ tickets: string[]; receipt: string } | null>(null);
+  const [justDelivered, setJustDelivered] = useState<{
+    tickets: string[];
+    receipt: string;
+    /** Session tender per ticketNumber, from the settling sale (paidToday). */
+    settledByTicket?: Record<string, number>;
+  } | null>(null);
   useEffect(() => {
     const onDelivered = (e: Event) => {
       const detail =
-        (e as CustomEvent<{ ticketNumbers?: string[]; receiptNumber?: string }>).detail || {};
+        (
+          e as CustomEvent<{
+            ticketNumbers?: string[];
+            receiptNumber?: string;
+            settledByTicket?: Record<string, number>;
+          }>
+        ).detail || {};
       const tickets = (detail.ticketNumbers || []).filter(Boolean);
       if (tickets.length === 0) return;
-      setJustDelivered({ tickets, receipt: detail.receiptNumber || '' });
+      const settledByTicket: Record<string, number> = {};
+      for (const [ticket, amount] of Object.entries(detail.settledByTicket || {})) {
+        if (ticket && Number.isFinite(amount)) settledByTicket[ticket] = Math.max(0, Math.round(amount));
+      }
+      setJustDelivered({ tickets, receipt: detail.receiptNumber || '', settledByTicket });
       setActiveTab('Historique');
       setHistorySearch(tickets[0]);
       setHistoryStatusFilter('Tous');
@@ -883,7 +898,11 @@ export const RepairWorkOrderModal: React.FC = () => {
    * channel) on desktop. Consumed by history buttons, the delivered banner,
    * and the cross-modal pendingRepairPrint handshake.
    */
-  const fireDocPrint = async (order: RepairOrder, kind: Exclude<RepairPrintKind, 'work_order'>) => {
+  const fireDocPrint = async (
+    order: RepairOrder,
+    kind: Exclude<RepairPrintKind, 'work_order'>,
+    paidToday?: number
+  ) => {
     printScopeRef.current = order.id;
     const { SavPrintCoordinator } = await import('../../utils/savPrintCoordinator');
     const quoteKind = kind === 'quote';
@@ -892,10 +911,12 @@ export const RepairWorkOrderModal: React.FC = () => {
       kind,
       medium: isMobileDevice() ? 'mobileSheet' : 'thermal80',
       title: `${quoteKind ? 'Devis' : 'Bon restitution'} ${order.ticketNumber}`,
+      // paidToday flows ONLY into restitution (today's handover tender);
+      // quotes and inquiry reprints keep the Case-A default (0 = unknown).
       produce: async () =>
         quoteKind
           ? SavPrintCoordinator.printRepairQuote(order, receiptSettings)
-          : SavPrintCoordinator.printRepairRestitution(order, receiptSettings),
+          : SavPrintCoordinator.printRepairRestitution(order, receiptSettings, paidToday),
     });
 
     if (outcome.status === 'aborted') {
@@ -1120,8 +1141,12 @@ export const RepairWorkOrderModal: React.FC = () => {
                   type="button"
                   onClick={() => {
                     const first = repairOrders.find((r) => r.ticketNumber === justDelivered.tickets[0]);
-                    if (first) void fireDocPrint(first, 'restitution');
-                    else showToast('Dossier SAV introuvable pour impression.', 'warning');
+                    if (first) {
+                      // Settle-path tender: the sale that just delivered this
+                      // ticket collected it — print SOLDE RÉGLÉ truthfully.
+                      const paid = justDelivered.settledByTicket?.[justDelivered.tickets[0]];
+                      void fireDocPrint(first, 'restitution', paid);
+                    } else showToast('Dossier SAV introuvable pour impression.', 'warning');
                   }}
                   className="h-10 sm:h-9 px-3.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs sm:text-sm font-medium shadow-sm transition active:scale-95 flex items-center justify-center gap-1.5"
                 >
@@ -1130,9 +1155,11 @@ export const RepairWorkOrderModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setJustDelivered(null)}
+                  aria-label="Fermer — masquer le bandeau de livraison"
+                  title="Fermer"
                   className="min-h-[48px] min-w-[48px] px-3 rounded-xl text-pos-muted hover:text-pos-text transition text-xs font-bold"
                 >
-                  ✕
+                  <span aria-hidden="true">✕</span>
                 </button>
               </div>
               {orderLookupUrl && (

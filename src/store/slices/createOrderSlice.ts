@@ -1364,6 +1364,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           const seen = new Set<string>();
           const deliveredIds: string[] = [];
           const deliveredTickets: string[] = [];
+          // Session tender per repair (paidToday plumbing): the net amount
+          // this checkout collected on each SAV line, so the restitution slip
+          // can print "Net payé ce jour" + SOLDE RÉGLÉ truthfully instead of
+          // defaulting to Case A. Pure derivation from the frozen cart —
+          // no new money math, same line-net convention as totals.
+          const settledAmounts: Record<string, number> = {};
           for (const line of savLines) {
             const repairId =
               repairIdForCartItem(line.product.id) ??
@@ -1377,6 +1383,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
               await get().updateRepairOrderStatus(repairId, 'Livré');
               deliveredIds.push(repairId);
               if (target?.ticketNumber) deliveredTickets.push(target.ticketNumber);
+              const unit = Number(line.appliedPrice ?? line.product?.price ?? 0);
+              const qty = Math.abs(Number(line.quantity ?? 1));
+              settledAmounts[repairId] = Math.max(
+                0,
+                Math.round(unit * qty - Math.max(0, Number(line.discount ?? 0)))
+              );
             } catch (e) {
               console.warn('[checkout] SAV auto-delivery failed:', e);
             }
@@ -1384,12 +1396,22 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           unlinkSavCartItems(savLines.map((l) => l.product.id));
           // Delivery handshake: UI offers [Imprimer Bon de Restitution].
           if (deliveredIds.length > 0 && typeof window !== 'undefined') {
+            // Key session tenders by TICKET (not loop index — tickets are
+            // pushed conditionally, so indices can misalign).
+            const settledByTicket: Record<string, number> = {};
+            for (const rid of deliveredIds) {
+              const t = get().repairOrders.find((r) => r.id === rid)?.ticketNumber;
+              const amount = settledAmounts[rid];
+              if (t && Number.isFinite(amount)) settledByTicket[t] = Math.max(0, Math.round(amount));
+            }
             window.dispatchEvent(
               new CustomEvent(REPAIR_DELIVERED_EVENT, {
                 detail: {
                   repairIds: deliveredIds,
                   ticketNumbers: deliveredTickets,
                   receiptNumber: transaction.receiptNumber,
+                  settledAmounts,
+                  settledByTicket,
                 },
               })
             );
