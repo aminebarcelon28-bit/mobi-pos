@@ -649,7 +649,9 @@ export const CartPanel: React.FC = () => {
             {tradeInSettlement.direction === 'SOULTE_SHOP_PAYS' ? (
               <p className="text-[10px] font-bold text-amber-300">Soulte boutique : {formatDZD(tradeInSettlement.shopOwes)} à verser au client</p>
             ) : (
-              <p className="text-[10px] text-pos-muted">Reste à payer : {formatDZD(tradeInSettlement.customerOwes)}</p>
+              // True totals net (all credits) — the trade-only delta would
+              // disagree under stacked avoir/bon (same rule as PaymentModal).
+              <p className="text-[10px] text-pos-muted">Reste à payer : {formatDZD(total)}</p>
             )}
             <div className="flex items-center gap-1.5">
               <button

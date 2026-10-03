@@ -22,6 +22,7 @@ import { computeEffectiveUnitPrice } from '../../utils/pricingEngine';
 import { generateUniqueEan13Barcode, generateUniqueSku } from '../../utils/barcodeGenerator';
 import { luhnCheckImei } from '../../utils/savValidation';
 import { isImeiAllocatedInCart } from '../../utils/tradeInExchange';
+import { isTauriEnv } from '../../db/adapters/base';
 // P11.3: sqliteAdapter -> adapters -> dexie + libsql is the heaviest static chain
 // left in the entry. initDatabase() runs from a useEffect, so load it on demand.
 // P11.3: repositories each pull sqliteAdapter -> dexie + libsql; all four are only
@@ -50,6 +51,41 @@ import { usePosStore } from '../usePosStore';
 let initDatabaseInFlight: Promise<void> | null = null;
 
 const HELD_SALES_STORAGE_KEY = 'mobi_held_sales_v1';
+
+/**
+ * Chaos-battery preview parity: mirror one intake batch + its ledger RECEIVE
+ * into Dexie (browser harness / web preview have no SQLite lane). The
+ * SQLite authority stays the truth on Tauri; the mirror only stands in when
+ * the native lane is unreachable AND we are not under Tauri.
+ */
+async function mirrorTradeBatchToDexie(args: {
+  batchId: string;
+  productId: string;
+  unitCost: number;
+  purchaseOrderId: string;
+  ledgerKey: string;
+  tradeId: string;
+}): Promise<void> {
+  const { dexieDb } = await import('../../db/database');
+  const now = new Date().toISOString();
+  await dexieDb.stockBatches.put({
+    batchId: args.batchId,
+    productId: args.productId,
+    quantityRemaining: 1,
+    unitCost: args.unitCost,
+    receivedAt: now,
+    purchaseOrderId: args.purchaseOrderId,
+  });
+  await dexieDb.inventoryLedger.put({
+    id: args.ledgerKey,
+    productId: args.productId,
+    delta: 1,
+    reason: 'RECEIVE',
+    refType: 'TRADE_IN',
+    refId: args.tradeId,
+    createdAt: now,
+  });
+}
 
 /** Read Wave-B persisted holds; validate array shape, fail silent to []. */
 function loadHeldSalesFromStorage(): HeldSale[] {
@@ -806,7 +842,13 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       const currentImeis = imeiRecords || [];
       const updatedImeiRecords = [imeiRecord, ...currentImeis.filter((r) => r.imei !== imeiRecord.imei)];
 
-      await (await getProductRepo()).save(convertedProduct);
+      // Ledger-first ordering (double-count fix): the RECEIVE delta must land
+      // BEFORE the product save. save() → syncProductUpsert mints an
+      // ADJUST/manual delta for (wantStock − ledger SUM); saving stock:1 with
+      // an empty ledger wrote a spurious +1, and the later RECEIVE +1 pushed
+      // SUM (and products.stock) to 2. Ledger-first: baseline SUM is already
+      // 1 at save time, so no ADJUST is minted. Matches the procurement
+      // receipt path (deltas → batches → product save).
       await (await getSqlite()).saveTradeIn(newTradeIn);
       try {
         await (await getSqlite()).saveIMEIRecord(imeiRecord);
@@ -819,10 +861,11 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       // the 1:1 buyback (exchange mode hides the +10% wallet bonus upstream;
       // standalone wallet bonus still flows via tradeInput.buybackValue).
       // purchase_order_id convention: TRADE-<tradeId> pseudo-PO (traceable).
+      // Hoisted for the preview-parity catch below (mirror needs the ids).
+      const buybackCost = Math.max(0, Math.round(Number(tradeInput.buybackValue) || 0));
+      const tradeBatchId = `batch-trade-${newTradeIn.id}`;
+      const tradeLedgerKey = `recv-trade-${newTradeIn.id}`;
       try {
-        const buybackCost = Math.max(0, Math.round(Number(tradeInput.buybackValue) || 0));
-        const tradeBatchId = `batch-trade-${newTradeIn.id}`;
-        const tradeLedgerKey = `recv-trade-${newTradeIn.id}`;
         // P11.3: sqlPluginAdapter pulls the libsql/Turso sync graph; load on demand.
         const { appendInventoryDeltas, insertStockBatch, ensureProductParents } =
           await import('../../db/sqlPluginAdapter');
@@ -846,19 +889,16 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           purchaseOrderId: `TRADE-${newTradeIn.id}`,
           idempotencyKey: `sb-${tradeBatchId}`,
         });
-        try {
-          const { dexieDb } = await import('../../db/database');
-          await dexieDb.stockBatches.put({
-            batchId: tradeBatchId,
-            productId: convertedProduct.id,
-            quantityRemaining: 1,
-            unitCost: buybackCost,
-            receivedAt: new Date().toISOString(),
-            purchaseOrderId: `TRADE-${newTradeIn.id}`,
-          });
-        } catch (dexieErr) {
+        await mirrorTradeBatchToDexie({
+          batchId: tradeBatchId,
+          productId: convertedProduct.id,
+          unitCost: buybackCost,
+          purchaseOrderId: `TRADE-${newTradeIn.id}`,
+          ledgerKey: tradeLedgerKey,
+          tradeId: newTradeIn.id,
+        }).catch((dexieErr) => {
           console.warn('[processTradeIn] Failed to mirror trade-in batch in Dexie:', dexieErr);
-        }
+        });
         try {
           const { syncManager } = await import('../../sync/SyncManager');
           syncManager.notifyLocalWrite();
@@ -866,18 +906,38 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           // Sync kick best-effort.
         }
       } catch (batchErr) {
-        console.error('[processTradeIn] FIFO batch mint failed after trade-in save:', batchErr);
-        set({
-          products: updatedProducts,
-          tradeIns: updatedTradeIns,
-          imeiRecords: updatedImeiRecords,
-          activeModal: null,
-        });
-        return {
-          success: false as const,
-          reason: `TRADE_BATCH_FAILED:${batchErr instanceof Error ? batchErr.message : String(batchErr)}`,
-        };
+        // No SQLite lane outside Tauri (browser harness / web preview): land
+        // the Dexie mirror here and continue instead of failing a healthy
+        // intake. Under Tauri this stays a hard failure.
+        if (!isTauriEnv()) {
+          console.warn('[processTradeIn] SQLite batch lane unavailable (preview) — Dexie mirror stands in.');
+          await mirrorTradeBatchToDexie({
+            batchId: tradeBatchId,
+            productId: convertedProduct.id,
+            unitCost: buybackCost,
+            purchaseOrderId: `TRADE-${newTradeIn.id}`,
+            ledgerKey: tradeLedgerKey,
+            tradeId: newTradeIn.id,
+          }).catch(() => {});
+        } else {
+          console.error('[processTradeIn] FIFO batch mint failed after trade-in save:', batchErr);
+          set({
+            products: updatedProducts,
+            tradeIns: updatedTradeIns,
+            imeiRecords: updatedImeiRecords,
+            activeModal: null,
+          });
+          return {
+            success: false as const,
+            reason: `TRADE_BATCH_FAILED:${batchErr instanceof Error ? batchErr.message : String(batchErr)}`,
+          };
+        }
       }
+
+      // Product save LAST (ledger-first invariant): with the RECEIVE delta
+      // already in place, syncProductUpsert sees baseline SUM = 1 = wantStock
+      // and mints no ADJUST delta. products.stock lands at exactly 1.
+      await (await getProductRepo()).save(convertedProduct);
 
       if (!tradeInput.creditToWallet && get().activeShift) {
         // B-033: integer DZD at drawer — unrounded buybackValue drifts.
@@ -1056,7 +1116,8 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         version: 1,
       };
 
-      await (await getProductRepo()).save(convertedProduct);
+      // Ledger-first (same double-count fix as processTradeIn): RECEIVE
+      // before product save so no spurious ADJUST/manual delta is minted.
       await (await getSqlite()).saveTradeIn(newTradeIn);
       try {
         await (await getSqlite()).saveIMEIRecord(imeiRecord);
@@ -1089,19 +1150,16 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           purchaseOrderId: `TRADE-${newTradeIn.id}`,
           idempotencyKey: `sb-${tradeBatchId}`,
         });
-        try {
-          const { dexieDb } = await import('../../db/database');
-          await dexieDb.stockBatches.put({
-            batchId: tradeBatchId,
-            productId: convertedProduct.id,
-            quantityRemaining: 1,
-            unitCost: buybackCost,
-            receivedAt: new Date().toISOString(),
-            purchaseOrderId: `TRADE-${newTradeIn.id}`,
-          });
-        } catch (dexieErr) {
+        await mirrorTradeBatchToDexie({
+          batchId: tradeBatchId,
+          productId: convertedProduct.id,
+          unitCost: buybackCost,
+          purchaseOrderId: `TRADE-${newTradeIn.id}`,
+          ledgerKey: tradeLedgerKey,
+          tradeId: newTradeIn.id,
+        }).catch((dexieErr) => {
           console.warn('[commitStagedTradeInIntake] Dexie batch mirror skipped:', dexieErr);
-        }
+        });
         try {
           const { syncManager } = await import('../../sync/SyncManager');
           syncManager.notifyLocalWrite();
@@ -1109,12 +1167,29 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           // Sync kick best-effort.
         }
       } catch (batchErr) {
-        console.error('[commitStagedTradeInIntake] FIFO batch mint failed:', batchErr);
-        return {
-          success: false as const,
-          reason: `TRADE_BATCH_FAILED:${batchErr instanceof Error ? batchErr.message : String(batchErr)}`,
-        };
+        // Preview parity (see processTradeIn): outside Tauri the Dexie
+        // mirror stands in; under Tauri this stays a hard failure.
+        if (!isTauriEnv()) {
+          console.warn('[commitStagedTradeInIntake] SQLite batch lane unavailable (preview) — Dexie mirror stands in.');
+          await mirrorTradeBatchToDexie({
+            batchId: tradeBatchId,
+            productId: convertedProduct.id,
+            unitCost: buybackCost,
+            purchaseOrderId: `TRADE-${newTradeIn.id}`,
+            ledgerKey: tradeLedgerKey,
+            tradeId: newTradeIn.id,
+          }).catch(() => {});
+        } else {
+          console.error('[commitStagedTradeInIntake] FIFO batch mint failed:', batchErr);
+          return {
+            success: false as const,
+            reason: `TRADE_BATCH_FAILED:${batchErr instanceof Error ? batchErr.message : String(batchErr)}`,
+          };
+        }
       }
+
+      // Product save LAST (ledger-first invariant — see processTradeIn).
+      await (await getProductRepo()).save(convertedProduct);
 
       set({
         products: [convertedProduct, ...products],

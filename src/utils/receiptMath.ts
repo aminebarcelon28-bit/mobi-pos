@@ -463,6 +463,14 @@ export interface RefundFundingSplit {
   avoirShare: number;
   debtShare: number;
   cashShare: number;
+  /**
+   * Level-5 chaos fix: value paid over non-cash direct rails (BaridiMob,
+   * Chèque, Autre). Reversing it as drawer cash would drain money that never
+   * entered the till as cash — it is reported for rail-of-origin reversal,
+   * never disbursed. Reprise tenders are excluded here (restored to the
+   * wallet by the trade-restore quota instead — never double-counted).
+   */
+  digitalShare: number;
   /** Net cash the customer originally paid (cap reference). */
   cashPaidOriginal: number;
   /** True when the cumulative cap trimmed the reversal. */
@@ -526,7 +534,33 @@ export function computeRefundFundingSplit(
     a = Math.min(fundA, Math.round((net * fundA) / denom));
     d = Math.min(fundD, Math.round((net * fundD) / denom));
   }
-  const cash = Math.max(0, net - v - a - d);
+  const cashPlug = Math.max(0, net - v - a - d);
+  // Split the cash plug by tender rail: Espèces disburses from the drawer,
+  // BaridiMob/Chèque/Autre reverse on their rail of origin (never cash).
+  // Avoir/Crédit/Reprise legs are claimed above and never land here.
+  const NON_CASH_RAILS = ['Avoir Client', 'Crédit Client', 'Reprise'];
+  const railTenders = orig?.tenders;
+  let cashT = 0;
+  let digT = 0;
+  if (railTenders && Array.isArray(railTenders) && railTenders.length > 0) {
+    for (const t of railTenders) {
+      if (!t || typeof t.method !== 'string') continue;
+      const amt = Math.max(0, Math.round(Number(t.amount) || 0));
+      if (t.method === 'Espèces') cashT += amt;
+      else if (!NON_CASH_RAILS.includes(t.method)) digT += amt;
+    }
+  } else if (orig?.paymentMethod === 'Espèces') {
+    cashT = total;
+  } else if (
+    orig?.paymentMethod === 'BaridiMob' ||
+    orig?.paymentMethod === 'Chèque' ||
+    orig?.paymentMethod === 'Autre'
+  ) {
+    digT = total;
+  }
+  const railBase = cashT + digT;
+  const cash = railBase > 0 ? Math.max(0, Math.min(cashPlug, Math.round((cashPlug * cashT) / railBase))) : cashPlug;
+  const digital = Math.max(0, cashPlug - cash);
   return {
     grossRefund: gross,
     netRefund: net,
@@ -534,6 +568,7 @@ export function computeRefundFundingSplit(
     avoirShare: a,
     debtShare: d,
     cashShare: cash,
+    digitalShare: digital,
     cashPaidOriginal: Math.max(0, total - fundD),
     capped,
   };

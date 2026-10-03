@@ -28,7 +28,10 @@ export function luhnCheckImei(raw: string): boolean {
  */
 export function sanitizeImeiInput(raw: string): string {
   const t = (raw || '').toUpperCase().trim();
-  const compact = t.replace(/[\s-]+/g, '');
+  // Chaos T6: also strip invisible / directional smugglers (zero-width
+  // spaces, BOM, bidi overrides/isolates) — \s alone misses \u200B and
+  // \u202E, which would otherwise poison the 15-digit match or the ledger.
+  const compact = t.replace(/[\s\u200B-\u200D\uFEFF\u202A-\u202E\u2066-\u2069-]+/g, '');
   if (/^\d{15}$/.test(compact)) return compact;
   return t;
 }

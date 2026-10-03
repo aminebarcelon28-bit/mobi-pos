@@ -626,7 +626,9 @@ export const PaymentModal: React.FC = () => {
               {tradeSettlement.direction === 'CUSTOMER_PAYS' || tradeSettlement.direction === 'EVEN' ? (
                 <p className="text-sm font-bold text-pos-text">
                   Total Panier : {formatDZD(netSubtotal)} — Valeur Reprise : {formatDZD(tradeInCredit)} ={' '}
-                  <span className="text-emerald-300 font-black">Reste à Encaisser : {formatDZD(tradeSettlement.customerOwes)}</span>
+                  {/* Reste = true totals net (all credits), NOT the trade-only
+                      delta — stacked avoir/bon would otherwise disagree. */}
+                  <span className="text-emerald-300 font-black">Reste à Encaisser : {formatDZD(netToPay)}</span>
                 </p>
               ) : (
                 <div className="space-y-2.5">

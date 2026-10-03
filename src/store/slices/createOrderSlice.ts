@@ -2158,6 +2158,10 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           : tradeValueUnclaimed
             ? `, reprise ${tradeRestoreNow} DA NON réclamable (ticket anonyme — régularisation manager requise)`
             : ''
+      }${
+        funding.digitalShare > 0
+          ? `, rail d’origine à reverser ${funding.digitalShare} DA (jamais en espèces)`
+          : ''
       }) pour Ticket #${originalTransaction.receiptNumber}. Motif: ${refundReason}`,
       requiresPin: true,
     };
