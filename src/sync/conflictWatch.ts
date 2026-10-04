@@ -101,6 +101,75 @@ function toFiniteVersion(value: unknown): number {
 }
 
 /**
+ * Ledger-delete planner (A2: SYNC-007 — append-only lanes never apply
+ * tombstones, so a delete would resurrect on every repair/restore).
+ * History is never mutated: a delete becomes a compensating REVERSAL row
+ * (negated delta, deterministic `REV-<id>` so every device converges via
+ * the existing `ON CONFLICT DO NOTHING`, reason VOID which already exists
+ * in the LedgerDeltaInput union — no new reason vocabulary anywhere).
+ *
+ * - `reverse`: original present, no reversal yet → insert the plan's row.
+ * - `pending`: original absent (out-of-order delete) → record a
+ *   pending-delete observation instead of dropping it silently; the
+ *   late-arriving original resolves it through the same planner.
+ * - `noop`: a reversal already exists (replay / multi-device race).
+ * Pure — the caller executes the returned row against its own drivers.
+ */
+export interface LedgerDeleteState {
+  original: { id: string; product_id: string; delta: unknown; version: unknown } | null;
+  reversalExists: boolean;
+  incomingVersion: unknown;
+  deleterDevice: string;
+  now: string;
+}
+
+export interface LedgerReversal {
+  id: string;
+  product_id: string;
+  delta: number;
+  reason: 'VOID';
+  ref_type: string;
+  ref_id: string;
+  device_id: string;
+  idempotency_key: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type LedgerDeletePlan =
+  | { action: 'reverse'; reversal: LedgerReversal }
+  | { action: 'pending' }
+  | { action: 'noop' };
+
+export function planLedgerDelete(state: LedgerDeleteState): LedgerDeletePlan {
+  if (state.reversalExists) return { action: 'noop' };
+  if (!state.original) return { action: 'pending' };
+  const version = Math.max(1, toFiniteVersion(state.incomingVersion) || 1);
+  // Stale delete (the row moved past what the deleter saw): applying a
+  // reversal would undo newer history. Same rule as every other lane —
+  // strictly-newer wins, ties go through (delete-wins-ties).
+  if (version < toFiniteVersion(state.original.version)) return { action: 'noop' };
+  const id = `REV-${state.original.id}`;
+  return {
+    action: 'reverse',
+    reversal: {
+      id,
+      product_id: state.original.product_id,
+      delta: -Number(state.original.delta ?? 0),
+      reason: 'VOID',
+      ref_type: 'reversal',
+      ref_id: state.original.id,
+      device_id: state.deleterDevice,
+      idempotency_key: id,
+      version,
+      created_at: state.now,
+      updated_at: state.now,
+    },
+  };
+}
+
+/**
  * Push-side divergence check (A3): after a push guard-miss, compare the
  * local row against the remote winner fetched back. Versions differ →
  * newer-wins path, already covered by the GUARD-STALE message ('skipped').

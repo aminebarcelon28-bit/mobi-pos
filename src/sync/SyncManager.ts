@@ -2702,6 +2702,165 @@ class SyncManager {
     }
   }
 
+  /**
+   * A2 shared ledger-reversal executor: inserts the compensating row,
+   * enqueues it for onward sync with an inline outbox row (never
+   * enqueueGenericSync — the pull chunk owns the non-reentrant
+   * withWriteLock), and files an audit entry. Best-effort throughout.
+   */
+  private async insertLedgerReversal(
+    db: Database,
+    reversal: {
+      id: string; product_id: string; delta: number; reason: string;
+      ref_type: string; ref_id: string; device_id: string; idempotency_key: string;
+      version: number; created_at: string; updated_at: string;
+    },
+  ): Promise<void> {
+    await db.execute(
+      `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
+        idempotency_key, sync_status, version, created_at, updated_at, deleted)
+       VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?,?,0) ON CONFLICT(id) DO NOTHING`,
+      [
+        reversal.id, reversal.product_id, reversal.delta, reversal.reason,
+        reversal.ref_type, reversal.ref_id, reversal.device_id, reversal.idempotency_key,
+        reversal.version, reversal.created_at, reversal.updated_at,
+      ],
+    );
+    await db.execute(
+      `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+       VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
+      [reversal.idempotency_key, reversal.id, JSON.stringify({ ...reversal, sync_status: 'pending' })],
+    ).catch(() => {});
+    try {
+      const { usePosStore } = await import('../store/usePosStore');
+      await usePosStore.getState().logSecurityAction(
+        'Contre-passation stock (sync)',
+        `Ligne ${reversal.ref_id} supprimée par ${reversal.device_id} — contre-passation ${reversal.id} (${reversal.delta}). Historique préservé, aucun effacement.`,
+        'Système (Sync)',
+        false,
+      );
+    } catch {
+      // Audit is best-effort; the reversal row itself is durable.
+    }
+  }
+
+  /**
+   * A2: a tombstoned ledger row arrives on an append-only lane whose pull
+   * is ON CONFLICT DO NOTHING — without this the delete never lands and
+   * the row resurrects on every repair/restore. History is never mutated:
+   * the delete becomes a compensating REVERSAL (negated delta,
+   * deterministic REV-<id>), or, when the original is absent
+   * (out-of-order), a pending-delete observation the late original
+   * resolves below. Best-effort: never throws, never blocks the pull.
+   */
+  private async applyLedgerDeleteReversal(
+    db: Database,
+    ledId: string,
+    r: Record<string, unknown>,
+    version: number,
+  ): Promise<void> {
+    try {
+      if (!ledId) return;
+      const { planLedgerDelete } = await import('./conflictWatch');
+      const now = utcNowIso();
+      const origRows = (await db
+        .select('SELECT id, product_id, delta, version FROM inventory_ledger WHERE id = $1', [ledId])
+        .catch(() => [])) as Array<{ id?: unknown; product_id?: unknown; delta?: unknown; version?: unknown }>;
+      const orig = origRows?.[0] ?? null;
+      const revRows = (await db
+        .select('SELECT id FROM inventory_ledger WHERE id = $1', [`REV-${ledId}`])
+        .catch(() => [])) as Array<{ id?: unknown }>;
+      const plan = planLedgerDelete({
+        original: orig
+          ? {
+              id: String(orig.id ?? ledId),
+              product_id: String(orig.product_id ?? 'unknown'),
+              delta: Number(orig.delta ?? 0),
+              version: orig.version,
+            }
+          : null,
+        reversalExists: Array.isArray(revRows) && revRows.length > 0,
+        incomingVersion: version,
+        deleterDevice: String(r.device_id ?? 'remote'),
+        now,
+      });
+      if (plan.action === 'noop') return;
+      if (plan.action === 'pending') {
+        const { ensureConflictTable } = await import('./conflictWatch');
+        await ensureConflictTable(db as unknown as import('./conflictWatch').ConflictDb);
+        await (db as unknown as { execute: (sql: string, args?: unknown[]) => Promise<unknown> })
+          .execute(
+            `INSERT INTO sync_conflicts (id, table_name, row_id, local_version, incoming_version,
+              local_device, incoming_device, local_fp, incoming_fp, winner, detected_at, resolved, note)
+             VALUES ($1,'inventory_ledger',$2,0,$3,'',$4,'','','', $5, 0,$6)
+             ON CONFLICT(id) DO NOTHING`,
+            [
+              `PENDDEL-${ledId}`, ledId, version, String(r.device_id ?? 'remote'), now,
+              `pending-delete: original ${ledId} absent when v${version} tombstone arrived`,
+            ],
+          )
+          .catch(() => {});
+        return;
+      }
+      await this.insertLedgerReversal(db, plan.reversal);
+    } catch {
+      // Best-effort: a failed reversal must not fail the pull lane.
+    }
+  }
+
+  /**
+   * A2: resolves pending deletes when their original lands late. Skips
+   * reversal ids themselves (a reversal is never reversed).
+   */
+  private async resolvePendingLedgerDelete(db: Database, ledId: string): Promise<void> {
+    try {
+      if (!ledId || ledId.startsWith('REV-')) return;
+      const markers = (await db
+        .select(
+          `SELECT id, incoming_version, incoming_device FROM sync_conflicts
+           WHERE table_name = 'inventory_ledger' AND row_id = $1 AND resolved = 0 AND note LIKE 'pending-delete%'`,
+          [ledId],
+        )
+        .catch(() => [])) as Array<{ id?: unknown; incoming_version?: unknown; incoming_device?: unknown }>;
+      if (!markers || markers.length === 0) return;
+      const { planLedgerDelete } = await import('./conflictWatch');
+      const now = utcNowIso();
+      for (const marker of markers) {
+        try {
+          const origRows = (await db
+            .select('SELECT id, product_id, delta, version FROM inventory_ledger WHERE id = $1', [ledId])
+            .catch(() => [])) as Array<{ id?: unknown; product_id?: unknown; delta?: unknown; version?: unknown }>;
+          const orig = origRows?.[0] ?? null;
+          if (!orig) continue;
+          const revRows = (await db
+            .select('SELECT id FROM inventory_ledger WHERE id = $1', [`REV-${ledId}`])
+            .catch(() => [])) as Array<{ id?: unknown }>;
+          const plan = planLedgerDelete({
+            original: {
+              id: String(orig.id ?? ledId),
+              product_id: String(orig.product_id ?? 'unknown'),
+              delta: Number(orig.delta ?? 0),
+              version: orig.version,
+            },
+            reversalExists: Array.isArray(revRows) && revRows.length > 0,
+            incomingVersion: Number(marker.incoming_version ?? 1),
+            deleterDevice: String(marker.incoming_device ?? 'remote'),
+            now,
+          });
+          if (plan.action !== 'reverse') continue;
+          await this.insertLedgerReversal(db, plan.reversal);
+          await db
+            .execute('UPDATE sync_conflicts SET resolved = 1 WHERE id = $1', [String(marker.id ?? '')])
+            .catch(() => {});
+        } catch {
+          // Per-marker failures must not block sibling markers or the pull.
+        }
+      }
+    } catch {
+      // Best-effort.
+    }
+  }
+
   private async applyRemoteRow(db: Database, table: string, r: Record<string, unknown>) {
     const generic = GENERIC_PULL[table];
     const version = Number(r.version ?? 1);
@@ -2729,9 +2888,13 @@ class SyncManager {
         return;
       }
       // P1-13: ledger rows are IMMUTABLE events — first writer wins. The old
-      // P1-13: ledger rows are IMMUTABLE events — first writer wins. The old
       // ON CONFLICT DO UPDATE overwrote delta on id collisions (replays and
       // cross-device same-id races silently rewrote stock history).
+      // A2: tombstoned rows take the reversal path below (never a mutation).
+      if (Number(r.deleted ?? 0) === 1) {
+        await this.applyLedgerDeleteReversal(db, ledId, r, version);
+        return;
+      }
       await db.execute(
         `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
           idempotency_key, sync_status, version, created_at, updated_at, deleted)
@@ -2742,6 +2905,8 @@ class SyncManager {
           version, String(r.created_at ?? utcNowIso()), String(r.updated_at ?? utcNowIso()), Number(r.deleted ?? 0),
         ],
       );
+      // A2: a late-arriving original resolves an earlier pending delete.
+      await this.resolvePendingLedgerDelete(db, ledId);
       return;
     }
 

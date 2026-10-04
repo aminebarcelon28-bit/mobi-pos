@@ -18,6 +18,7 @@ import {
   guardMissNeedsObservation,
   observePullGuardMiss,
   observeVersionConflict,
+  planLedgerDelete,
   type ConflictDb,
 } from '../src/sync/conflictWatch.ts';
 
@@ -274,7 +275,33 @@ async function main() {
     }
   }
 
-  // 10. Keys sanitized + deterministic; ensure is idempotent.
+  // 10. Ledger-delete planner: reverse / pending / noop.
+  {
+    const base = {
+      original: { id: 'LED-1', product_id: 'P', delta: 5, version: 4 },
+      reversalExists: false, incomingVersion: 6, deleterDevice: 'till-02', now: '2026-01-01T00:00:00.000Z',
+    };
+    const r = planLedgerDelete(base);
+    check('normal delete → reverse with negated delta',
+      r.action === 'reverse' && r.reversal.delta === -5 && r.reversal.id === 'REV-LED-1' &&
+      r.reversal.reason === 'VOID' && r.reversal.ref_id === 'LED-1' &&
+      r.reversal.idempotency_key === 'REV-LED-1' && r.reversal.version === 6);
+    check('existing reversal → noop',
+      planLedgerDelete({ ...base, reversalExists: true }).action === 'noop');
+    check('missing original → pending (never silently dropped)',
+      planLedgerDelete({ ...base, original: null }).action === 'pending');
+    check('stale delete (v3 vs row v5) → noop',
+      planLedgerDelete({ ...base, incomingVersion: 3 }).action === 'noop');
+    check('equal versions → reverse (delete-wins-ties)',
+      planLedgerDelete({ ...base, incomingVersion: 4 }).action === 'reverse');
+    // Garbage version on a delete: fail closed (noop) rather than mutating
+    // books on unreadable intent. The row stays; the delete stays visible
+    // upstream for repair.
+    check('NaN incoming version → noop (fail closed)',
+      planLedgerDelete({ ...base, incomingVersion: Number.NaN }).action === 'noop');
+  }
+
+  // 11. Keys sanitized + deterministic; ensure is idempotent.
   {
     check('record id sanitizes hostile input',
       conflictRecordId('trans actions', 'TX/1', 'AA', 'BB') === 'CONFLICT-transactions-TX1-AA-BB');
