@@ -232,6 +232,35 @@ export function projectionFingerprint(
 }
 
 /**
+ * Status-rank expression for the transactions pull guard: terminal states
+ * outrank live ones so a COMPLETED echo can never un-void a ticket.
+ */
+export function statusRankSql(statusExpr: string): string {
+  return (
+    `(CASE COALESCE(${statusExpr}, 'COMPLETED') ` +
+    `WHEN 'VOIDED' THEN 3 WHEN 'REFUNDED' THEN 2 WHEN 'PARTIALLY_REFUNDED' THEN 2 ELSE 1 END)`
+  );
+}
+
+/**
+ * Full pull-side transactions guard: version first, then status rank (so
+ * terminal states stick), then device tiebreak at the bottom so equal
+ * versions with equal rank still converge deterministically on every
+ * replica instead of by arrival order.
+ */
+export function transactionPullGuardSql(): string {
+  const rankIncoming = statusRankSql('excluded.status');
+  const rankLocal = statusRankSql('transactions.status');
+  return (
+    `excluded.version > transactions.version ` +
+    `OR (excluded.version = transactions.version ` +
+    `AND (${rankIncoming} > ${rankLocal} ` +
+    `OR (${rankIncoming} = ${rankLocal} ` +
+    `AND COALESCE(excluded.device_id,'') >= COALESCE(transactions.device_id,''))))`
+  );
+}
+
+/**
  * Optimistic-bump helper for the write side (DB-013): read the version,
  * write with `UPDATE ... WHERE version = :read` (or an upsert whose guard
  * carries the read version), and RETRY the whole read-modify-write on a

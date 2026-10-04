@@ -17,7 +17,7 @@ import type { Product } from '../types/pos';
 import { newId } from '../utils/ids';
 import { withWriteLock } from '../db/writeMutex';
 import { withBusyRetry, isRetryableDbError } from '../db/busyRetry';
-import { tiedVersionGuardSql } from './causalVersion';
+import { tiedVersionGuardSql, transactionPullGuardSql } from './causalVersion';
 
 /**
  * Additive sync-visibility extension (SyncStatus itself lives in
@@ -2633,12 +2633,7 @@ class SyncManager {
           created_at=excluded.created_at,
           json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at,
           deleted=excluded.deleted, sync_status='synced', shift_id=excluded.shift_id
-          WHERE excluded.version > transactions.version
-            OR (excluded.version = transactions.version
-              AND (CASE COALESCE(excluded.status, 'COMPLETED')
-                     WHEN 'VOIDED' THEN 3 WHEN 'REFUNDED' THEN 2 WHEN 'PARTIALLY_REFUNDED' THEN 2 ELSE 1 END)
-                >= (CASE COALESCE(transactions.status, 'COMPLETED')
-                     WHEN 'VOIDED' THEN 3 WHEN 'REFUNDED' THEN 2 WHEN 'PARTIALLY_REFUNDED' THEN 2 ELSE 1 END))`,
+          WHERE ${transactionPullGuardSql()}`,
         [
           txId, receiptNo, r.customer_id ? String(r.customer_id) : null, Number(r.subtotal ?? 0), Number(r.tax ?? 0),
           Number(r.discount_total ?? 0), Number(r.total ?? 0), Number(r.cost_total ?? 0), Number(r.profit ?? 0),
@@ -2772,7 +2767,7 @@ class SyncManager {
             discount_amount=excluded.discount_amount, line_profit=excluded.line_profit,
             json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at,
             deleted=excluded.deleted, sync_status='synced'
-            WHERE excluded.version >= transaction_items.version`,
+            WHERE ${tiedVersionGuardSql('transaction_items')}`,
         [
           itemId, txnId, prodId, Number(r.quantity ?? 1), Number(r.applied_price ?? 0),
           Number(r.discount ?? 0), r.imei_number ? String(r.imei_number) : null,
@@ -2813,7 +2808,7 @@ class SyncManager {
            reorder_point=excluded.reorder_point, json_payload=excluded.json_payload,
            version=excluded.version, updated_at=excluded.updated_at,
            deleted=excluded.deleted, sync_status='synced'
-           WHERE excluded.version >= products.version`,
+           WHERE ${tiedVersionGuardSql('products')}`,
         [
           pId, String(r.sku ?? ''), String(r.barcode ?? ''), String(r.title || pId), String(r.brand ?? 'Autre'),
           String(r.compatible_model ?? ''), String(r.category ?? 'Tous les produits'),

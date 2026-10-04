@@ -10,7 +10,7 @@
  */
 import { createClient } from '@libsql/client';
 import { rmSync } from 'node:fs';
-import { tiedVersionGuardSql } from '../src/sync/causalVersion.ts';
+import { tiedVersionGuardSql, transactionPullGuardSql } from '../src/sync/causalVersion.ts';
 
 let pass = 0;
 let fail = 0;
@@ -115,6 +115,55 @@ async function main() {
   await applyNew(db, 'S', 6, 'till-01', 'same');
   const s = await read(db, 'S');
   check('same-device re-apply idempotent', s.version === 6 && s.payload === 'same');
+
+  // 6. The REAL transactions-pull predicate: status rank first, device
+  // tiebreak at the bottom. Executed verbatim via transactionPullGuardSql().
+  // Fixture table is named `transactions`: transactionPullGuardSql() encodes
+  // the transactions lane (status ranks), not a generic table.
+  await db.execute(
+    'CREATE TABLE transactions (id TEXT PRIMARY KEY, version INTEGER, device_id TEXT, status TEXT, payload TEXT)',
+  );
+  async function applyTx(
+    id: string, version: number, device: string | null, status: string, payload: string,
+  ) {
+    return db.execute({
+      sql: `INSERT INTO transactions (id, version, device_id, status, payload) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET version=excluded.version,
+          device_id=excluded.device_id, status=excluded.status, payload=excluded.payload
+        WHERE ${transactionPullGuardSql()}`,
+      args: [id, version, device, status, payload],
+    });
+  }
+  async function readTx(id: string) {
+    const rs = await db.execute({ sql: 'SELECT version, device_id, status, payload FROM transactions WHERE id = ?', args: [id] });
+    return rs.rows[0] as unknown as { version: number; device_id: string | null; status: string; payload: string };
+  }
+  // 6a. Equal version + equal rank → deterministic device winner, both orders.
+  await applyTx('T', 6, 'till-01', 'COMPLETED', 'A');
+  await applyTx('T', 6, 'till-02', 'COMPLETED', 'B');
+  const tfwd = await readTx('T');
+  await db.execute({ sql: `DELETE FROM transactions WHERE id = 'T'`, args: [] });
+  await applyTx('T', 6, 'till-02', 'COMPLETED', 'B');
+  await applyTx('T', 6, 'till-01', 'COMPLETED', 'A');
+  const trev = await readTx('T');
+  check('pull guard converges equal-rank ties', tfwd.payload === 'B' && trev.payload === 'B',
+    `fwd=${tfwd.payload} rev=${trev.payload}`);
+  // 6b. Terminal rank sticks: COMPLETED echo never un-voids, both orders.
+  await db.execute({ sql: `DELETE FROM transactions WHERE id = 'V'`, args: [] });
+  await applyTx('V', 6, 'till-01', 'VOIDED', 'void');
+  await applyTx('V', 6, 'till-02', 'COMPLETED', 'echo');
+  const v1 = await readTx('V');
+  await db.execute({ sql: `DELETE FROM transactions WHERE id = 'V'`, args: [] });
+  await applyTx('V', 6, 'till-02', 'COMPLETED', 'echo');
+  await applyTx('V', 6, 'till-01', 'VOIDED', 'void');
+  const v2 = await readTx('V');
+  check('pull guard never un-voids (rank preserved)', v1.status === 'VOIDED' && v2.status === 'VOIDED');
+  // 6c. Higher rank still wins ties upward.
+  await db.execute({ sql: `DELETE FROM transactions WHERE id = 'R'`, args: [] });
+  await applyTx('R', 6, 'till-01', 'COMPLETED', 'sale');
+  await applyTx('R', 6, 'till-02', 'REFUNDED', 'refund');
+  const r = await readTx('R');
+  check('pull guard promotes higher rank', r.status === 'REFUNDED' && r.payload === 'refund');
 
   db.close();
   try { rmSync(DB_FILE); } catch { /* cleanup */ }
