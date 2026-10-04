@@ -18,6 +18,7 @@ import { newId } from '../utils/ids';
 import { withWriteLock } from '../db/writeMutex';
 import { withBusyRetry, isRetryableDbError } from '../db/busyRetry';
 import { tiedVersionGuardSql, transactionPullGuardSql } from './causalVersion';
+import { transactionTimeMs } from '../utils/dateUtils';
 
 /**
  * Additive sync-visibility extension (SyncStatus itself lives in
@@ -1342,10 +1343,14 @@ class SyncManager {
       };
       // Push at most 50 per cycle (network-bounded); the ranked remainder
       // stays pending for the next cycles in dependency order.
+      // Numeric clock compare (TIME-009): all outbox rows are minted via
+      // utcNowIso today, but lexicographic order is one mixed format away
+      // from mis-sequencing a push batch. Identical order on uniform input.
       const batch = candidates.sort(
         (a, b) =>
           (rank[a.entity_type] ?? 9) - (rank[b.entity_type] ?? 9) ||
-          (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : (a.rowid ?? 0) - (b.rowid ?? 0))
+          (transactionTimeMs(a.created_at) - transactionTimeMs(b.created_at)) ||
+          ((a.rowid ?? 0) - (b.rowid ?? 0))
       ).slice(0, 50);
 
       const remote = await getTursoClient();

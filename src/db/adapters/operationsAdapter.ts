@@ -10,6 +10,7 @@ import { db as dexieDb } from '../database';
 import { fireSync, fireSyncDelete, isTauriEnv } from './base';
 import { getLocalDb, isDeviceLocalSettingKey, stripDeviceLocalSettingValue } from '../sqlPluginAdapter';
 import { newId } from '../../utils/ids';
+import { sortTransactionsNewestFirst } from '../../utils/dateUtils';
 import {
   AUDIT_LEGACY_LIMIT,
   auditSelectParams,
@@ -82,8 +83,8 @@ export const operationsAdapter = {
   },
 
   async getAllPurchaseOrders(): Promise<PurchaseOrder[]> {
-    const orders = await dexieDb.purchaseOrders.toArray();
-    return orders.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    // Canonical newest-first (NaN-safe): identical order on healthy rows.
+    return sortTransactionsNewestFirst(await dexieDb.purchaseOrders.toArray());
   },
 
   // ── TRADE-INS ──

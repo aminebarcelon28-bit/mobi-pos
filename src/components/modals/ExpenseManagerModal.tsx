@@ -25,7 +25,7 @@ import { newId } from '../../utils/ids';
 import { csvCell } from '../../utils/spreadsheetSafe';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
-import { todayLocalKey, toLocalDayKey } from '../../utils/dateUtils';
+import { todayLocalKey, toLocalDayKey, sortTransactionsNewestFirst } from '../../utils/dateUtils';
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
   'Loyer': <Building className="w-4 h-4 text-amber-400" />,
@@ -105,7 +105,8 @@ export const ExpenseManagerModal: React.FC = () => {
       );
     }
 
-    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    // Canonical newest-first (NaN-safe): identical order on healthy rows.
+    return sortTransactionsNewestFirst(list);
   }, [allExpenses, dateFilter, selectedCategoryFilter, searchQuery, todayStr, currentMonthStr]);
 
   useEffect(() => { if (activeModal !== 'expense_manager') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);

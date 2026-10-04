@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { todayLocalKey, toLocalDayKey } from '../../../utils/dateUtils';
+import { todayLocalKey, toLocalDayKey, sortTransactionsNewestFirst } from '../../../utils/dateUtils';
 import {
   TrendingUp,
   Receipt,
@@ -257,11 +257,13 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
 
   // Transactions de la période, plus récentes d'abord (plafond par période
   // pour rester fluide sur mobile même à 90 jours / toute la période).
+  // Tri canonique (NaN-safe) : mêmes plus-récents-d'abord sur lignes saines.
   const recentFeed = useMemo(() => {
-    return (transactions || [])
-      .filter((t) => isDayKeyInRange(toLocalDayKey(t.createdAt), minDayKey, todayDateStr, todayOnly))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, activeRange.feedLimit);
+    return sortTransactionsNewestFirst(
+      (transactions || []).filter((t) =>
+        isDayKeyInRange(toLocalDayKey(t.createdAt), minDayKey, todayDateStr, todayOnly)
+      )
+    ).slice(0, activeRange.feedLimit);
   }, [transactions, minDayKey, todayDateStr, todayOnly, activeRange.feedLimit]);
 
   const refreshRef = useRef(handleManualRefresh);

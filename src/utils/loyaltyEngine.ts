@@ -1,5 +1,6 @@
 import type { Customer, LoyaltyLedgerEntry, LoyaltyTierInfo, LoyaltyTierDef, LoyaltyProgramConfig, SpendMilestone, MilestoneAward, FinancialProfitImpact, CartItem, SaleTransaction, RefundItem, LoyaltyPointBucket, PromoCampaignRule } from '../types/pos';
 import { newId } from './ids';
+import { transactionTimeMs } from './dateUtils';
 
 // ══════════════════════════════════════════════════════════════
 // DEFAULT GRANULAR LOYALTY PROGRAM CONFIGURATION
@@ -659,12 +660,13 @@ export const depleteFifoPointBuckets = (
     return { updatedBuckets: buckets || [], consumedPoints: 0, remainingPointsToRedeem: pointsToRedeem };
   }
 
-  // Sort: Expiring soonest first, unexpiring (null) last
+  // Sort: Expiring soonest first, unexpiring (null) last. NaN-safe clocks:
+  // malformed dates sink deterministically instead of poisoning the sort.
   const sorted = [...buckets].sort((a, b) => {
-    if (!a.expiresAt && !b.expiresAt) return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    if (!a.expiresAt && !b.expiresAt) return transactionTimeMs(a.createdAt) - transactionTimeMs(b.createdAt);
     if (!a.expiresAt) return 1;
     if (!b.expiresAt) return -1;
-    return new Date(a.expiresAt).getTime() - new Date(b.expiresAt).getTime();
+    return transactionTimeMs(a.expiresAt) - transactionTimeMs(b.expiresAt);
   });
 
   let needed = pointsToRedeem;
@@ -995,11 +997,11 @@ export const restoreBucketsForVoid = (
   const sorted = [...kept]
     .sort((a, b) => {
       if (!a.expiresAt && !b.expiresAt) {
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        return transactionTimeMs(b.createdAt) - transactionTimeMs(a.createdAt);
       }
       if (!a.expiresAt) return -1;
       if (!b.expiresAt) return 1;
-      return new Date(b.expiresAt).getTime() - new Date(a.expiresAt).getTime();
+      return transactionTimeMs(b.expiresAt) - transactionTimeMs(a.expiresAt);
     })
     .map((b) => {
       const c = { ...b };

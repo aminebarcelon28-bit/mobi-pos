@@ -18,6 +18,7 @@ import { WARRANTY_TIER_DAYS, WARRANTY_TIER_ORDER, computeWarrantyExpiryISO } fro
 import type { ImeiLifecycleDossier, WarrantyDossierSnapshot } from '../types/pos';
 import { luhnCheckImei } from './savValidation';
 import { canonicalDeviceId, normalizeDeviceKey } from './deviceIdCodec';
+import { sortTransactionsNewestFirst, transactionTimeMs } from './dateUtils';
 
 export const DEFAULT_WARRANTY_MONTHS = 12;
 
@@ -951,11 +952,14 @@ export function repairTicketsFor(
   opts: { includeVoided?: boolean; excludeIds?: string[] } = {}
 ): RepairOrder[] {
   const exclude = new Set(opts.excludeIds || []);
-  return (repairOrders || [])
-    .filter((r) => matchesAnyIdentifier(r?.imei, keys))
-    .filter((r) => !exclude.has(r.id))
-    .filter((r) => opts.includeVoided || isLiveRepairOrder(r))
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  // Canonical newest-first (NaN-safe): malformed dates sink instead of
+  // poisoning the order repair timelines depend on.
+  return sortTransactionsNewestFirst(
+    (repairOrders || [])
+      .filter((r) => matchesAnyIdentifier(r?.imei, keys))
+      .filter((r) => !exclude.has(r.id))
+      .filter((r) => opts.includeVoided || isLiveRepairOrder(r))
+  );
 }
 
 /** Interventions SAV count — live tickets only (owner decision on W-15). */
@@ -1034,8 +1038,7 @@ export function lookupDeviceWarrantyByImei(
   // Newest-first, like every other timeline in the dossier: the inspector shows
   // the most recent intervention at the top, and a delivered ticket (the only one
   // that carries a repair expiry) is almost never the oldest.
-  const ticketSummaries = [...tickets]
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  const ticketSummaries = sortTransactionsNewestFirst([...tickets])
     .map((r) => ({
       ticketNumber: r.ticketNumber,
       status: r.status,
@@ -1044,9 +1047,7 @@ export function lookupDeviceWarrantyByImei(
     }));
 
   // 1. Transactions (newest first)
-  const sortedSales = [...transactions].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  const sortedSales = sortTransactionsNewestFirst([...transactions]);
   const matchingTxns = sortedSales.filter((sale) =>
     (sale.items || []).some(
       (i: CartItem) =>
@@ -1221,8 +1222,10 @@ export function lookupDeviceWarrantyByImei(
   const registryMatches = imeiRecords
     .filter((r) => matchesAnyIdentifier(r.imei, keys))
     .sort((a, b) => {
-      const at = new Date(a.soldAt || a.receivedAt || 0).getTime();
-      const bt = new Date(b.soldAt || b.receivedAt || 0).getTime();
+      // NaN-safe clocks: garbage dates sink instead of poisoning the
+      // most-recent-first resolution (NaN !== NaN made order random).
+      const at = transactionTimeMs(a.soldAt || a.receivedAt || 0);
+      const bt = transactionTimeMs(b.soldAt || b.receivedAt || 0);
       if (bt !== at) return bt - at;
       return String(b.imei).length - String(a.imei).length;
     });

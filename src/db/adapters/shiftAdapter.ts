@@ -9,7 +9,7 @@ import type {
 import { db as dexieDb } from '../database';
 import { fireSync, fireSyncDelete, isTauriEnv } from './base';
 import { newId } from '../../utils/ids';
-import { resolveTransactionStanding } from '../../utils/dateUtils';
+import { resolveTransactionStanding, transactionTimeMs } from '../../utils/dateUtils';
 import { verifyManagerGate } from '../../utils/pinGate';
 import { cashSalesFromTxns, cashRefundsFromTxns } from '../../utils/cashTerms';
 
@@ -66,19 +66,29 @@ export function isTxInCloseScope(
   // the historic scope exactly.
   const standing = resolveTransactionStanding(t);
   if (standing === 'void' || standing === 'unknown') return false;
+  // Numeric time compare (TIME-009): lexicographic `<` on mixed formats
+  // (UTC `Z` vs `+00:00` vs space-form legacy) mis-orders across tables.
+  // Identical outcomes on well-formed ISO; corrupt bounds fail closed.
+  const tMs = transactionTimeMs(t.createdAt);
   const stamp = t.shiftId ? String(t.shiftId) : '';
   const sid = session.id ? String(session.id) : '';
   if (stamp && sid) {
     if (stamp === sid) {
       if (!session.closedAt) return true;
-      return String(t.createdAt ?? '') < String(session.closedAt);
+      const closedMs = transactionTimeMs(session.closedAt);
+      if (!Number.isFinite(closedMs)) return false;
+      return tMs < closedMs;
     }
     return false;
   }
   const openedAt = session.openedAt ?? null;
-  if (openedAt && !((t.createdAt ?? '') >= openedAt)) return false;
+  if (openedAt) {
+    const openedMs = transactionTimeMs(openedAt);
+    if (!Number.isFinite(openedMs) || !(tMs >= openedMs)) return false;
+  }
   const upper = session.closedAt ?? nowIso ?? new Date().toISOString();
-  if (!((t.createdAt ?? '') < upper)) return false;
+  const upperMs = transactionTimeMs(upper);
+  if (!Number.isFinite(upperMs) || !(tMs < upperMs)) return false;
   return true;
 }
 
