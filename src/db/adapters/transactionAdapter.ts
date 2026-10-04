@@ -7,7 +7,8 @@ import type {
 import { db as dexieDb } from '../database';
 import { sortTransactionsNewestFirst } from '../../utils/dateUtils';
 import { fireSync, isTauriEnv } from './base';
-import { getLocalDb, beginImmediate } from '../sqlPluginAdapter';
+import { getLocalDb, beginImmediate, utcNowIso } from '../sqlPluginAdapter';
+import { buildOrderOutboxInsert, existingRowOutboxKey, newReceiptOutboxKey } from '../../sync/outboxFold';
 import { withWriteLock } from '../writeMutex';
 import { withBusyRetry, isBusyError } from '../busyRetry';
 
@@ -194,11 +195,11 @@ export const transactionAdapter = {
           // cross-window duplicate voids serialize here and the loser aborts.
           // Missing row (SQLite lane never saw the sale) skips the check.
           const statusRows = (await db
-            .select('SELECT status FROM transactions WHERE id=$1', [voidedTransaction.id])
+            .select('SELECT status, version, idempotency_key FROM transactions WHERE id=$1', [voidedTransaction.id])
             .catch((e: unknown) => {
               if (isBusyError(e)) throw e;
               return [];
-            })) as Array<{ status?: string }>;
+            })) as Array<{ status?: string; version?: number; idempotency_key?: string }>;
           const sqliteStatus = String(statusRows?.[0]?.status ?? '');
           if (sqliteStatus === 'VOIDED') {
             throw new Error('ALREADY_VOIDED');
@@ -217,6 +218,38 @@ export const transactionAdapter = {
             // Row may not exist yet in SQLite lane — non-fatal (enqueue later).
             console.warn('[db:void] status flip skipped:', updErr);
           });
+          // C1 (DB-012): fold the outbox row into the SAME txn as the money
+          // flip. A crash after COMMIT then leaves peers converging via this
+          // row; the later enqueueOrderSync refreshes it idempotently onto
+          // the same key (harmless version re-bump, never a duplicate
+          // payout). Best-effort with a warning, like the IMEI lane below:
+          // an outbox failure must not roll back a durable flip.
+          try {
+            const outboxNow = utcNowIso();
+            const baseVersion = Number(
+              statusRows?.[0]?.version ?? (voidedTransaction as unknown as { version?: number }).version ?? 0,
+            );
+            const outboxKey = existingRowOutboxKey(voidedTransaction.id, statusRows?.[0]?.idempotency_key);
+            const outbox = buildOrderOutboxInsert(
+              voidedTransaction.id,
+              outboxKey,
+              {
+                ...(voidedTransaction as unknown as Record<string, unknown>),
+                receipt_number: voidedTransaction.receiptNumber,
+                created_at: voidedTransaction.createdAt,
+                idempotency_key: outboxKey,
+                updated_at: outboxNow,
+                version: baseVersion + 1,
+              },
+              outboxNow,
+            );
+            await db.execute(outbox.sql, outbox.args as unknown[]);
+          } catch (outboxErr: unknown) {
+            if (isBusyError(outboxErr)) throw outboxErr;
+            const msg = '[db:void] Outbox fold skipped — peers converge on the later enqueue (or not at all after a crash in between).';
+            console.warn(msg, outboxErr);
+            warnings.push(msg);
+          }
           for (const imei of restoredImeis) {
             try {
               await db.execute(
@@ -399,6 +432,78 @@ export const transactionAdapter = {
               }
             }
             assertRefundBound(prior);
+          }
+          // C1 (DB-012): fold the original's status flip and BOTH outbox
+          // rows (original + refund receipt) into the SAME txn. A crash
+          // after COMMIT leaves peers converging via these rows; the later
+          // writeCheckoutAtomic/enqueueOrderSync calls refresh them
+          // idempotently onto the same keys (monotonic re-bump, never a
+          // duplicate payout). The receipt's SQLite row itself still lands
+          // via the existing F3 replay path (replay-safe short-circuit).
+          if (originalId && updatedOriginalTransaction) {
+            const outboxNow = utcNowIso();
+            try {
+              const origRows = (await db
+                .select('SELECT version, idempotency_key FROM transactions WHERE id = $1', [originalId])
+                .catch((e: unknown) => {
+                  if (isBusyError(e)) throw e;
+                  return [];
+                })) as Array<{ version?: number; idempotency_key?: string }>;
+              if (origRows?.[0]) {
+                const bumped = Number(origRows[0].version ?? 0) + 1;
+                await db.execute(
+                  `UPDATE transactions SET status=$1, updated_at=$2, version=$3, sync_status='pending' WHERE id=$4`,
+                  [updatedOriginalTransaction.status, outboxNow, bumped, originalId],
+                );
+                const origKey = existingRowOutboxKey(originalId, origRows[0].idempotency_key);
+                const origOutbox = buildOrderOutboxInsert(
+                  originalId,
+                  origKey,
+                  {
+                    ...(updatedOriginalTransaction as unknown as Record<string, unknown>),
+                    receipt_number: updatedOriginalTransaction.receiptNumber,
+                    created_at: updatedOriginalTransaction.createdAt,
+                    idempotency_key: origKey,
+                    updated_at: outboxNow,
+                    version: bumped,
+                  },
+                  outboxNow,
+                );
+                await db.execute(origOutbox.sql, origOutbox.args as unknown[]);
+              } else {
+                console.warn('[db:refund] original row absent in SQLite — status flip deferred (enqueue later).');
+              }
+            } catch (flipErr: unknown) {
+              if (isBusyError(flipErr)) throw flipErr;
+              const msg = '[db:refund] Original status flip skipped — peers converge on the later enqueue (or not at all after a crash in between).';
+              console.warn(msg, flipErr);
+              warnings.push(msg);
+            }
+            try {
+              const receiptKey = newReceiptOutboxKey(
+                refundTransaction.id,
+                (refundTransaction as unknown as { idempotency_key?: string }).idempotency_key,
+              );
+              const receiptOutbox = buildOrderOutboxInsert(
+                refundTransaction.id,
+                receiptKey,
+                {
+                  ...(refundTransaction as unknown as Record<string, unknown>),
+                  receipt_number: refundTransaction.receiptNumber,
+                  created_at: refundTransaction.createdAt,
+                  idempotency_key: receiptKey,
+                  updated_at: outboxNow,
+                  version: 1,
+                },
+                outboxNow,
+              );
+              await db.execute(receiptOutbox.sql, receiptOutbox.args as unknown[]);
+            } catch (receiptErr: unknown) {
+              if (isBusyError(receiptErr)) throw receiptErr;
+              const msg = '[db:refund] Refund-receipt outbox fold skipped — peers converge on the later enqueue (or not at all after a crash in between).';
+              console.warn(msg, receiptErr);
+              warnings.push(msg);
+            }
           }
           for (const imei of restoredImeis) {
             try {
