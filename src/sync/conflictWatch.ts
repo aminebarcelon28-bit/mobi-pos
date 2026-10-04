@@ -99,6 +99,29 @@ function toFiniteVersion(value: unknown): number {
   return Number.isFinite(n) ? Math.floor(n) : 0;
 }
 
+export interface GuardMissInput {
+  /** Raw driver result of the guarded upsert (number, {rowsAffected}, or unknown). */
+  affectedRaw: unknown;
+  /** Local row AFTER the miss (intact — the guard rejected the overwrite). */
+  local: { version?: unknown } | null | undefined;
+  incomingVersion: unknown;
+}
+
+/**
+ * Pure gate for wiring sites: observe ONLY a proven guard miss
+ * (affected === 0 exactly) on equal versions. Anything indeterminate —
+ * driver-shaped results, missing rows, version mismatch — returns false:
+ * a missed observation is acceptable, a wrong one is not.
+ */
+export function guardMissNeedsObservation(input: GuardMissInput): boolean {
+  const raw = input.affectedRaw;
+  const affected =
+    typeof raw === 'number' ? raw : Number((raw as { rowsAffected?: unknown } | null)?.rowsAffected ?? NaN);
+  if (affected !== 0) return false;
+  if (!input.local) return false;
+  return toFiniteVersion(input.local.version) === toFiniteVersion(input.incomingVersion);
+}
+
 function toDevice(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }

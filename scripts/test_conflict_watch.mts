@@ -15,6 +15,7 @@ import {
   conflictAuditKey,
   conflictRecordId,
   ensureConflictTable,
+  guardMissNeedsObservation,
   observeVersionConflict,
   type ConflictDb,
 } from '../src/sync/conflictWatch.ts';
@@ -175,7 +176,23 @@ async function main() {
     check('throwing audit sink → still recorded', out2 === 'recorded');
   }
 
-  // 7. Keys sanitized + deterministic; ensure is idempotent.
+  // 7. Guard-miss gate: observe only proven misses on equal versions.
+  {
+    const local = { version: 6 };
+    check('affected>0 → no observation', guardMissNeedsObservation({ affectedRaw: 1, local, incomingVersion: 6 }) === false);
+    check('indeterminate driver result → no observation',
+      guardMissNeedsObservation({ affectedRaw: {}, local, incomingVersion: 6 }) === false);
+    check('missing local row → no observation',
+      guardMissNeedsObservation({ affectedRaw: 0, local: null, incomingVersion: 6 }) === false);
+    check('version mismatch → no observation',
+      guardMissNeedsObservation({ affectedRaw: 0, local, incomingVersion: 7 }) === false);
+    check('miss on equal versions → observe',
+      guardMissNeedsObservation({ affectedRaw: 0, local, incomingVersion: 6 }) === true);
+    check('object-shaped zero → observe',
+      guardMissNeedsObservation({ affectedRaw: { rowsAffected: 0 }, local, incomingVersion: 6 }) === true);
+  }
+
+  // 8. Keys sanitized + deterministic; ensure is idempotent.
   {
     check('record id sanitizes hostile input',
       conflictRecordId('trans actions', 'TX/1', 'AA', 'BB') === 'CONFLICT-transactions-TX1-AA-BB');

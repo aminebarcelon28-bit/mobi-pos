@@ -2619,7 +2619,7 @@ class SyncManager {
       } catch {
         isNewSale = true;
       }
-      await db.execute(
+      const txApplyResult: unknown = await db.execute(
         `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
           cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
           status, created_at, json_payload, device_id, idempotency_key, sync_status, version, updated_at, deleted, shift_id)
@@ -2647,6 +2647,59 @@ class SyncManager {
             : null,
         ],
       );
+      // A3: an equal-version guard miss with divergent content is a version
+      // conflict, not a silent keep-local. Guard winners apply (no miss), so
+      // every divergence is observed exactly once — here, on the loser's
+      // side. Observation is best-effort and never blocks the pull.
+      try {
+        const { guardMissNeedsObservation, observeVersionConflict } = await import('./conflictWatch');
+        const localRows = (await db
+          .select('SELECT version, device_id, status, total, json_payload FROM transactions WHERE id = $1', [txId])
+          .catch(() => [])) as Array<{
+            version?: unknown; device_id?: unknown; status?: unknown; total?: unknown; json_payload?: unknown;
+          }>;
+        const localRow = localRows?.[0] ?? null;
+        if (guardMissNeedsObservation({ affectedRaw: txApplyResult, local: localRow, incomingVersion: version })) {
+          const parseJson = (raw: unknown): Record<string, unknown> => {
+            try {
+              const parsed: unknown = JSON.parse(String(raw ?? '{}'));
+              return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+                ? (parsed as Record<string, unknown>)
+                : {};
+            } catch {
+              return {};
+            }
+          };
+          const { usePosStore } = await import('../store/usePosStore');
+          await observeVersionConflict(
+            db as unknown as import('./conflictWatch').ConflictDb,
+            async (action, details) => {
+              await usePosStore.getState().logSecurityAction(action, details, 'Système (Sync)', false);
+            },
+            {
+              table: 'transactions',
+              id: txId,
+              localVersion: localRow?.version,
+              incomingVersion: version,
+              localDevice: localRow?.device_id,
+              incomingDevice: r.device_id,
+              localPayload: {
+                status: localRow?.status,
+                total: localRow?.total,
+                json: parseJson(localRow?.json_payload),
+              },
+              incomingPayload: {
+                status: r.status,
+                total: r.total,
+                json: parseJson(cleanRemoteJson(r.json_payload)),
+              },
+              at: utcNowIso(),
+            },
+          );
+        }
+      } catch {
+        // Observation must never fail or stall the pull lane.
+      }
       // v105 ATOMIC MATERIALIZATION (peer convergence): the originator's
       // exact FIFO sum rides the receipt JSON envelope. Fill the local
       // materialized column from it ONLY when locally unknown (NULL) —
