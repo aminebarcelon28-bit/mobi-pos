@@ -242,7 +242,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 106;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 108;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -1544,6 +1544,36 @@ fn base_schema_migrations() -> Vec<Migration> {
             ALTER TABLE imei_records ADD COLUMN warranty_months INTEGER;
             CREATE INDEX IF NOT EXISTS idx_imei_sold ON imei_records(sold_at);
             CREATE INDEX IF NOT EXISTS idx_imei_sale_txn ON imei_records(sale_transaction_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v108 — transactions.status allow-list (D3/CT-008 fail-closed).
+            //
+            // SQLite cannot ADD a table CHECK via ALTER, so enforcement is two
+            // BEFORE triggers (INSERT + UPDATE): any non-NULL status outside
+            // the TransactionStatus union aborts the write instead of landing
+            // a typo that every money lane would then count as COMPLETED.
+            // NULL stays allowed (legacy rows predate the clock columns) and
+            // is quarantined TS-side by resolveTransactionStanding — fail
+            // closed at both layers, neither invents data for the other.
+            // Existing rows are untouched (triggers fire on writes only), so
+            // this is fully additive: no backfill, no rebuild, no resync.
+            version: 108,
+            description: "transactions.status allow-list triggers (INSERT/UPDATE)",
+            sql: r#"
+            CREATE TRIGGER IF NOT EXISTS trg_transactions_status_check_insert
+            BEFORE INSERT ON transactions
+            WHEN NEW.status IS NOT NULL AND NEW.status NOT IN ('COMPLETED','VOIDED','REFUNDED','PARTIALLY_REFUNDED')
+            BEGIN
+              SELECT RAISE(ABORT, 'transactions.status must be a known TransactionStatus');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_transactions_status_check_update
+            BEFORE UPDATE ON transactions
+            WHEN NEW.status IS NOT NULL AND NEW.status NOT IN ('COMPLETED','VOIDED','REFUNDED','PARTIALLY_REFUNDED')
+            BEGIN
+              SELECT RAISE(ABORT, 'transactions.status must be a known TransactionStatus');
+            END;
             "#,
             kind: MigrationKind::Up,
         },
