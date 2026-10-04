@@ -226,16 +226,16 @@ export class RestoreManager {
 
           } else if (table === 'transactions') {
             await local.execute(
-              `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total,
+              `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total,
                 total, cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
                 status, json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'synced',$19,$20,$21,$22)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'synced',$18,$19,$20,$21)
                 ON CONFLICT(id) DO UPDATE SET
                   status=excluded.status, total=excluded.total, json_payload=excluded.json_payload,
                   version=excluded.version, updated_at=excluded.updated_at, deleted=excluded.deleted, sync_status='synced'
                   WHERE excluded.version >= transactions.version`,
               [
-                id, r.receipt_number, r.customer_id ?? null, Number(r.subtotal ?? 0), Number(r.tax ?? 0),
+                id, r.receipt_number, r.customer_id ?? null, Number(r.subtotal ?? 0),
                 Number(r.discount_total ?? 0), Number(r.total ?? 0), Number(r.cost_total ?? 0),
                 Number(r.profit ?? 0), Number(r.profit_margin ?? 0), r.pricing_tier ?? 'Retail',
                 r.payment_method ?? 'Espèces', Number(r.cash_tendered ?? 0), Number(r.change_due ?? 0),

@@ -93,7 +93,7 @@ impl AllowedTable {
     fn sql(self) -> &'static str {
         match self {
             Self::SalesJournal => {
-                "SELECT receipt_number, created_at, status, subtotal, tax, discount_total, \
+                "SELECT receipt_number, created_at, status, subtotal, discount_total, \
                  total, payment_method, cash_tendered, change_due, shift_id, device_id \
                  FROM transactions WHERE deleted = 0 ORDER BY created_at, receipt_number"
             }
@@ -954,7 +954,7 @@ mod tests {
         c.execute_batch(
             "CREATE TABLE transactions (
                 id TEXT PRIMARY KEY, receipt_number TEXT, customer_id TEXT,
-                subtotal REAL, tax REAL, discount_total REAL, total REAL,
+                subtotal REAL, discount_total REAL, total REAL,
                 payment_method TEXT, cash_tendered REAL, change_due REAL,
                 status TEXT, created_at TEXT, json_payload TEXT, device_id TEXT,
                 shift_id TEXT, deleted INTEGER DEFAULT 0);
@@ -980,9 +980,12 @@ mod tests {
     }
 
     fn seed(conn: &Connection) {
+        // No `tax` value: the column is dropped (migration 108). The fixture's
+        // totals are HT-only now — subtotal 100, total 119 stands as
+        // subtotal + collected cash, and nothing fiscal is implied.
         conn.execute(
             "INSERT INTO transactions VALUES
-             ('t1','R-001','CUST-SECRET',100.0,19.0,0.0,119.0,'Espèces',120.0,1.0,
+             ('t1','R-001','CUST-SECRET',100.0,0.0,119.0,'Espèces',120.0,1.0,
               'COMPLETED','2026-09-01T10:00:00.000Z','{\"customer\":\"Ali\"}','dev1','S1',0)",
             [],
         )

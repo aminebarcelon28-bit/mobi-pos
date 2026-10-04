@@ -52,11 +52,9 @@ const toDataUrl = (js) => 'data:text/javascript;base64,' + Buffer.from(js).toStr
 const trFile = (abs) => ts2.transpileModule(fs2.readFileSync(abs, 'utf8'), {
   compilerOptions: { module: ts2.ModuleKind.ESNext, target: ts2.ScriptTarget.ES2020 }, fileName: abs,
 }).outputText;
-const taxUrl = toDataUrl(trFile(`${ROOT}/src/utils/taxEngine.ts`));
 const pricingUrl = toDataUrl(trFile(`${ROOT}/src/utils/pricingEngine.ts`));
 let rmSrc = fs2.readFileSync(`${ROOT}/src/utils/receiptMath.ts`, 'utf8');
 rmSrc = rmSrc.replace(/from\s+(['"])\.\/pricingEngine\1/g, `from '${pricingUrl}'`);
-rmSrc = rmSrc.replace(/from\s+(['"])\.\/taxEngine\1/g, `from '${taxUrl}'`);
 const { computeRefundFundingSplit } = await import(toDataUrl(ts2.transpileModule(rmSrc, {
   compilerOptions: { module: ts2.ModuleKind.ESNext, target: ts2.ScriptTarget.ES2020 }, fileName: 'receiptMath.ts',
 }).outputText));

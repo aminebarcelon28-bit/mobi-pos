@@ -177,7 +177,6 @@ export function generateDemoInvoiceScan(): ProcessRawScanRequest {
   return {
     supplier_name: 'Grossiste Mobile Alger',
     bounding_boxes: boundingBoxes,
-    reported_tax: 0,
     reported_freight: 3250,
     reported_grand_total: 135250,
   };
@@ -202,7 +201,6 @@ export function generateAccessoriesInvoiceScan(): ProcessRawScanRequest {
   return {
     supplier_name: 'Accessoires Express Bab El Oued',
     bounding_boxes: boundingBoxes,
-    reported_tax: 0,
     reported_freight: 0,
     reported_grand_total: 128000,
   };

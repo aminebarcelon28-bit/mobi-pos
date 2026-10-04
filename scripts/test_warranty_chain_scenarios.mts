@@ -43,7 +43,13 @@ import { buildReceiptViewModel } from '../src/utils/receiptViewModel.ts';
 import { canonicalDeviceId, normalizeDeviceKey as canonicalKey } from '../src/utils/deviceIdCodec.ts';
 import { luhnCheckImei, validateDeviceIdentifierForIntake } from '../src/utils/savValidation.ts';
 import { toBoundedSyncJson } from '../src/sync/payloadHygiene.ts';
+import { sanitizeSyncPayload } from '../src/sync/payloadHygiene.ts';
 import { applyGenericRemoteRow } from '../src/sync/genericApply.ts';
+import {
+  buildImeiAnchorUpsert,
+  IMEI_BASE_ANCHOR_COLUMNS,
+  imeiAnchorColumnsPresent,
+} from '../src/db/imeiAnchorSchema.ts';
 import { readFileSync } from 'node:fs';
 import {
   canRevealSellerId,
@@ -58,8 +64,12 @@ import {
   originViewWithHistory,
   sellerIdAuditDetail,
 } from '../src/utils/tradeInOrigin.ts';
+import { formatDZD } from '../src/types/pos.ts';
 import type { TradeInItem } from '../src/types/pos.ts';
 import { planBackfill } from './warranty_anchor_backfill.mts';
+import { blindRevealAuditDetail, buildZSnapshot } from '../src/utils/zReportSnapshot.ts';
+import { buildZReportBuffer } from '../src/utils/escpos.ts';
+import { zReportText } from '../src/utils/mobileDocPrint.ts';
 import type {
   CartItem,
   IMEIRecord,
@@ -2229,6 +2239,324 @@ section('S31  PULL lane — the frozen warranty ANCHOR survives, and cannot be w
   ok(unanchoredResolved === 3,
      'S31e a device with NO anchor resolves the catalog — which is exactly why the pull must carry it',
      { warrantyMonths: unanchoredResolved });
+}
+
+section('S33  SALE lane on an UNMIGRATED database — the anchor write must not take the row down');
+{
+  // S31 proved the PULL lane against a fake `db`. The SALE lane is proven here
+  // against a REAL SQLite engine (`node:sqlite`), because the failure this section
+  // exists for is one only the engine can produce: a statement that names a column
+  // the table does not have. A fake `execute` would happily accept it.
+  const { DatabaseSync } = await import('node:sqlite');
+  type Row = Record<string, unknown>;
+  const baseSchema = (db: { exec: (sql: string) => void }, withTerm: boolean) => {
+    db.exec(`CREATE TABLE imei_records (
+      imei TEXT PRIMARY KEY, product_id TEXT, purchase_order_id TEXT,
+      sale_transaction_id TEXT, warranty_expires_at TEXT, received_at TEXT,
+      sold_at TEXT, version INTEGER NOT NULL DEFAULT 1${withTerm ? ', warranty_months INTEGER' : ''})`);
+  };
+  const run = (db: InstanceType<typeof DatabaseSync>, sql: string, cols: string[], byColumn: Row) =>
+    // `$1…$N` is tauri-plugin-sql (sqlx) parameter style; node:sqlite binds
+    // positional `?`. Only the placeholder syntax is adapted — the statement
+    // under test is otherwise byte-for-byte the shipped one.
+    db.prepare(sql.replace(/\$\d+/g, '?')).run(...cols.map((c) => byColumn[c] ?? null));
+  const read = (db: InstanceType<typeof DatabaseSync>) =>
+    db.prepare('SELECT * FROM imei_records WHERE imei = ?').get(IMEI) as Row | undefined;
+
+  // 0. The pre-fix statement, verbatim. On a pre-107 database it throws — and
+  //    because the anchor shared one INSERT with the sale pointers, EVERY column
+  //    in that INSERT was lost with it.
+  const legacy = new DatabaseSync(':memory:');
+  baseSchema(legacy, false);
+  let legacyThrew = '';
+  try {
+    legacy.prepare(
+      `INSERT INTO imei_records (imei, product_id, sale_transaction_id, sold_at,
+         received_at, warranty_expires_at, warranty_months, version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1)`
+    ).run(IMEI, 'p1', 'tx1', '2026-01-01', '2025-12-31', '2027-01-01', 12);
+  } catch (e) {
+    legacyThrew = String((e as Error).message);
+  }
+  ok(/no column named warranty_months/i.test(legacyThrew),
+     'S33 REGRESSION PROOF: hardcoding warranty_months fails on a pre-107 database', legacyThrew);
+  ok(read(legacy) === undefined,
+     'S33 …and it takes the whole row down, expiry and sold stamp included', read(legacy));
+
+  // 1. The generated statement writes the SAME row on a pre-107 database.
+  const PRE107 = new Set([...IMEI_BASE_ANCHOR_COLUMNS, 'sold_at', 'version']);
+  const pre = buildImeiAnchorUpsert(PRE107);
+  ok(!/warranty_months/.test(pre.sql),
+     'S33a the generated SALE statement never names warranty_months on a pre-107 schema',
+     { columns: pre.columns });
+  ok(/warranty_expires_at/.test(pre.sql),
+     'S33a the base-schema expiry is still written — requirement G.5', { columns: pre.columns });
+  ok(/\$1, \$2, \$3, \$4, \$5, \$6, \$7/.test(pre.sql),
+     'S33a the placeholders follow the column order the caller zips by', pre.sql);
+  const preByColumn: Row = {
+    imei: IMEI, product_id: 'p1', sale_transaction_id: 'tx1',
+    sold_at: '2026-01-01', received_at: '2025-12-31',
+    warranty_expires_at: '2027-01-01', warranty_months: 12, version: 1,
+  };
+  run(legacy, pre.sql, pre.columns, preByColumn);
+  const preRow = read(legacy);
+  ok(preRow?.warranty_expires_at === '2027-01-01' && preRow?.sold_at === '2026-01-01',
+     'S33a the unmigrated sale still persists the anchor and the sold stamp', preRow);
+  ok(!('warranty_months' in (preRow ?? {})),
+     'S33a …and the term is simply absent, never invented', Object.keys(preRow ?? {}));
+
+  // 2. Non-widening, on the real engine: re-selling with a longer term must not
+  //    stretch the anchor the first buyer already bought.
+  run(legacy, pre.sql, pre.columns, { ...preByColumn, sale_transaction_id: 'tx2', warranty_expires_at: '2029-01-01' });
+  const reRow = read(legacy);
+  ok(reRow?.warranty_expires_at === '2027-01-01' && reRow?.sale_transaction_id === 'tx2',
+     'S33b a re-sale updates the sale pointer but NEVER widens a frozen anchor', reRow);
+  ok(reRow?.version === 2, 'S33b the re-sale still bumps the row version', reRow?.version);
+
+  // 3. A migrated database gets the term too, and it is equally non-widening.
+  const migrated = new DatabaseSync(':memory:');
+  baseSchema(migrated, true);
+  const post = buildImeiAnchorUpsert(new Set([...PRE107, 'warranty_months']));
+  ok(post.sql.includes('warranty_months') && post.columns.includes('warranty_months'),
+     'S33c a migrated database is given the term column', post.columns);
+  run(migrated, post.sql, post.columns, preByColumn);
+  ok(read(migrated)?.warranty_months === 12, 'S33c the minted term lands', read(migrated));
+  run(migrated, post.sql, post.columns, { ...preByColumn, warranty_months: 36, warranty_expires_at: '2030-01-01' });
+  const mRow = read(migrated);
+  ok(mRow?.warranty_months === 12 && mRow?.warranty_expires_at === '2027-01-01',
+     'S33c a peer/later term cannot widen a local anchor either', mRow);
+
+  // 4. The probe both writers share: cached per handle, and FAIL-CLOSED — an
+  //    unreadable schema resolves to the base shape, which is the shape that
+  //    cannot throw.
+  const probeDb = (rows: string[] | 'throws') => {
+    let selects = 0;
+    const handle = {
+      select: () => {
+        selects++;
+        return rows === 'throws'
+          ? Promise.reject(new Error('database is locked'))
+          : Promise.resolve(rows.map((name) => ({ name })));
+      },
+    };
+    return { handle, calls: () => selects };
+  };
+  const legacyShape = probeDb([...PRE107]);
+  const [a1, a2] = await Promise.all([
+    imeiAnchorColumnsPresent(legacyShape.handle as never),
+    imeiAnchorColumnsPresent(legacyShape.handle as never),
+  ]);
+  ok(!a1.has('warranty_months') && a1.has('warranty_expires_at'),
+     'S33d the probe reports the columns the table really has', [...a1]);
+  ok(legacyShape.calls() === 1, 'S33d the probe is cached per database handle', legacyShape.calls());
+
+  const broken = probeDb('throws');
+  const fell = await imeiAnchorColumnsPresent(broken.handle as never);
+  ok([...fell].sort().join() === [...IMEI_BASE_ANCHOR_COLUMNS].sort().join(),
+     'S33d an unreadable schema falls back to the BASE column set', [...fell]);
+  ok(!buildImeiAnchorUpsert(fell).sql.includes('warranty_months'),
+     'S33d the fallback shape is the one that cannot throw on a pre-107 database');
+  legacy.close();
+  migrated.close();
+}
+
+section('S34  BLIND COUNT reveal — audited once, with no concealed figure in the log');
+{
+  // The other sensitive reveal (seller ID) is covered by S26. The blind-count
+  // reveal was the gap: the first keystroke put the expected drawer balance AND
+  // the variance on screen with no audit line anywhere in the component.
+  //
+  // The audit detail is a real exported function, exercised on hostile inputs,
+  // because "the log must not contain the concealed amount" is only meaningful if
+  // something can try to put it there.
+  const detail = blindRevealAuditDetail;
+  for (const amount of [0, 31_305, 1_234_567, -999, 12.5, 1e9]) {
+    const line = detail({ zNumber: 'Z-2026-0042', cashier: 'Yacine' });
+    // Compare the RENDERED money forms, not bare digits: a single "0" also
+    // occurs inside the Z document number and proves nothing.
+    const leaked = [formatDZD(Math.abs(amount)), String(Math.abs(amount)), `${Math.abs(amount)} DA`]
+      .filter((rendering) => rendering.length > 2 && line.includes(rendering));
+    ok(leaked.length === 0,
+       `S34a the audit line never carries a monetary value (${amount})`, leaked);
+  }
+  const full = detail({ zNumber: 'Z-2026-0042', cashier: 'Yacine' });
+  ok(full.includes('Z-2026-0042') && full.includes('Yacine'),
+     'S34a the document and the operator ARE recorded — accountability without a reference is useless',
+     full);
+  ok(detail({}).length > 0 && !/undefined|NaN/.test(detail({})),
+     'S34a a missing z number / cashier degrades without leaking "undefined"', detail({}));
+
+  // The reveal itself: one line per reveal, not per keystroke, and never awaited
+  // (an awaited audit would stall the money input that triggered it).
+  const zSrc = readFileSync(
+    new URL('../src/components/modals/ShiftZReportModal.tsx', import.meta.url),
+    'utf8'
+  );
+  const handler = zSrc.slice(
+    zSrc.indexOf('onChangeMinor={(minor) => {'),
+    zSrc.indexOf('placeholder="ex: 31 305 DA"')
+  );
+  ok(handler.includes('logSecurityAction('),
+     'S34b the blind-count reveal writes an audit event', handler.slice(0, 120));
+  ok(handler.includes('blindRevealAuditedRef.current') &&
+     handler.indexOf('if (!blindRevealAuditedRef.current)') < handler.indexOf('logSecurityAction('),
+     'S34b the event is GATED by the once-guard, so it is one line per reveal', handler.slice(0, 160));
+  ok(/void logSecurityAction\(/.test(handler),
+     'S34b the audit is fire-and-forget — it must never block the money input', handler.slice(0, 200));
+  ok(/blindRevealAuditDetail\(\{[^}]*\}\)/.test(handler),
+     'S34b the entry is built by the amount-free builder', handler.slice(0, 260));
+  const auditCall = handler.slice(
+    handler.indexOf('logSecurityAction('),
+    handler.indexOf('setIsBlindRevealed')
+  );
+  ok(!/expectedCash|variance|formatDZD|actualCountedCash/.test(auditCall),
+     'S34c no expected/variance/counted value is passed to the audit call', auditCall);
+  ok(/blindRevealAuditedRef\.current = false/.test(zSrc),
+     'S34c the guard resets when the Z report is reopened, so each reveal is journaled');
+}
+
+section('S35  PULL-side sanitation — the snapshot must survive the RECEIVE path too');
+{
+  // S30 proves the snapshot survives the PUSH serializer (`toBoundedSyncJson`).
+  // The receive path is a DIFFERENT function — `sanitizeSyncPayload`, run inside
+  // `applyGenericRemoteRow` before anything is mirrored — and a change there
+  // would strip the operator's frozen verdict on arrival, with the reader then
+  // silently recomputing from the catalog. W-27 ("sync mapping is W-27
+  // territory") is exactly this boundary, so it is pinned here.
+  const frozen = minimalTicketDossierSnapshot(detail(IMEI, {
+    transactions: [soldTx({ id: 'txRT', receiptNumber: 'F-2026-9911' })],
+    products: [product()],
+    imeiRecords: [registry({ saleTransactionId: 'txRT' })],
+    repairOrders: [repair({ id: 'rRT', ticketNumber: 'REP-2026-0007', status: 'Livré',
+                            warrantyTier: 'repair_90d', deliveredAt: iso(-5 * DAY),
+                            warrantyExpiresAt: iso(85 * DAY) })],
+  }).snapshot);
+  ok(frozen !== null, 'S35a the fixture dossier freezes for the pull test', frozen?.dossier);
+
+  const received = sanitizeSyncPayload({
+    id: 'rRT',
+    ticketNumber: 'REP-2026-0007',
+    warrantyDossierSnapshot: frozen,
+  });
+  ok((received as { warrantyDossierSnapshot?: unknown }).warrantyDossierSnapshot !== undefined,
+     'S35a the receive-side sanitizer KEEPS the snapshot',
+     Object.keys(received).filter((k) => /warranty/i.test(k)));
+  ok(JSON.stringify((received as { warrantyDossierSnapshot?: unknown }).warrantyDossierSnapshot)
+       === JSON.stringify(frozen),
+     'S35a …byte-identical: sanitation must not re-shape or re-trim the dossier');
+  // …and the reader still reads it back, through the shipped projection.
+  ok(minimalTicketDossierSnapshot(
+       (received as { warrantyDossierSnapshot?: unknown }).warrantyDossierSnapshot as never
+     )?.dossier.isWarrantyValid === true,
+     'S35b the pulled row still reads as the frozen coverage, not a recomputation');
+
+  // `repair_orders` has NO SQLite mirror, so the Dexie put is the only landing
+  // spot and it is a RAW put of the sanitized payload. Pin that: a future
+  // per-lane reshape (like stock_batches/credit_vouchers got) must not start
+  // dropping the dossier field.
+  const applySrc = readFileSync(new URL('../src/sync/genericApply.ts', import.meta.url), 'utf8');
+  ok(!/repair_orders: \{ dexie: 'repairOrders', sqlite/.test(applySrc),
+     'S35c repair_orders stays Dexie-only (no SQLite mirror to drift)');
+  const rawPutBranch = applySrc.slice(applySrc.lastIndexOf("if (table === 'customers')"));
+  ok(/store\?\.put\(recordPayload\)/.test(rawPutBranch),
+     'S35c the generic Dexie put is a raw put of the sanitized payload', rawPutBranch.slice(0, 160));
+}
+
+section('S36  Z REPORT print settlement — an un-counted drawer prints no figure');
+{
+  // The interim Z report is a preview printed BEFORE the blind count. Its
+  // `countedCash` is 0 and `variance` is derived from it, so all three renderers
+  // used to print `COMPTÉ 0 DA` and `ÉCART -<expected> DA` — a fabricated
+  // full-drawer shortage on a document the manager then signs.
+  //
+  // Driven through the SHIPPED print settlement paths: the ESC/POS buffer
+  // (`buildZReportBuffer`, decoded) and the mobile text twin (`zReportText`).
+  const baseArgs = {
+    settings: { storeName: 'MOBI ACCESSORIES', paperWidth: '80mm' } as never,
+    shift: { id: 'shift-1', openedAt: iso(-8 * 60 * 60 * 1000), openedBy: 'Yacine', openingFloat: 20_000 },
+    shiftFloat: 20_000,
+    transactions: [soldTx({ id: 'txZ', total: 45_000, paymentMethod: 'CASH' })] as never[],
+    customerDebts: [] as never[],
+    storeExpenses: [] as never[],
+    repairOrders: [] as never[],
+    tradeIns: [] as never[],
+    cashDrops: [] as never[],
+    payouts: [] as never[],
+    closedAtISO: iso(0),
+    closedShiftCount: 3,
+    fallbackCashier: 'Yacine',
+  };
+  const unCounted = buildZSnapshot({ ...baseArgs, countedCash: 0, blindCountPerformed: false });
+  ok(unCounted.blindCountPerformed === false,
+     'S36a the snapshot records that no count was performed', unCounted.blindCountPerformed);
+  ok(unCounted.countedCash === 0 && unCounted.variance === -unCounted.expectedCash,
+     'S36a the control: the numbers are still derived, which is exactly why printing them would fabricate',
+     { variance: unCounted.variance, expected: unCounted.expectedCash });
+
+  const decode = (bytes: Uint8Array) =>
+    new TextDecoder('utf-8', { fatal: false }).decode(bytes).replace(/[\u0000-\u001f]/g, ' ');
+  const escUnCounted = decode(buildZReportBuffer(unCounted, { storeName: 'MOBI', paperWidth: '80mm' } as never));
+  ok(/COMPTE EN CAISSE:\s*\(NON EFFECTUE\)/.test(escUnCounted),
+     'S36b the ESC/POS twin prints (NON EFFECTUE) for the counted line', escUnCounted.slice(0, 60));
+  ok(/ECART:\s*\(NON EFFECTUE\)/.test(escUnCounted),
+     'S36b …and for the variance too', escUnCounted.slice(0, 60));
+  ok(!new RegExp(`ECART:\\s*-?\\d`).test(escUnCounted),
+     'S36b no numeric ECART can be printed on an un-counted Z',
+     escUnCounted.match(/ECART:[^\n]{0,24}/)?.[0]);
+  ok(!/COMPTE EN CAISSE:\s*\d/.test(escUnCounted),
+     'S36b no numeric COMTE can be printed either',
+     escUnCounted.match(/COMPTE EN CAISSE:[^\n]{0,24}/)?.[0]);
+  ok(/ESPECES THEORIQUES:\s*\d/.test(escUnCounted),
+     'S36b the THEORICAL line still prints — that figure is computed, not concealed');
+
+  const textUnCounted = zReportText({
+    ...baseArgs, cashierName: 'Yacine', dateStr: '04/10/2026',
+    openingFloat: 20_000, cashSales: unCounted.cashSales, debtSettlements: 0,
+    refunds: 0, expenses: 0, drops: 0, payouts: 0,
+    expectedCash: unCounted.expectedCash, countedCash: 0, variance: unCounted.variance,
+    blindCountPerformed: false,
+  });
+  ok(/Compte physique:\s*\(non effectué\)/.test(textUnCounted),
+     'S36c the mobile text twin says the same thing', textUnCounted.split('\n').find((l) => /Compte physique/.test(l)));
+  ok(/ECART:\s*\(non effectué\)/.test(textUnCounted),
+     'S36c …for the variance as well', textUnCounted.split('\n').find((l) => /ECART/.test(l)));
+
+  // A REALLED count must be untouched — this is a fix for the preview, not a
+  // change to the accounting document the manager signs.
+  const counted = buildZSnapshot({ ...baseArgs, countedCash: 44_000 });
+  ok(counted.blindCountPerformed === true,
+     'S36d a caller that supplies a count is treated as "performed" by default', counted.blindCountPerformed);
+  const escCounted = decode(buildZReportBuffer(counted, { storeName: 'MOBI', paperWidth: '80mm' } as never));
+  ok(/COMPTE EN CAISSE:\s*44/.test(escCounted) && !/NON EFFECTUE/.test(escCounted),
+     'S36d the signed close ticket still prints the counted amount and a real variance',
+     escCounted.match(/COMPTE EN CAISSE:[^\n]{0,24}/)?.[0]);
+  const textCounted = zReportText({
+    ...baseArgs, cashierName: 'Yacine', dateStr: '04/10/2026',
+    openingFloat: 20_000, cashSales: counted.cashSales, debtSettlements: 0,
+    refunds: 0, expenses: 0, drops: 0, payouts: 0,
+    expectedCash: counted.expectedCash, countedCash: 44_000, variance: counted.variance,
+  });
+  ok(!/non effectué/.test(textCounted) && /Compte physique:\s*44/.test(textCounted),
+     'S36d the mobile twin is unchanged for a counted shift',
+     textCounted.split('\n').find((l) => /Compte physique/.test(l)));
+
+  // A legitimately EMPTY drawer is a real count of 0 — it must not be mistaken
+  // for "not counted" (that would hide a real, provable zero-variance finding).
+  const emptyDrawer = buildZSnapshot({ ...baseArgs, countedCash: 0 });
+  ok(emptyDrawer.blindCountPerformed === true && emptyDrawer.variance === -emptyDrawer.expectedCash,
+     'S36e an explicit 0 count stays a performed count', emptyDrawer.blindCountPerformed);
+
+  // The interim Z is the ONLY producer that passes `false`, and it must be the
+  // reveal flag — not a value-derived guess.
+  const zSrc = readFileSync(
+    new URL('../src/components/modals/ShiftZReportModal.tsx', import.meta.url), 'utf8');
+  ok(/blindCountPerformed: isBlindRevealed/.test(zSrc),
+     'S36f the interim Z ties the flag to the reveal, not to the amount');
+  const closeSrc = readFileSync(
+    new URL('../src/components/modals/ShiftCloseModal.tsx', import.meta.url), 'utf8');
+  ok(!/blindCountPerformed/.test(closeSrc),
+     'S36f the close ticket is left on the default — it is gated on a real count',
+     closeSrc.match(/physicalCount <= 0[\s\S]{0,120}/)?.[0]);
 }
 
 console.log(

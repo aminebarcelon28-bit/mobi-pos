@@ -34,7 +34,6 @@ declare global {
     __harnessSetShift: (openingFloat: number) => void;
     __harnessSeedCartLines: (lines: Array<{ price: number; discount?: number; title?: string }>) => void;
     __harnessSetAvoirAndVoucher: (storeCredit: number, voucherCredit: number) => void;
-    __harnessSetVatRate: (rate: number) => void;
     __harnessDexie: (table: string) => Promise<Array<Record<string, unknown>>>;
     __harnessBlastPayment: (n: number) => Promise<Array<string>>;
     __harnessOpenRefund: (txn: Record<string, unknown>) => void;
@@ -75,7 +74,6 @@ type W = Window & {
   __harnessSetShift: (openingFloat: number) => void;
   __harnessSeedCartLines: (lines: Array<{ price: number; discount?: number; title?: string }>) => void;
   __harnessSetAvoirAndVoucher: (storeCredit: number, voucherCredit: number) => void;
-  __harnessSetVatRate: (rate: number) => void;
   __harnessDexie: (table: string) => Promise<Array<Record<string, unknown>>>;
   __harnessBlastPayment: (n: number) => Promise<Array<string>>;
   __harnessOpenRefund: (txn: Record<string, unknown>) => void;
@@ -110,12 +108,6 @@ W.__harnessSeedCartLines = (lines) => {
 W.__harnessSetAvoirAndVoucher = (storeCredit: number, voucherCredit: number) => {
   usePosStore.getState().setStoreCreditApplied(storeCredit);
   usePosStore.setState({ voucherCreditApplied: voucherCredit } as unknown as never);
-};
-W.__harnessSetVatRate = (rate: number) => {
-  const s = usePosStore.getState();
-  usePosStore.setState({
-    receiptSettings: { ...(s.receiptSettings || {}), vatRate: rate },
-  } as unknown as never);
 };
 W.__harnessDexie = async (table: string) => {
   const { db } = await import('../../src/db/database');

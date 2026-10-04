@@ -8,6 +8,13 @@ export interface RemoteMigration {
   version: number;
   description: string;
   statements: string[];
+  /**
+   * Phase 1b-i: opt-in tolerance for statements whose success is already the
+   * "column absent" state (a DROP on a schema created without the column).
+   * Scoped to this migration only — a missing-column error elsewhere still
+   * aborts, so genuine drift is never masked.
+   */
+  tolerateMissingColumn?: boolean;
 }
 
 export const GENERIC_SYNC_TABLES = [
@@ -102,7 +109,6 @@ export const REMOTE_MIGRATIONS: RemoteMigration[] = [
         receipt_number TEXT NOT NULL UNIQUE,
         customer_id TEXT,
         subtotal REAL DEFAULT 0,
-        tax REAL DEFAULT 0,
         discount_total REAL DEFAULT 0,
         total REAL NOT NULL DEFAULT 0,
         cost_total REAL DEFAULT 0,
@@ -344,9 +350,25 @@ export const REMOTE_MIGRATIONS: RemoteMigration[] = [
       'ALTER TABLE transactions ADD COLUMN shift_id TEXT;',
     ],
   },
+
+  {
+    // Phase 1b-i: the POS `transactions.tax` column is dropped. Gate Addendum A
+    // made every sale HT-only and §3 of the plan proved the column held nothing
+    // but zeros (live + remote `tax != 0` count = 0), so this loses no data.
+    // Old builds asking for `tax` get a per-table pull stall / push quarantine
+    // (plan §7) — never a silent skip.
+    version: 13,
+    description: 'Drop transactions.tax (no-TVA product; every dropped value was 0)',
+    // A remote created from the post-drop base DDL never had `tax`, so the DROP
+    // is already-satisfied rather than an error.
+    tolerateMissingColumn: true,
+    statements: [
+      'ALTER TABLE transactions DROP COLUMN tax;',
+    ],
+  },
 ];
 
-export const LATEST_REMOTE_VERSION = 12;
+export const LATEST_REMOTE_VERSION = 13;
 
 export async function ensureRemoteSchemaColumns(client: Client): Promise<void> {
   const alterStatements = ALL_REMOTE_SYNC_TABLES.map(
@@ -430,6 +452,12 @@ export async function applyRemoteMigrations(client: Client): Promise<number> {
       } catch (err: unknown) {
         const msg = String(err);
         if (msg.includes('duplicate column') || msg.includes('already exists')) {
+          continue;
+        }
+        if (mig.tolerateMissingColumn && /no such column/i.test(msg)) {
+          console.warn(
+            `[sync:schema] v${mig.version}: column already absent, statement skipped :: ${msg}`
+          );
           continue;
         }
         throw err;

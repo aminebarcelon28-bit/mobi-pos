@@ -42,6 +42,17 @@ export interface ZReportSnapshot {
   expectedCash: number;
   countedCash: number;
   variance: number;
+  /**
+   * Whether a blind count was actually performed for THIS document.
+   *
+   * `countedCash` is 0 until an operator tallies the drawer, and `variance` is
+   * derived from it — so printing the interim Z before the count produced
+   * `COMPTÉ 0 DA` and `ÉCART -<expected> DA`, i.e. a fabricated full-drawer
+   * shortage on a signed accounting document. Absent/undefined means "performed"
+   * so every pre-existing caller keeps its current output; the interim Z report
+   * (a preview, before the blind count) is the only producer that sets it false.
+   */
+  blindCountPerformed?: boolean;
   dropsList?: Array<{ id: string; reason: string; amount: number }>;
 }
 
@@ -100,11 +111,26 @@ export const ZReportPaper: React.FC<{ snapshot: ZReportSnapshot }> = ({ snapshot
 
     <div className="py-2 border-b border-dashed border-gray-400 space-y-0.5">
       <MoneyRow label="ESPÈCES THÉORIQUES:" value={formatDZD(s.expectedCash)} strong />
-      <MoneyRow label="COMPTÉ EN CAISSE:" value={formatDZD(s.countedCash)} strong />
-      <div className="flex justify-between gap-2 font-extrabold">
-        <span>ÉCART:</span>
-        <span className="whitespace-nowrap">{s.variance >= 0 ? `+${formatDZD(s.variance)}` : formatDZD(s.variance)}</span>
-      </div>
+      {s.blindCountPerformed === false ? (
+        <>
+          {/* Never a fabricated figure: an un-counted drawer has no counted amount
+              and therefore no variance. Both lines say so instead of printing 0
+              and the whole expected balance as a shortage. */}
+          <MoneyRow label="COMPTÉ EN CAISSE:" value="— (non effectué)" strong />
+          <div className="flex justify-between gap-2 font-extrabold">
+            <span>ÉCART:</span>
+            <span className="whitespace-nowrap">— (non effectué)</span>
+          </div>
+        </>
+      ) : (
+        <>
+          <MoneyRow label="COMPTÉ EN CAISSE:" value={formatDZD(s.countedCash)} strong />
+          <div className="flex justify-between gap-2 font-extrabold">
+            <span>ÉCART:</span>
+            <span className="whitespace-nowrap">{s.variance >= 0 ? `+${formatDZD(s.variance)}` : formatDZD(s.variance)}</span>
+          </div>
+        </>
+      )}
     </div>
 
     {(s.dropsList || []).length > 0 ? (

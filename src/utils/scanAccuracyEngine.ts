@@ -16,21 +16,6 @@ export interface PreprocessingOptions {
   targetWidth?: number;
 }
 
-export interface ConstraintSolveResult {
-  isSolved: boolean;
-  solvedLines: Array<{
-    quantity: number;
-    unit_cost: number;
-    line_total: number;
-    repairedField?: 'quantity' | 'unit_cost' | 'line_total';
-    confidence: number;
-    explanation?: string;
-  }>;
-  calculatedGrandTotal: number;
-  residualDelta: number;
-  repairsAppliedCount: number;
-}
-
 /**
  * Common OCR numeric digit confusion matrix for noisy document scans.
  * Maps visually similar characters that OCR engines confuse.
@@ -194,109 +179,7 @@ export function restoreCorruptedImeiLuhn(rawImei: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// 3. CLOSED-LOOP DIOPHANTINE ACCOUNTING INVARIANT SOLVER (CSP / SMT)
-// ---------------------------------------------------------------------------
-
-/**
- * Closed-Loop Invariant Accounting Constraint Satisfaction Solver.
- * Solves the Diophantine system across line and document conservation laws:
- * 1. Line Invariant:     |(Quantity × UnitCost) - LineTotal| ≤ 0.01 DA
- * 2. Document Invariant: |Σ(LineTotals) + Tax + Freight - GrandTotal| ≤ 0.01 DA
- *
- * Employs exact integer cent arithmetic (1.00 DA = 100 centimes) and explores
- * the digit confusion lattice to resolve OCR artifacts into exact Delta = 0.00 DA.
- */
-export function solveAccountingConstraints(
-  lines: Array<{ quantity: number; unit_cost: number; line_total: number }>,
-  tax: number,
-  freight: number,
-  reportedGrandTotal: number
-): ConstraintSolveResult {
-  const solved = lines.map((l) => ({
-    quantity: Math.max(0, l.quantity),
-    unit_cost: Math.max(0, l.unit_cost),
-    line_total: Math.max(0, l.line_total),
-    repairedField: undefined as 'quantity' | 'unit_cost' | 'line_total' | undefined,
-    confidence: 1.0,
-    explanation: undefined as string | undefined,
-  }));
-
-  let repairsApplied = 0;
-
-  // Step 1: Solve Line-Level Diophantine Invariants
-  for (let i = 0; i < solved.length; i++) {
-    const row = solved[i];
-    const expectedLineCents = Math.round(row.quantity * row.unit_cost * 100);
-    const actualLineCents = Math.round(row.line_total * 100);
-    const lineDeltaCents = Math.abs(expectedLineCents - actualLineCents);
-
-    if (lineDeltaCents > 1) {
-      if (row.quantity > 0 && row.unit_cost > 0) {
-        row.line_total = expectedLineCents / 100;
-        row.repairedField = 'line_total';
-        row.explanation = `Ajusté mathématiquement : ${row.quantity} × ${row.unit_cost} = ${row.line_total} DA`;
-        repairsApplied++;
-      } else if (row.quantity > 0 && actualLineCents > 0 && row.unit_cost === 0) {
-        row.unit_cost = Math.round((row.line_total / row.quantity) * 100) / 100;
-        row.repairedField = 'unit_cost';
-        row.explanation = `Déduit mathématiquement : ${row.line_total} / ${row.quantity} = ${row.unit_cost} DA`;
-        repairsApplied++;
-      } else if (row.unit_cost > 0 && actualLineCents > 0 && row.quantity === 0) {
-        row.quantity = Math.max(1, Math.round(row.line_total / row.unit_cost));
-        row.repairedField = 'quantity';
-        row.explanation = `Déduit mathématiquement : quantité fixée à ${row.quantity}`;
-        repairsApplied++;
-      }
-    }
-  }
-
-  // Step 2: Solve Document-Level Conservation
-  let subtotalCents = 0;
-  for (const r of solved) {
-    subtotalCents += Math.round(r.line_total * 100);
-  }
-
-  const taxCents = Math.round(tax * 100);
-  const freightCents = Math.round(freight * 100);
-  const currentCalculatedGrandCents = subtotalCents + taxCents + freightCents;
-  const targetGrandCents = reportedGrandTotal > 0 ? Math.round(reportedGrandTotal * 100) : currentCalculatedGrandCents;
-  const residualDeltaCents = currentCalculatedGrandCents - targetGrandCents;
-
-  // Step 3: If residual delta remains due to single OCR digit confusion in one line total
-  if (Math.abs(residualDeltaCents) > 1 && solved.length > 0 && reportedGrandTotal > 0) {
-    for (let i = 0; i < solved.length; i++) {
-      const candidateTotalCents = Math.round(solved[i].line_total * 100) - residualDeltaCents;
-      if (candidateTotalCents > 0 && solved[i].quantity > 0) {
-        const candidateCost = candidateTotalCents / 100 / solved[i].quantity;
-        // If candidate matches clean unit cost (e.g., integer or half-dinar)
-        if (Math.abs(candidateCost - Math.round(candidateCost)) <= 0.01) {
-          solved[i].line_total = candidateTotalCents / 100;
-          solved[i].unit_cost = Math.round(candidateCost * 100) / 100;
-          solved[i].repairedField = 'line_total';
-          solved[i].explanation = `Résolu par le solveur Diophantien pour combler l'écart de ${Math.abs(residualDeltaCents / 100)} DA`;
-          repairsApplied++;
-          break;
-        }
-      }
-    }
-  }
-
-  const finalSubtotal = solved.reduce((acc, r) => acc + Math.round(r.line_total * 100), 0);
-  const finalGrandTotalCents = finalSubtotal + taxCents + freightCents;
-  const finalDelta = Math.abs(finalGrandTotalCents - targetGrandCents) / 100;
-  const isSolved = finalDelta <= 0.01;
-
-  return {
-    isSolved,
-    solvedLines: solved,
-    calculatedGrandTotal: finalGrandTotalCents / 100,
-    residualDelta: finalDelta,
-    repairsAppliedCount: repairsApplied,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// 4. COMPUTER VISION: PERSPECTIVE RECTIFICATION & WOLF-JOLION BINARIZATION
+// 3. COMPUTER VISION: PERSPECTIVE RECTIFICATION & WOLF-JOLION BINARIZATION
 // ---------------------------------------------------------------------------
 
 /**
@@ -428,7 +311,7 @@ export function processImageWithComputerVision(
 }
 
 // ---------------------------------------------------------------------------
-// 5. DETERMINISTIC TOKENIZER & SPATIAL BOUNDING BOX GENERATOR
+// 4. DETERMINISTIC TOKENIZER & SPATIAL BOUNDING BOX GENERATOR
 // ---------------------------------------------------------------------------
 
 export function generateAccurateBoundingBoxes(text: string): OcrBoundingBox[] {

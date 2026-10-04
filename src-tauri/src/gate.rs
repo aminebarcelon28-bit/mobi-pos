@@ -2,7 +2,8 @@
 //!
 //! Validates:
 //! 1. Line-level invariant: |(Qty × UnitCost) - LineTotal| ≤ 0.01 DA (1 centime)
-//! 2. Document-level invariant: |Σ(LineTotals) + Tax + Freight - GrandTotal| ≤ 0.01 DA
+//! 2. Document-level invariant: |Σ(LineTotals) + Freight - GrandTotal| ≤ 0.01 DA
+//!    (no tax term: Phase 1b-i / Addendum B removed the reported-tax passthrough)
 //!
 //! Hardened for 100% reliability:
 //! - Rejects `NaN`, `Infinity`, and unrepresentable floats.
@@ -40,7 +41,6 @@ pub struct InvariantReport {
 /// and integer-cent precision.
 pub fn evaluate_invoice_invariants(
     lines: &[(f64, f64, f64)], // (quantity, unit_cost, line_total)
-    reported_tax: f64,
     reported_freight: f64,
     reported_grand_total: f64,
 ) -> InvariantReport {
@@ -65,16 +65,8 @@ pub fn evaluate_invoice_invariants(
         };
     }
 
-    // Sanitize reported document fees
-    let safe_tax = if reported_tax.is_finite() && reported_tax >= 0.0 {
-        reported_tax
-    } else {
-        if !reported_tax.is_finite() {
-            validation_errors.push("Montant taxe invalide (non-fini).".into());
-        }
-        0.0
-    };
-
+    // Phase 1b-i (Addendum B): the reported-tax passthrough is DELETED. Freight
+    // stays — freight is a real fee, not a tax.
     let safe_freight = if reported_freight.is_finite() && reported_freight >= 0.0 {
         reported_freight
     } else {
@@ -171,11 +163,8 @@ pub fn evaluate_invoice_invariants(
         calculated_subtotal_cents = calculated_subtotal_cents.saturating_add(actual_line_cents);
     }
 
-    let tax_cents = (safe_tax * 100.0).round() as i64;
     let freight_cents = (safe_freight * 100.0).round() as i64;
-    let calculated_grand_total_cents = calculated_subtotal_cents
-        .saturating_add(tax_cents)
-        .saturating_add(freight_cents);
+    let calculated_grand_total_cents = calculated_subtotal_cents.saturating_add(freight_cents);
 
     let calculated_subtotal = (calculated_subtotal_cents as f64) / 100.0;
     let calculated_grand_total = (calculated_grand_total_cents as f64) / 100.0;
@@ -194,11 +183,9 @@ pub fn evaluate_invoice_invariants(
     let delta = (delta_cents as f64) / 100.0;
     let is_balanced = delta_cents.abs() <= 1 && faulty_row_indices.is_empty();
 
-    // NO-TVA PRODUCT (Gate Addendum A): the former TVA-rate anomaly hints
-    // (19 % / 9 % / timbre) are removed — this software charges no VAT.
-    // `reported_tax` remains a generic supplier-document fee passthrough
-    // (added into the grand total) until the Phase 1b schema decision drops
-    // or repurposes the column; no rate math lives here anymore.
+    // NO-TVA PRODUCT (Gate Addendum A + Phase 1b-i / Addendum B): there is no
+    // reported-tax term at all — the declared grand total is reconciled against
+    // line subtotal + freight. No rate math and no VAT hint lives here.
     if delta_cents.abs() > 1 {
         validation_errors.push(format!(
             "Écart document global : Δ = {:.2} DA (Calculé: {:.2} DA vs Déclaré: {:.2} DA).",
@@ -224,8 +211,9 @@ mod tests {
 
     #[test]
     fn test_balanced_invoice() {
+        // (quantity, unit_cost, line_total) x2 = 25.50 + 2.55 freight = 28.05.
         let lines = vec![(2.0, 10.00, 20.00), (1.0, 5.50, 5.50)];
-        let r = evaluate_invoice_invariants(&lines, 2.55, 0.0, 28.05);
+        let r = evaluate_invoice_invariants(&lines, 2.55, 28.05);
         assert!(r.is_balanced);
         assert!((r.delta).abs() <= 0.01);
         assert!(r.faulty_row_indices.is_empty());
@@ -235,7 +223,7 @@ mod tests {
     #[test]
     fn test_faulty_row_and_delta() {
         let lines = vec![(2.0, 10.00, 21.00)];
-        let r = evaluate_invoice_invariants(&lines, 0.0, 0.0, 20.00);
+        let r = evaluate_invoice_invariants(&lines, 0.0, 20.00);
         assert!(!r.is_balanced);
         assert_eq!(r.faulty_row_indices, vec![0]);
         assert!((r.delta - 1.0).abs() <= 0.01);
@@ -245,7 +233,7 @@ mod tests {
     #[test]
     fn test_nan_and_inf_handling() {
         let lines = vec![(f64::NAN, 10.00, 20.00), (2.0, f64::INFINITY, 20.00)];
-        let r = evaluate_invoice_invariants(&lines, 0.0, 0.0, 20.00);
+        let r = evaluate_invoice_invariants(&lines, 0.0, 20.00);
         assert!(!r.is_balanced);
         assert_eq!(r.faulty_row_indices, vec![0, 1]);
     }
@@ -253,7 +241,7 @@ mod tests {
     #[test]
     fn test_negative_quantities_and_costs() {
         let lines = vec![(-2.0, 10.00, -20.00), (0.0, 10.00, 0.00)];
-        let r = evaluate_invoice_invariants(&lines, 0.0, 0.0, 0.0);
+        let r = evaluate_invoice_invariants(&lines, 0.0, 0.0);
         assert!(!r.is_balanced);
         assert_eq!(r.faulty_row_indices, vec![0, 1]);
     }
@@ -261,7 +249,7 @@ mod tests {
     #[test]
     fn test_empty_invoice() {
         let lines = vec![];
-        let r = evaluate_invoice_invariants(&lines, 0.0, 0.0, 100.0);
+        let r = evaluate_invoice_invariants(&lines, 0.0, 100.0);
         assert!(!r.is_balanced);
         assert_eq!(r.calculated_grand_total, 0.0);
     }
@@ -269,9 +257,22 @@ mod tests {
     #[test]
     fn test_auto_total_when_reported_is_zero() {
         let lines = vec![(5.0, 100.0, 500.0)];
-        let r = evaluate_invoice_invariants(&lines, 0.0, 0.0, 0.0);
+        let r = evaluate_invoice_invariants(&lines, 0.0, 0.0);
         assert!(r.is_balanced);
         assert_eq!(r.reported_grand_total, 500.0);
         assert_eq!(r.delta, 0.0);
+    }
+
+    #[test]
+    fn test_no_tax_term_in_grand_total() {
+        // Phase 1b-i (Addendum B): the calculated grand total is subtotal +
+        // freight ONLY — there is no tax passthrough to feed. A reported total
+        // that still carries a tax-sized gap must surface as a delta, not be
+        // silently absorbed.
+        let lines = vec![(2.0, 10.00, 20.00), (1.0, 5.50, 5.50)];
+        let r = evaluate_invoice_invariants(&lines, 0.0, 28.05);
+        assert!(!r.is_balanced);
+        assert!((r.delta.abs() - 2.55).abs() <= 0.01);
+        assert_eq!(r.calculated_grand_total, 25.50);
     }
 }

@@ -74,11 +74,11 @@ await local.execute({
   args: [`stub-${prodId}`, prodId, JSON.stringify({ id: prodId, sku: 'E2E', barcode: 'E2E', title: 'E2E Canary', brand: 'Test', category: 'Test', price: 125, stock: 0 }), now(), now()],
 });
 await local.execute({
-  sql: `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
+  sql: `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total, total,
     cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
     status, created_at, json_payload, device_id, idempotency_key, sync_status, updated_at, deleted)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
-  args: [txnId, receipt, null, 250, 0, 0, 250, 100, 150, 60, 'Retail', 'Espèces', 250, 0,
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+  args: [txnId, receipt, null, 250, 0, 250, 100, 150, 60, 'Retail', 'Espèces', 250, 0,
     'COMPLETED', orderPayload.created_at, JSON.stringify(orderPayload), 'e2e-device', orderKey, 'pending', now()],
 });
 await local.execute({
@@ -150,14 +150,14 @@ for (const op of batch) {
       p.price ?? 0, p.stock ?? 0, o.payload_json, 'e2e-device', o.idempotency_key, now(), now()],
   });
   if (o.entity_type === 'order') statements.push({
-    sql: `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
+    sql: `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total, total,
       cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
       status, created_at, json_payload, device_id, idempotency_key, sync_status, updated_at, deleted)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,0)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,0)
       ON CONFLICT(id) DO UPDATE SET status=excluded.status, total=excluded.total,
       json_payload=excluded.json_payload, updated_at=excluded.updated_at, sync_status='synced'
       WHERE excluded.updated_at > transactions.updated_at`,
-    args: [p.id, p.receipt_number, null, 250, 0, 0, 250, 100, 150, 60, 'Retail', 'Espèces', 250, 0,
+    args: [p.id, p.receipt_number, null, 250, 0, 250, 100, 150, 60, 'Retail', 'Espèces', 250, 0,
       'COMPLETED', p.created_at, o.payload_json, 'e2e-device', o.idempotency_key, now()],
   });
   if (o.entity_type === 'order_item') statements.push({

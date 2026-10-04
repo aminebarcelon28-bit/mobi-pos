@@ -10,6 +10,7 @@ import type { Product } from '../types/pos';
 import { newId } from '../utils/ids';
 import { toLocalDayKey } from '../utils/dateUtils';
 import { withWriteLock } from './writeMutex';
+import { buildImeiAnchorUpsert, imeiAnchorColumnsPresent } from './imeiAnchorSchema';
 // Phase 4.5 WP2c: NO static import of './benchHook' — it must stay out of
 // release bundles entirely (bundle-inspected by test_bench_hook.mjs). Timing
 // marks go through devBenchMark below: a DEV-guarded lazy import that Vite
@@ -767,8 +768,9 @@ function toIntMoney(n: unknown): number {
   return Number.isFinite(v) ? v : 0;
 }
 
+// Phase 1b-i: `tax` removed — the column is gone and no sale may carry it.
 const ORDER_MONEY_KEYS = [
-  'subtotal', 'tax', 'discount_total', 'discountTotal', 'total',
+  'subtotal', 'discount_total', 'discountTotal', 'total',
   'cost_total', 'costTotal', 'profit', 'cash_tendered', 'cashTendered',
   'change_due', 'changeDue',
 ];
@@ -989,7 +991,7 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
 
   try {
     // Integer-DA invariant (ad.md §8): money persists as whole dinars ONLY.
-    // computeCartTotals/computeTax/debt paths already round, but profit, costs
+    // computeCartTotals/debt paths already round, but profit, costs
     // and refund/void call sites can still hand floats (e.g. 189.81 VAT-style
     // math, blended FIFO unit costs). Two devices storing 189.81 vs 190 for
     // the same logical sale diverge forever (REAL columns). Canonicalize once
@@ -1459,12 +1461,14 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
     const receiptJson = toBoundedSyncJson(parsedReceipt);
 
     // 3. Atomically write the sales record into SQLite with the exact FIFO COGS hardcoded.
+    // Phase 1b-i: the `tax` column is gone (no-TVA product). The parameter list
+    // below is positional and must stay in lockstep with the three statements —
+    // `tax` was its 5th entry, so every placeholder after it shifted down by one.
     const txnParamsWithLedger = [
       txId,
       receiptNo,
       (input.orderRow.customer_id as string) ?? (input.orderRow.customerId as string) ?? null,
       Number(input.orderRow.subtotal ?? 0),
-      Number(input.orderRow.tax ?? 0),
       Number(input.orderRow.discount_total ?? input.orderRow.discountTotal ?? 0),
       Number(input.orderRow.total ?? 0),
       finalCostTotal,
@@ -1491,10 +1495,10 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
         ((input.orderRow as { shiftId?: unknown }).shiftId as string | null) ??
         null;
       await db.execute(
-        `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
+        `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total, total,
           cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
           status, created_at, json_payload, device_id, idempotency_key, sync_status, updated_at, version, deleted, ledger_cogs_total, shift_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,0,$23,$24)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,0,$22,$23)
          ON CONFLICT(id) DO UPDATE SET receipt_number=excluded.receipt_number, total=excluded.total,
            cost_total=excluded.cost_total, profit=excluded.profit, profit_margin=excluded.profit_margin,
            ledger_cogs_total=excluded.ledger_cogs_total, shift_id=excluded.shift_id,
@@ -1512,10 +1516,10 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
         // the new column. The sale still records; attribution falls back to
         // the createdAt window at close.
         await db.execute(
-          `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
+          `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total, total,
             cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
             status, created_at, json_payload, device_id, idempotency_key, sync_status, updated_at, version, deleted, ledger_cogs_total)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,0,$23)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,0,$22)
            ON CONFLICT(id) DO UPDATE SET receipt_number=excluded.receipt_number, total=excluded.total,
              cost_total=excluded.cost_total, profit=excluded.profit, profit_margin=excluded.profit_margin,
              ledger_cogs_total=excluded.ledger_cogs_total,
@@ -1525,15 +1529,15 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
         );
       } else if (missLedger) {
         await db.execute(
-          `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
+          `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total, total,
             cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
             status, created_at, json_payload, device_id, idempotency_key, sync_status, updated_at, version, deleted)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,0)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,0)
            ON CONFLICT(id) DO UPDATE SET receipt_number=excluded.receipt_number, total=excluded.total,
              cost_total=excluded.cost_total, profit=excluded.profit, profit_margin=excluded.profit_margin,
              status=excluded.status, json_payload=excluded.json_payload, updated_at=excluded.updated_at,
              sync_status='pending', idempotency_key=excluded.idempotency_key, version=excluded.version`,
-          txnParamsWithLedger.slice(0, 22),
+          txnParamsWithLedger.slice(0, 21),
         );
       } else {
         throw insertErr;
@@ -1703,7 +1707,7 @@ const imeiVersion = await bumpEntityVersion(db, 'imei', pit.imeiNum);
               return null;
             }
           })();
-          const imeiData = {
+const imeiData = {
             imei: pit.imeiNum,
             product_id: pit.prodId,
             sale_transaction_id: txId,
@@ -1713,35 +1717,45 @@ const imeiVersion = await bumpEntityVersion(db, 'imei', pit.imeiNum);
             warranty_expires_at: wExpiresAt,
             version: imeiVersion,
           };
-        const imeiKey = await stableEntityKey(db, 'imei', pit.imeiNum);
-        try {
-          await db.execute(
-            `INSERT INTO imei_records (id, data_json, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
-             VALUES ($1, $2, $3, $4, 'pending', 1, $5, $5, 0)
-             ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at, sync_status='pending'`,
-            [pit.imeiNum, JSON.stringify(imeiData), deviceId, imeiKey, now],
-          );
-        } catch {
+          const imeiKey = await stableEntityKey(db, 'imei', pit.imeiNum);
           try {
             await db.execute(
-              `INSERT INTO imei_records (imei, product_id, sale_transaction_id, sold_at,
-                                         received_at, warranty_expires_at, warranty_months, version)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, 1)
-               ON CONFLICT(imei) DO UPDATE SET
-                 sale_transaction_id=excluded.sale_transaction_id,
-                 sold_at=excluded.sold_at,
-                 product_id=excluded.product_id,
-                 warranty_expires_at=COALESCE(imei_records.warranty_expires_at,
-                                              excluded.warranty_expires_at),
-                 warranty_months=COALESCE(imei_records.warranty_months,
-                                          excluded.warranty_months),
-                 version=imei_records.version + 1`,
-              [pit.imeiNum, pit.prodId, txId, now, priorReceivedAt || now, wExpiresAt, wMonths],
+              `INSERT INTO imei_records (id, data_json, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
+               VALUES ($1, $2, $3, $4, 'pending', 1, $5, $5, 0)
+               ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at, sync_status='pending'`,
+              [pit.imeiNum, JSON.stringify(imeiData), deviceId, imeiKey, now],
             );
-          } catch (e: unknown) {
-            console.warn('[db:imei] IMEI table record write skipped:', e);
+          } catch {
+            try {
+              // Schema-aware legacy shape (see `db/imeiAnchorSchema`): the anchor
+              // columns share ONE insert with `sold_at`/`sale_transaction_id`, so
+              // naming `warranty_months` on a database that never applied
+              // migration 107 threw `no such column` and took the entire registry
+              // row down with it — the base-schema expiry and the sold stamp the
+              // re-sale gate reads included. Probing keeps the write working on
+              // both schemas; an unmigrated device loses only its LOCAL copy of
+              // the term, because the term still reaches peers inside `imeiData`
+              // via the outbox payload below.
+              const anchorCols = await imeiAnchorColumnsPresent(db);
+              const upsert = buildImeiAnchorUpsert(anchorCols);
+              const byColumn: Record<string, unknown> = {
+                imei: pit.imeiNum,
+                product_id: pit.prodId,
+                sale_transaction_id: txId,
+                sold_at: now,
+                received_at: priorReceivedAt || now,
+                warranty_expires_at: wExpiresAt,
+                warranty_months: wMonths,
+                version: 1,
+              };
+              await db.execute(
+                upsert.sql,
+                upsert.columns.map((column) => byColumn[column] ?? null) as never[]
+              );
+            } catch (e: unknown) {
+              console.warn('[db:imei] IMEI table record write skipped:', e);
+            }
           }
-        }
         await db.execute(
           `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
            VALUES ($1,'imei',$2,'UPSERT',$3,'pending')
@@ -2885,6 +2899,10 @@ export const RECEIPT_SETTINGS_KEY = 'mobi_pos_receipt_settings';
 /**
  * Strip per-device fields from a setting value before it ships to the cloud.
  * Unknown keys pass through untouched.
+ *
+ * Phase 1b-i: the legacy `vatRate` key is dropped here too. The field left the
+ * ReceiptSettings type (no-TVA product), so a pre-drop row can still carry the
+ * key in its JSON; it is inert on read and must never be re-published.
  */
 export function stripDeviceLocalSettingValue<T>(key: string, value: T): T {
   if (
@@ -2893,7 +2911,12 @@ export function stripDeviceLocalSettingValue<T>(key: string, value: T): T {
     typeof value === 'object' &&
     !Array.isArray(value)
   ) {
-    const { printerRouting: _dropped, ...rest } = value as Record<string, unknown>;
+    const {
+      printerRouting: _dropped,
+      // Phase 1b-i: dead legacy key from the deleted tax-rate field.
+      vatRate: _droppedVatRate,
+      ...rest
+    } = value as Record<string, unknown>;
     return rest as T;
   }
   return value;

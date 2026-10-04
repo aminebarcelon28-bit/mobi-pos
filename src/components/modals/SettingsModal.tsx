@@ -1611,9 +1611,10 @@ export const SettingsModal: React.FC = () => {
                       className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text"
                     />
                   </div>
-                  {/* TVA REMOVED (no-TVA product, Gate Addendum A): the rate
-                      setting is gone — every sale is HT-only. Any legacy
-                      stored vatRate is ignored by readVatRate/computeTax. */}
+{/* TVA REMOVED (no-TVA product, Gate Addendum A + Phase 1b-i): the rate
+                      setting is gone — every sale is HT-only and the field no
+                      longer exists in the type. Any legacy stored `vatRate`
+                      key is inert (ignored on read, never persisted). */}
                 </div>
               </div>
             </div>

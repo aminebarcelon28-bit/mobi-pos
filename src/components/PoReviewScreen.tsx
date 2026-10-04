@@ -44,7 +44,6 @@ import type { EditableReviewLine, ProcessRawScanResponse } from '../types/po';
 
 interface PoReviewScreenProps {
   supplierName: string;
-  reportedTax: number;
   reportedFreight: number;
   reportedGrandTotal: number;
   scanData: ProcessRawScanResponse;
@@ -59,7 +58,6 @@ type SortDirection = 'asc' | 'desc';
 
 export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
   supplierName,
-  reportedTax,
   reportedFreight,
   reportedGrandTotal,
   scanData,
@@ -175,13 +173,13 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
       subtotal += actual;
     });
 
-    const calculatedTotal = Math.round((subtotal + reportedTax + reportedFreight) * 100) / 100;
+    const calculatedTotal = Math.round((subtotal + reportedFreight) * 100) / 100;
     const targetTotal = grandTotalState > 0 ? grandTotalState : calculatedTotal;
     const delta = Math.round((calculatedTotal - targetTotal) * 100) / 100;
     const isBalanced = Math.abs(delta) <= 0.01 && faultyRows.size === 0 && lines.length > 0;
 
     return { subtotal, calculatedTotal, targetTotal, delta, isBalanced, faultyRows };
-  }, [lines, reportedTax, reportedFreight, grandTotalState]);
+  }, [lines, reportedFreight, grandTotalState]);
 
   // Financial Analytics & Projected Margin
   const financialAnalytics = useMemo(() => {
@@ -452,11 +450,11 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
 
     setLines(updated);
 
-    const newGrandTotal = Math.round((newSubtotal + reportedTax + reportedFreight) * 100) / 100;
+    const newGrandTotal = Math.round((newSubtotal + reportedFreight) * 100) / 100;
     setGrandTotalState(newGrandTotal);
     setBalanceSuccessNotice(`Comptabilité équilibrée automatiquement (Total: ${formatDZD(newGrandTotal)}).`);
     setTimeout(() => setBalanceSuccessNotice(null), 4000);
-  }, [lines, reportedTax, reportedFreight]);
+  }, [lines, reportedFreight]);
 
   // Bulk Actions
   const handleToggleSelectAll = () => {
@@ -712,7 +710,6 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
     const exportPayload = {
       supplier: supplierName,
       exported_at: new Date().toISOString(),
-      reported_tax: reportedTax,
       reported_freight: reportedFreight,
       target_grand_total: mathState.targetTotal,
       calculated_grand_total: mathState.calculatedTotal,
@@ -900,7 +897,7 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
               </div>
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5 font-mono">
-              TVA (19%) : {formatDZD(reportedTax)} | Port : {formatDZD(reportedFreight)} | Total Facture : {formatDZD(mathState.targetTotal)}
+              Port : {formatDZD(reportedFreight)} | Total Facture : {formatDZD(mathState.targetTotal)}
             </p>
           </div>
 
@@ -2052,7 +2049,6 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
             <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 space-y-1 text-xs shrink-0">
               <span className="text-[10px] uppercase font-bold text-slate-400 block">En-tête Détecté</span>
               <p className="text-slate-200"><span className="text-slate-500">Fournisseur :</span> {supplierName}</p>
-              <p className="text-slate-200"><span className="text-slate-500">TVA déclarée :</span> {formatDZD(reportedTax)}</p>
               <p className="text-slate-200"><span className="text-slate-500">Frais port :</span> {formatDZD(reportedFreight)}</p>
               <p className="text-emerald-400 font-bold"><span className="text-slate-500 font-normal">Total Facture :</span> {formatDZD(mathState.targetTotal)}</p>
             </div>

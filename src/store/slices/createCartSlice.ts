@@ -63,15 +63,6 @@ export function readVoucherStaging(s: PosState): { voucherCreditApplied: number;
   return { voucherCreditApplied: Math.max(0, Math.round(amount)), voucherCode: code };
 }
 
-/**
- * DEPRECATED (no-TVA product, Gate Addendum A): always returns 0. The
- * `vatRate` receipt setting is ignored — every sale is HT-only. Kept so
- * existing call sites compile until Phase 1b removes the plumbing.
- */
-export function readVatRate(_s: PosState): number {
-  return 0;
-}
-
 function refreshCartItemPricing(item: CartItem, newQty: number, pricingTier?: PricingTier): CartItem {
   // If the price was manually overridden by cashier/manager, keep the override
   const isManualPriceOverride =
@@ -152,7 +143,6 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
           pricingTier,
           storeCreditApplied,
           voucherCreditApplied: 0,
-          vatRate: readVatRate(get()),
         });
         const capacity = Math.max(
           0,

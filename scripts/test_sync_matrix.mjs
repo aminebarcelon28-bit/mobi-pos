@@ -155,11 +155,16 @@ console.log('\n[6] store-profile pull lands the SQLite authority row');
   mkdirSync(join(SHIM, 'db'), { recursive: true });
   mkdirSync(join(SHIM, 'lane'), { recursive: true });
   copyFileSync(join(ROOT, 'src', 'sync', 'genericApply.ts'), join(SHIM, 'lane', 'genericApply.ts'));
+  // genericApply also imports `../db/imeiAnchorSchema` (the IMEI-anchor column
+  // probe). Dependency-free module, so the REAL source is copied beside the
+  // stubs — no behaviour is faked.
+  copyFileSync(join(ROOT, 'src', 'db', 'imeiAnchorSchema.ts'), join(SHIM, 'db', 'imeiAnchorSchema.ts'));
   {
     const p = join(SHIM, 'lane', 'genericApply.ts');
     let t = readFileSync(p, 'utf8');
     t = t.replace(/from '\.\.\/db\/database'/g, "from '../db/database.js'")
-         .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'");
+         .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'")
+         .replace(/from '\.\.\/db\/imeiAnchorSchema'/g, "from '../db/imeiAnchorSchema.ts'");
     writeFileSync(p, t);
   }
   writeFileSync(join(SHIM, 'db', 'database.js'), `
@@ -186,7 +191,7 @@ export function isRetryableDbError() { return false; }
     updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1)`);
   await local.execute(`CREATE TABLE entity_keys (entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
     idempotency_key TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (entity_type, entity_id))`);
-  const profile = { key: 'mobi_pos_receipt_settings', value: { storeName: 'NOUVEAU NOM', vatRate: 19 } };
+  const profile = { key: 'mobi_pos_receipt_settings', value: { storeName: 'NOUVEAU NOM' } };
   await applyGenericRemoteRow(asPluginSql(local), 'app_settings', {
     id: 'mobi_pos_receipt_settings', data_json: JSON.stringify(profile), version: 3,
     updated_at: new Date().toISOString(), deleted: 0,

@@ -129,7 +129,9 @@ const GENERIC_PULL: Record<string, { dexie: string; ts: string[] }> = {
 // payload + version only). Cursor keys (updated_at, id) always included.
 const PULL_COLUMNS: Record<string, string> = {
   products: 'id, sku, barcode, title, brand, compatible_model, category, price, wholesale_price, cost_price, stock, image_url, is_serialized, imei_number, vendor_name, lead_time_days, daily_sales_velocity, reorder_point, json_payload, device_id, idempotency_key, version, created_at, updated_at, deleted',
-  transactions: 'id, receipt_number, customer_id, subtotal, tax, discount_total, total, cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due, status, json_payload, device_id, idempotency_key, version, created_at, updated_at, deleted, shift_id',
+  // Phase 1b-i: `tax` dropped from PULL_COLUMNS with the remote v13 drop. An
+// old build still asking for it gets a per-table stall, never a silent skip.
+  transactions: 'id, receipt_number, customer_id, subtotal, discount_total, total, cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due, status, json_payload, device_id, idempotency_key, version, created_at, updated_at, deleted, shift_id',
   transaction_items: 'id, transaction_id, product_id, quantity, applied_price, discount, imei_number, cost_price, unit_price_charged, unit_cost_at_sale, discount_amount, line_profit, json_payload, device_id, idempotency_key, version, created_at, updated_at, deleted',
   inventory_ledger: 'id, product_id, delta, reason, ref_type, ref_id, device_id, idempotency_key, version, created_at, updated_at, deleted',
 };
@@ -2004,10 +2006,10 @@ class SyncManager {
       const cust = (payload.customer_id ?? (payload.customer as Record<string, unknown> | undefined)?.id ?? null) as InValue;
       const shiftVal = (payload.shift_id ?? (payload as Record<string, unknown>).shiftId ?? null) as InValue;
       return {
-        sql: `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
+        sql: `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total, total,
           cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
           status, created_at, json_payload, device_id, idempotency_key, sync_status, version, updated_at, deleted, shift_id)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?,?)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?,?)
           ON CONFLICT(id) DO UPDATE SET status=excluded.status, total=excluded.total,
             json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at, sync_status='synced',
             deleted=excluded.deleted, shift_id=excluded.shift_id
@@ -2015,7 +2017,7 @@ class SyncManager {
         args: [
           v(payload.id ?? op.entity_id),
           v(payload.receipt_number ?? payload.receiptNumber ?? payload.id ?? op.entity_id),
-          v(cust), v(Number(payload.subtotal ?? 0)), v(Number(payload.tax ?? 0)),
+          v(cust), v(Number(payload.subtotal ?? 0)),
           v(Number(payload.discount_total ?? payload.discountTotal ?? 0)),
           v(Number(payload.total ?? 0)), v(Number(payload.cost_total ?? payload.costTotal ?? 0)),
           v(Number(payload.profit ?? 0)), v(Number(payload.profit_margin ?? payload.profitMargin ?? 0)),
@@ -2768,12 +2770,12 @@ class SyncManager {
         isNewSale = true;
       }
       const txApplyResult: unknown = await db.execute(
-        `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
+        `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total, total,
           cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
           status, created_at, json_payload, device_id, idempotency_key, sync_status, version, updated_at, deleted, shift_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?,?)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'synced',?,?,?,?)
          ON CONFLICT(id) DO UPDATE SET status=excluded.status, total=excluded.total,
-          customer_id=excluded.customer_id, subtotal=excluded.subtotal, tax=excluded.tax,
+          customer_id=excluded.customer_id, subtotal=excluded.subtotal,
           discount_total=excluded.discount_total, cost_total=excluded.cost_total,
           profit=excluded.profit, profit_margin=excluded.profit_margin,
           pricing_tier=excluded.pricing_tier, payment_method=excluded.payment_method,
@@ -2783,7 +2785,7 @@ class SyncManager {
           deleted=excluded.deleted, sync_status='synced', shift_id=excluded.shift_id
           WHERE ${transactionPullGuardSql()}`,
         [
-          txId, receiptNo, r.customer_id ? String(r.customer_id) : null, Number(r.subtotal ?? 0), Number(r.tax ?? 0),
+          txId, receiptNo, r.customer_id ? String(r.customer_id) : null, Number(r.subtotal ?? 0),
           Number(r.discount_total ?? 0), Number(r.total ?? 0), Number(r.cost_total ?? 0), Number(r.profit ?? 0),
           Number(r.profit_margin ?? 0), String(r.pricing_tier ?? 'Retail'), String(r.payment_method ?? 'Espèces'),
           Number(r.cash_tendered ?? 0), Number(r.change_due ?? 0), String(r.status ?? 'COMPLETED'),

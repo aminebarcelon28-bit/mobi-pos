@@ -17,7 +17,7 @@ CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
 
 CREATE TABLE IF NOT EXISTS transactions (
   id TEXT PRIMARY KEY, receipt_number TEXT NOT NULL UNIQUE, customer_id TEXT,
-  subtotal REAL DEFAULT 0, tax REAL DEFAULT 0, discount_total REAL DEFAULT 0, total REAL NOT NULL DEFAULT 0,
+  subtotal REAL DEFAULT 0, discount_total REAL DEFAULT 0, total REAL NOT NULL DEFAULT 0,
   cost_total REAL DEFAULT 0, profit REAL DEFAULT 0, profit_margin REAL DEFAULT 0,
   pricing_tier TEXT DEFAULT 'Retail', payment_method TEXT, cash_tendered REAL DEFAULT 0, change_due REAL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'COMPLETED', json_payload TEXT NOT NULL DEFAULT '{}',

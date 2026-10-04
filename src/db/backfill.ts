@@ -112,12 +112,12 @@ async function backfillAllToOutboxInner(): Promise<{ enqueued: number; skipped: 
       if (!t?.id || (await hasLocalOrder(db, t.id))) continue;
       const key = `legacy-${t.id}`;
       await db.execute(
-        `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
+`INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total, total,
           cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
           status, created_at, json_payload, device_id, idempotency_key, sync_status, version, updated_at, deleted)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'backfill',$18,'pending',1,$19,0)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'backfill',$17,'pending',1,$18,0)
           ON CONFLICT(id) DO NOTHING`,
-        [t.id, t.receiptNumber ?? t.id, t.customer?.id ?? null, t.subtotal ?? 0, 0,
+        [t.id, t.receiptNumber ?? t.id, t.customer?.id ?? null, t.subtotal ?? 0,
           t.discountTotal ?? 0, t.total ?? 0, t.costTotal ?? 0, t.profit ?? 0, t.profitMargin ?? 0,
           t.pricingTier ?? 'Retail', t.paymentMethod ?? 'Espèces', t.cashTendered ?? 0, t.changeDue ?? 0,
           t.status ?? 'COMPLETED', t.createdAt ?? now, JSON.stringify(t), key, now],

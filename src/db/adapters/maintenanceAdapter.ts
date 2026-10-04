@@ -1031,9 +1031,6 @@ async function mirrorImportToAuthority(parsed: BackupPayload): Promise<void> {
         receiptNo,
         t.customer?.id ?? null,
         Number(t.subtotal ?? 0),
-        // SaleTransaction has no `tax` column on the DTO; the table keeps one
-        // and every other writer derives it as total - subtotal - discount.
-        Number(Number(t.total ?? 0) - Number(t.subtotal ?? 0) - Number(t.discountTotal ?? 0)),
         Number(t.discountTotal ?? 0),
         Number(t.total ?? 0),
         Number(t.costTotal ?? 0),
@@ -1051,10 +1048,10 @@ async function mirrorImportToAuthority(parsed: BackupPayload): Promise<void> {
         now,
       ];
       await db.execute(
-        `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
+        `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total, total,
           cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
           status, created_at, json_payload, device_id, idempotency_key, sync_status, version, updated_at${hasLedgerCol ? ', ledger_cogs_total' : ''}, deleted)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'synced',1,$20${hasLedgerCol ? ',$21' : ''},0)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'synced',1,$19${hasLedgerCol ? ',$20' : ''},0)
          ON CONFLICT(id) DO UPDATE SET receipt_number=excluded.receipt_number, total=excluded.total,
            status=excluded.status, json_payload=excluded.json_payload, updated_at=excluded.updated_at,
            sync_status='synced', version=excluded.version`

@@ -98,7 +98,6 @@ const DDL_MIGRATIONS = [
         receipt_number TEXT NOT NULL UNIQUE,
         customer_id TEXT,
         subtotal REAL DEFAULT 0,
-        tax REAL DEFAULT 0,
         discount_total REAL DEFAULT 0,
         total REAL NOT NULL DEFAULT 0,
         cost_total REAL DEFAULT 0,
@@ -277,7 +276,6 @@ async function runTests() {
       receipt_number: `REC-2026-${String(i).padStart(5, '0')}`,
       customer_id: i % 3 === 0 ? `cust-${i % 5 + 1}` : null,
       subtotal: 5000,
-      tax: 0,
       discount_total: 0,
       total: 5000,
       cost_total: 3600,
@@ -375,14 +373,14 @@ async function runTests() {
   // Upload transactions
   for (const t of localTransactions) {
     await remote.execute({
-      sql: `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total,
+      sql: `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total,
         total, cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
         status, json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET status=excluded.status, total=excluded.total, version=excluded.version,
         updated_at=excluded.updated_at, deleted=excluded.deleted, sync_status='synced'`,
       args: [
-        t.id, t.receipt_number, t.customer_id, t.subtotal, t.tax, t.discount_total,
+        t.id, t.receipt_number, t.customer_id, t.subtotal, t.discount_total,
         t.total, t.cost_total, t.profit, t.profit_margin, t.pricing_tier, t.payment_method,
         t.cash_tendered, t.change_due, t.status, t.json_payload, t.device_id, t.idempotency_key,
         'synced', t.version, t.created_at, t.updated_at, t.deleted,

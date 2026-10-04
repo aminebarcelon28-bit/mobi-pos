@@ -1547,6 +1547,31 @@ fn base_schema_migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            // v108 — Phase 1b-i: drop the POS `transactions.tax` column.
+            //
+            // Gate Addendum A made every sale HT-only (`taxEngine` returned a hard
+            // zero), so the column could only ever hold zeros; the plan's §3 gate
+            // measured `tax != 0` = 0 on the live DB and the merchant remote
+            // before this was written. Nothing is lost, and there is no backfill
+            // because there is no value to migrate.
+            //
+            // The dependent views are dropped FIRST and recreated after the swap,
+            // verbatim from migration 3. `orders` is `SELECT * FROM transactions`,
+            // so SQLite refuses a `DROP COLUMN` while it exists ("error in view
+            // orders"). This is the same ordering trap the rehearsal drill
+            // caught under FK enforcement, reproduced here deliberately.
+            version: 108,
+            description: "Phase 1b-i: drop transactions.tax (no-TVA product)",
+            sql: r#"
+            DROP VIEW IF EXISTS orders;
+            DROP VIEW IF EXISTS order_items;
+            ALTER TABLE transactions DROP COLUMN tax;
+            CREATE VIEW IF NOT EXISTS orders AS SELECT * FROM transactions;
+            CREATE VIEW IF NOT EXISTS order_items AS SELECT * FROM transaction_items;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

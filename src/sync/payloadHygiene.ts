@@ -34,9 +34,12 @@ const SYNC_NESTED_JSON_KEYS = new Set([
   'json_payload', 'data_json', 'payload_json', 'value_json', 'dataJson', 'jsonPayload',
 ]);
 
+// Phase 1b-i: `tax` removed — it is no longer part of any contract, so a peer
+// payload carrying one is shed like any other unknown key instead of being
+// protected as a money field.
 const SYNC_PROTECTED_KEYS = new Set([
   'id', 'transaction_id', 'product_id', 'customer_id', 'customer', 'items', 'lines',
-  'tenders', 'payments', 'subtotal', 'tax', 'discount_total', 'total',
+  'tenders', 'payments', 'subtotal', 'discount_total', 'total',
   'cost_total', 'costTotal', 'profit', 'profitMargin', 'ledgerCogsTotal',
   'ledger_cogs_total', 'quantity', 'applied_price', 'status',
   'idempotency_key', 'device_id', 'version',

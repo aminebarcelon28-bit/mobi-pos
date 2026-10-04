@@ -1581,8 +1581,6 @@ export interface ReceiptSettings {
   baridimobRip?: string;        // 16 or 20-digit BaridiMob RIP
   ccpAccount?: string;          // CCP Account + Clé
   bankBeneficiaryName?: string; // Account Holder Name
-  /** DEPRECATED (no-TVA product, Gate Addendum A): ignored — every sale is HT-only. Kept until Phase 1b removes it. */
-  vatRate?: number;
 }
 
 export interface SecurityAuditLogEntry {

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { formatDZD } from '../../types/pos';
 import type { ReceiptSettings } from '../../types/pos';
-import { fiscalIdentifierLine, tvaSplitFromTotal } from '../../utils/receiptMath';
+import { fiscalIdentifierLine } from '../../utils/receiptMath';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
 import {
   STORE_RETURN_POLICY,
@@ -48,7 +48,6 @@ export const ReceiptPaper: React.FC<ReceiptPaperProps> = ({
   }, [showBarcode, vm.ticketId]);
 
   const fiscal = fiscalIdentifierLine(settings);
-  const tva = tvaSplitFromTotal(vm.netDue, settings.vatRate);
   const showBarcodeBlock = showBarcode && (settings.showBarcode !== false);
 
   return (
@@ -225,18 +224,6 @@ export const ReceiptPaper: React.FC<ReceiptPaperProps> = ({
             <span>AVOIR CLIENT DÉDUIT:</span>
             <span className="whitespace-nowrap">-{formatDZD(vm.avoirCredit)}</span>
           </div>
-        ) : null}
-        {tva ? (
-          <>
-            <div className="flex justify-between gap-2 text-gray-700 text-[10px]">
-              <span>HT:</span>
-              <span className="whitespace-nowrap">{formatDZD(tva.ht)}</span>
-            </div>
-            <div className="flex justify-between gap-2 text-gray-700 text-[10px]">
-              <span>TVA {tva.rate}%:</span>
-              <span className="whitespace-nowrap">+{formatDZD(tva.tva)}</span>
-            </div>
-          </>
         ) : null}
 
         <div className="flex justify-between gap-2 font-extrabold text-sm pt-1.5 pb-1 px-1 -mx-1 mt-1 border-t-2 border-black bg-gray-100 rounded-sm">

@@ -99,7 +99,6 @@ export const InvoiceIngestionModal: React.FC = () => {
 
   // AI Recon & Invariant Scanner State
   const [supplierName, setSupplierName] = useState<string>('Grossiste Mobile Distribution');
-  const [reportedTax, setReportedTax] = useState<number>(0);
   const [reportedFreight, setReportedFreight] = useState<number>(0);
   const [reportedGrandTotal, setReportedGrandTotal] = useState<number>(0);
   const [rawOcrInput, setRawOcrInput] = useState<string>('');
@@ -278,9 +277,6 @@ export const InvoiceIngestionModal: React.FC = () => {
       ) {
         setSupplierName(res.document_summary.detected_supplier);
       }
-      if (res.document_summary.detected_tax !== undefined && res.document_summary.detected_tax !== null) {
-        setReportedTax(res.document_summary.detected_tax);
-      }
       if (res.document_summary.detected_freight !== undefined && res.document_summary.detected_freight !== null) {
         setReportedFreight(res.document_summary.detected_freight);
       }
@@ -333,7 +329,6 @@ export const InvoiceIngestionModal: React.FC = () => {
       const res = await processRawScan({
         supplier_name: supplierName.trim() || 'Fournisseur Inconnu',
         bounding_boxes: scanResult.blocks,
-        reported_tax: reportedTax,
         reported_freight: reportedFreight,
         reported_grand_total: reportedGrandTotal,
       });
@@ -356,7 +351,6 @@ export const InvoiceIngestionModal: React.FC = () => {
     try {
       const demoData = generateDemoInvoiceScan();
       setSupplierName(demoData.supplier_name);
-      setReportedTax(demoData.reported_tax);
       setReportedFreight(demoData.reported_freight);
       setReportedGrandTotal(demoData.reported_grand_total);
 
@@ -379,7 +373,6 @@ export const InvoiceIngestionModal: React.FC = () => {
     try {
       const demoData = generateAccessoriesInvoiceScan();
       setSupplierName(demoData.supplier_name);
-      setReportedTax(demoData.reported_tax);
       setReportedFreight(demoData.reported_freight);
       setReportedGrandTotal(demoData.reported_grand_total);
 
@@ -413,7 +406,6 @@ export const InvoiceIngestionModal: React.FC = () => {
         const res = await processRawScan({
           supplier_name: supplierName.trim() || 'Fournisseur Inconnu',
           bounding_boxes: boxes,
-          reported_tax: reportedTax,
           reported_freight: reportedFreight,
           reported_grand_total: reportedGrandTotal,
         });
@@ -472,7 +464,6 @@ export const InvoiceIngestionModal: React.FC = () => {
       const res = await processRawScan({
         supplier_name: supplierName.trim() || 'Fournisseur Inconnu',
         bounding_boxes: boxes,
-        reported_tax: reportedTax,
         reported_freight: reportedFreight,
         reported_grand_total: reportedGrandTotal,
       });
@@ -496,7 +487,6 @@ export const InvoiceIngestionModal: React.FC = () => {
         <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-6xl xl:max-w-7xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-full max-h-[96dvh] sm:max-h-[92dvh]">
           <PoReviewScreen
             supplierName={supplierName}
-            reportedTax={reportedTax}
             reportedFreight={reportedFreight}
             reportedGrandTotal={
               reportedGrandTotal > 0
@@ -629,23 +619,6 @@ export const InvoiceIngestionModal: React.FC = () => {
                     valueMinor={dinarsToMinor(reportedGrandTotal || 0)}
                     onChangeMinor={(minor) => setReportedGrandTotal(Math.max(0, toLegacyReal(minor)))}
                     placeholder="Auto (calculé)"
-                    className="w-full bg-pos-panel border border-pos-border rounded-xl px-2 py-1.5 text-xs text-pos-text text-center font-mono focus:outline-none focus:border-pos-accent min-h-[40px]"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[9px] font-semibold text-pos-muted uppercase tracking-wider block mb-1">
-                    TVA (DA)
-                  </label>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={reportedTax}
-                    onChange={(e) =>
-                      setReportedTax(
-                        Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0))
-                      )
-                    }
                     className="w-full bg-pos-panel border border-pos-border rounded-xl px-2 py-1.5 text-xs text-pos-text text-center font-mono focus:outline-none focus:border-pos-accent min-h-[40px]"
                   />
                 </div>

@@ -1,7 +1,7 @@
 import type { SaleTransaction, ReceiptSettings, CashSession, StagedTradeIn, TradeInItem } from '../types/pos';
 import { formatDZD } from '../types/pos';
 import { RECEIPT_BARCODE } from '../constants';
-import { fiscalIdentifierLine, tvaSplitFromTotal } from './receiptMath';
+import { fiscalIdentifierLine } from './receiptMath';
 import {
   STORE_RETURN_POLICY,
   TRADE_IN_LEGAL_STATEMENT,
@@ -293,17 +293,8 @@ export function buildReceiptBuffer(
   if (vm.avoirCredit > 0) {
     builder.text(pair('AVOIR CLIENT DÉDUIT:', `-${formatDZD(vm.avoirCredit)}`)).newline();
   }
-  const txTax = (transaction as { tax?: number }).tax;
-  if (typeof txTax === 'number' && txTax > 0) {
-    builder.text(pair('TVA:', `+${formatDZD(txTax)}`)).newline();
-  }
-  // Explicit TVA breakdown table when a VAT rate is configured.
-  const tva = tvaSplitFromTotal(vm.netDue, settings.vatRate);
-  if (tva) {
-    builder.text(pair('HT:', formatDZD(tva.ht))).newline();
-    builder.text(pair(`TVA ${tva.rate}%:`, `+${formatDZD(tva.tva)}`)).newline();
-    builder.text(pair('TTC:', formatDZD(tva.ttc))).newline();
-  }
+  // Phase 1b-i: no TVA/HT/TTC block. There is no rate to print, no `tax` field
+  // on the transaction and no split to compute — the ticket states the net.
 
   // Total Net (en gras et double hauteur)
   builder.align('right').bold(true).doubleHeight(true);
@@ -695,10 +686,21 @@ export function buildZReportBuffer(s: ZReportSnapshot, settings: ReceiptSettings
 
   b.bold(true).doubleHeight(true);
   money('ESPECES THEORIQUES:', s.expectedCash);
-  money('COMPTE EN CAISSE:', s.countedCash);
-  b.doubleHeight(false);
-  b.bold(true);
-  b.text(pair('ECART:', `${s.variance >= 0 ? '+' : ''}${formatDZD(s.variance)}`)).newline();
+  if (s.blindCountPerformed === false) {
+    // An un-counted drawer has no counted amount and no variance. Printing 0 and
+    // `-<expected>` here would put a fabricated full-drawer shortage on a signed
+    // accounting document — the hardware twin must say the same thing the paper
+    // twin says.
+    b.text(pair('COMPTE EN CAISSE:', '(NON EFFECTUE)')).newline();
+    b.doubleHeight(false);
+    b.bold(true);
+    b.text(pair('ECART:', '(NON EFFECTUE)')).newline();
+  } else {
+    money('COMPTE EN CAISSE:', s.countedCash);
+    b.doubleHeight(false);
+    b.bold(true);
+    b.text(pair('ECART:', `${s.variance >= 0 ? '+' : ''}${formatDZD(s.variance)}`)).newline();
+  }
   b.bold(false).separator('=', cols);
 
   for (const drop of s.dropsList || []) {

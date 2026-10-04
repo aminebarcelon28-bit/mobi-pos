@@ -32,7 +32,6 @@ type Harness = {
   __harnessSetShift: (openingFloat: number) => void;
   __harnessSeedCartLines: (lines: Array<{ price: number; discount?: number; title?: string }>) => void;
   __harnessSetAvoirAndVoucher: (storeCredit: number, voucherCredit: number) => void;
-  __harnessSetVatRate: (rate: number) => void;
   __harnessSeedCustomer: (storeCredit: number) => void;
   __harnessDexie: (table: string) => Promise<Array<Record<string, unknown>>>;
   __harnessBlastPayment: (n: number) => Promise<Array<string>>;
@@ -224,9 +223,11 @@ test.describe('Test 3 — tender hydra (discounts + avoir + voucher + trade-in)'
   // Engine truths: (1) applyCartDiscountPercent DISTRIBUTES onto lines,
   // replacing the seeded 7k with 5% of gross — base is 95 000 (the 88 350
   // stack lives in pure math via cartDiscountPercent, node battery);
-  // (2) VAT is HT-additive, so EVEN-0 holds at 0% VAT; at 19% the customer
-  // owes exactly the VAT slice (18 050), never a manufactured refund.
-  test('95k base, 15k+10k+70k credits = EVEN 0 (0% VAT); VAT base pinned at 19%', async ({ page }) => {
+  // (2) Phase 1b-i (no-TVA product): every sale is HT-only, so the credits
+  // stack still lands on EVEN 0 with no tax slice to owe. The former 19 %-VAT
+  // phase (reste = 18 050) was purely VAT-behavioral and is deleted with the
+  // tax engine.
+  test('95k base, 15k+10k+70k credits = EVEN 0 (HT-only, no tax term)', async ({ page }) => {
     await openTradeIn(page);
     await page.evaluate(() => {
       const h = window as unknown as Harness;
@@ -235,18 +236,14 @@ test.describe('Test 3 — tender hydra (discounts + avoir + voucher + trade-in)'
       h.__harnessSeedCustomer(200000);
       h.__harnessSetAvoirAndVoucher(15000, 10000);
       h.__harnessStageTradeIn(70000);
-      h.__harnessSetVatRate(0);
       h.__harnessOpenPayment();
     });
     await expect(page.getByText(/Reste à Encaisser : 0[\s\u00a0\u202f]*DA/)).toBeVisible({ timeout: 20000 });
     await expect(page.getByText(/Reprise:/).first()).toBeVisible();
     // 100%-covered label variant ('Valider Paiement Avoir (100%)').
     await expect(page.getByRole('button', { name: /Valider/ }).first()).toBeEnabled();
-
-    // Phase 2: same stack at 19% VAT — VAT base stays 95 000, reste = VAT only.
-    await page.evaluate(() => (window as unknown as Harness).__harnessSetVatRate(19));
-    await expect(page.getByText(/TVA/).first()).toBeVisible();
-    await expect(page.getByText(/Reste à Encaisser : 18[\s\u00a0\u202f]*050[\s\u00a0\u202f]*DA/)).toBeVisible();
+    // No-TVA invariant: no tax line is offered anywhere in the checkout.
+    await expect(page.getByText(/TVA/i)).toHaveCount(0);
   });
 });
 

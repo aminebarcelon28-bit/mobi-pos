@@ -40,24 +40,45 @@ console.log('\n=== H24: payload hygiene never truncates mid-value ===\n');
     id: 't1',
     total: 4999,
     subtotal: 4500,
-    tax: 499,
     notes: filler,      // non-protected, big
     description: filler, // non-protected, big
   };
   const json = toBoundedSyncJson(payload, 64 * 1024);
   const parsed = JSON.parse(json);
   ok('3: the budget shed the big non-protected fields', !('notes' in parsed) || parsed.notes.length < 1024);
-  ok('3: protected money keys survived the budget', parsed.total === 4999 && parsed.subtotal === 4500 && parsed.tax === 499);
+  ok('3: protected money keys survived the budget', parsed.total === 4999 && parsed.subtotal === 4500);
   ok('3: the result is valid JSON (no mid-value truncation)', typeof parsed === 'object' && parsed.id === 't1');
+}
+
+// 3b. Phase 1b-i: `tax` is NOT a protected money key any more. It is shed
+// like any other non-protected field when the budget demands it. (Before the
+// drop it was in SYNC_PROTECTED_KEYS and always survived.)
+{
+  // Non-blob-like filler (punctuation) so the value survives sanitizing and the
+  // byte budget is the only thing that can remove it — i.e. this asserts
+  // protection, not blob-stripping.
+  const taxBlob = 'tax-value;'.repeat(24 * 1024);
+  const json = toBoundedSyncJson({ id: 't3b', total: 4999, subtotal: 4500, tax: taxBlob }, 64 * 1024);
+  const parsed = JSON.parse(json);
+  ok('3b: a peer `tax` field is shed by the byte budget (no longer protected)', !('tax' in parsed));
+  ok('3b: protected money fields alongside it still survive', parsed.total === 4999 && parsed.subtotal === 4500);
+}
+
+// 3c. A legacy peer payload that still carries a numeric `tax` syncs as a plain
+// unknown key (it is not stripped by sanitizing — only un-protected), so a
+// pre-drop device cannot corrupt a post-drop one by asserting anything about it.
+{
+  const parsed = JSON.parse(toBoundedSyncJson({ id: 't3c', total: 100, subtotal: 90, tax: 10 }, 64 * 1024));
+  ok('3c: a small legacy `tax` key is carried, never interpreted', parsed.tax === 10 && parsed.total === 100);
 }
 
 // 4. A payload that CANNOT fit (all fields protected) passes through intact.
 {
   const big = 'y'.repeat(200 * 1024);
-  const payload = { total: 100, subtotal: 90, tax: 10, items: [big, big, big] };
+  const payload = { total: 100, subtotal: 90, items: [big, big, big] };
   const json = toBoundedSyncJson(payload, 64 * 1024);
   const parsed = JSON.parse(json);
-  ok('4: an un-sheddable payload syncs intact (money protected)', parsed.total === 100 && parsed.subtotal === 90 && parsed.tax === 10);
+  ok('4: an un-sheddable payload syncs intact (money protected)', parsed.total === 100 && parsed.subtotal === 90);
   ok('4: it is still valid JSON', Array.isArray(parsed.items));
 }
 

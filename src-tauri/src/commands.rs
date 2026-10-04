@@ -73,7 +73,8 @@ fn now_iso() -> String {
 pub struct ProcessRawScanRequest {
     pub supplier_name: String,
     pub bounding_boxes: Vec<OcrBoundingBox>,
-    pub reported_tax: f64,
+    // Phase 1b-i (Addendum B): no `reported_tax` — the field is removed from
+    // the request contract, not kept optional.
     pub reported_freight: f64,
     pub reported_grand_total: f64,
 }
@@ -124,7 +125,6 @@ fn process_scan_inner(
 
     let invariant_report = evaluate_invoice_invariants(
         &math_tuples,
-        req.reported_tax,
         req.reported_freight,
         req.reported_grand_total,
     );

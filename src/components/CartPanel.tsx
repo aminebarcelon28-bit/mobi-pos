@@ -125,7 +125,6 @@ export const CartPanel: React.FC = () => {
       pricingTier,
       storeCreditApplied: storeCreditApplied || 0,
       voucherCreditApplied,
-      vatRate,
     });
     const saleTotalForCap = Math.max(0, liveTotals.subtotalAfterDiscount - voucherCreditApplied);
     const check = canRedeemPoints(currentCustomer.loyaltyPoints ?? 0, pointConvertPreset, saleTotalForCap, loyaltyCfg);
@@ -163,8 +162,6 @@ export const CartPanel: React.FC = () => {
     usePosStore((s) => (s as unknown as { voucherCreditApplied?: number }).voucherCreditApplied ?? 0) || 0;
   const voucherCode =
     usePosStore((s) => (s as unknown as { voucherCode?: string | null }).voucherCode ?? null);
-  const vatRate =
-    usePosStore((s) => (s.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate ?? 0) || 0;
 
   const handleOpenPriceOverride = (item: typeof cart[0], e: React.MouseEvent) => {
     e.stopPropagation();
@@ -359,13 +356,11 @@ export const CartPanel: React.FC = () => {
     storeCreditApplied,
     voucherCreditApplied,
     tradeInCredit,
-    vatRate,
   });
   const grossTotal = totals.grossSubtotal;
   const totalDiscount = totals.discountTotal;
   const subtotal = totals.subtotalAfterDiscount;
   const total = totals.total;
-  const taxTotal = totals.tax;
   const tradeInCreditApplied = totals.tradeInCreditApplied;
   // Settlement uses the TRUE buyback (unclamped) against the payable base
   // (post-discount) so a soulte (Net<0) still surfaces when buyback exceeds
@@ -1254,7 +1249,7 @@ export const CartPanel: React.FC = () => {
         )}
 
         {/* Breakdown of Subtotal, Discounts and Store Credit if active */}
-        {(totalDiscount > 0 || (storeCreditApplied || 0) > 0 || voucherCreditApplied > 0 || tradeInCreditApplied > 0 || taxTotal > 0) && (
+        {(totalDiscount > 0 || (storeCreditApplied || 0) > 0 || voucherCreditApplied > 0 || tradeInCreditApplied > 0) && (
           <div className="space-y-1 pb-1.5 border-b border-pos-border/40 text-xs font-mono">
             <div className="flex justify-between items-center text-pos-muted">
               <span className="text-[11px] font-sans font-semibold">Sous-Total Brut :</span>
@@ -1290,12 +1285,6 @@ export const CartPanel: React.FC = () => {
                   <RefreshCw className="w-3 h-3 text-emerald-300" /> Reprise Déduite :
                 </span>
                 <span className="text-emerald-300">-{formatDZD(tradeInCreditApplied)}</span>
-              </div>
-            )}
-            {taxTotal > 0 && (
-              <div className="flex justify-between items-center text-cyan-300 font-bold">
-                <span className="text-[11px] font-sans">TVA ({vatRate}%) :</span>
-                <span>+{formatDZD(taxTotal)}</span>
               </div>
             )}
           </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Printer, ShieldAlert, CheckCircle2, ArrowDownCircle } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
@@ -20,7 +20,7 @@ import {
   DRAWER_REASON_PREFIXES,
 } from '../../utils/cashTerms';
 import { ZReportPaper, type ZReportSnapshot } from '../receipt/ZReportPaper';
-import { buildZSnapshot } from '../../utils/zReportSnapshot';
+import { blindRevealAuditDetail, buildZSnapshot } from '../../utils/zReportSnapshot';
 
 export const ShiftZReportModal: React.FC = () => {
   const {
@@ -38,9 +38,14 @@ export const ShiftZReportModal: React.FC = () => {
     repairOrders,
     tradeIns,
     receiptSettings,
+    logSecurityAction,
   } = usePosStore();
   const [actualCountedCash, setActualCountedCash] = useState<number>(0);
   const [isBlindRevealed, setIsBlindRevealed] = useState<boolean>(false);
+  // One audit line per REVEAL, not per keystroke: `onChangeMinor` fires on every
+  // digit, and a journal that grows with the length of the number is noise that
+  // hides the event it exists to record.
+  const blindRevealAuditedRef = useRef(false);
   const [cashDropInput, setCashDropInput] = useState<number>(0);
   const [cashDropReason, setCashDropReason] = useState<string>('Dépôt coffre-fort mi-journée');
   const { showToast } = useToast();
@@ -51,7 +56,7 @@ export const ShiftZReportModal: React.FC = () => {
     (usePosStore.getState() as unknown as { activeCashier?: { name?: string } | null })
       .activeCashier?.name?.trim() || 'Caissier';
 
-  useEffect(() => { if (activeModal !== 'shift_zreport') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+  useEffect(() => { if (activeModal !== 'shift_zreport') return; blindRevealAuditedRef.current = false; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
   if (activeModal !== 'shift_zreport') return null;
 
@@ -138,6 +143,10 @@ export const ShiftZReportModal: React.FC = () => {
     cashDrops: cashDrops || [],
     payouts: payouts || [],
     countedCash: actualCountedCash,
+    // This Z is an INTERIM preview: until a digit is tallied there is no counted
+    // amount, so the document must say "non effectué" rather than print 0 and a
+    // fabricated -expected variance. The reveal flag is exactly that signal.
+    blindCountPerformed: isBlindRevealed,
     closedAtISO: new Date().toISOString(),
     closedShiftCount,
     fallbackCashier: lockScreenCashier,
@@ -183,6 +192,7 @@ export const ShiftZReportModal: React.FC = () => {
           expectedCash,
           countedCash: actualCountedCash,
           variance,
+          blindCountPerformed: isBlindRevealed,
         })
       );
       showToast(
@@ -349,6 +359,24 @@ export const ShiftZReportModal: React.FC = () => {
                   valueMinor={dinarsToMinor(actualCountedCash || 0)}
                   onChangeMinor={(minor) => {
                     setActualCountedCash(toLegacyReal(minor));
+                    // The FIRST keystroke reveals the theoretical balance and the
+                    // variance — the collusion surface of a blind count — and it
+                    // was written with NO audit trail at all. Journal it here,
+                    // before the figure is on screen, with no monetary value in
+                    // the entry (see `blindRevealAuditDetail`).
+                    //
+                    // Not awaited on purpose: `logSecurityAction` never re-throws
+                    // (createUISlice — audit is a side-effect of the primary
+                    // action), and an awaited write would stall the money input
+                    // that produced it.
+                    if (!blindRevealAuditedRef.current) {
+                      blindRevealAuditedRef.current = true;
+                      void logSecurityAction(
+                        'Révolution du solde théorique — Z à Aveugle',
+                        blindRevealAuditDetail({ zNumber, cashier: lockScreenCashier }),
+                        lockScreenCashier
+                      );
+                    }
                     setIsBlindRevealed(true);
                   }}
                   placeholder="ex: 31 305 DA"

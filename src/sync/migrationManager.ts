@@ -199,7 +199,6 @@ export class MigrationManager {
         receipt_number: t.receiptNumber || t.id,
         customer_id: t.customer?.id || null,
         subtotal: t.subtotal || 0,
-        tax: (t as unknown as { tax?: number }).tax || 0,
         discount_total: t.discountTotal || 0,
         total: t.total || 0,
         cost_total: t.costTotal || 0,
@@ -221,9 +220,9 @@ export class MigrationManager {
       }));
       for (const t of localTxns) {
         await local.execute(
-          `INSERT OR REPLACE INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total, cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due, status, json_payload, device_id, idempotency_key, sync_status, created_at, updated_at, deleted)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
-          [t.id, t.receipt_number, t.customer_id, t.subtotal, t.tax, t.discount_total, t.total, t.cost_total, t.profit, t.profit_margin, t.pricing_tier, t.payment_method, t.cash_tendered, t.change_due, t.status, t.json_payload, t.device_id, t.idempotency_key, t.sync_status, t.created_at, t.updated_at, t.deleted ?? 0]
+          `INSERT OR REPLACE INTO transactions (id, receipt_number, customer_id, subtotal, discount_total, total, cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due, status, json_payload, device_id, idempotency_key, sync_status, created_at, updated_at, deleted)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+          [t.id, t.receipt_number, t.customer_id, t.subtotal, t.discount_total, t.total, t.cost_total, t.profit, t.profit_margin, t.pricing_tier, t.payment_method, t.cash_tendered, t.change_due, t.status, t.json_payload, t.device_id, t.idempotency_key, t.sync_status, t.created_at, t.updated_at, t.deleted ?? 0]
         );
       }
     }
@@ -231,16 +230,16 @@ export class MigrationManager {
     for (let i = 0; i < localTxns.length; i += 50) {
       const chunk = localTxns.slice(i, i + 50);
       const stmts = chunk.map((t) => ({
-        sql: `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total,
+        sql: `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total,
           total, cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
           status, json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT(id) DO UPDATE SET total=excluded.total, status=excluded.status, json_payload=excluded.json_payload,
           version=excluded.version, updated_at=excluded.updated_at, deleted=excluded.deleted, sync_status='synced'
           WHERE excluded.version >= transactions.version`,
         args: [
           t.id as InValue, t.receipt_number as InValue, (t.customer_id ?? null) as InValue,
-          Number(t.subtotal ?? 0) as InValue, Number(t.tax ?? 0) as InValue, Number(t.discount_total ?? 0) as InValue,
+          Number(t.subtotal ?? 0) as InValue, Number(t.discount_total ?? 0) as InValue,
           Number(t.total ?? 0) as InValue, Number(t.cost_total ?? 0) as InValue, Number(t.profit ?? 0) as InValue,
           Number(t.profit_margin ?? 0) as InValue, (t.pricing_tier ?? 'Retail') as InValue,
           (t.payment_method ?? 'Espèces') as InValue, Number(t.cash_tendered ?? 0) as InValue,

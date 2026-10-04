@@ -21,7 +21,7 @@ import type {
   TradeInItem,
 } from '../types/pos';
 import { formatDZD, formatDateTime, faitALine } from '../types/pos';
-import { fiscalIdentifierLine, tvaSplitFromTotal } from './receiptMath';
+import { fiscalIdentifierLine } from './receiptMath';
 import { warrantyCertificateDates } from './warrantyResolver';
 import {
   STORE_RETURN_POLICY,
@@ -159,12 +159,8 @@ export function receiptText(tx: SaleTransaction, settings?: ReceiptSettings | nu
   if (vm.avoirCredit > 0) {
     lines.push(cell('AVOIR CLIENT DEDUIT:', `-${formatDZD(vm.avoirCredit)}`));
   }
-  const tva = tvaSplitFromTotal(vm.netDue, settings?.vatRate);
-  if (tva) {
-    lines.push(cell('HT:', formatDZD(tva.ht)));
-    lines.push(cell(`TVA ${tva.rate}%:`, `+${formatDZD(tva.tva)}`));
-    lines.push(cell('TTC:', formatDZD(tva.ttc)));
-  }
+// Phase 1b-i: no TVA/HT/TTC block on the mobile twin either — the receipt is
+  // HT-only and states the net.
   lines.push(cell(tx.isRefund ? 'TOTAL REMBOURSE:' : 'TOTAL NET A PAYER:', formatDZD(vm.netDue)));
   // Two-way exchange leg (never a cart line): print the deduction + soulte
   // so the thermal ticket reconciles like the desktop net receipt.
@@ -310,6 +306,12 @@ export interface ZReportTextData {
   expectedCash: number;
   countedCash: number;
   variance: number;
+  /**
+   * False when no blind count was tallied (interim Z preview). Absent means
+   * "performed" — the pre-close Z always has one, so legacy callers are
+   * unchanged and no document loses its figures.
+   */
+  blindCountPerformed?: boolean;
   dropsList?: Array<{ reason: string; amount: number }>;
 }
 
@@ -357,9 +359,16 @@ export function zReportText(d: ZReportTextData): string {
   if (d.payouts > 0) lines.push(row('Décaissements:', `-${formatDZD(d.payouts)}`));
   lines.push(rule());
   lines.push(row('ESPECES THEORIQUES:', formatDZD(d.expectedCash)));
-  lines.push(row('Compte physique:', formatDZD(d.countedCash)));
-  const v = d.variance >= 0 ? `+${formatDZD(d.variance)}` : formatDZD(d.variance);
-  lines.push(row('ECART:', v));
+  if (d.blindCountPerformed === false) {
+    // No count → no counted amount and no variance. Printing 0 and the negative
+    // of the expected balance would be a fabricated shortage on the mobile twin.
+    lines.push(row('Compte physique:', '(non effectué)'));
+    lines.push(row('ECART:', '(non effectué)'));
+  } else {
+    lines.push(row('Compte physique:', formatDZD(d.countedCash)));
+    const v = d.variance >= 0 ? `+${formatDZD(d.variance)}` : formatDZD(d.variance);
+    lines.push(row('ECART:', v));
+  }
   lines.push(rule('='));
   lines.push(center('Signature: ________________'));
   lines.push(center('Signature Responsable / Gérant: ______'));

@@ -87,7 +87,8 @@ console.log('\n--- Rule 3: money-path float registry (Stage E expiry) ---');
   // file -> max allowed hits (author-time baseline, Stage A).
   const REGISTRY = {
     'src/utils/receiptMath.ts': 23,
-    'src/utils/taxEngine.ts': 1,
+    // Phase 1b-i: taxEngine.ts is DELETED — its registry entry goes with it
+    // (the file may not reappear; the zero-tax gate greps src/ for tax tokens).
     'src/utils/moneyInput.ts': 1,
     'src/utils/cashTerms.ts': 8,
     'src/utils/receiptViewModel.ts': 13,
@@ -125,8 +126,8 @@ console.log('\n--- Rule 4: Phase 1c input sweep (one parsing path) ---');
 {
   // file -> max remaining legacy-parser hits. Every money input in these
   // files parses via MoneyInput (Money.fromUserInput); remaining hits are
-  // enumerated non-money uses (percent, qty, volume slider, OCR extraction,
-  // 1b-i-deleted TVA field). Any NEW money-field parser fails the build.
+  // enumerated non-money uses (percent, qty, volume slider, OCR extraction).
+  // Any NEW money-field parser fails the build.
   const ADOPTION = {
     'src/components/modals/KittingBundleModal.tsx': { pla: 0, pf: 0 },
     'src/components/modals/PurchaseOrderModal.tsx': { pla: 0, pf: 0 },
@@ -149,7 +150,7 @@ console.log('\n--- Rule 4: Phase 1c input sweep (one parsing path) ---');
     'src/components/modals/ShiftOpenModal.tsx': { pla: 0, pf: 0 },
     'src/components/modals/ShiftMovementModal.tsx': { pla: 0, pf: 0 },
     'src/components/modals/SettingsModal.tsx': { pla: 0, pf: 1 }, // audio volume slider
-    'src/components/modals/InvoiceIngestionModal.tsx': { pla: 2, pf: 0 }, // OCR extraction + 1b-i-deleted TVA field
+    'src/components/modals/InvoiceIngestionModal.tsx': { pla: 1, pf: 0 }, // OCR cost extraction (Phase 1b-i removed the TVA field: 2 -> 1)
     // PoReviewScreen DEFERRED (Phase 1c doc §5): 7 parseFloat money inputs sit
     // inside another lane's in-flight card/table rewrite and cannot be
     // committed without absorbing it. Dot-decimals preserved (no destruction);

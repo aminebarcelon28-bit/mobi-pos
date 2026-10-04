@@ -69,8 +69,6 @@ export const PaymentModal: React.FC = () => {
     usePosStore((s) => (s as unknown as { voucherCreditApplied?: number }).voucherCreditApplied ?? 0) || 0;
   const voucherCode =
     usePosStore((s) => (s as unknown as { voucherCode?: string | null }).voucherCode ?? null);
-  const vatRate =
-    usePosStore((s) => (s.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate ?? 0) || 0;
   // Phase 3: staged two-way exchange (memory-only until checkout commits).
   const stagedTradeIn = usePosStore((s) => s.stagedTradeIn);
   const exchangeSoultePayout = usePosStore((s) => s.exchangeSoultePayout);
@@ -79,21 +77,20 @@ export const PaymentModal: React.FC = () => {
   const tradeInCredit = Math.max(0, Math.round(Number(stagedTradeIn?.buybackValue) || 0));
 
   // Canonical totals — the same computeCartTotals() base as CartPanel,
-  // MobileCheckoutTab and processPayment (signed returns, credits, VAT).
+  // MobileCheckoutTab and processPayment (signed returns, credits). HT-only:
+  // there is no VAT term in the base (Phase 1b-i).
   // grossSubtotal = signed catalog value ("SOUS-TOTAL BRUT" on the ticket);
-  // netToPay = amount the tender must cover (net of credits, incl. VAT).
+  // netToPay = amount the tender must cover (net of credits).
   const totals = computeCartTotals(cart, {
     pricingTier,
     storeCreditApplied: appliedCredit,
     voucherCreditApplied,
     tradeInCredit,
-    vatRate,
   });
   const grossSubtotal = totals.grossSubtotal;
   const cartDiscount = totals.discountTotal;
   const netSubtotal = totals.subtotalAfterDiscount;
   const netToPay = totals.total;
-  const taxAmount = totals.tax;
   const tradeInCreditApplied = totals.tradeInCreditApplied;
   // Settlement on the TRUE buyback (unclamped) vs the payable base so the
   // soulte direction survives the totals clamp.
@@ -267,10 +264,6 @@ export const PaymentModal: React.FC = () => {
       0,
       Math.round(Number((live as unknown as { voucherCreditApplied?: number }).voucherCreditApplied) || 0)
     );
-    const liveVat = Math.max(
-      0,
-      Number((live.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate) || 0
-    );
     const liveStaged = live.stagedTradeIn;
     const liveTradeInCredit = Math.max(0, Math.round(Number(liveStaged?.buybackValue) || 0));
     const submitTotals = computeCartTotals(liveCart, {
@@ -278,7 +271,6 @@ export const PaymentModal: React.FC = () => {
       storeCreditApplied: appliedCredit,
       voucherCreditApplied: liveVoucherCredit,
       tradeInCredit: liveTradeInCredit,
-      vatRate: liveVat,
     });
     const submitNet = submitTotals.total;
     // B-026: refund-due carts submit as a pure disbursement — tender covers 0
@@ -565,7 +557,7 @@ export const PaymentModal: React.FC = () => {
             </div>
 
             {/* Subtotal & Store Credit breakdown pill */}
-              {(cartDiscount > 0 || appliedCredit > 0 || voucherCreditApplied > 0 || tradeInCreditApplied > 0 || taxAmount > 0) && (
+              {(cartDiscount > 0 || appliedCredit > 0 || voucherCreditApplied > 0 || tradeInCreditApplied > 0) && (
               <div className="pt-2 border-t border-pos-border/60 flex items-center justify-between text-xs font-mono">
                 <div className="flex items-center gap-2 text-pos-muted flex-wrap">
                   <span>Sous-total: {formatDZD(grossSubtotal)}</span>
@@ -586,9 +578,6 @@ export const PaymentModal: React.FC = () => {
                     <span className="text-emerald-400 font-bold flex items-center gap-1">
                       <RefreshCw className="w-3.5 h-3.5" /> Reprise: -{formatDZD(tradeInCreditApplied)}
                     </span>
-                  )}
-                  {taxAmount > 0 && (
-                    <span className="text-cyan-300 font-bold">TVA ({vatRate}%): +{formatDZD(taxAmount)}</span>
                   )}
                 </div>
                 <button

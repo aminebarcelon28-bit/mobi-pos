@@ -46,7 +46,7 @@ CREATE TABLE customers (
 );
 CREATE TABLE transactions (
   id TEXT PRIMARY KEY, receipt_number TEXT NOT NULL UNIQUE, customer_id TEXT,
-  subtotal REAL DEFAULT 0, tax REAL DEFAULT 0, discount_total REAL DEFAULT 0,
+  subtotal REAL DEFAULT 0, discount_total REAL DEFAULT 0,
   total REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'COMPLETED',
   json_payload TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL,
   idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
@@ -152,8 +152,8 @@ function upsertSql(entity) {
           version=excluded.version, updated_at=excluded.updated_at
         WHERE excluded.version >= customers.version`;
     case 'order':
-      return `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total, status, json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?, 'synced', ?,?,?,0)
+      return `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, discount_total, total, status, json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
+        VALUES (?,?,?,?,?,?,?,?,?,?, 'synced', ?,?,?,0)
         ON CONFLICT(id) DO UPDATE SET status=excluded.status, total=excluded.total, json_payload=excluded.json_payload,
           version=excluded.version, updated_at=excluded.updated_at
         WHERE excluded.version >= transactions.version`;
@@ -222,7 +222,7 @@ function argsFor(entity, id, p, deviceId, key, ver, ts) {
       return [id, p.name ?? p.phone ?? 'C', p.phone ?? '', JSON.stringify(p), deviceId, key, ver, ts];
     case 'order':
       return [id, p.receipt_number ?? p.receiptNumber ?? id, p.customer_id ?? p.customerId ?? null,
-        Number(p.subtotal ?? 0), Number(p.tax ?? 0), Number(p.discount_total ?? 0), Number(p.total ?? 0),
+        Number(p.subtotal ?? 0), Number(p.discount_total ?? 0), Number(p.total ?? 0),
         p.status ?? 'COMPLETED', JSON.stringify(p), deviceId, key, ver, p.created_at ?? ts, ts];
     case 'order_item':
       return [id, p.transaction_id ?? p.transactionId, p.product_id ?? p.productId,
@@ -422,7 +422,7 @@ async function main() {
   // ── [3] full sale chain desktop → mobile (order + items + ledger) ──────
   console.log('\n[3] desktop sale chain (order + item + ledger) → mobile');
   await enqueue(desktop, 'order', 'tx1', {
-    receipt_number: 'R-001', customer_id: 'c1', subtotal: 90000, tax: 0,
+    receipt_number: 'R-001', customer_id: 'c1', subtotal: 90000,
     discount_total: 0, total: 90000, status: 'COMPLETED', version: 1, created_at: now(),
   });
   await enqueue(desktop, 'order_item', 'tx1-i1', {
@@ -504,7 +504,7 @@ async function main() {
   console.log('\n[7] C5 idempotent replay (same key twice)');
   const cntBefore = (await cloud.execute(`SELECT COUNT(*) n FROM transactions WHERE id='tx1'`)).rows[0].n;
   await enqueue(desktop, 'order', 'tx1', {
-    receipt_number: 'R-001', customer_id: 'c1', subtotal: 90000, tax: 0,
+    receipt_number: 'R-001', customer_id: 'c1', subtotal: 90000,
     discount_total: 0, total: 90000, status: 'COMPLETED', version: 2, created_at: now(),
   });
   await pushOutbox(desktop, 'desktop');

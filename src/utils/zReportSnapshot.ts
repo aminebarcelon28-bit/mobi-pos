@@ -56,6 +56,15 @@ export interface BuildZSnapshotArgs {
   payouts: PayoutLike[];
   /** Physical count for the reconciliation block. */
   countedCash: number;
+  /**
+   * Whether a blind count was actually tallied. The interim Z report is a preview
+   * printed BEFORE any count, so its `countedCash` is 0 and its derived variance
+   * would read as a full-drawer shortage; it passes `false` and all three
+   * renderers print "non effectué" instead of a figure. Defaults to `true` — the
+   * close ticket is gated on a positive count (`ShiftCloseModal`), so every other
+   * caller keeps its current numbers.
+   */
+  blindCountPerformed?: boolean;
   /** Frozen at snapshot time (pre-close for the close ticket). */
   closedAtISO: string;
   /** Closed-shift count feeding the Z ticket sequence. */
@@ -157,8 +166,39 @@ export function buildZSnapshot(a: BuildZSnapshotArgs): ZReportSnapshot {
     // stays exact fabricated ±1 phantom variances on half-dinar rows.
     countedCash: Math.max(0, Number(a.countedCash) || 0),
     variance: (Number(a.countedCash) || 0) - expectedCash,
+    // Carried, not inferred from `countedCash`: a legitimately empty drawer is a
+    // real count of 0, and an un-counted drawer is a different fact entirely.
+    // Only the caller knows which one it is.
+    blindCountPerformed: a.blindCountPerformed ?? true,
     dropsList: (a.cashDrops || [])
-      .filter((d) => inShiftWindow(d.timestamp))
-      .map((d) => ({ id: d.id, reason: d.reason, amount: d.amount })),
+        .filter((d) => inShiftWindow(d.timestamp))
+        .map((d) => ({ id: d.id, reason: d.reason, amount: d.amount })),
   };
+}
+
+/**
+ * Audit detail for the blind-count reveal, and nothing else.
+ *
+ * The blind count exists so the cashier commits to a figure BEFORE the software
+ * shows the expected drawer balance. That figure is the whole collusion surface:
+ * once revealed, the operator can adjust the count to it. So the audit line
+ * records THAT a reveal happened, and deliberately records NO monetary value —
+ * not the counted amount, not the expected balance, not the variance.
+ *
+ * This is not squeamishness: `security_audit_logs` is synced to peers and
+ * included in the backup merge, so a variance figure written here would land in
+ * the one table every device and every restore can read, outliving the shift it
+ * was meant to grade. `zNumber` is a document number, not a concealed value, so
+ * it stays — an accountability event with no document reference is useless.
+ *
+ * The type deliberately accepts no money fields, so a future caller cannot widen
+ * it by accident: the only inputs are the ones safe to journal.
+ */
+export function blindRevealAuditDetail(args: { zNumber?: string | null; cashier?: string | null }): string {
+  const z = (args.zNumber ?? '').trim() || 'Z (non numérotée)';
+  const who = (args.cashier ?? '').trim() || 'Caissier';
+  return [
+    `Réconciliation à Aveugle — révélation du solde théorique (${z}) par ${who}.`,
+    "Montant compté, solde attendu et écart NON journalisés (valeur masquée).",
+  ].join(' ');
 }

@@ -19,7 +19,6 @@
 import type { SaleTransaction } from '../types/pos';
 import type { CartItem, PricingTier, TradeInDirection } from '../types/pos';
 import { getProductPriceForTier } from './pricingEngine';
-import { computeTax } from './taxEngine';
 
 /**
  * Gross catalog value of a transaction: sum of (unit price x qty) over all
@@ -79,23 +78,6 @@ export function fiscalIdentifierLine(settings?: FiscalSettingsLike | null): stri
   if ((settings.art || '').trim()) parts.push(`ART: ${(settings.art || '').trim()}`);
   if (parts.length > 0) return parts.join(' | ');
   if ((settings.taxNumber || '').trim()) return `NIF / RC : ${(settings.taxNumber || '').trim()}`;
-  return null;
-}
-
-export interface TvaSplit {
-  ht: number;
-  tva: number;
-  ttc: number;
-  rate: number;
-}
-
-/**
- * TVA breakdown — REMOVED (owner-confirmed no-TVA product, Gate Addendum A).
- * Always returns null so every receipt/print path renders HT-only. The `rate`
- * argument is ignored. Kept (not deleted) until the Phase 1b schema drop
- * removes the `tax` column and `vatRate` plumbing in lockstep.
- */
-export function tvaSplitFromTotal(_total: number, _vatRate?: number | null): TvaSplit | null {
   return null;
 }
 
@@ -256,8 +238,9 @@ export function computeSalesMetrics(
  * - `storeCreditApplied` / `voucherCreditApplied`: payment-method credits.
  *   They are payment, not discount (an avoir pays the ticket, it is not a
  *   commercial discount).
- * - NO TAX (no-TVA product, Gate Addendum A): tva is always 0,
- *   ht = pre-credit subtotal, ttc = ht − credits.
+* - NO TAX (no-TVA product, Gate Addendum A + Phase 1b-i): there is no tax
+  *   term at all — `ht` = pre-credit subtotal, `ttc` = ht − credits, and the
+  *   result carries no `tax`/`tva` field (they were deleted, not zeroed).
  *
  * Money stays integer DZD: inputs rounded on entry, the cart-% multiplication
  * is the only rounding point.
@@ -273,11 +256,6 @@ export interface CartTotalsOptions {
    * cart line (corrupts gross + FIFO).
    */
   tradeInCredit?: number;
-  /**
-   * DEPRECATED (no-TVA product, Gate Addendum A): ignored — every sale is
-   * HT-only. Kept so existing call sites compile until Phase 1b removes it.
-   */
-  vatRate?: number;
 }
 
 /**
@@ -335,14 +313,10 @@ export interface CartTotals {
   net: number;
   /** Taxable base: PRE-credit subtotal clamped >= 0 (credits are payment). */
   ht: number;
-  /** VAT amount → persisted into the order row `tax` column. */
-  tva: number;
-  /** Amount the tender must cover (ht + tva, always >= 0). */
+  /** Amount the tender must cover (ht − credits, always >= 0). */
   ttc: number;
   /** Alias of ttc (what processPayment stores as `total`). */
   total: number;
-  /** Alias of tva (what processPayment stores as `tax`). */
-  tax: number;
   /**
    * B-026: cash/store-credit owed BACK when returns dominate (net < 0).
    * Always >= 0; 0 when the cart is payable. UI must branch on this —
@@ -417,9 +391,11 @@ export function computeCartTotals(lines: CartItem[], opts: CartTotalsOptions = {
   );
   const credits = storeCreditApplied + voucherCreditApplied + tradeInCreditApplied;
   const net = subtotalAfterDiscount - credits;
-  // NO-TVA (Gate Addendum A): opts.vatRate is ignored — every sale is
-  // HT-only. computeTax is a zero shim (tva 0, ttc ht).
-  const { ht, tva } = computeTax(Math.max(0, subtotalAfterDiscount), 0);
+  // Phase 1b-i: the `taxEngine` zero shim is deleted. `ht` is the taxable base
+  // (pre-credit subtotal, clamped >= 0) and there is no VAT to add — every sale
+  // is HT-only by product decision (Gate Addendum A), and the `tax` column that
+  // used to receive the zero is dropped in migration 108.
+  const ht = Math.max(0, subtotalAfterDiscount);
   const ttc = Math.max(0, ht - credits);
   return {
     grossSubtotal,
@@ -432,14 +408,12 @@ export function computeCartTotals(lines: CartItem[], opts: CartTotalsOptions = {
     tradeInCreditApplied,
     net,
     ht,
-    tva,
     ttc,
     total: ttc,
-    tax: tva,
     // B-026: signed net can go negative — surface the disbursement amount.
-    // With VAT, the refund is credits minus what was actually owed.
+    // HT-only, so what was owed is `ht` itself: credits minus the taxable base.
     refundDue:
-      subtotalAfterDiscount < 0 ? Math.max(0, -net) : Math.max(0, credits - (ht + tva)),
+      subtotalAfterDiscount < 0 ? Math.max(0, -net) : Math.max(0, credits - ht),
   };
 }
 

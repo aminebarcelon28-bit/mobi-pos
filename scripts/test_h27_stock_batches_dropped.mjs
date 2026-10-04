@@ -56,11 +56,16 @@ rmSync(SHIM, { recursive: true, force: true });
 mkdirSync(join(SHIM, 'db'), { recursive: true });
 mkdirSync(join(SHIM, 'lane'), { recursive: true });
 copyFileSync(join(SRC_SYNC, 'genericApply.ts'), join(SHIM, 'lane', 'genericApply.ts'));
+// genericApply also imports `../db/imeiAnchorSchema` (the IMEI-anchor column
+// probe). It is a dependency-free module, so the REAL source is copied next to
+// the stubs — no behaviour is faked.
+copyFileSync(join(ROOT, 'src', 'db', 'imeiAnchorSchema.ts'), join(SHIM, 'db', 'imeiAnchorSchema.ts'));
 {
   const p = join(SHIM, 'lane', 'genericApply.ts');
   let t = readFileSync(p, 'utf8');
   t = t.replace(/from '\.\.\/db\/database'/g, "from '../db/database.js'")
-       .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'");
+       .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'")
+       .replace(/from '\.\.\/db\/imeiAnchorSchema'/g, "from '../db/imeiAnchorSchema.ts'");
   writeFileSync(p, t);
 }
 writeFileSync(join(SHIM, 'db', 'database.js'), `

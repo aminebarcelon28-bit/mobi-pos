@@ -18,11 +18,11 @@ import { pathToFileURL as toUrl } from 'node:url';
 const ROOT = process.cwd();
 
 async function loadReceiptMath() {
-  // receiptMath.ts imports ./pricingEngine + ./taxEngine (value imports), and
-  // a data: URL module cannot resolve relative specifiers — so transpile each
-  // dependency to its own data: URL first, then rewrite the specifiers to
-  // point at them. Type-only imports (../types/pos) are elided by the
-  // transpiler and need no handling.
+  // receiptMath.ts imports ./pricingEngine (value import), and a data: URL
+  // module cannot resolve relative specifiers — so transpile each dependency to
+  // its own data: URL first, then rewrite the specifiers to point at them.
+  // Phase 1b-i: ./taxEngine is gone (module deleted), so there is one less
+  // dependency to rewire here.
   const ts = await import('typescript');
   const fs = await import('node:fs');
   const transpileFile = (absPath) => {
@@ -33,11 +33,9 @@ async function loadReceiptMath() {
     }).outputText;
   };
   const toDataUrl = (js) => 'data:text/javascript;base64,' + Buffer.from(js).toString('base64');
-  const taxUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/taxEngine.ts`));
   const pricingUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/pricingEngine.ts`));
   let src = fs.readFileSync(`${ROOT}/src/utils/receiptMath.ts`, 'utf8');
   src = src.replace(/from\s+(['"])\.\/pricingEngine\1/g, `from '${pricingUrl}'`);
-  src = src.replace(/from\s+(['"])\.\/taxEngine\1/g, `from '${taxUrl}'`);
   const out = ts.transpileModule(src, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
     fileName: 'receiptMath.ts',

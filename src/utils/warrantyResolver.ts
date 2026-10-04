@@ -143,6 +143,29 @@ export function coerceWarrantyMonths(value: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * A warranty value that is a DELIBERATE zero, as opposed to one that merely
+ * coerces/floors/clamps down to zero.
+ *
+ * `coerceWarrantyMonths` clamps, so `-6`, `0.4` and `Infinity` all come back as
+ * `0`. Reading those as an owner decision would void coverage nobody refused —
+ * BUG-WAR-03 one layer down, and unreachable by the explicit-disabled flag that
+ * already exists for exactly this. Only a value that IS zero counts.
+ *
+ * It must also not SHADOW a well-formed sibling: a malformed `warrantyMonths`
+ * next to a clean `garantie: 12` has to yield 12, not "absent".
+ */
+function isLiteralZeroTerm(value: unknown): boolean {
+  if (value === 0) return true;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    const n = Number(trimmed);
+    return Number.isFinite(n) && n === 0;
+  }
+  return false;
+}
+
 function readWarrantyField(obj: Record<string, unknown> | null | undefined): number | undefined {
   if (!obj) return undefined;
   const candidates = [
@@ -154,7 +177,10 @@ function readWarrantyField(obj: Record<string, unknown> | null | undefined): num
   ];
   for (const c of candidates) {
     const parsed = coerceWarrantyMonths(c);
-    if (parsed !== undefined) return parsed;
+    if (parsed === undefined) continue;
+    // A zero that only appears after clamping is malformed input, not a decision.
+    if (parsed === 0 && !isLiteralZeroTerm(c)) continue;
+    return parsed;
   }
   return undefined;
 }

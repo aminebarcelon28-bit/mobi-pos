@@ -51,7 +51,6 @@ export interface ExtractedDocumentSummary {
   detected_invoice_number?: string | null;
   detected_date?: string | null;
   detected_subtotal?: number | null;
-  detected_tax?: number | null;
   detected_freight?: number | null;
   detected_grand_total?: number | null;
 }
@@ -66,7 +65,7 @@ export interface ProcessRawScanResponse {
 export interface ProcessRawScanRequest {
   supplier_name: string;
   bounding_boxes: OcrBoundingBox[];
-  reported_tax: number;
+  // Phase 1b-i (Addendum B): no reported-tax field — the software models no tax.
   reported_freight: number;
   reported_grand_total: number;
 }

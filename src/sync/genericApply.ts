@@ -23,6 +23,7 @@ import type Database from '@tauri-apps/plugin-sql';
 import { db as dexieDb } from '../db/database';
 import type { CreditVoucher, Customer, LoyaltyLedgerEntry } from '../types/pos';
 import { sanitizeSyncPayload, utcNowIso, isDeviceLocalSettingKey, RECEIPT_SETTINGS_KEY, isRetryableDbError } from '../db/sqlPluginAdapter';
+import { imeiAnchorColumnsPresent as probeImeiAnchorColumns } from '../db/imeiAnchorSchema';
 
 /** Singular push entity_type -> plural remote KV table. */
 export const GENERIC_TABLES: Record<string, string> = {
@@ -97,31 +98,12 @@ function dexieStoreFor(table: string): DexieStore | null {
 /**
  * `imei_records` warranty-anchor columns present on THIS database.
  *
- * `warranty_months` only exists from migration 107 and `warranty_expires_at` from
- * the base schema. A pull that names a column the local DB does not have throws
- * `no such column`, which would abort the whole device lane — so the anchor
- * columns are probed once per database handle and only written when present.
- * Keyed by handle, not a single module-level cache, so two databases in one
- * process (a test double and the real one) cannot inherit each other's answer.
+ * The probe itself lives in `db/imeiAnchorSchema` because the SALE writer needs
+ * the identical answer — a pull that names a missing column aborts the device
+ * lane, and a sale that names one loses its registry row. One probe, one
+ * fallback set, two lanes.
  */
-const imeiAnchorColumnsByDb = new WeakMap<Database, Promise<Set<string>>>();
-function imeiAnchorColumnsPresent(db: Database): Promise<Set<string>> {
-  let probed = imeiAnchorColumnsByDb.get(db);
-  if (!probed) {
-    probed = db
-      .select("SELECT name FROM pragma_table_info('imei_records')")
-      .then((rows) => {
-        const names = new Set((rows as Array<{ name?: string }>).map((r) => String(r?.name ?? '')));
-        names.delete('');
-        return names;
-      })
-      // An unreadable schema must not abort the pull: assume the legacy shape and
-      // write the columns that have existed since the base migration.
-      .catch(() => new Set(['imei', 'product_id', 'sale_transaction_id', 'warranty_expires_at', 'received_at']));
-    imeiAnchorColumnsByDb.set(db, probed);
-  }
-  return probed;
-}
+const imeiAnchorColumnsPresent = probeImeiAnchorColumns;
 
 /**
  * A peer's warranty term, or NULL. Never invented and never widened: a
@@ -628,11 +610,21 @@ async function mirrorGenericToSqlite(
           const localRouting = (JSON.parse(rawLocal) as Record<string, unknown>)?.printerRouting;
           if (localRouting !== undefined) {
             value = { ...(value as Record<string, unknown>), printerRouting: localRouting };
-            (payload as Record<string, unknown>).value = value;
           }
         }
       } catch {
         // keep incoming on read/parse error
+      }
+      // Phase 1b-i: a pre-drop peer row can still carry the deleted tax-rate
+      // key. Scrub it on apply so it never lands in local settings (and can
+      // never be published back out). Scoped inline — NOT the push-side
+      // `stripDeviceLocalSettingValue` helper, which also drops the per-device
+      // `printerRouting` this branch deliberately PRESERVES. Unknown keys pass
+      // through.
+      if ('vatRate' in (value as Record<string, unknown>)) {
+        const { vatRate: _droppedVatRate, ...rest } = value as Record<string, unknown>;
+        value = rest;
+        (payload as Record<string, unknown>).value = rest;
       }
     }
     await db.execute(

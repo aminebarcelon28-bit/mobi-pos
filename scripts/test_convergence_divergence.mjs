@@ -45,7 +45,7 @@ const SCHEMA = `
   );
   CREATE TABLE transactions (
     id TEXT PRIMARY KEY, receipt_number TEXT, customer_id TEXT, subtotal REAL NOT NULL DEFAULT 0,
-    tax REAL NOT NULL DEFAULT 0, discount_total REAL NOT NULL DEFAULT 0, total REAL NOT NULL DEFAULT 0,
+    discount_total REAL NOT NULL DEFAULT 0, total REAL NOT NULL DEFAULT 0,
     cost_total REAL NOT NULL DEFAULT 0, profit REAL NOT NULL DEFAULT 0, profit_margin REAL NOT NULL DEFAULT 0,
     pricing_tier TEXT, payment_method TEXT, cash_tendered REAL NOT NULL DEFAULT 0,
     change_due REAL NOT NULL DEFAULT 0, status TEXT NOT NULL, created_at TEXT,

@@ -57,6 +57,10 @@ pub struct ExtractedDocumentSummary {
     pub detected_invoice_number: Option<String>,
     pub detected_date: Option<String>,
     pub detected_subtotal: Option<f64>,
+    /// Skip-bin for supplier summary lines this product does not model
+    /// (noise-skip, not a tax feature). Nothing consumes the value: totals are
+    /// read from the labelled rows below, and the field exists so a "TVA" line
+    /// is EXCLUDED from the product rows instead of being parsed as an article.
     pub detected_tax: Option<f64>,
     pub detected_freight: Option<f64>,
     pub detected_grand_total: Option<f64>,
@@ -236,11 +240,14 @@ pub fn is_table_header_line(s: &str) -> bool {
         || lower.contains("prix")
         || lower.contains("montant")
         || lower.contains("total")
+        // noise-skip, not a tax feature: keeps a "TVA" row from being treated as
+        // a product row when it carries a qty-like token.
         || lower.contains("tva");
     has_desc && has_metric
 }
 
-/// Identifies invoice summary rows (totals, taxes, freight)
+/// Identifies invoice summary rows (totals, freight, and binned summary lines
+/// such as a "TVA" line — noise-skip, not a tax feature).
 pub fn is_document_summary_line(s: &str) -> bool {
     let lower = s.to_lowercase();
     lower.contains("total ht")
@@ -253,6 +260,8 @@ pub fn is_document_summary_line(s: &str) -> bool {
         || lower.contains("total general")
         || lower.contains("montant total")
         || lower.contains("total facture")
+        // Skip-bin matchers: these exist so a summary row is EXCLUDED from the
+        // product rows (noise-skip, not a tax feature). No value is surfaced.
         || lower.starts_with("tva ")
         || lower.starts_with("t.v.a")
         || lower.contains("timbre fiscal")
@@ -284,6 +293,8 @@ pub fn extract_summary_amounts(line: &str, summary: &mut ExtractedDocumentSummar
         } else if lower.contains("total ht") || lower.contains("sous-total") || lower.contains("sous total") {
             summary.detected_subtotal = Some(last_amt);
         } else if lower.contains("tva") || lower.contains("t.v.a") {
+            // noise-skip, not a tax feature: bin the line so it cannot become a
+            // product row. The amount itself is never surfaced or used.
             summary.detected_tax = Some(last_amt);
         } else if lower.contains("port") || lower.contains("transport") || lower.contains("livraison") {
             summary.detected_freight = Some(last_amt);
@@ -732,6 +743,8 @@ impl SpatialLayoutParser {
             }
 
             // 3. Document Summary & Footers (e.g. "TOTAL HT", "TOTAL TTC", "NET A PAYER", "TVA")
+            // noise-skip, not a tax feature: the branch excludes summary rows from
+            // product rows and bins their amounts; it models no tax.
             if is_document_summary_line(trimmed_line) {
                 extract_summary_amounts(trimmed_line, &mut summary);
                 continue;

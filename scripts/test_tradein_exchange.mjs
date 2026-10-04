@@ -45,12 +45,10 @@ const transpileFile = (p) => {
     fileName: p,
   }).outputText;
 };
-const taxUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/taxEngine.ts`));
 const pricingUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/pricingEngine.ts`));
 let rmSrc = fs.readFileSync(`${ROOT}/src/utils/receiptMath.ts`, 'utf8');
 rmSrc = rmSrc.replace(/from\s+(['"])\.\.\/types\/pos\1/g, `from '${toDataUrl('export {};')}'`);
 rmSrc = rmSrc.replace(/from\s+(['"])\.\/pricingEngine\1/g, `from '${pricingUrl}'`);
-rmSrc = rmSrc.replace(/from\s+(['"])\.\/taxEngine\1/g, `from '${taxUrl}'`);
 const rm = await import(toDataUrl(ts.transpileModule(rmSrc, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
   fileName: 'receiptMath.ts',

@@ -33,7 +33,6 @@ export const M3CartProtectionModal: React.FC<M3CartProtectionModalProps> = ({
     pricingTier,
     storeCreditApplied,
     voucherCreditApplied,
-    vatRate: 0,
   });
   const cartTotal = Math.max(0, cartTotals.total);
 

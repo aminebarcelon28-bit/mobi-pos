@@ -68,7 +68,7 @@ import { isTxInCloseScope } from '../../db/adapters/shiftAdapter';
 import { formatDZD } from '../../types/pos';
 import { DRAWER_REASON_PREFIXES } from '../../constants/index';
 import { DEFAULT_CREDIT_LIMIT } from './createCustomerSlice';
-import { readVatRate, readVoucherStaging } from './createCartSlice';
+import { readVoucherStaging } from './createCartSlice';
 import { audioBus } from '../../utils/audioEvents';
 import { canonicalDeviceId, normalizeDeviceKey, resolveWarrantyWithFallback, warrantyAnchorFor } from '../../utils/warrantyResolver';
 // P11.3: escpos pulls in the Windows spooler + serial + label builder chain.
@@ -330,8 +330,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
 
       // Canonical totals (single source: receiptMath.computeCartTotals):
       // signed quantities, per-line discounts, store credit, staged voucher
-      // credit, VAT. Every checkout surface must derive from the same base.
-      const vatRate = readVatRate(get());
+      // credit. Every checkout surface must derive from the same base.
       const stagedVoucher = readVoucherStaging(get());
 
       let actualStoreCreditApplied = tenders
@@ -369,7 +368,6 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           pricingTier,
           storeCreditApplied: 0,
           voucherCreditApplied: 0,
-          vatRate,
         });
         actualStoreCreditApplied = Math.max(
           0,
@@ -431,7 +429,6 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         pricingTier,
         storeCreditApplied: actualStoreCreditApplied,
         voucherCreditApplied: 0,
-        vatRate,
       });
       // A voucher never over-covers the pre-credit net: excess stays on the voucher.
       voucherCreditApplied = Math.max(
@@ -471,13 +468,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         storeCreditApplied: actualStoreCreditApplied,
         voucherCreditApplied,
         tradeInCredit: tradeInApplied,
-        vatRate,
       });
       // Accounting Invariant: gross catalog value (signed for return/exchange
-      // items); total is the net due incl. VAT (ttc), never negative.
+      // items); total is the net due (ttc), never negative. HT-only — there is
+      // no VAT term and no `tax` field (Phase 1b-i).
       const grossSubtotal = totals.grossSubtotal;
       const discountTotal = totals.discountTotal;
-      const taxAmount = totals.tax;
       const total = totals.total;
       // B-026: when returns dominate, net is negative and ttc clamps to 0 —
       // the signed shortfall must still leave the drawer as cash-out.
@@ -934,7 +930,6 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             customer_id: updatedCustomer?.id ?? null,
             shift_id: activeShift?.id ?? null,
             subtotal: grossSubtotal,
-            tax: taxAmount,
             discount_total: discountTotal,
             total,
             cost_total: costTotal,
@@ -950,7 +945,6 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           },
           fullTx: {
             ...transaction,
-            tax: taxAmount,
             ...(voucherCode ? { voucherCode, voucherCreditApplied } : {}),
           } as unknown as Record<string, unknown>,
           items: frozenCartItems.map((ci, idx) => {
@@ -1522,7 +1516,6 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       storeCreditApplied,
       voucherCreditApplied,
       tradeInCredit: tradeInLegAmount,
-      vatRate: readVatRate(get()),
     });
     const avoirLeg =
       Math.max(0, Math.round(Number(storeCreditApplied) || 0)) > 0

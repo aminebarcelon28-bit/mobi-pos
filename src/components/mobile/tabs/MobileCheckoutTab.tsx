@@ -135,8 +135,6 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
   // negative net is a refund due, displayed as such below).
   const voucherCreditApplied =
     usePosStore((s) => (s as unknown as { voucherCreditApplied?: number }).voucherCreditApplied ?? 0) || 0;
-  const vatRate =
-    usePosStore((s) => (s.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate ?? 0) || 0;
   // Exchange credit (1:1 buyback) as payment credit — never a cart line.
   const tradeInCredit = Math.max(0, Math.round(Number(stagedTradeIn?.buybackValue) || 0));
   const totals = computeCartTotals(cart, {
@@ -144,12 +142,10 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     storeCreditApplied,
     voucherCreditApplied,
     tradeInCredit,
-    vatRate,
   });
   const grossSubtotal = totals.grossSubtotal;
   const totalDiscount = totals.discountTotal;
   const netTotal = totals.total;
-  const taxTotal = totals.tax;
   const tradeInCreditApplied = totals.tradeInCreditApplied;
   const tradeSettlement = stagedTradeIn
     ? computeTradeInSettlement(totals.subtotalAfterDiscount, tradeInCredit)
@@ -342,10 +338,6 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       0,
       Math.round(Number((live as unknown as { voucherCreditApplied?: number }).voucherCreditApplied) || 0)
     );
-    const liveVat = Math.max(
-      0,
-      Number((live.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate) || 0
-    );
     const liveStaged = live.stagedTradeIn;
     const liveTradeInCredit = Math.max(0, Math.round(Number(liveStaged?.buybackValue) || 0));
     const submitTotals = computeCartTotals(live.cart, {
@@ -353,7 +345,6 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       storeCreditApplied: live.storeCreditApplied,
       voucherCreditApplied: liveVoucherCredit,
       tradeInCredit: liveTradeInCredit,
-      vatRate: liveVat,
     });
     const submitNet = submitTotals.total;
     const submitRefundDue = submitTotals.refundDue;
@@ -546,17 +537,12 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       0,
       Math.round(Number((live as unknown as { voucherCreditApplied?: number }).voucherCreditApplied) || 0)
     );
-    const liveVat = Math.max(
-      0,
-      Number((live.receiptSettings as unknown as { vatRate?: number } | undefined)?.vatRate) || 0
-    );
     const liveTradeInForCredit = Math.max(0, Math.round(Number(live.stagedTradeIn?.buybackValue) || 0));
     const submitNet = computeCartTotals(live.cart, {
       pricingTier: live.pricingTier,
       storeCreditApplied: live.storeCreditApplied,
       voucherCreditApplied: liveVoucherCredit,
       tradeInCredit: liveTradeInForCredit,
-      vatRate: liveVat,
     }).total;
 
     const currentDebt = currentCustomer.currentDebt || 0;
@@ -821,12 +807,6 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                     <div className="flex justify-between text-emerald-300 font-medium">
                       <span>Reprise Déduite</span>
                       <span className="font-mono">-{formatDZD(tradeInCreditApplied)}</span>
-                    </div>
-                  )}
-                  {taxTotal > 0 && (
-                    <div className="flex justify-between text-cyan-300 font-medium">
-                      <span>TVA ({vatRate}%)</span>
-                      <span className="font-mono">+{formatDZD(taxTotal)}</span>
                     </div>
                   )}
                   <div className="flex justify-between items-baseline pt-2 border-t border-pos-border text-pos-text">

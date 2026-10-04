@@ -1,6 +1,9 @@
-# Plan 1b-i — POS `transactions.tax` contract drop (plan document, no execution)
+# Plan 1b-i — POS `transactions.tax` contract drop (EXECUTED)
 
-Status: PLAN ONLY. No migration executed. STOP gates in §8 must clear first.
+Status: **EXECUTED** (all four stages). The §8 gates cleared before any
+destructive step: owner approval recorded, §3 pre-counts = 0 on the live DB and
+the merchant remote, and the local rehearsal + abort drill ran on temp copies
+(§12). Post-drop verification: §13.
 Gate decision: Phase 1a+1a′ accepted; 1b split into 1b-i (this doc) and 1b-ii
 (REAL→INTEGER type migration — BLOCKED on `Currency = ___, decimals = ___`).
 
@@ -341,3 +344,85 @@ build fails.
   the naive order aborts mid-RENAME under FK enforcement; caught and fixed
   here, not in production); rollback B verified. Reconciliation: every
   mutation ran on temp copies; workdir retained in report output.
+
+---
+
+## 13. Execution record (post-drop) — what actually landed
+
+### 13.1 Schema, both sides
+
+| side | change | proof |
+|---|---|---|
+| local | migration `v108` (`src-tauri/src/lib.rs:1550-1574`) drops the column after dropping `orders`/`order_items` views, then recreates them | `scripts/test_zero_tax.mjs` E3 asserts the DDL + statement order; every SQLite artifact this build produced is column-free |
+| local creation DDL | `lib.rs:976` still names `tax REAL DEFAULT 0` — see R-5 | the plugin migrator is transactional, so v1 must describe the pre-drop shape for v108 to drop; the persisted schema is tax-free on every install |
+| remote | migration `v13` (`src/sync/remoteSchema.ts:353-369`) drops it; the remote base DDL (`turso/remote-schema.sql`, `remoteSchema.ts` v1) is already tax-free, so v13 needs `tolerateMissingColumn` (scoped to that migration, logged, never masks other drift) | E3 replays the real migration list through `node:sqlite` |
+
+### 13.2 Two defects the suites caught (both fixed here, not wallpapered)
+
+- **Placeholder drift after the column drop.** Removing a column from a
+  positional `VALUES` list without renumbering leaves a silent
+  "N values for N-1 columns". Caught by `test:h28-import-authority`
+  (`SQLITE_ERROR: 24 values for 23 columns`). Fixed in
+  `maintenanceAdapter.ts:1054` (import authority row), `restoreManager.ts:232`
+  (restore lane) and `backfill.ts:118` (legacy-order backfill). A repo-wide
+  parity sweep over every `INSERT INTO transactions|transaction_items` now
+  reports 20/20 statements balanced.
+- **Remote v13 on a fresh remote.** The remote base DDL no longer has the
+  column, so the bare `DROP COLUMN` aborted the whole migration on a
+  post-drop-created remote (`test:h29` surfaced it). Fixed with the scoped
+  `tolerateMissingColumn` flag above.
+
+### 13.3 Post-drop verification (§9 executed)
+
+| check | result |
+|---|---|
+| `npx tsc -b --pretty false` | exit 0 |
+| `npm run lint` (oxlint) | exit 0 — 0 errors, warnings only (pre-existing) |
+| `cargo test -p mobi-pos --lib` | 238 passed, 0 failed |
+| `npm test` (full main lane) | ALL PASS — ends `443 passed, 0 failed` (warranty scenarios) |
+| `npm run test:boundaries` (incl. rewritten `test_zero_tax.mjs`) | 23/23 zero-tax gate PASS; boundary gate 67 PASS |
+| `npm run test:e2e:sync`, `test:cloud`, `test:convergence`, `test:checkout-ordering`, `test:h28-import-authority`, `test:matrix`, `test:push-guard`, `test:xdev`, `test:h27-stock-batches`, `test:h29-credit-vouchers-sync`, `test:h24-payload-hygiene` | pass except the cross-lane items in §13.4 |
+| `npx playwright test tests/tradein-extreme-chaos.spec.ts` | 9 passed (includes the rewritten HT-only tender-hydra case) |
+
+`scripts/test_zero_tax.mjs` was rewritten from a "the shim returns 0" probe into
+the §10-C5 blocking gate: module/symbol absence, HT-only money math, a real
+remote migration replay, an artifact-wide column scan, and a line-pinned static
+grep whose whitelist entries must themselves still be live (a moved line fails
+the build, so the gate cannot silently loosen).
+
+### 13.4 Cross-lane items found while verifying (NOT tax defects — not fixed here)
+
+- **R-4 — stale `tiedVersionGuardSql` expectations in three harnesses.**
+  `causalVersion.ts:176-182` (commit `e9d1f0b`) replaced
+  `excluded.version >= t.version` with the tied guard
+  (`> version OR (= version AND device_id ≥)`), but three harnesses still
+  assert/slice the old predicate:
+  `test_h29_credit_vouchers_sync.mjs:317` ([2c] fails),
+  `test_h25_restore_authority_regression.mjs:94` + the SQL slice at `:85-92`,
+  `test_h27_stock_batches_dropped.mjs` ("the real push SQL INSERTs the batch").
+  Static proof the extraction is broken at HEAD: the sliced SQL still contains
+  the literal `${tiedVersionGuardSql(genericTable)}`, hence
+  `SQLITE_ERROR: unrecognized token: "$"`. The tax diff does not touch
+  `causalVersion.ts` or the guard call sites (`git diff src/sync/SyncManager.ts`
+  is tax-only), so these fail identically without this changeset. Owner of that
+  lane decides whether the assertions follow the tied guard.
+- **Harness-compat shim fixes (mechanical, applied here so the suites can run
+  at all):** the uncommitted IMEI-anchor work added
+  `import … from '../db/imeiAnchorSchema'` to `genericApply.ts`, which the
+  three shims copy file-by-file. They now copy the real (dependency-free)
+  module and rewrite the specifier: `test_h25_restore_authority_regression.mjs`,
+  `test_h27_stock_batches_dropped.mjs`, `test_sync_matrix.mjs`. No behaviour is
+  faked. `test_h25_restore_authority_regression.mjs` also passed `local.execute(sql, args)`
+  to a raw `@libsql/client` (object signature) — fixed to `{ sql, args }`.
+- **R-6 — untouched historical codemod:** `scripts/refactor_atomic_cogs.mjs`
+  embeds the pre-1b-i INSERT text (with `tax`) as escaped template literals.
+  It is a one-off migration script, wired to no npm script and not executed by
+  CI, so it was left as history. Re-running it today would re-add the column.
+
+### 13.5 Legacy `vatRate` scrub (plan item #20)
+
+`stripDeviceLocalSettingValue` (`src/db/sqlPluginAdapter.ts:2899-2924`) now
+drops the dead `vatRate` key alongside `printerRouting`, and the pull-apply path
+(`src/sync/genericApply.ts:603-627`) scrubs it from an incoming peer row before
+it is written locally. The field is inert on read either way (it left
+`ReceiptSettings`), but it can no longer be re-published or re-applied.

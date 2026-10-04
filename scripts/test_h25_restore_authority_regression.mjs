@@ -30,8 +30,8 @@ function check(name, cond, extra) {
 }
 
 // ---------------------------------------------------------------------------
-// Shim: copy the REAL genericApply.ts into tmp-h25r-shim and stub its two
-// bare imports (Dexie + sqlPluginAdapter). The logic is untouched.
+// Shim: copy the REAL genericApply.ts into tmp-h25r-shim and stub its bare
+// runtime imports (Dexie + sqlPluginAdapter). The logic is untouched.
 // ---------------------------------------------------------------------------
 rmSync(SHIM, { recursive: true, force: true });
 mkdirSync(join(SHIM, 'db'), { recursive: true });
@@ -39,13 +39,18 @@ mkdirSync(join(SHIM, 'db'), { recursive: true });
 // onto the stub dir (from SHIM/lane, `../db/x` -> SHIM/db/x).
 mkdirSync(join(SHIM, 'lane'), { recursive: true });
 copyFileSync(join(SRC_SYNC, 'genericApply.ts'), join(SHIM, 'lane', 'genericApply.ts'));
-// Node's ESM loader needs explicit extensions. Rewrite ONLY the two bare
+// Node's ESM loader needs explicit extensions. Rewrite ONLY the bare
 // import specifiers in the copy — no logic is touched.
+// Phase 1b-i/harness: genericApply also imports `../db/imeiAnchorSchema`
+// (the IMEI-anchor column probe). It is a pure module with no runtime deps, so
+// the REAL source is copied next to the stubs — no behaviour is faked.
+copyFileSync(join(ROOT, 'src', 'db', 'imeiAnchorSchema.ts'), join(SHIM, 'db', 'imeiAnchorSchema.ts'));
 {
   const p = join(SHIM, 'lane', 'genericApply.ts');
   let t = readFileSync(p, 'utf8');
   t = t.replace(/from '\.\.\/db\/database'/g, "from '../db/database.js'")
-       .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'");
+       .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'")
+       .replace(/from '\.\.\/db\/imeiAnchorSchema'/g, "from '../db/imeiAnchorSchema.ts'");
   writeFileSync(p, t);
 }
 
@@ -209,17 +214,19 @@ check('debt authority row carries the remote version', Number(localDebt[0]?.vers
 console.log('\n[2] the user edits the restored customer; the edit must SURVIVE');
 // ===========================================================================
 // enqueueGenericSync -> stableEntityKey + bumpEntityVersion (real SQL)
-await local.execute('INSERT OR IGNORE INTO entity_keys (entity_type, entity_id, idempotency_key) VALUES ($1,$2,$3)',
-  ['customer', CUST_ID, 'idem-restored-1']);
+// Harness fix: `local` is a raw @libsql client (object-arg signature), not the
+// plugin adapter, so every call here passes { sql, args }.
+await local.execute({ sql: 'INSERT OR IGNORE INTO entity_keys (entity_type, entity_id, idempotency_key) VALUES ($1,$2,$3)',
+  args: ['customer', CUST_ID, 'idem-restored-1'] });
 const before = Number((await q(local, bumpReadRaw, ['customer', CUST_ID]))[0]?.version ?? 1);
 const next = before + 1;
-await local.execute(bumpWriteRaw, [next, 'customer', CUST_ID]);
+await local.execute({ sql: bumpWriteRaw, args: [next, 'customer', CUST_ID] });
 check('the clock read is now the RESTORED version, not the empty-state 1', before === 5, { before });
 check('the local edit is stamped version 6 (strictly above remote 5)', next === 6, { next });
 
 const editPayload = { ...cloudPayload, name: 'Awa Traoré-Diallo', version: next };
-await local.execute(`INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-  VALUES ($1,$2,$3,'UPSERT',$4,'pending')`, ['idem-restored-1', 'customer', CUST_ID, JSON.stringify(editPayload)]);
+await local.execute({ sql: `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+  VALUES ($1,$2,$3,'UPSERT',$4,'pending')`, args: ['idem-restored-1', 'customer', CUST_ID, JSON.stringify(editPayload)] });
 
 const pushRes = await cloud.execute({ sql: genUpsert, args: [CUST_ID, JSON.stringify(editPayload), 'device-new', 'idem-restored-1', next, T5] });
 check('FIXED: guarded upsert matches 1 row (version 6 >= remote 5)', Number(pushRes.rowsAffected ?? 0) === 1, { rowsAffected: pushRes.rowsAffected });
