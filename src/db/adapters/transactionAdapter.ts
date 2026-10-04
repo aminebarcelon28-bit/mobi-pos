@@ -409,27 +409,50 @@ export const transactionAdapter = {
           }
           if (originalId && updatedOriginalTransaction) {
             const prior = new Map<string, number>();
-            const rows = (await db
-              .select("SELECT json_payload FROM transactions WHERE deleted = 0 AND json_payload LIKE '%originalTransactionId%'")
-              .catch((e: unknown) => {
-                if (isBusyError(e)) throw e;
-                return [];
-              })) as Array<{ json_payload?: string }>;
-            for (const row of rows ?? []) {
-              try {
-                const parsed = JSON.parse(String(row.json_payload ?? '{}')) as {
-                  id?: string; originalTransactionId?: string; refundedItems?: Array<{ productId?: string; quantity?: number }>;
-                };
-                if (parsed.originalTransactionId === originalId && parsed.id !== refundTransaction.id) {
-                  for (const ri of parsed.refundedItems ?? []) {
-                    if (ri.productId) {
-                      prior.set(ri.productId, (prior.get(ri.productId) ?? 0) + Number(ri.quantity ?? 0));
-                    }
+            const collectRefundRow = (parsed: {
+              id?: string; originalTransactionId?: string; refundedItems?: Array<{ productId?: string; quantity?: number }>;
+            }): void => {
+              if (parsed.originalTransactionId === originalId && parsed.id !== refundTransaction.id) {
+                for (const ri of parsed.refundedItems ?? []) {
+                  if (ri.productId) {
+                    prior.set(ri.productId, (prior.get(ri.productId) ?? 0) + Number(ri.quantity ?? 0));
                   }
                 }
+              }
+            };
+            const parseRow = (jsonPayload: unknown): void => {
+              try {
+                collectRefundRow(JSON.parse(String(jsonPayload ?? '{}')) as {
+                  id?: string; originalTransactionId?: string; refundedItems?: Array<{ productId?: string; quantity?: number }>;
+                });
               } catch {
                 // Unparseable receipt payload — ignore this row, keep the bound.
               }
+            };
+            // DB-002: indexed primary on original_transaction_id (stamped at
+            // write, backfilled once for legacy rows) plus a LIKE residual
+            // for rows whose column is still NULL (fallback-statement
+            // writes on pre-linkage schemas). Same bound as the old full
+            // scan, without scanning the whole history per refund.
+            let boundRows: Array<{ json_payload?: string }> | null = null;
+            try {
+              boundRows = (await db.select(
+                "SELECT json_payload FROM transactions WHERE deleted = 0 AND (original_transaction_id = $1 OR (original_transaction_id IS NULL AND json_payload LIKE '%originalTransactionId%'))",
+                [originalId],
+              )) as Array<{ json_payload?: string }>;
+            } catch (e: unknown) {
+              if (isBusyError(e)) throw e;
+              // Pre-linkage schema (no column yet): legacy full scan. Slow
+              // but complete — never an empty bound.
+              boundRows = (await db
+                .select("SELECT json_payload FROM transactions WHERE deleted = 0 AND json_payload LIKE '%originalTransactionId%'")
+                .catch((legacyErr: unknown) => {
+                  if (isBusyError(legacyErr)) throw legacyErr;
+                  return [];
+                })) as Array<{ json_payload?: string }>;
+            }
+            for (const row of boundRows ?? []) {
+              parseRow(row.json_payload);
             }
             assertRefundBound(prior);
           }

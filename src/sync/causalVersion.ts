@@ -355,6 +355,24 @@ export function tombstoneVersionPredicate(
 }
 
 /**
+ * Extracts a refund's original-transaction linkage from receipt JSON
+ * (DB-002 backfill): non-empty string result, else null (missing key,
+ * unparseable, or empty — all mean "not a linked refund row").
+ */
+export function extractOriginalTransactionId(jsonPayload: unknown): string | null {
+  try {
+    if (typeof jsonPayload !== 'string') return null;
+    const parsed: unknown = JSON.parse(jsonPayload);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const id = (parsed as Record<string, unknown>).originalTransactionId;
+    const str = typeof id === 'string' ? id : '';
+    return str.length > 0 ? str : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Optimistic-bump helper for the write side (DB-013): read the version,
  * write with `UPDATE ... WHERE version = :read` (or an upsert whose guard
  * carries the read version), and RETRY the whole read-modify-write on a

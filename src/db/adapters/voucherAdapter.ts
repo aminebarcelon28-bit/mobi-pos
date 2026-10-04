@@ -1,7 +1,7 @@
 import type { CreditVoucher } from '../../types/pos';
 import { db as dexieDb } from '../database';
 import { fireSync, isTauriEnv } from './base';
-import { newId } from '../../utils/ids';
+import { newId, normalizeVoucherCode } from '../../utils/ids';
 import { getLocalDb } from '../sqlPluginAdapter';
 import { withBusyRetry } from '../busyRetry';
 
@@ -73,7 +73,7 @@ export const voucherAdapter = {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
             [
               voucher.id,
-              voucher.code,
+              normalizeVoucherCode(voucher.code),
               voucher.initialAmount,
               voucher.remainingAmount,
               voucher.status,
@@ -118,42 +118,57 @@ export const voucherAdapter = {
   },
 
   async findCreditVoucherByCode(rawCode: string): Promise<CreditVoucher | null> {
-    const code = rawCode.trim().toUpperCase();
+    const code = normalizeVoucherCode(rawCode);
     if (!code) return null;
 
     if (isTauriEnv()) {
       try {
         const db = await getLocalDb();
-        const rows = await db.select<
-          Array<{
-            id: string;
-            code: string;
-            initial_amount: number;
-            remaining_amount: number;
-            status: string;
-            customer_name: string | null;
-            customer_phone: string | null;
-            notes: string | null;
-            created_at: string;
-            updated_at: string;
-            expires_at: string | null;
-          }>
-        >('SELECT * FROM credit_vouchers WHERE UPPER(code) = $1 AND deleted = 0 LIMIT 1', [code]);
-        if (rows && rows.length > 0) {
-          const r = rows[0];
-          return {
-            id: r.id,
-            code: r.code,
-            initialAmount: Number(r.initial_amount),
-            remainingAmount: Number(r.remaining_amount),
-            status: r.status as CreditVoucher['status'],
-            customerName: r.customer_name || undefined,
-            customerPhone: r.customer_phone || undefined,
-            notes: r.notes || undefined,
-            createdAt: r.created_at,
-            updatedAt: r.updated_at,
-            expiresAt: r.expires_at || undefined,
-          };
+        type VoucherRow = {
+          id: string;
+          code: string;
+          initial_amount: number;
+          remaining_amount: number;
+          status: string;
+          customer_name: string | null;
+          customer_phone: string | null;
+          notes: string | null;
+          created_at: string;
+          updated_at: string;
+          expires_at: string | null;
+        };
+        const mapRow = (r: VoucherRow): CreditVoucher => ({
+          id: r.id,
+          code: r.code,
+          initialAmount: Number(r.initial_amount),
+          remainingAmount: Number(r.remaining_amount),
+          status: r.status as CreditVoucher['status'],
+          customerName: r.customer_name || undefined,
+          customerPhone: r.customer_phone || undefined,
+          notes: r.notes || undefined,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at,
+          expiresAt: r.expires_at || undefined,
+        });
+        // Fast path first: exact match on the normalized code uses
+        // idx_credit_vouchers_code (DB-003). `code` is already uppercased
+        // above and all new writes normalize too.
+        const fast = await db.select<Array<VoucherRow>>(
+          'SELECT * FROM credit_vouchers WHERE code = $1 AND deleted = 0 LIMIT 1',
+          [code],
+        );
+        if (fast && fast.length > 0) return mapRow(fast[0]);
+        // Legacy mixed-case row: function-wrapped fallback, then heal the
+        // row in place so the next lookup takes the fast path. The scan
+        // runs only on fast-path misses, never on the hot path.
+        const slow = await db.select<Array<VoucherRow>>(
+          'SELECT * FROM credit_vouchers WHERE UPPER(code) = $1 AND deleted = 0 LIMIT 1',
+          [code],
+        );
+        if (slow && slow.length > 0) {
+          const r = slow[0];
+          db.execute('UPDATE credit_vouchers SET code = $1 WHERE id = $2', [code, r.id]).catch(() => {});
+          return mapRow({ ...r, code });
         }
       } catch (err) {
         console.warn('[voucherAdapter] SQLite find fallback to Dexie:', err);
@@ -235,7 +250,7 @@ export const voucherAdapter = {
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
                     [
                       updated.id,
-                      updated.code,
+                      normalizeVoucherCode(updated.code),
                       updated.initialAmount,
                       updated.remainingAmount,
                       updated.status,

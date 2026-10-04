@@ -2482,6 +2482,9 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           change_due: 0,
           status: 'COMPLETED',
           created_at: refundTransaction.createdAt,
+          // Refund linkage for the indexed over-refund bound (DB-002):
+          // snake_case like every other orderRow column.
+          original_transaction_id: originalTransaction.id,
         },
         fullTx: refundTransaction as unknown as Record<string, unknown>,
         items: canonicalRefundItems.map((ri, idx) => ({

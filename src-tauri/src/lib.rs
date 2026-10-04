@@ -242,7 +242,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 108;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 109;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -1574,6 +1574,24 @@ fn base_schema_migrations() -> Vec<Migration> {
             BEGIN
               SELECT RAISE(ABORT, 'transactions.status must be a known TransactionStatus');
             END;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v109 — refund linkage column + refund-adjacent composites
+            // (C2/DB-002/DB-009). Fully additive: one nullable column plus
+            // covering indexes, no data rewrite. Refund writers stamp
+            // original_transaction_id at insert; a flagged TS one-shot
+            // backfills pre-existing rows from their receipt JSON. The
+            // refund over-refund bound then reads this indexed column
+            // instead of a json_payload LIKE full scan per refund.
+            version: 109,
+            description: "refund linkage column + transaction_items composites (C2)",
+            sql: r#"
+            ALTER TABLE transactions ADD COLUMN original_transaction_id TEXT;
+            CREATE INDEX IF NOT EXISTS idx_transactions_orig_txn ON transactions(original_transaction_id);
+            CREATE INDEX IF NOT EXISTS idx_txn_items_txn_deleted ON transaction_items(transaction_id, deleted);
+            CREATE INDEX IF NOT EXISTS idx_txn_items_prod_deleted ON transaction_items(product_id, deleted);
             "#,
             kind: MigrationKind::Up,
         },

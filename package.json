@@ -36,6 +36,8 @@
     "test:conflict-watch": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_conflict_watch.mts",
     "test:optimistic-write": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_optimistic_write.mts",
     "test:claim-contention": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_claim_contention.mts",
+    "test:refund-bound": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_refund_bound.mts",
+    "test:casefold": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_casefold.mts",
     "test:ipc-guards": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_ipc_guards.mts",
     "test:tombstone-guard": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_tombstone_guard.mts",
     "test:oversell": "node scripts/test_oversell_guard.mjs",

@@ -26,6 +26,7 @@ import { sanitizeSyncPayload, utcNowIso, isDeviceLocalSettingKey, RECEIPT_SETTIN
 import { batchClampNeedsObservation, observeVersionConflict } from './conflictWatch';
 import { tiedVersionGuardSql } from './causalVersion';
 import { tombstoneVersionPredicate } from './causalVersion';
+import { normalizeImeiKey, normalizeVoucherCode } from '../utils/ids';
 
 /** Singular push entity_type -> plural remote KV table. */
 export const GENERIC_TABLES: Record<string, string> = {
@@ -274,18 +275,18 @@ async function mirrorGenericToSqlite(
         `pull-cust-${id}`
     );
     await db.execute(
-      `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12)
+      `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key, device_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $13)
        ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, email=excluded.email,
          loyalty_points=excluded.loyalty_points, store_credit=excluded.store_credit,
          pricing_tier=excluded.pricing_tier, total_spent=excluded.total_spent,
          json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0, version=excluded.version
-         WHERE excluded.version >= customers.version`,
+         WHERE ${tiedVersionGuardSql('customers')}`,
       [
         id,
         (c.name as string) || 'Client',
         (c.phone as string) || '',
-        (c.email as string) || null,
+        (c.email as string) || '',
         Number(c.loyaltyPoints ?? 0),
         storeCreditValue,
         (c.pricingTier as string) || 'Retail',
@@ -294,6 +295,7 @@ async function mirrorGenericToSqlite(
         (c.updatedAt as string) ?? now,
         version,
         custKey,
+        String((c.device_id as string | undefined) ?? (c.deviceId as string | undefined) ?? 'remote'),
       ],
     );
   } else if (table === 'customer_debts') {
@@ -313,14 +315,14 @@ async function mirrorGenericToSqlite(
     );
     await db.execute(
       `INSERT INTO customer_debts (id, customer_id, customer_name, type, amount, balance_after,
-        receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0)
+        receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted, device_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15)
        ON CONFLICT(id) DO UPDATE SET customer_id=excluded.customer_id, customer_name=excluded.customer_name,
         type=excluded.type, amount=excluded.amount, balance_after=excluded.balance_after,
         receipt_number=excluded.receipt_number, payment_method=excluded.payment_method,
         notes=excluded.notes, recorded_by=excluded.recorded_by, created_at=excluded.created_at,
         json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0, version=excluded.version
-        WHERE excluded.version >= customer_debts.version`,
+        WHERE ${tiedVersionGuardSql('customer_debts')}`,
       [
         id,
         String(d.customerId ?? ''),
@@ -336,6 +338,7 @@ async function mirrorGenericToSqlite(
         JSON.stringify(payload),
         version,
         now,
+        String((d.device_id as string | undefined) ?? (d.deviceId as string | undefined) ?? 'remote'),
       ],
     );
   } else if (table === 'stock_batches') {
@@ -522,12 +525,12 @@ async function mirrorGenericToSqlite(
          status=excluded.status, customer_name=excluded.customer_name,
          customer_phone=excluded.customer_phone, notes=excluded.notes,
          expires_at=excluded.expires_at, updated_at=excluded.updated_at,
-         idempotency_key=excluded.idempotency_key, device_id=excluded.device_id,
-         sync_status='synced', version=excluded.version, deleted=excluded.deleted
-         WHERE excluded.version >= credit_vouchers.version`,
+          idempotency_key=excluded.idempotency_key, device_id=excluded.device_id,
+          sync_status='synced', version=excluded.version, deleted=excluded.deleted
+          WHERE ${tiedVersionGuardSql('credit_vouchers')}`,
       [
         id,
-        String(vc.code ?? ''),
+        normalizeVoucherCode(vc.code ?? ''),
         initial,
         remaining,
         String(vc.status ?? 'ACTIVE'),
@@ -550,7 +553,10 @@ async function mirrorGenericToSqlite(
     // (data_json variant does not exist on this DB — the checkout write
     // path already falls back to it).
     const m = payload;
-    const imei = String((m.imei as string) ?? id ?? '');
+    // Normalized at write so the indexed exact-match read below never
+    // needs UPPER() (DB-003). Digits are unaffected; legacy rows heal
+    // through the read fallback.
+    const imei = normalizeImeiKey((m.imei as string) ?? id ?? '');
     if (!imei) return;
     const now = utcNowIso();
 

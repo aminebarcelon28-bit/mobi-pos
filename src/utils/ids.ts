@@ -121,3 +121,20 @@ export function newReceiptNumber(prefix: string): string {
   const msOfDay = ms - new Date(y, d.getMonth(), d.getDate()).getTime();
   return `${prefix}-${y}${m}${day}-${msOfDay.toString(36).toUpperCase()}-${String(seq).padStart(2, '0')}-${randomSuffix(5)}`;
 }
+
+/**
+ * Casefold for identifier lookups (DB-003). IMEI digits and voucher codes
+ * are matched case-insensitively, so both sides normalize to the same form
+ * and plain `col = $1` comparisons use the column indexes (the old
+ * `UPPER(col)` predicates scanned). Trims surrounding whitespace scanners
+ * and keyboards introduce; empty input stays empty (callers treat it as
+ * absent, never as a wildcard).
+ */
+export function normalizeImeiKey(value: unknown): string {
+  return String(value ?? '').trim().toUpperCase();
+}
+
+/** Same casefold contract as normalizeImeiKey, for voucher codes. */
+export function normalizeVoucherCode(value: unknown): string {
+  return String(value ?? '').trim().toUpperCase();
+}

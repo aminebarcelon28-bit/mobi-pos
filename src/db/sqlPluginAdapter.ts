@@ -7,7 +7,7 @@ import Database from '@tauri-apps/plugin-sql';
 import { recordShadowEvent, initClock } from '../sync/eventInterceptor.ts';
 import { backfillExistingProducts } from '../sync/snapshotBackfill.ts';
 import type { Product } from '../types/pos';
-import { newId } from '../utils/ids';
+import { newId, normalizeImeiKey } from '../utils/ids';
 import { toLocalDayKey } from '../utils/dateUtils';
 import { withWriteLock } from './writeMutex';
 // Phase 4.5 WP2c: NO static import of './benchHook' — it must stay out of
@@ -127,6 +127,12 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     // Owning cash session, stamped at checkout. Closes scope by window with
     // this id as the attribution tiebreak (gap sales stay visible).
     'ALTER TABLE transactions ADD COLUMN shift_id TEXT;',
+    // Belt-and-braces mirror of Rust v109 (DB-002): the refund linkage
+    // column writers stamp at insert. Duplicate-safe like every entry here.
+    'ALTER TABLE transactions ADD COLUMN original_transaction_id TEXT;',
+    'CREATE INDEX IF NOT EXISTS idx_transactions_orig_txn ON transactions(original_transaction_id);',
+    'CREATE INDEX IF NOT EXISTS idx_txn_items_txn_deleted ON transaction_items(transaction_id, deleted);',
+    'CREATE INDEX IF NOT EXISTS idx_txn_items_prod_deleted ON transaction_items(product_id, deleted);',
     'ALTER TABLE transaction_items ADD COLUMN unit_price_charged REAL DEFAULT 0;',
     'ALTER TABLE transaction_items ADD COLUMN unit_cost_at_sale REAL DEFAULT 0;',
     'ALTER TABLE transaction_items ADD COLUMN discount_amount REAL DEFAULT 0;',
@@ -458,6 +464,13 @@ export function getLocalDb(): Promise<Database> {
       const devId = (await getOrCreateDeviceId(cached)) || 'default';
       initClock(devId);
       await backfillExistingProducts(cached, devId).catch(() => {});
+      // DB-002 linkage backfill (flagged one-shot, cheap after first run).
+      try {
+        const { backfillOriginalTransactionIds } = await import('./backfill');
+        await backfillOriginalTransactionIds(cached).catch(() => {});
+      } catch {
+        // Never fail boot over a backfill.
+      }
       markBoot('db:ready');
     }
     return cached;
@@ -1522,22 +1535,34 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
         (input.orderRow.shift_id as string | null) ??
         ((input.orderRow as { shiftId?: unknown }).shiftId as string | null) ??
         null;
+      // Refund linkage for the indexed over-refund bound (DB-002): sales
+      // carry null, refund receipts carry their original's id.
+      const origTxnId =
+        (input.orderRow.original_transaction_id as string | null) ??
+        ((input.orderRow as { originalTransactionId?: unknown }).originalTransactionId as string | null) ??
+        null;
       await db.execute(
         `INSERT INTO transactions (id, receipt_number, customer_id, subtotal, tax, discount_total, total,
           cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due,
-          status, created_at, json_payload, device_id, idempotency_key, sync_status, updated_at, version, deleted, ledger_cogs_total, shift_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,0,$23,$24)
+          status, created_at, json_payload, device_id, idempotency_key, sync_status, updated_at, version, deleted, ledger_cogs_total, shift_id, original_transaction_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,0,$23,$24,$25)
          ON CONFLICT(id) DO UPDATE SET receipt_number=excluded.receipt_number, total=excluded.total,
            cost_total=excluded.cost_total, profit=excluded.profit, profit_margin=excluded.profit_margin,
            ledger_cogs_total=excluded.ledger_cogs_total, shift_id=excluded.shift_id,
+           original_transaction_id=excluded.original_transaction_id,
            status=excluded.status, json_payload=excluded.json_payload, updated_at=excluded.updated_at,
            sync_status='pending', idempotency_key=excluded.idempotency_key, version=excluded.version`,
-        [...txnParamsWithLedger, shiftVal],
+        [...txnParamsWithLedger, shiftVal, origTxnId],
       );
     } catch (insertErr) {
       if (isBusyError(insertErr)) throw insertErr;
       const msg = String((insertErr as { message?: unknown })?.message ?? insertErr);
-      const missShift = /no column named shift_id/i.test(msg);
+      // Pre-linkage schema (heal raced the write): the shift-statement below
+      // also omits the new column. The sale/refund still records; the
+      // flagged one-shot backfill covers the linkage once the column
+      // exists. Same for a missing shift_id (pre-existing behavior).
+      const missShift =
+        /no column named shift_id/i.test(msg) || /no column named original_transaction_id/i.test(msg);
       const missLedger = /no column named ledger_cogs_total/i.test(msg);
       if (missShift && !missLedger) {
         // Pre-shift_id schema (heal raced the write): same statement minus
@@ -1751,7 +1776,7 @@ const imeiVersion = await bumpEntityVersion(db, 'imei', pit.imeiNum);
             `INSERT INTO imei_records (id, data_json, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
              VALUES ($1, $2, $3, $4, 'pending', 1, $5, $5, 0)
              ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at, sync_status='pending'`,
-            [pit.imeiNum, JSON.stringify(imeiData), deviceId, imeiKey, now],
+            [normalizeImeiKey(pit.imeiNum), JSON.stringify(imeiData), deviceId, imeiKey, now],
           );
         } catch {
           try {
@@ -1768,7 +1793,7 @@ const imeiVersion = await bumpEntityVersion(db, 'imei', pit.imeiNum);
                  warranty_months=COALESCE(imei_records.warranty_months,
                                           excluded.warranty_months),
                  version=imei_records.version + 1`,
-              [pit.imeiNum, pit.prodId, txId, now, priorReceivedAt || now, wExpiresAt, wMonths],
+              [normalizeImeiKey(pit.imeiNum), pit.prodId, txId, now, priorReceivedAt || now, wExpiresAt, wMonths],
             );
           } catch (e: unknown) {
             console.warn('[db:imei] IMEI table record write skipped:', e);
@@ -1987,11 +2012,25 @@ export async function findSoldImeiStatus(
     // sale of the same IMEI through while the lock is held.
     return await withBusyRetry(
       async () => {
-        const rows = (await db.select(
-          'SELECT sale_transaction_id, sold_at FROM imei_records WHERE UPPER(imei) = UPPER($1) LIMIT 1',
-          [code],
-        )) as Array<{ sale_transaction_id?: string | null; sold_at?: string | null }>;
-        const row = rows?.[0];
+        // Fast path first: exact match on the normalized IMEI uses the
+        // index (DB-003). New writes normalize too; a legacy mixed-case
+        // row falls to the UPPER() fallback once, then heals in place.
+        const imei = normalizeImeiKey(code);
+        const fast = (await db.select(
+          'SELECT imei, sale_transaction_id, sold_at FROM imei_records WHERE imei = $1 LIMIT 1',
+          [imei],
+        )) as Array<{ imei?: string; sale_transaction_id?: string | null; sold_at?: string | null }>;
+        let row = fast?.[0];
+        if (!row) {
+          const slow = (await db.select(
+            'SELECT imei, sale_transaction_id, sold_at FROM imei_records WHERE UPPER(imei) = UPPER($1) LIMIT 1',
+            [code],
+          )) as Array<{ imei?: string; sale_transaction_id?: string | null; sold_at?: string | null }>;
+          row = slow?.[0];
+          if (row?.imei) {
+            db.execute('UPDATE imei_records SET imei = $1 WHERE imei = $2', [imei, String(row.imei)]).catch(() => {});
+          }
+        }
         if (!row) return { sold: false };
         const saleId = row.sale_transaction_id ?? undefined;
         const sold = Boolean(saleId ?? row.sold_at);

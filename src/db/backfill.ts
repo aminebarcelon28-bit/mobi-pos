@@ -258,6 +258,53 @@ async function backfillAllToOutboxInner(): Promise<{ enqueued: number; skipped: 
   return { enqueued, skipped: false };
 }
 
+// Era-independent one-shot (own flag): stamps original_transaction_id on
+// pre-linkage refund rows from their receipt JSON so the indexed
+// over-refund bound (DB-002) sees the complete history. New writes stamp
+// the column at insert; this covers everything written before. Idempotent
+// (only touches NULL-column rows whose JSON carries the key) and cheap
+// after the first run (flag short-circuit: one indexed settings read).
+const REMIRROR_ORIGIN_FLAG = 'sync.backfill_orig_txn_v1';
+
+export async function backfillOriginalTransactionIds(
+  db: FlagDb & {
+    select: (s: string, a?: unknown[]) => Promise<unknown>;
+    execute: (s: string, a?: unknown[]) => Promise<unknown>;
+  },
+): Promise<{ backfilled: number; skipped?: boolean }> {
+  if (await readFlag(db, REMIRROR_ORIGIN_FLAG)) return { backfilled: 0, skipped: true };
+  let backfilled = 0;
+  try {
+    const rows = (await db
+      .select(
+        "SELECT id, json_payload FROM transactions WHERE original_transaction_id IS NULL AND json_payload LIKE '%originalTransactionId%'",
+      )
+      .catch(() => [])) as Array<{ id?: unknown; json_payload?: unknown }>;
+    const { extractOriginalTransactionId } = await import('../sync/causalVersion');
+    for (const row of rows ?? []) {
+      const id = String(row?.id ?? '');
+      if (!id) continue;
+      const origId = extractOriginalTransactionId(row.json_payload);
+      if (!origId) continue;
+      try {
+        await db.execute('UPDATE transactions SET original_transaction_id = $1 WHERE id = $2 AND original_transaction_id IS NULL', [
+          origId,
+          id,
+        ]).catch(() => {});
+        backfilled += 1;
+      } catch {
+        // Row-level failure — leave NULL (the bound's LIKE residual still
+        // sees it, same as before).
+      }
+    }
+  } catch {
+    // Column missing (pre-migration schema) or unreadable DB: leave for the
+    // next boot after the heal runs. Never fail boot over a backfill.
+  }
+  await writeFlag(db, REMIRROR_ORIGIN_FLAG, { at: utcNowIso(), backfilled }).catch(() => {});
+  return { backfilled };
+}
+
 /**
  * One-time Dexie re-mirror: rows that pulls landed in plugin-sql BEFORE the
  * Dexie-mirror code existed never reached the UI store (and the pull cursor
@@ -315,14 +362,14 @@ export async function reconstructDexieTransactionsFromSql(
         for (let i = 0; i < ids.length; i += 500) {
           const chunk = ids.slice(i, i + 500);
           const part = (await db.select(
-            `SELECT * FROM transaction_items WHERE transaction_id IN (${chunk.map(() => '?').join(',')}) AND (deleted=0 OR deleted IS NULL)`,
+            `SELECT * FROM transaction_items WHERE transaction_id IN (${chunk.map(() => '?').join(',')}) AND (deleted=0 OR deleted IS NULL) ORDER BY transaction_id, id`,
             chunk,
           ).catch(() => [])) as Array<Record<string, unknown>>;
           allItems.push(...part);
         }
       } else {
         allItems = (await db.select(
-          "SELECT * FROM transaction_items WHERE deleted=0 OR deleted IS NULL"
+          "SELECT * FROM transaction_items WHERE deleted=0 OR deleted IS NULL ORDER BY transaction_id, id"
         ).catch(() => [])) as Array<Record<string, unknown>>;
       }
       for (const it of allItems) {
@@ -541,7 +588,9 @@ export async function remirrorToDexie(force = false): Promise<{ mirrored: number
   let mirrored = 0;
   // Products: merge stored blob over row essentials (same rule as pull mirror).
   try {
-    const rows = (await db.select('SELECT * FROM products WHERE deleted=0').catch(() => [])) as Array<Record<string, unknown>>;
+    // DB-001: deterministic remirror order (ghost-reconcile diffs were
+    // run-dependent on insertion order).
+    const rows = (await db.select('SELECT * FROM products WHERE deleted=0 ORDER BY id').catch(() => [])) as Array<Record<string, unknown>>;
     const productsToPut: Product[] = [];
     for (const r of rows) {
       try {
@@ -607,7 +656,7 @@ export async function remirrorToDexie(force = false): Promise<{ mirrored: number
 
   try {
     const custRows = (await db
-      .select('SELECT * FROM customers WHERE deleted = 0')
+      .select('SELECT * FROM customers WHERE deleted = 0 ORDER BY id')
       .catch(() => [])) as Array<Record<string, unknown>>;
     const customersToPut: Customer[] = [];
     for (const r of custRows) {
