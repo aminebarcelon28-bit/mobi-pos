@@ -52,7 +52,7 @@ for (const [input, want] of entryCases) {
   }
   check(`"${input}" → ${want}`, got === want, `got ${got}`);
 }
-const rejectCases = ['130.5555', '4.3575', '0.0001', '-5', '+5', '', 'abc', '1,200.50', '12..5', '1e3', '13.5.55'];
+const rejectCases = ['130.5555', '4.3575', '0.0001', '-5', '+5', '', 'abc', '1,200.50', '12..5', '1e3', '13.5.55', '130,555'];
 // NOTE: "130.555" is NOT in the reject list — under the FR convention shared
 // with moneyInput (B-027: "1.234"→1234), dot-groups of 3 are thousand
 // separators, so "130.555" = 130,555 DA exactly (verified below). Genuine
@@ -125,7 +125,12 @@ const arabicCases = [
   ['١٣٥٫٥٠', 13550], ['135٫50', 13550], ['١٣٥.٥٠', 13550],
   ['١٬٢٠٠٫٥٠', 120050], ['٤.٣٥', 435], ['٠.١', 10],
 ];
-for (const [input, want] of arabicCases) {
+const abCases = [
+  // A/B evaluation (PD-24 default A): grouping read is script-agnostic —
+  // Latin and Arabic inputs behave identically; B's retype path verified.
+  ['١٣٠٫٥٥٥', 13055500], ['130555', 13055500],
+];
+for (const [input, want] of [...arabicCases, ...abCases]) {
   let got;
   try {
     got = Money.fromUserInput(input).toMinor();

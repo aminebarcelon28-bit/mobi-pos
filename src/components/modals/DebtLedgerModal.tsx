@@ -153,6 +153,12 @@ export const DebtLedgerModal: React.FC = () => {
   const plafondRootRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  // KREDY-01: which sub-panel opened last. Refs auto-null on unmount, so a
+  // stale value safely falls through below — no close-path edits needed.
+  const lastOpenedPanel = useRef<'versement' | 'plafond' | null>(null);
+  // KREDY-02: deterministic idempotency key per payment intent (fresh per
+  // dialog open, stable across retries of the same intent).
+  const paymentEntryId = useRef('');
 
   useEffect(() => {
     if (activeModal !== 'debt_ledger') return;
@@ -165,7 +171,13 @@ export const DebtLedgerModal: React.FC = () => {
       if (e.key !== 'Tab') return;
       // The sub-panels are nested in the overlay, so the topmost one owns
       // the trap: Tab can never reach the (visually inert) ledger behind.
-      const panel = plafondRootRef.current ?? versementRootRef.current ?? modalRootRef.current;
+      // KREDY-01: trap the most-recently-opened panel when both mount;
+      // unmounted refs auto-null so stale `lastOpenedPanel` falls through.
+      const lastOpened = lastOpenedPanel.current;
+      const panel =
+        (lastOpened === 'versement' ? versementRootRef.current : null) ??
+        (lastOpened === 'plafond' ? plafondRootRef.current : null) ??
+        versementRootRef.current ?? plafondRootRef.current ?? modalRootRef.current;
       if (!panel) return;
       const focusable = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
         (el) => el.tabIndex !== -1 && el.getClientRects().length > 0
@@ -215,6 +227,8 @@ export const DebtLedgerModal: React.FC = () => {
     setPaymentAmount(String(customer.currentDebt || 0));
     setPaymentMethod('Espèces');
     setPaymentNotes('Règlement direct au comptoir');
+    lastOpenedPanel.current = 'versement';
+    paymentEntryId.current = `debt-pay-${customer.id}-${Date.now()}`;
   };
 
   const handleConfirmRepayment = async (e: React.FormEvent) => {
@@ -231,7 +245,10 @@ export const DebtLedgerModal: React.FC = () => {
       payingCustomer.id,
       amount,
       paymentMethod,
-      paymentNotes
+      paymentNotes,
+      // KREDY-02: convergent retries of one intent collapse on this key
+      // instead of doubling (slice uses it as the ledger row id).
+      { entryId: paymentEntryId.current || undefined }
     );
     setIsProcessing(false);
 
@@ -613,6 +630,7 @@ export const DebtLedgerModal: React.FC = () => {
                           onClick={() => {
                             setAdjustingCustomer(customer);
                             setNewLimitInput(String(customer.debtLimit ?? DEFAULT_CREDIT_LIMIT));
+                            lastOpenedPanel.current = 'plafond';
                           }}
                           className="min-h-[38px] min-w-[38px] p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95"
                           aria-haspopup="dialog"

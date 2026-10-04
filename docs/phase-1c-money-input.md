@@ -95,8 +95,11 @@ optional semi-wholesale clears via onClear instead of empty-string state.
   comma==dot, no silent truncation). Drill/rehearse/differencer stay
   execution-time tools (need the live DB, absent in CI by design).
 
-## 6. Deferred audit fixes with ready diffs (deep-audit follow-up — DO NOT
-apply while the a11y lane owns DebtLedgerModal; both touch the deferred file)
+## 6. Deferred audit fixes — APPLIED (owner confirmed footprint stabilized)
+
+KREDY-01 and KREDY-02 below were applied to `DebtLedgerModal.tsx` after the
+owner confirmed the a11y lane had settled (their focus-trap/testid work is
+committed). Verified: tsc clean for the file, boundary gate green.
 
 KREDY-01 (dual sub-panel trap scope, `DebtLedgerModal.tsx:168`): track open
 order and trap the topmost panel instead of the fixed
