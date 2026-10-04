@@ -120,6 +120,21 @@ console.log('\n--- J5: fractional qty x santeem price ---');
   check('cumulative target step1 = 166,667 s', step1.toMinor() === 166667, String(step1.toMinor()));
 }
 
+console.log('\n--- J1b: Arabic-script entry (BUG-MONEY-03) ---');
+const arabicCases = [
+  ['١٣٥٫٥٠', 13550], ['135٫50', 13550], ['١٣٥.٥٠', 13550],
+  ['١٬٢٠٠٫٥٠', 120050], ['٤.٣٥', 435], ['٠.١', 10],
+];
+for (const [input, want] of arabicCases) {
+  let got;
+  try {
+    got = Money.fromUserInput(input).toMinor();
+  } catch (e) {
+    got = `threw:${e?.message}`;
+  }
+  check(`"${input}" → ${want}`, got === want, `got ${got}`);
+}
+
 console.log('\n--- J7: live canonical echo (C-2, extends PD-23) ---');
 // Every money input must display fromUserInput(value).format() while typing /
 // before commit: a mis-parse (esp. the 1000x grouping ambiguity) is VISIBLE

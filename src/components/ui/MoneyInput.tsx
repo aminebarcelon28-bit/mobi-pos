@@ -49,12 +49,28 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
   // typing, do not clobber the caret) from external changes (form reset,
   // programmatic set — re-sync the text).
   const emittedRef = useRef<number>(valueMinor);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (valueMinor !== emittedRef.current) {
       emittedRef.current = valueMinor;
+      // BUG-MONEY-05 fix: parent-driven re-sync (e.g. max-debt clamp) must
+      // not drop the caret mid-typing — preserve the selection around it.
+      const el = inputRef.current;
+      const focused = !!el && document.activeElement === el;
+      const start = el?.selectionStart ?? null;
+      const end = el?.selectionEnd ?? null;
       setText(echoOf(valueMinor));
       setTouched(false);
+      if (focused && el && start !== null && end !== null) {
+        requestAnimationFrame(() => {
+          try {
+            el.setSelectionRange(Math.min(start, el.value.length), Math.min(end, el.value.length));
+          } catch {
+            // Non-textual input state — caret restore is best-effort only.
+          }
+        });
+      }
     }
   }, [valueMinor]);
 
@@ -72,9 +88,15 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
       <span className="flex items-center gap-2">
         <input
           id={id}
+          ref={inputRef}
           type="text"
           inputMode="decimal"
           autoComplete="off"
+          // BUG-MONEY-04 mitigation: magnitudes above ~10^13 DA are
+          // unrepresentable as minor units — cap keystrokes so the field can
+          // never assemble one (callers must still guard valueMinor with
+          // `|| 0`; the boundary gate enforces both).
+          maxLength={16}
           required={required}
           disabled={disabled}
           aria-label={label ?? 'Montant (DA)'}

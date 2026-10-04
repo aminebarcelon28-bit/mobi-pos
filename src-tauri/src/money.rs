@@ -75,7 +75,21 @@ impl Money {
         if raw.starts_with('-') || raw.starts_with('+') {
             return Err(MoneyError::SignNotAllowed);
         }
-        let compact: String = raw
+        // BUG-MONEY-03 parity: normalize Arabic-script numerals (TS Test J
+        // pins the same vectors on both sides via shared sources).
+        let mut latinized = String::with_capacity(raw.len());
+        for c in raw.chars() {
+            if ('\u{0660}'..='\u{0669}').contains(&c) {
+                latinized.push((c as u32 - 0x0660 + '0' as u32) as u8 as char);
+            } else if c == '\u{066B}' {
+                latinized.push('.');
+            } else if c == '\u{066C}' {
+                // Arabic thousands separator — dropped like FR grouping dots.
+            } else {
+                latinized.push(c);
+            }
+        }
+        let compact: String = latinized
             .chars()
             .filter(|c| !matches!(c, ' ' | '\u{00A0}' | '\u{202F}' | '\u{2009}' | '\''))
             .collect();
@@ -323,6 +337,10 @@ mod tests {
         assert!(Money::from_user_input("-5").is_err());
         assert!(Money::from_user_input("").is_err());
         assert!(Money::from_user_input("1,200.50").is_err());
+        // BUG-MONEY-03 parity: Arabic-script numerals (TS Test J mirrors).
+        assert_eq!(Money::from_user_input("١٣٥٫٥٠").unwrap().to_minor(), 13550);
+        assert_eq!(Money::from_user_input("135٫50").unwrap().to_minor(), 13550);
+        assert_eq!(Money::from_user_input("١٬٢٠٠٫٥٠").unwrap().to_minor(), 120050);
     }
 
     #[test]

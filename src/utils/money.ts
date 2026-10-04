@@ -75,9 +75,11 @@ export class Money {
   /**
    * PD-22 string-based entry. NEVER float×100: the decimal string is split
    * and concatenated into minor units ("130.5"→13050, "4.35"→435).
-   * Accepts "." and "," decimal separators (FR/DZ keyboards); strips
-   * grouping spaces (regular, NBSP, narrow NBSP, apostrophe) and FR
-   * thousand-grouping dots ("45.000"→45000, "12.500,50"→1250050).
+   * Accepts "." and "," decimal separators (FR/DZ keyboards) plus Arabic-
+   * script numerals (٠-٩, decimal separator ٫, thousands ٬ — normalized
+   * before validation); strips grouping spaces (regular, NBSP, narrow NBSP,
+   * apostrophe) and FR thousand-grouping dots ("45.000"→45000,
+   * "12.500,50"→1250050).
    * REJECTS (throws, never silently rounds): 3+ decimals ("130.555"),
    * negatives, empty/unparseable input, values beyond safe integer.
    */
@@ -92,7 +94,16 @@ export class Money {
     if (raw.startsWith('-') || raw.startsWith('+')) {
       fail(`fromUserInput: sign not allowed for money entry: ${raw}`);
     }
-    const compact = raw.replace(/[\s  ’']/g, '');
+    // BUG-MONEY-03 fix: normalize Arabic-script numerals before validation —
+    // Eastern Arabic-Indic digits (٠-٩), Arabic decimal separator (٫ U+066B),
+    // Arabic thousands separator (٬ U+066C). DZ Arabic-keyboard users type
+    // ١٣٥٫٥٠ for 135.50; rejecting it blocked all price entry for that locale.
+    const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+    const latinized = [...raw].map((c) => {
+      const i = ARABIC_DIGITS.indexOf(c);
+      return i >= 0 ? String(i) : c === '٫' ? '.' : c === '٬' ? '' : c;
+    }).join('');
+    const compact = latinized.replace(/[\s  ’']/g, '');
     if (!compact) fail('fromUserInput: empty input');
     const hasComma = compact.includes(',');
     const hasDot = compact.includes('.');

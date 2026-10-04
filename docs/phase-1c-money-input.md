@@ -54,7 +54,7 @@ Non-goals kept out: quantities, counts, percents, multipliers, points,
 IMEI/phone/search/PIN/note/checkbox/select, `vatRate` reads, tender-math
 engines (parse-only change), fractional-qty acceptance (Stage B).
 
-## 5. Deferred: PoReviewScreen 7 inputs (explicit, tracked)
+## 5. Deferred: PoReviewScreen 7 inputs + DebtLedgerModal 2 inputs (explicit, tracked)
 
 The card/table `unit_cost` / `selling_price` / `line_total` + quick-create
 `quickCost` / `quickPrice` inputs (parseFloat) sit inside another lane's
@@ -66,16 +66,16 @@ deferral is enforced, not silent. These inputs never destroyed decimals
 Stage E. Redo recipe: replace each `parseFloat(e.target.value)` money input
 with `MoneyInput` + entry-bridge (see §2 pattern); ~30 minutes.
 
-**DebtLedgerModal's 2 inputs are no longer deferred.** They were held back
-only while the a11y lane owned that file (focus trap + `kredy-*` testids);
-both now render through `MoneyInput` (`Montant du Versement (DA)`,
-`Nouveau Plafond Autorisé (DA)`), the `paymentAmount` / `newLimitInput`
-state is numeric (santeem bridge), the two handlers dropped
-`Math.round(parseLocalizedAmount(…))`, and the registry row is tightened to
-`{ pla: 0, pf: 0 }` so a reintroduced parser fails the build. One documented
-delta: a half-dinar over-payment now shows change to the cent
-(`250,30 DA`) instead of a rounded whole dinar — the store still settles in
-integer dinars (`recordCustomerDebtPayment` rounds the tendered amount).
+DebtLedgerModal's 2 amount fields (`Montant du Versement`,
+`Nouveau Plafond Autorisé`) are deferred for the same reason: the a11y lane
+owns that file (focus trap + `kredy-*` testids), so it was reverted to
+`parseLocalizedAmount` to keep zero footprint. Its registry row carries
+`deferred: true` with `pla: 3` pinned, which the gate honours — a
+re-introduced parser still fails. Redo recipe: the same §2 pattern; note the
+visible delta when it happens — a half-dinar over-payment currently shows
+change rounded to the whole dinar, and would then show it to the cent (the
+store settles in integer dinars either way, `recordCustomerDebtPayment`
+rounds the tendered amount).
 
 Trivial behavior deltas (echo-visible, fail-obvious, documented in code):
 empty quick-touch price now saves 0 ("0.00 DA" shown) instead of erroring;
@@ -95,10 +95,35 @@ optional semi-wholesale clears via onClear instead of empty-string state.
   comma==dot, no silent truncation). Drill/rehearse/differencer stay
   execution-time tools (need the live DB, absent in CI by design).
 
+## 6. Deferred audit fixes with ready diffs (deep-audit follow-up — DO NOT
+apply while the a11y lane owns DebtLedgerModal; both touch the deferred file)
+
+KREDY-01 (dual sub-panel trap scope, `DebtLedgerModal.tsx:168`): track open
+order and trap the topmost panel instead of the fixed
+`plafond ?? versement ?? modal` chain:
+```tsx
+const lastOpenedPanel = useRef<'plafond' | 'versement' | null>(null);
+// set lastOpenedPanel.current = 'versement' in handleOpenPayment and
+// = 'plafond' in the limit-adjust opener; clear both on close.
+const panel =
+  (lastOpenedPanel.current === 'versement' ? versementRootRef.current : null) ??
+  (lastOpenedPanel.current === 'plafond' ? plafondRootRef.current : null) ??
+  modalRootRef.current;
+```
+KREDY-02 (cross-device double-settle, `createCustomerSlice.ts:449-502`):
+the slice already supports `entryId` idempotency — the modal just never
+passes it. When DebtLedgerModal is back under our lane: capture
+`const paymentEntryId = useRef('')`, set it to
+`` `debt-pay-${customer.id}-${Date.now()}` `` in `handleOpenPayment`
+(fresh per dialog open, stable across retries of the same intent), and pass
+`{ entryId: paymentEntryId.current }` to `recordCustomerDebtPayment`.
+Convergent retries then collapse instead of doubling.
+
 ## 4. Verification
 
-Test J 71/71 (J8 bridges), boundary 69/69 (Rule 4 adoption registry:
-24 files, per-file legacy-parser caps), half-dinar 12/12, tsc clean
+Test J 77/77 (J8 bridges, J1b Arabic entry), boundary 68/68 (Rule 1b
+render-crash guard, Rule 4 adoption registry: 24 files, per-file
+legacy-parser caps), half-dinar 12/12, tsc clean
 (baseline unchanged), oxlint 0 errors. Owner 5-minute check: 135.50 saves +
 shows everywhere; 135,50 identical; 135.555 echoes the grouping read;
 receipt prints "135.50 DA".

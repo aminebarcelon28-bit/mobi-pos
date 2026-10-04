@@ -108,7 +108,7 @@ export function buildZSnapshot(a: BuildZSnapshotArgs): ZReportSnapshot {
     .filter(
       (m) => m.type === 'EXPENSE' && (m.reason || '').startsWith(DRAWER_REASON_PREFIXES.SOULTE_CASHOUT)
     )
-    .reduce((acc, m) => acc + Math.max(0, Math.round(Number(m.amount) || 0)), 0);
+    .reduce((acc, m) => acc + Math.max(0, Number(m.amount) || 0), 0);
   const exchangeOutPure = Math.max(0, exchangeOut - soulteOut);
   const manualIn = standaloneDepositsFromMovements(sessionMovements);
   const manualOut = standaloneExpensesFromMovements(sessionMovements);
@@ -152,8 +152,11 @@ export function buildZSnapshot(a: BuildZSnapshotArgs): ZReportSnapshot {
     manualOut,
     tradeInCashOut,
     expectedCash,
-    countedCash: Math.max(0, Math.round(a.countedCash || 0)),
-    variance: Math.round(a.countedCash || 0) - expectedCash,
+    // BUG-MONEY-02 fix: single-base aggregation — both legs unrounded, display
+    // (formatDZD) rounds once. Rounding countedCash here while expectedCash
+    // stays exact fabricated ±1 phantom variances on half-dinar rows.
+    countedCash: Math.max(0, Number(a.countedCash) || 0),
+    variance: (Number(a.countedCash) || 0) - expectedCash,
     dropsList: (a.cashDrops || [])
       .filter((d) => inShiftWindow(d.timestamp))
       .map((d) => ({ id: d.id, reason: d.reason, amount: d.amount })),

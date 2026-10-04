@@ -285,9 +285,13 @@ export function savSettledFromTxns(txns: SavTxnLike[] | undefined | null): numbe
       return (
         acc +
         lines.reduce((sum, i) => {
+          // BUG-MONEY-01 fix: no per-line rounding — stored values are already
+          // whole-or-half dinars, and Math.round(135.5) would destroy the half
+          // dinar Phase 1c preserved at entry (same for Math.floor on qty).
+          // Sums stay exact floats; display rounds once (Stage E → minor units).
           const net =
-            Math.round(Number(i.appliedPrice) || 0) * Math.max(0, Math.floor(Number(i.quantity) || 0)) -
-            Math.max(0, Math.round(Number(i.discount) || 0));
+            (Number(i.appliedPrice) || 0) * Math.max(0, Number(i.quantity) || 0) -
+            Math.max(0, Number(i.discount) || 0);
           return sum + Math.max(0, net);
         }, 0)
       );

@@ -115,6 +115,12 @@ console.log('\n--- Rule 3: money-path float registry (Stage E expiry) ---');
   }
 }
 
+console.log('\n--- Rule 1b: BUG-MONEY-04 render-crash guard ---');
+{
+  const mi = read('src/components/ui/MoneyInput.tsx');
+  check('MoneyInput caps keystroke magnitude (maxLength)', /maxLength=\{\d+\}/.test(mi));
+}
+
 console.log('\n--- Rule 4: Phase 1c input sweep (one parsing path) ---');
 {
   // file -> max remaining legacy-parser hits. Every money input in these
