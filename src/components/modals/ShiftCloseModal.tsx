@@ -19,9 +19,10 @@ import type { CloseShiftWithPin } from '../../store/slices/createShiftSlice';
 import { SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD } from '../../db/adapters/shiftAdapter';
 import { formatDZD, type DenominationCount } from '../../types/pos';
 import { useToast } from '../ui/Toast';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { maintenanceService } from '../../services/maintenanceService';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
 import { isMobileDevice } from '../../utils/platform';
 import { verifyManagerGate } from '../../utils/pinGate';
 import { useAllocationCogs } from '../../hooks/useAllocationCogs';
@@ -586,15 +587,12 @@ export const ShiftCloseModal: React.FC = () => {
                   <label className="text-[11px] text-pos-muted font-bold block uppercase">
                     Total Espèces Comptées Physiquement (DA)
                   </label>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0"
-                    value={directPhysicalCount || ''}
-                    onChange={(e) => setDirectPhysicalCount(Math.round(parseLocalizedAmount(e.target.value) || 0))}
+                  <MoneyInput
+                    label="Total Espèces Comptées Physiquement (DA)"
+                    valueMinor={dinarsToMinor(directPhysicalCount || 0)}
+                    onChangeMinor={(minor) => setDirectPhysicalCount(toLegacyReal(minor))}
                     placeholder="Ex: 48 500 DA"
                     className="w-full bg-pos-bg border border-pos-border rounded-xl px-4 py-3 text-xl font-mono font-bold text-emerald-400 focus:border-emerald-400 focus:outline-none"
-                    autoFocus
                   />
                 </div>
               ) : (
@@ -637,11 +635,12 @@ export const ShiftCloseModal: React.FC = () => {
                         <span className="text-xs font-bold text-pos-muted">Pièces Div.</span>
                         <p className="text-[9px] text-pos-muted font-mono">Monnaie vrac</p>
                       </div>
-                      <input
-                        type="number"
-                        min="0"
-                        value={denominations.coins || ''}
-                        onChange={(e) => handleDenomChange('coins', e.target.value)}
+                      <MoneyInput
+                        label="Pièces Div."
+                        valueMinor={dinarsToMinor(denominations.coins || 0)}
+                        onChangeMinor={(minor) =>
+                          setDenominations((prev) => ({ ...prev, coins: toLegacyReal(minor) }))
+                        }
                         placeholder="0 DA"
                         className="w-14 bg-pos-card border border-pos-border rounded px-2 py-1 text-right text-xs font-mono font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
                       />

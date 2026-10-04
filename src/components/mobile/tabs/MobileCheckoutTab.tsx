@@ -35,7 +35,8 @@ import type { CartItem, Customer, PricingTier } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
 import { getProductPriceForTier } from '../../../utils/pricingEngine';
 import { computeCartTotals, computeTradeInSettlement } from '../../../utils/receiptMath';
-import { parseLocalizedAmount } from '../../../utils/moneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../../utils/money';
+import { MoneyInput } from '../../ui/MoneyInput';
 import { useFifoPreviewCosts } from '../../../hooks/useFifoPreviewCosts';
 import { soundEngine } from '../../../utils/audioFeedback';
 import { useToast } from '../../ui/Toast';
@@ -90,7 +91,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
 
   // Cash Tender Number Pad Sheet states
   const [isCashTenderOpen, setIsCashTenderOpen] = useState(false);
-  const [tenderedStr, setTenderedStr] = useState('');
+  const [tenderedStr, setTenderedStr] = useState<number>(0);
   const [isTenderDirty, setIsTenderDirty] = useState(false);
 
   // Post-Checkout Celebration & WhatsApp Receipt Sheet
@@ -111,7 +112,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
 
   // Line item price override & discount bottom sheet states
   const [editingItem, setEditingItem] = useState<CartItem | null>(null);
-  const [overridePriceInput, setOverridePriceInput] = useState<string>('');
+  const [overridePriceInput, setOverridePriceInput] = useState<number>(0);
   const [managerPinInput, setManagerPinInput] = useState<string>('');
   const [overrideError, setOverrideError] = useState<string | null>(null);
 
@@ -255,15 +256,15 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     soundEngine.playKeyBeep?.();
     const currentPrice = item.appliedPrice !== undefined ? item.appliedPrice : getProductPriceForTier(item.product, pricingTier);
     setEditingItem(item);
-    setOverridePriceInput(String(currentPrice));
+    setOverridePriceInput(currentPrice);
     setManagerPinInput('');
     setOverrideError(null);
   };
 
   const handleApplyPriceOverride = async () => {
     if (!editingItem) return;
-    const newPrice = parseLocalizedAmount(overridePriceInput);
-    if (isNaN(newPrice) || newPrice < 0) {
+    const newPrice = overridePriceInput;
+    if (!Number.isFinite(newPrice) || newPrice < 0) {
       setOverrideError('Veuillez saisir un montant valide');
       soundEngine.playError?.();
       return;
@@ -305,7 +306,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     soundEngine.playSuccess?.();
     showToast(`Prix mis à jour : ${formatDZD(newPrice)}`, 'success');
     setEditingItem(null);
-    setOverridePriceInput('');
+    setOverridePriceInput(0);
     setManagerPinInput('');
     setOverrideError(null);
   };
@@ -313,7 +314,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
   const handleOpenCashTender = () => {
     if (cart.length === 0 || isSubmitting) return;
     soundEngine.playKeyBeep?.();
-    setTenderedStr(String(netTotal));
+    setTenderedStr(netTotal);
     setIsTenderDirty(false);
     setIsCashTenderOpen(true);
   };
@@ -355,7 +356,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     });
     const submitNet = submitTotals.total;
     const submitRefundDue = submitTotals.refundDue;
-    const tendered = Math.round(parseLocalizedAmount(tenderedStr) || 0);
+    const tendered = tenderedStr;
     // Soulte gate (slice enforces too): explicit payout choice required.
     const liveSettlement = liveStaged
       ? computeTradeInSettlement(submitTotals.subtotalAfterDiscount, liveTradeInCredit)
@@ -1380,23 +1381,17 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 <label className="text-xs font-bold text-pos-text block mb-1">
                   Nouveau Prix Vendu (DA / unité) :
                 </label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step="any"
-                    value={overridePriceInput}
-                    onChange={(e) => {
-                      setOverridePriceInput(e.target.value);
+                <div>
+                  <MoneyInput
+                    label="Nouveau Prix Vendu (DA / unité)"
+                    valueMinor={dinarsToMinor(overridePriceInput || 0)}
+                    onChangeMinor={(minor) => {
+                      setOverridePriceInput(toLegacyReal(minor));
                       setOverrideError(null);
                     }}
                     placeholder="Saisir montant..."
                     className="w-full min-h-[48px] bg-pos-card border border-pos-border focus:border-amber-400 rounded-xl px-3 py-2 text-base font-mono font-black text-pos-text focus:outline-none shadow-xs"
-                    autoFocus
                   />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-pos-muted font-mono pointer-events-none">
-                    DA
-                  </span>
                 </div>
               </div>
 
@@ -1415,7 +1410,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                         type="button"
                         onClick={() => {
                           soundEngine.playKeyBeep?.();
-                          setOverridePriceInput(String(discounted));
+                          setOverridePriceInput(discounted);
                           setOverrideError(null);
                         }}
                         className="py-2 rounded-xl bg-pos-card border border-pos-border hover:border-amber-500/40 text-amber-400 font-black text-[11px] min-h-[42px] transition cursor-pointer active:scale-95"
@@ -1429,7 +1424,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                     onClick={() => {
                       soundEngine.playKeyBeep?.();
                       const def = editingItem.defaultPrice ?? editingItem.product.price;
-                      setOverridePriceInput(String(def));
+                      setOverridePriceInput(def);
                       setOverrideError(null);
                     }}
                     className="py-2 rounded-xl bg-pos-card border border-pos-border hover:border-pos-text text-pos-muted hover:text-pos-text font-bold text-[10px] min-h-[42px] transition cursor-pointer active:scale-95"
@@ -1441,7 +1436,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
 
               {/* Live Margin and Loss Calculations */}
               {(() => {
-                const newPrice = parseLocalizedAmount(overridePriceInput) || 0;
+                const newPrice = overridePriceInput || 0;
                 // STRICT LEDGER: displayed margin is FIFO-or-pending (never a
                 // costPrice-derived number); the below-cost gate keeps the
                 // conservative fallback so protection never sleeps.
@@ -1560,7 +1555,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
             <div className="p-4 space-y-3 overflow-y-auto overscroll-contain">
               {/* Total Net & Change Due Display Card */}
               {(() => {
-                const tenderedNum = Math.round(parseLocalizedAmount(tenderedStr) || 0);
+                const tenderedNum = tenderedStr;
                 const changeDue = Math.max(0, tenderedNum - netTotal);
                 const remainingDue = Math.max(0, netTotal - tenderedNum);
                 const isExact = tenderedNum === netTotal;
@@ -1670,7 +1665,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 </span>
                 <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
                   {smartBanknotes.map((preset) => {
-                    const isSelected = Math.round(parseLocalizedAmount(tenderedStr) || 0) === preset;
+                    const isSelected = tenderedStr === preset;
                     const isExact = preset === netTotal;
 
                     return (
@@ -1681,7 +1676,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                         aria-label={isExact ? `Exact (${formatDZD(preset)}) — Montant exact` : `${formatDZD(preset)} — Encaisser`}
                         onClick={() => {
                           soundEngine.playKeyBeep?.();
-                          setTenderedStr(String(preset));
+                          setTenderedStr(preset);
                           setIsTenderDirty(true);
                         }}
                         className={`px-3 py-2 rounded-xl text-xs font-mono font-black shrink-0 transition active-press cursor-pointer border min-h-[44px] ${
@@ -1707,11 +1702,12 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                     type="button"
                     onClick={() => {
                       soundEngine.playKeyBeep?.();
+                      const dNum = Number(d);
                       if (!isTenderDirty) {
-                        setTenderedStr(d);
+                        setTenderedStr(dNum);
                         setIsTenderDirty(true);
                       } else {
-                        setTenderedStr((prev) => (prev === '0' ? d : prev + d));
+                        setTenderedStr((prev) => (prev === 0 ? dNum : prev * 10 + dNum));
                       }
                     }}
                     className="min-h-[52px] rounded-2xl bg-pos-card border border-pos-border hover:border-pos-text/30 active-press text-lg font-mono font-bold text-pos-text flex items-center justify-center cursor-pointer shadow-xs"
@@ -1725,7 +1721,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   type="button"
                   onClick={() => {
                     soundEngine.playKeyBeep?.();
-                    setTenderedStr('0');
+                    setTenderedStr(0);
                     setIsTenderDirty(true);
                   }}
                   className="min-h-[52px] rounded-2xl bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500/20 active-press text-rose-400 font-black text-sm flex items-center justify-center cursor-pointer"
@@ -1739,10 +1735,10 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   onClick={() => {
                     soundEngine.playKeyBeep?.();
                     if (!isTenderDirty) {
-                      setTenderedStr('0');
+                      setTenderedStr(0);
                       setIsTenderDirty(true);
                     } else {
-                      setTenderedStr((prev) => (prev === '0' ? '0' : prev + '0'));
+                      setTenderedStr((prev) => (prev === 0 ? 0 : prev * 10));
                     }
                   }}
                   className="min-h-[52px] rounded-2xl bg-pos-card border border-pos-border hover:border-pos-text/30 active-press text-lg font-mono font-bold text-pos-text flex items-center justify-center cursor-pointer shadow-xs"
@@ -1754,7 +1750,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   type="button"
                   onClick={() => {
                     soundEngine.playKeyBeep?.();
-                    setTenderedStr((prev) => (prev.length > 1 ? prev.slice(0, -1) : '0'));
+                    setTenderedStr((prev) => Math.floor(prev / 10));
                     setIsTenderDirty(true);
                   }}
                   className="min-h-[52px] rounded-2xl bg-pos-card border border-pos-border hover:border-pos-text/30 active-press text-pos-muted hover:text-pos-text flex items-center justify-center cursor-pointer"
@@ -1767,7 +1763,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
               {/* Confirm Cash Tender Button */}
               <button
                 type="button"
-                disabled={isSubmitting || Math.round(parseLocalizedAmount(tenderedStr) || 0) < netTotal}
+                disabled={isSubmitting || tenderedStr < netTotal}
                 onClick={handleConfirmCashTender}
                 className="w-full min-h-[54px] rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 active-press text-slate-950 font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer disabled:opacity-50 disabled:pointer-events-none mt-2"
               >

@@ -11,7 +11,8 @@ import { formatDZD, formatDateTime } from '../../types/pos';
 import type { Customer, PricingTier, SaleTransaction, PaymentMethodType } from '../../types/pos';
 import { calculateNextTierProgress, calculateCustomerTier, normalizeLoyaltyConfig } from '../../utils/loyaltyEngine';
 import { normalizeAlgerianPhone, openWhatsApp } from '../../utils/phoneUtils';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
+import { MoneyInput } from '../ui/MoneyInput';
 import { useToast } from '../ui/Toast';
 
 const foldForSearch = (s: string | undefined | null): string =>
@@ -69,7 +70,7 @@ export const CustomersModal: React.FC = () => {
 
   // Debt Payment & WhatsApp State
   const [debtPaymentCustomer, setDebtPaymentCustomer] = useState<Customer | null>(null);
-  const [debtPaymentAmount, setDebtPaymentAmount] = useState<string>('');
+  const [debtPaymentAmount, setDebtPaymentAmount] = useState<number>(0);
   const [debtPaymentMethod, setDebtPaymentMethod] = useState<PaymentMethodType>('Espèces');
   const [debtPaymentNotes, setDebtPaymentNotes] = useState<string>('');
   const [whatsappDebtCustomer, setWhatsappDebtCustomer] = useState<Customer | null>(null);
@@ -320,7 +321,7 @@ export const CustomersModal: React.FC = () => {
   const handleRecordDebtPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!debtPaymentCustomer) return;
-    const amount = Math.round(parseLocalizedAmount(debtPaymentAmount));
+    const amount = debtPaymentAmount;
     if (!Number.isFinite(amount) || amount <= 0) {
       alert('Veuillez saisir un montant valide.');
       return;
@@ -342,7 +343,7 @@ export const CustomersModal: React.FC = () => {
           : `Versement de ${formatDZD(amount)} enregistré avec succès !`
       );
       setDebtPaymentCustomer(null);
-      setDebtPaymentAmount('');
+      setDebtPaymentAmount(0);
       setDebtPaymentNotes('');
     }
   };
@@ -1197,7 +1198,7 @@ export const CustomersModal: React.FC = () => {
                               type="button"
                               onClick={() => {
                                 setDebtPaymentCustomer(customer);
-                                setDebtPaymentAmount(debt.toString());
+                                setDebtPaymentAmount(debt);
                                 setDebtPaymentMethod('Espèces');
                                 setDebtPaymentNotes('');
                               }}
@@ -1345,16 +1346,17 @@ export const CustomersModal: React.FC = () => {
                   <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
                     Montant du Versement (DA) *
                   </label>
-                  <input
-                    type="number"
-                    required
-                    min="1"
-                    max={debtPaymentCustomer.currentDebt || undefined}
-                    value={debtPaymentAmount}
-                    onChange={(e) => setDebtPaymentAmount(e.target.value)}
+                  <MoneyInput
+                    label="Montant du Versement (DA)"
+                    valueMinor={dinarsToMinor(debtPaymentAmount || 0)}
+                    onChangeMinor={(minor) => {
+                      const v = toLegacyReal(minor);
+                      const cap = debtPaymentCustomer.currentDebt || 0;
+                      setDebtPaymentAmount(cap > 0 ? Math.min(v, cap) : v);
+                    }}
                     className="w-full bg-pos-bg border-2 border-pos-border focus:border-emerald-400 rounded-lg px-4 py-2.5 text-xl font-black font-mono text-pos-text focus:outline-none"
                     placeholder="5000"
-                    autoFocus
+                    required
                   />
                 </div>
 

@@ -18,6 +18,8 @@ import {
 import { usePosStore } from '../../store/usePosStore';
 import { CsvInvoiceRowSchema } from '../../schemas/invoiceSchema';
 import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { resolveReferenceCost } from '../../utils/referenceCost';
 import { formatDZD } from '../../types/pos';
 import { useToast } from '../ui/Toast';
@@ -570,16 +572,11 @@ export const InvoiceIngestionModal: React.FC = () => {
                   <label className="text-[9px] font-semibold text-pos-muted uppercase tracking-wider block mb-1">
                     Total Facture (DA)
                   </label>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={reportedGrandTotal > 0 ? reportedGrandTotal : ''}
+                  <MoneyInput
+                    label="Total Facture (DA)"
+                    valueMinor={dinarsToMinor(reportedGrandTotal || 0)}
+                    onChangeMinor={(minor) => setReportedGrandTotal(Math.max(0, toLegacyReal(minor)))}
                     placeholder="Auto (calculé)"
-                    onChange={(e) =>
-                      setReportedGrandTotal(
-                        Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0))
-                      )
-                    }
                     className="w-full bg-pos-panel border border-pos-border rounded-xl px-2 py-1.5 text-xs text-pos-text text-center font-mono focus:outline-none focus:border-pos-accent min-h-[40px]"
                   />
                 </div>
@@ -605,15 +602,10 @@ export const InvoiceIngestionModal: React.FC = () => {
                   <label className="text-[9px] font-semibold text-pos-muted uppercase tracking-wider block mb-1">
                     Frais Port (DA)
                   </label>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={reportedFreight}
-                    onChange={(e) =>
-                      setReportedFreight(
-                        Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0))
-                      )
-                    }
+                  <MoneyInput
+                    label="Frais Port (DA)"
+                    valueMinor={dinarsToMinor(reportedFreight || 0)}
+                    onChangeMinor={(minor) => setReportedFreight(Math.max(0, toLegacyReal(minor)))}
                     className="w-full bg-pos-panel border border-pos-border rounded-xl px-2 py-1.5 text-xs text-pos-text text-center font-mono focus:outline-none focus:border-pos-accent min-h-[40px]"
                   />
                 </div>

@@ -23,7 +23,8 @@ import { useToast } from '../ui/Toast';
 import { soundEngine } from '../../utils/audioFeedback';
 import { newId } from '../../utils/ids';
 import { csvCell } from '../../utils/spreadsheetSafe';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { todayLocalKey, toLocalDayKey } from '../../utils/dateUtils';
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
@@ -57,7 +58,7 @@ export const ExpenseManagerModal: React.FC = () => {
   const [showAddForm, setShowAddForm] = useState(false);
   const [category, setCategory] = useState<ExpenseCategory>('Loyer');
   const [title, setTitle] = useState('');
-  const [amount, setAmount] = useState('');
+  const [amount, setAmount] = useState<number>(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType>('Espèces');
   const [paidTo, setPaidTo] = useState('');
   const [notes, setNotes] = useState('');
@@ -114,8 +115,8 @@ export const ExpenseManagerModal: React.FC = () => {
   // ══════════════════════════════════════════════════════════════
   const handleSaveExpense = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Integer DA only: localized parse then round to minor units.
-    const val = Math.round(parseLocalizedAmount(amount));
+    // Entry-bridge: MoneyInput emits exact integer minor; state stays dinars.
+    const val = amount;
     if (!Number.isFinite(val) || val <= 0) {
       showToast('Veuillez saisir un montant de charge valide.', 'warning');
       return;
@@ -139,7 +140,7 @@ export const ExpenseManagerModal: React.FC = () => {
 
     // Reset Form
     setTitle('');
-    setAmount('');
+    setAmount(0);
     setPaidTo('');
     setNotes('');
     setShowAddForm(false);
@@ -478,16 +479,13 @@ export const ExpenseManagerModal: React.FC = () => {
 
                   <div>
                     <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">Montant (DA) :</label>
-                    <input
-                      type="number"
-                      min="1"
-                      step="any"
-                      value={amount}
-                      onChange={(e) => setAmount(e.target.value)}
+                    <MoneyInput
+                      label="Montant (DA)"
+                      valueMinor={dinarsToMinor(amount || 0)}
+                      onChangeMinor={(minor) => setAmount(toLegacyReal(minor))}
                       placeholder="0"
-                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-sm font-mono font-black text-amber-400 focus:outline-none focus:border-amber-400"
-                      autoFocus
                       required
+                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-sm font-mono font-black text-amber-400 focus:outline-none focus:border-amber-400"
                     />
                   </div>
                 </div>

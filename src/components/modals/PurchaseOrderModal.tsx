@@ -28,7 +28,8 @@ import {
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import type { PurchaseOrder, PaymentMethodType, Product } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { printCoordinator } from '../../utils/printCoordinator';
@@ -1014,16 +1015,13 @@ export const PurchaseOrderModal: React.FC = () => {
 
                               <td className="p-3 text-right">
                                 <div className="flex items-center justify-end gap-1">
-                                  <input
-                                    type="number"
-                                    step="any"
-                                    min="0"
-                                    value={item.unitCost}
-                                    onChange={(e) =>
-                                      // Integer-DA cost input: parseLocalizedAmount honours
-                                      // FR decimals ("400,50") where parseInt silently
-                                      // truncated; Math.round lands whole dinars.
-                                      handleUpdateDraftCost(item.productId, Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)))
+                                  <MoneyInput
+                                    label="Coût Unitaire Estimé (DA)"
+                                    valueMinor={dinarsToMinor(item.unitCost || 0)}
+                                    onChangeMinor={(minor) =>
+                                      // Entry-bridge: MoneyInput emits exact
+                                      // integer minor; state stays dinars.
+                                      handleUpdateDraftCost(item.productId, toLegacyReal(minor))
                                     }
                                     className="w-24 min-h-[44px] text-right bg-pos-bg border border-pos-border rounded-lg text-pos-text font-bold font-mono py-1 px-1.5 focus:outline-none focus:border-emerald-400"
                                   />
@@ -1253,15 +1251,15 @@ export const PurchaseOrderModal: React.FC = () => {
 
                             <td className="p-3 text-right">
                               <div className="flex items-center justify-end gap-1">
-                                <input
-                                  type="number"
-                                  step="any"
-                                  value={verifiedCost}
-                                  onChange={(e) =>
+                                <MoneyInput
+                                  label="Prix Achat Facturé (DA)"
+                                  valueMinor={dinarsToMinor(verifiedCost || 0)}
+                                  onChangeMinor={(minor) =>
                                     setVerifiedCostMap({
                                       ...verifiedCostMap,
-                                      // Integer-DA cost input (see draft input above).
-                                      [item.productId]: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)),
+                                      // Entry-bridge: exact integer minor in,
+                                      // dinars-number state kept.
+                                      [item.productId]: toLegacyReal(minor),
                                     })
                                   }
                                   className="w-24 text-right bg-pos-bg border border-pos-border rounded-lg text-pos-text font-bold font-mono py-1 px-1.5 focus:outline-none focus:border-emerald-400"

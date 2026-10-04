@@ -68,6 +68,8 @@ import type {
 } from '../../types/pos';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { useToast } from '../ui/Toast';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import ModalShell from '../ui/ModalShell';
 import ConditionChecklist, { EMPTY_DAMAGE } from '../ui/ConditionChecklist';
 import WarrantyTierSelector from '../ui/WarrantyTierSelector';
@@ -1821,14 +1823,11 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <label htmlFor="sav-labor" className="text-xs font-medium text-pos-text mb-1 block">
                       Main d&apos;Œuvre (DA)
                     </label>
-                    <input
+                    <MoneyInput
                       id="sav-labor"
-                      type="number"
-                      inputMode="decimal"
-                      step="1"
-                      min="0"
-                      value={laborCost}
-                      onChange={(e) => setLaborCost(parseFloat(e.target.value) || 0)}
+                      label="Main d'Œuvre (DA)"
+                      valueMinor={dinarsToMinor(laborCost || 0)}
+                      onChangeMinor={(minor) => setLaborCost(toLegacyReal(minor))}
                       className="w-full h-10 sm:h-9 bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-base sm:text-xs font-normal font-mono tabular-nums text-pos-text placeholder:text-pos-muted focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     />
                   </div>
@@ -1837,14 +1836,11 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <label htmlFor="sav-parts" className="text-xs font-medium text-pos-text mb-1 block">
                       Pièces / Composants (DA)
                     </label>
-                    <input
+                    <MoneyInput
                       id="sav-parts"
-                      type="number"
-                      inputMode="decimal"
-                      step="1"
-                      min="0"
-                      value={partsCost}
-                      onChange={(e) => setPartsCost(parseFloat(e.target.value) || 0)}
+                      label="Pièces / Composants (DA)"
+                      valueMinor={dinarsToMinor(partsCost || 0)}
+                      onChangeMinor={(minor) => setPartsCost(toLegacyReal(minor))}
                       className="w-full h-10 sm:h-9 bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-base sm:text-xs font-normal font-mono tabular-nums text-pos-text placeholder:text-pos-muted focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     />
                   </div>
@@ -1853,15 +1849,11 @@ export const RepairWorkOrderModal: React.FC = () => {
                     <label htmlFor="sav-deposit" className="text-xs font-medium text-pos-text mb-1 block">
                       Acompte versé (DA)
                     </label>
-                    <input
+                    <MoneyInput
                       id="sav-deposit"
-                      type="number"
-                      inputMode="decimal"
-                      step="1"
-                      min="0"
-                      max={totalCost}
-                      value={depositAmount}
-                      onChange={(e) => setDepositAmount(parseFloat(e.target.value) || 0)}
+                      label="Acompte versé (DA)"
+                      valueMinor={dinarsToMinor(depositAmount || 0)}
+                      onChangeMinor={(minor) => setDepositAmount(toLegacyReal(minor))}
                       className={`w-full h-10 sm:h-9 bg-pos-card border rounded-lg px-3 py-1.5 text-base sm:text-xs font-normal font-mono tabular-nums placeholder:text-pos-muted focus:outline-none focus:ring-1 focus:ring-emerald-500 ${
                         depositAmount > totalCost
                           ? 'border-rose-500 text-rose-600 dark:text-rose-300'

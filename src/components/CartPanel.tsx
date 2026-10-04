@@ -8,7 +8,8 @@ import { canRedeemPoints, normalizeLoyaltyConfig, isEarnAllowed, isRedeemAllowed
 import { soundEngine } from '../utils/audioFeedback';
 import { getProductPriceForTier } from '../utils/pricingEngine';
 import { computeCartTotals, computeTradeInSettlement } from '../utils/receiptMath';
-import { parseLocalizedAmount } from '../utils/moneyInput';
+import { toLegacyReal, dinarsToMinor } from '../utils/money';
+import { MoneyInput } from './ui/MoneyInput';
 import { useFifoPreviewCosts } from '../hooks/useFifoPreviewCosts';
 import { verifyManagerGate } from '../utils/pinGate';
 
@@ -85,7 +86,7 @@ export const CartPanel: React.FC = () => {
   );
 
   const [editingPriceProductId, setEditingPriceProductId] = useState<string | null>(null);
-  const [overridePriceInput, setOverridePriceInput] = useState<string>('');
+  const [overridePriceInput, setOverridePriceInput] = useState<number>(0);
   const [managerPinInput, setManagerPinInput] = useState<string>('');
   const [overrideError, setOverrideError] = useState<string | null>(null);
   // Double-submit guard: quick-cash + Encaisser stay disabled while a payment
@@ -169,14 +170,14 @@ export const CartPanel: React.FC = () => {
     e.stopPropagation();
     setEditingPriceProductId(item.product.id);
     const initialPrice = item.unitPriceCharged ?? item.appliedPrice ?? getItemPrice(item);
-    setOverridePriceInput(String(initialPrice));
+    setOverridePriceInput(initialPrice);
     setManagerPinInput('');
     setOverrideError(null);
   };
 
   const handleApplyPriceOverride = async (item: typeof cart[0], e: React.MouseEvent) => {
     e.stopPropagation();
-    const newPrice = parseLocalizedAmount(overridePriceInput);
+    const newPrice = overridePriceInput;
     if (isNaN(newPrice) || newPrice < 0) {
       setOverrideError('Prix unitaire invalide.');
       return;
@@ -214,7 +215,7 @@ export const CartPanel: React.FC = () => {
 
     soundEngine.playSuccess?.();
     setEditingPriceProductId(null);
-    setOverridePriceInput('');
+    setOverridePriceInput(0);
     setManagerPinInput('');
     setOverrideError(null);
   };
@@ -1114,21 +1115,19 @@ export const CartPanel: React.FC = () => {
                         <label htmlFor={`price-override-${item.product.id}`} className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
                           Nouveau Prix Vendu (DA/unité) :
                         </label>
-                        <input
+                        <MoneyInput
+                          label="Nouveau Prix Vendu (DA/unité)"
                           id={`price-override-${item.product.id}`}
-                          type="number"
-                          min="0"
-                          value={overridePriceInput}
-                          onChange={(e) => setOverridePriceInput(e.target.value)}
+                          valueMinor={dinarsToMinor(overridePriceInput || 0)}
+                          onChangeMinor={(minor) => setOverridePriceInput(toLegacyReal(minor))}
                           className="w-full bg-pos-card border border-pos-border rounded-lg px-2.5 py-1.5 font-mono font-bold text-pos-text text-xs focus:outline-none focus:border-amber-400"
                           placeholder="Ex: 3500"
-                          autoFocus
                         />
                       </div>
 
                       {/* Live Margin & Discount Calculation */}
                       {(() => {
-                        const p = parseLocalizedAmount(overridePriceInput) || 0;
+                        const p = overridePriceInput || 0;
                         const previewCost = fifoPreviewCosts[idx];
                         const frozenCost = item.isReturn ? (item.unitCostAtSale ?? item.unitCostPrice) : undefined;
                         // Displayed margin is FIFO-or-pending (never a

@@ -140,6 +140,19 @@ for (const [input, want] of echoCases) {
   check(`echo "${input}" → "${want}"`, got === want, `got "${got}"`);
 }
 
+console.log('\n--- J8: transitional bridges (1c entry, death-marked at 1b-ii) ---');
+const { toLegacyReal, dinarsToMinor, formatMinor } = await import(toDataUrl(out.outputText));
+check('toLegacyReal(13550) === 135.5 exactly', toLegacyReal(13550) === 135.5, String(toLegacyReal(13550)));
+check('toLegacyReal(13050) === 130.5 exactly', toLegacyReal(13050) === 130.5, String(toLegacyReal(13050)));
+check('toLegacyReal(10) === 0.1 (nearest float; storage limit, not computation)', toLegacyReal(10) === 0.1);
+check('toLegacyReal(0) === 0', toLegacyReal(0) === 0);
+check('dinarsToMinor(3500) === 350000 (integer fast path)', dinarsToMinor(3500) === 350000);
+check('dinarsToMinor(135.5) === 13550 (string path)', dinarsToMinor(135.5) === 13550);
+check('dinarsToMinor(0.1) === 10 (string path)', dinarsToMinor(0.1) === 10);
+check('dinarsToMinor(135.50000000001) === 13550 (dust fallback, <=1 minor)', dinarsToMinor(135.50000000001) === 13550);
+check('formatMinor(13550) === "135.50 DA"', formatMinor(13550) === '135.50 DA');
+check('formatMinor(4500000) === "45 000.00 DA"', formatMinor(4500000) === '45 000.00 DA');
+
 console.log('\n--- J6: UI sweep (no raw integers, no santeem word) ---');
 {
   const { execFileSync } = await import('node:child_process');
@@ -151,11 +164,13 @@ console.log('\n--- J6: UI sweep (no raw integers, no santeem word) ---');
       return e?.status === 1 ? [] : ['(grep unavailable)'];
     }
   };
+  // MoneyInput.tsx is the implementation (it legitimately calls the
+  // primitive); the sweep covers every other user-facing path.
   const santeemHits = grep('santeem', ['src/components', 'src/utils', 'src/store', 'src/db'])
-    .filter((l) => !l.includes('(grep unavailable)'));
+    .filter((l) => !l.includes('(grep unavailable)') && !l.includes('src/components/ui/MoneyInput.tsx'));
   check('no "santeem" in components/store/db/utils (unit word never user-facing)', santeemHits.length === 0, santeemHits.slice(0, 3).join(' | '));
   const minorRender = grep('\\.toMinor\\(\\)', ['src/components', 'src/utils/escpos.ts', 'src/utils/mobileDocPrint.ts', 'src/utils/receiptViewModel.ts', 'src/components/receipt'])
-    .filter((l) => !l.includes('(grep unavailable)'));
+    .filter((l) => !l.includes('(grep unavailable)') && !l.includes('src/components/ui/MoneyInput.tsx'));
   check('no .toMinor() in display paths (format() only)', minorRender.length === 0, minorRender.slice(0, 3).join(' | '));
 }
 

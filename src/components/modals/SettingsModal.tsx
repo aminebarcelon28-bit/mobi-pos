@@ -18,6 +18,8 @@ import { verifyManagerGate, verifyUserGate } from '../../utils/pinGate';
 import { friendlyPinSetError } from '../../api/pin';
 import { canSeeJournalLauncher } from '../../utils/auditGate';
 import { PinDialog } from '../ui/PinDialog';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { normalizeLoyaltyConfig, calculateFinancialProfitImpact } from '../../utils/loyaltyEngine';
 import type { LoyaltyProgramConfig } from '../../types/pos';
 // P11.3: maintenanceService -> maintenanceAdapter -> backupSchema pulls the whole
@@ -2898,11 +2900,12 @@ export const SettingsModal: React.FC = () => {
                       <label className="text-[11px] text-pos-muted font-semibold block mb-1">
                         Montant d'Achat par Point de Base (DA)
                       </label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={cfg.baseSpendPerPoint}
-                        onChange={(e) => updateLoyaltyCfg({ ...cfg, baseSpendPerPoint: Math.max(1, Math.floor(numField(e.target.value, cfg.baseSpendPerPoint))) })}
+                      <MoneyInput
+                        label="Montant d'Achat par Point de Base (DA)"
+                        valueMinor={dinarsToMinor(cfg.baseSpendPerPoint || 0)}
+                        onChangeMinor={(minor) =>
+                          updateLoyaltyCfg({ ...cfg, baseSpendPerPoint: Math.max(1, toLegacyReal(minor)) })
+                        }
                         className="w-full bg-pos-bg border border-pos-border rounded-lg p-2 text-pos-text font-bold"
                       />
                       <span className="text-[9.5px] text-pos-muted mt-0.5 block">{cfg.baseSpendPerPoint} DA dépensés = 1 Point de Base</span>
@@ -2912,11 +2915,12 @@ export const SettingsModal: React.FC = () => {
                       <label className="text-[11px] text-pos-muted font-semibold block mb-1">
                         Valeur de Conversion en Avoir Client (DA par Point)
                       </label>
-                      <input
-                        type="number"
-                        min={1}
-                        value={cfg.pointRedemptionRate}
-                        onChange={(e) => updateLoyaltyCfg({ ...cfg, pointRedemptionRate: Math.max(1, Math.floor(numField(e.target.value, cfg.pointRedemptionRate))) })}
+                      <MoneyInput
+                        label="Valeur de Conversion en Avoir Client (DA par Point)"
+                        valueMinor={dinarsToMinor(cfg.pointRedemptionRate || 0)}
+                        onChangeMinor={(minor) =>
+                          updateLoyaltyCfg({ ...cfg, pointRedemptionRate: Math.max(1, toLegacyReal(minor)) })
+                        }
                         className="w-full bg-pos-bg border border-pos-border rounded-lg p-2 text-emerald-400 font-bold"
                       />
                       <span className="text-[9.5px] text-pos-muted mt-0.5 block">1 Point = {cfg.pointRedemptionRate} DA d'Avoir Client</span>
@@ -2988,15 +2992,14 @@ export const SettingsModal: React.FC = () => {
                         <div className="grid grid-cols-2 gap-1.5">
                           <label className="block">
                             <span className="text-[9px] text-pos-muted uppercase font-semibold">Seuil (DA)</span>
-                            <input
-                              type="number"
-                              min={t.id === 'tier-0' ? 0 : 1}
-                              disabled={t.id === 'tier-0'}
-                              value={t.minSpend}
-                              onChange={(e) => {
-                                const tiers = cfg.tiers.map((x) => (x.id === t.id ? { ...x, minSpend: Math.max(0, Math.floor(numField(e.target.value, t.minSpend))) } : x));
+                            <MoneyInput
+                              label="Seuil (DA)"
+                              valueMinor={dinarsToMinor(t.minSpend || 0)}
+                              onChangeMinor={(minor) => {
+                                const tiers = cfg.tiers.map((x) => (x.id === t.id ? { ...x, minSpend: Math.max(0, toLegacyReal(minor)) } : x));
                                 updateLoyaltyCfg({ ...cfg, tiers });
                               }}
+                              disabled={t.id === 'tier-0'}
                               className="w-full bg-pos-card border border-pos-border rounded px-1.5 py-1 font-mono font-bold text-pos-text focus:outline-none focus:border-amber-500 disabled:opacity-70"
                             />
                           </label>
@@ -3053,13 +3056,12 @@ export const SettingsModal: React.FC = () => {
                     <div key={m.id} className="grid grid-cols-[1fr_1fr_auto_auto] gap-1.5 items-end bg-pos-bg p-2 rounded-lg border border-pos-border">
                       <label className="block">
                         <span className="text-[9px] text-pos-muted uppercase font-semibold">Seuil (DA)</span>
-                        <input
-                          type="number"
-                          min={1}
-                          value={m.threshold}
-                          onChange={(e) => {
+                        <MoneyInput
+                          label="Seuil (DA)"
+                          valueMinor={dinarsToMinor(m.threshold || 0)}
+                          onChangeMinor={(minor) => {
                             const rows = cfg.spendMilestones.map((x) => (x.id === m.id
-                              ? { ...x, id: freshId('ms'), threshold: Math.max(1, Math.floor(numField(e.target.value, m.threshold))) }
+                              ? { ...x, id: freshId('ms'), threshold: Math.max(1, toLegacyReal(minor)) }
                               : x));
                             updateLoyaltyCfg({ ...cfg, spendMilestones: rows });
                           }}
@@ -3068,13 +3070,12 @@ export const SettingsModal: React.FC = () => {
                       </label>
                       <label className="block">
                         <span className="text-[9px] text-pos-muted uppercase font-semibold">Récompense (DA)</span>
-                        <input
-                          type="number"
-                          min={0}
-                          value={m.reward}
-                          onChange={(e) => {
+                        <MoneyInput
+                          label="Récompense (DA)"
+                          valueMinor={dinarsToMinor(m.reward || 0)}
+                          onChangeMinor={(minor) => {
                             const rows = cfg.spendMilestones.map((x) => (x.id === m.id
-                              ? { ...x, id: freshId('ms'), reward: Math.max(0, Math.floor(numField(e.target.value, m.reward))) }
+                              ? { ...x, id: freshId('ms'), reward: Math.max(0, toLegacyReal(minor)) }
                               : x));
                             updateLoyaltyCfg({ ...cfg, spendMilestones: rows });
                           }}

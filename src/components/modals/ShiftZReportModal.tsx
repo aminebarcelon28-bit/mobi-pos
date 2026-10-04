@@ -3,6 +3,8 @@ import { X, Printer, ShieldAlert, CheckCircle2, ArrowDownCircle } from 'lucide-r
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { useToast } from '../../components/ui/Toast';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { isMobileDevice } from '../../utils/platform';
 import { isTxInCloseScope } from '../../db/adapters/shiftAdapter';
@@ -342,12 +344,11 @@ export const ShiftZReportModal: React.FC = () => {
             <div className="grid grid-cols-2 gap-3 items-center">
               <div>
                 <label className="text-xs text-pos-muted block mb-1 font-semibold">Montant Physique Compté (DA)</label>
-                <input
-                  type="number"
-                  step="any"
-                  value={actualCountedCash}
-                  onChange={(e) => {
-                    setActualCountedCash(parseFloat(e.target.value) || 0);
+                <MoneyInput
+                  label="Montant Physique Compté (DA)"
+                  valueMinor={dinarsToMinor(actualCountedCash || 0)}
+                  onChangeMinor={(minor) => {
+                    setActualCountedCash(toLegacyReal(minor));
                     setIsBlindRevealed(true);
                   }}
                   placeholder="ex: 31 305 DA"
@@ -390,11 +391,10 @@ export const ShiftZReportModal: React.FC = () => {
               <ArrowDownCircle className="w-4 h-4 text-amber-400" /> Enregistrer un Dépôt Coffre-fort (Cash Drop)
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <input
-                type="number"
-                inputMode="decimal"
-                value={cashDropInput}
-                onChange={(e) => setCashDropInput(parseFloat(e.target.value) || 0)}
+              <MoneyInput
+                label="Montant (DA)"
+                valueMinor={dinarsToMinor(cashDropInput || 0)}
+                onChangeMinor={(minor) => setCashDropInput(toLegacyReal(minor))}
                 placeholder="Montant (DA)"
                 className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-base sm:text-xs text-pos-text"
               />

@@ -5,7 +5,8 @@ import { formatDZD } from '../../types/pos';
 import type { Product } from '../../types/pos';
 import { soundEngine } from '../../utils/audioFeedback';
 import { newId } from '../../utils/ids';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import {
   getQuickTouches,
   saveQuickTouch,
@@ -34,8 +35,8 @@ export const CustomItemModal: React.FC = () => {
 
   // Free-form item state
   const [title, setTitle] = useState('');
-  const [priceInput, setPriceInput] = useState('');
-  const [costInput, setCostInput] = useState('');
+  const [priceInput, setPriceInput] = useState(0);
+  const [costInput, setCostInput] = useState(0);
   const [quantityInput, setQuantityInput] = useState('1');
   const [isReturn, setIsReturn] = useState(false);
   const [saveAsQuickTouch, setSaveAsQuickTouch] = useState(false);
@@ -45,8 +46,8 @@ export const CustomItemModal: React.FC = () => {
   const [isEditingTouch, setIsEditingTouch] = useState(false);
   const [editingTouchId, setEditingTouchId] = useState<string | null>(null);
   const [touchTitle, setTouchTitle] = useState('');
-  const [touchPrice, setTouchPrice] = useState('');
-  const [touchCost, setTouchCost] = useState('');
+  const [touchPrice, setTouchPrice] = useState(0);
+  const [touchCost, setTouchCost] = useState(0);
   const [touchIcon, setTouchIcon] = useState('⚡');
   const [touchColor, setTouchColor] = useState(AVAILABLE_COLORS[0].value);
   const [touchError, setTouchError] = useState('');
@@ -56,8 +57,8 @@ export const CustomItemModal: React.FC = () => {
     if (activeModal === 'custom_item') {
       setQuickTouches(getQuickTouches());
       setTitle('');
-      setPriceInput('');
-      setCostInput('');
+      setPriceInput(0);
+      setCostInput(0);
       setQuantityInput('1');
       setIsReturn(false);
       setSaveAsQuickTouch(false);
@@ -93,15 +94,15 @@ export const CustomItemModal: React.FC = () => {
     if (touch) {
       setEditingTouchId(touch.id);
       setTouchTitle(touch.title);
-      setTouchPrice(touch.price.toString());
-      setTouchCost((touch.costPrice || 0).toString());
+      setTouchPrice(dinarsToMinor(touch.price || 0));
+      setTouchCost(dinarsToMinor(touch.costPrice || 0));
       setTouchIcon(touch.icon || '⚡');
       setTouchColor(touch.color || AVAILABLE_COLORS[0].value);
     } else {
       setEditingTouchId(null);
       setTouchTitle('');
-      setTouchPrice('');
-      setTouchCost('0');
+      setTouchPrice(0);
+      setTouchCost(0);
       setTouchIcon('⚡');
       setTouchColor(AVAILABLE_COLORS[0].value);
     }
@@ -111,16 +112,14 @@ export const CustomItemModal: React.FC = () => {
 
   const handleSaveTouch = () => {
     const trimmed = touchTitle.trim();
-    // Localized parsing: parseFloat("12,50") silently yields 12 (FR decimals).
-    const price = parseLocalizedAmount(touchPrice);
-    const cost = parseLocalizedAmount(touchCost) || 0;
+    // Phase 1c: states are integer minor units (MoneyInput guarantees >= 0).
+    // Trivial behavior delta, echo-visible: an untouched price now saves 0
+    // ("0.00 DA" shown) instead of erroring on empty input.
+    const price = toLegacyReal(touchPrice);
+    const cost = toLegacyReal(touchCost);
 
     if (!trimmed) {
       setTouchError('Veuillez entrer un titre pour la touche rapide.');
-      return;
-    }
-    if (isNaN(price) || price < 0) {
-      setTouchError('Veuillez entrer un tarif valide en DA.');
       return;
     }
 
@@ -130,8 +129,8 @@ export const CustomItemModal: React.FC = () => {
     const newTouch: QuickTouchItem = {
       id,
       title: trimmed,
-      price: Math.round(price),
-      costPrice: Math.round(cost),
+      price,
+      costPrice: cost,
       category: 'Services',
       icon: touchIcon,
       color: touchColor,
@@ -163,16 +162,17 @@ export const CustomItemModal: React.FC = () => {
   // Adding freeform ad-hoc item/service
   const handleAddCustomItem = () => {
     const trimmedTitle = title.trim();
-    // Localized parsing: parseFloat("12,50") silently yields 12 (FR decimals).
-    const price = parseLocalizedAmount(priceInput);
-    const cost = parseLocalizedAmount(costInput) || 0;
+    // Phase 1c: states are integer minor units; empty input is 0 minor,
+    // which this guard rejects exactly like the old NaN path did.
+    const price = toLegacyReal(priceInput);
+    const cost = toLegacyReal(costInput);
     const qty = parseInt(quantityInput, 10) || 1;
 
     if (!trimmedTitle) {
       alert('Veuillez saisir un nom ou une description pour l\'article.');
       return;
     }
-    if (isNaN(price) || price <= 0) {
+    if (priceInput <= 0) {
       alert('Veuillez saisir un prix de vente valide.');
       return;
     }
@@ -193,9 +193,9 @@ export const CustomItemModal: React.FC = () => {
       brand: 'Autre',
       compatibleModel: 'Tous modèles',
       category: 'Services',
-      price: Math.round(price),
+      price,
       wholesalePrice: Math.round(price * 0.8),
-      costPrice: Math.round(cost),
+      costPrice: cost,
       stock: 999999, // Infinite stock: services/custom items never run out
       isService: true, // Non-stock service invariant
       vendorName: 'Service / Divers',
@@ -211,8 +211,8 @@ export const CustomItemModal: React.FC = () => {
       const newTouch: QuickTouchItem = {
         id: newId('qt'),
         title: trimmedTitle,
-        price: Math.round(price),
-        costPrice: Math.round(cost),
+        price,
+        costPrice: cost,
         category: 'Services',
         icon: '🏷️',
         color: AVAILABLE_COLORS[4].value, // Amber default
@@ -381,12 +381,10 @@ export const CustomItemModal: React.FC = () => {
                       <label className="text-xs font-bold text-pos-text block mb-1">
                         Tarif de Vente (DA) *
                       </label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={touchPrice}
-                        onChange={(e) => setTouchPrice(e.target.value)}
+                      <MoneyInput
+                        label="Tarif de Vente (DA)"
+                        valueMinor={touchPrice}
+                        onChangeMinor={setTouchPrice}
                         placeholder="Ex: 1200"
                         className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-mono font-black text-emerald-400 focus:outline-none focus:border-emerald-400"
                       />
@@ -398,12 +396,10 @@ export const CustomItemModal: React.FC = () => {
                       <label className="text-xs font-bold text-pos-muted block mb-1">
                         Coût Fournisseur (DA) optionnel
                       </label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={touchCost}
-                        onChange={(e) => setTouchCost(e.target.value)}
+                      <MoneyInput
+                        label="Coût Fournisseur (DA)"
+                        valueMinor={touchCost}
+                        onChangeMinor={setTouchCost}
                         placeholder="Ex: 300"
                         className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-mono font-bold text-pos-muted focus:outline-none focus:border-pos-border"
                       />
@@ -571,12 +567,10 @@ export const CustomItemModal: React.FC = () => {
                   <label className="text-xs font-bold text-pos-text block mb-1">
                     Prix de Vente Net (DA) *
                   </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={priceInput}
-                    onChange={(e) => setPriceInput(e.target.value)}
+                  <MoneyInput
+                    label="Prix de Vente Net (DA)"
+                    valueMinor={priceInput}
+                    onChangeMinor={setPriceInput}
                     placeholder="Ex: 1500"
                     className="w-full bg-pos-card border border-pos-border rounded-xl px-3.5 py-2.5 text-base font-black font-mono text-emerald-400 focus:outline-none focus:border-emerald-500 transition"
                   />
@@ -586,12 +580,10 @@ export const CustomItemModal: React.FC = () => {
                   <label className="text-xs font-bold text-pos-muted block mb-1">
                     Coût d'Achat Estimé (DA)
                   </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={costInput}
-                    onChange={(e) => setCostInput(e.target.value)}
+                  <MoneyInput
+                    label="Coût d'Achat Estimé (DA)"
+                    valueMinor={costInput}
+                    onChangeMinor={setCostInput}
                     placeholder="Ex: 500 (pour calcul marge)"
                     className="w-full bg-pos-card border border-pos-border rounded-xl px-3.5 py-2.5 text-sm font-bold font-mono text-pos-muted focus:outline-none focus:border-pos-border transition"
                   />

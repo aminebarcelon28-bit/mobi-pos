@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 
 const foldForSearch = (s: string | undefined | null): string =>
   (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -467,15 +468,11 @@ export const KittingBundleModal: React.FC = () => {
               {/* Selling Price */}
               <div>
                 <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Prix de Vente Forfaitaire du Pack (DA)</label>
-                <input
-                  type="number"
-                  step="any"
+                <MoneyInput
+                  label="Prix de Vente Forfaitaire du Pack (DA)"
+                  valueMinor={dinarsToMinor(bundlePrice || 0)}
+                  onChangeMinor={(minor) => setBundlePrice(toLegacyReal(minor))}
                   required
-                  value={bundlePrice}
-                  onChange={(e) => {
-                    const parsed = parseLocalizedAmount(e.target.value);
-                    setBundlePrice(Number.isFinite(parsed) ? Math.round(parsed) : 0);
-                  }}
                   className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-xs font-extrabold text-emerald-400 focus:border-emerald-400 focus:outline-none"
                 />
               </div>

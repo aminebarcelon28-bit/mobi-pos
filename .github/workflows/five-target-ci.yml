@@ -78,6 +78,9 @@ jobs:
       - name: Test E — zero-tax consistency
         run: node scripts/test_zero_tax.mjs
 
+      - name: Phase 1c — half-dinar storage regression
+        run: node scripts/test_half_dinar_regression.mjs
+
       - name: Setup Rust Stable
         uses: dtolnay/rust-toolchain@stable
 

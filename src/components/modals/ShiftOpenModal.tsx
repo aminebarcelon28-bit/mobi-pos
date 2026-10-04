@@ -3,7 +3,8 @@ import { X, Play, Calculator, Sparkles, User, FileText, CheckCircle2, AlertTrian
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime, type DenominationCount } from '../../types/pos';
 import { useToast } from '../ui/Toast';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 
 // Lock-screen cashier (createUISlice owns `activeCashier`; absent from the
 // shared PosState type, so read via structural cast). Used as the default
@@ -349,11 +350,12 @@ export const ShiftOpenModal: React.FC = () => {
                       <span className="text-xs font-bold text-pos-muted">Pièces Div.</span>
                       <p className="text-[10px] text-pos-muted font-mono">Monnaie vrac</p>
                     </div>
-                    <input
-                      type="number"
-                      min="0"
-                      value={denominations.coins || ''}
-                      onChange={(e) => handleDenomChange('coins', e.target.value)}
+                    <MoneyInput
+                      label="Pièces Div."
+                      valueMinor={dinarsToMinor(denominations.coins || 0)}
+                      onChangeMinor={(minor) =>
+                        setDenominations((prev) => ({ ...prev, coins: toLegacyReal(minor) }))
+                      }
                       placeholder="0 DA"
                       className="w-16 bg-pos-card border border-pos-border rounded px-2 py-1 text-right text-xs font-mono font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
                     />
@@ -366,12 +368,10 @@ export const ShiftOpenModal: React.FC = () => {
               <label className="text-xs font-bold text-pos-text block">
                 Fond de Caisse Initial Direct (DA)
               </label>
-              <input
-                type="number"
-                step="any"
-                min="0"
-                value={directFloat || ''}
-                onChange={(e) => setDirectFloat(Math.round(parseLocalizedAmount(e.target.value) || 0))}
+              <MoneyInput
+                label="Fond de Caisse Initial Direct (DA)"
+                valueMinor={dinarsToMinor(directFloat || 0)}
+                onChangeMinor={(minor) => setDirectFloat(toLegacyReal(minor))}
                 placeholder="20 000 DA"
                 className="w-full bg-pos-bg border border-pos-border rounded-xl px-4 py-3 text-lg font-mono font-bold text-emerald-400 focus:border-emerald-400 focus:outline-none"
               />

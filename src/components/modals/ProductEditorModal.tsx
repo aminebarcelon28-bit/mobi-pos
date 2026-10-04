@@ -21,7 +21,8 @@ import {
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import type { BrandName, CategoryType, ProductInput } from '../../types/pos';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import {
   generateUniqueEan13Barcode,
   generateUniqueSku,
@@ -1126,16 +1127,14 @@ export const ProductEditorModal: React.FC = () => {
                     <span className="inline-flex px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-semibold text-slate-600 mb-1">
                       Détail (DA) *
                     </span>
-                    <input
-                      type="number"
-                      step="any"
+                    <MoneyInput
+                      label="Détail (DA)"
                       required
-                      min="0"
-                      value={formData.price}
-                      onChange={(e) =>
+                      valueMinor={dinarsToMinor(formData.price || 0)}
+                      onChangeMinor={(minor) =>
                         setFormData({
                           ...formData,
-                          price: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)),
+                          price: toLegacyReal(minor),
                         })
                       }
                       className={`w-full min-h-[48px] bg-white border rounded-lg px-2.5 text-base sm:text-xs font-normal text-slate-900 focus:outline-none transition focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 ${
@@ -1149,17 +1148,19 @@ export const ProductEditorModal: React.FC = () => {
                     <span className="inline-flex px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-semibold text-slate-600 mb-1">
                       Demi-Gros (DA)
                     </span>
-                    <input
-                      type="number"
-                      step="any"
-                      min="0"
-                      value={formData.semiWholesalePrice ?? ''}
-                      onChange={(e) =>
+                    <MoneyInput
+                      label="Demi-Gros (DA)"
+                      valueMinor={dinarsToMinor(formData.semiWholesalePrice ?? (formData.price || 0))}
+                      onChangeMinor={(minor) =>
                         setFormData({
                           ...formData,
-                          semiWholesalePrice: e.target.value
-                            ? Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0))
-                            : undefined,
+                          semiWholesalePrice: toLegacyReal(minor),
+                        })
+                      }
+                      onClear={() =>
+                        setFormData({
+                          ...formData,
+                          semiWholesalePrice: undefined,
                         })
                       }
                       placeholder={String(Math.round(((formData.price || 0) + (formData.wholesalePrice || 0)) / 2))}
@@ -1176,16 +1177,14 @@ export const ProductEditorModal: React.FC = () => {
                     <span className="inline-flex px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-semibold text-slate-600 mb-1">
                       Gros (DA) *
                     </span>
-                    <input
-                      type="number"
-                      step="any"
+                    <MoneyInput
+                      label="Gros (DA)"
                       required
-                      min="0"
-                      value={formData.wholesalePrice}
-                      onChange={(e) =>
+                      valueMinor={dinarsToMinor(formData.wholesalePrice || 0)}
+                      onChangeMinor={(minor) =>
                         setFormData({
                           ...formData,
-                          wholesalePrice: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)),
+                          wholesalePrice: toLegacyReal(minor),
                         })
                       }
                       className={`w-full min-h-[48px] bg-white border rounded-lg px-2.5 text-base sm:text-xs font-normal text-slate-900 focus:outline-none transition focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 ${
@@ -1204,15 +1203,13 @@ export const ProductEditorModal: React.FC = () => {
                     <label className="text-[10px] font-bold text-pos-muted block mb-1">
                       Prix Achat Coûtant (DA)
                     </label>
-                    <input
-                      type="number"
-                      step="any"
-                      min="0"
-                      value={formData.costPrice}
-                      onChange={(e) =>
+                    <MoneyInput
+                      label="Prix Achat Coûtant (DA)"
+                      valueMinor={dinarsToMinor(formData.costPrice || 0)}
+                      onChangeMinor={(minor) =>
                         setFormData({
                           ...formData,
-                          costPrice: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)),
+                          costPrice: toLegacyReal(minor),
                         })
                       }
                       className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-lg px-2.5 text-base sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none transition"
@@ -1224,15 +1221,13 @@ export const ProductEditorModal: React.FC = () => {
                     <label className="text-[10px] font-bold text-pos-muted block mb-1">
                       Prix Plancher Min (DA)
                     </label>
-                    <input
-                      type="number"
-                      step="any"
-                      min="0"
-                      value={formData.minPrice || 0}
-                      onChange={(e) =>
+                    <MoneyInput
+                      label="Prix Plancher Min (DA)"
+                      valueMinor={dinarsToMinor(formData.minPrice || 0)}
+                      onChangeMinor={(minor) =>
                         setFormData({
                           ...formData,
-                          minPrice: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)),
+                          minPrice: toLegacyReal(minor),
                         })
                       }
                       className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-lg px-2.5 text-base sm:text-xs font-bold text-pos-muted focus:border-emerald-400 focus:outline-none transition"
@@ -1301,19 +1296,17 @@ export const ProductEditorModal: React.FC = () => {
                             className="w-12 h-7 bg-pos-card border border-pos-border rounded px-1.5 text-xs font-bold text-pos-text text-center focus:outline-none focus:border-cyan-400"
                           />
                           <span className="text-[10px] font-bold text-pos-muted whitespace-nowrap">pcs →</span>
-                          <input
-                            type="number"
-                            step="any"
-                            min="0"
-                            value={tier.price}
-                            onChange={(e) => {
-                              const updated = [...(formData.volumeDiscounts || [])];
-                              updated[tIdx] = {
-                                ...updated[tIdx],
-                                price: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0)),
-                              };
-                              setFormData({ ...formData, volumeDiscounts: updated });
-                            }}
+                            <MoneyInput
+                              label="Palier volume (DA/u)"
+                              valueMinor={dinarsToMinor(tier.price || 0)}
+                              onChangeMinor={(minor) => {
+                                const updated = [...(formData.volumeDiscounts || [])];
+                                updated[tIdx] = {
+                                  ...updated[tIdx],
+                                  price: toLegacyReal(minor),
+                                };
+                                setFormData({ ...formData, volumeDiscounts: updated });
+                              }}
                             className="w-20 h-7 bg-white border border-slate-200 rounded px-1.5 text-xs font-normal text-slate-900 font-mono text-center focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                           />
                           <span className="text-[10px] font-bold text-cyan-400">DA/u</span>

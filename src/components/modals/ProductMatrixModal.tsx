@@ -15,6 +15,8 @@ import { generateUniqueEan13Barcode } from '../../utils/barcodeGenerator';
 import { newId } from '../../utils/ids';
 import { useToast } from '../ui/Toast';
 import { soundEngine } from '../../utils/audioFeedback';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 
 const BRANDS: BrandName[] = [
   'Apple',
@@ -583,12 +585,10 @@ export const ProductMatrixModal: React.FC = () => {
                 <label className="text-[10px] font-bold text-pos-muted block mb-1">
                   Prix Achat Cost (DA)
                 </label>
-                <input
-                  type="number"
-                  step="any"
-                  min="0"
-                  value={costPrice}
-                  onChange={(e) => setCostPrice(parseFloat(e.target.value) || 0)}
+                <MoneyInput
+                  label="Prix Achat Cost (DA)"
+                  valueMinor={dinarsToMinor(costPrice || 0)}
+                  onChangeMinor={(minor) => setCostPrice(toLegacyReal(minor))}
                   className="w-full h-9 bg-pos-bg border border-pos-border rounded-lg px-2.5 text-xs font-bold text-pos-text focus:border-cyan-400 focus:outline-none transition"
                 />
               </div>
@@ -597,12 +597,10 @@ export const ProductMatrixModal: React.FC = () => {
                 <label className="text-[10px] font-bold text-emerald-400 block mb-1">
                   Prix Vente Détail (DA) *
                 </label>
-                <input
-                  type="number"
-                  step="any"
-                  min="0"
-                  value={price}
-                  onChange={(e) => setPrice(parseFloat(e.target.value) || 0)}
+                <MoneyInput
+                  label="Prix Vente Détail (DA)"
+                  valueMinor={dinarsToMinor(price || 0)}
+                  onChangeMinor={(minor) => setPrice(toLegacyReal(minor))}
                   className="w-full h-9 bg-pos-bg border border-pos-border rounded-lg px-2.5 text-xs font-black text-emerald-400 focus:border-emerald-400 focus:outline-none transition"
                 />
               </div>
@@ -611,12 +609,10 @@ export const ProductMatrixModal: React.FC = () => {
                 <label className="text-[10px] font-bold text-amber-400 block mb-1">
                   Prix Vente Gros (DA)
                 </label>
-                <input
-                  type="number"
-                  step="any"
-                  min="0"
-                  value={wholesalePrice}
-                  onChange={(e) => setWholesalePrice(parseFloat(e.target.value) || 0)}
+                <MoneyInput
+                  label="Prix Vente Gros (DA)"
+                  valueMinor={dinarsToMinor(wholesalePrice || 0)}
+                  onChangeMinor={(minor) => setWholesalePrice(toLegacyReal(minor))}
                   className="w-full h-9 bg-pos-bg border border-pos-border rounded-lg px-2.5 text-xs font-black text-amber-400 focus:border-amber-400 focus:outline-none transition"
                 />
               </div>

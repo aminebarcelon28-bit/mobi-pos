@@ -41,7 +41,8 @@ import { useInventoryValuation } from '../../hooks/useInventoryValuation';
 import { useAllocationCogs } from '../../hooks/useAllocationCogs';
 import { useReceiptLedgerCogs } from '../../hooks/useReceiptLedgerCogs';
 import { computeSalesMetrics, grossFromTransaction, isExchangeSaleTx } from '../../utils/receiptMath';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { todayLocalKey, toLocalDayKey } from '../../utils/dateUtils';
 import { verifyManagerGate } from '../../utils/pinGate';
 
@@ -80,7 +81,7 @@ export const ReportsModal: React.FC = () => {
   const [showNewExpenseModal, setShowNewExpenseModal] = useState(false);
   const [expenseCategory, setExpenseCategory] = useState<ExpenseCategory>('Loyer');
   const [expenseTitle, setExpenseTitle] = useState('');
-  const [expenseAmount, setExpenseAmount] = useState('');
+  const [expenseAmount, setExpenseAmount] = useState<number>(0);
   const [expensePaymentMethod, setExpensePaymentMethod] = useState<PaymentMethodType>('Espèces');
   const [expensePaidTo, setExpensePaidTo] = useState('');
   const [expenseNotes, setExpenseNotes] = useState('');
@@ -392,7 +393,8 @@ export const ReportsModal: React.FC = () => {
 
   const handleAddExpenseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = Math.round(parseLocalizedAmount(expenseAmount) || 0);
+    // Entry-bridge: MoneyInput emits exact integer minor; state stays dinars.
+    const amount = expenseAmount;
     if (!(amount > 0) || !expenseTitle.trim()) {
       showToast('Veuillez saisir un titre et un montant valide.', 'warning');
       return;
@@ -411,7 +413,7 @@ export const ReportsModal: React.FC = () => {
     showToast('Charge d\'exploitation enregistrée avec succès !', 'success');
     setShowNewExpenseModal(false);
     setExpenseTitle('');
-    setExpenseAmount('');
+    setExpenseAmount(0);
     setExpensePaidTo('');
     setExpenseNotes('');
   };
@@ -2221,12 +2223,11 @@ export const ReportsModal: React.FC = () => {
                     <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
                       Montant (DA) *
                     </label>
-                    <input
-                      type="number"
+                    <MoneyInput
+                      label="Montant (DA)"
+                      valueMinor={dinarsToMinor(expenseAmount || 0)}
+                      onChangeMinor={(minor) => setExpenseAmount(toLegacyReal(minor))}
                       required
-                      min="1"
-                      value={expenseAmount}
-                      onChange={(e) => setExpenseAmount(e.target.value)}
                       placeholder="4500"
                       className="w-full bg-pos-bg border-2 border-pos-border focus:border-amber-400 rounded-xl px-3 py-2 text-base font-black font-mono text-pos-text focus:outline-none"
                     />

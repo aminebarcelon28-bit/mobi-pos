@@ -234,3 +234,51 @@ export class Money {
     return this.minor < 0;
   }
 }
+
+/**
+ * Display helper for migrated callers: format integer minor units.
+ * Same contract as Money.format; throws on non-safe-integer input.
+ */
+export function formatMinor(minor: number): string {
+  return Money.fromMinor(minor).format();
+}
+
+/**
+ * DEATH-MARKED: killed at 1b-ii Stage B/C. Transitional bridge for STORE
+ * writes while columns are still REAL dinars: integer minor → float dinars
+ * (13050 → 135.5). Exact for values whose dinar form is binary-exact;
+ * values like 0.10 DA become the nearest float (storage limitation, not a
+ * computation — 1b-ii ends it). The ONLY permitted float conversion in the
+ * codebase: grep must show no other `minor / 100`-class conversion outside
+ * this function. Callers: DB-write/submit boundaries only, never display,
+ * never arithmetic.
+ */
+export function toLegacyReal(minor: number): number {
+  assertSafeInteger(minor, 'toLegacyReal');
+  return minor / 100;
+}
+
+/**
+ * DEATH-MARKED: killed at 1b-ii Stage B/C. Transitional LOAD bridge for
+ * Phase 1c entry fields whose parent state is still float dinars: dinars →
+ * integer minor for the `valueMinor` prop. Exact paths first (integer
+ * fast-path, then the string path via fromUserInput); the single
+ * rounding-helper fallback below fires ONLY for float dust whose shortest
+ * representation exceeds 2 decimals (error ≤ 1 minor unit, documented).
+ * This is the ONE float-helper line allowed in this file — the boundary
+ * gate pins it to its exact line. Never use in arithmetic or new code.
+ */
+export function dinarsToMinor(dinars: number): number {
+  if (!Number.isFinite(dinars)) fail('dinarsToMinor: non-finite input');
+  if (dinars >= Number.MAX_SAFE_INTEGER / 100 || dinars <= -Number.MAX_SAFE_INTEGER / 100) {
+    fail('dinarsToMinor: magnitude exceeds safe minor range');
+  }
+  if (Number.isInteger(dinars)) {
+    return dinars * 100;
+  }
+  try {
+    return Money.fromUserInput(String(dinars)).toMinor();
+  } catch {
+    return Math.round(dinars * 100); // dust-only fallback (see doc above)
+  }
+}

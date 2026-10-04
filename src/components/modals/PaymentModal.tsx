@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Banknote,
@@ -23,7 +23,8 @@ import { useToast } from '../../components/ui/Toast';
 import { getEffectiveDebtLimit } from '../../store/slices/createCustomerSlice';
 import { soundEngine } from '../../utils/audioFeedback';
 import { computeCartTotals, computeTradeInSettlement } from '../../utils/receiptMath';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
+import { MoneyInput } from '../ui/MoneyInput';
 import { calculateMaxAllowedCredit, calculateCustomerTier, normalizeLoyaltyConfig } from '../../utils/loyaltyEngine';
 
 /** Display-only tier resolution — the cached loyaltyTier string may be stale after renames. */
@@ -54,15 +55,14 @@ export const PaymentModal: React.FC = () => {
 
   const { showToast } = useToast();
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethodType>('Espèces');
-  const [cashTenderAmount, setCashTenderAmount] = useState<string>('');
+  const [cashTenderAmount, setCashTenderAmount] = useState<number>(0);
   const [appliedCredit, setAppliedCredit] = useState<number>(0);
   const [isCustomCreditOpen, setIsCustomCreditOpen] = useState(false);
-  const [customCreditInput, setCustomCreditInput] = useState<string>('');
+  const [customCreditInput, setCustomCreditInput] = useState<number>(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [voucherInput, setVoucherInput] = useState('');
   const [voucherBusy, setVoucherBusy] = useState(false);
   const [voucherError, setVoucherError] = useState<string | null>(null);
-  const amountInputRef = useRef<HTMLInputElement>(null);
 
   // Runtime-staged voucher credit + VAT rate (owned by other agents' types).
   const voucherCreditApplied =
@@ -128,13 +128,12 @@ export const PaymentModal: React.FC = () => {
       setAppliedCredit(initialCredit);
 
         const initialNet = Math.max(0, netToPay - initialCredit);
-      setCashTenderAmount(initialNet > 0 ? initialNet.toString() : '0');
+      setCashTenderAmount(initialNet > 0 ? initialNet : 0);
 
       setTimeout(() => {
-        if (amountInputRef.current) {
-          amountInputRef.current.focus();
-          amountInputRef.current.select();
-        }
+        const el = document.getElementById('payment-cash-input') as HTMLInputElement | null;
+        el?.focus();
+        el?.select();
       }, 50);
     }
   }, [activeModal, cart.length, grossSubtotal, netSubtotal, netToPay, tradeInCredit, currentCustomer, storeCreditApplied, closeModal, showToast, setExchangeSoultePayout]);
@@ -166,7 +165,7 @@ export const PaymentModal: React.FC = () => {
         Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied)
       )
     : 0;
-  const currentCashGiven = Math.round(parseLocalizedAmount(cashTenderAmount) || 0);
+  const currentCashGiven = cashTenderAmount;
 
   const resteAPayer = Math.max(0, netToPay - currentCashGiven);
   const changeDue = Math.max(0, currentCashGiven - netToPay);
@@ -187,7 +186,7 @@ export const PaymentModal: React.FC = () => {
     setAppliedCredit(maxAvailableCredit);
     setStoreCreditApplied(maxAvailableCredit);
       const newNet = Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied - maxAvailableCredit);
-    setCashTenderAmount(newNet > 0 ? newNet.toString() : '0');
+    setCashTenderAmount(newNet > 0 ? newNet : 0);
     soundEngine.playSuccess();
     showToast(`🎁 Avoir Client appliqué : -${formatDZD(maxAvailableCredit)}`, 'success');
   };
@@ -201,7 +200,7 @@ export const PaymentModal: React.FC = () => {
     setAppliedCredit(clamped);
     setStoreCreditApplied(clamped);
     const newNet = Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied - clamped);
-    setCashTenderAmount(newNet > 0 ? newNet.toString() : '0');
+    setCashTenderAmount(newNet > 0 ? newNet : 0);
     setIsCustomCreditOpen(false);
     soundEngine.playKeyBeep?.();
     if (clamped > 0) {
@@ -215,7 +214,7 @@ export const PaymentModal: React.FC = () => {
     setAppliedCredit(0);
     setStoreCreditApplied(0);
       const resetNet = Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied);
-      setCashTenderAmount(resetNet > 0 ? resetNet.toString() : '0');
+      setCashTenderAmount(resetNet > 0 ? resetNet : 0);
     soundEngine.playKeyBeep?.();
     showToast('Avoir Client retiré de la vente.', 'info');
   };
@@ -285,7 +284,7 @@ export const PaymentModal: React.FC = () => {
     // B-026: refund-due carts submit as a pure disbursement — tender covers 0
     // and processPayment uses refundDue for the cash-out path.
     const submitRefundDue = submitTotals.refundDue;
-    const submitCash = submitRefundDue > 0 ? 0 : Math.round(parseLocalizedAmount(cashTenderAmount) || 0);
+    const submitCash = submitRefundDue > 0 ? 0 : cashTenderAmount;
     const submitReste = Math.max(0, submitNet - submitCash);
     const liveHasMissingImei = liveCart.some(
       (item) => item.product.isSerialized && (!item.imeiNumber || !item.imeiNumber.trim())
@@ -765,18 +764,17 @@ export const PaymentModal: React.FC = () => {
               {/* Custom Credit Amount Input */}
               {isCustomCreditOpen && (
                 <div className="flex items-center gap-2 pt-1 animate-in fade-in slide-in-from-top-1">
-                  <input
-                    type="number"
-                    value={customCreditInput}
-                    onChange={(e) => setCustomCreditInput(e.target.value)}
+                  <MoneyInput
+                    label="Montant avoir personnalisé (DA)"
+                    valueMinor={dinarsToMinor(customCreditInput || 0)}
+                    onChangeMinor={(minor) => setCustomCreditInput(toLegacyReal(minor))}
                     placeholder={`Max ${maxAvailableCredit} DA`}
                     className="flex-1 bg-pos-bg border border-purple-500/50 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-purple-400"
                   />
                   <button
                     type="button"
                     onClick={() => {
-                      const val = Math.round(parseLocalizedAmount(customCreditInput) || 0);
-                      handleApplyCustomCredit(val);
+                      handleApplyCustomCredit(customCreditInput);
                     }}
                     className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold transition cursor-pointer"
                   >
@@ -970,20 +968,15 @@ export const PaymentModal: React.FC = () => {
                       Espèces Reçues du Client (DA) :
                     </label>
 
-                    <div className="relative">
-                      <input
-                        ref={amountInputRef}
-                        type="number"
-                        inputMode="decimal"
-                        value={cashTenderAmount}
-                        onChange={(e) => setCashTenderAmount(e.target.value)}
-                        onWheel={(e) => (e.target as HTMLElement).blur()}
+                    <div>
+                      <MoneyInput
+                        label="Espèces Reçues du Client (DA)"
+                        id="payment-cash-input"
+                        valueMinor={dinarsToMinor(cashTenderAmount || 0)}
+                        onChangeMinor={(minor) => setCashTenderAmount(toLegacyReal(minor))}
                         placeholder={netToPay.toString()}
                         className="w-full bg-pos-bg border border-pos-border focus:border-emerald-400 rounded-xl px-4 py-3 text-3xl font-black font-mono text-pos-text focus:outline-none transition"
                       />
-                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-base font-black text-pos-muted font-mono pointer-events-none">
-                        DA
-                      </span>
                     </div>
 
                     {/* Quick Bill Tap Buttons */}
@@ -995,8 +988,8 @@ export const PaymentModal: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => {
-                            setCashTenderAmount(netToPay.toString());
-                            amountInputRef.current?.focus();
+                            setCashTenderAmount(netToPay);
+                            document.getElementById('payment-cash-input')?.focus();
                           }}
                           className="py-2.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/50 rounded-xl text-xs font-black text-emerald-300 transition cursor-pointer"
                           title="Montant exact net"
@@ -1008,8 +1001,8 @@ export const PaymentModal: React.FC = () => {
                             key={bill}
                             type="button"
                             onClick={() => {
-                              setCashTenderAmount(bill.toString());
-                              amountInputRef.current?.focus();
+                              setCashTenderAmount(bill);
+                              document.getElementById('payment-cash-input')?.focus();
                             }}
                             className={`py-2.5 rounded-xl text-xs font-black border transition cursor-pointer font-mono ${
                               bill >= netToPay

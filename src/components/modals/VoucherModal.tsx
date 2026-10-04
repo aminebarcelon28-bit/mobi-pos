@@ -8,6 +8,8 @@ import { printCoordinator } from '../../utils/printCoordinator';
 import { useToast } from '../ui/Toast';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
 import { isMobileDevice } from '../../utils/platform';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 
 export const VoucherModal: React.FC = () => {
   const {
@@ -26,7 +28,7 @@ export const VoucherModal: React.FC = () => {
     'Caisse Principale';
 
   const [activeTab, setActiveTab] = useState<'create' | 'list'>('create');
-  const [amountInput, setAmountInput] = useState('');
+  const [amountInput, setAmountInput] = useState<number>(0);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [notes, setNotes] = useState('');
@@ -45,7 +47,7 @@ export const VoucherModal: React.FC = () => {
   useEffect(() => {
     if (activeModal === 'credit_voucher') {
       fetchCreditVouchers();
-      setAmountInput('');
+      setAmountInput(0);
       setCustomerName('');
       setCustomerPhone('');
       setNotes('');
@@ -81,8 +83,8 @@ export const VoucherModal: React.FC = () => {
   if (activeModal !== 'credit_voucher') return null;
 
   const handleCreateVoucher = async () => {
-    const amount = Math.round(parseFloat(amountInput));
-    if (isNaN(amount) || amount <= 0) {
+    const amount = amountInput;
+    if (!Number.isFinite(amount) || amount <= 0) {
       alert('Veuillez saisir un montant valide supérieur à 0 DA.');
       return;
     }
@@ -203,15 +205,12 @@ export const VoucherModal: React.FC = () => {
                   <label className="text-xs font-bold text-pos-text block mb-1">
                     Montant de l'Avoir (DA) *
                   </label>
-                  <input
-                    type="number"
-                    min="50"
-                    step="any"
-                    value={amountInput}
-                    onChange={(e) => setAmountInput(e.target.value)}
+                  <MoneyInput
+                    label="Montant de l'Avoir (DA)"
+                    valueMinor={dinarsToMinor(amountInput || 0)}
+                    onChangeMinor={(minor) => setAmountInput(toLegacyReal(minor))}
                     placeholder="Ex: 1500"
                     className="w-full bg-pos-card border border-pos-border rounded-xl px-4 py-2.5 text-xl font-black font-mono text-purple-400 focus:outline-none focus:border-purple-500 transition"
-                    autoFocus
                   />
                   {/* Quick Preset Amount Buttons */}
                   <div className="flex items-center gap-1.5 mt-2">
@@ -220,7 +219,7 @@ export const VoucherModal: React.FC = () => {
                         key={preset}
                         type="button"
                         onClick={() => {
-                          setAmountInput(preset.toString());
+                          setAmountInput(preset);
                           soundEngine.playKeyBeep?.();
                         }}
                         className="px-2.5 py-1 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs font-mono font-bold text-pos-text transition cursor-pointer"
@@ -382,7 +381,7 @@ export const VoucherModal: React.FC = () => {
                     type="button"
                     onClick={() => {
                       setIssuedVoucher(null);
-                      setAmountInput('');
+                      setAmountInput(0);
                     }}
                     className="px-4 py-2.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-text font-bold text-xs transition cursor-pointer"
                   >

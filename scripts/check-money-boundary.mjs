@@ -62,7 +62,17 @@ console.log('\n--- Rule 1: no parseFloat(x)*100 anywhere in src/ ---');
 console.log('\n--- Rule 2: money.ts / money.rs are float-free ---');
 {
   const ts = read('src/utils/money.ts');
-  check('money.ts: no Math.*', !/Math\./.test(ts));
+  // Exactly ONE Math.* line is allowed: the dinarsToMinor dust-only fallback
+  // (transitional load bridge, pinned to its documented line).
+  const tsMathHits = [];
+  ts.split('\n').forEach((line, i) => {
+    if (/Math\./.test(line)) tsMathHits.push(i + 1);
+  });
+  check('money.ts: single Math.* hit (dust fallback only)', tsMathHits.length === 1,
+    `hits at lines ${tsMathHits.join(',')}`);
+  check('money.ts: the hit is the dust fallback line',
+    tsMathHits.length === 1 && ts.split('\n')[tsMathHits[0] - 1].includes('dust-only fallback'),
+    tsMathHits.length === 1 ? ts.split('\n')[tsMathHits[0] - 1].trim() : '');
   check('money.ts: no parseFloat/parseInt', !/parseFloat|parseInt/.test(ts));
   const rs = read('src-tauri/src/money.rs');
   const rsNoComments = rs.split('\n').filter((l) => !l.trim().startsWith('//!') && !l.trim().startsWith('///')).join('\n');
@@ -102,6 +112,64 @@ console.log('\n--- Rule 3: money-path float registry (Stage E expiry) ---');
     }
     const n = (src.match(pat) || []).length;
     check(`${file}: ${n} <= ${max}${n < max ? ' (migration progress — update registry)' : ''}`, n <= max, `got ${n}, allowed ${max}`);
+  }
+}
+
+console.log('\n--- Rule 4: Phase 1c input sweep (one parsing path) ---');
+{
+  // file -> max remaining legacy-parser hits. Every money input in these
+  // files parses via MoneyInput (Money.fromUserInput); remaining hits are
+  // enumerated non-money uses (percent, qty, volume slider, OCR extraction,
+  // 1b-i-deleted TVA field). Any NEW money-field parser fails the build.
+  const ADOPTION = {
+    'src/components/modals/KittingBundleModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/PurchaseOrderModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/VoucherModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/ExpenseManagerModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/ReportsModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/DiscountModal.tsx': { pla: 1, pf: 0 }, // percent input
+    'src/components/modals/TradeInBuybackModal.tsx': { pla: 0, pf: 1 }, // margin percent
+    'src/components/modals/PaymentModal.tsx': { pla: 0, pf: 0 },
+    'src/components/mobile/tabs/MobileCheckoutTab.tsx': { pla: 0, pf: 0 },
+    'src/components/CartPanel.tsx': { pla: 0, pf: 0 },
+    // DebtLedgerModal DEFERRED (Phase 1c doc §5): another lane is actively
+    // rewriting it. Reverted to legacy parsers to leave zero footprint;
+    // migrate post-settle/Stage E. pla=3 pins it.
+    'src/components/modals/DebtLedgerModal.tsx': { pla: 3, pf: 0, deferred: true },
+    'src/components/modals/CustomersModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/RepairWorkOrderModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/ShiftCloseModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/ShiftZReportModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/ShiftOpenModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/ShiftMovementModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/SettingsModal.tsx': { pla: 0, pf: 1 }, // audio volume slider
+    'src/components/modals/InvoiceIngestionModal.tsx': { pla: 2, pf: 0 }, // OCR extraction + 1b-i-deleted TVA field
+    // PoReviewScreen DEFERRED (Phase 1c doc §5): 7 parseFloat money inputs sit
+    // inside another lane's in-flight card/table rewrite and cannot be
+    // committed without absorbing it. Dot-decimals preserved (no destruction);
+    // comma+echo arrive post-settle or Stage E. pf=9 pins the deferral.
+    'src/components/PoReviewScreen.tsx': { pla: 0, pf: 9, deferred: true },
+    'src/components/modals/CommandTicketDashboardModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/ProductEditorModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/CustomItemModal.tsx': { pla: 0, pf: 0 },
+    'src/components/modals/ProductMatrixModal.tsx': { pla: 0, pf: 0 },
+  };
+  for (const [file, max] of Object.entries(ADOPTION)) {
+    let src;
+    try {
+      src = read(file);
+    } catch {
+      check(`${file}: readable`, false, 'file missing');
+      continue;
+    }
+    if (!max.deferred) {
+      check(`${file}: MoneyInput adopted`, src.includes('MoneyInput'),
+        'no MoneyInput import — money fields must use the shared component');
+    }
+    const pla = (src.match(/parseLocalizedAmount\s*\(/g) || []).length;
+    const pf = (src.match(/parseFloat\s*\(/g) || []).length;
+    check(`${file}: legacy parsers within registry (pla ${pla}<=${max.pla}, pf ${pf}<=${max.pf})`,
+      pla <= max.pla && pf <= max.pf, `got pla=${pla} pf=${pf}`);
   }
 }
 

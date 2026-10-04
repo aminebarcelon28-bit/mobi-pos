@@ -3,7 +3,8 @@ import { X, ArrowDownCircle, ArrowUpCircle, FileText, CheckCircle2, AlertTriangl
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { useToast } from '../ui/Toast';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { MANUAL_MOVEMENT_TAG } from '../../utils/cashTerms';
 
 // Lock-screen cashier fallback (createUISlice owns `activeCashier`; absent
@@ -138,12 +139,10 @@ export const ShiftMovementModal: React.FC = () => {
             <label className="text-[10px] text-pos-muted uppercase font-bold">
               Montant du Mouvement (DA)
             </label>
-            <input
-              type="number"
-              min="0"
-              step="any"
-              value={amount || ''}
-              onChange={(e) => setAmount(Math.round(parseLocalizedAmount(e.target.value) || 0))}
+            <MoneyInput
+              label="Montant du Mouvement (DA)"
+              valueMinor={dinarsToMinor(amount || 0)}
+              onChangeMinor={(minor) => setAmount(toLegacyReal(minor))}
               placeholder="0 DA"
               className={`w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-lg font-mono font-bold focus:outline-none ${
                 type === 'EXPENSE' ? 'text-red-400 focus:border-red-400' : 'text-emerald-400 focus:border-emerald-400'

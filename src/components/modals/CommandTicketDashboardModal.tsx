@@ -26,6 +26,8 @@ import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime, REPAIR_STATUS_BADGE_TOKENS, repairRemainingBalance } from '../../types/pos';
 import type { PurchaseOrder, PaymentMethodType } from '../../types/pos';
 import { useToast } from '../ui/Toast';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { buildWhatsAppUrl } from '../../utils/phoneUtils';
 import { soundEngine } from '../../utils/audioFeedback';
 import { PurchaseOrderA4Document } from './PurchaseOrderA4Document';
@@ -1138,15 +1140,12 @@ export const CommandTicketDashboardModal: React.FC = () => {
 
                           <div>
                             <label className="text-[9px] uppercase font-bold text-pos-muted block">Prix Achat Réel (DA) :</label>
-                            <input
-                              type="number"
-                              min="0"
-                              value={currentCost}
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value) || 0;
-                                setVerifiedCostMap((prev) => ({ ...prev, [item.productId]: val }));
+                            <MoneyInput
+                              label={`Prix Achat Réel (DA) pour ${item.title}`}
+                              valueMinor={dinarsToMinor(currentCost || 0)}
+                              onChangeMinor={(minor) => {
+                                setVerifiedCostMap((prev) => ({ ...prev, [item.productId]: toLegacyReal(minor) }));
                               }}
-                              aria-label={`Prix Achat Réel (DA) pour ${item.title}`}
                               className="w-full bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-500 min-h-[44px]"
                             />
                           </div>

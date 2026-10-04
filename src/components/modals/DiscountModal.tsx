@@ -4,6 +4,8 @@ import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { getProductPriceForTier } from '../../utils/pricingEngine';
 import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { PROMO_TRACKING } from '../../constants';
 
 interface PromoCodeDef {
@@ -276,13 +278,10 @@ export const DiscountModal: React.FC = () => {
                 className="w-full bg-pos-card border border-pos-border rounded-xl px-3.5 py-2 text-base font-black text-purple-400 focus:border-purple-400 focus:outline-none"
               />
             ) : (
-              <input
-                type="number"
-                inputMode="decimal"
-                min="0"
-                step="any"
-                value={amountValue}
-                onChange={(e) => setAmountValue(parseLocalizedAmount(e.target.value) || 0)}
+              <MoneyInput
+                label="Montant de Remise Personnalisé (DA)"
+                valueMinor={dinarsToMinor(amountValue || 0)}
+                onChangeMinor={(minor) => setAmountValue(toLegacyReal(minor))}
                 className="w-full bg-pos-card border border-pos-border rounded-xl px-3.5 py-2 text-base font-black text-emerald-400 focus:border-emerald-400 focus:outline-none"
               />
             )}

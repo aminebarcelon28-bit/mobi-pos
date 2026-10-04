@@ -22,6 +22,8 @@ import { luhnCheckImei, imeiCheckState, sanitizeImeiInput } from '../../utils/sa
 import { isImeiAllocatedInCart, CART_IMEI_COLLISION_MESSAGE } from '../../utils/tradeInExchange';
 import { useToast } from '../ui/Toast';
 import { isMobileDevice } from '../../utils/platform';
+import { MoneyInput } from '../ui/MoneyInput';
+import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 
 const DEVICE_PRESETS = [
   { model: 'iPhone 15 Pro Max', brand: 'Apple' as BrandName },
@@ -645,13 +647,11 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:items-center">
                   <div>
                     <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Prix de Rachat Cash (DA)</label>
-                    <input
-                      type="number"
-                      inputMode="decimal"
-                      step="any"
+                    <MoneyInput
+                      label="Prix de Rachat Cash (DA)"
+                      valueMinor={dinarsToMinor(buybackValue || 0)}
+                      onChangeMinor={(minor) => setBuybackValue(toLegacyReal(minor))}
                       required
-                      value={buybackValue}
-                      onChange={(e) => setBuybackValue(parseFloat(e.target.value) || 0)}
                       className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-emerald-400 focus:border-emerald-400 focus:outline-none"
                     />
                   </div>
