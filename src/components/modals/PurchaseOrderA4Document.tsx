@@ -1,6 +1,6 @@
 import React from 'react';
-import type { PurchaseOrder, ReceiptSettings } from '../../types/pos';
-import { formatDZD, formatDateTime } from '../../types/pos';
+import type { PurchaseOrder, POReceptionSnapshot, ReceiptSettings } from '../../types/pos';
+import { formatDZD, formatDateTime, faitALine } from '../../types/pos';
 import type { PurchaseOrderExportData } from '../../utils/purchaseOrderXlsx';
 
 export interface PurchaseOrderA4DocumentProps {
@@ -8,12 +8,22 @@ export interface PurchaseOrderA4DocumentProps {
   receiptSettings?: ReceiptSettings | null;
   /** When true, renders optimized for on-screen preview (with paper frame & subtle borders). */
   previewMode?: boolean;
+  /** When set, appends the Bon de Réception & Contrôle Fournisseur section. */
+  reception?: POReceptionSnapshot | null;
+}
+
+function receptionLineStatus(ordered: number, received: number, reason?: string): string {
+  if (reason && /d[eé]fectueux|défectueuse|cass[eé]|ab[îi]m|non conforme/i.test(reason)) return 'Défectueux';
+  if (received < ordered) return 'Manquant';
+  if (received > ordered) return 'Excédent';
+  return 'Conforme';
 }
 
 export const PurchaseOrderA4Document: React.FC<PurchaseOrderA4DocumentProps> = ({
   po,
   receiptSettings,
   previewMode = false,
+  reception = null,
 }) => {
   const storeName = receiptSettings?.storeName || 'MOBI ACCESSORIES';
   const items = po.items || [];
@@ -65,7 +75,7 @@ export const PurchaseOrderA4Document: React.FC<PurchaseOrderA4DocumentProps> = (
               <span className="text-base sm:text-lg font-black tracking-tight text-slate-900 uppercase">
                 {storeName}
               </span>
-              <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 tracking-wide uppercase">
+              <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 tracking-wide uppercase">
                 Acheteur
               </span>
             </div>
@@ -106,7 +116,7 @@ export const PurchaseOrderA4Document: React.FC<PurchaseOrderA4DocumentProps> = (
           {status && (
             <div className="mt-1.5 flex justify-end">
               <span
-                className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md border tracking-wider ${
+                className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full border tracking-wider ${
                   status === 'Completed' || status === 'Received'
                     ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                     : status === 'Partially Received'
@@ -253,6 +263,76 @@ export const PurchaseOrderA4Document: React.FC<PurchaseOrderA4DocumentProps> = (
           </span>
         </div>
       </div>
+
+      {/* Reception PV — Commandée vs Reçue vs Écart + supplier invoice + dual sign-off */}
+      {reception && (
+        <div className="my-4 border border-emerald-200 rounded-xl overflow-hidden shadow-xs">
+          <div className="bg-emerald-50 px-3 py-2.5 border-b border-emerald-200">
+            <p className="text-xs font-black uppercase tracking-wider text-emerald-800">
+              Bon de Réception & Contrôle Fournisseur
+            </p>
+            <p className="text-[10px] text-slate-600 mt-0.5">
+              Facture / BL Fournisseur : <strong>{reception.supplierInvoice || 'Non renseignée'}</strong>
+              {' • '}Réceptionné le : <strong>{new Date(reception.receivedAt || Date.now()).toLocaleString('fr-DZ')}</strong>
+            </p>
+          </div>
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="bg-slate-100/90 text-slate-700 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200">
+                <th className="py-2 px-3 text-left">Désignation du Produit</th>
+                <th className="py-2 px-3 text-center w-[12%]">Commandée</th>
+                <th className="py-2 px-3 text-center w-[12%]">Reçue</th>
+                <th className="py-2 px-3 text-center w-[12%]">Écart</th>
+                <th className="py-2 px-3 text-center w-[16%]">Statut</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200/80">
+              {items.map((item, idx) => {
+                const pid = item.productId || `${item.sku || 'row'}-${idx}`;
+                const ordered = item.suggestedQty || 0;
+                const baseReceived = 'receivedQty' in item ? item.receivedQty ?? ordered : ordered;
+                const received = Math.max(0, Math.round(reception.receivedQty[pid] ?? baseReceived));
+                const gap = received - ordered;
+                const baseReason = 'discrepancyReason' in item ? item.discrepancyReason || '' : '';
+                const reason = reception.reasons?.[pid] || baseReason;
+                const status = receptionLineStatus(ordered, received, reason);
+                return (
+                  <tr key={pid} className={idx % 2 === 1 ? 'bg-slate-50/50' : 'bg-white'}>
+                    <td className="py-2 px-3 text-left">
+                      <span className="font-bold text-slate-900 block leading-tight">{item.title}</span>
+                      <span className="font-mono text-[10px] text-slate-600">{item.sku || '—'}</span>
+                      {reason ? <span className="block text-[9px] italic text-amber-700">Réserve : {reason}</span> : null}
+                    </td>
+                    <td className="py-2 px-3 text-center font-mono text-slate-700">{ordered}</td>
+                    <td className="py-2 px-3 text-center font-black font-mono text-slate-900">{received}</td>
+                    <td className="py-2 px-3 text-center font-mono font-bold text-slate-900">{gap > 0 ? `+${gap}` : `${gap}`}</td>
+                    <td className="py-2 px-3 text-center text-[10px] font-black uppercase">{status}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="px-3 py-2 text-[10px] text-slate-600">{faitALine(receiptSettings)}</p>
+          <div className="grid grid-cols-2 gap-4 p-3 pt-1">
+            <div className="border border-slate-300 rounded-xl p-3 bg-white min-h-[110px] flex flex-col justify-between">
+              <span className="text-[10px] font-black uppercase text-slate-800 tracking-wider block">
+                Réceptionné et vérifié par le magasinier
+              </span>
+              <span className="text-[9px] text-slate-500 text-center block border-t border-slate-200 pt-1">
+                Nom, date & signature
+              </span>
+            </div>
+            <div className="border border-slate-300 rounded-xl p-3 bg-white min-h-[110px] flex flex-col justify-between">
+              <span className="text-[10px] font-black uppercase text-slate-800 tracking-wider block">
+                Viseur Fournisseur / Livreur
+              </span>
+              <span className="text-[9px] text-slate-500 text-center block border-t border-slate-200 pt-1">
+                Nom, date & signature
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Commercial & Legal Terms */}
       <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 my-4 text-[10.5px] text-slate-600 space-y-1">

@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+/**
+ * Class-based dark variant.
+ *
+ * Without this, Tailwind v4's `dark:` utilities key off
+ * `prefers-color-scheme`, while the in-app theme toggle (createUISlice
+ * `toggleTheme`) only toggles the `html.dark` class that drives the POS token
+ * custom properties below. The two disagreed, so selecting "light" in the app
+ * under a dark OS produced a half-light/half-dark UI: tokens flipped but every
+ * `dark:` utility stayed dark. Making the variant class-based binds both to
+ * the single user-facing switch.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --pos-bg: #f8fafc;
   --pos-panel: #ffffff;

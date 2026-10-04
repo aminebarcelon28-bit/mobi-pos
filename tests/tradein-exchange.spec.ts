@@ -46,7 +46,21 @@ const modelInput = (page: Page) => page.getByPlaceholder('ex: iPhone 14 Pro Max'
 // Scoped to the modal overlay: CartPanel mounts cart steppers (number
 // inputs) that would otherwise shadow the buyback field in DOM order.
 const tradeInDialog = (page: Page) => page.locator('div.fixed.inset-0').filter({ hasText: 'REPRISE & TRADE-IN' });
-const buybackInput = (page: Page) => tradeInDialog(page).locator('input[type="number"]').first();
+// The buyback price is a `MoneyInput` (`type="text"`), so `input[type="number"].first()`
+// resolved to the RESALE MARGIN spinner instead: the price never reached the
+// model, `buybackValue` stayed 0, and the submit no-op'd on
+// `if (buybackValue <= 0) return;` — surfacing as "nothing staged", nowhere near
+// the cause. The field now carries its own stable test id.
+const buybackInput = (page: Page) => tradeInDialog(page).getByTestId('buyback-price');
+/**
+ * MoneyInput commits only a parseable amount and reports what it parsed in its
+ * `aria-live` echo line. Assert it before every submit, so a silent no-op submit
+ * can never be mistaken for a passing run.
+ */
+const expectBuybackCommitted = async (page: Page) => {
+  const echo = buybackInput(page).locator('xpath=../../span[@aria-live="polite"]');
+  await expect(echo).toContainText('=', { timeout: 10_000 });
+};
 const submitBtn = (page: Page) => page.getByRole('button', { name: /Racheter & Injecter/i });
 
 /** Fill the natively-required fields so submit reaches our handler. */
@@ -54,6 +68,7 @@ async function fillRequired(page: Page, buyback = '45000') {
   await nameInput(page).fill('Karim Hadj');
   await modelInput(page).fill('iPhone 13 Pro');
   await buybackInput(page).fill(buyback);
+  await expectBuybackCommitted(page);
 }
 
 test.describe('Suite 3 — IMEI & identity matrix (real component)', () => {
@@ -151,6 +166,7 @@ test.describe('Suite 5 — mobile 375px', () => {
     await openTradeIn(page);
     await buybackInput(page).click();
     await buybackInput(page).fill('45000');
+    await expectBuybackCommitted(page);
     const submit = submitBtn(page);
     await expect(submit).toBeVisible();
     const box = await submit.boundingBox();
@@ -243,6 +259,7 @@ test.describe('Suite 6 — staged exchange flow (real UI, zero DB writes)', () =
     await modelInput(page).fill('iPhone 13 Pro');
     await imeiInput(page).fill('490154203237518');
     await buybackInput(page).fill('50000');
+    await expectBuybackCommitted(page);
 
     const before = await snapshot(page);
     await page.getByRole('button', { name: /Valider l’Échange/ }).click();

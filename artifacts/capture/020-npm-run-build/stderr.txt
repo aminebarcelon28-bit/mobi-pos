@@ -1,0 +1,35 @@
+[33m[plugin builtin:vite-reporter] 
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/db/checkoutRecovery.ts is dynamically imported by src/App.tsx but also statically imported by src/store/slices/createOrderSlice.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/db/checkoutFlight.ts is dynamically imported by src/db/busyRetry.ts, src/db/checkoutRecovery.ts but also statically imported by src/store/slices/createOrderSlice.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/utils/savSettlement.ts is dynamically imported by src/store/slices/createCartSlice.ts, src/store/slices/createOrderSlice.ts but also statically imported by src/store/slices/createRepairSlice.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/store/slices/createRepairSlice.ts is dynamically imported by src/store/slices/createOrderSlice.ts but also statically imported by src/components/modals/RepairWorkOrderModal.tsx, src/store/usePosStore.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/store/usePosStore.ts is dynamically imported by src/components/mobile/tabs/SyncDiagnosticsTab.tsx, src/store/slices/createOrderSlice.ts, src/sync/payoutWatch.ts but also statically imported by src/App.tsx, src/components/BottomBar.tsx, src/components/CartPanel.tsx, src/components/GlobalModalHost.tsx, src/components/Header.tsx, ..., dynamic import will not move module into another chunk.
+[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/licensing/store.ts is dynamically imported by src/App.tsx but also statically imported by src/App.tsx, src/components/licensing/ActivationGateScreen.tsx, src/components/modals/LicensingModal.tsx, src/licensing/client.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/licensing/client.ts is dynamically imported by src/components/licensing/ActivationGateScreen.tsx but also statically imported by src/App.tsx, src/components/licensing/ActivationGateScreen.tsx, src/components/mobile/MobilePairingWizard.tsx, src/components/modals/LicensingModal.tsx, dynamic import will not move module into another chunk.
+[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/licensing/degraded.ts is dynamically imported by src/components/mobile/MobilePairingWizard.tsx, src/store/slices/createOrderSlice.ts but also statically imported by src/App.tsx, dynamic import will not move module into another chunk.
+[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/db/backupManager.ts is dynamically imported by src/sync/restoreManager.ts but also statically imported by src/sync/migrationManager.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/db/database.ts is dynamically imported by src/components/mobile/tabs/SyncDiagnosticsTab.tsx, src/db/sqlPluginAdapter.ts, src/hooks/useAllocationCogs.ts, src/hooks/useFifoPreviewCosts.ts, src/hooks/useInventoryValuation.ts, ... but also statically imported by src/db/adapters/customerAdapter.ts, src/db/adapters/maintenanceAdapter.ts, src/db/adapters/operationsAdapter.ts, src/db/adapters/productAdapter.ts, src/db/adapters/shiftAdapter.ts, ..., dynamic import will not move module into another chunk.
+[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/db/sqlPluginAdapter.ts is dynamically imported by src/App.tsx, src/components/modals/DatabaseMaintenanceModal.tsx, src/db/adapters/base.ts, src/db/adapters/customerAdapter.ts, src/db/adapters/maintenanceAdapter.ts, ... but also statically imported by src/db/adapters/maintenanceAdapter.ts, src/db/adapters/operationsAdapter.ts, src/db/adapters/transactionAdapter.ts, src/db/adapters/voucherAdapter.ts, src/db/backfill.ts, ..., dynamic import will not move module into another chunk.
+[39m
+[33m[33m[INEFFECTIVE_DYNAMIC_IMPORT] [0msrc/sync/SyncManager.ts is dynamically imported by src/App.tsx, src/components/BottomBar.tsx, src/components/mobile/CompanionHeader.tsx, src/components/mobile/CompanionShell.tsx, src/components/mobile/tabs/LiveActivityTab.tsx, ... but also statically imported by src/components/mobile/MobilePairingWizard.tsx, src/components/mobile/tabs/SyncDiagnosticsTab.tsx, src/components/settings/CloudSyncPanel.tsx, src/sync/repairResync.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[33m[PLUGIN_TIMINGS] [0mPlugin hooks ran for 31.0s of this 31.6s build (98%).
+The slowest hooks, timed inside each callback (the wait before a callback starts is excluded, the time it awaits is included):
+  - @tailwindcss/vite:generate:build transform (97%, 30.8s, 1 call)
+Additional hook time came from hooks under 1s.
+See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+[39m

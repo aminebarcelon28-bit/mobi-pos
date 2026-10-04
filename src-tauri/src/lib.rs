@@ -16,6 +16,7 @@ pub mod resolver;
 pub mod commands;
 pub mod emergency_export;
 pub mod snapshot_prune;
+pub mod snapshot_crypto;
 pub mod sav_attachments;
 pub mod trust_core;
 
@@ -347,7 +348,12 @@ fn create_database_backup(
                 return Err("Fichier mobi_pos.db introuvable".into());
             }
             let kind = kind.unwrap_or_else(|| "manual".to_string());
-            backup_db_file(&db_path, &backups_dir(&app_handle)?, &kind)
+            // Phase 4d: the seal key resolves from the app dir (OS keyring /
+            // device vault), never from the backup dir — tests inject their
+            // own key via backup_db_file_with_key so unit tests never touch
+            // the real keychain.
+            let key = crate::snapshot_crypto::backup_data_key(&app_dir)?;
+            backup_db_file_with_key(&db_path, &backups_dir(&app_handle)?, &kind, &key)
         },
     )
 }
@@ -427,6 +433,22 @@ pub fn backup_db_file(
     src_db: &std::path::Path,
     backups_dir: &std::path::Path,
     kind: &str,
+) -> Result<BackupMeta, TrustError> {
+    // Production entry: seal key from the live app dir. Unit tests use
+    // backup_db_file_with_key with a fixed key (never the real keychain).
+    let app_dir = src_db
+        .parent()
+        .ok_or_else(|| TrustError::op_failed("snapshot source has no parent dir".to_string()))?;
+    let key = crate::snapshot_crypto::backup_data_key(app_dir)?;
+    backup_db_file_with_key(src_db, backups_dir, kind, &key)
+}
+
+/// Core snapshot routine (key injectable — see above).
+pub fn backup_db_file_with_key(
+    src_db: &std::path::Path,
+    backups_dir: &std::path::Path,
+    kind: &str,
+    key: &[u8; 32],
 ) -> Result<BackupMeta, TrustError> {
     let kind = validate_snapshot_kind(kind)?;
     std::fs::create_dir_all(backups_dir).map_err(|e| e.to_string())?;
@@ -563,6 +585,17 @@ pub fn backup_db_file(
         return Err(e);
     }
     drop(ro);
+    // Phase 4d: seal the verified image before it rests. The seal covers the
+    // exact bytes integrity_check just approved; the SHA below is over the
+    // STORED (ciphertext) bytes. A seal failure deletes the copy and fails
+    // closed — an unverified plaintext snapshot is never left behind, and a
+    // half-sealed one cannot exist (encrypt_file_in_place is atomic).
+    // The key arrives as a parameter (resolved by the caller from the app
+    // dir, injected by tests) so this core never touches the keychain.
+    if let Err(e) = crate::snapshot_crypto::encrypt_file_in_place(&dst_path, key) {
+        let _ = std::fs::remove_file(&dst_path);
+        return Err(e);
+    }
     let bytes = std::fs::read(&dst_path).map_err(|e| {
         let _ = std::fs::remove_file(&dst_path);
         if e.kind() == std::io::ErrorKind::StorageFull {
@@ -587,9 +620,10 @@ pub fn backup_db_file(
             .unwrap_or(0);
         // Restrictive permissions (Unix 0600). Windows inherits the
         // per-user app-data ACL (profile-private by default) — documented,
-        // not modified here. Snapshots are NOT encrypted (explicit: same
-        // posture as the live DB; see the decision list — encrypt in 1B or
-        // record acceptance).
+        // not modified here. Snapshots ARE sealed at rest (Phase 4d,
+        // ChaCha20-Poly1305, per-device key): the sha256 above covers the
+        // stored ciphertext, and `MPB1`-magic tells sealed from legacy
+        // plaintext without renaming (evidence references stay valid).
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -652,6 +686,145 @@ fn list_database_backups(app_handle: tauri::AppHandle) -> Result<Vec<String>, Tr
     files.sort();
     files.reverse();
     Ok(files)
+        },
+    )
+}
+
+/// Strict snapshot-id shape for recovery/or any file-touching path: bare
+/// filename, snapshot pattern, sane length. Traversal is rejected before any
+/// filesystem touch (callers still verify canonical containment).
+fn validate_snapshot_id(id: &str) -> Result<String, TrustError> {
+    let clean = id.trim().to_string();
+    if clean.is_empty()
+        || clean.len() > 128
+        || clean.contains('/')
+        || clean.contains('\\')
+        || clean.contains("..")
+        || !clean.contains("_mobi_pos_backup_")
+        || !clean.ends_with(".db")
+    {
+        return Err(TrustError::IPCProtocolError {
+            reason: "snapshot id invalid",
+        });
+    }
+    Ok(clean)
+}
+
+/// Manual-recovery decrypt (Phase 4d): produce a plaintext working copy of a
+/// sealed snapshot for operator copy-out. The sealed original is NEVER
+/// modified; the destination is reserved exclusively (refuses when present).
+/// Fresh manager PIN verified INSIDE through the unmodified `pin_verify`
+/// (same path as the lock screen — wrong PINs burn the ladder). Kernel audit
+/// row on every success. Strict id shape: bare filename, must match the
+/// snapshot pattern — traversal is rejected before any filesystem touch, and
+/// the resolved path is verified to sit inside the backups dir.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecryptSnapshotRequest {
+    pub snapshot_id: String,
+    pub pin: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecryptedSnapshot {
+    pub id: String,
+    pub decrypted_file: String,
+    pub bytes: u64,
+}
+
+#[tauri::command]
+fn decrypt_snapshot_for_recovery(
+    app_handle: tauri::AppHandle,
+    request: DecryptSnapshotRequest,
+) -> Result<DecryptedSnapshot, TrustError> {
+    // Cheap gates first (no budget burn on malformed input — same doctrine
+    // as prune_snapshots): strict id shape (traversal rejected), then PIN.
+    let id = validate_snapshot_id(&request.snapshot_id)?;
+    if request.pin.len() > 64 {
+        return Err(TrustError::IPCProtocolError {
+            reason: "PIN oversized",
+        });
+    }
+    // Fresh manager PIN through the EXISTING function, unmodified. Sequential
+    // with the export-gated decrypt below (never nested guards).
+    let verify_res = crate::trust_core::pin::pin_verify(
+        app_handle.clone(),
+        crate::trust_core::pin::PinVerifyRequest {
+            user_id: "manager".to_string(),
+            pin: request.pin,
+        },
+    )?;
+    if verify_res.locked {
+        return Err(TrustError::op_failed(format!(
+            "PIN verrouillé — réessayez dans {}s.",
+            (verify_res.locked_remaining_ms + 999) / 1000
+        )));
+    }
+    if !verify_res.ok {
+        return Err(TrustError::SecurityPolicyFailure {
+            reason: "PIN manager incorrect — décryptage refusé.",
+        });
+    }
+    authorize_and_execute(
+        "decrypt_snapshot_for_recovery",
+        Capability::EmergencyExport,
+        |_| {
+            let backups = backups_dir(&app_handle)?;
+            let src = backups.join(&id);
+            // Canonical containment: the join must resolve inside backups.
+            let canon_backups = backups.canonicalize().map_err(|e| TrustError::op_failed(format!("backups dir: {e}")))?;
+            let canon_src = src.canonicalize().map_err(|_| TrustError::SecurityPolicyFailure {
+                reason: "snapshot introuvable.",
+            })?;
+            if !canon_src.starts_with(&canon_backups) {
+                return Err(TrustError::SecurityPolicyFailure {
+                    reason: "snapshot hors périmètre.",
+                });
+            }
+            let stem = id.strip_suffix(".db").unwrap_or(&id);
+            let dest_name = format!("{stem}.recovery.db");
+            let dest = backups.join(&dest_name);
+            let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+            let key = crate::snapshot_crypto::backup_data_key(&app_dir)?;
+            let bytes = crate::snapshot_crypto::decrypt_file_to(&canon_src, &key, &dest)?;
+            // Plaintext working copy exists: verify it opens before reporting
+            // success (a torn decrypt must not be handed to an operator).
+            {
+                let ro = rusqlite::Connection::open_with_flags(
+                    &dest,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+                )
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&dest);
+                    TrustError::op_failed(format!("recovery copy illisible: {e}"))
+                })?;
+                if let Err(e) = crate::trust_core::export_snapshot::integrity_check(&ro) {
+                    drop(ro);
+                    let _ = std::fs::remove_file(&dest);
+                    return Err(e);
+                }
+            }
+            // "restauration" keyword: the TS classifier raises this row to
+            // critical, matching every other recovery-point event.
+            let row = crate::trust_core::audit_append::AuditAppendRequest {
+                action: "Décryptage Snapshot Secours".to_string(),
+                details: format!(
+                    "Copie de travail en clair produite pour restauration manuelle : {id} -> {dest_name} ({bytes} octets). L'original scellé est inchangé."
+                ),
+                user: Some("Manager".to_string()),
+                requires_pin: Some(true),
+                device_id: None,
+                ip_address: None,
+            };
+            if let Err(e) = crate::trust_core::audit_append::append_kernel_row(&app_dir, &row) {
+                eprintln!("[snapshot-crypto] recovery audit row dropped: {e:?}");
+            }
+            Ok(DecryptedSnapshot {
+                id,
+                decrypted_file: dest_name,
+                bytes,
+            })
         },
     )
 }
@@ -1345,6 +1518,35 @@ fn base_schema_migrations() -> Vec<Migration> {
             sql: crate::db::PO_RECON_PLUGIN_MIGRATION_V106,
             kind: MigrationKind::Up,
         },
+        Migration {
+            // v107 — point-in-time warranty anchoring.
+            //
+            // `warranty_expires_at` was declared in the base schema but had ZERO
+            // write sites, so every lookup recomputed expiry from the MUTABLE
+            // catalog: editing a product's warrantyMonths retroactively re-dated
+            // coverage customers had already bought. It is now minted once at
+            // sale and read preferentially.
+            //
+            // `warranty_months` records the term the customer actually bought,
+            // so an anchored record can be read without consulting the catalog
+            // at all.
+            //
+            // ADDITIVE ONLY — deliberately NO data backfill here. Backfilling
+            // must be a separate, audited step: freezing a historical row pins
+            // whatever the current resolver computes, so doing it silently would
+            // bake in today's answer before anyone has signed off on the
+            // zero-warranty policy question. `warranty_expires_at IS NULL`
+            // remains a valid "not yet anchored" state and the resolver falls
+            // back to computing for those rows.
+            version: 107,
+            description: "Point-in-time warranty anchoring (imei_records.warranty_months)",
+            sql: r#"
+            ALTER TABLE imei_records ADD COLUMN warranty_months INTEGER;
+            CREATE INDEX IF NOT EXISTS idx_imei_sold ON imei_records(sold_at);
+            CREATE INDEX IF NOT EXISTS idx_imei_sale_txn ON imei_records(sale_transaction_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -1429,6 +1631,23 @@ pub fn run() {
                         return;
                     };
                     let live_db = app_dir.join("mobi_pos.db");
+                    // Phase 4d: seal legacy plaintext snapshots BEFORE the sweep
+                    // (one-way migration; filenames unchanged so audit
+                    // snapshotId references survive). Key failure skips the
+                    // pass loudly — boot continues on plaintext, next boot
+                    // retries. Never fails boot.
+                    match crate::snapshot_crypto::backup_data_key(&app_dir) {
+                        Ok(key) => {
+                            let mig = crate::snapshot_crypto::seal_legacy_plaintext(&backups, &key);
+                            if mig.sealed > 0 || !mig.failed.is_empty() {
+                                eprintln!(
+                                    "[snapshot-crypto] legacy seal: {} sealed, {} already, {} failed",
+                                    mig.sealed, mig.already, mig.failed.len()
+                                );
+                            }
+                        }
+                        Err(e) => eprintln!("[snapshot-crypto] legacy seal skipped (no key): {e:?}"),
+                    }
                     let _ = snapshot_prune::janitor_sweep_backups_at(&live_db, &backups);
                 });
             }
@@ -1442,6 +1661,7 @@ pub fn run() {
             delete_cloud_credentials,
             create_database_backup,
             list_database_backups,
+            decrypt_snapshot_for_recovery,
             sqlite_check_db_version,
             sqlite_db_maintenance,
             emergency_export::emergency_export_ledger,
@@ -1492,6 +1712,32 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    /// Fixed seal key for unit tests: production resolves the device key from
+    /// the keychain/vault, which tests must never touch.
+    const TEST_SEAL_KEY: [u8; 32] = [7u8; 32];
+
+    #[test]
+    fn snapshot_id_shape_rejects_traversal_and_non_snapshots() {
+        assert!(validate_snapshot_id("wipe_mobi_pos_backup_1_ab12cd34.db").is_ok());
+        for bad in [
+            "",
+            "notes.txt",
+            "../wipe_mobi_pos_backup_1_ab12cd34.db",
+            "..\\wipe_mobi_pos_backup_1_ab12cd34.db",
+            "sub/dir/wipe_mobi_pos_backup_1_ab12cd34.db",
+            "wipe_mobi_pos_backup_1_ab12cd34.enc",
+            "random.db",
+            &"a".repeat(129),
+        ] {
+            assert!(validate_snapshot_id(bad).is_err(), "{bad:?} must be rejected");
+        }
+        // Whitespace-padded valid id trims clean.
+        assert_eq!(
+            validate_snapshot_id("  wipe_mobi_pos_backup_1_ab12cd34.db  ").unwrap(),
+            "wipe_mobi_pos_backup_1_ab12cd34.db"
+        );
+    }
+
     #[test]
     fn backup_names_are_unique_kind_scoped_and_never_overwrite() {
         // Stage 1/E: two rapid snapshots of the same kind must differ, carry
@@ -1510,23 +1756,25 @@ mod tests {
             let c = rusqlite::Connection::open(&live).unwrap();
             c.execute_batch("CREATE TABLE t(v TEXT); INSERT INTO t(v) VALUES ('a');").unwrap();
         }
-        let m1 = backup_db_file(&live, &dir, "wipe").unwrap();
-        let m2 = backup_db_file(&live, &dir, "wipe").unwrap();
+        let m1 = backup_db_file_with_key(&live, &dir, "wipe", &TEST_SEAL_KEY).unwrap();
+        let m2 = backup_db_file_with_key(&live, &dir, "wipe", &TEST_SEAL_KEY).unwrap();
         assert_ne!(m1.id, m2.id, "same-millisecond snapshots must differ");
         assert!(m1.id.starts_with("wipe_mobi_pos_backup_"), "kind scoped: {}", m1.id);
         assert!(m1.id.ends_with(".db"));
         assert!(std::path::Path::new(&m1.path).exists());
         assert!(std::path::Path::new(&m2.path).exists());
         // Unknown kinds fail closed, never filed as manual.
-        assert!(backup_db_file(&live, &dir, "oops").is_err());
+        assert!(backup_db_file_with_key(&live, &dir, "oops", &TEST_SEAL_KEY).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn backup_result_is_verified_and_hashed() {
         // integrity_check on the RESULT, SHA-256 AFTER completion, bytes and
-        // mtime reported. A second backup of the same content hashes equal
-        // (deterministic content) with a different id (unique names).
+        // mtime reported. Phase 4d: the stored file is SEALED (random nonce),
+        // so two backups of the same content differ byte-wise (ids differ,
+        // hashes differ) — equality is proven on the DECRYPTED bytes, and
+        // integrity_check runs against the decrypted image.
         let dir = std::env::temp_dir().join(format!(
             "mobi-snap-verify-{}",
             std::time::SystemTime::now()
@@ -1540,11 +1788,13 @@ mod tests {
             let c = rusqlite::Connection::open(&live).unwrap();
             c.execute_batch("CREATE TABLE t(v TEXT); INSERT INTO t(v) VALUES ('hello');").unwrap();
         }
-        let m1 = backup_db_file(&live, &dir, "migration").unwrap();
+        let m1 = backup_db_file_with_key(&live, &dir, "migration", &TEST_SEAL_KEY).unwrap();
         assert!(m1.id.starts_with("migration_mobi_pos_backup_"));
         assert!(m1.bytes > 0);
         assert!(m1.mtime_ms > 0);
         assert_eq!(m1.sha256.len(), 64);
+        // Sealed at rest: magic present, not a SQLite file anymore.
+        assert!(crate::snapshot_crypto::is_encrypted_snapshot(std::path::Path::new(&m1.path)));
         // Recomputed independently: the reported hash matches the file bytes.
         let raw = std::fs::read(&m1.path).unwrap();
         {
@@ -1554,17 +1804,40 @@ mod tests {
             let expect: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
             assert_eq!(expect, m1.sha256);
         }
-        // The copy opens read-only and passes integrity_check on its own.
-        let ro = rusqlite::Connection::open_with_flags(
+        // Decrypted image opens read-only and passes integrity_check on its own.
+        let plain = dir.join("m1-plain.db");
+        crate::snapshot_crypto::decrypt_file_to(
             std::path::Path::new(&m1.path),
+            &TEST_SEAL_KEY,
+            &plain,
+        )
+        .unwrap();
+        let ro = rusqlite::Connection::open_with_flags(
+            &plain,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )
         .unwrap();
         assert!(crate::trust_core::export_snapshot::integrity_check(&ro).is_ok());
         drop(ro);
-        let m2 = backup_db_file(&live, &dir, "migration").unwrap();
+        let m2 = backup_db_file_with_key(&live, &dir, "migration", &TEST_SEAL_KEY).unwrap();
         assert_ne!(m1.id, m2.id);
-        assert_eq!(m1.sha256, m2.sha256, "same content hashes equal");
+        assert_ne!(
+            m1.sha256, m2.sha256,
+            "random nonces: same content seals to different bytes"
+        );
+        // ...but decrypts to identical content.
+        let plain2 = dir.join("m2-plain.db");
+        crate::snapshot_crypto::decrypt_file_to(
+            std::path::Path::new(&m2.path),
+            &TEST_SEAL_KEY,
+            &plain2,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(&plain).unwrap(),
+            std::fs::read(&plain2).unwrap(),
+            "same content decrypts identically"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1603,12 +1876,20 @@ mod tests {
         let mut clean = 0u32;
         let mut refused = 0u32;
         for _ in 0..8u32 {
-            match backup_db_file(&live, &dir, "manual") {
+            match backup_db_file_with_key(&live, &dir, "manual", &TEST_SEAL_KEY) {
                 Ok(m) => {
-                    // Verified by construction (integrity_check ran inside);
-                    // re-verify here to prove the returned file stands alone.
-                    let ro = rusqlite::Connection::open_with_flags(
+                    // Verified by construction (integrity_check ran inside on
+                    // the plaintext image); re-verify here on the DECRYPTED
+                    // bytes to prove the returned sealed file stands alone.
+                    let plain = dir.join(format!("race-{}.db", m.id.replace(".db", "")));
+                    crate::snapshot_crypto::decrypt_file_to(
                         std::path::Path::new(&m.path),
+                        &TEST_SEAL_KEY,
+                        &plain,
+                    )
+                    .unwrap();
+                    let ro = rusqlite::Connection::open_with_flags(
+                        &plain,
                         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
                     )
                     .unwrap();

@@ -1,0 +1,1 @@
+ba9f89e fix(trust): bench-hook gate pins span labels at call sites (false uniqueness premise), bundle proof unchanged

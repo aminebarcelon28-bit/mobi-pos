@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Layers,
@@ -159,6 +159,8 @@ export const ProductMatrixModal: React.FC = () => {
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  useEffect(() => { if (activeModal !== 'product_matrix') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
   if (activeModal !== 'product_matrix') return null;
 
   const availableModelsForBrand = PRESET_MODELS[brand] || PRESET_MODELS.Autre;
@@ -310,7 +312,7 @@ export const ProductMatrixModal: React.FC = () => {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[88vh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(0.5rem,var(--safe-bottom))] sm:pb-0"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-dvh-shell sm:h-[88dvh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(0.5rem,var(--safe-bottom))] sm:pb-0"
       >
         {/* Header */}
         <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
@@ -385,7 +387,7 @@ export const ProductMatrixModal: React.FC = () => {
         </div>
 
         {/* Main Body (2 Columns on Desktop) */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4 bg-pos-bg">
+        <div className="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4 space-y-4 bg-pos-bg">
           {/* Base Attributes Card */}
           <div className="bg-pos-card border border-pos-border rounded-xl p-3 space-y-3">
             <span className="text-[10px] font-black text-pos-muted uppercase tracking-wider block">
@@ -484,7 +486,7 @@ export const ProductMatrixModal: React.FC = () => {
             </div>
 
             {/* Model chips */}
-            <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-1 bg-pos-bg rounded-lg border border-pos-border">
+            <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto overscroll-contain p-1 bg-pos-bg rounded-lg border border-pos-border">
               {availableModelsForBrand.map((m) => {
                 const isSelected = selectedModels.includes(m);
                 return (

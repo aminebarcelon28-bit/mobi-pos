@@ -43,6 +43,7 @@ export interface InvariantReport {
   reported_grand_total: number;
   delta: number;
   faulty_row_indices: number[];
+  validation_errors?: string[];
 }
 
 export interface ExtractedDocumentSummary {
@@ -59,6 +60,7 @@ export interface ProcessRawScanResponse {
   invariant_report: InvariantReport;
   resolved_lines: ResolvedPoLine[];
   document_summary?: ExtractedDocumentSummary;
+  bounding_boxes?: OcrBoundingBox[];
 }
 
 export interface ProcessRawScanRequest {
@@ -93,4 +95,7 @@ export interface EditableReviewLine {
   match_tier: MatchTier;
   save_alias: boolean;
   candidates: ProductCandidate[];
+  match_reasoning?: string;
+  match_confidence?: number;
+  selling_price?: number;
 }

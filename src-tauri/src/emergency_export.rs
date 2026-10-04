@@ -236,13 +236,58 @@ fn csv_field(value: &ValueRef<'_>) -> String {
         ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
         ValueRef::Blob(_) => String::new(),
     };
-    let needs_guard = raw
+    // Stage 1/E: strictly numeric values are exempt — a pure number cannot
+    // execute as a formula, and prefixing one would corrupt amounts (and
+    // coerce "-42" to text). The rule is tight on purpose: optional single
+    // leading `-`, ASCII digits, optional single `.fraction`. Anything else
+    // starting with a trigger stays guarded ("-1+1", "+7", ".5"); a leading
+    // space is text by position, while leading TAB/CR (which trimmers can
+    // strip to expose a trigger) are guarded below.
+    fn is_plain_number(s: &str) -> bool {
+        let b = s.as_bytes();
+        if b.is_empty() {
+            return false;
+        }
+        let mut i = 0;
+        if b[0] == b'-' {
+            i = 1;
+            if b.len() < 2 {
+                return false;
+            }
+        }
+        let mut digits = 0;
+        while i < b.len() && b[i].is_ascii_digit() {
+            digits += 1;
+            i += 1;
+        }
+        if digits == 0 {
+            return false;
+        }
+        if i < b.len() {
+            if b[i] != b'.' {
+                return false;
+            }
+            i += 1;
+            let mut frac = 0;
+            while i < b.len() && b[i].is_ascii_digit() {
+                frac += 1;
+                i += 1;
+            }
+            if frac == 0 {
+                return false;
+            }
+        }
+        i == b.len()
+    }
+    let guarded = if is_plain_number(&raw) {
+        raw
+    } else if raw
         .chars()
         .next()
-        .map(|c| matches!(c, '=' | '+' | '-' | '@'))
-        .unwrap_or(false);
-    let guarded = if needs_guard {
-        format!("'{}", raw)
+        .map(|c| matches!(c, '=' | '+' | '-' | '@' | '\t' | '\r'))
+        .unwrap_or(false)
+    {
+        format!("'{raw}")
     } else {
         raw
     };
@@ -1083,6 +1128,38 @@ mod tests {
         assert_eq!(csv_field(&v), "19.00");
         let v = ValueRef::Null;
         assert_eq!(csv_field(&v), "");
+    }
+
+    #[test]
+    fn test_csv_tab_cr_guarded_numeric_exempt() {
+        // Stage 1/E: leading TAB/CR are formula-smuggling triggers (trimmers
+        // strip them to expose `=` underneath).
+        let v = ValueRef::Text(b"\t=cmd");
+        assert!(csv_field(&v).starts_with("'\t"), "leading TAB must be neutralised");
+        // Leading CR is both guarded AND RFC-4180-quoted (it contains \r),
+        // so the payload survives inside quotes with the guard intact.
+        let v = ValueRef::Text(b"\r=cmd");
+        let out_cr = csv_field(&v);
+        assert!(out_cr.contains("'\r=cmd"), "leading CR must stay neutralised, got {out_cr:?}");
+        // Tight numeric exemption: pure numbers cannot execute.
+        for plain in ["0", "42", "-42", "3.14", "-0.50", "007"] {
+            let v = ValueRef::Text(plain.as_bytes());
+            assert_eq!(csv_field(&v), plain, "{plain} is a pure number, must pass through");
+        }
+        // Abuse boundary: near-numbers that are NOT strictly numeric stay
+        // guarded — the exemption cannot be smuggled through. (Empty input
+        // yields empty output and never reaches the trigger test.)
+        for hostile in ["-1+1", "+7", "- 42", "--5", "1e5+", "0x10", "42 ", " 42", "4.5.6", "-", "+", ".5", "-.5"] {
+            let v = ValueRef::Text(hostile.as_bytes());
+            let out = csv_field(&v);
+            let first = hostile.chars().next().unwrap();
+            if matches!(first, '=' | '+' | '-' | '@' | '\t' | '\r') {
+                assert!(out.starts_with('\''), "{hostile:?} must be guarded, got {out:?}");
+            }
+        }
+        // "-42" exemption is exact: a trailing payload breaks it.
+        let v = ValueRef::Text(b"-42+SUM(A1)");
+        assert!(csv_field(&v).starts_with("'-"), "payload after a number must stay guarded");
     }
 
     #[test]

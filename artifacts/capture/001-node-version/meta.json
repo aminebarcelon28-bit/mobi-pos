@@ -1,0 +1,15 @@
+{
+  "slot": "001-node-version",
+  "name": "Validation: Node Version",
+  "command": "node --version",
+  "cwd": ".",
+  "expected_exit": 0,
+  "exit_code": 0,
+  "status": "PASS",
+  "start_local": "2026-10-01T01:56:53.291Z",
+  "start_utc": "2026-10-01T01:56:53.303Z",
+  "end_local": "2026-10-01T01:56:53.384Z",
+  "end_utc": "2026-10-01T01:56:53.384Z",
+  "stdout_sha256": "b447734bea5971cc4beed4007192e4cf2e07a9f04fdaff5d9df3bb307e61987e",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

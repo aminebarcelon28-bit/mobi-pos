@@ -1,6 +1,32 @@
 import { PDFDocument, rgb, StandardFonts, PDFName, AFRelationship } from 'pdf-lib';
 import ExcelJS from 'exceljs';
 import type { SecurityAuditLogEntry } from '../types/pos';
+import { computeAuditSignature, sha256Hex, signaturePreimage } from './auditIntel';
+import { isPinLengthValidForRole, verifyManagerStepUp } from './auditGate';
+import { auditAppend } from '../api/audit';
+import {
+  CANONICALIZATION_RULES,
+  CURRENT_RULESET,
+  SIGNATURE_LABEL,
+  verifyAndClassify,
+  type AuditManifest,
+  type AuditVerificationReport,
+  type AuditVerificationVerdict,
+} from './auditIntegrity';
+
+// Re-exported so consumers of the export API keep a single import site for the
+// canonicalization rules and the digest label they need to verify a document.
+export {
+  CANONICAL_RULES_LABEL,
+  CANONICALIZATION_RULES,
+  SIGNATURE_LABEL,
+  verifyAuditManifest,
+  type AuditManifest,
+  type AuditManifestEntry,
+  type AuditVerificationReason,
+  type AuditVerificationReport,
+  type AuditVerificationRow,
+} from './auditIntegrity';
 
 export interface AuditExportOptions {
   storeName?: string;
@@ -96,57 +122,73 @@ function formatDateForPDF(date: Date): string {
 // single cell/row invalidates the root. Verification = recompute from the
 // embedded manifest.
 
-function bytesToHex(bytes: ArrayBuffer): string {
-  return Array.from(new Uint8Array(bytes))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
+// sha256Hex is imported from utils/auditIntel so the exporter and the
+// re-import verifier hash through one primitive. Two "the hash" implementations
+// is how a document ends up verifiable by the writer and not by the checker.
 
-function fallbackHashHex(input: string): string {
-  // FNV-1a 64-bit x2 with domain separation — ONLY when WebCrypto is
-  // unavailable (non-secure contexts). Labelled as such in the manifest.
-  let h1 = 0xcbf29ce484222325n;
-  let h2 = 0x84222325cbf29ce4n;
-  const prime = 0x100000001b3n;
-  const mask = 0xffffffffffffffffn;
-  for (let i = 0; i < input.length; i++) {
-    const c = BigInt(input.charCodeAt(i));
-    h1 = ((h1 ^ c) * prime) & mask;
-    h2 = ((h2 ^ (c + 0x9e3779b9n)) * prime) & mask;
-  }
-  return h1.toString(16).padStart(16, '0') + h2.toString(16).padStart(16, '0') + h1.toString(16).padStart(16, '0') + h2.toString(16).padStart(16, '0');
-}
+// sha256Hex is imported from utils/auditIntel so the exporter and the
+// re-import verifier hash through one primitive. Two "the hash" implementations
+// is how a document ends up verifiable by the writer and not by the checker.
 
-async function sha256Hex(input: string): Promise<{ hex: string; algo: string }> {
-  try {
-    const cryptoObj = globalThis.crypto?.subtle;
-    if (!cryptoObj) return { hex: fallbackHashHex(`FALLBACK:${input}`), algo: 'FNV-FALLBACK (WebCrypto indisponible)' };
-    const digest = await cryptoObj.digest('SHA-256', new TextEncoder().encode(input));
-    return { hex: bytesToHex(digest), algo: 'SHA-256' };
-  } catch {
-    return { hex: fallbackHashHex(`FALLBACK:${input}`), algo: 'FNV-FALLBACK (WebCrypto indisponible)' };
-  }
-}
-
+/**
+ * Canonical string for one audit row.
+ *
+ * This is deliberately the SAME string the journal drawer hashes (see
+ * `signaturePreimage` in utils/auditIntel): one canonical form, recursively
+ * key-sorted and primitive-normalized, so the digest shown in the UI, the
+ * per-entry `presentationDigest` written into the manifest, and any re-import
+ * verification all agree byte for byte.
+ */
 function canonicalEntry(log: ParsedLogEntry): string {
-  return [
-    log.id ?? '',
-    log.timestamp ?? '',
-    log.user ?? '',
-    log.action ?? '',
-    log.details ?? '',
-    log.requiresPin ? '1' : '0',
-    log.deviceId ?? '',
-    log.ipAddress ?? '',
-  ].join('|');
+  return signaturePreimage(log);
 }
 
 interface AuditChain {
   hashes: string[];
+  /** Per-row presentation digest, identical to what the journal drawer shows. */
+  digests: string[];
   root: string;
   fingerprint: string;
   algo: string;
   exportedAt: string;
+  /** Canonicalization rules, embedded so a verifier can reproduce the bytes. */
+  canonicalization: string;
+}
+
+/**
+ * The canonical machine-readable manifest embedded in both export formats.
+ *
+ * Built by one function so the PDF and the workbook cannot commit to different
+ * content, and so the export path can immediately re-verify what it just wrote
+ * (see `selfVerifyExport`) instead of trusting that the bytes it produced are
+ * the bytes it will later be able to prove.
+ */
+export function buildAuditManifest(
+  parsedLogs: ParsedLogEntry[],
+  chain: AuditChain,
+): AuditManifest {
+  return {
+    canonicalization: chain.canonicalization,
+    canonicalizationId: CURRENT_RULESET,
+    digestLabel: SIGNATURE_LABEL,
+    chainRoot: chain.root,
+    entries: parsedLogs.map((l, i) => ({
+      seq: i + 1,
+      id: l.id,
+      timestamp: l.timestamp,
+      user: l.user,
+      action: l.action,
+      details: l.details,
+      requiresPin: l.requiresPin,
+      deviceId: l.deviceId ?? null,
+      ipAddress: l.ipAddress ?? null,
+      // Same digest the journal drawer displays, plus the exact bytes it was
+      // derived from, so an auditor can recompute it by hand.
+      presentationDigest: chain.digests[i],
+      canonicalPayload: canonicalEntry(l),
+      chainHash: chain.hashes[i],
+    })),
+  } as AuditManifest;
 }
 
 async function buildAuditChain(logs: ParsedLogEntry[], options: AuditExportOptions): Promise<AuditChain> {
@@ -154,10 +196,12 @@ async function buildAuditChain(logs: ParsedLogEntry[], options: AuditExportOptio
   let prev = 'MOBIPOS-AUDIT-GENESIS';
   let algo = 'SHA-256';
   const hashes: string[] = [];
+  const digests: string[] = [];
   for (const log of logs) {
     const { hex, algo: a } = await sha256Hex(`${prev}|${canonicalEntry(log)}`);
     algo = a;
     hashes.push(hex);
+    digests.push(await computeAuditSignature(log));
     prev = hex;
   }
   const root = hashes.length > 0 ? hashes[hashes.length - 1] : prev;
@@ -165,7 +209,7 @@ async function buildAuditChain(logs: ParsedLogEntry[], options: AuditExportOptio
     `ROOT:${root}|BY:${options.exportedBy ?? 'Systeme'}|DEV:${options.deviceId ?? '-'}|IP:${options.ipAddress ?? '-'}|AT:${exportedAt}|N:${logs.length}`
   );
   if (fa.includes('FALLBACK')) algo = fa;
-  return { hashes, root, fingerprint, algo, exportedAt };
+  return { hashes, digests, root, fingerprint, algo, exportedAt, canonicalization: CANONICALIZATION_RULES };
 }
 
 function escapeXml(s: string): string {
@@ -289,6 +333,30 @@ function getActionCategory(action: string): string {
   if (act.includes('création') || act.includes('modification') || act.includes('ajout')) return 'Création / Modification';
   if (act.includes('connexion') || act.includes('déconnexion') || act.includes('login')) return 'Session';
   return 'Autre';
+}
+
+/**
+ * FT-04 — spreadsheet formula-injection guard (family A XLSX).
+ *
+ * Rule, stated exactly: if the FIRST character of a text cell is one of
+ * `=`, `+`, `-`, `@`, TAB (`\t`) or CR (`\r`), prefix the whole cell with a
+ * single quote `'`. Excel / Sheets / LibreOffice then render the cell as text
+ * and never execute it as a formula. The quote is data (visible in the
+ * formula bar) — the same `'...` prefix convention as the emergency-export
+ * CSV guard. Non-strings (Dates, numbers) pass through untouched.
+ *
+ * Comparison with `emergency_export.rs::csv_field`: the CSV guard covers
+ * only the four `= + - @` triggers (plus RFC-4180 quoting, which incidentally
+ * quotes fields CONTAINING `\r` but does not neutralize a LEADING TAB or CR
+ * that a trimming parser could expose). Proposed 1B Rust follow-up — called
+ * out, not changed here: extend `csv_field`'s first-char set with `\t`/`\r`.
+ * This XLSX guard already covers all six. PDF cells are not
+ * formula-executable and are out of scope.
+ */
+const SPREADSHEET_TRIGGER_RE = /^[=+\-@\t\r]/;
+export function sanitizeSpreadsheetValue(value: unknown): unknown {
+  if (typeof value !== 'string' || value.length === 0) return value;
+  return SPREADSHEET_TRIGGER_RE.test(value) ? `'${value}` : value;
 }
 
 export async function exportAuditLogToPDF(
@@ -601,6 +669,9 @@ export async function exportAuditLogToPDF(
       deviceId: options.deviceId ?? null,
       ipAddress: options.ipAddress ?? null,
       hashAlgo: chain.algo,
+      canonicalization: chain.canonicalization,
+      canonicalizationId: CURRENT_RULESET,
+      digestLabel: SIGNATURE_LABEL,
       canonicalOrder: 'timestamp DESC',
       chainRoot: chain.root,
       documentFingerprint: chain.fingerprint,
@@ -619,6 +690,10 @@ export async function exportAuditLogToPDF(
         entityIds: l.entityIds,
         entityTypes: l.entityTypes,
         chainHash: chain.hashes[i],
+        // Same digest the journal drawer displays, plus the exact bytes it was
+        // derived from, so an auditor can recompute it by hand.
+        presentationDigest: chain.digests[i],
+        canonicalPayload: canonicalEntry(l),
       })),
     };
     await pdfDoc.attach(new TextEncoder().encode(JSON.stringify(manifest, null, 2)), 'audit-manifest.json', {
@@ -690,7 +765,9 @@ export async function exportAuditLogToExcel(
   sheet.mergeCells('A1:J1');
 
   const subtitleRow = sheet.addRow([
-    `${options.storeName || 'MobiPOS'} | Exporté le ${now.toLocaleString('fr-DZ')} | ${options.exportedBy || 'Système'} | Terminal: ${options.deviceId || '—'} | IP: ${options.ipAddress || '—'} | ${parsedLogs.length} entrée(s) | Empreinte ${chain.fingerprint.slice(0, 16)}…`,
+    sanitizeSpreadsheetValue(
+      `${options.storeName || 'MobiPOS'} | Exporté le ${now.toLocaleString('fr-DZ')} | ${options.exportedBy || 'Système'} | Terminal: ${options.deviceId || '—'} | IP: ${options.ipAddress || '—'} | ${parsedLogs.length} entrée(s) | Empreinte ${chain.fingerprint.slice(0, 16)}…`
+    ),
   ]);
   subtitleRow.getCell(1).font = { size: 9, color: { argb: BRAND.gray }, name: 'Calibri', italic: true };
   subtitleRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
@@ -727,17 +804,19 @@ export async function exportAuditLogToExcel(
   // when present in future audit payloads — must use #,##0 "DA" currency
   // typing rather than text. IDs/IPs stay text to preserve leading zeros.
   parsedLogs.forEach((log, rowIndex) => {
+    // FT-04: every log-derived text cell passes the formula-injection guard.
+    // The timestamp stays a native Date (never a string, never guarded).
     const row = sheet.addRow([
       log.parsedTimestamp,
-      log.user || '—',
-      getActionCategory(log.action),
-      log.action || '—',
-      log.details || '—',
-      log.entityIds.join(', ') || '—',
-      log.entityTypes.join(', ') || '—',
-      log.requiresPin ? 'OUI (PIN Validé)' : 'NON (Standard)',
-      log.deviceId || '—',
-      log.ipAddress || '—',
+      sanitizeSpreadsheetValue(log.user || '—'),
+      sanitizeSpreadsheetValue(getActionCategory(log.action)),
+      sanitizeSpreadsheetValue(log.action || '—'),
+      sanitizeSpreadsheetValue(log.details || '—'),
+      sanitizeSpreadsheetValue(log.entityIds.join(', ') || '—'),
+      sanitizeSpreadsheetValue(log.entityTypes.join(', ') || '—'),
+      sanitizeSpreadsheetValue(log.requiresPin ? 'OUI (PIN Validé)' : 'NON (Standard)'),
+      sanitizeSpreadsheetValue(log.deviceId || '—'),
+      sanitizeSpreadsheetValue(log.ipAddress || '—'),
     ]);
     row.height = 28;
 
@@ -826,7 +905,8 @@ export async function exportAuditLogToExcel(
     ["Nombre d'entrées", `${parsedLogs.length}`],
   ];
   metaLines.forEach(([k, v], i) => {
-    const r = manifestSheet.addRow([k, v]);
+    // FT-04: operator-controlled values (exportedBy, device, IP) guarded.
+    const r = manifestSheet.addRow([k, sanitizeSpreadsheetValue(v)]);
     r.getCell(1).font = { bold: true, size: 10, name: 'Calibri', color: { argb: BRAND.white } };
     r.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: i === 0 ? BRAND.navy : BRAND.amber } };
     r.getCell(1).alignment = { horizontal: 'right', vertical: 'middle' };
@@ -848,7 +928,9 @@ export async function exportAuditLogToExcel(
     cell.alignment = { horizontal: 'center', vertical: 'middle' };
   });
   parsedLogs.forEach((log, i) => {
-    const r = manifestSheet.addRow([i + 1, log.id, log.timestamp, chain.hashes[i]]);
+    // FT-04: log-derived cells guarded (ids/timestamps are system-shaped but
+    // guarded anyway — the rule is unconditional by design).
+    const r = manifestSheet.addRow([i + 1, sanitizeSpreadsheetValue(log.id), sanitizeSpreadsheetValue(log.timestamp), sanitizeSpreadsheetValue(chain.hashes[i])]);
     r.height = 16;
     r.eachCell((cell, col) => {
       cell.font = { size: 9, name: col >= 2 ? 'Consolas' : 'Calibri', color: { argb: BRAND.navy } };
@@ -902,10 +984,20 @@ export function downloadBlob(blob: Blob, filename: string): void {
 export async function triggerAuditExport(
   logs: SecurityAuditLogEntry[],
   format: 'pdf' | 'xlsx',
-  options: AuditExportOptions = {}
-): Promise<void> {
+  options: AuditExportOptions = {},
+): Promise<{ report: AuditVerificationReport; verdict: AuditVerificationVerdict }> {
   const now = new Date().toISOString().split('T')[0].replace(/-/g, '');
   const time = new Date().toTimeString().split(' ')[0].replace(/:/g, '');
+
+  // Build the manifest and chain once, up front, and use them for the artefact
+  // and for the post-export self-check. Verifying the document this run just
+  // produced is what proves the canonical form is reproducible end to end — a
+  // bug that changes the preimage would otherwise ship silently.
+  const parsedLogs = parseLogsForExport(logs).sort(
+    (a, b) => b.parsedTimestamp.getTime() - a.parsedTimestamp.getTime(),
+  );
+  const chain = await buildAuditChain(parsedLogs, options);
+  const manifest = buildAuditManifest(parsedLogs, chain);
 
   if (format === 'pdf') {
     const pdfBytes = await exportAuditLogToPDF(logs, options);
@@ -916,4 +1008,228 @@ export async function triggerAuditExport(
     const blob = new Blob([xlsxBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     downloadBlob(blob, `journal-audit-securite-${now}-${time}.xlsx`);
   }
+
+  const { report, verdict } = await verifyAndClassify(manifest, logs);
+  if (verdict.state === 'TAMPER') {
+    console.error('[audit:export] the exported manifest did not verify against its source rows', report);
+  }
+  return { report, verdict };
+}
+
+// ── FT-04 — fail-closed gated export pipeline ─────────────────────────────
+// Order is load-bearing: fresh native PIN (no window, no weak fallback) →
+// generate the file IN MEMORY → verify the manifest BEFORE download
+// (TAMPER/UNVERIFIABLE blocks the handover) → append EXPORT_JOURNAL natively
+// (filter hash, row count, fingerprint, format, redaction level; throw blocks
+// the handover) → only then deliver the bytes. Any failure means no download.
+
+export const EXPORT_JOURNAL_ACTION = 'EXPORT_JOURNAL';
+/** FT-05/D: written when verification blocks the handover (no file exists). */
+export const EXPORT_BLOCKED_ACTION = 'EXPORT_BLOCKED';
+/** 1A honesty: no minimization exists yet (FT-12 lands in Phase 2). */
+export const EXPORT_REDACTION_LEVEL = 'full';
+
+export interface BuiltAuditExport {
+  buffer: Uint8Array | ArrayBuffer;
+  filename: string;
+  mimeType: string;
+  report: AuditVerificationReport;
+  verdict: AuditVerificationVerdict;
+  fingerprint: string;
+  root: string;
+  rowCount: number;
+}
+
+function exportFilename(format: 'pdf' | 'xlsx'): string {
+  const now = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  const time = new Date().toTimeString().split(' ')[0].replace(/:/g, '');
+  return `journal-audit-securite-${now}-${time}.${format === 'pdf' ? 'pdf' : 'xlsx'}`;
+}
+
+/** Build the artefact + manifest + verdict in memory. No download, no audit. */
+export async function buildAuditExport(
+  logs: SecurityAuditLogEntry[],
+  format: 'pdf' | 'xlsx',
+  options: AuditExportOptions = {}
+): Promise<BuiltAuditExport> {
+  const parsedLogs = parseLogsForExport(logs).sort(
+    (a, b) => b.parsedTimestamp.getTime() - a.parsedTimestamp.getTime()
+  );
+  const chain = await buildAuditChain(parsedLogs, options);
+  const manifest = buildAuditManifest(parsedLogs, chain);
+  const filename = exportFilename(format);
+  const { report, verdict } = await verifyAndClassify(manifest, logs);
+  if (format === 'pdf') {
+    const pdfBytes = await exportAuditLogToPDF(logs, options);
+    return {
+      buffer: pdfBytes,
+      filename,
+      mimeType: 'application/pdf',
+      report,
+      verdict,
+      fingerprint: chain.fingerprint,
+      root: chain.root,
+      rowCount: parsedLogs.length,
+    };
+  }
+  const xlsxBuffer = await exportAuditLogToExcel(logs, options);
+  return {
+    buffer: xlsxBuffer,
+    filename,
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    report,
+    verdict,
+    fingerprint: chain.fingerprint,
+    root: chain.root,
+    rowCount: parsedLogs.length,
+  };
+}
+
+export type GatedExportRefusal =
+  | 'bad-pin'
+  | 'denied'
+  | 'locked'
+  | 'unavailable'
+  | 'blocked-tamper'
+  | 'audit-failed';
+
+export interface GatedExportDeps {
+  verifyPin?: typeof verifyManagerStepUp;
+  buildExport?: typeof buildAuditExport;
+  appendAudit?: typeof auditAppend;
+  deliver?: (buffer: Uint8Array | ArrayBuffer, filename: string, mimeType: string) => Promise<void> | void;
+  hashFilters?: (descriptor: unknown) => Promise<string>;
+  nowIso?: () => string;
+}
+
+export async function runGatedAuditExport(
+  args: {
+    pin: string;
+    format: 'pdf' | 'xlsx';
+    logs: SecurityAuditLogEntry[];
+    options?: AuditExportOptions;
+    filterDescriptor?: unknown;
+    redactionLevel?: string;
+  },
+  deps: GatedExportDeps = {}
+): Promise<
+  | { ok: true; verdict: AuditVerificationVerdict; report: AuditVerificationReport; fingerprint: string; rowCount: number }
+  | { ok: false; reason: GatedExportRefusal; message: string; verdict?: AuditVerificationVerdict; report?: AuditVerificationReport; auditLogged?: boolean }
+> {
+  // 1. Fresh native manager PIN — always asked, even inside the journal
+  // window; never the weak fallback.
+  const clean = (args.pin || '').trim();
+  if (!isPinLengthValidForRole(clean, 'manager')) {
+    return { ok: false, reason: 'bad-pin', message: 'PIN manager : 6 chiffres minimum.' };
+  }
+  const verify = deps.verifyPin ?? verifyManagerStepUp;
+  let stepUp: Awaited<ReturnType<typeof verifyManagerStepUp>>;
+  try {
+    stepUp = await verify(clean, { allowWeakFallback: false, gateName: 'export' });
+  } catch {
+    return { ok: false, reason: 'denied', message: 'PIN manager incorrect.' };
+  }
+  if (stepUp.weaker) {
+    return { ok: false, reason: 'denied', message: 'PIN manager incorrect.' };
+  }
+  if (stepUp.locked) {
+    const secs = Math.max(1, Math.ceil(stepUp.lockedRemainingMs / 1000));
+    return { ok: false, reason: 'locked', message: `Verrouillé — réessayez dans ${secs}s.` };
+  }
+  if (!stepUp.ok) {
+    return stepUp.reason === 'unavailable'
+      ? { ok: false, reason: 'unavailable', message: 'Vérification indisponible — réessayez.' }
+      : { ok: false, reason: 'denied', message: 'PIN manager incorrect.' };
+  }
+
+  // 2. Generate in memory (no handover yet).
+  const build = deps.buildExport ?? buildAuditExport;
+  const built = await build(args.logs, args.format, args.options ?? {});
+
+  // 3. Verify before download. TAMPER/UNVERIFIABLE blocks the handover. The
+  // block itself is audited (EXPORT_BLOCKED with verdict + filter hash, no
+  // file content — no file exists); if that row cannot be written the caller
+  // still gets the verdict for the banner, flagged via `auditLogged`.
+  // DRIFT proceeds: the verdict rides in the EXPORT_JOURNAL row below and
+  // the caller surfaces the warning alongside the file.
+  if (built.verdict.state === 'TAMPER' || built.verdict.state === 'UNVERIFIABLE') {
+    const append = deps.appendAudit ?? auditAppend;
+    let filterHash = '?';
+    try {
+      const hashFilters = deps.hashFilters ?? (async (d: unknown) => (await sha256Hex(JSON.stringify(d ?? {}))).hex);
+      filterHash = await hashFilters(args.filterDescriptor ?? {});
+    } catch {
+      filterHash = '?';
+    }
+    try {
+      await append({
+        action: EXPORT_BLOCKED_ACTION,
+        details: JSON.stringify({
+          filterHash,
+          rowCount: built.rowCount,
+          fingerprint: built.fingerprint,
+          format: args.format,
+          verdict: built.verdict.state,
+          at: (deps.nowIso ?? (() => new Date().toISOString()))(),
+        }),
+        requiresPin: true,
+      });
+    } catch {
+      return {
+        ok: false,
+        reason: 'blocked-tamper',
+        message: 'Export bloqué : le manifeste ne se revalide pas (traçabilité du blocage impossible).',
+        verdict: built.verdict,
+        report: built.report,
+        auditLogged: false,
+      };
+    }
+    return {
+      ok: false,
+      reason: 'blocked-tamper',
+      message: 'Export bloqué : le manifeste ne se revalide pas.',
+      verdict: built.verdict,
+      report: built.report,
+      auditLogged: true,
+    };
+  }
+
+  // 4. Audit the export natively — throw blocks the handover.
+  const hashFilters = deps.hashFilters ?? (async (d: unknown) => (await sha256Hex(JSON.stringify(d ?? {}))).hex);
+  const nowIso = deps.nowIso ?? (() => new Date().toISOString());
+  const redactionLevel = args.redactionLevel ?? EXPORT_REDACTION_LEVEL;
+  let filterHash: string;
+  try {
+    filterHash = await hashFilters(args.filterDescriptor ?? {});
+  } catch {
+    return { ok: false, reason: 'audit-failed', message: 'Traçabilité d\u2019export impossible — export refusé.' };
+  }
+  const append = deps.appendAudit ?? auditAppend;
+  try {
+    await append({
+      action: EXPORT_JOURNAL_ACTION,
+      details: JSON.stringify({
+        filterHash,
+        rowCount: built.rowCount,
+        fingerprint: built.fingerprint,
+        format: args.format,
+        redactionLevel,
+        // FT-05/D: the verification verdict rides along, including DRIFT —
+        // a future reviewer can tell a clean export from a warned one.
+        verification: built.verdict.state,
+        at: nowIso(),
+      }),
+      requiresPin: true,
+    });
+  } catch {
+    return { ok: false, reason: 'audit-failed', message: 'Traçabilité d\u2019export impossible — export refusé.' };
+  }
+
+  // 5. Only now hand the bytes over.
+  const deliver =
+    deps.deliver ??
+    ((buffer: Uint8Array | ArrayBuffer, filename: string, mimeType: string) =>
+      downloadBlob(new Blob([buffer as unknown as BlobPart], { type: mimeType }), filename));
+  await deliver(built.buffer, built.filename, built.mimeType);
+  return { ok: true, verdict: built.verdict, report: built.report, fingerprint: built.fingerprint, rowCount: built.rowCount };
 }

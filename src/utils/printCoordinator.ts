@@ -199,6 +199,19 @@ class PrintCoordinator {
     return this.executePrint('repair_work_order', { delayMs });
   }
 
+  /**
+   * SAV restitution / quote A4 documents. Strict channel reuse: both render
+   * inside the shared print-repair-target (selected by the caller's
+   * printingDocKind state), so no new PrintChannelType or CSS is required.
+   */
+  public printRepairRestitution(delayMs: number = 80): boolean {
+    return this.executePrint('repair_work_order', { delayMs });
+  }
+
+  public printRepairQuote(delayMs: number = 80): boolean {
+    return this.executePrint('repair_work_order', { delayMs });
+  }
+
   public printTradeInVoucher(delayMs: number = 80): boolean {
     return this.executePrint('trade_in_voucher', { delayMs });
   }

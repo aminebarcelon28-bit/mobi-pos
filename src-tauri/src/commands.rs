@@ -21,6 +21,10 @@ use crate::db::{ensure_po_recon_tables, register_vec_extension};
 use crate::gate::{evaluate_invoice_invariants, InvariantReport};
 use crate::geometry::{ExtractedDocumentSummary, OcrBoundingBox, SpatialLayoutParser};
 use crate::resolver::{InventoryResolver, ResolvedPoLine};
+use crate::trust_core::{
+    capability_policy::Capability,
+    ipc_authorizer::{authorize_and_execute, global_kernel, TrustError},
+};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -78,55 +82,41 @@ pub struct ProcessRawScanRequest {
 pub struct ProcessRawScanResponse {
     pub invariant_report: InvariantReport,
     pub resolved_lines: Vec<ResolvedPoLine>,
-    pub document_summary: ExtractedDocumentSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_summary: Option<ExtractedDocumentSummary>,
 }
 
 fn process_scan_inner(
     conn: &Connection,
     req: &ProcessRawScanRequest,
 ) -> Result<ProcessRawScanResponse, String> {
-    // Step 0: Ensure active catalog products are indexed in vec_products
-    let _ = resolver().ensure_products_indexed(conn);
+    let safe_supplier = req.supplier_name.trim();
+    let sanitized_supplier = if safe_supplier.is_empty() {
+        "Fournisseur Inconnu"
+    } else if safe_supplier.len() > 255 {
+        &safe_supplier[..255]
+    } else {
+        safe_supplier
+    };
 
-    // Step 1: Reconstruct physical table structure and extract document summary
-    let parsed_doc = parser().parse_document(req.bounding_boxes.clone());
-    let extracted_rows = parsed_doc.rows;
-    let document_summary = parsed_doc.summary;
-
-    if extracted_rows.is_empty() {
-        return Err("No legible tabular rows detected from scan geometry.".into());
+    let mut boxes = req.bounding_boxes.clone();
+    if boxes.is_empty() {
+        return Err("Aucun bloc de texte ou tableau détecté sur le document.".into());
+    }
+    if boxes.len() > 5000 {
+        boxes.truncate(5000);
     }
 
-    // Step 2: Determine effective accounting targets
-    let effective_tax = if req.reported_tax > 0.0 {
-        req.reported_tax
-    } else {
-        document_summary.detected_tax.unwrap_or(0.0)
-    };
+    // Step 1: Reconstruct physical table structure and extract document metadata
+    let parsed_doc = parser().parse_document(boxes);
+    let extracted_rows = parsed_doc.rows;
+    let document_summary = Some(parsed_doc.summary);
 
-    let effective_freight = if req.reported_freight > 0.0 {
-        req.reported_freight
-    } else {
-        document_summary.detected_freight.unwrap_or(0.0)
-    };
+    if extracted_rows.is_empty() {
+        return Err("Aucune ligne d'article lisible n'a pu être extraite du scan.".into());
+    }
 
-    let calculated_subtotal: f64 = extracted_rows.iter().map(|r| r.line_total).sum();
-    let calculated_total =
-        ((calculated_subtotal + effective_tax + effective_freight) * 100.0).round() / 100.0;
-
-    let effective_grand_total = if req.reported_grand_total > 0.0 {
-        req.reported_grand_total
-    } else if let Some(gt) = document_summary.detected_grand_total {
-        if gt > 0.0 {
-            gt
-        } else {
-            calculated_total
-        }
-    } else {
-        calculated_total
-    };
-
-    // Step 3: Validate invoice accounting
+    // Step 2: Validate invoice accounting
     let math_tuples: Vec<(f64, f64, f64)> = extracted_rows
         .iter()
         .map(|r| (r.quantity, r.unit_cost, r.line_total))
@@ -134,26 +124,18 @@ fn process_scan_inner(
 
     let invariant_report = evaluate_invoice_invariants(
         &math_tuples,
-        effective_tax,
-        effective_freight,
-        effective_grand_total,
+        req.reported_tax,
+        req.reported_freight,
+        req.reported_grand_total,
     );
 
-    // Step 4: Run multi-tier entity resolution
-    let effective_supplier = if !req.supplier_name.trim().is_empty() {
-        &req.supplier_name
-    } else if let Some(ref sup) = document_summary.detected_supplier {
-        sup
-    } else {
-        "Fournisseur Inconnu"
-    };
-
+    // Step 3: Run multi-tier entity resolution
     let mut resolved_lines = Vec::new();
     for row in extracted_rows {
         let res = resolver()
             .resolve_line(
                 conn,
-                effective_supplier,
+                sanitized_supplier,
                 &row.description,
                 row.extracted_barcode.as_deref(),
                 row.quantity,
@@ -175,9 +157,15 @@ fn process_scan_inner(
 pub fn po_process_raw_scan(
     app: tauri::AppHandle,
     request: ProcessRawScanRequest,
-) -> Result<ProcessRawScanResponse, String> {
-    let conn = open_live_db(&app)?;
-    process_scan_inner(&conn, &request)
+) -> Result<ProcessRawScanResponse, TrustError> {
+    authorize_and_execute(
+        "po_process_raw_scan",
+        Capability::OperationalWrites,
+        |_| {
+            let conn = open_live_db(&app).map_err(TrustError::op_failed)?;
+            process_scan_inner(&conn, &request).map_err(TrustError::op_failed)
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -197,12 +185,19 @@ pub struct CommitItem {
 pub struct CommitStockBatchRequest {
     pub supplier_name: String,
     pub items: Vec<CommitItem>,
+    #[serde(default)]
     pub user_id: Option<String>,
 }
 
-fn commit_batch_inner(conn: &mut Connection, payload: &CommitStockBatchRequest) -> Result<usize, String> {
+fn commit_batch_inner(
+    conn: &mut Connection,
+    payload: &CommitStockBatchRequest,
+    entry_generation: u64,
+) -> Result<usize, TrustError> {
     if payload.items.is_empty() {
-        return Err("Cannot commit empty inventory payload.".into());
+        return Err(TrustError::IPCProtocolError {
+            reason: "empty inventory payload",
+        });
     }
 
     let group_id = uuid::Uuid::new_v4().to_string();
@@ -257,24 +252,24 @@ fn commit_batch_inner(conn: &mut Connection, payload: &CommitStockBatchRequest) 
 
         for item in &payload.items {
             if !item.quantity.is_finite() || item.quantity <= 0.0 {
-                return Err(format!(
+                return Err(TrustError::op_failed(format!(
                     "Invalid non-positive quantity for product {}",
                     item.product_id
-                ));
+                )));
             }
             if !item.unit_cost.is_finite() || item.unit_cost < 0.0 {
-                return Err(format!(
+                return Err(TrustError::op_failed(format!(
                     "Invalid negative unit cost for product {}",
                     item.product_id
-                ));
+                )));
             }
             // Whole-unit ledger: accessories are discrete; fractional scans round.
             let whole = item.quantity.round() as i64;
             if whole <= 0 {
-                return Err(format!(
+                return Err(TrustError::op_failed(format!(
                     "Quantity rounds to zero for product {}",
                     item.product_id
-                ));
+                )));
             }
 
             let batch_id = uuid::Uuid::new_v4().to_string();
@@ -307,10 +302,10 @@ fn commit_batch_inner(conn: &mut Connection, payload: &CommitStockBatchRequest) 
                 .map_err(|e| e.to_string())?;
 
             if rows_affected == 0 {
-                return Err(format!(
+                return Err(TrustError::op_failed(format!(
                     "Active product {} not found in catalog.",
                     item.product_id
-                ));
+                )));
             }
 
             if item.save_as_alias {
@@ -324,28 +319,34 @@ fn commit_batch_inner(conn: &mut Connection, payload: &CommitStockBatchRequest) 
             }
         }
 
-        let mut insert_audit = tx
-            .prepare(
-                r#"
-                INSERT INTO scan_audit_log
-                  (trace_id, user_id, supplier_name, items_count, grand_total, delta, is_balanced, created_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, 0.0, 1, ?6)
-                "#,
-            )
-            .map_err(|e| e.to_string())?;
+        let items_count = payload.items.len() as i64;
+        let total_cost: f64 = payload
+            .items
+            .iter()
+            .map(|it| it.quantity * it.unit_cost)
+            .sum();
 
-        let total_val: f64 = payload.items.iter().map(|i| i.quantity * i.unit_cost).sum();
-        insert_audit
-            .execute(params![
+        tx.execute(
+            r#"
+            INSERT INTO scan_audit_log
+              (trace_id, user_id, supplier_name, items_count, grand_total, delta, is_balanced)
+            VALUES (?1, ?2, ?3, ?4, ?5, 0.0, 1)
+            "#,
+            params![
                 group_id,
                 payload.user_id,
                 payload.supplier_name,
-                payload.items.len() as i64,
-                total_val,
-                ts,
-            ])
-            .map_err(|e| e.to_string())?;
+                items_count,
+                total_cost,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
     }
+
+    // B.5: re-verify the kernel generation immediately before persisting. A
+    // license transition that landed mid-batch aborts instead of committing
+    // under stale authority (returns TerminalLocked, nothing persisted).
+    global_kernel().ensure_generation_unchanged(entry_generation)?;
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(payload.items.len())
@@ -355,9 +356,15 @@ fn commit_batch_inner(conn: &mut Connection, payload: &CommitStockBatchRequest) 
 pub fn po_commit_stock_batch(
     app: tauri::AppHandle,
     payload: CommitStockBatchRequest,
-) -> Result<usize, String> {
-    let mut conn = open_live_db(&app)?;
-    commit_batch_inner(&mut conn, &payload)
+) -> Result<usize, TrustError> {
+    authorize_and_execute(
+        "po_commit_stock_batch",
+        Capability::OperationalWrites,
+        |ctx| {
+            let mut conn = open_live_db(&app).map_err(TrustError::op_failed)?;
+            commit_batch_inner(&mut conn, &payload, ctx.generation)
+        },
+    )
 }
 
 /// Back-compat aliases matching the spec's command names (`process_raw_scan`,
@@ -367,7 +374,7 @@ pub fn po_commit_stock_batch(
 pub fn process_raw_scan(
     app: tauri::AppHandle,
     request: ProcessRawScanRequest,
-) -> Result<ProcessRawScanResponse, String> {
+) -> Result<ProcessRawScanResponse, TrustError> {
     po_process_raw_scan(app, request)
 }
 
@@ -375,7 +382,7 @@ pub fn process_raw_scan(
 pub fn commit_stock_batch(
     app: tauri::AppHandle,
     payload: CommitStockBatchRequest,
-) -> Result<usize, String> {
+) -> Result<usize, TrustError> {
     po_commit_stock_batch(app, payload)
 }
 
@@ -433,6 +440,9 @@ mod tests {
     /// ZERO rows persisted (full rollback).
     #[test]
     fn test_commit_rollback_on_invalid_row() {
+        // Serialized against kernel-mutating tests: the generation captured
+        // below must still be current at commit time.
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
         let mut conn = open_test_db();
         for (id, sku) in [("p1", "SKU1"), ("p2", "SKU2"), ("p3", "SKU3")] {
             conn.execute(
@@ -449,10 +459,16 @@ mod tests {
                 CommitItem { product_id: "p3".into(), quantity: 3.0, unit_cost: 7.0, raw_supplier_name: "Widget C".into(), save_as_alias: false },
                 CommitItem { product_id: "p1".into(), quantity: -5.0, unit_cost: 10.0, raw_supplier_name: "Widget A".into(), save_as_alias: false },
             ],
-            user_id: Some("user-test".into()),
+            user_id: Some("user_test".into()),
         };
-        let err = commit_batch_inner(&mut conn, &payload).expect_err("must reject negative qty");
-        assert!(err.contains("non-positive") || err.contains("rounds to zero"), "{err}");
+        let (_, entry_gen) = global_kernel().get();
+        let err =
+            commit_batch_inner(&mut conn, &payload, entry_gen).expect_err("must reject negative qty");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("non-positive") || msg.contains("rounds to zero"),
+            "{msg}"
+        );
 
         let batches: i64 = conn
             .query_row("SELECT count(*) FROM stock_batches", [], |r| r.get(0))
@@ -463,10 +479,10 @@ mod tests {
         let aliases: i64 = conn
             .query_row("SELECT count(*) FROM vendor_aliases", [], |r| r.get(0))
             .unwrap();
-        let audits: i64 = conn
+        let audit: i64 = conn
             .query_row("SELECT count(*) FROM scan_audit_log", [], |r| r.get(0))
             .unwrap();
-        assert_eq!((batches, ledger, aliases, audits), (0, 0, 0, 0), "rollback must leave zero rows");
+        assert_eq!((batches, ledger, aliases, audit), (0, 0, 0, 0), "rollback must leave zero rows");
 
         let stock: i64 = conn
             .query_row("SELECT stock FROM products WHERE id='p1'", [], |r| r.get(0))
@@ -476,6 +492,7 @@ mod tests {
 
     #[test]
     fn test_commit_happy_path_and_reference_cost() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
         let mut conn = open_test_db();
         conn.execute(
             "INSERT INTO products(id, sku, barcode, title, cost_price, stock) VALUES ('p1','SKU1','BC1','Widget',400.0,5)",
@@ -491,9 +508,10 @@ mod tests {
                 raw_supplier_name: "Widget v2".into(),
                 save_as_alias: true,
             }],
-            user_id: Some("cashier-1".into()),
+            user_id: Some("user_agent_42".into()),
         };
-        assert_eq!(commit_batch_inner(&mut conn, &payload).unwrap(), 1);
+        let (_, entry_gen) = global_kernel().get();
+        assert_eq!(commit_batch_inner(&mut conn, &payload, entry_gen).unwrap(), 1);
         let (stock, cost): (i64, f64) = conn
             .query_row("SELECT stock, cost_price FROM products WHERE id='p1'", [], |r| {
                 Ok((r.get(0)?, r.get(1)?))
@@ -505,9 +523,17 @@ mod tests {
             .query_row("SELECT count(*) FROM vendor_aliases", [], |r| r.get(0))
             .unwrap();
         assert_eq!(alias, 1);
-        let audit: i64 = conn
-            .query_row("SELECT count(*) FROM scan_audit_log", [], |r| r.get(0))
+
+        let (audit_count, audit_trace, audit_cost, audit_user): (i64, String, f64, Option<String>) = conn
+            .query_row(
+                "SELECT count(*), trace_id, grand_total, user_id FROM scan_audit_log WHERE supplier_name = 'ACME'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
             .unwrap();
-        assert_eq!(audit, 1);
+        assert_eq!(audit_count, 1);
+        assert!(!audit_trace.is_empty());
+        assert!((audit_cost - 1000.0).abs() < 1e-9);
+        assert_eq!(audit_user.as_deref(), Some("user_agent_42"));
     }
 }

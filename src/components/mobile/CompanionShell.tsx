@@ -29,6 +29,7 @@ export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWiz
   const cart = usePosStore((state) => state.cart);
   const holdSale = usePosStore((state) => state.holdSale);
   const clearCart = usePosStore((state) => state.clearCart);
+  const logSecurityAction = usePosStore((state) => state.logSecurityAction);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [isCartProtectionOpen, setIsCartProtectionOpen] = useState(false);
   // Tab requested while the protection modal is up (tab taps are the
@@ -58,6 +59,17 @@ export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWiz
   };
 
   const handleDiscardAndExit = () => {
+    // Explicit cart abandon on tab switch: previously silent, now audited
+    // like every other cart wipe.
+    const units = cart.reduce((a, i) => a + i.quantity, 0);
+    if (units > 0) {
+      void logSecurityAction(
+        'Annulation Complète Panier (Mobile)',
+        `Panier abandonné au changement d'onglet (${units} unités)`,
+        usePosStore.getState().activeCashier?.name?.trim() || 'Caissier',
+        false,
+      );
+    }
     clearCart();
     showToast('Panier vidé', 'info');
     setIsCartProtectionOpen(false);

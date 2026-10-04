@@ -162,6 +162,18 @@ console.log('== P4: routing module ==');
   check('lock screen honors mustRotate', overlay.includes('mustRotate'));
   check('lock screen surfaces the native lockout', overlay.includes('nativeLockedRemainingMs'));
   check('native verdict is final (no local fallback after it)', /no local fallback/i.test(overlay));
+  // Phase 4a: rotations mint natively (pin_set → Argon2id v2). The lock
+  // screen, tech recovery and Settings all route through the single store
+  // action; a direct TS mint for credentials would fail the suite below.
+  const slice = read('store/slices/createUISlice.ts');
+  const settingsModal = read('components/modals/SettingsModal.tsx');
+  check('rotation authority lives in the store', slice.includes('rotatePinCredential: async'));
+  check('lock screen rotates through the authority', overlay.includes('rotatePinCredential('));
+  check('settings rotates through the authority', settingsModal.includes('rotatePinCredential('));
+  check(
+    'native failure never falls back to a local mint',
+    /NEVER falls back to a local mint/i.test(slice)
+  );
   // verifyManagerPin CALLS live only in the routing module (default weak
   // fallback) — the store keeps the definition for compat.
   const gateCallers = [];
@@ -205,7 +217,7 @@ console.log('== P4: routing module ==');
 console.log('== P5: credential-key readers ==');
 {
   const allowed = new Set([
-    'store/slices/createUISlice.ts', // boot heal + setters + rotation (interim TS mint)
+    'store/slices/createUISlice.ts', // boot heal + setters + native-first rotation (rotatePinCredential; TS mint survives only on the non-Tauri branch)
     'db/sqlPluginAdapter.ts', // the device-local predicate itself
     'constants/index.ts', // key constant (unused elsewhere)
     // Gate-name LABEL only, not a credential read: the literal is composed
@@ -236,6 +248,53 @@ console.log('== P5: credential-key readers ==');
   const missing = [...allowed].filter((r) => !readers.has(r));
   check('no new credential-key reader', extra.length === 0, `extra: [${extra.join(', ')}]`);
   check('pinned readers still present', missing.length === 0, `missing: [${missing.join(', ')}]`);
+}
+
+// ── P6. No native lockout reset (DoS posture + decision 3) ──
+// The persisted lockout clears ONLY via time expiry or a successful verify.
+// Any client-callable reset/unlock/clear-lockout path would be a bypass, so
+// the lockout-mutating primitives must live in exactly one file (pin.rs,
+// called on the verify path) and no Tauri command may be named like one.
+console.log('== P6: no lockout reset ==');
+{
+  const TAURI_SRC = join(ROOT, 'src-tauri', 'src');
+  const rsFiles = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir)) {
+      const p = join(dir, e);
+      const st = statSync(p);
+      if (st.isDirectory()) {
+        if (e === 'target' || e === 'target-test') continue;
+        walk(p);
+      } else if (e.endsWith('.rs')) rsFiles.push(p);
+    }
+  };
+  walk(TAURI_SRC);
+  const mutators = [];
+  for (const f of rsFiles) {
+    const src = readFileSync(f, 'utf8');
+    const stripped = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    if (/record_success_for|record_failure_for|save_lockouts/.test(stripped)) {
+      mutators.push(f.slice(TAURI_SRC.length + 1).split('\\').join('/'));
+    }
+  }
+  const unexpected = mutators.filter((r) => r !== 'trust_core/pin.rs');
+  check(
+    'lockout mutation lives only in trust_core/pin.rs (verify path)',
+    unexpected.length === 0,
+    `unexpected: [${unexpected.join(', ')}]`
+  );
+  const registry = readFileSync(join(TAURI_SRC, 'trust_core', 'ipc_authorizer.rs'), 'utf8');
+  const suspicious = (registry.match(/"[a-z_]*(unlock|reset|clear)[a-z_]*"/g) || []).filter(
+    (s) => !s.includes('clock') && !s.includes('counter')
+  );
+  check(
+    'no reset/unlock/clear command in the IPC registry',
+    suspicious.length === 0,
+    `suspicious: [${suspicious.join(', ')}]`
+  );
 }
 
 console.log('');

@@ -19,6 +19,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::Manager;
 
+use crate::trust_core::{
+    capability_policy::Capability,
+    ipc_authorizer::{authorize_and_execute, TrustError},
+};
+
 /// Mirrors the TS `DiscoveredDevice` contract (`src/types/pos.ts`).
 /// Serialized keys must stay camelCase: id / name / category /
 /// portOrQueue / isUsb / description?.
@@ -79,18 +84,23 @@ fn categorize_printer(name: &str) -> &'static str {
 }
 
 #[tauri::command]
-pub fn hardware_scan_devices() -> Result<Vec<DiscoveredDevice>, String> {
-    #[cfg(mobile)]
-    {
-        return Err(
-            "Détection matérielle non supportée sur mobile (configuration manuelle requise)."
-                .into(),
-        );
-    }
-    #[cfg(not(mobile))]
-    {
-        Ok(scan_desktop_devices())
-    }
+pub fn hardware_scan_devices() -> Result<Vec<DiscoveredDevice>, TrustError> {
+    authorize_and_execute(
+        "hardware_scan_devices",
+        Capability::HardwareOperations,
+        |_| {
+            #[cfg(mobile)]
+            {
+                return Err(TrustError::op_failed(
+                    "Détection matérielle non supportée sur mobile (configuration manuelle requise).",
+                ));
+            }
+            #[cfg(not(mobile))]
+            {
+                Ok(scan_desktop_devices())
+            }
+        },
+    )
 }
 
 #[cfg(not(mobile))]
@@ -440,26 +450,36 @@ pub fn hardware_update_vfd(
     interface: VfdInterface,
     item_title: String,
     total_price_formatted: String,
-) -> Result<(), String> {
-    #[cfg(mobile)]
-    {
-        let _ = (&interface, &item_title, &total_price_formatted);
-        return Err("Afficheur client non supporté sur mobile.".to_string());
-    }
-    #[cfg(not(mobile))]
-    {
-        if interface.kind != "serial" {
-            return Err("Interface VFD non supportée (serial uniquement).".to_string());
-        }
-        if let Some(rate) = interface.baud_rate {
-            if !STANDARD_BAUD_RATES.contains(&rate) {
-                return Err(format!("Vitesse série non standard : {rate} bauds."));
+) -> Result<(), TrustError> {
+    authorize_and_execute(
+        "hardware_update_vfd",
+        Capability::HardwareOperations,
+        |_| {
+            #[cfg(mobile)]
+            {
+                let _ = (&interface, &item_title, &total_price_formatted);
+                return Err(TrustError::op_failed("Afficheur client non supporté sur mobile."));
             }
-        }
-        let port = sanitize_serial_port(&interface.port_name)?;
-        let payload = build_vfd_payload(&item_title, &total_price_formatted);
-        write_serial_port(&port, &payload)
-    }
+            #[cfg(not(mobile))]
+            {
+                if interface.kind != "serial" {
+                    return Err(TrustError::IPCProtocolError {
+                        reason: "interface VFD non supportée (serial uniquement)",
+                    });
+                }
+                if let Some(rate) = interface.baud_rate {
+                    if !STANDARD_BAUD_RATES.contains(&rate) {
+                        return Err(TrustError::op_failed(format!(
+                            "Vitesse série non standard : {rate} bauds."
+                        )));
+                    }
+                }
+                let port = sanitize_serial_port(&interface.port_name).map_err(TrustError::op_failed)?;
+                let payload = build_vfd_payload(&item_title, &total_price_formatted);
+                write_serial_port(&port, &payload).map_err(TrustError::op_failed)
+            }
+        },
+    )
 }
 
 const APP_HWID_SALT: &[u8] = b"mobi-pos-license-salt-v1:";
@@ -539,24 +559,53 @@ fn get_platform_raw_hwid() -> (String, String) {
 }
 
 #[tauri::command]
-pub fn get_hardware_fingerprint(app_handle: tauri::AppHandle) -> Result<HardwareFingerprintResult, String> {
+pub fn get_hardware_fingerprint(app_handle: tauri::AppHandle) -> Result<HardwareFingerprintResult, TrustError> {
+    authorize_and_execute(
+        "get_hardware_fingerprint",
+        Capability::LicenseManagement,
+        |_| {
+            #[cfg(target_os = "windows")]
+            let (raw, platform) = {
+                let _ = &app_handle;
+                get_platform_raw_hwid()
+            };
+
+            #[cfg(target_os = "android")]
+            let (raw, platform) = get_platform_raw_hwid(&app_handle);
+
+            #[cfg(not(any(target_os = "windows", target_os = "android")))]
+            let (raw, platform) = {
+                let _ = &app_handle;
+                get_platform_raw_hwid()
+            };
+
+            let (formatted, hash) = format_hwid(&raw);
+            Ok(HardwareFingerprintResult { formatted, hash, platform })
+        },
+    )
+}
+
+/// Native hardware hash for license-token device binding
+/// (`trust_sync_license`). Computed inside the trust boundary from the same
+/// platform source as [`get_hardware_fingerprint`] — never accepted from the
+/// client.
+pub(crate) fn native_hwid_hash(app: &tauri::AppHandle) -> String {
     #[cfg(target_os = "windows")]
-    let (raw, platform) = {
-        let _ = &app_handle;
+    let (raw, _) = {
+        let _ = app;
         get_platform_raw_hwid()
     };
 
     #[cfg(target_os = "android")]
-    let (raw, platform) = get_platform_raw_hwid(&app_handle);
+    let (raw, _) = get_platform_raw_hwid(app);
 
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
-    let (raw, platform) = {
-        let _ = &app_handle;
+    let (raw, _) = {
+        let _ = app;
         get_platform_raw_hwid()
     };
 
-    let (formatted, hash) = format_hwid(&raw);
-    Ok(HardwareFingerprintResult { formatted, hash, platform })
+    format_hwid(&raw).1
 }
 
 fn get_license_vault_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -566,62 +615,85 @@ fn get_license_vault_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, 
 }
 
 #[tauri::command]
-pub fn get_license_token(app_handle: tauri::AppHandle) -> Result<Option<String>, String> {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        if let Ok(entry) = keyring::Entry::new("mobi-pos-license", "token") {
-            match entry.get_password() {
-                Ok(token) => return Ok(Some(token)),
-                Err(keyring::Error::NoEntry) => {}
-                Err(e) => eprintln!("[license] keyring read failed: {e}"),
-            }
-        }
-    }
-
-    let vault_path = get_license_vault_path(&app_handle)?;
-    if vault_path.exists() {
-        let data = std::fs::read_to_string(&vault_path).map_err(|e| e.to_string())?;
-        let trimmed = data.trim();
-        if !trimmed.is_empty() {
-            return Ok(Some(trimmed.to_string()));
-        }
-    }
-    Ok(None)
-}
-
-#[tauri::command]
-pub fn set_license_token(app_handle: tauri::AppHandle, token: String) -> Result<(), String> {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        if let Ok(entry) = keyring::Entry::new("mobi-pos-license", "token") {
-            if let Ok(()) = entry.set_password(&token) {
-                if let Ok(path) = get_license_vault_path(&app_handle) {
-                    let _ = std::fs::remove_file(path);
+pub fn get_license_token(app_handle: tauri::AppHandle) -> Result<Option<String>, TrustError> {
+    authorize_and_execute(
+        "get_license_token",
+        Capability::LicenseManagement,
+        |_| {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                if let Ok(entry) = keyring::Entry::new("mobi-pos-license", "token") {
+                    match entry.get_password() {
+                        Ok(token) => return Ok(Some(token)),
+                        Err(keyring::Error::NoEntry) => {}
+                        Err(e) => eprintln!("[license] keyring read failed: {e}"),
+                    }
                 }
-                return Ok(());
             }
-        }
-    }
 
-    let vault_path = get_license_vault_path(&app_handle)?;
-    std::fs::write(&vault_path, token).map_err(|e| e.to_string())?;
-    Ok(())
+            let vault_path = get_license_vault_path(&app_handle).map_err(TrustError::op_failed)?;
+            if vault_path.exists() {
+                let data = std::fs::read_to_string(&vault_path).map_err(TrustError::op_failed)?;
+                let trimmed = data.trim();
+                if !trimmed.is_empty() {
+                    return Ok(Some(trimmed.to_string()));
+                }
+            }
+            Ok(None)
+        },
+    )
 }
 
 #[tauri::command]
-pub fn delete_license_token(app_handle: tauri::AppHandle) -> Result<(), String> {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        if let Ok(entry) = keyring::Entry::new("mobi-pos-license", "token") {
-            let _ = entry.delete_credential();
-        }
-    }
+pub fn set_license_token(app_handle: tauri::AppHandle, token: String) -> Result<(), TrustError> {
+    authorize_and_execute(
+        "set_license_token",
+        Capability::LicenseManagement,
+        |_| {
+            if token.len() > 16 * 1024 {
+                return Err(TrustError::IPCProtocolError {
+                    reason: "license token oversized",
+                });
+            }
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                if let Ok(entry) = keyring::Entry::new("mobi-pos-license", "token") {
+                    if let Ok(()) = entry.set_password(&token) {
+                        if let Ok(path) = get_license_vault_path(&app_handle) {
+                            let _ = std::fs::remove_file(path);
+                        }
+                        return Ok(());
+                    }
+                }
+            }
 
-    let vault_path = get_license_vault_path(&app_handle)?;
-    if vault_path.exists() {
-        let _ = std::fs::remove_file(vault_path);
-    }
-    Ok(())
+            let vault_path = get_license_vault_path(&app_handle).map_err(TrustError::op_failed)?;
+            std::fs::write(&vault_path, token).map_err(TrustError::op_failed)?;
+            Ok(())
+        },
+    )
+}
+
+#[tauri::command]
+pub fn delete_license_token(app_handle: tauri::AppHandle) -> Result<(), TrustError> {
+    authorize_and_execute(
+        "delete_license_token",
+        Capability::LicenseManagement,
+        |_| {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                if let Ok(entry) = keyring::Entry::new("mobi-pos-license", "token") {
+                    let _ = entry.delete_credential();
+                }
+            }
+
+            let vault_path = get_license_vault_path(&app_handle).map_err(TrustError::op_failed)?;
+            if vault_path.exists() {
+                let _ = std::fs::remove_file(vault_path);
+            }
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]

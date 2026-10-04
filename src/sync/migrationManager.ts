@@ -82,8 +82,15 @@ export class MigrationManager {
   ): Promise<MigrationSummary> {
     onProgress?.('Création de la sauvegarde locale de sécurité...', 0, 100);
 
-    // Step 1: Automatic Pre-Migration Backup
-    const backupResult = await createPreMigrationBackup();
+    // Step 1: Automatic Pre-Migration Backup (unguarded by PIN by design:
+    // boot flows have no user present. Strict checkpoint first — an
+    // incomplete checkpoint aborts exactly like a failed backup below.)
+    const { maintenanceAdapter } = await import('../db/adapters/maintenanceAdapter');
+    const cp = await maintenanceAdapter.checkpointWalStrict();
+    if (!cp.ok) {
+      throw new Error(`Checkpoint pré-migration impossible (${cp.message}) — migration refusée.`);
+    }
+    const backupResult = await createPreMigrationBackup('migration');
     if (!backupResult.success) {
       throw new Error(`Échec de la sauvegarde préalable: ${backupResult.error}`);
     }

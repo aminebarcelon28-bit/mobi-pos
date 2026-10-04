@@ -37,6 +37,7 @@ import { getProductPriceForTier } from '../../../utils/pricingEngine';
 import { computeCartTotals, computeTradeInSettlement } from '../../../utils/receiptMath';
 import { toLegacyReal, dinarsToMinor } from '../../../utils/money';
 import { MoneyInput } from '../../ui/MoneyInput';
+import { DzPhoneInput } from '../../ui/DzPhoneInput';
 import { useFifoPreviewCosts } from '../../../hooks/useFifoPreviewCosts';
 import { soundEngine } from '../../../utils/audioFeedback';
 import { useToast } from '../../ui/Toast';
@@ -1826,13 +1827,11 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 </div>
 
                 <div className="relative">
-                  <input
-                    type="tel"
-                    inputMode="tel"
+                  <DzPhoneInput
                     value={whatsAppPhoneInput}
-                    onChange={(e) => setWhatsAppPhoneInput(e.target.value)}
+                    onChange={setWhatsAppPhoneInput}
                     placeholder="0550 12 34 56 ou +213..."
-                    className="w-full min-h-[46px] bg-pos-panel border border-pos-border focus:border-emerald-400 rounded-xl px-3 py-2 text-xs font-mono text-pos-text focus:outline-none"
+                    inputClassName="w-full min-h-[46px] bg-pos-panel border border-pos-border focus:border-emerald-400 rounded-xl px-3 py-2 text-xs font-mono text-pos-text focus:outline-none"
                   />
                 </div>
 

@@ -17,10 +17,12 @@ import {
   Key,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import { formatDZD } from '../../types/pos';
+import { formatDZD, formatDateTime } from '../../types/pos';
+import { sortTransactionsNewestFirst } from '../../utils/dateUtils';
 import type { SaleTransaction, PaymentMethodType, RefundItem } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { computeRefundFundingSplit } from '../../utils/receiptMath';
+import { verifyManagerGate } from '../../utils/pinGate';
 
 export const RefundModal: React.FC = () => {
   const {
@@ -30,7 +32,8 @@ export const RefundModal: React.FC = () => {
     selectedTransactionForRefund,
     setSelectedTransactionForRefund,
     processRefund,
-    verifyManagerPin,
+    // Phase 1: manager checks route through the native gate (no local
+    // verifyManagerPin reads here — see utils/pinGate).
   } = usePosStore();
 
   const { showToast } = useToast();
@@ -54,12 +57,25 @@ export const RefundModal: React.FC = () => {
     return () => clearTimeout(t);
   }, [searchQuery]);
 
+  // Progressive data windowing: the panel renders the newest
+  // REFUND_PAGE_SIZE tickets first instead of truncating the list at a
+  // fixed slice (which previously severed the latest receipts past 30).
+  const REFUND_PAGE_SIZE = 30;
+  const [visibleCount, setVisibleCount] = useState(REFUND_PAGE_SIZE);
+  useEffect(() => {
+    setVisibleCount(REFUND_PAGE_SIZE);
+  }, [debouncedSearch]);
+
   // Memoized on debounced input so fast typing does not rescan per keystroke.
   // Hooks must stay above the early return below.
+  // Newest-first (canonical comparator — defensive: the store is sorted at
+  // every writer, but the panel must never depend on producer order).
   const eligibleTransactionsMemo = useMemo(
     () =>
-      (transactions || []).filter(
-        (t) => t.status !== 'VOIDED' && t.status !== 'REFUNDED' && !t.isRefund
+      sortTransactionsNewestFirst(
+        (transactions || []).filter(
+          (t) => t.status !== 'VOIDED' && t.status !== 'REFUNDED' && !t.isRefund
+        )
       ),
     [transactions]
   );
@@ -92,6 +108,7 @@ export const RefundModal: React.FC = () => {
       }
       setManagerPin('');
       setPinRequired(false);
+      setVisibleCount(REFUND_PAGE_SIZE);
     }
   }, [activeModal, selectedTransactionForRefund]);
 
@@ -122,6 +139,8 @@ export const RefundModal: React.FC = () => {
     setRefundQuantities(initialQty);
     setRestockMap(initialRestock);
   };
+
+  useEffect(() => { if (activeModal !== 'refund') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
   if (activeModal !== 'refund') return null;
 
@@ -218,10 +237,21 @@ export const RefundModal: React.FC = () => {
       return;
     }
 
-    // Check Manager PIN
-    if (!managerPin || !verifyManagerPin(managerPin)) {
+    // Check Manager PIN — Phase 1: native gate (fail-closed).
+    if (!managerPin) {
       setPinRequired(true);
-      showToast('Code PIN Manager incorrect. Autorisation requise pour émettre un remboursement.', 'error');
+      showToast('Code PIN Manager requis. Autorisation requise pour émettre un remboursement.', 'error');
+      return;
+    }
+    const gate = await verifyManagerGate(managerPin);
+    if (!gate.ok) {
+      setPinRequired(true);
+      showToast(
+        gate.locked
+          ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+          : 'Code PIN Manager incorrect. Autorisation requise pour émettre un remboursement.',
+        'error'
+      );
       return;
     }
 
@@ -276,7 +306,7 @@ export const RefundModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94vh] sm:h-[90vh] flex flex-col relative">
+      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col relative">
         {/* Mobile drag handle */}
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
@@ -302,7 +332,7 @@ export const RefundModal: React.FC = () => {
               setSelectedTransactionForRefund(null);
               closeModal();
             }}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
             aria-label="Fermer"
           >
             <X className="w-5 h-5" />
@@ -325,16 +355,19 @@ export const RefundModal: React.FC = () => {
                   className="w-full bg-pos-bg border border-pos-border rounded-xl pl-8 pr-3 py-1.5 text-xs text-pos-text placeholder-pos-muted focus:border-purple-400 focus:outline-none"
                 />
               </div>
+              <p className="mt-1.5 text-[10px] text-pos-muted" aria-live="polite">
+                Affichage de {Math.min(visibleCount, filteredTransactions.length)} sur {filteredTransactions.length} tickets éligibles
+              </p>
             </div>
 
-            <div className="flex-1 overflow-y-auto divide-y divide-pos-border/40 p-1">
+            <div className="flex-1 overflow-y-auto overscroll-contain divide-y divide-pos-border/40 p-1">
               {(filteredTransactions || []).length === 0 ? (
                 <div className="p-6 text-center text-xs text-pos-muted">
                   <Receipt className="w-8 h-8 mx-auto mb-2 text-pos-muted/40" />
                   Aucun ticket éligible trouvé.
                 </div>
               ) : (
-                (filteredTransactions || []).slice(0, 30).map((t) => {
+                (filteredTransactions || []).slice(0, visibleCount).map((t) => {
                   const isSelected = selectedTxn?.id === t.id;
                   return (
                     <button
@@ -352,7 +385,7 @@ export const RefundModal: React.FC = () => {
                       </div>
                       <div className="flex justify-between text-[11px] text-pos-muted">
                         <span>{t.customer?.name || 'Client de passage'}</span>
-                        <span className="font-mono text-[10px]">{t.createdAt.slice(0, 11)}</span>
+                        <span className="font-mono text-[10px] whitespace-nowrap">{formatDateTime(t.createdAt)}</span>
                       </div>
                       {t.status === 'PARTIALLY_REFUNDED' && (
                         <span className="text-[9px] text-amber-400 font-bold">Partiellement Remboursé</span>
@@ -361,11 +394,20 @@ export const RefundModal: React.FC = () => {
                   );
                 })
               )}
+              {filteredTransactions.length > visibleCount && (
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((c) => c + REFUND_PAGE_SIZE)}
+                  className="w-full p-2.5 mt-1 text-xs font-bold text-purple-300 bg-purple-500/10 border border-purple-500/30 rounded-xl hover:bg-purple-500/20 transition cursor-pointer"
+                >
+                  Afficher plus ({filteredTransactions.length - visibleCount} restants)
+                </button>
+              )}
             </div>
           </div>
 
           {/* Right Column: Refund Configuration & Form */}
-          <div className={`flex-1 flex flex-col overflow-y-auto p-3.5 sm:p-5 bg-pos-bg space-y-4 ${!selectedTxn ? 'hidden sm:flex' : 'flex'}`}>
+          <div className={`flex-1 flex flex-col overflow-y-auto overscroll-contain p-3.5 sm:p-5 bg-pos-bg space-y-4 ${!selectedTxn ? 'hidden sm:flex' : 'flex'}`}>
             {!selectedTxn ? (
               <div className="flex-1 flex flex-col items-center justify-center text-center p-8 space-y-3">
                 <div className="w-16 h-16 rounded-2xl bg-purple-500/10 text-purple-400 flex items-center justify-center border border-purple-500/20">
@@ -645,6 +687,7 @@ export const RefundModal: React.FC = () => {
                         {fundingPreview.voucherShare > 0 && ` • Bon recrédité : ${formatDZD(fundingPreview.voucherShare)}`}
                         {fundingPreview.avoirShare > 0 && ` • Avoir recrédité : ${formatDZD(fundingPreview.avoirShare)}`}
                         {fundingPreview.debtShare > 0 && ` • Dette réduite : ${formatDZD(fundingPreview.debtShare)}`}
+                        {fundingPreview.digitalShare > 0 && ` • Rail d’origine à reverser : ${formatDZD(fundingPreview.digitalShare)} (jamais en espèces)`}
                       </span>
                     )}
                   </div>

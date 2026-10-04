@@ -45,7 +45,27 @@ const nameInput = (page: Page) => page.getByPlaceholder('Ex: Karim Hadj');
 const modelInput = (page: Page) => page.getByPlaceholder('ex: iPhone 14 Pro Max');
 const cniInput = (page: Page) => page.getByPlaceholder('Ex: 1987-44-112233');
 const tradeInDialog = (page: Page) => page.locator('div.fixed.inset-0').filter({ hasText: 'REPRISE & TRADE-IN' });
-const buybackInput = (page: Page) => tradeInDialog(page).locator('input[type="number"]').first();
+// The buyback price is a `MoneyInput` (`type="text"`), so `input[type="number"].first()`
+// resolved to the RESALE MARGIN spinner instead: these specs typed a price that
+// never reached the model, `buybackValue` stayed 0, and the submit no-op'd on
+// `if (buybackValue <= 0) return;` — which surfaced as "nothing staged", nowhere
+// near the cause. The field now carries its own stable test id.
+const buybackInput = (page: Page) => tradeInDialog(page).getByTestId('buyback-price');
+/**
+ * Never submit blind. `MoneyInput` commits ONLY a parseable amount and reports
+ * what it parsed in its `aria-live` echo line, so a field can look filled while
+ * the model still holds 0 — and the submit then no-ops with no visible error.
+ * Asserting the echo before every submit makes that failure mode unreachable.
+ */
+const expectBuybackCommitted = async (page: Page) => {
+  const echo = buybackInput(page).locator('xpath=../../span[@aria-live="polite"]');
+  await expect(echo).toContainText('=', { timeout: 10_000 });
+};
+/** The echo line's counterpart for a REJECTED amount (negative, garbage). */
+const expectBuybackNotCommitted = async (page: Page) => {
+  const echo = buybackInput(page).locator('xpath=../../span[@aria-live="polite"]');
+  await expect(echo).not.toContainText('=', { timeout: 10_000 });
+};
 const stagedOf = (page: Page) =>
   page.evaluate(() => (window as unknown as Harness).__harnessSnapshot().staged as unknown as {
     buybackValue: number; deviceModel: string; imei: string; stagedId: string; nationalIdNumber?: string;
@@ -65,6 +85,7 @@ test.describe('Scenario 1 — cart cancellation stages nothing (no ghost ingesti
     await modelInput(page).fill('Ghost Device');
     await imeiInput(page).fill(GHOST_IMEI);
     await buybackInput(page).fill('15000');
+    await expectBuybackCommitted(page);
     await cniInput(page).fill('1987-44-112233');
     await expect(page.getByText('Pièce manquante — à compléter')).toHaveCount(0);
     const dexBefore = await page.evaluate(async () => {
@@ -112,7 +133,10 @@ test.describe('Scenario 2 — buyback input sanitization', () => {
     await imeiInput(page).fill(ALPHA_IMEI);
 
     // Negative value: submit is a silent no-op (guard buybackValue<=0).
+    // MoneyInput refuses to COMMIT a negative amount, so the model still holds 0
+    // and the echo line reports the error instead of a parsed value.
     await buybackInput(page).fill('-5000');
+    await expectBuybackNotCommitted(page);
     const beforeNeg = await page.evaluate(() => (window as unknown as Harness).__harnessSnapshot());
     await page.getByRole('button', { name: /Racheter & Injecter/ }).click();
     await expect(page.getByText('REPRISE & TRADE-IN OCCASION').first()).toBeVisible();
@@ -120,14 +144,21 @@ test.describe('Scenario 2 — buyback input sanitization', () => {
     const afterNeg = await page.evaluate(() => (window as unknown as Harness).__harnessSnapshot());
     expect(afterNeg).toEqual(beforeNeg);
 
-    // Non-numeric text: Chromium refuses it outright in number inputs.
-    await expect(buybackInput(page).fill('abc')).rejects.toThrow();
-    await expect(buybackInput(page)).toHaveValue('-5000');
+    // Non-numeric text: this field is `type="text"`, so Chromium does NOT refuse
+    // it the way it refuses a number input. The invariant belongs to the model
+    // instead: letters are never committed, nothing renders NaN, and the submit
+    // still stages nothing.
+    await buybackInput(page).fill('abc');
     await expect(tradeInDialog(page).getByText(/NaN/)).toHaveCount(0);
-    // Empty input falls back to 0 (parseFloat || 0), never NaN.
+    await page.getByRole('button', { name: /Racheter & Injecter/ }).click();
+    await expect(page.getByText('REPRISE & TRADE-IN OCCASION').first()).toBeVisible();
+    expect(await stagedOf(page)).toBeNull();
+
+    // Empty input reverts to the last committed value on blur, never NaN.
     await buybackInput(page).fill('');
-    await expect(buybackInput(page)).toHaveValue('0');
+    await buybackInput(page).blur();
     await expect(tradeInDialog(page).getByText(/NaN/)).toHaveCount(0);
+    await expect(tradeInDialog(page).getByText(/Infinity/)).toHaveCount(0);
   });
 });
 
@@ -138,6 +169,7 @@ test.describe('Scenario 3 — identity policy: name blocks, CNI warns', () => {
     await modelInput(page).fill('Orphan Device');
     await imeiInput(page).fill(ALPHA_IMEI);
     await buybackInput(page).fill('20000');
+    await expectBuybackCommitted(page);
     // Both identity fields blank. The required name input blocks natively
     // (browser validation bubble, handler never runs): modal stays open,
     // nothing stages.
@@ -163,6 +195,7 @@ test.describe('Scenario 4 — single-slot staging: second device replaces first'
     await modelInput(page).fill('Alpha');
     await imeiInput(page).fill(ALPHA_IMEI);
     await buybackInput(page).fill('40000');
+    await expectBuybackCommitted(page);
     await page.getByRole('button', { name: /Valider l’Échange/ }).click();
     await expect(page.getByText(/Reprise : Alpha/)).toBeVisible();
     expect((await stagedOf(page))?.deviceModel).toBe('Alpha');
@@ -173,6 +206,7 @@ test.describe('Scenario 4 — single-slot staging: second device replaces first'
     await modelInput(page).fill('Bêta');
     await imeiInput(page).fill(BETA_IMEI);
     await buybackInput(page).fill('30000');
+    await expectBuybackCommitted(page);
     await page.getByRole('button', { name: /Valider l’Échange/ }).click();
     await expect(page.getByText(/Reprise : Bêta/)).toBeVisible();
     await expect(page.getByText(/Reprise : Alpha/)).toHaveCount(0);

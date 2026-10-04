@@ -16,7 +16,7 @@ import {
   grossFromTransaction,
   netFromTransaction,
 } from './receiptMath';
-import { extractWarrantyMonths, hasExplicitWarranty } from './warrantyResolver';
+import { coerceWarrantyMonths, extractWarrantyMonths, hasExplicitWarranty } from './warrantyResolver';
 
 /** Single cart line in receipt terms. */
 export interface ReceiptLineItem {
@@ -398,15 +398,35 @@ export function buildReceiptViewModel(
     const qty = Math.abs(Math.round(Number(line.quantity) || 0));
     const discount = Math.max(0, Math.round(Number(line.discount) || 0));
     const imei = line.imeiNumber?.trim() || undefined;
-    // Preserve the sale-time warranty marker: explicit product warranty wins,
-    // pre-owned phones default to 3 months, otherwise none.
-    const warrantyMonths = imei
-      ? hasExplicitWarranty(line.product)
-        ? extractWarrantyMonths(line.product)
-        : line.product?.category === "Téléphones d'Occasion (Reprise)"
-          ? 3
-          : 0
-      : 0;
+    // THE RECEIPT MUST NOT COMPUTE A WARRANTY TERM.
+    //
+    // This used to run its own heuristic (explicit product value → else 3 months
+    // for "Téléphones d'Occasion" → else 0), which disagreed with
+    // `warrantyResolver` — the engine the SAV terminal actually honours. On the
+    // live dataset 129 of 131 sold devices were occasion stock: customers were
+    // printed "Garantie 3 mois" while the warranty screen resolved 12, a 9-month
+    // gap of unpriced repair liability with no marketing benefit.
+    //
+    // Printing is presentation. The term comes from the Step A snapshot minted at
+    // checkout (`warranty_months_at_sale`), so paper, database and terminal can
+    // no longer drift apart.
+    //
+    // Legacy lines (sold before Step A) carry no snapshot. Those receipts are
+    // reprints of a document the customer already holds, so the historical
+    // heuristic is preserved for THEM ONLY — the sole remaining reason it exists.
+    // New sales can never reach this branch.
+    const snapshotMonths = coerceWarrantyMonths(
+      line.warrantyMonthsAtSale ?? (line as { warranty_months_at_sale?: unknown }).warranty_months_at_sale
+    );
+    const warrantyMonths = !imei
+      ? 0
+      : snapshotMonths !== undefined
+        ? snapshotMonths
+        : hasExplicitWarranty(line.product)
+          ? extractWarrantyMonths(line.product)
+          : line.product?.category === "Téléphones d'Occasion (Reprise)"
+            ? 3
+            : 0;
     return {
       name: line.product?.title?.trim() || 'Article',
       quantity: qty,

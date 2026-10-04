@@ -39,6 +39,10 @@ argon2 = { version = "0.5", features = ["zeroize"] }
 password-hash = { version = "0.5", features = ["getrandom"] }
 zeroize = { version = "1.9", features = ["zeroize_derive"] }
 subtle = "2.6"
+# Phase 4d — file-level snapshot encryption (snapshot_crypto.rs). Pure Rust
+# (no C toolchain), so mobile builds are unaffected. ChaCha20-Poly1305
+# (12-byte random nonce per file, never reused under one key).
+chacha20poly1305 = "0.10"
 ed25519-dalek = "3"
 base64 = "0.22"
 rusqlite = { version = "0.31", features = ["bundled", "backup"] }

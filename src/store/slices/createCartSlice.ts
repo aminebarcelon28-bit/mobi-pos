@@ -6,6 +6,7 @@ import { getProductPriceForTier, computeEffectiveUnitPrice } from '../../utils/p
 import { clampStoreCreditAmount } from '../../utils/loyaltyEngine';
 import { computeCartTotals } from '../../utils/receiptMath';
 import { newId } from '../../utils/ids';
+import { canonicalDeviceId } from '../../utils/warrantyResolver';
 
 // Holds reserve NO stock: a held sale is a cart snapshot only (customer +
 // items + prices). Stock is checked at payment time against the live ledger,
@@ -296,9 +297,27 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
   removeFromCart: (productId) => {
     const { cart } = get();
     set({ cart: cart.filter((item) => item.product.id !== productId) });
+    // Cart discard safety: dropping a SAV line purges its linkage —
+    // the repair stays 'Prêt / Terminé', never auto-delivers.
+    if (productId.startsWith('repair-balance-')) {
+      void import('../../utils/savSettlement').then(({ unlinkSavCartItems }) =>
+        unlinkSavCartItems([productId])
+      );
+    }
   },
 
-  clearCart: () => setAny({ cart: [], storeCreditApplied: 0, voucherCreditApplied: 0, voucherCode: null }),
+  clearCart: () => {
+    const { cart } = get();
+    const savIds = (cart || [])
+      .map((ci) => ci.product.id)
+      .filter((id) => id.startsWith('repair-balance-'));
+    setAny({ cart: [], storeCreditApplied: 0, voucherCreditApplied: 0, voucherCode: null });
+    if (savIds.length > 0) {
+      void import('../../utils/savSettlement').then(({ unlinkSavCartItems }) =>
+        unlinkSavCartItems(savIds)
+      );
+    }
+  },
 
   setCartItemDiscount: (productId, discount, managerApproved = false) => {
     // Any per-item discount needs a manager PIN (same override-PIN pattern as
@@ -361,7 +380,18 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
 
   setCartItemIMEI: (productId, imei) => {
     const { cart } = get();
-    const cleanImei = (imei || '').trim().replace(/[^a-zA-Z0-9-]/g, '').toUpperCase();
+    // Canonicalize at INGESTION so the stored form matches what the warranty
+    // resolver queries with. Previously this kept hyphens, while
+    // `sanitizeDeviceIdentifier` stripped to digits before lookup — the two
+    // halves of the lifecycle disagreed and every hyphenated IMEI (the standard
+    // GSMA label, i.e. most scanned phones) resolved as "non enregistré".
+    //
+    // Normalization only, never validation: `canonicalDeviceId` makes no length
+    // or Luhn claim, so alphanumeric serials for dead devices survive. IMEI
+    // length + Luhn stay enforced at the lookup gate
+    // (`sanitizeDeviceIdentifier`), which is where a wrong device must be
+    // refused rather than silently accepted at the till.
+    const cleanImei = canonicalDeviceId(imei);
     set({
       cart: cart.map((item) => (item.product.id === productId ? { ...item, imeiNumber: cleanImei } : item)),
     });
@@ -542,9 +572,19 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
 
   deleteHeldSale: (saleId) => {
     const { heldSales } = get();
+    const target = heldSales.find((h) => h.id === saleId);
     const next = heldSales.filter((h) => h.id !== saleId);
     persistHeldSales(next);
     set({ heldSales: next });
+    // Discarding a held cart with SAV lines purges linkage (stays Prêt).
+    const savIds = ((target?.items || []) as Array<{ product?: { id?: string } }>)
+      .map((ci) => ci.product?.id || '')
+      .filter((id) => id.startsWith('repair-balance-'));
+    if (savIds.length > 0) {
+      void import('../../utils/savSettlement').then(({ unlinkSavCartItems }) =>
+        unlinkSavCartItems(savIds)
+      );
+    }
   },
   };
 };

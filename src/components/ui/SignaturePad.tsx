@@ -169,7 +169,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
         <label className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-pos-muted flex items-center gap-1">
           {label}
           {required && (
-            <span className="text-rose-500 dark:text-rose-400" aria-hidden="true">
+            <span className="text-rose-600 dark:text-rose-400" aria-hidden="true">
               *
             </span>
           )}
@@ -211,7 +211,16 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
         />
         {!hasContent && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <span className="text-[10px] text-slate-400 dark:text-pos-muted font-normal text-center px-4">
+            {/*
+              Deliberately NOT a POS theme token. The canvas surface above is
+              pinned to bg-white because the exported PNG is stored inline as a
+              legal signature artifact (a transparent or dark backing would not
+              survive printing). A theme-following color would therefore resolve
+              to a light gray on that white box in dark mode (~2.8:1), so the
+              hint is pinned to a mid-gray that holds >= 4.5:1 on white in BOTH
+              themes.
+            */}
+            <span className="text-[10px] text-slate-500 font-normal text-center px-4">
               {hint || 'Signez ici avec le doigt ou la souris'}
             </span>
           </div>

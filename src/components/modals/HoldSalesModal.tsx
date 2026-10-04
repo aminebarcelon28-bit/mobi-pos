@@ -112,7 +112,7 @@ export const HoldSalesModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 max-h-[90vh] flex flex-col">
+      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 max-h-[90dvh] flex flex-col">
         {/* Mobile drag handle */}
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
@@ -137,7 +137,7 @@ export const HoldSalesModal: React.FC = () => {
           </button>
         </div>
 
-        <div className="p-4 sm:p-5 space-y-3 max-h-[60vh] overflow-y-auto">
+        <div className="p-4 sm:p-5 space-y-3 max-h-[60vh] overflow-y-auto overscroll-contain">
           {(heldSales || []).length === 0 ? (
             <div className="text-center py-8 text-pos-muted space-y-2">
               <Clock className="w-10 h-10 mx-auto opacity-40 text-emerald-400" />

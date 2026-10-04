@@ -761,14 +761,17 @@ pub enum ManifestMac {
 /// proved state exists). Store selection duplicates the kernel's desktop/
 /// mobile rule (see `ipc_authorizer::select_store` — kept local by the
 /// Phase 3.1 file-scope rule; the canonical implementation stays there).
-pub fn resolve_manifest_mac_key(_app_data_dir: &Path) -> ManifestMac {
+pub fn resolve_manifest_mac_key(app_data_dir: &Path) -> ManifestMac {
     use super::secure_storage as ss;
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let store: Box<dyn ss::KeyStore> =
-        Box::new(ss::FileKeyStore::new(ss::FileKeyStore::default_path(_app_data_dir)));
+        Box::new(ss::FileKeyStore::new(ss::FileKeyStore::default_path(app_data_dir)));
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let store: Box<dyn ss::KeyStore> = Box::new(ss::OsKeyStore);
-    match ss::resolve_mac_key(&*store, true) {
+    let path = ss::snapshot_path(app_data_dir);
+    let counter_hint = store.load_counter().ok().flatten();
+    let prior = path.exists() || counter_hint.is_some();
+    match ss::resolve_mac_key(&*store, prior) {
         ss::KeyResolution::Active { key, .. } => ManifestMac::Key(key),
         ss::KeyResolution::ProvisionOnFirstPersist => {
             ManifestMac::Unavailable("no-key:store-empty-during-export".into())

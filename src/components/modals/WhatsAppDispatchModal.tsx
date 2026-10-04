@@ -19,6 +19,7 @@ export const WhatsAppDispatchModal: React.FC = () => {
     activeModal,
     closeModal,
     selectedRepairOrderForNotification,
+    selectedRepairNotificationTemplate,
     receiptSettings,
   } = usePosStore();
   const { showToast } = useToast();
@@ -41,12 +42,19 @@ export const WhatsAppDispatchModal: React.FC = () => {
           ),
         }
       : order;
+  const template = selectedRepairNotificationTemplate ?? 'READY_FOR_PICKUP';
   const messageText = qrOrder
-    ? RepairNotificationEngine.generateMessageBody(qrOrder, receiptSettings, 'READY_FOR_PICKUP')
+    ? RepairNotificationEngine.generateMessageBody(qrOrder, receiptSettings, template)
     : '';
   const whatsAppUrl = qrOrder
-    ? RepairNotificationEngine.buildWhatsAppUrl(qrOrder, receiptSettings, 'READY_FOR_PICKUP')
+    ? RepairNotificationEngine.buildWhatsAppUrl(qrOrder, receiptSettings, template)
     : '';
+  const templateLabel =
+    template === 'QUOTE_APPROVAL_REQUIRED'
+      ? 'Devis à valider'
+      : template === 'PARTS_DELAY_NOTICE'
+        ? 'Retard pièces'
+        : 'Prêt à récupérer';
 
   // SECURITY: the QR payload (customer phone + message inside whatsAppUrl) is
   // rendered LOCALLY via the bundled `qrcode` lib. The previous
@@ -83,6 +91,8 @@ export const WhatsAppDispatchModal: React.FC = () => {
       cancelled = true;
     };
   }, [whatsAppUrl]);
+
+  useEffect(() => { if (activeModal !== 'whatsapp_dispatch') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
   if (activeModal !== 'whatsapp_dispatch' || !order) return null;
 
@@ -121,7 +131,7 @@ export const WhatsAppDispatchModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none animate-in fade-in">
-      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[92vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[92dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
         {/* Header */}
@@ -130,7 +140,7 @@ export const WhatsAppDispatchModal: React.FC = () => {
             <MessageSquare className="w-5 h-5 shrink-0" />
             <div className="min-w-0">
               <h2 className="text-sm font-bold text-pos-text truncate">
-                Notification Client WhatsApp
+                Notification Client WhatsApp • {templateLabel}
               </h2>
               <p className="text-[11px] text-pos-muted truncate">
                 Ticket N° {order.ticketNumber} • {order.customerName} ({order.customerPhone})
@@ -146,7 +156,7 @@ export const WhatsAppDispatchModal: React.FC = () => {
         </div>
 
         {/* Content Body */}
-        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">
+        <div className="p-4 sm:p-5 space-y-4 overflow-y-auto overscroll-contain flex-1">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Left Column: Message Preview */}
             <div className="space-y-2">
@@ -163,7 +173,7 @@ export const WhatsAppDispatchModal: React.FC = () => {
                   {copied ? 'Copié' : 'Copier'}
                 </button>
               </div>
-              <div className="bg-pos-bg border border-pos-border rounded-xl p-3.5 text-xs text-pos-text/90 font-sans leading-relaxed whitespace-pre-wrap max-h-56 overflow-y-auto">
+              <div className="bg-pos-bg border border-pos-border rounded-xl p-3.5 text-xs text-pos-text/90 font-sans leading-relaxed whitespace-pre-wrap max-h-56 overflow-y-auto overscroll-contain">
                 {messageText}
               </div>
             </div>

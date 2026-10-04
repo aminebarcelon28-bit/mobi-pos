@@ -58,6 +58,8 @@ export const CloudSyncPanel: React.FC = () => {
   // Disaster Recovery / Cloud Restore
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoreProgress, setRestoreProgress] = useState<RestoreProgress | null>(null);
+  // Phase 2: cloud restore requires a fresh native manager PIN per run.
+  const [restorePin, setRestorePin] = useState('');
 
   // Storage & Quota
   const [storageReport, setStorageReport] = useState<StorageUsageReport | null>(null);
@@ -163,25 +165,74 @@ export const CloudSyncPanel: React.FC = () => {
     );
     if (!ok) return;
 
+    // Phase 2: the merge runs inside requestDataRestore — pre-validated
+    // source, fresh native manager PIN (no window), strict checkpoint +
+    // snapshot of current state, DATA_RESTORE_BEFORE / DATA_RESTORED_OK.
+    // Cloud merges are additive and version-guarded (never delete), but the
+    // guard still applies: same bar as every restore.
+    const { requestDataRestore } = await import('../../db/restoreGuard');
+    const actor = usePosStore.getState().activeCashier?.name;
+    const remoteId = dbUrl.trim().replace(/^libsql:\/\//, '').split(/[/?]/)[0] || 'cloud';
+    const res = await requestDataRestore(
+      {
+        source: 'cloud-merge',
+        remoteId,
+        actor,
+        validate: async () => {
+          if (!dbUrl.trim() || !authToken.trim()) {
+            return { ok: false, reason: 'URL et jeton requis.' };
+          }
+          try {
+            const t = await testTursoConnection(dbUrl.trim(), authToken.trim());
+            return t.ok
+              ? { ok: true }
+              : { ok: false, reason: t.error ?? 'Source cloud injoignable ou schéma invalide.' };
+          } catch (e: unknown) {
+            return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+          }
+        },
+        proceed: async () => {
+          try {
+            await setCloudCredentials(dbUrl, authToken);
+            setHasStoredCreds(true);
+            setRestoreProgress({ phase: 'Sauvegarde', table: 'sauvegarde locale pré-restauration', processed: 0, total: 10 });
+            const restoreResult = await RestoreManager.restoreFromCloud((p) => {
+              setRestoreProgress(p);
+            });
+            return { success: restoreResult.success !== false, reason: (restoreResult as { error?: string }).error };
+          } catch (e: unknown) {
+            return { success: false, reason: e instanceof Error ? e.message : String(e) };
+          }
+        },
+      },
+      restorePin
+    );
+    if (!res.ok && res.reason === 'invalid-payload') {
+      showToast(res.message, 'error');
+      return;
+    }
+    if (!res.ok) {
+      showToast(res.message, 'error');
+      setRestorePin('');
+      return;
+    }
+
     setIsRestoring(true);
     setRestoreProgress({ phase: 'Démarrage', table: 'initialisation', processed: 0, total: 10 });
     try {
-      await setCloudCredentials(dbUrl, authToken);
-      setHasStoredCreds(true);
-      // RestoreManager.executeRestore takes its own pre-restore backup via the
-      // existing backup command and validates the cloud payload (schema +
-      // row ids) before merging; a backup/validation failure aborts loudly
-      // here and no local row is touched.
-      setRestoreProgress({ phase: 'Sauvegarde', table: 'sauvegarde locale pré-restauration', processed: 0, total: 10 });
-      const restoreResult = await RestoreManager.restoreFromCloud((p) => {
-        setRestoreProgress(p);
-      });
-      showToast(
-        restoreResult.backupPath
-          ? `${restoreResult.userSummary} (Sauvegarde pré-restauration: ${restoreResult.backupPath})`
-          : restoreResult.userSummary,
-        'success',
-      );
+      if (res.auditOk === false) {
+        showToast(
+          res.message || 'Restauration terminée MAIS traçabilité finale impossible — vérifiez le journal.',
+          'warning',
+          8000
+        );
+      } else {
+        showToast(
+          `Restauration cloud terminée (sauvegarde pré-restauration : ${res.receipt.snapshotId}).`,
+          'success'
+        );
+      }
+      setRestorePin('');
       await usePosStore.getState().refreshAfterPull();
       await syncManager.start(await getStableDeviceId());
       await loadStorageReport();
@@ -453,11 +504,21 @@ export const CloudSyncPanel: React.FC = () => {
           </button>
 
           <div className="flex items-center gap-2.5">
+            <input
+              type="password"
+              inputMode="numeric"
+              autoComplete="current-password"
+              value={restorePin}
+              onChange={(e) => setRestorePin(e.target.value.replace(/[^0-9]/g, '').slice(0, 12))}
+              placeholder="PIN Manager"
+              aria-label="PIN Manager requis pour restaurer"
+              className="w-32 bg-pos-bg border border-pos-border rounded-xl px-3 py-2.5 text-xs font-bold text-pos-text placeholder-pos-muted focus:outline-none focus:border-amber-500"
+            />
             <button
               onClick={handleRestoreFromCloud}
               disabled={isRestoring || isMigrating || !dbUrl || !authToken}
               className="px-4 py-2.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center gap-2 transition cursor-pointer disabled:opacity-50"
-              title="Télécharge l'intégralité des données cloud sur ce poste (nouvel ordinateur / remplacement)"
+              title="Télécharge l'intégralité des données cloud sur ce poste (nouvel ordinateur / remplacement). PIN Manager requis, opération tracée."
             >
               {isRestoring ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
               Restaurer depuis le cloud

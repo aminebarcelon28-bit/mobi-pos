@@ -21,6 +21,7 @@ export const settingsRepository = {
       await (await getSqlite()).setSetting(key, value);
     } catch (e) {
       console.error(`Failed to save setting [${key}]:`, e);
+      throw e;
     }
   },
 

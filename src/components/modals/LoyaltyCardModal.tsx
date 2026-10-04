@@ -29,6 +29,8 @@ export const LoyaltyCardModal: React.FC = () => {
     }
   }, [activeModal, customer, cardCode]);
 
+  useEffect(() => { if (activeModal !== 'loyalty_card') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
   if (activeModal !== 'loyalty_card' || !customer || !tierInfo || !progress) return null;
 
   const handlePrintCard = async () => {
@@ -66,7 +68,7 @@ export const LoyaltyCardModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 max-h-[92vh] flex flex-col pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 max-h-[92dvh] flex flex-col pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
         {/* Header */}
@@ -78,7 +80,7 @@ export const LoyaltyCardModal: React.FC = () => {
             <div className="min-w-0">
               <h2 className="text-xs sm:text-sm font-extrabold text-pos-text tracking-wide flex items-center gap-2 truncate">
                 <span className="truncate">CARTE DE FIDÉLITÉ NUMÉRIQUE & PVC</span>
-                <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded border shrink-0 ${tierInfo.bgColor} ${tierInfo.badgeColor} ${tierInfo.borderColor}`}>
+                <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full border shrink-0 ${tierInfo.bgColor} ${tierInfo.badgeColor} ${tierInfo.borderColor}`}>
                   {tierInfo.icon} {tierInfo.name}
                 </span>
               </h2>
@@ -122,7 +124,7 @@ export const LoyaltyCardModal: React.FC = () => {
         </div>
 
         {/* Scrollable Content */}
-        <div className="p-6 overflow-y-auto space-y-6 flex-1 bg-slate-950/50">
+        <div className="p-6 overflow-y-auto overscroll-contain space-y-6 flex-1 bg-slate-950/50">
 
           {/* TAB 1: PHYSICAL PVC CARD TEMPLATE */}
           {activeTab === 'pvc_physical' && (
@@ -166,7 +168,7 @@ export const LoyaltyCardModal: React.FC = () => {
                     <p className="text-base font-extrabold tracking-wide uppercase text-white truncate">{customer.name}</p>
                     <div className="flex justify-between items-end mt-1">
                       <span className="font-mono text-xs text-amber-300 font-bold tracking-widest">{cardCode}</span>
-                      <span className="text-[9px] text-emerald-400 font-extrabold bg-emerald-500/20 px-1.5 py-0.5 rounded">
+                      <span className="text-[9px] text-emerald-400 font-extrabold bg-emerald-500/20 px-1.5 py-0.5 rounded-full">
                         Multiplicateur: {tierInfo.pointsMultiplier}x
                       </span>
                     </div>

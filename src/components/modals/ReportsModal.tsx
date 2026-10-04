@@ -43,7 +43,7 @@ import { useReceiptLedgerCogs } from '../../hooks/useReceiptLedgerCogs';
 import { computeSalesMetrics, grossFromTransaction, isExchangeSaleTx } from '../../utils/receiptMath';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
-import { todayLocalKey, toLocalDayKey } from '../../utils/dateUtils';
+import { todayLocalKey, toLocalDayKey, sortTransactionsNewestFirst } from '../../utils/dateUtils';
 import { verifyManagerGate } from '../../utils/pinGate';
 
 export const ReportsModal: React.FC = () => {
@@ -449,10 +449,9 @@ export const ReportsModal: React.FC = () => {
       return matchesPayment && matchesStatus && matchesSearch;
     });
 
-    // ORDER BY date DESC — latest receipts first
-    return filtered.sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    // ORDER BY date DESC — latest receipts first (canonical comparator:
+    // NaN-safe, receiptNumber/id tiebreaks; see utils/dateUtils).
+    return sortTransactionsNewestFirst(filtered);
   }, [dateFilteredTransactions, paymentFilter, statusFilter, historySearch]);
 
   // Reset to first page whenever a history filter changes

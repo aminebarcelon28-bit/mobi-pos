@@ -34,6 +34,11 @@ jobs:
           node src/utils/runLoyaltyTests.cjs
           node src/utils/runSystemTests.cjs
 
+      - name: Production Build & Prod-Fold Proof (FT-06/B)
+        run: |
+          npm run build
+          node scripts/check-audit-boundary.mjs
+
   build-tauri:
     name: Build & Package (${{ matrix.platform }})
     needs: test-and-lint

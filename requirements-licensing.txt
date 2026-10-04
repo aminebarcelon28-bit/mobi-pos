@@ -1,0 +1,18 @@
+# Runtime dependencies for "Licensing for MobiPOS"
+# Install: pip install -r requirements-licensing.txt
+#
+# Build tooling (not needed to run from source):
+#   pip install pyinstaller
+
+PyQt6>=6.6,<7
+requests>=2.31
+cryptography>=42.0
+qrcode>=7.4
+pillow>=10.0
+
+# Argon2id + AES-GCM passphrase envelope for importing an encrypted operator
+# key file (licensing_app.config.encrypt_secrets_envelope / _decrypt_envelope).
+argon2-cffi>=23.1
+# OS secure vault for the master secrets. Optional at runtime -- config falls
+# back to DPAPI on Windows -- but bundling it avoids a silent downgrade.
+keyring>=24.0

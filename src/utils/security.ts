@@ -1,48 +1,56 @@
 /**
  * Cryptographic Security Engine for MobiPOS
- * Implements PBKDF2 / SHA-256 salted PIN hashing with backward-compatible migration.
+ * PIN hashing is single-round salted SHA-256 (`v1$`), NOT PBKDF2 despite any
+ * older comment to the contrary. Phase 4.5: this is brute-forceable offline
+ * (see report); Argon2id (`v2$`, native `pin_set`, owner-approved 2026-10-02)
+ * is the production replacement — every rotation path routes through
+ * `rotatePinCredential`, which mints natively under Tauri. The `v1$` helpers
+ * below survive ONLY for the non-Tauri preview/tests lane and the boot
+ * plaintext-migration step (which forces rotation at next login, closing the
+ * chain to `v2$`). Do not strengthen by adding rounds here — migrate formats
+ * instead.
  */
 
 // Pure TypeScript Synchronous SHA-256 implementation
 // Perf: the prime-derived H/K constants are input-independent — compute once
 // and reuse. The old code rebuilt them (prime sieve) on every hash, so each
 // PIN verify paid the sieve cost (verify loops over users × hashes).
-let cachedSha256Init: { h0: number[]; k: number[] } | null = null;
-function getSha256Init(): { h0: number[]; k: number[] } {
-  if (cachedSha256Init) return cachedSha256Init;
-  const mathPow = Math.pow;
-  const maxWord = mathPow(2, 32);
-  const h0: number[] = [];
-  const k: number[] = [];
-  let primeCounter = 0;
-  const isComposite: Record<number, boolean> = {};
-  for (let candidate = 2; primeCounter < 64; candidate++) {
-    if (!isComposite[candidate]) {
-      for (let i = 0; i < 300; i += candidate) {
-        isComposite[i] = true;
-      }
-      h0[primeCounter] = (mathPow(candidate, 0.5) * maxWord) | 0;
-      k[primeCounter++] = (mathPow(candidate, 1 / 3) * maxWord) | 0;
-    }
-  }
-  cachedSha256Init = { h0, k };
-  return cachedSha256Init;
+// Standard FIPS 180-4 SHA-256 initial hash values (first 32 bits of the fractional parts of the square roots of the first 8 primes)
+const STD_H0: readonly number[] = [
+  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+];
+
+// Standard FIPS 180-4 SHA-256 round constants (first 32 bits of the fractional parts of the cube roots of the first 64 primes)
+const STD_K: readonly number[] = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
+
+// Legacy sieve-variant constants (where prime sieve stopped at 300, setting K[62]=0xb1bf9402 and K[63]=0xb3a680f4)
+const SIEVE_K: readonly number[] = [
+  ...STD_K.slice(0, 62),
+  0xb1bf9402,
+  0xb3a680f4,
+];
+
+function rightRotate(value: number, amount: number): number {
+  return (value >>> amount) | (value << (32 - amount));
 }
 
-function sha256Sync(ascii: string): string {
-  function rightRotate(value: number, amount: number) {
-    return (value >>> amount) | (value << (32 - amount));
-  }
-
-  const mathPow = Math.pow;
-  const maxWord = mathPow(2, 32);
+function runSha256(ascii: string, kTable: readonly number[]): string {
+  const maxWord = Math.pow(2, 32);
   let result = '';
 
   const words: number[] = [];
   const asciiBitLength = ascii.length * 8;
 
-  const { h0, k } = getSha256Init();
-  let hash: number[] = [...h0];
+  let hash: number[] = [...STD_H0];
 
   ascii += '\x80';
   while ((ascii.length % 64) - 56) ascii += '\x00';
@@ -71,7 +79,7 @@ function sha256Sync(ascii: string): string {
 
       const s1b = rightRotate(hash[4], 6) ^ rightRotate(hash[4], 11) ^ rightRotate(hash[4], 25);
       const ch = (hash[4] & hash[5]) ^ (~hash[4] & hash[6]);
-      const temp1 = (hash[7] + s1b + ch + k[i] + w[i]) | 0;
+      const temp1 = (hash[7] + s1b + ch + kTable[i] + w[i]) | 0;
       const s0b = rightRotate(hash[0], 2) ^ rightRotate(hash[0], 13) ^ rightRotate(hash[0], 22);
       const maj = (hash[0] & hash[1]) ^ (hash[0] & hash[2]) ^ (hash[1] & hash[2]);
       const temp2 = (s0b + maj) | 0;
@@ -91,6 +99,14 @@ function sha256Sync(ascii: string): string {
     }
   }
   return result;
+}
+
+export function sha256Sync(ascii: string): string {
+  return runSha256(ascii, STD_K);
+}
+
+export function sieveSha256Sync(ascii: string): string {
+  return runSha256(ascii, SIEVE_K);
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
@@ -131,6 +147,62 @@ export function hashPin(pin: string, salt?: string): string {
 }
 
 /**
+ * Banal-PIN screen (NIST 800-63B-4 §3.1.1.2). WebView pre-check for instant
+ * UX feedback; the NATIVE check in `pin.rs::is_blocklisted_pin` is
+ * authoritative (it runs even when this one is bypassed). KEEP THE TWO LISTS
+ * IN SYNC — a PIN passing here can still be refused natively, and callers
+ * must surface the native refusal (never silently mint).
+ */
+const COMMON_PINS: ReadonlySet<string> = new Set([
+  '0000', '1111', '1234', '4321', '2580', '0852', '12345', '123456', '654321', '000000',
+  '111111', '123123', '121212', '112233', '159753', '357951',
+]);
+
+export function isCommonPin(pin: string): boolean {
+  const clean = (pin || '').trim();
+  if (COMMON_PINS.has(clean)) return true;
+  if (!/^[0-9]+$/.test(clean) || clean.length === 0) return false;
+  const digits = clean.split('').map(Number);
+  if (digits.every((d) => d === digits[0])) return true;
+  const asc = digits.slice(1).every((d, i) => d === digits[i] + 1);
+  const desc = digits.slice(1).every((d, i) => d === digits[i] - 1);
+  return asc || desc;
+}
+
+/**
+ * Hash a plain PIN into a fresh device-local `v1$local_salt$hash` format.
+ * The `local_` prefix in the salt marks that this credential was minted/rotated
+ * on this device and does not require forced migration/rotation.
+ */
+export function hashDeviceLocalPin(pin: string): string {
+  return hashPin(pin, 'local_' + generateRandomSalt(12));
+}
+
+/**
+ * Whether a stored credential predates the Argon2id era and must rotate.
+ * True for legacy `v1$` fast hashes (unless already re-secreted locally with
+ * 'local_' salt prefix) AND for anything that is not a modern `v2$` envelope
+ * (plaintext, empty, unknown) — fail closed toward rotation.
+ * Phase 4.5: replicated shops must rotate manager PINs (old synced hashes
+ * are treated as exposed).
+ */
+export function needsPinRotation(storedHashOrPlain: string | undefined | null): boolean {
+  const s = (storedHashOrPlain || '').trim();
+  if (s.startsWith('v2$')) {
+    const parts = s.split('$');
+    return parts.length < 3;
+  }
+  if (s.startsWith('v1$')) {
+    const parts = s.split('$');
+    if (parts.length === 3 && parts[1].startsWith('local_')) {
+      return false;
+    }
+    return true;
+  }
+  return true;
+}
+
+/**
  * Synchronous verification of a PIN against its stored `v1$` hash.
  * Fail-closed: anything that is not a verifiable v1 hash rejects — including
  * legacy plaintext (ancient installs are migrated to hashes at boot, and
@@ -150,7 +222,12 @@ export function verifyPin(inputPin: string, storedHashOrPlain: string): boolean 
       const salt = parts[1];
       const expectedDigest = parts[2];
       const computed = sha256Sync(`${salt}:${cleanInput}:mobi_pos_salt_v1`);
-      return timingSafeEqual(computed, expectedDigest);
+      if (timingSafeEqual(computed, expectedDigest)) {
+        return true;
+      }
+      // Backward compatibility: verify against legacy sieve-corrupted SHA-256
+      const legacyComputed = sieveSha256Sync(`${salt}:${cleanInput}:mobi_pos_salt_v1`);
+      return timingSafeEqual(legacyComputed, expectedDigest);
     }
   }
 

@@ -41,6 +41,7 @@ import { usePosStore } from '../../../store/usePosStore';
 import { AppTabContent } from '../AppScreenLayout';
 import { useDeviceMode } from '../../../hooks/useDeviceMode';
 import { PinDialog } from '../../ui/PinDialog';
+import { canSeeJournalLauncher } from '../../../utils/auditGate';
 // P11.3: sync engine loads on demand (static import pulls ~267 kB into entry).
 import type { SyncStatus } from '../../../sync/types';
 import { soundEngine } from '../../../utils/audioFeedback';
@@ -79,7 +80,16 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
     toggleTheme,
     products,
     logSecurityAction,
+    repairOrders,
+    activeCashier,
   } = usePosStore();
+  const pendingRepairsCount = useMemo(
+    () =>
+      (repairOrders || []).filter(
+        (r) => r.status === 'Diagnostic' || r.status === 'En attente de pièces' || r.status === 'En cours'
+      ).length,
+    [repairOrders]
+  );
   const { setRoleMode } = useDeviceMode();
   const { showToast } = useToast();
   const updater = useAppUpdater();
@@ -441,11 +451,38 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 <Wrench className="w-4 h-4" />
               </div>
               <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Réparations & SAV Atelier</span>
+                <span className="font-bold text-xs flex items-center gap-1.5 text-pos-text truncate">
+                  Réparations & SAV Atelier
+                  {pendingRepairsCount > 0 && (
+                    <span className="text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full px-2 py-0.5">
+                      {pendingRepairsCount > 9 ? '9+' : pendingRepairsCount}
+                    </span>
+                  )}
+                </span>
                 <span className="text-[10px] text-pos-muted block truncate">Fiches de réparation, diagnostics & devis</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openModal('repair_work_order');
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.stopPropagation();
+                    openModal('repair_work_order');
+                  }
+                }}
+                className="min-h-[48px] min-w-[48px] px-2.5 rounded-xl bg-emerald-500 text-slate-950 text-[11px] font-black flex items-center justify-center active:scale-95"
+                title="Nouveau ticket SAV direct"
+              >
+                + Nouveau SAV
+              </span>
+              <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            </div>
           </button>
 
           <button
@@ -730,6 +767,8 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
             <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
           </button>
 
+          {/* FT-01: hidden for cashiers (UX only — modal gate is authoritative). */}
+          {canSeeJournalLauncher(activeCashier?.role) && (
           <button
             type="button"
             onClick={() => openModal('security_audit')}
@@ -746,6 +785,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
             </div>
             <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
           </button>
+          )}
 
           <button
             type="button"

@@ -33,6 +33,7 @@ const receiveInFlight = new Map<string, number>();
 const RECEIVE_FLIGHT_TTL_MS = 10 * 60_000;
 import { getEffectiveCostPrice } from '../../utils/pricingEngine';
 import { resolveReferenceCost } from '../../utils/referenceCost';
+import { validateDeviceIdentifierForIntake } from '../../utils/savValidation';
 import type { LedgerDeltaInput } from '../../db/sqlPluginAdapter';
 import type { VendorDirectoryEntry } from '../../types/pos';
 
@@ -406,6 +407,54 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
     let totalReceivedCost = 0;
     let totalReceivedUnits = 0;
     const verifiedMap = new Map(verifiedItems.map((vi) => [vi.productId, vi]));
+
+    // W-43 — a PO receipt is an ACQUISITION writer, so the scanned/pasted
+    // identifiers get the same gate as the trade-in and the invoice import
+    // before any stock, batch or expense is minted: a 15-digit Luhn failure is
+    // REFUSED (a registry row nothing can resolve is worse than no row), a
+    // serial passes, a duplicate is a WARNING.
+    //
+    // Fail-closed here, unlike the invoice import: a purchase order is a signed
+    // commercial document, so a bad identifier must abort the receipt instead of
+    // importing 40 good lines and dropping one — the operator re-scans and
+    // re-submits the whole document. Blank entries are legitimate (a
+    // non-serialized accessory line), so they are skipped, not refused.
+    const { imeiRecords } = get();
+    const knownIdentifiers = [
+      ...(imeiRecords || []).map((r) => r.imei),
+      // The PO's own earlier lines: two receipts of the same PO must not
+      // collide with each other.
+      ...verifiedItems.flatMap((vi) => vi.imeis || []),
+    ];
+    for (const vi of verifiedItems) {
+      for (const raw of vi.imeis || []) {
+        const candidate = String(raw ?? '').trim();
+        if (!candidate) continue;
+        const verdict = validateDeviceIdentifierForIntake(candidate, knownIdentifiers);
+        if (!verdict.ok) {
+          releaseReceiveFlight();
+          return {
+            success: false,
+            isPartial: false,
+            totalReceivedCost: 0,
+            reason: `IDENTIFIER_REFUSED:${verdict.reason} (${candidate})`,
+          };
+        }
+        if (verdict.warning) console.warn('[validateAndReceivePO]', verdict.warning);
+      }
+    }
+    // Canonicalise before anything is written, so the line, the product and any
+    // later registry row all carry one spelling of the device.
+    const canonicalVerifiedItems = verifiedItems.map((vi) => ({
+      ...vi,
+      imeis: (vi.imeis || []).map((raw) => {
+        const candidate = String(raw ?? '').trim();
+        if (!candidate) return raw;
+        return validateDeviceIdentifierForIntake(candidate).canonical;
+      }),
+    }));
+    verifiedMap.clear();
+    for (const vi of canonicalVerifiedItems) verifiedMap.set(vi.productId, vi);
 
     // 1. Update Product Stocks and Cost Reference (first-known cost only —
     // per-receipt costs live on stock_batches rows, never on the product).

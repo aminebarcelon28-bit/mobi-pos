@@ -3,6 +3,7 @@
  * Author: Principal Systems Architect
  */
 import type { SaleTransaction, CartItem, ReceiptSettings } from '../types/pos';
+import { warrantyCertificateDates } from './warrantyResolver';
 import { EscPosBuilder } from './escpos';
 
 export class WarrantyCertificateBuilder {
@@ -11,7 +12,12 @@ export class WarrantyCertificateBuilder {
     item: CartItem,
     settings: ReceiptSettings,
     warrantyMonths: number = 3,
-    seller?: string | null
+    seller?: string | null,
+    /**
+     * Frozen expiry from the registry row. When present it is what the customer
+     * was promised at the till, so the certificate must not recompute it.
+     */
+    anchoredExpiresAt?: string | null
   ): Uint8Array {
     const builder = new EscPosBuilder();
     const is80mm = settings.paperWidth !== '58mm';
@@ -19,12 +25,14 @@ export class WarrantyCertificateBuilder {
       ? '================================================'
       : '================================';
 
-    const startDate = new Date(transaction.createdAt);
-    const expiryDate = new Date(startDate);
-    expiryDate.setMonth(expiryDate.getMonth() + warrantyMonths);
-
-    const startFormatted = startDate.toLocaleDateString('fr-DZ');
-    const expiryFormatted = expiryDate.toLocaleDateString('fr-DZ');
+    // Clamped, UTC, anchor-aware. Layout below is unchanged.
+    const dates = warrantyCertificateDates({
+      startIso: transaction.createdAt,
+      months: warrantyMonths,
+      anchoredExpiresAt,
+    });
+    const startFormatted = dates.start;
+    const expiryFormatted = dates.expiry;
     const imei = item.imeiNumber || item.serialNumber || 'Non spécifié';
 
     builder

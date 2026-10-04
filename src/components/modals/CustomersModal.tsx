@@ -13,6 +13,7 @@ import { calculateNextTierProgress, calculateCustomerTier, normalizeLoyaltyConfi
 import { normalizeAlgerianPhone, openWhatsApp } from '../../utils/phoneUtils';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { MoneyInput } from '../ui/MoneyInput';
+import { DzPhoneInput } from '../ui/DzPhoneInput';
 import { useToast } from '../ui/Toast';
 
 const foldForSearch = (s: string | undefined | null): string =>
@@ -667,10 +668,15 @@ export const CustomersModal: React.FC = () => {
                       className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2.5 text-xs text-pos-text focus:border-emerald-400 focus:outline-none transition" />
                   </div>
                   <div>
-                    <label className="text-[10px] text-pos-muted uppercase font-bold block mb-1.5">Téléphone *</label>
-                    <input type="tel" required value={phone} onChange={e => setPhone(e.target.value)}
+                    <label htmlFor="customer-phone" className="text-[10px] text-pos-muted uppercase font-bold block mb-1.5">Téléphone *</label>
+                    <DzPhoneInput
+                      id="customer-phone"
+                      required
+                      value={phone}
+                      onChange={setPhone}
                       placeholder="Ex: 0550 12 34 56"
-                      className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2.5 text-xs text-pos-text focus:border-emerald-400 focus:outline-none transition" />
+                      inputClassName="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2.5 text-xs text-pos-text focus:border-emerald-400 focus:outline-none transition"
+                    />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">

@@ -1,0 +1,4 @@
+   Compiling tauri-plugin-sql v2.4.1 (C:\Users\Click\Desktop\phone3-sync-lab\patches\tauri-plugin-sql)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.87s
+     Running unittests src\lib.rs (target\debug\deps\tauri_plugin_sql-e0999b9f75bfdc94.exe)
+   Doc-tests tauri_plugin_sql

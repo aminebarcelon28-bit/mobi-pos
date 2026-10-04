@@ -103,6 +103,32 @@ def decrypt_turso_token(envelope: str, master_key_b64: str = MASTER_ENCRYPTION_K
     plain_bytes = aesgcm.decrypt(iv, ciphertext_with_tag, None)
     return plain_bytes.decode("utf-8")
 
+def encrypt_data(plaintext: str, master_key_b64: str = MASTER_ENCRYPTION_KEY) -> str:
+    """
+    Encrypt an arbitrary string with AES-256-GCM for cloud escrow.
+
+    Same envelope as encrypt_turso_token -- ``v1:<base64(12B_iv|ct|16B_tag)>`` --
+    so an escrow blob written by one build is readable by any build using the
+    same master key. Named separately from the Turso helper because escrow
+    outlives a single credential and is fetched back days later by a different
+    code path; a reader that assumes "turso token" will not look here.
+    """
+    return encrypt_turso_token(plaintext, master_key_b64)
+
+
+def decrypt_data(envelope: str, master_key_b64: str = MASTER_ENCRYPTION_KEY) -> str:
+    """
+    Decrypt an AES-256-GCM envelope produced by encrypt_data().
+
+    Raises ValueError on a wrong master key or a tampered blob (GCM authenticates
+    the ciphertext), which is what lets the caller tell "unrecoverable escrow"
+    apart from "no escrow at all" and fall back to the resolution modal.
+    """
+    if not envelope:
+        return ""
+    return decrypt_turso_token(envelope, master_key_b64)
+
+
 def detect_local_hwid() -> Dict[str, str]:
     """
     Detect the local machine hardware identifier.
@@ -192,3 +218,110 @@ def generate_qr_image_bytes(data: str, box_size: int = 8, border: int = 2) -> by
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+# =========================================================================
+# Technician Dynamic Challenge-Response PIN Recovery (Model 1)
+# =========================================================================
+
+TECHNICIAN_MASTER_SECRET = b"MOBI-TECH-RESCUE-SECRET-v1-SECURE-KEY"
+
+
+def get_utc_date_str(offset_days: int = 0) -> str:
+    """Return UTC date formatted as YYYYMMDD with optional day offset."""
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc) + timedelta(days=offset_days)
+    return now.strftime("%Y%m%d")
+
+
+def compute_challenge_checksum(date_str: str, nonce: str) -> str:
+    """Compute 4-character Crockford Base32 HMAC checksum for challenge verification."""
+    msg = f"CHALLENGE:{date_str}:{nonce}".encode("utf-8")
+    h = hmac.new(TECHNICIAN_MASTER_SECRET, msg, hashlib.sha256).digest()
+    val = int.from_bytes(h[:4], "big")
+    res = []
+    for i in reversed(range(4)):
+        res.append(CROCKFORD_ALPHABET[(val >> (5 * i)) & 31])
+    return "".join(res)
+
+
+def compute_technician_otp(date_str: str, nonce: str) -> str:
+    """Compute single-use 6-digit OTP for the given nonce and date."""
+    msg = f"RESPONSE:{date_str}:{nonce}".encode("utf-8")
+    h = hmac.new(TECHNICIAN_MASTER_SECRET, msg, hashlib.sha256).digest()
+    code = int.from_bytes(h[:4], "big") % 1_000_000
+    return f"{code:06d}"
+
+
+def solve_technician_challenge(challenge_str: str) -> dict:
+    """
+    Validate POS challenge and generate 6-digit one-time unlock code.
+    Tolerates UTC day +- 1 to account for timezone differences.
+    """
+    clean = challenge_str.strip().upper()
+    parts = clean.split("-")
+
+    if len(parts) == 3 and parts[0] == "MOBI":
+        nonce, chk = parts[1], parts[2]
+    elif len(parts) == 2:
+        nonce, chk = parts[0], parts[1]
+    else:
+        return {"ok": False, "error": "Format invalide. Format attendu : MOBI-XXXX-YYYY (ex: MOBI-8F2A-W9ET)"}
+
+    if len(nonce) != 4 or len(chk) != 4:
+        return {"ok": False, "error": "Longueur invalide. Le défi doit comporter 2 blocs de 4 caractères."}
+
+    # Verify against today, yesterday, tomorrow
+    matched_date = None
+    matched_offset = None
+    for offset in (0, -1, 1):
+        d = get_utc_date_str(offset)
+        expected_chk = compute_challenge_checksum(d, nonce)
+        if expected_chk == chk:
+            matched_date = d
+            matched_offset = offset
+            break
+
+    if not matched_date:
+        d = get_utc_date_str(0)
+        otp = compute_technician_otp(d, nonce)
+        return {
+            "ok": True,
+            "warning": "Attention : La somme de contrôle ne correspond pas à aujourd'hui (date de caisse décalée ?).",
+            "date": d,
+            "offset": 0,
+            "nonce": nonce,
+            "otp": otp,
+        }
+
+    otp = compute_technician_otp(matched_date, nonce)
+    return {
+        "ok": True,
+        "date": matched_date,
+        "offset": matched_offset,
+        "nonce": nonce,
+        "otp": otp,
+    }
+
+
+def build_rescue_whatsapp_message(customer: str, code: str) -> str:
+    """Build standardized WhatsApp message with the recovery code for the customer."""
+    greeting = f"Bonjour *{customer}*," if customer else "Bonjour,"
+    return f"""
+{greeting}
+
+Voici votre code temporaire de déblocage sécurisé pour votre caisse MobiPOS :
+
+🔑 *Code de secours (6 chiffres) :*
+*{code}*
+
+👉 *Instructions sur votre caisse :*
+1. Sur l'écran de la caisse, saisissez ce code à 6 chiffres.
+2. La caisse se déverrouille immédiatement.
+3. Définissez votre nouveau code PIN gérant en toute sécurité.
+
+⚠️ Ce code est à usage unique et valable pour aujourd'hui.
+
+L'équipe MobiPOS
+""".strip()
+

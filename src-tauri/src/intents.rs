@@ -7,6 +7,11 @@ use tauri::{plugin::{Builder as PluginBuilder, PluginApi, TauriPlugin}, AppHandl
 use tauri::{plugin::PluginHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::trust_core::{
+    capability_policy::Capability,
+    ipc_authorizer::{authorize_and_execute, TrustError},
+};
+
 const ALLOWED_HOSTS: &[&str] = &["wa.me", "api.whatsapp.com"];
 
 fn normalize_phone_for_call(phone: &str) -> String {
@@ -58,75 +63,92 @@ pub fn is_url_allowed(raw_url: &str) -> bool {
 }
 
 #[tauri::command]
-pub fn launch_dialer(app: tauri::AppHandle, phone: String) -> Result<(), String> {
-    let clean_phone = normalize_phone_for_call(&phone);
-    if clean_phone.is_empty() {
-        return Err("Numéro de téléphone vide".to_string());
-    }
-    let tel_url = format!("tel:{}", clean_phone);
-    app.opener().open_url(&tel_url, None::<&str>).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn launch_call<R: Runtime>(app: AppHandle<R>, phone: String) -> Result<(), String> {
-    let clean_phone = normalize_phone_for_call(&phone);
-    if clean_phone.is_empty() {
-        return Err("Numéro de téléphone vide".to_string());
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        let plugin = app.state::<PhonePlugin<R>>();
-        plugin
-            .0
-            .run_mobile_plugin::<()>("call", serde_json::json!({ "phone": clean_phone }))
-            .map_err(|error| error.to_string())
-    }
-
-    #[cfg(not(target_os = "android"))]
-    {
+pub fn launch_dialer(app: tauri::AppHandle, phone: String) -> Result<(), TrustError> {
+    authorize_and_execute("launch_dialer", Capability::HardwareOperations, |_| {
+        let clean_phone = normalize_phone_for_call(&phone);
+        if clean_phone.is_empty() {
+            return Err(TrustError::IPCProtocolError {
+                reason: "numéro de téléphone vide",
+            });
+        }
+        let tel_url = format!("tel:{}", clean_phone);
         app.opener()
-            .open_url(format!("tel:{clean_phone}"), None::<&str>)
-            .map_err(|error| error.to_string())
-    }
+            .open_url(&tel_url, None::<&str>)
+            .map_err(TrustError::op_failed)
+    })
 }
 
 #[tauri::command]
-pub fn launch_whatsapp<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), String> {
-    if !is_url_allowed(&url) {
-        return Err(format!("URL non autorisée : {}", url));
-    }
-    #[cfg(target_os = "android")]
-    {
-        let plugin = app.state::<PhonePlugin<R>>();
-        plugin
-            .0
-            .run_mobile_plugin::<()>("whatsapp", serde_json::json!({ "url": url }))
-            .map_err(|error| error.to_string())
-    }
+pub fn launch_call<R: Runtime>(app: AppHandle<R>, phone: String) -> Result<(), TrustError> {
+    authorize_and_execute("launch_call", Capability::HardwareOperations, |_| {
+        let clean_phone = normalize_phone_for_call(&phone);
+        if clean_phone.is_empty() {
+            return Err(TrustError::IPCProtocolError {
+                reason: "numéro de téléphone vide",
+            });
+        }
 
-    #[cfg(not(target_os = "android"))]
-    {
-        app.opener().open_url(&url, None::<&str>).map_err(|e| e.to_string())
-    }
+        #[cfg(target_os = "android")]
+        {
+            let plugin = app.state::<PhonePlugin<R>>();
+            plugin
+                .0
+                .run_mobile_plugin::<()>("call", serde_json::json!({ "phone": clean_phone }))
+                .map_err(TrustError::op_failed)
+        }
+
+        #[cfg(not(target_os = "android"))]
+        {
+            app.opener()
+                .open_url(format!("tel:{clean_phone}"), None::<&str>)
+                .map_err(TrustError::op_failed)
+        }
+    })
 }
 
 #[tauri::command]
-pub fn launch_print<R: Runtime>(app: AppHandle<R>, title: String, content: String) -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    {
-        let plugin = app.state::<PhonePlugin<R>>();
-        plugin
-            .0
-            .run_mobile_plugin::<()>("print", serde_json::json!({ "title": title, "content": content }))
-            .map_err(|error| error.to_string())
-    }
+pub fn launch_whatsapp<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), TrustError> {
+    authorize_and_execute("launch_whatsapp", Capability::HardwareOperations, |_| {
+        if !is_url_allowed(&url) {
+            eprintln!("[trust_core][deny] launch_whatsapp: URL non autorisée bloquée");
+            return Err(TrustError::op_failed(format!("URL non autorisée : {}", url)));
+        }
+        #[cfg(target_os = "android")]
+        {
+            let plugin = app.state::<PhonePlugin<R>>();
+            plugin
+                .0
+                .run_mobile_plugin::<()>("whatsapp", serde_json::json!({ "url": url }))
+                .map_err(TrustError::op_failed)
+        }
 
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, title, content);
-        Err("Impression native disponible uniquement sur Android".to_string())
-    }
+        #[cfg(not(target_os = "android"))]
+        {
+            app.opener().open_url(&url, None::<&str>).map_err(TrustError::op_failed)
+        }
+    })
+}
+
+#[tauri::command]
+pub fn launch_print<R: Runtime>(app: AppHandle<R>, title: String, content: String) -> Result<(), TrustError> {
+    authorize_and_execute("launch_print", Capability::HardwareOperations, |_| {
+        #[cfg(target_os = "android")]
+        {
+            let plugin = app.state::<PhonePlugin<R>>();
+            plugin
+                .0
+                .run_mobile_plugin::<()>("print", serde_json::json!({ "title": title, "content": content }))
+                .map_err(TrustError::op_failed)
+        }
+
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (app, title, content);
+            Err(TrustError::op_failed(
+                "Impression native disponible uniquement sur Android",
+            ))
+        }
+    })
 }
 
 #[tauri::command]
@@ -137,30 +159,39 @@ pub fn launch_print_label<R: Runtime>(
     width_mm: f64,
     height_mm: f64,
     copies: i32,
-) -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    {
-        let plugin = app.state::<PhonePlugin<R>>();
-        plugin
-            .0
-            .run_mobile_plugin::<()>(
-                "printLabel",
-                serde_json::json!({
-                    "title": title,
-                    "imageBase64": image_base64,
-                    "widthMm": width_mm,
-                    "heightMm": height_mm,
-                    "copies": copies,
-                }),
-            )
-            .map_err(|error| error.to_string())
-    }
+) -> Result<(), TrustError> {
+    authorize_and_execute("launch_print_label", Capability::HardwareOperations, |_| {
+        if image_base64.len() > 16 * 1024 * 1024 {
+            return Err(TrustError::IPCProtocolError {
+                reason: "image d'étiquette oversized",
+            });
+        }
+        #[cfg(target_os = "android")]
+        {
+            let plugin = app.state::<PhonePlugin<R>>();
+            plugin
+                .0
+                .run_mobile_plugin::<()>(
+                    "printLabel",
+                    serde_json::json!({
+                        "title": title,
+                        "imageBase64": image_base64,
+                        "widthMm": width_mm,
+                        "heightMm": height_mm,
+                        "copies": copies,
+                    }),
+                )
+                .map_err(TrustError::op_failed)
+        }
 
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, title, image_base64, width_mm, height_mm, copies);
-        Err("Impression d'étiquettes native disponible uniquement sur Android".to_string())
-    }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (app, title, image_base64, width_mm, height_mm, copies);
+            Err(TrustError::op_failed(
+                "Impression d'étiquettes native disponible uniquement sur Android",
+            ))
+        }
+    })
 }
 
 /// Raw TCP print to a Wi-Fi thermal/label printer (default port 9100).
@@ -172,48 +203,65 @@ pub fn mobile_wifi_print<R: Runtime>(
     host: String,
     port: u16,
     data_base64: String,
-) -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    {
-        let plugin = app.state::<PhonePlugin<R>>();
-        plugin
-            .0
-            .run_mobile_plugin::<()>(
-                "wifiPrint",
-                serde_json::json!({
-                    "host": host,
-                    "port": port,
-                    "dataBase64": data_base64,
-                }),
-            )
-            .map_err(|error| error.to_string())
-    }
+) -> Result<(), TrustError> {
+    authorize_and_execute("mobile_wifi_print", Capability::HardwareOperations, |_| {
+        if data_base64.len() > 16 * 1024 * 1024 {
+            return Err(TrustError::IPCProtocolError {
+                reason: "données d'impression oversized",
+            });
+        }
+        #[cfg(target_os = "android")]
+        {
+            let plugin = app.state::<PhonePlugin<R>>();
+            plugin
+                .0
+                .run_mobile_plugin::<()>(
+                    "wifiPrint",
+                    serde_json::json!({
+                        "host": host,
+                        "port": port,
+                        "dataBase64": data_base64,
+                    }),
+                )
+                .map_err(TrustError::op_failed)
+        }
 
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, host, port, data_base64);
-        Err("Impression Wi-Fi disponible uniquement sur Android".to_string())
-    }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (app, host, port, data_base64);
+            Err(TrustError::op_failed(
+                "Impression Wi-Fi disponible uniquement sur Android",
+            ))
+        }
+    })
 }
 
 /// Lists Bluetooth printers already paired in Android settings
 /// (no location permission needed for bonded devices).
 #[tauri::command]
-pub fn mobile_bluetooth_printers<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
-    #[cfg(target_os = "android")]
-    {
-        let plugin = app.state::<PhonePlugin<R>>();
-        plugin
-            .0
-            .run_mobile_plugin::<serde_json::Value>("bluetoothPrinters", serde_json::json!({}))
-            .map_err(|error| error.to_string())
-    }
+pub fn mobile_bluetooth_printers<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, TrustError> {
+    authorize_and_execute(
+        "mobile_bluetooth_printers",
+        Capability::HardwareOperations,
+        |_| {
+            #[cfg(target_os = "android")]
+            {
+                let plugin = app.state::<PhonePlugin<R>>();
+                plugin
+                    .0
+                    .run_mobile_plugin::<serde_json::Value>("bluetoothPrinters", serde_json::json!({}))
+                    .map_err(TrustError::op_failed)
+            }
 
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = app;
-        Err("Bluetooth disponible uniquement sur Android".to_string())
-    }
+            #[cfg(not(target_os = "android"))]
+            {
+                let _ = app;
+                Err(TrustError::op_failed(
+                    "Bluetooth disponible uniquement sur Android",
+                ))
+            }
+        },
+    )
 }
 
 /// Raw SPP/RFCOMM print to a paired Bluetooth printer (ESC/POS, TSPL, ZPL).
@@ -222,34 +270,47 @@ pub fn mobile_bluetooth_print<R: Runtime>(
     app: AppHandle<R>,
     mac: String,
     data_base64: String,
-) -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    {
-        let plugin = app.state::<PhonePlugin<R>>();
-        plugin
-            .0
-            .run_mobile_plugin::<()>(
-                "bluetoothPrint",
-                serde_json::json!({
-                    "mac": mac,
-                    "dataBase64": data_base64,
-                }),
-            )
-            .map_err(|error| error.to_string())
-    }
+) -> Result<(), TrustError> {
+    authorize_and_execute("mobile_bluetooth_print", Capability::HardwareOperations, |_| {
+        if data_base64.len() > 16 * 1024 * 1024 {
+            return Err(TrustError::IPCProtocolError {
+                reason: "données d'impression oversized",
+            });
+        }
+        #[cfg(target_os = "android")]
+        {
+            let plugin = app.state::<PhonePlugin<R>>();
+            plugin
+                .0
+                .run_mobile_plugin::<()>(
+                    "bluetoothPrint",
+                    serde_json::json!({
+                        "mac": mac,
+                        "dataBase64": data_base64,
+                    }),
+                )
+                .map_err(TrustError::op_failed)
+        }
 
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, mac, data_base64);
-        Err("Impression Bluetooth disponible uniquement sur Android".to_string())
-    }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (app, mac, data_base64);
+            Err(TrustError::op_failed(
+                "Impression Bluetooth disponible uniquement sur Android",
+            ))
+        }
+    })
 }
 
 #[tauri::command]
-pub fn launch_url(app: tauri::AppHandle, url: String) -> Result<(), String> {    if !is_url_allowed(&url) {
-        return Err(format!("URL non autorisée : {}", url));
-    }
-    app.opener().open_url(&url, None::<&str>).map_err(|e| e.to_string())
+pub fn launch_url(app: tauri::AppHandle, url: String) -> Result<(), TrustError> {
+    authorize_and_execute("launch_url", Capability::HardwareOperations, |_| {
+        if !is_url_allowed(&url) {
+            eprintln!("[trust_core][deny] launch_url: URL non autorisée bloquée");
+            return Err(TrustError::op_failed(format!("URL non autorisée : {}", url)));
+        }
+        app.opener().open_url(&url, None::<&str>).map_err(TrustError::op_failed)
+    })
 }
 
 #[cfg(test)]

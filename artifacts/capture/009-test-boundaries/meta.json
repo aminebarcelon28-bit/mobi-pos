@@ -1,0 +1,15 @@
+{
+  "slot": "009-test-boundaries",
+  "name": "Gate 6: Architecture & Boundary Invariants",
+  "command": "npm run test:boundaries",
+  "cwd": ".",
+  "expected_exit": 0,
+  "exit_code": 0,
+  "status": "PASS",
+  "start_local": "2026-10-01T03:05:00.957+01:00",
+  "start_utc": "2026-10-01T02:05:00.957Z",
+  "end_local": "2026-10-01T03:05:02.371+01:00",
+  "end_utc": "2026-10-01T02:05:02.371Z",
+  "stdout_sha256": "e51192fa060485ce8744f39ea4ecfbdc695d38659c2e9500d7fc500e1ebb15c7",
+  "stderr_sha256": "48f1c59e90ba19bb53369e52d42503e02d29c348cc23c9fe14b88f8c0b364906"
+}

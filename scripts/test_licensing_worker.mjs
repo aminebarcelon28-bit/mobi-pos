@@ -207,6 +207,190 @@ await checkAsync('clients are isolated from each other', async () => {
   assert.equal((await checkpoint(kv, 'client-2', 1, hashOf(1))).code, 200);
 });
 
+// ---------------------------------------------------------------------------
+// Live integration (opt-in, isolated)
+//
+// Everything above runs against an in-memory KV and cannot touch production.
+// The live section below is the only part that talks to a real worker, so it is
+// doubly guarded:
+//
+//   1. It never runs by default. LICENSING_LIVE_TEST=1 opts in.
+//   2. It refuses to run against the production domain unless
+//      LICENSING_LIVE_ALLOW_PRODUCTION=1 is also set, because the real
+//      hazard is a test sequence becoming a baseline that locks out a real
+//      installation on the next run.
+//
+// Every live call uses an ephemeral client id. The worker expires records
+// prefixed test_ephemeral_ after 60s, so a run leaves nothing behind.
+// ---------------------------------------------------------------------------
+
+console.log('\nlive integration (isolated)');
+
+const LIVE_TEST = process.env.LICENSING_LIVE_TEST === '1';
+const LIVE_ALLOW_PROD = process.env.LICENSING_LIVE_ALLOW_PRODUCTION === '1';
+const LIVE_ENDPOINT = process.env.LICENSING_LIVE_ENDPOINT || '';
+const LIVE_TOKEN = process.env.LICENSING_LIVE_TOKEN || '';
+
+const testClientId = () =>
+  `test_ephemeral_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+const PRODUCTION_HOSTS = ['mobi-licensing.aminebarcelon28.workers.dev'];
+const isProduction =
+  PRODUCTION_HOSTS.some((h) => LIVE_ENDPOINT.includes(h)) || !LIVE_ENDPOINT;
+
+check('live tests are opt-in', () => {
+  if (!LIVE_TEST) {
+    console.log('       (skipped: set LICENSING_LIVE_TEST=1 to enable)');
+    return true;
+  }
+  return true;
+});
+
+check('live tests require an endpoint and token', () => {
+  if (!LIVE_TEST) return true;
+  if (!LIVE_ENDPOINT || !LIVE_TOKEN) {
+    console.log('       (skipped: LICENSING_LIVE_ENDPOINT / LICENSING_LIVE_TOKEN unset)');
+    return true;
+  }
+  return true;
+});
+
+check('live tests refuse production without an explicit override', () => {
+  if (!LIVE_TEST || !LIVE_ENDPOINT || !LIVE_TOKEN) return true;
+  if (isProduction && !LIVE_ALLOW_PROD) {
+    console.log(
+      '       (blocked: production endpoint requires LICENSING_LIVE_ALLOW_PRODUCTION=1)'
+    );
+    return true;
+  }
+  return true;
+});
+
+if (LIVE_TEST && LIVE_ENDPOINT && LIVE_TOKEN && (!isProduction || LIVE_ALLOW_PROD)) {
+  const post = async (path, body) => {
+    const res = await fetch(`${LIVE_ENDPOINT}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${LIVE_TOKEN}`,
+      },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, body: await res.json().catch(() => null) };
+  };
+
+  await checkAsync('live: signing returns a key and signature', async () => {
+    const r = await post('/api/v1/admin/licenses/sign', {
+      customer: 'Integration Test',
+      formula: 'LIFETIME',
+      seats_pos: 1,
+      seats_desk: 1,
+      expires_at: null,
+      hwid_bindings: [],
+    });
+    assert.equal(r.status, 200, `status ${r.status}`);
+    assert.match(r.body.license_key, /^MOBI-LIFE-/);
+    assert.match(r.body.token_signature, /^[0-9a-f]{128}$/);
+  });
+
+  await checkAsync('live: checkpoint anchors an ephemeral client', async () => {
+    const cid = testClientId();
+    const r = await post('/api/v1/admin/audit/checkpoint', {
+      client_id: cid,
+      sequence_number: 1,
+      head_audit_hash: 'a'.repeat(64),
+    });
+    assert.equal(r.status, 200, `status ${r.status} for ${cid}`);
+    assert.equal(r.body.status, 'anchored');
+  });
+
+  await checkAsync('live: truncation is refused for the ephemeral client', async () => {
+    const cid = testClientId();
+    await post('/api/v1/admin/audit/checkpoint', {
+      client_id: cid,
+      sequence_number: 50,
+      head_audit_hash: 'b'.repeat(64),
+    });
+    const r = await post('/api/v1/admin/audit/checkpoint', {
+      client_id: cid,
+      sequence_number: 5,
+      head_audit_hash: 'c'.repeat(64),
+    });
+    assert.equal(r.status, 409, `status ${r.status}`);
+    assert.match(r.body.error, /Sequence regression/);
+  });
+
+  await checkAsync('live: anchor reset is refused without explicit confirmation', async () => {
+    const cid = testClientId();
+    await post('/api/v1/admin/audit/checkpoint', {
+      client_id: cid,
+      sequence_number: 12,
+      head_audit_hash: 'd'.repeat(64),
+    });
+
+    const noConfirm = await post('/api/v1/admin/audit/reset', { client_id: cid });
+    assert.equal(noConfirm.status, 400, `missing confirm: ${noConfirm.status}`);
+
+    const wrongConfirm = await post('/api/v1/admin/audit/reset', {
+      client_id: cid,
+      confirm: 'yes-please',
+    });
+    assert.equal(wrongConfirm.status, 400, `wrong confirm: ${wrongConfirm.status}`);
+    assert.equal(wrongConfirm.body.error, 'CONFIRMATION_REQUIRED');
+
+    // The anchor must still be intact: a refused reset changes nothing.
+    const stillThere = await post('/api/v1/admin/audit/checkpoint', {
+      client_id: cid,
+      sequence_number: 1,
+      head_audit_hash: 'e'.repeat(64),
+    });
+    assert.equal(stillThere.status, 409, 'refused reset must not clear the anchor');
+  });
+
+  await checkAsync('live: confirmed anchor reset clears the false lockout', async () => {
+    const cid = testClientId();
+    await post('/api/v1/admin/audit/checkpoint', {
+      client_id: cid,
+      sequence_number: 40,
+      head_audit_hash: 'f'.repeat(64),
+    });
+
+    const locked = await post('/api/v1/admin/audit/checkpoint', {
+      client_id: cid,
+      sequence_number: 2,
+      head_audit_hash: '1'.repeat(64),
+    });
+    assert.equal(locked.status, 409, 'precondition: should be locked out');
+
+    const reset = await post('/api/v1/admin/audit/reset', {
+      client_id: cid,
+      confirm: 'RESET_EPHEMERAL',
+    });
+    assert.equal(reset.status, 200, `reset status ${reset.status}`);
+    assert.equal(reset.body.status, 'reset');
+    assert.equal(reset.body.had_checkpoint, true);
+    // The discarded baseline is reported back, not silently dropped.
+    assert.equal(reset.body.discarded_checkpoint.sequence_number, 40);
+
+    const after = await post('/api/v1/admin/audit/checkpoint', {
+      client_id: cid,
+      sequence_number: 2,
+      head_audit_hash: '2'.repeat(64),
+    });
+    assert.equal(after.status, 200, `re-anchor after reset: ${after.status}`);
+    assert.equal(after.body.status, 'anchored');
+  });
+
+  await checkAsync('live: unauthenticated signing is refused', async () => {
+    const res = await fetch(`${LIVE_ENDPOINT}/api/v1/admin/licenses/sign`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(res.status, 401);
+  });
+}
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) {
   console.log('Failed: ' + failures.join(', '));

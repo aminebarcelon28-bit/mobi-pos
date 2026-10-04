@@ -69,6 +69,10 @@ _assert_no_secrets(datas)
 hiddenimports = (
     collect_submodules("cryptography")
     + collect_submodules("qrcode")
+    # argon2-cffi is imported lazily inside _decrypt_envelope(), so static
+    # analysis never sees it. Without this the frozen build raises ImportError
+    # at the moment an operator tries to import an encrypted secrets envelope.
+    + ["argon2", "argon2.low_level", "cffi"]
     + ["PIL.Image", "requests", "licensing_app", "keyring", "win32crypt"]
 )
 

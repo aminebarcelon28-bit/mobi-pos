@@ -18,62 +18,91 @@ export function isNativeScannerSupported(): boolean {
 }
 
 /**
- * Helper to identify plugin missing or permission gate errors from Tauri.
+ * Rust command that bridges to the native scanner.
+ *
+ * This is the app-level `#[tauri::command]`, NOT `plugin:scanner|scanDocument`.
+ * The `scanner` Tauri plugin exists only to register the Android/iOS native
+ * module — it declares no commands of its own, so the plugin-namespaced form
+ * can never resolve and the ACL rejects it with
+ * "Scanner.scanDocument not allowed. Plugin not found". Calling the app-level
+ * command also keeps this out of the capability permission system entirely,
+ * which is exactly why `scanner.rs` exposes both. See the module doc there.
  */
-function isPluginMissingError(msg: string): boolean {
-  return /plugin not found|not allowed|non disponible|unknown command|command not found/i.test(msg);
+const SCAN_COMMAND = 'mobile_scan_document';
+
+/** Command this build used before `mobile_scan_document` existed. */
+const LEGACY_SCAN_COMMAND = 'plugin:scanner|scanDocument';
+
+/**
+ * True for the ACL/plugin-resolution failures that are a build wiring problem
+ * rather than anything the operator did.
+ */
+function isPluginUnavailable(message: string): boolean {
+  return /plugin not found|not allowed|plugin:\w+\|\w+.*not found/i.test(message);
 }
 
 /**
  * Triggers the native Document Scanner UI on mobile (Android GMS / iOS VisionKit).
- * First calls the registered root Tauri command `mobile_scan_document`, then falls back
- * to `plugin:scanner|scanDocument`, with graceful error classification if uninstalled.
+ * Returns normalized bounding boxes for invoice reconciliation.
  */
 export async function scanNativeDocument(): Promise<NativeScanResult> {
   if (!isTauriEnvironment()) {
     return {
       success: false,
       isPluginMissing: true,
-      error: "Le scanner de documents natif nécessite l'application installée sur Android ou iOS.",
+      error: 'Le scanner de documents natif nécessite l\'exécution sur l\'application mobile installée.',
     };
   }
 
-  // 1. Invoke direct root Tauri command `mobile_scan_document` (permitted by core:default)
   try {
-    const res = await invokeCommand<{ blocks?: OcrBoundingBox[] } | OcrBoundingBox[]>(
-      'mobile_scan_document',
+    const res = await invokeCommand<{ blocks: OcrBoundingBox[] }>(
+      SCAN_COMMAND,
       undefined,
       'HARDWARE_ERROR'
     );
 
-    const blocks = Array.isArray(res) ? res : res?.blocks;
-    if (Array.isArray(blocks) && blocks.length > 0) {
+    if (!res || !Array.isArray(res.blocks) || res.blocks.length === 0) {
       return {
-        success: true,
-        blocks,
+        success: false,
+        error: 'Aucun texte ni tableau détecté sur le document.',
       };
     }
 
     return {
-      success: false,
-      error: 'Aucun texte ni tableau détecté sur le document.',
+      success: true,
+      blocks: res.blocks,
     };
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err) || '';
-    if (/cancel|annul|user cancel/i.test(msg)) {
+    const message = err instanceof Error ? err.message : String(err) || 'Échec de numérisation';
+    if (/cancel|annul|user cancel/i.test(message)) {
       return {
         success: false,
         isCancelled: true,
       };
     }
-
-    const isMissing = isPluginMissingError(msg);
+    // A native command that is absent is a build/wiring fault, not an operator
+    // error. Say so plainly instead of surfacing a raw ACL string.
+    const isPluginMissing = isPluginUnavailable(message);
+    if (isPluginMissing) {
+      if (import.meta.env.DEV) {
+        console.error(
+          `[scanner] « ${SCAN_COMMAND} » indisponible (${message}). ` +
+            `Vérifier l'enregistrement de scanner::mobile_scan_document dans generate_handler! (src-tauri/src/lib.rs) ` +
+            `et scanner::plugin() (src-tauri/src/scanner.rs). ` +
+            `Lancienne commande « ${LEGACY_SCAN_COMMAND} » ne peut pas fonctionner : ` +
+            `le plugin « scanner » ne déclare aucune commande.`,
+        );
+      }
+      return {
+        success: false,
+        isPluginMissing: true,
+        error:
+          'Scanner natif indisponible sur ce build. Utilisez l’import de photo ou saisissez la facture manuellement.',
+      };
+    }
     return {
       success: false,
-      isPluginMissing: isMissing,
-      error: isMissing
-        ? "Le module caméra ML Kit n'est pas actif sur cet appareil (Google Play Services requis). Vous pouvez utiliser le bouton 'Facture Démo' ou saisir directement les lignes."
-        : (msg || 'Échec de numérisation caméra'),
+      error: message,
     };
   }
 }
@@ -98,17 +127,25 @@ export function parseTextToBoundingBoxes(rawText: string): OcrBoundingBox[] {
   const initialY = 0.1;
 
   lines.forEach((lineStr, lineIdx) => {
+    const tokens = lineStr.split(/\s+/).filter((t) => t.length > 0);
+    if (tokens.length === 0) return;
+
     const y = initialY + lineIdx * lineSpacing;
     const h = 0.03;
+    const tokenCount = tokens.length;
 
-    // Emitting the full trimmed line keeps all inner delimiters (pipes |, tabs \t, multi-spaces) intact
-    boxes.push({
-      text: lineStr,
-      x: 0.05,
-      y,
-      w: 0.9,
-      h,
-      confidence: 0.99,
+    tokens.forEach((tok, tokIdx) => {
+      const x = 0.05 + (tokIdx / Math.max(1, tokenCount)) * 0.88;
+      const w = Math.min(0.2, Math.max(0.04, tok.length * 0.012));
+
+      boxes.push({
+        text: tok,
+        x,
+        y,
+        w,
+        h,
+        confidence: 0.98,
+      });
     });
   });
 
@@ -145,3 +182,29 @@ export function generateDemoInvoiceScan(): ProcessRawScanRequest {
     reported_grand_total: 135250,
   };
 }
+
+/**
+ * Generates a real-world high-volume accessories invoice scan:
+ * 5 accessory items (Apple 20W, iPhone 15 PM Case, Belkin Cable, Anker 735 GaN, Spigen Glass)
+ * Total: 128,000.00 DA (Mathematically balanced)
+ */
+export function generateAccessoriesInvoiceScan(): ProcessRawScanRequest {
+  const sampleLines = [
+    'Apple Adaptateur Secteur 20W USB-C 194252157022 10x 3500.00 35000.00',
+    'Coque Silicone iPhone 15 Pro Max MagSafe 15x 1800.00 27000.00',
+    'Belkin Cable BoostCharge USB-C vers USB-C 2M 745883818310 20x 1200.00 24000.00',
+    'Anker 735 Chargeur GaNPrime 65W 3-Ports 5x 6000.00 30000.00',
+    'Protection Verre Trempé Galaxy S24 Ultra 10x 1200.00 12000.00',
+  ];
+
+  const boundingBoxes = parseTextToBoundingBoxes(sampleLines.join('\n'));
+
+  return {
+    supplier_name: 'Accessoires Express Bab El Oued',
+    bounding_boxes: boundingBoxes,
+    reported_tax: 0,
+    reported_freight: 0,
+    reported_grand_total: 128000,
+  };
+}
+

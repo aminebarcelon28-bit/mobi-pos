@@ -39,7 +39,7 @@ const chipOff = 'bg-pos-card border-pos-border text-pos-muted';
 const chipOn = (tone: 'intake' | 'exit'): string =>
   tone === 'exit'
     ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-700 dark:text-emerald-300'
-    : 'bg-amber-500/10 border-amber-500/50 text-amber-700 dark:text-amber-300';
+    : 'bg-amber-500/10 border-amber-500/50 text-amber-800 dark:text-amber-300';
 
 /** Section eyebrow — the single heading treatment shared by every fieldset. */
 const legendCls = 'text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-pos-muted';

@@ -1,8 +1,8 @@
 // Disaster Recovery / Cloud Restore Engine (New Device / Replacement Laptop).
 //
 // F4-honesty: despite the historical name, there is NO staging database and
-// NO file swap in this path (swapStagingDatabase exists for backup-file
-// flows only and has no callers here). What executeRestore does is a LIVE
+// NO file swap in this path (native file-swap restore was removed Phase 4.4;
+// FT-06 deleted its TS wrappers). What executeRestore does is a LIVE
 // version-guarded MERGE into mobi_pos.db: every applied row goes through the
 // same guarded upserts as pull (newer version wins, tombstones respected),
 // preceded by a validated source check and a restorable pre-merge backup.
@@ -106,7 +106,7 @@ export class RestoreManager {
     let backupPath: string | undefined;
     if (!opts?.skipPreBackup) {
       const { createPreMigrationBackup } = await import('../db/backupManager');
-      const pre = await createPreMigrationBackup();
+      const pre = await createPreMigrationBackup('restore');
       if (!pre.success) {
         throw new Error(`Sauvegarde pré-restauration impossible (${pre.error ?? 'cause inconnue'}) — restauration refusée.`);
       }

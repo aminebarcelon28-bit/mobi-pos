@@ -63,6 +63,7 @@ export class MobilePosRoutingEngine {
       case 'REPAIR_CLAIM_STUB':
       case 'TRADE_IN_VOUCHER':
       case 'Z_REPORT':
+      case 'WARRANTY_CERTIFICATE':
       case 'CUSTOMER_DEBT_STATEMENT':
         targetPrinter = this.profile.frontDeskReceiptPrinter;
         break;

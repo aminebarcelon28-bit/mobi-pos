@@ -26,12 +26,11 @@ COLUMNS = [
     "Actions",
 ]
 
-# PyQt6 does not expose Qt::TextFormatRole on Qt.ItemDataRole, but Qt still
-# queries it (UserRole + 17) to decide how to interpret DisplayRole. The model
-# answers with Qt.PlainText so a stray '<' can never be rendered as markup.
-_TEXT_FORMAT_ROLE = getattr(Qt.ItemDataRole, "TextFormatRole", None)
-if _TEXT_FORMAT_ROLE is None:
-    _TEXT_FORMAT_ROLE = Qt.ItemDataRole.UserRole + 17
+# Qt::TextFormatRole (role 17) decides how the view interprets DisplayRole.
+# PyQt6 does not expose it on Qt.ItemDataRole, so it is addressed numerically.
+# The model answers with Qt.PlainText, so a stray '<' in a customer name can
+# never be rendered as markup.
+_TEXT_FORMAT_ROLE = Qt.ItemDataRole.UserRole + 17
 
 
 class LicenseTableModel(QAbstractTableModel):
@@ -280,6 +279,14 @@ class LicenseTableModel(QAbstractTableModel):
             f"Postes : {esc(record.active_desktops)}/{esc(record.max_desktops)}"
             f"  •  Mobiles : {esc(record.active_mobiles)}/{esc(record.max_mobiles)}",
         ]
+        if not record.has_plaintext_key:
+            # Point at the fix rather than restating the problem. This line is
+            # what turns a dead end into a click.
+            lines.insert(
+                1,
+                "Clé en clair non liée localement. Cliquez pour générer, "
+                "associer ou utiliser l'identifiant Cloud.",
+            )
         days = record.days_left
         if days is not None:
             lines.append(f"Expiration : {esc(days)} jour(s) restant(s)")

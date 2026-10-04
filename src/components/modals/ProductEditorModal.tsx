@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
+import { defaultWarrantyMonthsFor } from '../../utils/warrantyResolver';
 import type { BrandName, CategoryType, ProductInput } from '../../types/pos';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
@@ -191,7 +192,8 @@ export const ProductEditorModal: React.FC = () => {
     leadTimeDays: 7,
     dailySalesVelocity: 2.0,
     reorderPoint: 5,
-    warrantyMonths: 0,
+    warrantyMonths: null,
+    warrantyExplicitlyDisabled: false,
     shelfLocation: 'Rayon A1',
     minPrice: 2000,
     isActive: true,
@@ -200,6 +202,11 @@ export const ProductEditorModal: React.FC = () => {
 
   const [autoPrintLabel, setAutoPrintLabel] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // The term that will ACTUALLY be stamped if the owner leaves this undecided.
+  // Derived from the resolver, never re-derived here, so the label cannot drift
+  // from the engine (Option A: 3 months for pre-owned stock, 12 otherwise).
+  const effectiveWarrantyDefault = defaultWarrantyMonthsFor({ category: formData.category });
 
   // Generate 100% collision-free EAN-13
   const handleGenerateFreshEan13 = () => {
@@ -321,7 +328,8 @@ export const ProductEditorModal: React.FC = () => {
         setFormData({
           ...editingProduct,
           semiWholesalePrice: editingProduct.semiWholesalePrice ?? fallbackSemi,
-          warrantyMonths: editingProduct.warrantyMonths || 0,
+          warrantyMonths: editingProduct.warrantyMonths ?? null,
+          warrantyExplicitlyDisabled: editingProduct.warrantyExplicitlyDisabled === true,
           shelfLocation: editingProduct.shelfLocation || 'Rayon A1',
           minPrice: editingProduct.minPrice || Math.round(editingProduct.price * 0.8),
           isActive: editingProduct.isActive !== false,
@@ -355,7 +363,8 @@ export const ProductEditorModal: React.FC = () => {
           leadTimeDays: 7,
           dailySalesVelocity: 2.0,
           reorderPoint: 5,
-          warrantyMonths: 0,
+          warrantyMonths: null,
+          warrantyExplicitlyDisabled: false,
           shelfLocation: 'Rayon A1',
           minPrice: 2000,
           isActive: true,
@@ -505,7 +514,8 @@ export const ProductEditorModal: React.FC = () => {
         leadTimeDays: 7,
         dailySalesVelocity: 2.0,
         reorderPoint: 5,
-        warrantyMonths: 0,
+        warrantyMonths: null,
+        warrantyExplicitlyDisabled: false,
         shelfLocation: formData.shelfLocation || 'Rayon A1',
         minPrice: formData.minPrice || Math.round(formData.price * 0.8),
         isActive: true,
@@ -550,7 +560,7 @@ export const ProductEditorModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-3 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in slide-in-from-bottom-5 sm:zoom-in-95">
+      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[90dvh] overflow-hidden animate-in slide-in-from-bottom-5 sm:zoom-in-95">
         {/* Mobile drag handle */}
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
@@ -650,7 +660,7 @@ export const ProductEditorModal: React.FC = () => {
           {/* ======================================================================= */}
           {/* MAIN SCROLLABLE FORM CONTENT (header/footer pinned via shrink-0)       */}
           {/* ======================================================================= */}
-          <div className="flex-1 overflow-y-auto px-6 py-4 min-h-0">
+          <div className="flex-1 overflow-y-auto overscroll-contain px-6 py-4 min-h-0">
           <div className="flex flex-col lg:flex-row gap-5 pb-6">
             
             {/* --------------------------------------------------------------------- */}
@@ -1280,7 +1290,7 @@ export const ProductEditorModal: React.FC = () => {
                       Aucun palier volume configuré. Exemple: "3 pièces pour 400 DA/u (au lieu de 500 DA)".
                     </p>
                   ) : (
-                    <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                    <div className="space-y-1.5 max-h-32 overflow-y-auto overscroll-contain">
                       {formData.volumeDiscounts.map((tier, tIdx) => (
                         <div key={tIdx} className="flex items-center gap-2 bg-pos-bg p-1.5 rounded-lg border border-pos-border">
                           <span className="text-[10px] font-bold text-pos-muted whitespace-nowrap">Dès</span>
@@ -1345,23 +1355,69 @@ export const ProductEditorModal: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-[10px] font-bold text-pos-muted block mb-1">
+                  <label
+                    htmlFor="warranty-magasin-select"
+                    className="text-[10px] font-bold text-pos-muted block mb-1"
+                  >
                     Garantie Magasin
                   </label>
+                  {/* Three states, not two (BUG-WAR-03). "Défaut magasin" is
+                      UNDECIDED and resolves to the store default at sale;
+                      "Sans Garantie" is a deliberate as-is/clearance decision and
+                      sets warrantyExplicitlyDisabled. Conflating them in one 0
+                      is what silently voided coverage on normally-configured
+                      products.
+
+                      Option A (owner-ratified): undecided PRE-OWNED stock resolves
+                      to the 3-month refurb baseline, not 12. The "default" option
+                      is relabelled with the term that will ACTUALLY be stamped, so
+                      the owner is never shown "12 mois" for a phone that will be
+                      sold with 3. Measured: all 252 occasion products are
+                      undecided, so this label is the only warning they get.
+
+                      The label is associated with htmlFor/id rather than an
+                      aria-label, so the accessible name IS the visible text
+                      (WCAG 2.5.3 Label in Name holds by construction) and the
+                      control stays locatable via
+                      getByRole('combobox', { name: /Garantie Magasin/i }). */}
                   <select
-                    value={formData.warrantyMonths || 0}
-                    onChange={(e) =>
-                      setFormData({ ...formData, warrantyMonths: parseInt(e.target.value) || 0 })
+                    id="warranty-magasin-select"
+                    value={
+                      formData.warrantyExplicitlyDisabled
+                        ? 'none'
+                        : formData.warrantyMonths === null || formData.warrantyMonths === undefined
+                          ? 'default'
+                          : String(formData.warrantyMonths)
                     }
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === 'none') {
+                        setFormData({ ...formData, warrantyMonths: 0, warrantyExplicitlyDisabled: true });
+                      } else if (v === 'default') {
+                        setFormData({ ...formData, warrantyMonths: null, warrantyExplicitlyDisabled: false });
+                      } else {
+                        setFormData({ ...formData, warrantyMonths: parseInt(v, 10), warrantyExplicitlyDisabled: false });
+                      }
+                    }}
                     className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-2.5 text-base sm:text-xs font-semibold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer transition"
                   >
-                    <option value={0}>Sans Garantie</option>
+                    <option value="default">
+                      Défaut magasin ({effectiveWarrantyDefault} mois)
+                    </option>
+                    <option value="none">Sans Garantie (vendu tel quel)</option>
                     <option value={1}>1 Mois Garantie SAV</option>
                     <option value={3}>3 Mois Garantie SAV</option>
                     <option value={6}>6 Mois Garantie SAV</option>
                     <option value={12}>1 An Garantie Constructeur</option>
                     <option value={24}>2 Ans Garantie Officielle</option>
                   </select>
+                  <p className="text-[10px] text-pos-muted mt-1">
+                    {formData.warrantyExplicitlyDisabled
+                      ? 'Vendu sans couverture — la garantie ne démarrera pas.'
+                      : formData.warrantyMonths === null || formData.warrantyMonths === undefined
+                        ? `Non défini : ${effectiveWarrantyDefault} mois s’appliqueront à la vente.`
+                        : `Terme figé à la vente : ${formData.warrantyMonths} mois.`}
+                  </p>
                 </div>
               </div>
 

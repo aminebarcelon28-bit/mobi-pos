@@ -4,9 +4,9 @@
 
 import {
   createDatabaseBackup as apiCreateDatabaseBackup,
-  restoreDatabaseBackup as apiRestoreDatabaseBackup,
   listDatabaseBackups as apiListDatabaseBackups,
-  swapStagingDatabase as apiSwapStagingDatabase,
+  type DatabaseBackupMeta,
+  type SnapshotKind,
 } from '../api/backup';
 import { db as dexieDb } from './database';
 
@@ -17,6 +17,11 @@ const isTauri = (): boolean => {
 export interface LocalBackupResult {
   success: boolean;
   sqliteBackupPath?: string;
+  /** Stage 1/E: native snapshot identity + integrity (audit rows use `snapshotId`, never the path). */
+  snapshotId?: string;
+  snapshotBytes?: number;
+  snapshotMtimeMs?: number;
+  snapshotSha256?: string;
   dexieBackupSnapshot?: string;
   timestamp: string;
   error?: string;
@@ -25,15 +30,21 @@ export interface LocalBackupResult {
 /**
  * Creates an automatic full backup of the local SQLite database file and a Dexie snapshot.
  * Must be executed BEFORE first-sync migration or account changes.
+ *
+ * Stage 1/E: the native side is now the SQLite online backup API (single
+ * read transaction, integrity-checked, hashed) instead of a raw file copy.
+ * `kind` files the snapshot into its filename (wipe/restore/migration/manual).
  */
-export async function createPreMigrationBackup(): Promise<LocalBackupResult> {
+export async function createPreMigrationBackup(kind: SnapshotKind = 'manual'): Promise<LocalBackupResult> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   let sqliteBackupPath: string | undefined;
+  let snapshotMeta: DatabaseBackupMeta | undefined;
 
-  // 1. Native SQLite .db copy
+  // 1. Native SQLite snapshot (online backup API)
   if (isTauri()) {
     try {
-      sqliteBackupPath = await apiCreateDatabaseBackup();
+      snapshotMeta = await apiCreateDatabaseBackup(kind);
+      sqliteBackupPath = snapshotMeta.path;
     } catch (e) {
       console.warn('Native SQLite backup error:', e);
     }
@@ -121,26 +132,14 @@ export async function createPreMigrationBackup(): Promise<LocalBackupResult> {
   return {
     success: isSuccess,
     sqliteBackupPath,
+    snapshotId: snapshotMeta?.id,
+    snapshotBytes: snapshotMeta?.bytes,
+    snapshotMtimeMs: snapshotMeta?.mtimeMs,
+    snapshotSha256: snapshotMeta?.sha256,
     dexieBackupSnapshot: dexieSnapshotKey || undefined,
     timestamp,
     error,
   };
-}
-
-/**
- * Rollback helper: restores a specified SQLite backup file.
- */
-export async function restoreLocalDatabaseFile(backupPath: string): Promise<boolean> {
-  if (isTauri()) {
-    try {
-      await apiRestoreDatabaseBackup(backupPath);
-      return true;
-    } catch (e) {
-      console.error('Failed to restore local database backup:', e);
-      throw e;
-    }
-  }
-  return false;
 }
 
 /**
@@ -158,61 +157,18 @@ export async function listLocalDatabaseBackups(): Promise<string[]> {
   return [];
 }
 
-/**
- * Swap a validated staging database into active mobi_pos.db (used during cloud restore).
- */
-export async function swapStagingDatabase(stagingFilename: string): Promise<void> {
-  if (isTauri()) {
-    await apiSwapStagingDatabase(stagingFilename);
-  }
-}
-
 // ---------------------------------------------------------------------------
-// Dexie-snapshot restore (B2): the mirror-rebuild path.
+// Dexie-snapshot retention (B2).
 // ---------------------------------------------------------------------------
+// FT-06: the Dexie-snapshot RESTORE helper was deleted — it had zero callers
+// and its clear()+bulkPut() swap replaced newer mirror rows (including audit)
+// with a stale subset. Snapshots are still TAKEN (createPreMigrationBackup
+// above; capturing evidence is fine) and pruned below. Restoring mirror
+// state goes through the guarded JSON import / cloud merge paths, which
+// preserve the audit trail (see maintenanceAdapter.importJSON,
+// restoreManager.executeRestore).
 
 const DEXIE_SNAPSHOT_PREFIX = 'mobi_pos_backup_dexie_';
-
-/** Mirror tables captured by createPreMigrationBackup — must stay in sync with it. */
-const DEXIE_SNAPSHOT_TABLES = [
-  'products',
-  'customers',
-  'transactions',
-  'repairOrders',
-  'purchaseOrders',
-  'tradeIns',
-  'imeiRecords',
-  'securityAuditLogs',
-  'cashDrops',
-  'payouts',
-  'bundles',
-  'customerDebts',
-  'storeExpenses',
-  'cashSessions',
-  'cashMovements',
-  'appSettings',
-  // B-015: keep in sync with createPreMigrationBackup's snapshot builder.
-  'stockBatches',
-  'creditVouchers',
-  'inventoryLedger',
-  'syncOutbox',
-  // Frozen FIFO allocations + recovery intents (see builder comment). Old
-  // snapshots lack these keys and restore skips them gracefully below.
-  'saleBatchAllocations',
-  'checkoutRecoveryIntents',
-] as const;
-
-export interface DexieSnapshotRestoreResult {
-  success: boolean;
-  tablesRestored: number;
-  recordsRestored: number;
-  error?: string;
-}
-
-interface WritableMirrorTable {
-  clear(): Promise<void>;
-  bulkPut(rows: unknown[]): Promise<unknown>;
-}
 
 /**
  * Deletes all but the newest `keep` Dexie snapshots. Retention bound so
@@ -254,64 +210,4 @@ export function listDexieSnapshots(): string[] {
     // Storage restricted
   }
   return out.sort().reverse();
-}
-
-/**
- * Restores the Dexie read-mirror from a snapshot taken by createPreMigrationBackup.
- *
- * Scope contract: this rebuilds the MIRROR only (browser preview / Dexie readers).
- * The live store on Tauri is SQLite (plugin-sql) — a native .db file restore
- * (restoreLocalDatabaseFile) remains the authoritative disaster-recovery path.
- * Typical use: after swapping in a native backup, refresh the stale mirror
- * from the pre-migration snapshot instead of re-downloading everything.
- *
- * Throws on missing/corrupt snapshots — never reports a false success.
- */
-export async function restoreDexieSnapshot(snapshotKey: string): Promise<DexieSnapshotRestoreResult> {
-  if (!snapshotKey || !snapshotKey.startsWith(DEXIE_SNAPSHOT_PREFIX)) {
-    throw new Error(`Clé de snapshot invalide: ${snapshotKey}`);
-  }
-  if (typeof localStorage === 'undefined') {
-    throw new Error('Stockage local indisponible pour la restauration du snapshot');
-  }
-  const raw = localStorage.getItem(snapshotKey);
-  if (!raw) {
-    throw new Error(`Snapshot introuvable: ${snapshotKey}`);
-  }
-  let snapshot: Record<string, unknown>;
-  try {
-    snapshot = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    throw new Error(`Snapshot corrompu (JSON invalide): ${snapshotKey}`);
-  }
-  if (!snapshot || typeof snapshot !== 'object') {
-    throw new Error(`Snapshot corrompu (contenu invalide): ${snapshotKey}`);
-  }
-
-  let tablesRestored = 0;
-  let recordsRestored = 0;
-
-  // One transaction: all mirror tables swap atomically, never half-restored.
-  await dexieDb.transaction('rw', dexieDb.tables, async () => {
-    for (const name of DEXIE_SNAPSHOT_TABLES) {
-      const rows = snapshot[name];
-      if (!Array.isArray(rows)) {
-        console.warn(`[backup] snapshot table "${name}" absente ou invalide, ignorée`);
-        continue;
-      }
-      const table = (dexieDb as unknown as Record<string, WritableMirrorTable | undefined>)[name];
-      if (!table) continue;
-      await table.clear();
-      if (rows.length > 0) {
-        await table.bulkPut(rows);
-      }
-      tablesRestored++;
-      recordsRestored += rows.length;
-    }
-  });
-
-  if (tablesRestored === 0) {
-    throw new Error(`Snapshot vide ou illisible: ${snapshotKey}`);
-  }
-  return { success: true, tablesRestored, recordsRestored };
 }

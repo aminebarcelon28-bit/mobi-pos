@@ -95,6 +95,55 @@ function dexieStoreFor(table: string): DexieStore | null {
 }
 
 /**
+ * `imei_records` warranty-anchor columns present on THIS database.
+ *
+ * `warranty_months` only exists from migration 107 and `warranty_expires_at` from
+ * the base schema. A pull that names a column the local DB does not have throws
+ * `no such column`, which would abort the whole device lane — so the anchor
+ * columns are probed once per database handle and only written when present.
+ * Keyed by handle, not a single module-level cache, so two databases in one
+ * process (a test double and the real one) cannot inherit each other's answer.
+ */
+const imeiAnchorColumnsByDb = new WeakMap<Database, Promise<Set<string>>>();
+function imeiAnchorColumnsPresent(db: Database): Promise<Set<string>> {
+  let probed = imeiAnchorColumnsByDb.get(db);
+  if (!probed) {
+    probed = db
+      .select("SELECT name FROM pragma_table_info('imei_records')")
+      .then((rows) => {
+        const names = new Set((rows as Array<{ name?: string }>).map((r) => String(r?.name ?? '')));
+        names.delete('');
+        return names;
+      })
+      // An unreadable schema must not abort the pull: assume the legacy shape and
+      // write the columns that have existed since the base migration.
+      .catch(() => new Set(['imei', 'product_id', 'sale_transaction_id', 'warranty_expires_at', 'received_at']));
+    imeiAnchorColumnsByDb.set(db, probed);
+  }
+  return probed;
+}
+
+/**
+ * A peer's warranty term, or NULL. Never invented and never widened: a
+ * non-finite, negative or non-numeric value is DROPPED so the resolver falls back
+ * to what it can prove locally. `0` is preserved — it is the documented encoding
+ * of "deliberately sold with no warranty", not "unknown".
+ */
+function coerceAnchorMonths(value: unknown): number | null {
+  const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return null;
+  return Math.floor(n);
+}
+
+/** A peer's frozen warranty expiry, or NULL. An unparseable instant is dropped. */
+function coerceAnchorInstant(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || Number.isNaN(new Date(trimmed).getTime())) return null;
+  return trimmed;
+}
+
+/**
  * H11/H12: the highest version ever applied to a (table, id). This is the
  * watermark the stale-echo guard must compare against. Returns 0 when no clock
  * row exists yet (a first-ever write, which always applies).
@@ -454,21 +503,45 @@ async function mirrorGenericToSqlite(
     const imei = String((m.imei as string) ?? id ?? '');
     if (!imei) return;
     const now = utcNowIso();
+
+    // Point-in-time warranty anchoring (migration 107) must survive the pull.
+    // The term/expiry are minted at sale and deliberately NEVER recomputed, so
+    // dropping them here would make a peer device resolve its coverage from the
+    // CATALOG instead — re-dating (or voiding) a warranty the customer already
+    // bought, silently, on whichever device pulled the row.
+    //
+    // They are written on INSERT only. The conflict branch below does not touch
+    // them: a locally frozen anchor is stronger evidence than a peer row, and
+    // with the shared merchant sync token a peer may rewrite anything it likes
+    // (Tier B residual). Widening local coverage from the wire is the one update
+    // direction this lane must never take.
+    const anchorCols = await imeiAnchorColumnsPresent(db);
+    const cols = ['imei', 'product_id', 'sale_transaction_id', 'sold_at', 'received_at', 'version'];
+    const vals: unknown[] = [
+      imei,
+      String((m.product_id as string) ?? (m.productId as string) ?? ''),
+      ((m.sale_transaction_id ?? m.saleTransactionId ?? null) as string | null),
+      ((m.sold_at ?? m.soldAt ?? null) as string | null),
+      String((m.received_at ?? m.receivedAt ?? now)),
+      version,
+    ];
+    if (anchorCols.has('warranty_expires_at')) {
+      cols.push('warranty_expires_at');
+      vals.push(coerceAnchorInstant(m.warranty_expires_at ?? m.warrantyExpiresAt));
+    }
+    if (anchorCols.has('warranty_months')) {
+      cols.push('warranty_months');
+      vals.push(coerceAnchorMonths(m.warranty_months ?? m.warrantyMonths));
+    }
+    const placeholders = vals.map((_, i) => `$${i + 1}`).join(', ');
     await db.execute(
-      `INSERT INTO imei_records (imei, product_id, sale_transaction_id, sold_at, received_at, version)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO imei_records (${cols.join(', ')})
+       VALUES (${placeholders})
        ON CONFLICT(imei) DO UPDATE SET sale_transaction_id=excluded.sale_transaction_id,
          sold_at=excluded.sold_at, product_id=excluded.product_id,
          received_at=excluded.received_at, version=excluded.version
          WHERE excluded.version >= imei_records.version`,
-      [
-        imei,
-        String((m.product_id as string) ?? (m.productId as string) ?? ''),
-        ((m.sale_transaction_id ?? m.saleTransactionId ?? null) as string | null),
-        ((m.sold_at ?? m.soldAt ?? null) as string | null),
-        String((m.received_at ?? m.receivedAt ?? now)),
-        version,
-      ],
+      vals as never[],
     );
   } else if (table === 'security_audit_logs') {
     // F7b: audit readers prefer SQLite when non-empty, so peer entries were
@@ -484,24 +557,55 @@ async function mirrorGenericToSqlite(
     // would then fail chain verification. Audit entries are immutable by
     // design (same id = same payload), so first-write-wins converges replays
     // with no loss, and no pulled row can ever mutate local evidence.
+    //
+    // FT-06/C provenance: pulled rows land with source='peer' (never the
+    // envelope's marker, even if a peer claims otherwise) so the journal
+    // labels them as unverified peer history, like imported rows.
     const a = payload;
     const now = utcNowIso();
-    await db.execute(
-      `INSERT INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, version, device_id, ip_address)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT(id) DO NOTHING`,
-      [
-        id,
-        String((a.timestamp as string) ?? now),
-        String((a.user as string) ?? (a.userId as string) ?? 'Système'),
-        String((a.action as string) ?? ''),
-        String((a.details as string) ?? ''),
-        Number((a.requiresPin as number) ?? 0),
-        version,
-        String((a.deviceId as string) ?? ''),
-        String((a.ipAddress as string) ?? ''),
-      ],
-    );
+    try {
+      await db.execute(
+        `INSERT INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, version, device_id, ip_address, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'peer')
+         ON CONFLICT(id) DO NOTHING`,
+        [
+          id,
+          String((a.timestamp as string) ?? now),
+          String((a.user as string) ?? (a.userId as string) ?? 'Système'),
+          String((a.action as string) ?? ''),
+          String((a.details as string) ?? ''),
+          Number((a.requiresPin as number) ?? 0),
+          version,
+          String((a.deviceId as string) ?? ''),
+          String((a.ipAddress as string) ?? ''),
+        ],
+      );
+    } catch (auditErr: unknown) {
+      const errStr = String(auditErr);
+      if (errStr.includes('device_id') || errStr.includes('ip_address') || errStr.includes('source')) {
+        await db.execute('ALTER TABLE security_audit_logs ADD COLUMN device_id TEXT;').catch(() => {});
+        await db.execute('ALTER TABLE security_audit_logs ADD COLUMN ip_address TEXT;').catch(() => {});
+        await db.execute("ALTER TABLE security_audit_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'local';").catch(() => {});
+        await db.execute(
+          `INSERT INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, version, device_id, ip_address, source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'peer')
+           ON CONFLICT(id) DO NOTHING`,
+          [
+            id,
+            String((a.timestamp as string) ?? now),
+            String((a.user as string) ?? (a.userId as string) ?? 'Système'),
+            String((a.action as string) ?? ''),
+            String((a.details as string) ?? ''),
+            Number((a.requiresPin as number) ?? 0),
+            version,
+            String((a.deviceId as string) ?? ''),
+            String((a.ipAddress as string) ?? ''),
+          ],
+        );
+      } else {
+        throw auditErr;
+      }
+    }
   } else if (table === 'app_settings') {
     // Store-profile lane (store name, receipt template, VAT rate, cashier
     // roster…): sync.* cursor/state keys are filtered upstream, everything
@@ -716,6 +820,20 @@ export async function applyGenericRemoteRow(
       if (table === 'app_settings') {
         const val = (recordPayload as Record<string, unknown>).value !== undefined ? (recordPayload as Record<string, unknown>).value : recordPayload;
         await store?.put({ key: id, value: val });
+      } else if (table === 'security_audit_logs') {
+        // FT-06/C: Dexie mirror of a pulled row is peer history too. Stamp
+        // it here (the envelope must not be trusted for provenance) without
+        // touching the SQLite freeze above — and put-if-absent, mirroring
+        // the SQLite DO NOTHING: a re-pull must never overwrite local
+        // evidence in either lane.
+        const peerMirror = store as unknown as {
+          get?: (id: string) => Promise<unknown>;
+          put?: (row: unknown) => Promise<unknown>;
+        };
+        const existing = await peerMirror?.get?.(id).catch(() => undefined);
+        if (!existing) {
+          await peerMirror?.put?.({ ...(recordPayload as Record<string, unknown>), id, source: 'peer' });
+        }
       } else {
         if (table === 'customers') (recordPayload as Record<string, unknown>).id = (recordPayload as Record<string, unknown>).id || id;
         await store?.put(recordPayload);

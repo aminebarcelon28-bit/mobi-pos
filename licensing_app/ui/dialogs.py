@@ -34,13 +34,259 @@ from ..config import MASTER_ENCRYPTION_KEY, LICENSE_PEPPER
 from ..core.crypto import (
     generate_license_key, hash_key, encrypt_turso_token,
     detect_local_hwid, generate_offline_jwt, build_whatsapp_message,
-    generate_qr_image_bytes
+    generate_qr_image_bytes, solve_technician_challenge,
+    build_rescue_whatsapp_message
 )
 from ..core.api import (
     AdminApiClient, record_in_ledger, update_customer_metadata,
     delete_from_ledger, record_audit_event, load_audit_log, clear_audit_log
 )
 from .theme import status_badge, formula_badge, seats_badge
+
+
+class ResolveMissingKeyDialog(QDialog):
+    """
+    Actionable modal for a licence that only exists as a cloud stub.
+
+    Replaces the dead-end "Clé Inconnue" warning. When a licence was created on
+    another machine, provisioned by API, or the local ledger was wiped, the row
+    renders as ``[Clé Cloud lic_XXXX]`` and every action that needs the real key
+    used to abort. The operator gets three concrete exits instead:
+
+    A. Rotate -- issue a fresh key for the same customer, quotas and formula,
+       persist it locally, and escrow it so the next machine can recover it.
+    B. Link -- paste a key the operator already holds (invoice, chat history).
+    C. Cloud ID -- proceed with the cloud identifier for a QR / deep link,
+       which is what a phone needs to activate when no plaintext key exists.
+
+    On accept, ``resolved_key`` holds the key to continue with, or
+    ``use_cloud_id`` is True when the operator chose path C.
+    """
+
+    #: Emitted with the licence id after a successful rotate or link.
+    key_resolved = pyqtSignal(str, str)
+
+    def __init__(self, license_record, api_client=None, parent=None):
+        super().__init__(parent)
+        self.record = license_record
+        self.api_client = api_client
+        self.resolved_key: Optional[str] = None
+        self.use_cloud_id = False
+
+        self.setWindowTitle("Résolution de la clé d'activation")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+        self._init_ui()
+
+    # -- construction -----------------------------------------------------
+    def _init_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        title = QLabel(f"Clé locale absente — {self.record.customer}")
+        title.setWordWrap(True)
+        title.setStyleSheet("font-size: 15px; font-weight: bold; color: #F0F6FC;")
+        layout.addWidget(title)
+
+        desc = QLabel(
+            "Cette licence provient de la synchronisation Cloud, mais sa clé en clair "
+            "n'est pas présente dans ce registre local.\n"
+            "Choisissez une action pour continuer :"
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #8B949E; font-size: 12px;")
+        layout.addWidget(desc)
+
+        # Path A -- rotate.
+        self.btn_rotate = QPushButton("🔄  Générer une nouvelle clé (Recommandé)")
+        self.btn_rotate.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_rotate.setMinimumHeight(42)
+        self.btn_rotate.setStyleSheet(
+            "QPushButton { background-color: #238636; color: #FFFFFF;"
+            " font-weight: bold; font-size: 12px; padding: 10px;"
+            " border-radius: 6px; border: 1px solid #2EA043; text-align: left; }"
+            "QPushButton:hover { background-color: #2EA043; }"
+            "QPushButton:disabled { background-color: #21262D; color: #484F58;"
+            " border-color: #30363D; }"
+        )
+        self.btn_rotate.clicked.connect(self._handle_rotate_key)
+        layout.addWidget(self.btn_rotate)
+
+        self.rotate_hint = QLabel(
+            "La clé est régénérée pour cette licence avec les mêmes quotas et la "
+            "même formule, puis chiffrée et depositée en garde-vous côté Cloud."
+        )
+        self.rotate_hint.setWordWrap(True)
+        self.rotate_hint.setStyleSheet("color: #6E7681; font-size: 11px;")
+        layout.addWidget(self.rotate_hint)
+
+        # Path B -- manual link.
+        manual_label = QLabel("Ou associer manuellement une clé existante :")
+        manual_label.setStyleSheet("color: #8B949E; font-size: 11px; font-weight: bold;")
+        layout.addWidget(manual_label)
+
+        manual_row = QHBoxLayout()
+        manual_row.setSpacing(8)
+        self.input_manual_key = QLineEdit()
+        self.input_manual_key.setPlaceholderText("MOBI-LIFE-XXXX-XXXX")
+        self.input_manual_key.setStyleSheet(
+            "QLineEdit { background: #0D1117; color: #58A6FF;"
+            " font-family: Consolas, monospace; padding: 6px;"
+            " border: 1px solid #30363D; border-radius: 6px; }"
+        )
+        self.input_manual_key.returnPressed.connect(self._handle_manual_link)
+        manual_row.addWidget(self.input_manual_key, 1)
+
+        self.btn_save_manual = QPushButton("Associer")
+        self.btn_save_manual.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_save_manual.setStyleSheet(
+            "QPushButton { background: #21262D; color: #C9D1D9; font-size: 11px;"
+            " font-weight: bold; padding: 6px 12px; border-radius: 6px;"
+            " border: 1px solid #30363D; }"
+            "QPushButton:hover { background: #30363D; color: #FFFFFF; }"
+        )
+        self.btn_save_manual.clicked.connect(self._handle_manual_link)
+        manual_row.addWidget(self.btn_save_manual)
+        layout.addLayout(manual_row)
+
+        # Path C -- cloud id.
+        self.btn_cloud_id = QPushButton(
+            f"🔗  Utiliser l'identifiant Cloud ({self.record.id[:8] or 'n/a'}) pour le QR"
+        )
+        self.btn_cloud_id.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_cloud_id.setStyleSheet(
+            "QPushButton { background: #21262D; color: #79C0FF; font-size: 12px;"
+            " padding: 10px; border-radius: 6px; border: 1px solid #30363D;"
+            " text-align: left; }"
+            "QPushButton:hover { background: #30363D; color: #FFFFFF; }"
+        )
+        self.btn_cloud_id.clicked.connect(self._handle_cloud_id)
+        layout.addWidget(self.btn_cloud_id)
+
+        self.cloud_hint = QLabel(
+            "Utile quand le client n'a jamais reçu de clé : le QR transmettra "
+            "l'identifiant Cloud, que le poste peut valider directement."
+        )
+        self.cloud_hint.setWordWrap(True)
+        self.cloud_hint.setStyleSheet("color: #6E7681; font-size: 11px;")
+        layout.addWidget(self.cloud_hint)
+
+        layout.addStretch()
+
+        btn_cancel = QPushButton("Annuler")
+        btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_cancel.setStyleSheet(
+            "QPushButton { background: transparent; color: #8B949E;"
+            " border: none; padding: 6px; }"
+            "QPushButton:hover { color: #F0F6FC; }"
+        )
+        btn_cancel.clicked.connect(self.reject)
+        layout.addWidget(btn_cancel)
+
+    # -- paths ------------------------------------------------------------
+    def _handle_rotate_key(self) -> None:
+        """
+        Path A: mint a fresh key and persist it against this licence.
+
+        Deliberately does NOT call the edge signing endpoint. That endpoint
+        creates a *new* licence row from (customer, formula, seats); calling it
+        here would leave two active licences for one customer instead of
+        rotating the existing one. Server-side rotation needs a dedicated
+        update-key route, which does not exist yet.
+        """
+        from ..core.crypto import encrypt_data, generate_license_key
+        from ..core.api import record_in_ledger
+
+        new_key = generate_license_key(self.record.formula)
+        self.resolved_key = new_key
+        self.use_cloud_id = False
+
+        entry = {
+            "id": self.record.id,
+            "customer": self.record.customer,
+            "licenseKey": new_key,
+            "type": self.record.formula,
+            "status": self.record.raw_status,
+            "created_at": self.record.created_at,
+            "notes": f"Clé régénérée localement le "
+                     f"{datetime.datetime.now():%Y-%m-%d %H:%M}.",
+        }
+        try:
+            record_in_ledger(entry)
+        except Exception as exc:  # ledger is the whole point of this path
+            QMessageBox.critical(
+                self,
+                "Échec de l'écriture locale",
+                f"La nouvelle clé n'a pas pu être enregistrée :\n{exc}",
+            )
+            return
+
+        self._escrow(new_key)
+        self.key_resolved.emit(self.record.id, new_key)
+        self.accept()
+
+    def _handle_manual_link(self) -> None:
+        """Path B: adopt a key the operator already holds."""
+        from ..core.api import record_in_ledger
+        from ..core.crypto import normalize_key
+
+        key = self.input_manual_key.text().strip().upper()
+        if not key:
+            return
+        if not key.startswith("MOBI-"):
+            QMessageBox.warning(
+                self,
+                "Format invalide",
+                "La clé doit respecter le format MOBI-… (ex. MOBI-LIFE-ABCD-EFGH).",
+            )
+            return
+        if len(normalize_key(key)) < 8:
+            QMessageBox.warning(self, "Format invalide", "Cette clé est trop courte.")
+            return
+
+        self.resolved_key = key
+        self.use_cloud_id = False
+        try:
+            record_in_ledger({
+                "id": self.record.id,
+                "customer": self.record.customer,
+                "licenseKey": key,
+                "type": self.record.formula,
+                "status": self.record.raw_status,
+                "created_at": self.record.created_at,
+            })
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Échec de l'écriture locale",
+                f"La clé n'a pas pu être enregistrée :\n{exc}",
+            )
+            return
+
+        self._escrow(key)
+        self.key_resolved.emit(self.record.id, key)
+        self.accept()
+
+    def _handle_cloud_id(self) -> None:
+        """Path C: continue with the cloud identifier."""
+        self.resolved_key = ""
+        self.use_cloud_id = True
+        self.accept()
+
+    def _escrow(self, key: str) -> None:
+        """
+        Best-effort escrow upload. Never blocks resolution: the operator has
+        already recovered the key locally, and a failed upload only means the
+        next machine will need this dialog again.
+        """
+        if self.api_client is None:
+            return
+        try:
+            from ..core.crypto import encrypt_data
+            self.api_client.put_key_escrow(self.record.id, encrypt_data(key))
+        except Exception:
+            pass
 
 
 # =========================================================================
@@ -504,7 +750,18 @@ class DevicesDialog(QDialog):
     def load_devices(self):
         raw_key = self.license_data.get("licenseKey", "")
         if not raw_key or raw_key.startswith("["):
-            QMessageBox.warning(self, "Clé Inconnue", "Cette licence n'a pas de clé en clair dans le registre.")
+            # The main window resolves the key before opening this dialog, so
+            # reaching here means it was opened without a key on purpose (the
+            # cloud-id path) or by another caller. Render an empty list instead
+            # of raising a modal warning on top of this one, which is what made
+            # the flow feel like a dead end.
+            cloud_id = self.license_data.get("cloudId") or self.license_data.get("id", "")
+            self.populate_table([])
+            self.btn_refresh.setEnabled(True)
+            self.btn_refresh.setToolTip(
+                "Aucun appareil à lister : cette licence n'a pas de clé en clair"
+                + (f" (identifiant Cloud {cloud_id[:8]})." if cloud_id else ".")
+            )
             return
 
         self.btn_refresh.setEnabled(False)
@@ -1375,19 +1632,35 @@ class RenewUpgradeDialog(QDialog):
         record_in_ledger(self.license_data)
         record_audit_event("UPGRADE_LICENSE", f"Surclassement vers {new_type} (Expiration: {new_exp or 'À Vie'})", self.license_data.get("customer", ""), self.license_data.get("licenseKey", ""))
 
+        # The local ledger is already written, so a cloud failure is a partial
+        # success: the upgrade is pending sync, not applied everywhere. Report
+        # that honestly instead of writing to stdout, which a --noconsole build
+        # discards.
+        cloud_error: Optional[str] = None
         try:
             self.api_client.sync_license(self.license_data)
             self.api_client.set_status(self.license_data.get("licenseKey", ""), "active")
         except Exception as e:
-            print(f"Cloud update warning: {e}")
+            cloud_error = str(e)
 
-        QMessageBox.information(
-            self,
-            "Surclassement Réussi",
-            f"🎉 La licence de {self.license_data.get('customer')} a été mise à jour !\n\n"
-            f"Nouvelle formule : {new_type}\n"
-            f"Expiration : {new_exp or 'Illimitée (À Vie)'}"
-        )
+        if cloud_error:
+            QMessageBox.warning(
+                self,
+                "Surclassement partiellement appliqué",
+                f"⚠️ La licence de {self.license_data.get('customer')} a été mise à jour "
+                f"localement et sera synchronisée au prochain passage.\n\n"
+                f"Nouvelle formule : {new_type}\n"
+                f"Expiration : {new_exp or 'Illimitée (À Vie)'}\n\n"
+                f"Le Cloud n'a pas répondu : {cloud_error}"
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Surclassement Réussi",
+                f"🎉 La licence de {self.license_data.get('customer')} a été mise à jour !\n\n"
+                f"Nouvelle formule : {new_type}\n"
+                f"Expiration : {new_exp or 'Illimitée (À Vie)'}"
+            )
         self.license_upgraded.emit(self.license_data)
         self.accept()
 
@@ -1543,3 +1816,438 @@ class AuditLogDialog(QDialog):
                     ])
             QMessageBox.information(self, "Export Réussi", f"Journal d'audit sauvegardé sous :\n{path}")
 
+
+# =========================================================================
+# 10. Secrets Status Dialog
+# =========================================================================
+
+class SecretsStatusDialog(QDialog):
+    """
+    Inspect and repair the console's secret configuration.
+
+    The dock warning pill used to be a dead end: it named the degraded state
+    but gave the operator no way to see which secret was at fault or to supply
+    it. This dialog is the way out, and it stays useful even when nothing is
+    wrong -- an all-green console can still show where each secret lives.
+
+    A secret is only editable when it is genuinely absent. Secrets that are
+    merely optional (offline signing, legacy admin token) are listed as such
+    and offer no input, because filling them in would not change any behaviour
+    and would invite the operator to add a credential the worker never reads.
+    """
+
+    #: Emitted with the key name each time a secret is stored in the vault.
+    secret_saved = pyqtSignal(str)
+
+    STATE_COLORS = {
+        "ready": "#34d399",
+        "optional": "#60a5fa",
+        "absent": "#fbbf24",
+    }
+
+    STATE_LABELS = {
+        "ready": "Configuré",
+        "optional": "Optionnel",
+        "absent": "Absent",
+    }
+
+    def __init__(self, settings=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("État des secrets")
+        self.setModal(True)
+        self.setMinimumSize(620, 460)
+        self._settings = settings
+        self._inputs = {}
+        self._init_ui()
+
+    def _init_ui(self) -> None:
+        from ..config import resolve_settings
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(22, 22, 22, 22)
+
+        title = QLabel("État des secrets")
+        title.setObjectName("SectionHeader")
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Les secrets requis conditionnent le fonctionnement de la console. "
+            "Les secrets optionnels ajoutent des capacités sans être nécessaires."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        layout.addWidget(subtitle)
+
+        if self._settings is None:
+            self._settings = resolve_settings()
+
+        rows = self._settings.secret_status()
+
+        for name, state, detail in rows:
+            layout.addLayout(self._build_row(name, state, detail))
+
+        layout.addStretch()
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_close = QPushButton("Fermer")
+        btn_close.clicked.connect(self.accept)
+        btn_row.addWidget(btn_close)
+        layout.addLayout(btn_row)
+
+    def _build_row(self, name: str, state: str, detail: str) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(10)
+
+        left = QVBoxLayout()
+        key_label = QLabel(name)
+        key_label.setStyleSheet("font-family: Consolas, monospace; font-weight: 700;")
+        left.addWidget(key_label)
+
+        detail_label = QLabel(detail)
+        detail_label.setWordWrap(True)
+        detail_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        left.addWidget(detail_label)
+        row.addLayout(left, 1)
+
+        state_label = QLabel(self.STATE_LABELS.get(state, state))
+        state_label.setStyleSheet(
+            f"color: {self.STATE_COLORS.get(state, '#cbd5e1')}; font-weight: 700;"
+        )
+        row.addWidget(state_label, 0)
+
+        # Only an absent, required secret is worth an input box.
+        if state == "absent":
+            editor = QLineEdit()
+            editor.setEchoMode(QLineEdit.EchoMode.Password)
+            editor.setPlaceholderText("Coller la valeur…")
+            editor.setMaximumWidth(210)
+            self._inputs[name] = editor
+            row.addWidget(editor, 0)
+
+            save = QPushButton("Enregistrer")
+            save.setObjectName("PrimaryBtn")
+            save.clicked.connect(lambda _=False, k=name: self._save(k))
+            row.addWidget(save, 0)
+
+        return row
+
+    def _save(self, name: str) -> None:
+        from ..config import vault_set
+
+        editor = self._inputs.get(name)
+        if editor is None:
+            return
+        value = editor.text().strip()
+        if not value:
+            QMessageBox.warning(
+                self,
+                "Valeur vide",
+                "Saisissez une valeur avant d'enregistrer.",
+            )
+            return
+        if not vault_set(name, value):
+            QMessageBox.critical(
+                self,
+                "Échec de l'écriture",
+                f"Impossible d'écrire {name} dans le coffre du système.\n"
+                "Vérifiez que le service de gestionnaire d'identifiants est "
+                "accessible.",
+            )
+            return
+        editor.clear()
+        self.secret_saved.emit(name)
+        QMessageBox.information(
+            self,
+            "Secret enregistré",
+            f"{name} a été écrit dans le coffre du système.",
+        )
+        self.accept()
+
+
+
+
+# =========================================================================
+# 10. Technician Dynamic PIN Rescue Dialog (Model 1)
+# =========================================================================
+
+class TechnicianPinRescueDialog(QDialog):
+    """
+    Technician PIN Rescue Dialog (Model 1 Dynamic Challenge-Response).
+    Allows the technician/distributor to solve a POS register's challenge code
+    and generate a single-use 6-digit unlock OTP for a customer who forgot
+    their manager PIN.
+    """
+
+    def __init__(
+        self,
+        customer: str = "",
+        phone: str = "",
+        challenge: str = "",
+        parent=None
+    ):
+        super().__init__(parent)
+        self.customer = customer
+        self.phone = phone
+        self.initial_challenge = challenge
+        self.current_otp: Optional[str] = None
+
+        self.setWindowTitle("🔑 Assistance Technicien — Déblocage Code PIN Caisse")
+        self.setMinimumSize(680, 580)
+        self.resize(720, 620)
+        self.init_ui()
+
+        if self.initial_challenge:
+            self.challenge_input.setText(self.initial_challenge)
+            self.solve_challenge()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+
+        # Header
+        title = QLabel("🔑 Déblocage PIN Caisse (Assistance Technicien)")
+        title.setObjectName("SectionHeader")
+        subtitle = QLabel(
+            "Générez un code temporaire à 6 chiffres pour déverrouiller une caisse cliente "
+            "lorsque le gérant a oublié son code PIN."
+        )
+        subtitle.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        subtitle.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        # Input Card
+        form_card = QFrame()
+        form_card.setObjectName("MetricCard")
+        grid = QGridLayout(form_card)
+        grid.setVerticalSpacing(12)
+        grid.setHorizontalSpacing(14)
+
+        # 1. Customer Name (Optional)
+        lbl_cust = QLabel("Client / Établissement :")
+        lbl_cust.setStyleSheet("font-weight: 600; color: #cbd5e1;")
+        grid.addWidget(lbl_cust, 0, 0)
+        self.cust_input = QLineEdit(self.customer)
+        self.cust_input.setPlaceholderText("Ex: Restaurant Le Palmier (facultatif)")
+        grid.addWidget(self.cust_input, 0, 1, 1, 2)
+
+        # 2. WhatsApp Phone (Optional)
+        lbl_phone = QLabel("Téléphone WhatsApp :")
+        lbl_phone.setStyleSheet("font-weight: 600; color: #cbd5e1;")
+        grid.addWidget(lbl_phone, 1, 0)
+        self.phone_input = QLineEdit(self.phone)
+        self.phone_input.setPlaceholderText("Ex: 0555 12 34 56 ou +213555123456")
+        grid.addWidget(self.phone_input, 1, 1, 1, 2)
+
+        # 3. Challenge Code
+        lbl_code = QLabel("Code Défi de la Caisse :")
+        lbl_code.setStyleSheet("font-weight: 600; color: #f59e0b;")
+        grid.addWidget(lbl_code, 2, 0)
+
+        self.challenge_input = QLineEdit()
+        self.challenge_input.setPlaceholderText("Ex: MOBI-8F2A-W9ET")
+        self.challenge_input.setStyleSheet(
+            "font-family: Consolas, monospace; font-size: 15px; font-weight: 700; "
+            "letter-spacing: 2px; text-transform: uppercase; color: #fbbf24;"
+        )
+        self.challenge_input.textChanged.connect(self._on_challenge_text_changed)
+        self.challenge_input.returnPressed.connect(self.solve_challenge)
+        grid.addWidget(self.challenge_input, 2, 1)
+
+        btn_paste = QPushButton("📋 Coller")
+        btn_paste.setToolTip("Coller depuis le presse-papier")
+        btn_paste.clicked.connect(self.paste_from_clipboard)
+        grid.addWidget(btn_paste, 2, 2)
+
+        layout.addWidget(form_card)
+
+        # Solve Action Button
+        self.btn_solve = QPushButton("⚡ Calculer le Code de Déblocage (OTP)")
+        self.btn_solve.setObjectName("PrimaryBtn")
+        self.btn_solve.setFixedHeight(40)
+        self.btn_solve.clicked.connect(self.solve_challenge)
+        layout.addWidget(self.btn_solve)
+
+        # Result Card
+        self.result_card = QFrame()
+        self.result_card.setObjectName("MetricCard")
+        self.result_card.setStyleSheet(
+            "QFrame#MetricCard { background-color: #0b1329; border: 1px solid #1e293b; border-radius: 8px; }"
+        )
+        res_layout = QVBoxLayout(self.result_card)
+        res_layout.setSpacing(10)
+        res_layout.setContentsMargins(18, 18, 18, 18)
+
+        lbl_res_title = QLabel("CODE DE DÉVERROUILLAGE UNIQUE :")
+        lbl_res_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 1.5px;")
+        lbl_res_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        res_layout.addWidget(lbl_res_title)
+
+        self.otp_label = QLabel("— — — — — —")
+        self.otp_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.otp_label.setStyleSheet(
+            "font-family: Consolas, monospace; font-size: 38px; font-weight: 800; "
+            "color: #64748b; letter-spacing: 10px;"
+        )
+        res_layout.addWidget(self.otp_label)
+
+        self.status_label = QLabel("Entrez le code de défi affiché sur la caisse cliente puis cliquez sur Calculer.")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
+        self.status_label.setWordWrap(True)
+        res_layout.addWidget(self.status_label)
+
+        # Secondary Action Buttons (Copy / WhatsApp)
+        actions_box = QHBoxLayout()
+        actions_box.setSpacing(10)
+
+        self.btn_copy_code = QPushButton("📋 Copier le code")
+        self.btn_copy_code.setEnabled(False)
+        self.btn_copy_code.clicked.connect(self.copy_code)
+        actions_box.addWidget(self.btn_copy_code)
+
+        self.btn_copy_msg = QPushButton("📄 Copier message client")
+        self.btn_copy_msg.setEnabled(False)
+        self.btn_copy_msg.clicked.connect(self.copy_message)
+        actions_box.addWidget(self.btn_copy_msg)
+
+        self.btn_wa = QPushButton("💬 Envoyer sur WhatsApp")
+        self.btn_wa.setObjectName("WhatsAppBtn")
+        self.btn_wa.setEnabled(False)
+        self.btn_wa.clicked.connect(self.open_whatsapp)
+        actions_box.addWidget(self.btn_wa)
+
+        res_layout.addLayout(actions_box)
+        layout.addWidget(self.result_card)
+
+        # Footnote
+        footnote = QLabel(
+            "ℹ️ Instructions : Transmettez ce code à 6 chiffres au client. Dès sa saisie sur sa caisse,\n"
+            "la caisse se déverrouille immédiatement et l'invite à saisir son nouveau code PIN gérant."
+        )
+        footnote.setStyleSheet("color: #64748b; font-size: 11px; line-height: 1.4;")
+        footnote.setWordWrap(True)
+        layout.addWidget(footnote)
+
+        # Dialog Bottom
+        bottom_box = QHBoxLayout()
+        bottom_box.addStretch()
+        btn_close = QPushButton("Fermer")
+        btn_close.clicked.connect(self.accept)
+        bottom_box.addWidget(btn_close)
+        layout.addLayout(bottom_box)
+
+    def _on_challenge_text_changed(self, text: str):
+        upper = text.upper()
+        if upper != text:
+            cursor_pos = self.challenge_input.cursorPosition()
+            self.challenge_input.setText(upper)
+            self.challenge_input.setCursorPosition(cursor_pos)
+
+    def paste_from_clipboard(self):
+        text = QApplication.clipboard().text().strip()
+        if text:
+            self.challenge_input.setText(text)
+            self.solve_challenge()
+
+    def solve_challenge(self):
+        raw = self.challenge_input.text().strip().upper()
+        if not raw:
+            QMessageBox.warning(
+                self,
+                "Code défi manquant",
+                "Veuillez saisir le code défi affiché sur la caisse du client (ex: MOBI-8F2A-W9ET)."
+            )
+            return
+
+        res = solve_technician_challenge(raw)
+        if not res.get("ok"):
+            self.current_otp = None
+            self.otp_label.setText("ERREUR")
+            self.otp_label.setStyleSheet(
+                "font-family: Consolas, monospace; font-size: 28px; font-weight: 800; "
+                "color: #ef4444; letter-spacing: 4px;"
+            )
+            self.status_label.setText(f"❌ {res.get('error', 'Code défi non valide.')}")
+            self.status_label.setStyleSheet("color: #ef4444; font-size: 12px; font-weight: 600;")
+            self.btn_copy_code.setEnabled(False)
+            self.btn_copy_msg.setEnabled(False)
+            self.btn_wa.setEnabled(False)
+            return
+
+        otp = res["otp"]
+        self.current_otp = otp
+
+        # Format OTP with nice spacing (ex: 137 680)
+        formatted_otp = f"{otp[:3]} {otp[3:]}"
+        self.otp_label.setText(formatted_otp)
+        self.otp_label.setStyleSheet(
+            "font-family: Consolas, monospace; font-size: 40px; font-weight: 800; "
+            "color: #10b981; letter-spacing: 8px;"
+        )
+
+        warning_note = ""
+        if res.get("warning"):
+            warning_note = f"\n⚠️ {res['warning']}"
+
+        self.status_label.setText(
+            f"✅ Code calculé avec succès pour le défi {raw} (Date UTC : {res['date']}).{warning_note}"
+        )
+        self.status_label.setStyleSheet("color: #10b981; font-size: 12px; font-weight: 600;")
+
+        self.btn_copy_code.setEnabled(True)
+        self.btn_copy_msg.setEnabled(True)
+        self.btn_wa.setEnabled(True)
+
+        # Audit event
+        cust_name = self.cust_input.text().strip() or "Client inconnu"
+        record_audit_event(
+            "pin_rescue_otp_generated",
+            f"PIN recovery OTP generated for challenge {raw} (Client: {cust_name})"
+        )
+
+    def copy_code(self):
+        if self.current_otp:
+            QApplication.clipboard().setText(self.current_otp)
+            self.status_label.setText(f"✅ Code {self.current_otp} copié dans le presse-papier !")
+            self.status_label.setStyleSheet("color: #38bdf8; font-size: 12px; font-weight: 600;")
+
+    def copy_message(self):
+        if not self.current_otp:
+            return
+        cust_name = self.cust_input.text().strip()
+        msg = build_rescue_whatsapp_message(cust_name, self.current_otp)
+        QApplication.clipboard().setText(msg)
+        self.status_label.setText("✅ Message complet copié dans le presse-papier !")
+        self.status_label.setStyleSheet("color: #38bdf8; font-size: 12px; font-weight: 600;")
+
+    def open_whatsapp(self):
+        if not self.current_otp:
+            return
+
+        cust_name = self.cust_input.text().strip()
+        phone_raw = self.phone_input.text().strip()
+
+        clean_phone = re.sub(r"[^\d+]", "", phone_raw)
+        if clean_phone.startswith("0") and len(clean_phone) == 10:
+            clean_phone = "213" + clean_phone[1:]
+        elif clean_phone.startswith("+"):
+            clean_phone = clean_phone[1:]
+
+        msg = build_rescue_whatsapp_message(cust_name, self.current_otp)
+        encoded = urllib.parse.quote(msg)
+
+        if clean_phone:
+            url = f"https://web.whatsapp.com/send?phone={clean_phone}&text={encoded}"
+        else:
+            url = f"https://web.whatsapp.com/send?text={encoded}"
+
+        try:
+            webbrowser.open(url)
+            self.status_label.setText("🌐 WhatsApp ouvert avec le message pré-rempli.")
+            self.status_label.setStyleSheet("color: #10b981; font-size: 12px;")
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur WhatsApp", f"Impossible d'ouvrir le navigateur : {e}")

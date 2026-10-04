@@ -314,8 +314,18 @@ if (PHASE === 'all' || PHASE === 'cycles') {
           const pay = await S().processPayment([{ method: 'Espèces', amount: prod.price }]);
           if (!pay.success) {
             // Forensics: which lane claims it sold? (mirror / dexie / sqlite)
-            const imeiU = ('GAUNTLET-' + tag).toUpperCase();
-            const mir = (S().imeiRecords || []).find((x) => String(x.imei || '').toUpperCase() === imeiU);
+            // Import the PRODUCTION normalizer instead of re-implementing it.
+            // A local `.toUpperCase()` here made this harness pass while the
+            // product was broken: it normalized the way the fixed code does,
+            // never exercising the divergent path a real hyphenated GSMA scan
+            // takes through `setCartItemIMEI` → `sanitizeDeviceIdentifier`.
+            // Any future drift between ingest and lookup now fails this line.
+            const { normalizeDeviceKey: _normKey } =
+              await import('../src/utils/warrantyResolver.ts');
+            const imeiU = _normKey('GAUNTLET-' + tag);
+            const mir = (S().imeiRecords || []).find(
+              (x) => _normKey(String(x.imei || '')) === imeiU
+            );
             let dex = null;
             try { dex = await dbgDb.imeiRecords.get(imeiU).catch(() => null); } catch {}
             throw new Error('pay:' + pay.reason + ' | mir=' + JSON.stringify(mir && { s: mir.soldAt, t: mir.saleTransactionId }) + ' dex=' + JSON.stringify(dex && { s: dex.soldAt, t: dex.saleTransactionId }));

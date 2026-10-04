@@ -9,13 +9,15 @@ blocks and the table stays interactive during a full sync.
 import csv
 import json
 import sys
+from typing import Optional
 
-from PyQt6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QPoint, QRect, QRunnable, Qt, QThreadPool, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -53,6 +55,7 @@ from .dialogs import (
     OfflineTokenDialog,
     QRCodeDialog,
     RenewUpgradeDialog,
+    TechnicianPinRescueDialog,
     UpdateQuotasDialog,
     WhatsAppMessageDialog,
 )
@@ -116,6 +119,30 @@ SORT_COLUMN_BY_INDEX = {
 }
 
 
+class _ClickablePill(QLabel):
+    """
+    A QLabel that reports left clicks.
+
+    The dock status pill is a dead end as plain text: the operator can see that
+    something is wrong but cannot act on it. Emitting a signal keeps the
+    "what does this do" knowledge in the main window instead of baking a dialog
+    into a label.
+    """
+
+    clicked = pyqtSignal()
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class WorkerSignals(QObject):
     """Signals for a QRunnable executed on the shared thread pool."""
 
@@ -166,6 +193,10 @@ class MainWindow(QMainWindow):
         self._running = set()
         self._auto_sync = False
         self._read_only = False
+        self._resetting_anchor = False
+        self._anchor_banner_active = False
+        self._pending_anchor_reset = None
+        self._shutting_down = False
         self.audit_ok = True
         self._latency = 0.0
         self._pending = None
@@ -197,14 +228,16 @@ class MainWindow(QMainWindow):
         screen = QApplication.primaryScreen()
         available = screen.availableGeometry() if screen else None
         if available is None:
-            self.setMinimumSize(1024, 640)
-            self.resize(1440, 900)
+            # No screen reported (headless CI). Use the same caps as the
+            # dynamic path so tests exercise the real layout, not a wider one.
+            self.setMinimumSize(1024, 600)
+            self.resize(1360, 820)
             return
 
-        width = min(1440, int(available.width() * 0.94))
-        height = min(900, int(available.height() * 0.92))
+        width = min(1360, int(available.width() * 0.94))
+        height = min(820, int(available.height() * 0.88))
         min_w = min(1024, width)
-        min_h = min(620, height)
+        min_h = min(600, height)
 
         self.setMinimumSize(min_w, min_h)
         self.resize(width, height)
@@ -230,6 +263,7 @@ class MainWindow(QMainWindow):
         # on. It does not auto-dismiss, unlike a toast.
         self.alert_banner = DismissibleAlertBanner("", "warning", self)
         self.alert_banner.hide()
+        self.alert_banner.action_triggered.connect(self._on_reset_anchor_requested)
         root.addWidget(self.alert_banner, 0)
 
         root.addLayout(self._build_metrics())
@@ -240,14 +274,23 @@ class MainWindow(QMainWindow):
         root.addWidget(self.bulk_bar, 0)
 
         body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         body.addWidget(self._build_table(), 1)
         self.drawer = InspectorDrawer()
+        self.drawer.closed.connect(self._on_drawer_closed)
+        self.drawer.upgradeRequested.connect(self._drawer_record_action(self.open_upgrade))
+        self.drawer.whatsappRequested.connect(self._drawer_record_action(self.open_whatsapp))
+        self.drawer.qrRequested.connect(self._drawer_record_action(self.open_qr))
+        self.drawer.quotasRequested.connect(self._drawer_record_action(self.open_quotas))
+        self.drawer.devicesRequested.connect(self._drawer_record_action(self.open_devices))
+        self.drawer.copyRequested.connect(self.copy_to_clipboard)
         body.addWidget(self.drawer, 0)
         root.addLayout(body, 1)
 
-        root.addWidget(self._build_inspector(), 0)
-        root.addWidget(self._build_dock(), 0)
+        self._expose_drawer_widgets()
+        self.dock = self._build_dock()
+        root.addWidget(self.dock, 0)
         self._reserve_dock_for_toasts()
 
         self._build_statusbar()
@@ -289,11 +332,13 @@ class MainWindow(QMainWindow):
                                       "Journal d'audit (Ctrl+L)", self.open_audit)
         self.btn_offline = self._button("🔏 Jeton offline", "",
                                         "Jeton Ed25519 pour machine sans Internet", self.open_offline_token)
+        self.btn_rescue = self._button("🔑 Dépannage PIN", "",
+                                       "Générer un code de déblocage PIN caisse (Ctrl+P)", self.open_pin_rescue)
         self.btn_csv = self._button("📊 CSV", "", "Exporter en CSV (Ctrl+E)", self.export_csv)
         self.btn_json = self._button("📤 JSON", "", "Sauvegarder en JSON (Ctrl+J)", self.export_json)
 
         for btn in (self.btn_new, self.btn_refresh, self.btn_autosync, self.btn_audit,
-                    self.btn_offline, self.btn_csv, self.btn_json):
+                    self.btn_offline, self.btn_rescue, self.btn_csv, self.btn_json):
             layout.addWidget(btn)
 
         return card
@@ -364,6 +409,7 @@ class MainWindow(QMainWindow):
         # regardless of fleet size.
         self._copy_delegate = CopyCellDelegate(self.table)
         self.table.setItemDelegateForColumn(COL_KEY, self._copy_delegate)
+        self._copy_delegate.resolveRequested.connect(self._resolve_key_at_row)
         self.table.setItemDelegateForColumn(COL_DESKTOPS, SeatBarDelegate("desktop", self.table))
         self.table.setItemDelegateForColumn(COL_MOBILES, SeatBarDelegate("mobile", self.table))
         self.table.setItemDelegateForColumn(COL_FORMULA, BadgeDelegate("formula", self.table))
@@ -376,19 +422,39 @@ class MainWindow(QMainWindow):
         header = self.table.horizontalHeader()
         header.setSectionsClickable(True)
         header.sectionClicked.connect(self._on_header_clicked)
+        # The Client column absorbs whatever is left over; every other column
+        # is fixed. stretchLastSection must stay off or it fights the explicit
+        # Stretch mode on COL_CLIENT.
+        header.setStretchLastSection(False)
         header.setSectionResizeMode(COL_CLIENT, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(COL_ACTIONS, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(COL_CHECK, QHeaderView.ResizeMode.Fixed)
-        for col, width in (
-            (COL_CHECK, 36), (COL_KEY, 240), (COL_FORMULA, 140),
-            (COL_DESKTOPS, 130), (COL_MOBILES, 120), (COL_STATUS, 160),
-            (COL_EXPIRY, 120),
-        ):
+        # Floor for the stretching column. Without it, fixed columns can consume
+        # the entire viewport and Client collapses to zero width -- which is
+        # what truncated the header to "iei" and the names to "Cli...".
+        # When the fixed columns plus this floor exceed the viewport the table
+        # scrolls horizontally rather than hiding the client name.
+        header.setMinimumSectionSize(90)
+        for col, width in self.DEFAULT_COLUMN_WIDTHS.items():
             self.table.setColumnWidth(col, width)
-        # Six chips need real room; 120 px would clip the last two.
-        self.table.setColumnWidth(COL_ACTIONS, 360)
         self._restore_column_widths()
         return self.table
+
+    #: Default width per fixed column. Also the restore budget: a persisted
+    #: width may shrink a column but never grow it past DEFAULT_COLUMN_WIDTHS
+    #: (persisted values predate the 3-chip action column, and letting them
+    #: restore at face value starves the stretching Client column of the width
+    #: that was just freed up).
+    DEFAULT_COLUMN_WIDTHS = {
+        COL_CHECK: 34,
+        COL_KEY: 190,
+        COL_FORMULA: 104,
+        COL_DESKTOPS: 100,
+        COL_MOBILES: 92,
+        COL_STATUS: 100,
+        COL_EXPIRY: 100,
+        COL_ACTIONS: 112,
+    }
 
     def _restore_column_widths(self):
         from PyQt6.QtCore import QSettings
@@ -396,13 +462,17 @@ class MainWindow(QMainWindow):
         from ..config import APP_ID
 
         settings = QSettings(APP_ID, "licensing-console")
-        for col in (COL_KEY, COL_FORMULA, COL_DESKTOPS, COL_MOBILES, COL_STATUS, COL_EXPIRY):
+        for col, default in self.DEFAULT_COLUMN_WIDTHS.items():
+            if col in (COL_CLIENT, COL_ACTIONS):
+                continue
             value = settings.value(f"colWidth/{col}")
-            if value is not None:
-                try:
-                    self.table.setColumnWidth(col, int(value))
-                except (TypeError, ValueError):
-                    pass
+            if value is None:
+                continue
+            try:
+                width = int(value)
+            except (TypeError, ValueError):
+                continue
+            self.table.setColumnWidth(col, max(60, min(default, width)))
 
     def _persist_column_widths(self):
         from PyQt6.QtCore import QSettings
@@ -412,63 +482,60 @@ class MainWindow(QMainWindow):
         settings = QSettings(APP_ID, "licensing-console")
         for col in (COL_KEY, COL_FORMULA, COL_DESKTOPS, COL_MOBILES, COL_STATUS, COL_EXPIRY):
             settings.setValue(f"colWidth/{col}", self.table.columnWidth(col))
+    def _expose_drawer_widgets(self):
+        """
+        Publish the drawer's meters and title on the window.
 
-    def _build_inspector(self):
-        card = QFrame()
-        card.setObjectName("DetailsCard")
-        layout = QHBoxLayout(card)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(16)
+        The seat meters used to live in a horizontal strip above the dock. They
+        now live in the inspector drawer, but the bar/label pair is still
+        addressed as ``window.bar_pc`` / ``window.lbl_pc`` so the regression
+        guard that catches a swapped bar/label binding keeps testing a real
+        pair rather than being deleted along with the old layout.
+        """
+        self.det_title = self.drawer.title
+        self.bar_pc = self.drawer.bar_pc
+        self.lbl_pc = self.drawer.lbl_pc
+        self.bar_mob = self.drawer.bar_mob
+        self.lbl_mob = self.drawer.lbl_mob
+        self.btn_det_qr = self.drawer.btn_qr
+        self.btn_det_upgrade = self.drawer.btn_upgrade
+        self.btn_det_devices = self.drawer.btn_devices
+        self.btn_det_wa = self.drawer.btn_whatsapp
+        self.btn_det_quotas = self.drawer.btn_quotas
 
-        info = QVBoxLayout()
-        info.setSpacing(3)
-        self.det_title = QLabel("Sélectionnez une licence")
-        self.det_title.setObjectName("DetailTitle")
-        self.det_contact = QLabel("Coordonnées : —")
-        self.det_contact.setObjectName("Muted")
-        self.det_notes = QLabel("Notes : —")
-        self.det_notes.setObjectName("Muted")
-        for lbl in (self.det_title, self.det_contact, self.det_notes):
-            lbl.setWordWrap(True)
-            info.addWidget(lbl)
-        layout.addLayout(info, stretch=3)
+    def _drawer_record_action(self, handler):
+        """
+        Adapt a ``fn(record)`` handler to the drawer's ``(license_id)`` signals.
 
-        self.key_field = KeyField()
-        self.key_field.setMaximumWidth(300)
-        layout.addWidget(self.key_field, stretch=2)
+        The drawer only knows the id it was shown for, which may no longer be in
+        ``visible_records`` after a refresh, so the id is resolved against the
+        full set and falls back to whatever the drawer is currently showing.
+        """
 
-        layout.addLayout(self._meter("🖥️ Caisses", "bar_pc", "lbl_pc"), stretch=1)
-        layout.addLayout(self._meter("📱 Mobiles", "lbl_mob", "bar_mob"), stretch=1)
+        def _dispatch(license_id: str):
+            record = self._record_by_id(license_id)
+            if record is None:
+                self.toasts.notify("Sélectionnez d'abord une licence.", "info", 2500)
+                return
+            self.selected = record
+            handler(record)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(6)
-        self.btn_det_qr = self._button("📱 QR", "", "QR code d'activation", lambda: self._with_selection(self.open_qr))
-        self.btn_det_edit = self._button("✏️ Contact", "", "Modifier contact et notes", lambda: self._with_selection(self.open_notes))
-        self.btn_det_upgrade = self._button("⭐ Surclasser", "SecondaryBtn", "Prolonger ou passer à LIFETIME", lambda: self._with_selection(self.open_upgrade))
-        self.btn_det_devices = self._button("🖥️ Appareils", "", "Inspecter les postes connectés", lambda: self._with_selection(self.open_devices))
-        self.btn_det_wa = self._button("💬 WhatsApp", "WhatsAppBtn", "Préparer le message d'activation", lambda: self._with_selection(self.open_whatsapp))
-        for btn in (self.btn_det_qr, self.btn_det_edit, self.btn_det_upgrade,
-                    self.btn_det_devices, self.btn_det_wa):
-            btn.setEnabled(False)
-            actions.addWidget(btn)
-        layout.addLayout(actions)
+        return _dispatch
 
-        return card
+    def _record_by_id(self, license_id: str):
+        if not license_id:
+            return None
+        for record in list(self.all_records) + list(self.visible_records):
+            if license_id in (record.id, record.license_key):
+                return record
+        current = getattr(self.drawer, "_record", None)
+        if current is not None and license_id in (current.id, current.license_key):
+            return current
+        return current
 
-    def _meter(self, caption, bar_attr, label_attr):
-        box = QVBoxLayout()
-        box.setSpacing(3)
-        label = QLabel(caption)
-        label.setObjectName("Muted")
-        bar = QProgressBar()
-        bar.setRange(0, 100)
-        bar.setValue(0)
-        bar.setTextVisible(False)
-        setattr(self, bar_attr, bar)
-        setattr(self, label_attr, label)
-        box.addWidget(label)
-        box.addWidget(bar)
-        return box
+    def _on_drawer_closed(self):
+        self.selected = None
+        self._update_selection_badge()
 
     def _build_statusbar(self):
         self.status = QStatusBar()
@@ -512,6 +579,29 @@ class MainWindow(QMainWindow):
         self.audit_anchor.setObjectName("Muted")
         self.audit_anchor.setTextFormat(Qt.TextFormat.PlainText)
         layout.addStretch(1)
+
+        # Centre: selection counter. The dock carries status only -- the
+        # per-record actions moved into the inspector drawer.
+        self.selection_badge = QLabel("")
+        self.selection_badge.setObjectName("WarningPill")
+        self.selection_badge.setTextFormat(Qt.TextFormat.PlainText)
+        self.selection_badge.setVisible(False)
+        layout.addWidget(self.selection_badge, 0)
+
+        # Persistent degraded-mode marker. A missing secret is a standing
+        # condition, not an event, so it lives inline in the dock instead of
+        # firing a 7-second toast that covered the action buttons and then
+        # vanished while the problem was still there.
+        #
+        # Clickable: the pill is the operator's only route to the secret
+        # inspector, so it advertises that with a pointer cursor and a tooltip.
+        self.secrets_tag = _ClickablePill("")
+        self.secrets_tag.setObjectName("WarningPill")
+        self.secrets_tag.setTextFormat(Qt.TextFormat.PlainText)
+        self.secrets_tag.setVisible(False)
+        self.secrets_tag.clicked.connect(self.open_secrets_dialog)
+        layout.addWidget(self.secrets_tag, 0)
+
         layout.addWidget(self.audit_anchor, 0)
 
         self.dock_hint = QLabel("F5 actualiser · Ctrl+K commandes · Ctrl+L journal")
@@ -522,8 +612,19 @@ class MainWindow(QMainWindow):
         return dock
 
     def _reserve_dock_for_toasts(self) -> None:
-        """Keep the toast stack clear of the fixed-height dock."""
-        self.toasts.bottom_inset = self.DOCK_HEIGHT + 14
+        """Keep the toast stack clear of the dock and the action-button row."""
+        # Covers the 68px dock plus the root layout's 14px bottom margin, so the
+        # default placement already clears the dock without depending on the
+        # avoid-regions below.
+        self.toasts.bottom_clearance = self.DOCK_HEIGHT + 14 + 20
+
+        # Widgets are passed directly rather than wrapped in lambdas: a lambda
+        # closing over `self` would keep the window alive through the toast
+        # host, and that cycle faults the collector on teardown.
+        self.toasts.set_avoid_regions([
+            getattr(self, "drawer", None),
+            getattr(self, "dock", None),
+        ])
         self.toasts.reposition()
 
     @staticmethod
@@ -546,6 +647,7 @@ class MainWindow(QMainWindow):
             ("Ctrl+F", lambda: self.search.setFocus()),
             ("Ctrl+K", self.open_palette),
             ("Ctrl+L", self.open_audit),
+            ("Ctrl+P", self.open_pin_rescue),
             ("Ctrl+E", self.export_csv),
             ("Ctrl+J", self.export_json),
             ("Ctrl+C", self.copy_selected_key),
@@ -583,14 +685,53 @@ class MainWindow(QMainWindow):
         return btn
 
     def _warn_missing_secrets(self):
+        """
+        Surface unconfigured secrets as a persistent inline dock tag.
+
+        Deliberately not a toast: the condition persists until the operator
+        configures the secret, so a timed toast both obscured the drawer's
+        action buttons and disappeared while the problem was unresolved.
+
+        Only genuinely required secrets count. A console whose remote signing
+        works has no reason to be told it is degraded because it holds no
+        offline signing key or no legacy admin token -- the worker holds the
+        signing key and authenticates on MASTER_ENCRYPTION_KEY.
+        """
         missing = missing_secrets()
-        if missing:
-            self.toasts.notify(
-                f"Secrets non configurés : {', '.join(missing)}. "
-                "La génération de jetons offline sera désactivée.",
-                "warning",
-                7000,
+        if not missing:
+            self.secrets_tag.setVisible(False)
+            self.secrets_tag.setToolTip("")
+            return
+        self.secrets_tag.setText(
+            f"⚠ Mode dégradé · {len(missing)} secret(s) absent(s)"
+        )
+        self.secrets_tag.setToolTip(
+            "Secrets requis non configurés : "
+            + ", ".join(missing)
+            + ". Cliquez pour ouvrir le detail et les saisir."
+        )
+        self.secrets_tag.setVisible(True)
+
+    def open_secrets_dialog(self):
+        """
+        Open the secret inspector, then re-evaluate the dock.
+
+        Settings are re-resolved after a save so the pill reflects the vault as
+        it now stands instead of waiting for the next restart.
+        """
+        from ..config import resolve_settings
+        from .dialogs import SecretsStatusDialog
+
+        dialog = SecretsStatusDialog(parent=self)
+        dialog.exec()
+        try:
+            config_mod = __import__(
+                "licensing_app.config", fromlist=["SETTINGS"]
             )
+            config_mod.SETTINGS = resolve_settings()
+        except Exception:  # noqa: BLE001 - never fail the window on a refresh
+            pass
+        self._warn_missing_secrets()
 
     # ------------------------------------------------------------------
     # Data flow
@@ -599,6 +740,14 @@ class MainWindow(QMainWindow):
         if event.type() == event.Type.Resize and obj is self.centralWidget():
             self.overlay.resize(self.centralWidget().size())
         return False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Re-cap the drawer as the window changes width, then let the table
+        # re-negotiate its columns against the new free space.
+        if hasattr(self, "drawer") and self.drawer is not None:
+            self.drawer.apply_responsive_width(self.width())
+            self.table.updateGeometry()
 
     def refresh(self):
         if "refresh" in self._running:
@@ -675,6 +824,8 @@ class MainWindow(QMainWindow):
         return anchor_audit_ledger(self.service.api_client)
 
     def _on_anchor_ok(self, result) -> None:
+        if getattr(self, "_shutting_down", False):
+            return
         self._pending_anchor = None
         self.audit_anchor.setText(
             f"Audit: {result.get('sequence_number', 0)} entrées · ancré"
@@ -683,6 +834,28 @@ class MainWindow(QMainWindow):
         self.audit_anchor.setToolTip(
             f"Ancré côté serveur · head {str(result.get('head_audit_hash', ''))[:16]}…"
         )
+        # A successful anchor means the server agrees with the local head, so any
+        # standing 409 banner is now obsolete. Without this the banner survived a
+        # successful re-anchor and kept claiming a regression the server no
+        # longer reports -- the console looked locked while being fully synced.
+        self._clear_anchor_banner()
+
+    def _clear_anchor_banner(self) -> None:
+        """
+        Retire the audit-anchor banner only if it is the one we raised.
+
+        The banner is shared with the ledger-integrity and missing-secret
+        alerts. Hiding it unconditionally would erase an unrelated alarm the
+        operator still has to act on, so the flag decides.
+        """
+        if not getattr(self, "_anchor_banner_active", False):
+            return
+        self._anchor_banner_active = False
+        self.alert_banner.set_action("")
+        self.alert_banner.hide()
+        self._read_only = False
+        self.audit_ok = True
+        self.status.showMessage("Ancrage d'audit rétabli — écritures réactivées.")
 
     def _on_anchor_error(self, exc: Exception) -> None:
         """
@@ -694,6 +867,9 @@ class MainWindow(QMainWindow):
         timeout -- is transient and must not lock the operator out.
         """
         from ..core.audit import AuditAnchorTamperError
+
+        if getattr(self, "_shutting_down", False):
+            return
 
         self._pending_anchor = None
 
@@ -717,8 +893,137 @@ class MainWindow(QMainWindow):
             "Des entrées ont été supprimées ou réécrites localement. "
             "Les écritures sont désactivées."
         )
+        # The banner is the only place the operator learns about this, so it is
+        # also the only place the recovery can start. Guarded by a confirmation
+        # dialog because a real regression is a security event.
+        self.alert_banner.set_action(
+            "Réinitialiser l'ancrage Cloud",
+            "Effacer le point d'ancrage serveur et repartir de zéro.\n"
+            "À n'utiliser que si le journal local a été perdu ou restauré "
+            "depuis une sauvegarde.",
+        )
         self.alert_banner.show()
+        self._anchor_banner_active = True
         self.status.showMessage("⛔ Ancrage d'audit refusé — mode lecture seule.")
+
+    def _on_reset_anchor_requested(self) -> None:
+        """
+        Operator-confirmed recovery from a false audit lockout.
+
+        A 409 is treated as a security event everywhere else in this class, and
+        that is right. This is the one deliberate exception: when the local
+        ledger was lost (wiped machine, restored backup, reinstall) the server
+        baseline outlives it and no legitimate sequence can ever clear the
+        guard, so the console is bricked by a non-attack. The operator has to
+        confirm explicitly, and the discarded checkpoint is reported back
+        rather than silently dropped.
+        """
+        from PyQt6.QtWidgets import QMessageBox
+
+        from ..core.audit import client_identifier
+
+        confirm = QMessageBox.warning(
+            self,
+            "Réinitialiser l'ancrage d'audit",
+            "Cette opération efface le point d'ancrage d'audit stocké côté Cloud "
+            "et permet au journal local de repartir de zéro.\n\n"
+            "À faire uniquement si le journal local a été perdu (machine "
+            "réinstallée, sauvegarde restaurée). Si vous suspectez une "
+            "altération délibérée, n'utilisez PAS cette option et restaurez "
+            "le journal depuis une sauvegarde.\n\n"
+            "Continuer ?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        # On the pool, not inline. This is a network call to the edge with a
+        # 10s timeout; run synchronously it froze the window solid, which is
+        # indistinguishable from the request having hung with no feedback.
+        self._resetting_anchor = True
+        self._running.add("anchor-reset")
+        task = Task(self._reset_anchor_worker)
+        task.signals.ok.connect(self._on_reset_anchor_ok)
+        task.signals.error.connect(self._on_reset_anchor_failed)
+        self._pending_anchor_reset = task
+        self.pool.start(task)
+
+    def _reset_anchor_worker(self):
+        from ..core.audit import client_identifier
+
+        return self.service.api_client.reset_audit_anchor(client_identifier())
+
+    def _on_reset_anchor_ok(self, result) -> None:
+        if getattr(self, "_shutting_down", False):
+            return
+        self._pending_anchor_reset = None
+        self._resetting_anchor = False
+        self._running.discard("anchor-reset")
+
+        # The worker reports a cleared anchor as status="reset"; anything else
+        # means the edge answered 200 without doing the work. Treating a
+        # missing status as success is how a failed reset looks like a working
+        # one.
+        if result.get("status") != "reset":
+            self._on_reset_anchor_failed(
+                ValueError(
+                    f"réponse inattendue du worker : {result.get('error') or result}"
+                )
+            )
+            return
+
+        self._clear_anchor_banner()
+        discarded = result.get("discarded_checkpoint")
+        if discarded:
+            self.toasts.notify(
+                "Ancrage Cloud réinitialisé "
+                f"(séquence serveur écartée : {discarded.get('sequence_number')}).",
+                "success",
+                6000,
+            )
+        else:
+            self.toasts.notify("Ancrage Cloud réinitialisé.", "success", 5000)
+
+        # Re-anchor immediately so the status bar returns to a truthful,
+        # server-confirmed state rather than waiting for the next F5.
+        self._anchor_audit_async()
+
+    def _on_reset_anchor_failed(self, exc: Exception) -> None:
+        """
+        Report a failed reset loudly and leave the operator able to retry.
+
+        The action button is deliberately left in place. A toast that fades
+        after a few seconds, on a console that is still locked out, reads as
+        silence; the operator needs an unmissable message and a live retry.
+        """
+        from PyQt6.QtWidgets import QMessageBox
+
+        if getattr(self, "_shutting_down", False):
+            return
+
+        self._pending_anchor_reset = None
+        self._resetting_anchor = False
+        self._running.discard("anchor-reset")
+
+        detail = str(exc)
+        if isinstance(exc, Exception) and getattr(exc, "response", None) is not None:
+            resp = exc.response
+            try:
+                body = resp.json()
+                detail = body.get("message") or body.get("error") or detail
+            except Exception:  # noqa: BLE001 - non-JSON error body
+                pass
+            detail = f"HTTP {resp.status_code} — {detail}"
+
+        QMessageBox.critical(
+            self,
+            "Réinitialisation de l'ancrage impossible",
+            f"La réinitialisation de l'ancrage d'audit a échoué :\n\n{detail}\n\n"
+            "La console reste en lecture seule. Vous pouvez réessayer depuis "
+            "ce bouton, ou lancer :\n"
+            "    python scripts/reset_audit_anchor.py",
+        )
 
     def _on_error(self, message: str):
         self._running.discard("refresh")
@@ -900,7 +1205,18 @@ class MainWindow(QMainWindow):
         record = self.current_record() or self.selected
         if record is None:
             return
-        self.copy_to_clipboard(record.license_key)
+        payload = self._resolve_missing_key(record)
+        if payload is None:
+            return
+        key = payload.get("licenseKey", "")
+        if not key:
+            self.toasts.notify(
+                "Aucun identifiant à copier : utilisez l'option Cloud ID.",
+                "info",
+                3000,
+            )
+            return
+        self.copy_to_clipboard(key)
 
     def copy_to_clipboard(self, text: str):
         if not text:
@@ -912,35 +1228,34 @@ class MainWindow(QMainWindow):
     def _sync_selection(self):
         record = self.current_record()
         if record is None:
+            # Deselecting must reset the drawer. Returning early here left the
+            # previous customer's details and the enabled buttons on screen,
+            # so an action could be fired against a record that was no longer
+            # selected.
+            self.clear_selection()
             return
         self.selected = record
-        self.det_title.setText(
-            f"👤 {record.customer}  —  {record.formula}  ·  {record.status.value.upper()}"
-        )
-        self.det_contact.setText(
-            f"📞 {record.phone or '—'}   |   📍 {record.city or '—'}"
-        )
-        self.det_notes.setText(f"📝 {record.notes or 'Aucune note interne.'}")
-        self.key_field.setValue(record.license_key if record.has_plaintext_key else "")
-        self.lbl_pc.setText(f"🖥️ {record.active_desktops}/{record.max_desktops}")
-        self.bar_pc.setValue(int(record.seat_ratio * 100))
-        self.lbl_mob.setText(f"📱 {record.active_mobiles}/{record.max_mobiles}")
-        self.bar_mob.setValue(int(record.mobile_ratio * 100))
-        for btn in (self.btn_det_qr, self.btn_det_edit, self.btn_det_upgrade,
-                    self.btn_det_devices, self.btn_det_wa):
-            btn.setEnabled(True)
+        self.drawer.show_for(record)
+        self._update_selection_badge()
+
+    def _update_selection_badge(self):
+        """Centre-of-dock selection counter."""
+        selection = self.table.selectionModel()
+        count = len(selection.selectedRows()) if selection is not None else 0
+        if count == 1:
+            text = "1 licence sélectionnée"
+        elif count > 1:
+            text = f"{count} licences sélectionnées"
+        else:
+            text = ""
+        self.selection_badge.setText(text)
+        self.selection_badge.setVisible(bool(text))
 
     def clear_selection(self):
         self.selected = None
-        self.det_title.setText("Sélectionnez une licence")
-        self.det_contact.setText("Coordonnées : —")
-        self.det_notes.setText("Notes : —")
-        self.key_field.setValue("")
-        self.bar_pc.setValue(0)
-        self.bar_mob.setValue(0)
-        for btn in (self.btn_det_qr, self.btn_det_edit, self.btn_det_upgrade,
-                    self.btn_det_devices, self.btn_det_wa):
-            btn.setEnabled(False)
+        self.drawer.clear()
+        self.drawer.hide()
+        self._update_selection_badge()
 
     # ------------------------------------------------------------------
     # Sorting & menus
@@ -984,6 +1299,7 @@ class MainWindow(QMainWindow):
         )
         act_reset = menu.addAction("🔄 Déconnecter tous les postes")
         act_offline = menu.addAction("🔏 Jeton offline (Ed25519)")
+        act_rescue = menu.addAction("🔑 Dépannage PIN client")
         menu.addSeparator()
         act_del = menu.addAction("🗑️ Supprimer du registre local")
 
@@ -1000,6 +1316,7 @@ class MainWindow(QMainWindow):
             act_toggle: lambda: self.toggle_status(record),
             act_reset: lambda: self.reset_seats(record),
             act_offline: lambda: self.open_offline_token(record),
+            act_rescue: lambda: self.open_pin_rescue(record),
             act_del: lambda: self.delete_license(record),
         }
         handler = dispatch.get(chosen)
@@ -1031,11 +1348,73 @@ class MainWindow(QMainWindow):
         dialog.license_created.connect(lambda _r: self.refresh())
         dialog.exec()
 
+    def _resolve_key_at_row(self, row: int) -> None:
+        """Open the resolution modal for a clicked unresolved key cell."""
+        record = self.model.record_at(row)
+        if record is None or record.has_plaintext_key:
+            return
+        self._resolve_missing_key(record)
+
+    def _make_missing_key_dialog(self, record):
+        """
+        Build the resolution modal.
+
+        Split out so a test can substitute a stub without opening a real modal;
+        QDialog.exec is a C++ slot and cannot be monkeypatched on the class.
+        """
+        from .dialogs import ResolveMissingKeyDialog
+
+        return ResolveMissingKeyDialog(record, self.service.api_client, self)
+
+    def _resolve_missing_key(self, record) -> Optional[dict]:
+        """
+        Offer the resolution modal when a licence has no plaintext key.
+
+        Returns the payload to continue with, or None when the operator
+        cancelled. Before this, WhatsApp/QR/Copy opened a dialog that opened a
+        "Clé Inconnue" warning and stopped -- the operator could not service,
+        copy, or hand over credentials for a licence that exists perfectly
+        well in the cloud.
+        """
+        if record is None or record.has_plaintext_key:
+            return record.to_dict() if record is not None else None
+
+        from .dialogs import ResolveMissingKeyDialog
+
+        dialog = self._make_missing_key_dialog(record)
+        dialog.key_resolved.connect(lambda _lid, _k: self.refresh())
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        payload = record.to_dict()
+        if dialog.use_cloud_id:
+            # Path C: no plaintext key, but the QR can still carry the cloud id
+            # the phone validates against.
+            payload["licenseKey"] = ""
+            payload["cloudId"] = record.id
+            return payload
+
+        key = dialog.resolved_key
+        if not key:
+            return None
+        payload["licenseKey"] = key
+        # Keep the in-memory record consistent so a follow-up action in the same
+        # session does not re-open the modal.
+        record.license_key = key
+        self.apply_filters()
+        return payload
+
     def open_qr(self, record):
-        QRCodeDialog(record.to_dict(), self).exec()
+        payload = self._resolve_missing_key(record)
+        if payload is None:
+            return
+        QRCodeDialog(payload, self).exec()
 
     def open_whatsapp(self, record):
-        WhatsAppMessageDialog(record.to_dict(), self).exec()
+        payload = self._resolve_missing_key(record)
+        if payload is None:
+            return
+        WhatsAppMessageDialog(payload, self).exec()
 
     def open_notes(self, record):
         dialog = EditCustomerNotesDialog(record.to_dict(), self)
@@ -1048,12 +1427,21 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def open_quotas(self, record):
-        dialog = UpdateQuotasDialog(record.to_dict(), self.service.api_client, self)
+        payload = self._resolve_missing_key(record)
+        if payload is None:
+            return
+        dialog = UpdateQuotasDialog(payload, self.service.api_client, self)
         dialog.quotas_updated.connect(lambda _r: self.refresh())
         dialog.exec()
 
     def open_devices(self, record):
-        dialog = DevicesDialog(record.to_dict(), self.service.api_client, self)
+        # Routed through the resolver for the same reason as QR/WhatsApp: the
+        # devices dialog needs the plaintext key to call the edge, and used to
+        # stop at an empty list with a warning.
+        payload = self._resolve_missing_key(record)
+        if payload is None:
+            return
+        dialog = DevicesDialog(payload, self.service.api_client, self)
         dialog.devices_changed.connect(lambda: self.refresh())
         dialog.exec()
 
@@ -1066,9 +1454,18 @@ class MainWindow(QMainWindow):
             default_license=target.to_dict() if target else None, parent=self
         ).exec()
 
+    def open_pin_rescue(self, record=None):
+        target = record or self.selected
+        customer = target.customer if target else ""
+        phone = target.phone if target else ""
+        TechnicianPinRescueDialog(customer=customer, phone=phone, parent=self).exec()
+
     def toggle_status(self, record: LicenseRecord):
         if not record.has_plaintext_key:
-            self.toasts.notify("Clé en clair inconnue pour cette licence.", "error", 4000)
+            # A toast here was a dead end: it named the problem and offered no
+            # way out. Route through the resolver so the operator can actually
+            # service the licence.
+            self._resolve_missing_key(record)
             return
         new_status = "suspended" if record.raw_status == "active" else "active"
         confirm = QMessageBox.question(
@@ -1085,7 +1482,7 @@ class MainWindow(QMainWindow):
 
     def reset_seats(self, record: LicenseRecord):
         if not record.has_plaintext_key:
-            self.toasts.notify("Clé en clair inconnue pour cette licence.", "error", 4000)
+            self._resolve_missing_key(record)
             return
         confirm = QMessageBox.question(
             self,
@@ -1276,6 +1673,7 @@ class MainWindow(QMainWindow):
             Command("Export Selection to CSV", self.export_csv, "download save", "Ctrl+E"),
             Command("Export Ledger to JSON", self.export_json, "backup", "Ctrl+J"),
             Command("Open Audit Log", self.open_audit, "history security", "Ctrl+L"),
+            Command("Dépannage PIN Caisse", self.open_pin_rescue, "rescue pin reset unlock gérant", "Ctrl+P"),
             Command("Filter: Expiring this week", lambda: self.set_pill("EXPIRING"), "soon"),
             Command("Filter: Quota full", lambda: self.set_pill("FULL"), "seats"),
             Command("Filter: All licences", lambda: self.set_pill("ALL"), "reset"),
@@ -1397,12 +1795,23 @@ class MainWindow(QMainWindow):
         """
         Shut down cleanly: stop timers, then drain the worker pool.
 
-        Order matters. A repeating QTimer can enqueue a new Task while the pool
-        is draining, and any Task still running when the window's C++ object is
-        destroyed will emit into freed memory. Both the sync clock and the
-        auto-sync timer must be stopped before waiting, and the wait must not be
-        abandoned while work is outstanding.
+        The toast host is detached first. It is a child widget that observes
+        the window's resize events and calls mapTo() on the dock and the
+        inspector's button row; once the window starts tearing those down,
+        those calls run against half-destroyed C++ objects and take the
+        process down with 0xC0000409 rather than raising anything Python can
+        catch.
         """
+        try:
+            self.toasts.detach()
+        except Exception:
+            pass
+
+        # Order matters. A repeating QTimer can enqueue a new Task while the pool
+        # is draining, and any Task still running when the window's C++ object is
+        # destroyed will emit into freed memory. Both the sync clock and the
+        # auto-sync timer must be stopped before waiting, and the wait must not be
+        # abandoned while work is outstanding.
         self._persist_column_widths()
 
         for timer in (
@@ -1414,6 +1823,27 @@ class MainWindow(QMainWindow):
                 timer.stop()
 
         self._auto_sync = False
+
+        # Cut the queued-signal path before draining. A Task finishing on a pool
+        # thread emits with an auto-connection, so the slot invocation is queued
+        # to the main thread and delivered *after* this event handler returns --
+        # by which point the receiver's C++ object can already be gone, which is
+        # a use-after-free (0xC0000409) rather than a catchable Python error.
+        # Disconnecting the outstanding tasks makes the late delivery a no-op.
+        self._shutting_down = True
+        for task in (
+            getattr(self, "_pending_anchor", None),
+            getattr(self, "_pending_anchor_reset", None),
+        ):
+            if task is not None:
+                try:
+                    task.signals.ok.disconnect()
+                    task.signals.error.disconnect()
+                    task.signals.fail.disconnect()
+                except (RuntimeError, TypeError):
+                    # Already torn down; nothing left to disconnect.
+                    pass
+
         # clear() drops queued tasks that have not started; waitForDone() then
         # covers the ones already on a thread. Requests carry a 6-15 s timeout,
         # so allow enough time that no worker outlives this object.

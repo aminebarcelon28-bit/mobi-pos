@@ -27,6 +27,7 @@ async function getCustomerRepo() {
   return customerRepository;
 }
   import { newId, newReceiptNumber, deterministicId } from '../../utils/ids';
+  import { sortedTransactions } from '../transactionOrder';
   import { saveCheckoutRecoveryIntent, clearCheckoutRecoveryIntent, cartFingerprintOfPayload, clearSiblingRecoveryIntents } from '../../db/checkoutRecovery';
   import { tryAcquireCheckoutFlight, releaseCheckoutFlight } from '../../db/checkoutFlight';
 import {
@@ -69,6 +70,7 @@ import { DRAWER_REASON_PREFIXES } from '../../constants/index';
 import { DEFAULT_CREDIT_LIMIT } from './createCustomerSlice';
 import { readVatRate, readVoucherStaging } from './createCartSlice';
 import { audioBus } from '../../utils/audioEvents';
+import { canonicalDeviceId, normalizeDeviceKey, resolveWarrantyWithFallback, warrantyAnchorFor } from '../../utils/warrantyResolver';
 // P11.3: escpos pulls in the Windows spooler + serial + label builder chain.
 // Printing is fire-and-forget and desktop-only, so it loads on first print.
 import type { ReceiptSettings } from '../../types/pos';
@@ -626,6 +628,15 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           defaultPrice,
           discountAmount,
           lineProfit,
+          // Freeze the warranty term onto the frozen line. `transaction.items`
+          // IS `frozenCartItems`, so this is what the receipt renders — the same
+          // value persisted as `warranty_months_at_sale` on the order line and
+          // used by `warrantyAnchorFor` for the IMEI record. One snapshot, three
+          // consumers: paper, database, SAV terminal.
+          warrantyMonthsAtSale: resolveWarrantyWithFallback(
+            (products || []).find((p) => p.id === item.product?.id) ?? null,
+            item.product ?? null
+          ),
         };
       });
 
@@ -903,7 +914,9 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         ...(completedMilestoneAwards.length > 0 ? { milestoneAwards: completedMilestoneAwards } : {}),
       };
 
-      const newTransactions = [transaction, ...transactions];
+      // Store invariant: newest-first (centralized helper — a raw prepend
+      // alone diverges from boot/pull order; see store/transactionOrder).
+      const newTransactions = sortedTransactions([transaction, ...transactions]);
 
       // Synchronous Atomic Persistence (Contract C6: Zero Silent Data Loss)
       const warnings: string[] = [];
@@ -952,6 +965,14 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
               discount_amount: Number(ci.discountAmount ?? 0),
               discount: Number(ci.discount ?? 0),
               imei_number: ci.imeiNumber ?? null,
+              // Warranty captured AT SALE. The SQLite line is the durable
+              // point-in-time record, so the months a customer actually bought
+              // must be frozen here — the catalog `warrantyMonths` may change
+              // later and must never re-date this sale.
+              warranty_months_at_sale: resolveWarrantyWithFallback(
+                (products || []).find((p) => p.id === pId) ?? null,
+                ci.product ?? null
+              ),
               cost_price: Number(ci.unitCostPrice ?? ci.product?.costPrice ?? 0),
               unit_cost_at_sale: Number(ci.unitCostAtSale ?? ci.unitCostPrice ?? ci.product?.costPrice ?? 0),
               line_profit: Number(ci.lineProfit ?? 0),
@@ -1275,13 +1296,28 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         }
       }
 
-      // Track sold serialized items in Dexie and store
+      // Track sold serialized items in Dexie and store.
+      // Q-B: a RETURN leg (`isReturn`) goes back to stock, so it must not mint a
+      // sale, a registry row, or a warranty anchor. Previously every line with an
+      // identifier was stamped as sold, so an exchange wrote `soldAt` +
+      // `warrantyExpiresAt` for the outgoing handset — the inspector then showed
+      // a live warranty on a device the customer had just handed back, and the
+      // unit could never be re-sold because the "sold" gate rejected it.
       const soldImeis = frozenCartItems
         .filter((ci) => Boolean(ci.imeiNumber && ci.imeiNumber.trim()))
-        .map((ci) => ({
-          imei: ci.imeiNumber!.trim(),
-          productId: ci.product?.id || '',
-        }));
+        .filter((ci) => !(ci as { isReturn?: boolean }).isReturn)
+        .map((ci) => {
+          const pId = ci.product?.id || '';
+          return {
+            imei: canonicalDeviceId(ci.imeiNumber),
+            productId: pId,
+            // Point-in-time anchor, minted once here at checkout completion.
+            warrantyMonths: resolveWarrantyWithFallback(
+              (products || []).find((p) => p.id === pId) ?? null,
+              ci.product ?? null
+            ),
+          };
+        });
 
       let nextImeiRecords = get().imeiRecords || [];
       if (soldImeis.length > 0) {
@@ -1292,16 +1328,47 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             const rec: IMEIRecord = existing || {
               imei: si.imei,
               productId: si.productId,
+              // No prior registry row, so there is no earlier stock-entry
+              // instant to preserve; checkout time is the best available.
               receivedAt: transaction.createdAt,
             };
             rec.saleTransactionId = transaction.id;
             rec.soldAt = transaction.createdAt;
+            rec.warrantyMonths = si.warrantyMonths;
+            // Q-A WRITER: re-anchor when the SALE TRANSACTION CHANGES, and only
+            // then.
+            //
+            // Before this, the guard was `if (!rec.warrantyExpiresAt)`, so a
+            // device that was refunded and then genuinely re-sold kept the FIRST
+            // anchor: the row carried buyer #1's expiry while `saleTransactionId`
+            // and `soldAt` pointed at buyer #2's sale. The inspector then showed
+            // buyer #1's clock for buyer #2's device.
+            //
+            // Same transaction re-written = the SAME sale (a corrected ticket, a
+            // retry). Coverage the customer already holds must not be re-dated,
+            // so the frozen anchor is preserved.
+            const isSameSale = existing?.saleTransactionId === transaction.id;
+            if (!isSameSale || !rec.warrantyExpiresAt) {
+              rec.warrantyExpiresAt = warrantyAnchorFor({
+                soldAt: transaction.createdAt,
+                warrantyMonths: si.warrantyMonths,
+              });
+            }
             await dexieDb.imeiRecords.put(rec);
+
+            // Upsert into the in-memory mirror. `.map()` alone could only
+            // PATCH rows that already existed, so a device sold without a prior
+            // registry row was written to Dexie but never appeared in
+            // `imeiRecords` — its warranty silently reverted to "not sold"
+            // until the next boot refresh read Dexie back, then re-applied.
+            const siKey = normalizeDeviceKey(si.imei);
+            const idx = nextImeiRecords.findIndex((r) => normalizeDeviceKey(r.imei) === siKey);
+            if (idx >= 0) {
+              nextImeiRecords = nextImeiRecords.map((r, i) => (i === idx ? rec : r));
+            } else {
+              nextImeiRecords = [rec, ...nextImeiRecords];
+            }
           }
-          nextImeiRecords = nextImeiRecords.map((r) => {
-            const match = soldImeis.find((s) => s.imei === r.imei);
-            return match ? { ...r, saleTransactionId: transaction.id, soldAt: transaction.createdAt } : r;
-          });
         } catch (e) {
           console.warn('[completeSale] Failed to update imeiRecords in Dexie:', e);
         }
@@ -1654,7 +1721,10 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       voidedBy: cashierName || 'Manager',
     };
 
-    const updatedTransactions = transactions.map((t) => (t.id === transactionId ? voidedTxn : t));
+    // Status flip keeps the row's chronological slot (same createdAt keys —
+    // the stable canonical sort preserves its position while healing any
+    // legacy disorder around it).
+    const updatedTransactions = sortedTransactions(transactions.map((t) => (t.id === transactionId ? voidedTxn : t)));
 
     const auditEntry: SecurityAuditLogEntry = {
       id: newId('AUDIT'),
@@ -1827,8 +1897,17 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
 
     audioBus.emit('success');
 
+    const releasedImeiKeys = new Set(restoredImeis.map(normalizeDeviceKey));
     const nextImeiRecords = (get().imeiRecords || []).map((r) =>
-      restoredImeis.includes(r.imei)
+      releasedImeiKeys.has(normalizeDeviceKey(r.imei))
+        // `warrantyExpiresAt` is deliberately PRESERVED. Clearing it was rejected:
+        // the anchor is the record of what the refunded customer was promised, and
+        // it is needed for reprints, audits and disputes. The reader already
+        // scopes to the latest sale and ignores a stale anchor when
+        // `saleTransactionId` does not match, and the writer re-anchors on a
+        // genuine resale, so clearing was redundant as well as destructive.
+        // Worse, on a PARTIAL refund (one unit of a multi-item order) a bug here
+        // could wipe a different unit's warranty.
         ? { ...r, saleTransactionId: undefined, soldAt: undefined }
         : r
     );
@@ -2197,10 +2276,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       status: isFullyRefunded ? 'REFUNDED' : 'PARTIALLY_REFUNDED',
     };
 
-    const updatedTransactions = [
+    // Store invariant: newest-first (refund receipt carries a fresh
+    // createdAt; the helper places it by comparator, not by assumption).
+    const updatedTransactions = sortedTransactions([
       refundTransaction,
       ...transactions.map((t) => (t.id === originalTransaction.id ? updatedOriginalTransaction : t)),
-    ];
+    ]);
 
     const auditEntry: SecurityAuditLogEntry = {
       id: newId('AUDIT'),
@@ -2469,8 +2550,10 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       audioBus.emit('cashDrawer');
     }
 
+    const releasedImeiKeys = new Set(restoredImeis.map(normalizeDeviceKey));
+    // Same as the void path: the anchor is preserved (see the note there).
     const nextImeiRecords = (get().imeiRecords || []).map((r) =>
-      restoredImeis.includes(r.imei)
+      releasedImeiKeys.has(normalizeDeviceKey(r.imei))
         ? { ...r, saleTransactionId: undefined, soldAt: undefined }
         : r
     );

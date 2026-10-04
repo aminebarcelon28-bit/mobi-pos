@@ -23,6 +23,7 @@ import {
   MessageCircle,
   HelpCircle,
   ExternalLink,
+  Download,
   X
 } from 'lucide-react';
 import { sanitizeLicenseKey, formatLicenseKeyForDisplay } from '../../licensing/keyFormat';
@@ -39,10 +40,22 @@ import {
   type LicenseSuspensionState
 } from '../../licensing/store';
 import {
+  runEmergencyComplianceExport,
+  summarizeExport,
+  EmergencyExportError,
+  type EmergencyExportResult,
+} from '../../licensing/emergencyExporter';
+import {
   getDetailedPlatform,
   type DevicePlatformDetails
 } from '../../utils/platform';
 import type { HardwareFingerprintResult } from '../../api/license';
+
+// BOUNDARY (enforced by scripts/check-boundaries.mjs): this file must not
+// import store slices, db adapters/repositories, sqlPluginAdapter, or sync/*.
+// The only data path available while locked is the scoped read-only exporter
+// above. Adding a domain import here would re-open the expired-licence bypass
+// this gate exists to close.
 
 // Lazy-load camera scanner to keep bundle slim
 const MobileCameraScanner = React.lazy(() =>
@@ -78,6 +91,63 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
   // Suspension detection
   const [suspension, setSuspension] = useState<LicenseSuspensionState | null>(null);
   const [forcedNewKey, setForcedNewKey] = useState(false);
+
+  // ── Scoped emergency compliance export ─────────────────────────────────────
+  // Statutory retention must not require a paid licence, but an export must
+  // never become a general-purpose data door. The workflow is deliberately
+  // narrow: Owner/Manager PIN → native read-only extraction → file paths and
+  // SHA-256 digests. No store hydration, no sync, no operational capability.
+  const [exportPin, setExportPin] = useState('');
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportResult, setExportResult] = useState<EmergencyExportResult | null>(null);
+  const [exportProgress, setExportProgress] = useState<string | null>(null);
+
+  const handleEmergencyExport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (exportBusy) return;
+    const pin = exportPin.trim();
+    if (!pin) {
+      setExportError('Saisissez le PIN Gérant pour autoriser l\'export.');
+      return;
+    }
+    setExportBusy(true);
+    setExportError(null);
+    setExportResult(null);
+    setExportProgress('Ouverture de la connexion en lecture seule…');
+
+    try {
+      const result = await runEmergencyComplianceExport(
+        // Phase 1 B.7: no licenseStatus is forwarded — the native kernel
+        // records its own coarse state code in the audit row.
+        { pin },
+        {
+          onProgress: (p) =>
+            setExportProgress(
+              `Extraction ${p.table}… ${p.rows.toLocaleString('fr-FR')} lignes`
+            ),
+        }
+      );
+      setExportResult(result);
+      setExportProgress(null);
+      // The PIN is not needed again for this archive; drop it from component
+      // state so it does not linger in memory behind the receipt.
+      setExportPin('');
+    } catch (err) {
+      setExportProgress(null);
+      if (err instanceof EmergencyExportError) {
+        setExportError(
+          err.code === 'INVALID_PIN'
+            ? 'PIN Gérant incorrect. L\'export a été refusé et la tentative consignée.'
+            : err.message
+        );
+      } else {
+        setExportError('Export impossible. Veuillez réessayer.');
+      }
+    } finally {
+      setExportBusy(false);
+    }
+  };
 
   // Advanced options accordion
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -300,14 +370,14 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
       {/* Background Ambience */}
       <div className="absolute inset-0 bg-gradient-to-tr from-slate-950 via-slate-900 to-slate-950 pointer-events-none" />
       <div
-        className={`absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[32rem] h-[32rem] rounded-full blur-3xl pointer-events-none transition-all duration-700 ${
+        className={`absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[32rem] h-[32rem] max-w-full rounded-full blur-3xl pointer-events-none transition-all duration-700 ${
           isSuspendedView ? 'bg-rose-500/10' : 'bg-emerald-500/10'
         }`}
       />
 
       {/* QR Code Scanner Overlay */}
       {showScanner && (
-        <div className="fixed inset-0 z-60 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4">
+        <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4">
           <div className="relative w-full max-w-sm bg-slate-900 border border-slate-700 rounded-3xl overflow-hidden shadow-2xl p-4 flex flex-col items-center">
             <div className="w-full flex items-center justify-between pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2 font-bold text-sm text-purple-400">
@@ -802,6 +872,122 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
                 <HelpCircle className="w-3 h-3" />
                 <span>Assistance</span>
               </button>
+            </div>
+
+            {/* ═══════════════════════════════════════════════════════════════
+                SCOPED EMERGENCY COMPLIANCE EXPORT
+                Statutory retention must not depend on a paid licence. This
+                panel is the ONLY data access available while locked, and it is
+                read-only by construction (SQLITE_OPEN_READ_ONLY +
+                PRAGMA query_only). It requires a re-verified Owner/Manager
+                PIN — never an existing session — and writes a tamper-evident
+                EMERGENCY_DATA_EXPORT audit row carrying each file's SHA-256.
+                ═══════════════════════════════════════════════════════════════ */}
+            <div className="pt-3 mt-1 border-t border-slate-800/60">
+              <button
+                type="button"
+                onClick={() => {
+                  setExportError(null);
+                  setExportResult(null);
+                }}
+                className="w-full flex items-center justify-between gap-2 text-[11px] font-semibold text-slate-400 hover:text-slate-200 transition"
+                aria-expanded={exportResult !== null || exportError !== null}
+              >
+                <span className="flex items-center gap-1.5">
+                  <Download className="w-3.5 h-3.5 text-sky-400" />
+                  Exporter les registres comptables (conformité)
+                </span>
+                {exportResult === null && exportError === null ? (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronUp className="w-3.5 h-3.5" />
+                )}
+              </button>
+
+              {(exportResult !== null || exportError !== null) && (
+                <div className="mt-2.5 space-y-2.5">
+                  <p className="text-[10px] text-slate-500 leading-relaxed">
+                    Extraction en lecture seule via une connexion SQLite dédiée.
+                    Les données clients, identifiants appareils et secrets ne sont
+                    jamais inclus. Chaque export est journalisé.
+                  </p>
+
+                  <form onSubmit={handleEmergencyExport} className="space-y-2">
+                    <div>
+                      <label className="block text-[10px] font-medium text-slate-400 mb-1">
+                        PIN Gérant (autorisation requise) :
+                      </label>
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        value={exportPin}
+                        onChange={(e) => {
+                          setExportPin(e.target.value);
+                          if (exportError) setExportError(null);
+                        }}
+                        placeholder="••••"
+                        disabled={exportBusy}
+                        autoComplete="off"
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-sky-500 focus:ring-1 focus:ring-sky-500 rounded-xl text-sm text-center tracking-[0.4em] text-sky-200 placeholder:text-slate-700 outline-none disabled:opacity-50"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={exportBusy}
+                      className="w-full py-2.5 px-4 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-xl transition flex items-center justify-center gap-2 active:scale-[0.98] min-h-[40px]"
+                    >
+                      {exportBusy ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>{exportProgress || 'Export en cours…'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Générer les registres CSV</span>
+                        </>
+                      )}
+                    </button>
+                  </form>
+
+                  {exportError && (
+                    <div className="p-2.5 bg-rose-950/60 border border-rose-500/50 rounded-xl text-rose-200 text-[11px] flex items-start gap-2">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" />
+                      <span className="font-medium leading-relaxed">{exportError}</span>
+                    </div>
+                  )}
+
+                  {exportResult && (
+                    <div className="p-3 bg-emerald-950/40 border border-emerald-500/40 rounded-xl space-y-2">
+                      <div className="flex items-center gap-1.5 text-emerald-300 text-[11px] font-bold">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Export terminé — {summarizeExport(exportResult)}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-mono break-all">
+                        {exportResult.exportDir}
+                      </div>
+                      <ul className="space-y-1">
+                        {exportResult.files.map((f) => (
+                          <li key={f.fileName} className="text-[10px] text-slate-400">
+                            <span className="text-slate-300 font-semibold">{f.fileName}</span>
+                            {' · '}
+                            {f.rowCount.toLocaleString('fr-FR')} lignes
+                            <div className="font-mono text-[9px] text-slate-600 break-all">
+                              SHA-256 {f.sha256}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="text-[9px] text-slate-500 pt-1 border-t border-emerald-900/50">
+                        Journalisé sous l&apos;identifiant{' '}
+                        <span className="font-mono">{exportResult.auditEventId}</span> —
+                        vérifiez cejournal avant toute diffusion externe.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

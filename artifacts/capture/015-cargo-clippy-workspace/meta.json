@@ -1,0 +1,15 @@
+{
+  "slot": "015-cargo-clippy-workspace",
+  "name": "Gate 3: Cargo Clippy All Targets (Zero Warnings)",
+  "command": "cargo clippy --workspace --all-targets -- -D warnings",
+  "cwd": ".",
+  "expected_exit": 0,
+  "exit_code": 0,
+  "status": "PASS",
+  "start_local": "2026-10-01T03:18:17.329+01:00",
+  "start_utc": "2026-10-01T02:18:17.329Z",
+  "end_local": "2026-10-01T03:18:24.698+01:00",
+  "end_utc": "2026-10-01T02:18:24.698Z",
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "06a34e60cb45d93ec8ef859289a131efba5733afca8e99fceb92385467c73a62"
+}

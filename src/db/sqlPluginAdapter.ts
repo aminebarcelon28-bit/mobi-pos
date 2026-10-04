@@ -1095,6 +1095,8 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
       lineProfit: number;
       enrichedPayload: string;
       isReturnLine: boolean;
+      /** Months captured on the order line at sale — the point-in-time term. */
+      warrantyMonthsAtSale?: number;
       rawItem: Record<string, unknown>;
     };
     const preparedItems: PreparedItem[] = [];
@@ -1392,6 +1394,9 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
         lineProfit,
         enrichedPayload,
         isReturnLine,
+        warrantyMonthsAtSale: Number(
+          (it.warranty_months_at_sale ?? (it as Record<string, unknown>).warrantyMonthsAtSale ?? 0) || 0
+        ),
         rawItem: it as Record<string, unknown>,
       });
     }
@@ -1670,15 +1675,44 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
             throw new Error(`IMEI_ALREADY_SOLD:${pit.imeiNum}`);
           }
         }
-        const imeiVersion = await bumpEntityVersion(db, 'imei', pit.imeiNum);
-        const imeiData = {
-          imei: pit.imeiNum,
-          product_id: pit.prodId,
-          sale_transaction_id: txId,
-          sold_at: now,
-          received_at: now,
-          version: imeiVersion,
-        };
+const imeiVersion = await bumpEntityVersion(db, 'imei', pit.imeiNum);
+          // Point-in-time warranty anchor, minted ONCE here at checkout.
+          // Reads prefer this value, so a later catalog `warrantyMonths` edit
+          // cannot retroactively re-date coverage a customer already bought.
+          // `warranty_months_at_sale` is captured on the order line by the cart
+          // (the only layer holding the sale-time product snapshot).
+          // Already a non-negative integer from `resolveWarrantyWithFallback`, so no
+          // re-floor here — the money-path float registry is shrink-only and a
+          // redundant coercion must not grow it.
+          const wMonths = Math.max(0, Number(pit.warrantyMonthsAtSale ?? 0) || 0);
+          const { addMonthsClamped } = await import('../utils/warrantyResolver');
+          const wExpiresAt =
+            wMonths > 0 ? addMonthsClamped(now, wMonths) : new Date(now).toISOString();
+          // `received_at` MUST NOT be stamped with the sale time: it is the
+          // inventory-aging / FIFO clock. Preserve the true stock-entry instant
+          // when the device is already registered, else fall back to `now`.
+          const priorReceivedAt = await (async (): Promise<string | null> => {
+            try {
+              const rows = (await db
+                .select('SELECT received_at FROM imei_records WHERE imei = $1', [pit.imeiNum])
+                .catch(rethrowBusy)) as Array<{ received_at?: string | null }>;
+              const v = rows?.[0]?.received_at;
+              return v ? String(v) : null;
+            } catch (e) {
+              if (isBusyError(e)) throw e;
+              return null;
+            }
+          })();
+          const imeiData = {
+            imei: pit.imeiNum,
+            product_id: pit.prodId,
+            sale_transaction_id: txId,
+            sold_at: now,
+            received_at: priorReceivedAt || now,
+            warranty_months: wMonths,
+            warranty_expires_at: wExpiresAt,
+            version: imeiVersion,
+          };
         const imeiKey = await stableEntityKey(db, 'imei', pit.imeiNum);
         try {
           await db.execute(
@@ -1690,11 +1724,19 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
         } catch {
           try {
             await db.execute(
-              `INSERT INTO imei_records (imei, product_id, sale_transaction_id, sold_at, received_at, version)
-               VALUES ($1, $2, $3, $4, $4, 1)
-               ON CONFLICT(imei) DO UPDATE SET sale_transaction_id=excluded.sale_transaction_id, sold_at=excluded.sold_at,
-                 product_id=excluded.product_id, version=imei_records.version + 1`,
-              [pit.imeiNum, pit.prodId, txId, now],
+              `INSERT INTO imei_records (imei, product_id, sale_transaction_id, sold_at,
+                                         received_at, warranty_expires_at, warranty_months, version)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, 1)
+               ON CONFLICT(imei) DO UPDATE SET
+                 sale_transaction_id=excluded.sale_transaction_id,
+                 sold_at=excluded.sold_at,
+                 product_id=excluded.product_id,
+                 warranty_expires_at=COALESCE(imei_records.warranty_expires_at,
+                                              excluded.warranty_expires_at),
+                 warranty_months=COALESCE(imei_records.warranty_months,
+                                          excluded.warranty_months),
+                 version=imei_records.version + 1`,
+              [pit.imeiNum, pit.prodId, txId, now, priorReceivedAt || now, wExpiresAt, wMonths],
             );
           } catch (e: unknown) {
             console.warn('[db:imei] IMEI table record write skipped:', e);

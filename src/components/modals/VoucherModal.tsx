@@ -9,6 +9,7 @@ import { useToast } from '../ui/Toast';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
 import { isMobileDevice } from '../../utils/platform';
 import { MoneyInput } from '../ui/MoneyInput';
+import { DzPhoneInput } from '../ui/DzPhoneInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 
 export const VoucherModal: React.FC = () => {
@@ -245,15 +246,15 @@ export const VoucherModal: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="text-xs font-bold text-pos-text block mb-1">
+                    <label htmlFor="voucher-customer-phone" className="text-xs font-bold text-pos-text block mb-1">
                       Téléphone (Optionnel)
                     </label>
-                    <input
-                      type="tel"
+                    <DzPhoneInput
+                      id="voucher-customer-phone"
                       value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
+                      onChange={setCustomerPhone}
                       placeholder="Ex: 0550123456"
-                      className="w-full bg-pos-card border border-pos-border rounded-xl px-3 py-2 text-sm text-pos-text focus:outline-none focus:border-purple-500 transition"
+                      inputClassName="w-full bg-pos-card border border-pos-border rounded-xl px-3 py-2 text-sm text-pos-text focus:outline-none focus:border-purple-500 transition"
                     />
                   </div>
                 </div>

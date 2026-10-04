@@ -1,6 +1,13 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
+import {
+  PIN_DIALOG_MAX_LENGTH,
+  PIN_DIALOG_MIN_LENGTH,
+  isPinDialogLengthOk,
+  type GateRole,
+} from '../../utils/auditGate';
+import { verifyManagerGate } from '../../utils/pinGate';
 
 interface PinDialogProps {
   isOpen: boolean;
@@ -8,6 +15,20 @@ interface PinDialogProps {
   description?: string;
   onSuccess: () => void;
   onCancel: () => void;
+  /**
+   * Display role for copy only. Length is 4–12 for both roles (see
+   * PIN_DIALOG_MIN/MAX_LENGTH) — verification decides, not the dialog.
+   * Defaults to manager because every current call site gates a manager
+   * action (drawer No-Sale, stock force-sale). No auto-submit at any
+   * length — an explicit Valider press is required so longer PINs never
+   * misfire.
+   *
+   * Phase 1: verification routes through the native gate
+   * (`verifyManagerGate` — pin_verify under Tauri, fail-closed). The weak
+   * local path survives ONLY outside Tauri (flagged in code, never for
+   * privileged actions).
+   */
+  role?: GateRole;
 }
 
 export const PinDialog: React.FC<PinDialogProps> = ({
@@ -16,6 +37,7 @@ export const PinDialog: React.FC<PinDialogProps> = ({
   description,
   onSuccess,
   onCancel,
+  role = 'manager',
 }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
@@ -24,13 +46,15 @@ export const PinDialog: React.FC<PinDialogProps> = ({
   const dialogRef = useRef<HTMLDivElement>(null);
   const pinInputRef = useRef<HTMLInputElement>(null);
   
-  // Access store actions. Fallback functions are provided for development safety.
-  const verifyManagerPin = usePosStore((state) => state.verifyManagerPin);
+  // NOTE: verifyManagerPin is intentionally NOT read here anymore — the
+  // dialog routes through verifyManagerGate (native under Tauri).
   const logSecurityAction = usePosStore((state) => state.logSecurityAction);
 
   const resetState = useCallback(() => {
     setPin('');
     setError(false);
+    setLockMsg(null);
+    setVerifying(false);
   }, []);
 
   useEffect(() => {
@@ -52,27 +76,52 @@ export const PinDialog: React.FC<PinDialogProps> = ({
     previouslyFocusedRef.current = null;
   }, [isOpen, resetState]);
 
-  const handleVerify = useCallback((currentPin: string) => {
-    if (currentPin.length !== 4) return;
-    
-    const isSuccess = Boolean(verifyManagerPin && verifyManagerPin(currentPin));
+  const minLength = PIN_DIALOG_MIN_LENGTH;
 
-    if (isSuccess) {
-      if (logSecurityAction) {
-        logSecurityAction('Vérification PIN Réussie', 'Validation du code PIN manager');
+  const [verifying, setVerifying] = useState(false);
+  const [lockMsg, setLockMsg] = useState<string | null>(null);
+
+  const handleVerify = useCallback(async (currentPin: string) => {
+    // 4–12 digits, explicit submit only (no auto-submit). Verification is
+    // native under Tauri (fail-closed); the weak local path runs ONLY
+    // outside Tauri. Locked shows the native countdown — never recorded
+    // locally, never retried silently.
+    if (!isPinDialogLengthOk(currentPin)) {
+      setError(true);
+      setTimeout(() => {
+        setError(false);
+      }, 500);
+      return;
+    }
+    if (verifying) return;
+    setVerifying(true);
+    setError(false);
+    try {
+      const res = await verifyManagerGate(currentPin);
+      if (res.ok) {
+        setLockMsg(null);
+        if (logSecurityAction) {
+          logSecurityAction('Vérification PIN Réussie', 'Validation du code PIN manager');
+        }
+        onSuccess();
+        return;
       }
-      onSuccess();
-    } else {
       if (logSecurityAction) {
-        logSecurityAction('Tentative PIN Échouée', 'Code PIN incorrect saisi');
+        logSecurityAction('Tentative PIN Échouée', res.locked ? 'Code PIN verrouillé (compte à rebours natif)' : 'Code PIN incorrect saisi');
+      }
+      if (res.locked) {
+        const secs = Math.max(1, Math.ceil(res.remainingMs / 1000));
+        setLockMsg(`Verrouillé — réessayez dans ${secs}s.`);
       }
       setError(true);
       setTimeout(() => {
         setPin('');
         setError(false);
       }, 500); // 500ms allows the shake animation to finish
+    } finally {
+      setVerifying(false);
     }
-  }, [verifyManagerPin, logSecurityAction, onSuccess]);
+  }, [verifying, logSecurityAction, onSuccess]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -121,17 +170,18 @@ export const PinDialog: React.FC<PinDialogProps> = ({
             </div>
             <h2 id="pin-dialog-title" className="text-xl font-bold text-pos-text mb-2">{title}</h2>
             <p id="pin-dialog-desc" className="text-sm text-pos-muted">
-              {description || 'Entrez le PIN à 4 chiffres'}
+              {description || (role === 'cashier' ? 'Entrez le PIN à 4 chiffres' : 'Entrez le PIN manager')}
             </p>
           </div>
 
           {/* Champ PIN natif : le clavier OS (tactile y compris) gère la
-              saisie, la suppression (Backspace) et la validation (Entrée). */}
+              saisie et la suppression. Pas de vérification automatique :
+              la validation exige un appui explicite sur Valider (Entrée). */}
           <form
             className="mb-6"
             onSubmit={(e) => {
               e.preventDefault();
-              if (pin.length === 4 && !error) handleVerify(pin);
+              if (!error && !verifying) void handleVerify(pin);
             }}
           >
             <input
@@ -141,29 +191,34 @@ export const PinDialog: React.FC<PinDialogProps> = ({
               pattern="[0-9]*"
               autoComplete="current-password"
               enterKeyHint="done"
-              aria-label="Code PIN à 4 chiffres"
+              aria-label={role === 'cashier' ? 'Code PIN à 4 chiffres' : 'Code PIN manager'}
               aria-invalid={error}
               aria-describedby={error ? 'pin-dialog-error' : 'pin-dialog-desc'}
-              maxLength={4}
+              maxLength={PIN_DIALOG_MAX_LENGTH}
               value={pin}
               onChange={(e) => {
                 if (error) return;
-                const next = e.target.value.replace(/[^0-9]/g, '').slice(0, 4);
+                const next = e.target.value.replace(/[^0-9]/g, '').slice(0, PIN_DIALOG_MAX_LENGTH);
                 setPin(next);
-                // Auto-vérification dès 4 chiffres (même contrat que l'ancien pavé).
-                if (next.length === 4) handleVerify(next);
               }}
               placeholder="••••"
               className="w-full min-h-[56px] bg-pos-card border border-pos-border rounded-xl px-4 text-center text-2xl font-mono font-black tracking-[0.5em] text-pos-text focus:outline-none focus:border-emerald-500 transition"
             />
             <span className="sr-only" role="status">
-              {pin.length} sur 4 chiffres saisis
+              {pin.length} chiffres saisis, {minLength} minimum
             </span>
+            <button
+              type="submit"
+              disabled={pin.trim().length < minLength || error || verifying}
+              className="mt-4 w-full min-h-[48px] rounded-xl font-bold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition"
+            >
+              {verifying ? 'Vérification…' : 'Valider'}
+            </button>
           </form>
 
-          {error && (
+          {(error || lockMsg) && (
             <div id="pin-dialog-error" role="alert" className="text-center text-red-500 text-sm mb-4 font-medium">
-              PIN incorrect. Veuillez réessayer.
+              {lockMsg ?? 'PIN incorrect. Veuillez réessayer.'}
             </div>
           )}
 

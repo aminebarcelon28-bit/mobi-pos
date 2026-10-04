@@ -80,12 +80,34 @@ export const ModalShell: React.FC<ModalShellProps> = ({
     };
   }, []);
 
+  // Focus moves into the dialog ONCE per open — deliberately NOT keyed on
+  // `onClose`.
+  //
+  // `onClose` is routinely an unstable identity in this codebase: inline arrows
+  // (`onClose={() => setScannerOpen(false)}`) and `useCallback`s whose deps are
+  // the form's own field state — e.g. RepairWorkOrderModal's
+  // `handleRequestClose` depends on customerName/deviceModel/imei/
+  // problemDescription. Keying focus on that made this effect re-run on every
+  // keystroke, and each run called `.focus()` on `[data-modal-autofocus]`
+  // (or the card when no target exists). Symptom: typing in Client Name or IMEI
+  // jumped focus away after the first character, and in the IMEI field the
+  // caret was reset to position 0 on every keystroke so text looked frozen or
+  // reversed. The Escape listener below keeps its own [open, onClose] deps
+  // because it must always call the CURRENT handler.
   useEffect(() => {
     if (!open) return;
-    // Move focus into the dialog so Tab never lands behind the backdrop.
     const card = cardRef.current;
-    const target = card?.querySelector<HTMLElement>('[data-modal-autofocus]');
-    (target ?? card)?.focus?.();
+    if (!card) return;
+    // Already inside the dialog (a nested control took focus): leave it alone.
+    if (card.contains(document.activeElement)) return;
+    const target = card.querySelector<HTMLElement>('[data-modal-autofocus]');
+    // preventScroll: a focus-driven scroll jump was part of the "content
+    // bleeds outside the modal" report.
+    (target ?? card).focus?.({ preventScroll: true });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.stopPropagation();

@@ -96,6 +96,8 @@ export const InventoryManagerModal: React.FC = () => {
       return true;
     });
   }, [products, debouncedManagerSearch, auditCounts, stocktakeFilter]);
+  useEffect(() => { if (activeModal !== 'inventory_manager') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
   if (activeModal !== 'inventory_manager') return null;
 
   // Catalog filtered list
@@ -230,7 +232,7 @@ export const InventoryManagerModal: React.FC = () => {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-full sm:h-[88vh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(0.5rem,var(--safe-bottom))] sm:pb-0"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-dvh-shell sm:h-[88dvh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(0.5rem,var(--safe-bottom))] sm:pb-0"
       >
         {/* Header */}
         <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
@@ -519,7 +521,7 @@ export const InventoryManagerModal: React.FC = () => {
                   value={scannerInput}
                   onChange={(e) => setScannerInput(e.target.value)}
                   placeholder="Scanner un code-barres USB douchette ou saisir un SKU..."
-                  className="w-full bg-pos-bg border-2 border-cyan-500/50 focus:border-cyan-400 rounded-xl pl-10 pr-24 py-2 text-xs font-mono font-bold text-pos-text placeholder-pos-muted focus:outline-none shadow-inner"
+                  className="w-full bg-pos-bg border border-cyan-500/50 focus:border-cyan-400 rounded-xl pl-10 pr-24 py-2 text-xs font-mono font-bold text-pos-text placeholder-pos-muted focus:outline-none shadow-inner"
                 />
                 <button
                   type="submit"

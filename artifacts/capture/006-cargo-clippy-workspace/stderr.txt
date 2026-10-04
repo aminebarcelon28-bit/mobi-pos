@@ -1,0 +1,2 @@
+    Checking mobi-pos v1.6.8 (C:\Users\Click\Desktop\phone3-sync-lab\src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 21.59s

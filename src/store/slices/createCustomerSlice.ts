@@ -12,6 +12,7 @@ import {
 } from '../../utils/loyaltyEngine';
 import { audioBus } from '../../utils/audioEvents';
 import { newId, newReceiptNumber } from '../../utils/ids';
+import { verifyManagerGate } from '../../utils/pinGate';
 
 // ══════════════════════════════════════════════════════════════
 // UNIFIED CREDIT LIMIT (integer DZD). Single source of truth for
@@ -162,7 +163,7 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
   },
 
   issueStoreCredit: async (customerId, amount, managerPin?: string) => {
-    const { customers, currentCustomer, logSecurityAction, verifyManagerPin } = get();
+    const { customers, currentCustomer, logSecurityAction } = get();
     // Write-layer hardening: integer DZD only; non-positive amounts are
     // rejected (a negative amount here was a silent confiscation).
     const rounded = typeof amount !== 'number' || isNaN(amount) || !isFinite(amount) ? 0 : Math.round(amount);
@@ -174,15 +175,17 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
       return { success: false, reason: 'CUSTOMER_NOT_FOUND' };
     }
     // Large emissions mint uncapped credit: require the manager override PIN
-    // (same verifyManagerPin pattern as the cart price-override flow).
+    // (Phase 1: native gate, fail-closed — same bar as the cart
+    // price-override flow).
     if (rounded > STORE_CREDIT_PIN_THRESHOLD_DZD) {
       if (!managerPin) {
         return { success: false, reason: 'MANAGER_PIN_REQUIRED' };
       }
-      if (!verifyManagerPin(managerPin)) {
+      const gate = await verifyManagerGate(managerPin);
+      if (!gate.ok) {
         await logSecurityAction(
           'Émission Avoir Refusée (PIN Manager)',
-          `Client: ${existing.name} — émission de ${rounded} DA refusée (PIN incorrect).`,
+          `Client: ${existing.name} — émission de ${rounded} DA refusée (${gate.locked ? 'PIN verrouillé' : 'PIN incorrect'}).`,
           'Système POS',
           true
         );

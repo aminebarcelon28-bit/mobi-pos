@@ -77,6 +77,7 @@ const SEED_PRODUCTS: Product[] = [
   seedProduct('seed-vA3', 'VC-0003', 'Chargeur Rapide 25W', 'Grossiste Algerien Mobile', 4, 10, 900, 1900),
   seedProduct('seed-vB1', 'VD-0001', 'Verre Trempe iPhone 15', 'Distributeur Officiel', 3, 8, 2500, 5200),
   seedProduct('seed-vB2', 'VD-0002', 'Adaptateur Lightning', 'Distributeur Officiel', 6, 8, 150, 400),
+  seedProduct('seed-vB3', 'VD-0003', 'Protège-Écran Verre Trempé', 'Distributeur Officiel', 5, 8, 300, 700),
   seedProduct('seed-vC1', 'VG-0001', 'Support Ventouse Auto', '', 1, 6, 700, 1600),
   seedProduct('seed-vC2', 'VG-0002', 'Kit Nettoyage Ecran', 'Fournisseur Général', 1, 6, 550, 1300),
 ];

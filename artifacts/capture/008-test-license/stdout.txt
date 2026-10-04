@@ -1,0 +1,235 @@
+
+> phone3@1.6.8 test:license
+> node --experimental-strip-types scripts/test_license_crypto.mjs && node --experimental-strip-types scripts/test_clock_guard.mjs && node --experimental-strip-types scripts/test_license_flow.mjs && npm run test:license:failclosed
+
+========================================================================
+⚡ MOBIPOS — CRYPTOGRAPHIC LICENSING SUITE (Ed25519)
+========================================================================
+
+[TEST 1] Legitimate Ed25519 Token Signing & Verification:
+  ✅ [PASS] Valid token passes cryptographic verification
+  ✅ [PASS] Decoded license key matches
+  ✅ [PASS] Decoded device ID matches
+
+[TEST 2] Tampered Claims Detection (Anti-Piracy):
+  ✅ [PASS] Tampered token is rejected
+  ✅ [PASS] Error cites signature invalidity
+
+[TEST 3] Bit-Flipped Signature Detection:
+  ✅ [PASS] Corrupted signature is rejected
+
+[TEST 4] Malformed Token Handling:
+  ✅ [PASS] Two-part token rejected
+  ✅ [PASS] Empty token rejected
+
+========================================================================
+RESULTS: 8 Passed, 0 Failed
+========================================================================
+
+========================================================================
+⚡ MOBIPOS — ANTI-CLOCK-TAMPERING & GRACE PERIOD SUITE
+========================================================================
+
+[TEST 1] Normal Monotonic Time Progression:
+  ✅ [PASS] Normal forward time is ACTIVE
+  ✅ [PASS] High-water mark advanced
+
+[TEST 2] Malicious Clock Rollback Detection:
+  ✅ [PASS] Detects clock set backwards
+  ✅ [PASS] Calculates rollback delta
+
+[TEST 3] Legitimate NTP Jitter Tolerance (< 5 minutes):
+  ✅ [PASS] 2-minute NTP jitter is tolerated
+  ✅ [PASS] High-water mark preserved
+
+[TEST 4] Database Anchor Protection (Local Receipts / HLC):
+  ✅ [PASS] Database receipt high-water catches clock rollback
+
+[TEST 5] Offline Grace Period (7 Days):
+  ✅ [PASS] Grace period exceeded after 8 days offline
+
+[TEST 6] Lifetime License Exemption:
+  ✅ [PASS] Lifetime license remains ACTIVE regardless of offline duration
+
+========================================================================
+RESULTS: 9 Passed, 0 Failed
+========================================================================
+
+========================================================================
+⚡ MOBIPOS — LICENSE FLOW & ENCRYPTION SUITE
+========================================================================
+
+[TEST 1] Key Sanitization & Presentation:
+  ✅ [PASS] Strips whitespace and non-alphanumeric chars
+  ✅ [PASS] Standard presentation format
+  ✅ [PASS] Validates clean key format
+
+[TEST 2] Deterministic Blind Indexing (HMAC-SHA256):
+  ✅ [PASS] Identical keys generate identical HMAC hashes
+  ✅ [PASS] 64-character hex hash suitable for B-Tree indexing
+
+[TEST 3] AES-256-GCM Token Encryption & Decryption:
+  ✅ [PASS] Envelope contains version tag (v1:)
+  ✅ [PASS] Ciphertext does not contain plaintext token
+  ✅ [PASS] Decrypted token matches original token exactly
+
+[TEST 4] Ciphertext Tamper Resistance:
+  ✅ [PASS] Tampered ciphertext is rejected by AES-GCM auth tag
+
+========================================================================
+RESULTS: 9 Passed, 0 Failed
+========================================================================
+
+
+> phone3@1.6.8 test:license:failclosed
+> node --experimental-strip-types scripts/test_licensing_failclosed.mjs
+
+========================================================================
+MOBIPOS — FAIL-CLOSED LICENSING & EMERGENCY EXPORT SUITE
+========================================================================
+
+[TEST 1: Predicate Matrix — non-ACTIVE status must hard-lock]
+  ✅ [PASS] isLicenseLocked("EXPIRED") === true
+  ✅ [PASS] isLicenseActive("EXPIRED") === false
+  ✅ [PASS] isDegradedLicenseStatus("EXPIRED") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("GRACE_EXCEEDED") === true
+  ✅ [PASS] isLicenseActive("GRACE_EXCEEDED") === false
+  ✅ [PASS] isDegradedLicenseStatus("GRACE_EXCEEDED") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("SUSPENDED") === true
+  ✅ [PASS] isLicenseActive("SUSPENDED") === false
+  ✅ [PASS] isDegradedLicenseStatus("SUSPENDED") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("REVOKED") === true
+  ✅ [PASS] isLicenseActive("REVOKED") === false
+  ✅ [PASS] isDegradedLicenseStatus("REVOKED") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("TAMPERED_CLOCK") === true
+  ✅ [PASS] isLicenseActive("TAMPERED_CLOCK") === false
+  ✅ [PASS] isDegradedLicenseStatus("TAMPERED_CLOCK") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("DEVICE_MISMATCH") === true
+  ✅ [PASS] isLicenseActive("DEVICE_MISMATCH") === false
+  ✅ [PASS] isDegradedLicenseStatus("DEVICE_MISMATCH") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("UNLICENSED") === true
+  ✅ [PASS] isLicenseActive("UNLICENSED") === false
+  ✅ [PASS] isDegradedLicenseStatus("UNLICENSED") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("UNKNOWN") === true
+  ✅ [PASS] isLicenseActive("UNKNOWN") === false
+  ✅ [PASS] isDegradedLicenseStatus("UNKNOWN") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("CORRUPT") === true
+  ✅ [PASS] isLicenseActive("CORRUPT") === false
+  ✅ [PASS] isDegradedLicenseStatus("CORRUPT") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("") === true
+  ✅ [PASS] isLicenseActive("") === false
+  ✅ [PASS] isDegradedLicenseStatus("") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("   ") === true
+  ✅ [PASS] isLicenseActive("   ") === false
+  ✅ [PASS] isDegradedLicenseStatus("   ") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("null") === true
+  ✅ [PASS] isLicenseActive("null") === false
+  ✅ [PASS] isDegradedLicenseStatus("null") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("undefined") === true
+  ✅ [PASS] isLicenseActive("undefined") === false
+  ✅ [PASS] isDegradedLicenseStatus("undefined") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("{\"status\":\"ACTIVE\"}") === true
+  ✅ [PASS] isLicenseActive("{\"status\":\"ACTIVE\"}") === false
+  ✅ [PASS] isDegradedLicenseStatus("{\"status\":\"ACTIVE\"}") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("ACTI V") === true
+  ✅ [PASS] isLicenseActive("ACTI V") === false
+  ✅ [PASS] isDegradedLicenseStatus("ACTI V") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("ACTIVE!") === true
+  ✅ [PASS] isLicenseActive("ACTIVE!") === false
+  ✅ [PASS] isDegradedLicenseStatus("ACTIVE!") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("true") === true
+  ✅ [PASS] isLicenseActive("true") === false
+  ✅ [PASS] isDegradedLicenseStatus("true") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked("1") === true
+  ✅ [PASS] isLicenseActive("1") === false
+  ✅ [PASS] isDegradedLicenseStatus("1") === false (no degraded bypass)
+  ✅ [PASS] isLicenseLocked(null) === true
+  ✅ [PASS] isDegradedLicenseStatus(null) === false
+  ✅ [PASS] isLicenseLocked(undefined) === true
+  ✅ [PASS] isDegradedLicenseStatus(undefined) === false
+  ✅ [PASS] known unlicensed status EXPIRED locks
+  ✅ [PASS] known unlicensed status GRACE_EXCEEDED locks
+  ✅ [PASS] known unlicensed status SUSPENDED locks
+  ✅ [PASS] known unlicensed status REVOKED locks
+  ✅ [PASS] known unlicensed status TAMPERED_CLOCK locks
+  ✅ [PASS] known unlicensed status DEVICE_MISMATCH locks
+  ✅ [PASS] known unlicensed status UNLICENSED locks
+  ✅ [PASS] known unlicensed status UNKNOWN locks
+  ✅ [PASS] known unlicensed status CORRUPT locks
+  ✅ [PASS] ACTIVE grants access
+  ✅ [PASS] ACTIVE does not lock
+  ✅ [PASS] lowercase "active" normalises to ACTIVE
+  ✅ [PASS] trailing whitespace normalises to ACTIVE
+  ✅ [PASS] surrounding whitespace normalises to ACTIVE
+  ✅ [PASS] near-miss string does not normalise to ACTIVE
+  ✅ [PASS] prefix-extension does not normalise to ACTIVE
+  ✅ [PASS] isLicenseLocked === !isLicenseActive for all probed inputs
+
+[TEST 2: Write Immunity — read-only handle rejects every mutation]
+  ✅ [PASS] PRAGMA query_only is ON
+  ✅ [PASS] read-only handle can still read compliance data
+  ✅ [PASS] INSERT is rejected on the export connection
+  ✅ [PASS] UPDATE is rejected on the export connection
+  ✅ [PASS] DELETE is rejected on the export connection
+  ✅ [PASS] DROP is rejected on the export connection
+  ✅ [PASS] ALTER is rejected on the export connection
+  ✅ [PASS] DDL create is rejected on the export connection
+  ✅ [PASS] row count unchanged after mutation attempts
+  ✅ [PASS] existing financial record unmodified
+
+[TEST 3: Auth Gating — export refuses bad / absent credentials]
+  ✅ [PASS] empty PIN — rejected with code INVALID_PIN (got INVALID_PIN)
+  ✅ [PASS] whitespace-only PIN — rejected with code INVALID_PIN (got INVALID_PIN)
+  ✅ [PASS] missing PIN (undefined) — rejected with code INVALID_PIN (got INVALID_PIN)
+  ✅ [PASS] invalid PIN (native rejection) — rejected with code INVALID_PIN (got INVALID_PIN)
+  ✅ [PASS] engine failure is not reported as bad PIN — rejected with code FAILED (got FAILED)
+  ✅ [PASS] invokes the emergency_export_ledger command
+  ✅ [PASS] sends the PIN and no licence status to the engine (kernel owns state)
+  ✅ [PASS] legacy licence status is dropped before IPC, never forwarded
+  ✅ [PASS] an unspecified table set is sent as empty (engine defaults to all allowed)
+  ✅ [PASS] returns the audit id and per-file SHA-256
+  ✅ [PASS] progress listener is detached after the export
+  ✅ [PASS] progress listener is detached on failure too
+  ✅ [PASS] non-allowlisted table "customers" — rejected with code FORBIDDEN_TABLE (got FORBIDDEN_TABLE)
+  ✅ [PASS] non-allowlisted table "app_settings" — rejected with code FORBIDDEN_TABLE (got FORBIDDEN_TABLE)
+  ✅ [PASS] non-allowlisted table "products" — rejected with code FORBIDDEN_TABLE (got FORBIDDEN_TABLE)
+  ✅ [PASS] non-allowlisted table "cashier_users" — rejected with code FORBIDDEN_TABLE (got FORBIDDEN_TABLE)
+  ✅ [PASS] non-allowlisted table "sql" — rejected with code FORBIDDEN_TABLE (got FORBIDDEN_TABLE)
+  ✅ [PASS] forbidden table never reaches the native command
+  ✅ [PASS] allowlist is exactly the four compliance tables
+  ✅ [PASS] allowlist contains no PII, credential, or catalog table
+  ✅ [PASS] pre-aborted signal — rejected with code CANCELLED (got CANCELLED)
+  ✅ [PASS] an aborted export never reaches the native command
+
+[TEST 3b: Sale choke fails closed when state is unreadable]
+  ✅ [PASS] armed choke blocks sales
+  ✅ [PASS] explicitly disarmed choke permits sales
+
+[TEST 4: Boot Isolation — locked surface reaches no lifecycle module]
+  ✅ [PASS] components/licensing/ActivationGateScreen.tsx: 'licensing/keyFormat' is not a lifecycle module
+  ✅ [PASS] components/licensing/ActivationGateScreen.tsx: 'licensing/client' is not a lifecycle module
+  ✅ [PASS] components/licensing/ActivationGateScreen.tsx: 'licensing/hwid' is not a lifecycle module
+  ✅ [PASS] components/licensing/ActivationGateScreen.tsx: 'licensing/store' is not a lifecycle module
+  ✅ [PASS] components/licensing/ActivationGateScreen.tsx: 'licensing/emergencyExporter' is not a lifecycle module
+  ✅ [PASS] components/licensing/ActivationGateScreen.tsx: 'utils/platform' is not a lifecycle module
+  ✅ [PASS] components/licensing/ActivationGateScreen.tsx: 'api/license' is not a lifecycle module
+  ✅ [PASS] components/licensing/ActivationGateScreen.tsx imports no cloud-sync client
+  ✅ [PASS] licensing/emergencyExporter.ts: 'platform/invoke' is not a lifecycle module
+  ✅ [PASS] licensing/emergencyExporter.ts imports no cloud-sync client
+  ✅ [PASS] emergencyExporter loads the IPC wrapper lazily, not at module scope
+  ✅ [PASS] emergencyExporter reaches IPC through the lazy transport
+  ✅ [PASS] POS store still exists and is importable by the operating app
+  ✅ [PASS] App.tsx gates the operating app on licenseState.locked
+  ✅ [PASS] App.tsx no longer contains the degraded-bypass gate condition
+  ✅ [PASS] App.tsx renders no degraded banner (the bypass UI is gone)
+  ✅ [PASS] sync effect is gated on licenseState.licensed (no egress while locked)
+  ✅ [PASS] initDatabase is called from exactly one site (found 1)
+  ✅ [PASS] App.tsx records a TAMPERED_CLOCK status somewhere
+  ✅ [PASS] clock-rollback tripwire arms the sale choke (fail-closed)
+  ✅ [PASS] clock-rollback tripwire does not disarm the sale choke
+  ✅ [PASS] at most one setLicenseState clears the lock (the activation callback); found 1
+  ✅ [PASS] the only state that clears the lock also sets licensed: true (post-activation)
+
+========================================================================
+RESULTS: 132 Passed, 0 Failed
+========================================================================

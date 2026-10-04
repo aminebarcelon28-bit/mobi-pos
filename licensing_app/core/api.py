@@ -6,6 +6,7 @@ version is pinned to TLS 1.2+ (1.3 where the platform supports it), and
 redirects that would downgrade to HTTP are refused.
 """
 
+import datetime
 import json
 import ssl
 import time
@@ -132,6 +133,29 @@ class AdminApiClient:
         resp.raise_for_status()
         return resp.json()
 
+    def put_key_escrow(self, license_id: str, envelope: str) -> Dict[str, Any]:
+        """
+        Deposit the AES-GCM encrypted plaintext key for a licence.
+
+        Best effort by design: the caller has already recovered the key locally,
+        so a failure here only means the next machine needs the resolution
+        dialog again. Never raises for a missing route -- an older worker that
+        predates escrow returns 404 and the operator must not be blocked.
+        """
+        url = f"{self.endpoint}/api/v1/admin/key-escrow"
+        try:
+            resp = self.session.post(
+                url,
+                json={"license_id": license_id, "encrypted_key_escrow": envelope},
+                timeout=10.0,
+            )
+        except Exception:
+            return {"status": "unavailable"}
+        if resp.status_code == 404:
+            return {"status": "unavailable"}
+        resp.raise_for_status()
+        return resp.json()
+
     def anchor_audit_checkpoint(
         self, client_id: str, sequence_number: int, head_audit_hash: str
     ) -> Dict[str, Any]:
@@ -150,6 +174,25 @@ class AdminApiClient:
             "sequence_number": int(sequence_number),
             "head_audit_hash": head_audit_hash,
         }
+        resp = self.session.post(url, json=payload, timeout=10.0)
+        resp.raise_for_status()
+        return resp.json()
+
+    def reset_audit_anchor(self, client_id: str) -> Dict[str, Any]:
+        """
+        Clear the server-side audit anchor for this client.
+
+        Only for the false-lockout case: the local ledger was lost while the
+        anchor survived, so every legitimate sequence the client can propose
+        is "lower" than the server baseline and the 409 guard can never clear.
+        The worker returns the discarded checkpoint so the operator keeps the
+        evidence of what was thrown away.
+        """
+        url = f"{self.endpoint}/api/v1/admin/audit/reset"
+        # Field name must stay "confirm": that is what the worker reads
+        # (index.ts, route 14). A "confirmation_token" key is ignored and the
+        # worker answers 400 CONFIRMATION_REQUIRED.
+        payload = {"client_id": client_id, "confirm": "RESET_AUDIT_ANCHOR"}
         resp = self.session.post(url, json=payload, timeout=10.0)
         resp.raise_for_status()
         return resp.json()
@@ -260,6 +303,42 @@ def record_in_ledger(entry: Dict[str, Any]) -> None:
         ledger.append(entry)
     save_ledger(ledger)
 
+def _persist_escrow_recovery(
+    license_id: str,
+    customer: str,
+    key: str,
+    cloud_item: Dict[str, Any],
+) -> None:
+    """
+    Write an escrow-recovered key into the local ledger and audit it.
+
+    Failures are swallowed on purpose. The merge runs on every refresh; a
+    read-only ledger must degrade to "this licence still needs the modal"
+    rather than abort the whole sync and leave the operator with no list at all.
+    """
+    try:
+        record_in_ledger({
+            "id": license_id,
+            "customer": customer,
+            "licenseKey": key,
+            "type": cloud_item.get("license_type", "LIFETIME"),
+            "status": cloud_item.get("status", "active"),
+            "created_at": cloud_item.get("created_at", ""),
+            "escrow_restored_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        })
+    except Exception:
+        return
+    try:
+        from .audit import record_audit_event
+        record_audit_event("KEY_ESCROW_RESTORED", {
+            "license_id": license_id,
+            "customer": customer,
+            "key_fingerprint": hash_key(key)[:16],
+        })
+    except Exception:
+        pass
+
+
 def merge_cloud_and_ledger(
     cloud_list: List[Dict[str, Any]],
     ledger_list: List[Dict[str, Any]]
@@ -306,10 +385,38 @@ def merge_cloud_and_ledger(
         if matched_ledger and matched_ledger.get("id"):
             processed_ledger_ids.add(matched_ledger["id"])
 
+        # Escrow recovery. A licence minted on another machine arrives with an
+        # opaque ciphertext that only the master key can open; without this the
+        # row renders as a "[Clé Cloud ...]" stub and every key-bound action
+        # dead-ends in the resolution modal. Restoring here is what makes the
+        # licence serviceable on this machine without operator intervention.
+        escrow_status = ""
+        if not plaintext_key and not (plaintext_key or "").startswith("["):
+            escrow = cloud_item.get("encrypted_key_escrow") or ""
+            if escrow:
+                try:
+                    from .crypto import decrypt_data
+                    recovered = decrypt_data(escrow).strip()
+                except Exception:
+                    # Wrong master key, tampered blob, or a payload written by a
+                    # rotated key. Leave the row unresolved rather than
+                    # binding a licence to a key that may not verify.
+                    recovered = ""
+                    escrow_status = "undecryptable"
+                if recovered.startswith("MOBI-"):
+                    plaintext_key = recovered
+                    escrow_status = "restored"
+                    _persist_escrow_recovery(
+                        cid, clean_name, recovered, cloud_item
+                    )
+                elif not escrow_status:
+                    escrow_status = "rejected"
+
         record = {
             "id": cid,
             "customer": clean_name,
             "licenseKey": plaintext_key or f"[Clé Cloud {cid[:8]}]",
+            "escrowStatus": escrow_status,
             "type": cloud_item.get("license_type", "LIFETIME"),
             "status": cloud_item.get("status", "active"),
             "desktops": int(cloud_item.get("max_desktops", 1)),

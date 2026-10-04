@@ -1,0 +1,539 @@
+C:\Users\Click\Downloads\Compressed\realesrgan-ncnn-vulkan-20220424-windows
+.\realesrgan-ncnn-vulkan.exe -i input.jpg -o output.png -s 4
+.\realesrgan-ncnn-vulkan.exe -i 1.jpg -o output.png -s 4
+.\realesrgan-ncnn-vulkan.exe -i 1.png -o output.png -s 4
+.\realesrgan-ncnn-vulkan.exe -i onepiece_demo.mp4 -o output.png -s 4
+.\realesrgan-ncnn-vulkan.exe -i onepiece_demo.mp4 -o output.mp4 -s 4
+pip install torch torchvision torchaudio
+./realesrgan-ncnn-vulkan.exe -i onepiece_demo.mp4 -o output.mp4 -n realesr-animevideov3
+./realesrgan-ncnn-vulkan.exe -i onepiece_demo.mp4 -o output.mp4 -n realesr-animevideov3-x4
+./realesrgan-ncnn-vulkan.exe -i input.jpg -o output.png -n realesrnet-x4plus
+realesrgan-ncnn-vulkan.exe -i input.jpg -o output.png -n realesr-animevideov3 -s 2
+realesrgan-ncnn-vulkan.exe -i input.jpg -o output.png -n realesr-animevid
+realesrgan-ncnn-vulkan.exe -i 2.jpg -o 45.png -n realesr-animevideov3 -s 2
+realesrgan-ncnn-vulkan.exe -i 2.mp4 -o 45.mp4 -n realesr-animevideov3 -s 2
+realesrgan-ncnn-vulkan.exe -i 1.png -o 45.png -n realesr-animevideov3 -s 2
+realesrgan-ncnn-vulkan.exe -i 2.webp -o output.webp -n realesr-animevideov3 -s 2
+.\realesrgan-ncnn-vulkan.exe -i input.jpg -o output.png -s 4
+.\realesrgan-ncnn-vulkan.exe -i 1.jpg -o output.png -s 4
+.\realesrgan-ncnn-vulkan.exe -i 1.png -o output.png -s 4
+.\realesrgan-ncnn-vulkan.exe -i 1.mp4 -o output.png -s 4
+.\realesrgan-ncnn-vulkan.exe -i 2.mp4 -o output.mp4 -s 4
+.\realesrgan-ncnn-vulkan.exe -i 2.webp -o output.webp -s 4
+.\realesrgan-ncnn-vulkan.exe -i 2.webp -o output.webp -s 3
+.\realesrgan-ncnn-vulkan.exe -i 2.webp -o output.webp -s 2
+.\realesrgan-ncnn-vulkan.exe -i 2.mp4 -o output.mp4 -m realesr-animevideov3-x4 -s 2
+.\realesrgan-ncnn-vulkan.exe -i 2.mp4 -o output.mp4 -m realesr-animevideov3-x4 -s 4
+.\realesrgan-ncnn-vulkan.exe -i 2.webp -o output.webp -m realesr-animevideov3-x4 -s 4
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+ C:\Users\Click\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\python.exe -m pip install --upgrade pip
+pip install opencv-python
+pip install opencv-contrib-python
+python -c "import torch, cv2; print('Torch:', torch.__version__, 'CUDA:', torch.cuda.is_available()); print('OpenCV:', cv2.__version__)"
+git clone https://github.com/xinntao/Real-ESRGAN.git
+cd Real-ESRGAN
+git clone https://github.com/xinntao/Real-ESRGAN.git
+pip install -r requirements.txt
+python inference_realesrgan.py -n RealESRGAN_x4plus -i input_folder --outscale 4 --face_enhance
+python inference_realesrgan.py -n RealESRGAN_x4plus -i input.jpg --outscale 4
+python inference_realesrgan.py -n RealESRGAN_x4plus -i 3.png --outscale 4
+python inference_realesrgan.py -n RealESRGAN_x4plus_anime_6B -i 3.png --outscale 4
+python inference_realesrgan.py -n -n RealESRGAN -i 3.png --outscale 4
+cd Real-ESRGAN
+python inference_realesrgan.py -n -n RealESRGAN -i 3.png --outscale 4
+python inference_realesrgan.py -n RealESRGAN_x4plus_anime_6B -i 3.png --outscale 4
+python inference_realesrgan.py -n RealESRGAN_x4plus -i 3.png --outscale 4
+pip install basicsr
+python inference_realesrgan.py -n RealESRGAN_x4plus_anime_6B -i 3.png --outscale 4
+pip install -e .
+cd "C:\Users\Click\Downloads\Compressed\BasicSR-master\BasicSR-master"
+echo "__version__ = '1.4.2'" > basicsr\version.py
+pip install -e .
+python -c "import basicsr; print('basicsr', getattr(basicsr,'__version__','(no __version__)'))"
+.\realesrgan-ncnn-vulkan.exe -i 3.png -o 3_out.png -s 4 -n realesrgan-x4plus-anime
+.\realesrgan-ncnn-vulkan.exe -i 3.png -o 3_out.png -s 4 -n realesrgan-x4plus
+Measure-Connection -ComputerName 8.8.8.8 -Count 100
+wmic ComputerSystem Get TotalPhysicalMemory
+RAMMap.exe
+iwr -useb https://openclaw.ai/install.ps1 | iex
+wmic ComputerSystem Get TotalPhysicalMemory
+iwr -useb https://openclaw.ai/install.ps1 | iex
+Run openclaw doctor
+$script = "$env:TEMP\winget-install.ps1"
+Invoke-WebRequest 
+  -Uri "https://raw.githubusercontent.com/ash..." 
+  -OutFile $script
+notepad $script   # quick review
+Set-ExecutionPolicy Bypass -Scope Process -Force
+& $script winget install --id Git.Git -e
+winget install --id Git.Git -e
+powershell -c "irm https://openclaw.ai/install.ps1 | iex"
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh -o install.sh
+bash install.sh`
+
+curl -fsSL https://raw.githubusercontent.com/darrenhinde/OpenAgentsControl/main/install.sh -o install.sh
+bash install.sh`
+
+npx skills add https://github.com/vercel-labs/skills --skill find-skills
+npm start
+claude
+irm https://claude.ai/install.ps1 | iex
+claude
+where claude
+claude
+cd C:\Users\Click\.local\bin
+claude
+claude --help
+claude -help
+.\claude
+opencode --continue
+opencode --resume
+cd C:\Users\Click\Documents\redbubble\opencode-redbubble-skill\opencode-redbubble-skill
+./install.sh
+./install.sh C:\Users\Click\Documents\redbubble\opencode-redbubble-skill\opencode-redbubble-skill
+./install.sh cd\C:\Users\Click\Documents\redbubble\opencode-redbubble-skill\opencode-redbubble-skill
+npm i -g agent-browser && agent-browser install
+$env:DOTNET_ROOT="C:\Users\Click\AppData\Local\Microsoft\dotnet"; $env:PATH="C:\Users\Click\AppData\Local\Microsoft\dotnet;$env:PATH"; & "C:\Users\Click\Documents\supermarket\dotnet\src\SoukPos.App\bin\Debug\net8.0-windows\SoukPos.App.exe"
+irm https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.ps1 | iex
+qwen
+$env:DOTNET_ROOT="C:\Users\Click\AppData\Local\Microsoft\dotnet"; $env:PATH="C:\Users\Click\AppData\Local\Microsoft\dotnet;$env:PATH"; & "C:\Users\Click\Documents\supermarket\dotnet\src\SoukPos.App\bin\Debug\net8.0-windows\SoukPos.App.exe"
+nmp dev
+nmp run dev
+nmp run tauri dev
+npm run tauri dev
+npm run build
+npm run tauri dev
+$env:DOTNET_ROOT="C:\Users\Click\AppData\Local\Microsoft\dotnet"; $env:PATH="C:\Users\Click\AppData\Local\Microsoft\dotnet;$env:PATH"; & "C:\Users\Click\Documents\supermarket\dotnet\src\SoukPos.App\bin\Debug\net8.0-windows\SoukPos.App.exe"
+npm.cmd run tauri build
+$env:DOTNET_ROOT="C:\Users\Click\AppData\Local\Microsoft\dotnet"; $env:PATH="C:\Users\Click\AppData\Local\Microsoft\dotnet;$env:PATH"; & "C:\Users\Click\Documents\supermarket\dotnet\src\SoukPos.App\bin\Debug\net8.0-windows\SoukPos.App.exe"
+npm.cmd run tauri build
+$env:DOTNET_ROOT="C:\Users\Click\AppData\Local\Microsoft\dotnet"; $env:PATH="C:\Users\Click\AppData\Local\Microsoft\dotnet;$env:PATH"; & "C:\Users\Click\Documents\supermarket\dotnet\src\SoukPos.App\bin\Debug\net8.0-windows\SoukPos.App.exe"
+bash
+   cd src-tauri
+bash
+./posoffe-seller \
+  --customer "Café Tafilalet" \
+  --branches 2 \
+  --machine d381-73ca-025a-6dda
+# omit --expires for lifetime
+cd C:\Users\Click\Documents\posoffe
+bash
+./posoffe-seller \
+  --customer "Café Tafilalet" \
+  --branches 2 \
+  --machine d381-73ca-025a-6dda
+# omit --expires for lifetime
+/tools/seller/target/release/posoffe-seller \
+bash
+./posoffe-seller \
+  --customer "Café Tafilalet" \
+  --branches 2 \
+  --machine d381-73ca-025a-6dda
+# omit --expires for lifetime
+./posoffe-seller \
+  --customer "Café Tafilalet" \
+  --branches 2 \
+  --machine d381-73ca-025a-6dda
+./posoffe-seller \
+  --customer "Café Tafilalet" \
+  --branches 2 \
+cargo run --example try_license -- "C:\path\to\posoffe-vendor.sk.b64" "Customer Name"
+cargo run --example try_license -- "C:\path\to\posoffe-vendor.sk.b64" "ahmad"
+npm.cmd run tauri build
+cargo test --lib
+cargo run --example try_license
+posoffe-seller \
+  --customer "Café Tafilalet" \
+  --branches 1 \
+  --machine d381-73ca-025a-6dda
+  --customer "Ahmed - Café Tafilalet" \
+  --branches 1 \
+cargo run --example try_license -- "C:\path\to\posoffe-vendor.sk.b64" "Customer Name"
+cargo run --example try_license -- "C:\Users\Click\Documents\posoffe\src-tauri\examples"
+Bash
+./posoffe-seller \
+  --customer "Café Tafilalet" \
+  --branches 2 \
+$env:DOTNET_ROOT="C:\Users\Click\AppData\Local\Microsoft\dotnet"; $env:PATH="C:\Users\Click\AppData\Local\Microsoft\dotnet;$env:PATH"; & "C:\Users\Click\Documents\supermarket\dotnet\src\SoukPos.App\bin\Debug\net8.0-windows\SoukPos.App.exe"
+npm run tauri build 
+cargo build --release
+cargo build 
+npm run tauri build
+npm.cmd run tauri build
+npm.cmd run tauri build 
+cd C:\Users\Click\Documents\posoffe\src-tauri\target\release\posoffe.exe
+npm.cmd run tauri build 
+cargo fix --lib -p posoffe
+cargo fix --lib
+npm.cmd run tauri build 
+npm run tauri build
+npm.Cmd run tauri build
+npm run tauri dev
+npm.Cmd run tauri dev
+npm.cmd run tauri build
+npm run tauri dev
+npm.Cmd run tauri dev
+npx.cmd tauri build
+npm.cmd tauri build
+irm https://code.kimi.com/kimi-code/install.ps1 | iex
+kimi --version
+nmp run tauri dev
+nmp.Cmd run tauri dev
+npx tauri dev
+npm tauri dev
+npm.cmd tauri dev
+nmp help*
+nmp help
+npm --help
+npm help
+tauri dev
+cargo tauri dev
+Clear
+cargo tauri dev
+$env:DOTNET_ROOT="C:\Users\Click\AppData\Local\Microsoft\dotnet"; $env:PATH="C:\Users\Click\AppData\Local\Microsoft\dotnet;$env:PATH"; & "C:\Users\Click\Documents\supermarket\dotnet\src\SoukPos.App\bin\Debug\net8.0-windows\SoukPos.App.exe"
+cargo run
+cargo run dev
+cargo tauri dev
+cd src-tauri && cargo check
+src-tauri && cargo check
+cargo check
+cd src-tauri
+ cargo check
+cargo tauri dev
+cargo fix --lib -p resto
+cargo tauri dev
+Remove-Item "$env:LOCALAPPDATA\resto" -Recurse -Force
+cargo tauri dev
+dotnet run --project Offee.UI
+dotnet publish dotnet/src/SoukPos.App/SoukPos.App.csproj -c Release
+-WindowStyle Normal; echo "App launched"
+$ Get-Process -Name "SoukPos.App","SoukPos.Server" -ErrorAction SilentlyContinue | Stop-Process -Force; $env:DOTNET_ROOT = "C:\Users\Click\AppData\Local\Microsoft\dotnet"; $env:PATH = "$env:DOTNET_ROOT;$env:PATH"; Start-Process -FilePath "dotnet" -ArgumentList "run","--project","dotnet/src/SoukPos.App/SoukPos.App.csproj" -WorkingDirectory "C:\Users\Click\Documents\supermarket" -WindowStyle Normal; echo "App launched"
+App launched`
+
+dotnet run --project src/CafePOS.Server
+dotnet run --project src/CafePOS.Client
+$ Get-Process -Name dotnet -ErrorAction SilentlyContinue | Stop-Process -Force; Get-Process -Name "CafePOS.Client" -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 2`
+
+(no output)`
+
+$ Remove-Item -LiteralPath "C:\Users\Click\Desktop\offe2\src\CafePOS.Server\cafe_pos.db*" -Force -ErrorAction SilentlyContinue; dotnet build CafePOS.sln --no-restore 2>&1 | Select-String "error|succeeded|Warning"
+Build succeeded.`
+
+    0 Warning(s)`
+
+    0 Error(s)`
+
+cargo tauri dev
+cargo tauri build
+cargo build --release
+get int 
+get init
+git init 
+git config user.name "nadir phone"
+git add README.md
+git commit -m "first commit"
+git config --global user.email "kerarma2017@gmail.com"
+git config --global user.name "zoughlal"
+git branch -M main
+git remote add origin https://github.com/aminebarcelon28-bit/mobi-pos.git
+git push -u origin main
+git remote add origin https://github.com/aminebarcelon28-bit/mobi-pos.git
+git push -u origin main
+git push -u origin main --force
+git pull origin main --rebase
+git push -u origin main
+echo "# mobi-pos" >> README.md
+git init
+git add README.md
+git commit -m "first commit"
+git branch -M main
+git remote add origin https://github.com/aminebarcelon28-bit/mobi-pos.git
+git push -u origin main
+git tag v1.0.0
+git push origin v1.0.0
+git push origin main
+git push origin v1.3.3
+git add .
+git commit -m "Release v1.3.3"
+git tag v1.3.3
+git push origin main
+git push origin v1.3.3
+git remote -v
+git branch --show-current
+npm run release 1.3.5
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+npm run release 1.3.5
+git add .
+git commit -m "Release v1.3.6"
+git tag v1.3.6
+git push origin main
+git push origin v1.3.6
+On branch main
+Changes not staged for commit:
+modified:   src-tauri/Cargo.lockOn branch main
+Changes not staged for commit:
+modified:   src-tauri/Cargo.lockOn branch main
+Changes not staged for commit:
+On branch main
+Changes not staged for commit:
+git status
+git add
+git add .
+cargo tauri build
+tauri devv
+tauri dev
+start-dev.bat
+cd C:\Users\Click\Desktop\phone3-sync-lab\proxy
+node server.mjs`
+
+npx tauri dev
+cd C:\Users\Click\Desktop\phone3-sync-lab\proxy
+node server.mjs`
+
+cd C:\Users\Click\Desktop\phone3-sync-lab
+npx tauri dev`
+
+cd C:\Users\Click\Desktop\phone3-sync-lab\proxy
+node server.mjs`
+
+cd C:\Users\Click\Desktop\phone3-sync-lab\proxy
+node server.mjs`
+
+cd C:\Users\Click\Desktop\phone3-sync-lab
+npx tauri dev`
+
+npx tauri dev
+apx tauri dev 
+npx tauri dev
+npm tauri dev
+npm run android:build
+powershell -c "irm bun.sh/install.ps1 | iex"
+bun CloudSyncPanel.tsx
+cd C:\Users\Click\Desktop
+curl -fsSL https://opencode.ai/install | bash
+npm i -g opencode-ai
+opencode
+npm run tauri android dev
+npm run tauri dev
+npm tauri dev 
+npm run tauri dev
+npm run tauri andriod:apk
+npm run tauri android:apk
+tauri android build -- --apk
+npx run tauri android:apk
+npx tauri android build --apk
+npx tauri dev 
+npx tauri android build --apk
+npx tauri dev 
+git satatus
+git status
+npx tauri dev 
+npx tauri android build --apk
+npx tauri dev 
+npx tauri android build --apk
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+pi
+npx tauri android build --apk
+npx tauri dev 
+opencode
+npx tauri dev 
+npx tauri android build --apk
+npx tauri dev 
+opencode
+npx tauri dev 
+npx tauri android build --apk
+opencode
+npx tauri dev 
+npx tauri android dev
+npm run tauri android dev --open
+npx tauri android build --apk
+npx tauri dev 
+npx tauri android build --apk --debug
+npx tauri dev 
+npx tauri dev
+opencode --port 40528
+opencode --port 52121
+opencode
+npm run tauri andAndroid dev
+`
+npm run tauri android dev
+npm run tauri android dev
+opencode
+npm run tauri build --apk --debug
+npm run tauri android --apk --debug
+npm run tauri android build --apk --debug
+pi
+pi update
+pi
+npm run tauri build -- --apk --debug
+npx tauri build --apk --debug
+npx tauri android build --apk --debug
+npx tauri android dev --host 0.0.0.0
+y
+npx tauri android dev
+y
+npx tauri android build --apk --debug
+npx run tauri android dev 
+npm update
+npx run tauri android dev 
+npm run tauri android dev 
+opencode --port 44446
+opencode
+npm run tauri android dev 
+y
+npm run tauri android dev 
+y
+npm run tauri android dev 
+y
+npm run tauri android dev 
+y
+opencode
+npx run tauri dev 
+npm run tauri dev 
+opencode
+npm run tauri dev 
+npm run tauri dev
+npm run tauri android build --apk --debug
+npx run tauri android build --apk --debug
+npx tauri android build --debug --apk
+npm run tauri dev
+y
+npm run tauri dev
+npx run tauri android --debug --apk
+npx run tauri android build  --debug --apk
+npx tauri android build --debug --apk
+openvode
+opencode
+opencode 
+Opencode 
+mpx run tauri android --debug --apk
+npx run tauri android build --debug --apk
+npx tauri android build --apk --debugi
+npm run tauri android build -- --apk --debugi
+npm run tauri android build -- --apk --debug
+npx tauri dev
+opencode --port 35945
+opencode
+npx tauri dev
+npx tauri android build --apk --debug
+npx tauri dev
+opencode --port 58041
+npx tauri dev
+npx tauri android dev
+clear
+npx tauri dev
+y
+y
+npx tauri dev
+npm run license:list
+npm run license:mint
+clear
+turso auth login
+turso db create mobi-licensing
+turso db show mobi-licensing --url
+npm run license:deploy
+npm run license:deploy`
+libsql://mobi-licensing-zoughlal.aws-us-east-1.turso.io
+npm run license:deploy
+npx tauri dev
+npm run license:list
+npm run license:mint
+npx tauri android build --apk --debug
+npm run license:ui
+npm run license:mint # run the "license:mint" package script
+npx tauri android build --apk --debug
+y
+npm run license:desktop`
+
+clear
+npm run license:desktop`
+
+python admin_desktop/main.py`
+
+npm run license:desktop
+npm run license:desktop`
+
+npm run license:desktop
+python admin_desktop/main.py
+npm run license:desktop`
+
+python admin_desktop/main.py
+npm run license:desktop`
+
+python admin_desktop/main.py
+python admin_desktop/main.py`
+
+npx tauri dev
+npx tauri android build --apk --debug 
+opencode --port 57783
+npx tauri dev
+opencode --port 29649
+npm licince:desktop
+python admin_desktop/main.py
+opencode
+npx tauri dev
+Clear-Disk -Number E -RemoveData
+Get-Disk
+Clear-Disk -Number 1 -RemoveData
+Clear-Disk -Number 1 -RemoveData -RemoveOEM
+New-Partition -DiskNumber 1 -UseMaximumSize -IsActive -DriveLetter Z
+Get-Disk
+Clear-Disk -Number 1 -RemoveData -RemoveOEM
+Get-Disk
+Clear-Disk -Number 1 -RemoveData -RemoveOEM
+Get-Disk
+Clear-Disk -Number 1 -RemoveData -RemoveOEM
+Get-Disk
+Clear-Disk -Number 1 -RemoveData -RemoveOEM
+opencode
+opencode --port 54449
+npx tauri dev
+npx tauri android build --apk --debug
+npx tauri android build --apk --debug
+clear
+npx tauri android build --apk --debug
+clear
+npx tauriandroid build dev
+clear
+npx tauri android build --apk --debug
+clear
+npx tauri android build --apk --debug
+npx tauri dev
+git update-git-for-windows
+git add .
+git commit -m "feat(loyalty): merchant-configurable tiers, milestones, and ledger-backed sync engine"
+pi
+npx tauri dev
+npx tauri android build --apk --debug
+opencode --port 18307
+npx tauri android build --apk --debug
+npx tauri android dev
+npm licence:desktop
+npm run license:desktop
+clear
+npm run license:desktop 
+clear
+npm run license:desktop 
+clear
+npm run license:desktop 
+licensing_dist\Licensing for MobiPOS.exe
+npm run license:desktop 
+clear
+npm license:desktop
+npm run license:desktop
+npx tquri qndroid dev
+npx tauri android dev
+y
+npm license:desktop
+npm run license:desktop
+npx tauri dev
+npm run license:desktop
+npx tauri dev
+npm run license:desktop
+opencode
+npm run license:desktop
+npx tauri android build --apk --debug
+y
+npx tauri dev
+cargo fix --lib -p mobi-pos
+npx tauri dev

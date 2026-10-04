@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   X,
   RefreshCw,
@@ -19,10 +19,14 @@ import { policeRegistryFolio, SELLER_SWORN_STATEMENT } from '../../utils/tradeIn
 import { printCoordinator } from '../../utils/printCoordinator';
 import { generateUniqueEan13Barcode } from '../../utils/barcodeGenerator';
 import { luhnCheckImei, imeiCheckState, sanitizeImeiInput } from '../../utils/savValidation';
+import { normalizeDeviceKey } from '../../utils/deviceIdCodec';
 import { isImeiAllocatedInCart, CART_IMEI_COLLISION_MESSAGE } from '../../utils/tradeInExchange';
+import { NATIONAL_ID_TYPE_OPTIONS, normalizeNationalIdType } from '../../utils/tradeInOrigin';
+import type { NationalIdType } from '../../utils/tradeInOrigin';
 import { useToast } from '../ui/Toast';
 import { isMobileDevice } from '../../utils/platform';
 import { MoneyInput } from '../ui/MoneyInput';
+import { DzPhoneInput } from '../ui/DzPhoneInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 
 const DEVICE_PRESETS = [
@@ -55,6 +59,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
   const {
     activeModal, closeModal, processTradeIn, tradeIns, customers, receiptSettings,
     products, imeiRecords, setStagedTradeIn, tradeInExchangeRequest, clearTradeInExchangeRequest,
+    tradeInEditRequest, clearTradeInEditRequest, updateTradeInIdentity,
     cart,
   } = usePosStore();
   const { showToast } = useToast();
@@ -70,6 +75,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [nationalIdNumber, setNationalIdNumber] = useState('');
+  const [nationalIdType, setNationalIdType] = useState<NationalIdType | ''>('');
   const [deviceModel, setDeviceModel] = useState('');
   const [imei, setImei] = useState('');
   const [barcode, setBarcode] = useState('');
@@ -114,6 +120,10 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
     // so zero orphaned rows by construction. Always drop the request so a
     // later standalone open cannot inherit exchange mode.
     clearTradeInExchangeRequest();
+    // Same rule for the identity-edit request: abandoning a "Compléter"
+    // dossier must leave nothing behind that the NEXT intake could inherit as
+    // a prefill (the seller identity of another transaction).
+    clearTradeInEditRequest();
     closeModal();
   };
 
@@ -125,6 +135,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
     if (init.customerName) setCustomerName(init.customerName);
     if (init.customerPhone) setCustomerPhone(init.customerPhone);
     if (init.nationalIdNumber) setNationalIdNumber(init.nationalIdNumber);
+    if (init.nationalIdType) setNationalIdType(normalizeNationalIdType(init.nationalIdType) ?? '');
     if (init.deviceModel) setDeviceModel(init.deviceModel);
     if (init.imei) setImei(init.imei);
     if (init.barcode) setBarcode(init.barcode);
@@ -134,6 +145,44 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
     if (typeof init.resaleMarginPercent === 'number') setResaleMarginPercent(init.resaleMarginPercent);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exchangeNonce, activeModal]);
+
+  /**
+   * IDENTITY-EDIT mode ("Compléter la pièce", opened from the Inspector).
+   *
+   * The record is read back from the store, so the form starts from what is
+   * actually on file. Only the identity fields are writable here: the IMEI,
+   * the amounts and the acquisition date are shown for context and cannot be
+   * changed, because a "completion" must never turn into a silent rewrite of the
+   * acquisition. `updateTradeInIdentity` enforces that server-side too — it
+   * patches the stored record rather than accepting a form payload.
+   */
+  const editNonce = tradeInEditRequest?.nonce;
+  const editingTrade = useMemo(
+    () =>
+      editNonce
+        ? (tradeIns || []).find((t) => t.id === tradeInEditRequest?.tradeInId) ?? null
+        : null,
+    [editNonce, tradeIns, tradeInEditRequest]
+  );
+  const isIdentityEdit = Boolean(editNonce && editingTrade);
+
+  useEffect(() => {
+    if (activeModal !== 'trade_in_buyback' || !editNonce || !editingTrade) return;
+    setActiveTab('Nouvelle');
+    setCustomerName(editingTrade.customerName || '');
+    setCustomerPhone(editingTrade.customerPhone || '');
+    setNationalIdNumber(editingTrade.nationalIdNumber || '');
+    setNationalIdType(normalizeNationalIdType(editingTrade.nationalIdType) ?? '');
+    setDeviceModel(editingTrade.deviceModel || '');
+    setImei(editingTrade.imei || '');
+    setBarcode(editingTrade.barcode || '');
+    if (editingTrade.brand) setBrand(editingTrade.brand);
+    if (editingTrade.conditionGrade) setGrade(editingTrade.conditionGrade);
+    setBuybackValue(Number(editingTrade.buybackValue) || 0);
+    setResaleMarginPercent(Number(editingTrade.resaleMarginPercent) || 0);
+    setCreditToWallet(Boolean(editingTrade.creditToWallet));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editNonce, activeModal, editingTrade?.id]);
 
   useEffect(() => { if (activeModal !== 'trade_in_buyback') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') { clearTradeInExchangeRequest(); closeModal(); } }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, clearTradeInExchangeRequest, closeModal]);
 
@@ -158,6 +207,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
     setCustomerName('');
     setCustomerPhone('');
     setNationalIdNumber('');
+    setNationalIdType('');
     setDeviceModel('');
     setImei('');
     setBarcode('');
@@ -192,8 +242,13 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
   const imeiTrimmed = sanitizeImeiInput(imei);
   const imeiDigits = imeiTrimmed.replace(/\D/g, '');
   const imeiIs15Digit = /^\d{15}$/.test(imeiDigits);
-  const imeiDuplicate = imeiTrimmed
-    ? (imeiRecords || []).some((r) => r.imei === imeiTrimmed)
+  // Canonical key, not `===`. Trade-in IMEIs land in the same `imeiRecords`
+  // the checkout path reads, so a raw compare against a historic
+  // hyphenated row would let the same handset be bought in twice — or block a
+  // legitimate re-buy because of a spelling difference alone.
+  const imeiKey = normalizeDeviceKey(imeiTrimmed);
+  const imeiDuplicate = imeiKey
+    ? (imeiRecords || []).some((r) => normalizeDeviceKey(r.imei) === imeiKey)
     : false;
   const imeiState = imeiCheckState(imeiTrimmed);
   const imeiHardError: string | null = !imeiTrimmed
@@ -218,6 +273,36 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
 
   const handleSubmitTradeIn = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // ── Identity-edit mode: patch the identity fields of an EXISTING record.
+    // Nothing else is read from the form, so an amount or an IMEI typed into a
+    // read-only field cannot reach the store.
+    if (isIdentityEdit && editingTrade) {
+      const res = await updateTradeInIdentity(editingTrade.id, {
+        nationalIdType: nationalIdType || null,
+        nationalIdNumber: nationalIdNumber.trim(),
+        customerPhone: customerPhone.trim(),
+      });
+      if (res.success) {
+        showSuccess(
+          nationalIdNumber.trim()
+            ? 'Pièce d\'identité enregistrée sur la reprise.'
+            : 'Pièce d\'identité retirée de la reprise.'
+        );
+      } else {
+        showSuccess(
+          res.reason === 'TRADE_IN_NOT_FOUND'
+            ? 'Reprise introuvable — elle a peut-être été supprimée entre-temps.'
+            : 'Enregistrement de la pièce d\'identité refusé.'
+        );
+        return;
+      }
+      clearTradeInEditRequest();
+      resetForm();
+      closeModal();
+      return;
+    }
+
     if (buybackValue <= 0) return;
     // Hard-block only true 15-digit Luhn failures and duplicates.
     if (imeiHardError) {
@@ -246,6 +331,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
         customerName: customerPhone ? `${customerName.trim()} (${customerPhone.trim()})` : customerName.trim(),
         customerPhone: customerPhone.trim() || undefined,
         nationalIdNumber: nationalIdNumber.trim() || undefined,
+        nationalIdType: nationalIdType || undefined,
         deviceModel: deviceModel.trim(),
         imei: imeiTrimmed,
         barcode: barcode.trim() || undefined,
@@ -267,6 +353,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
       customerName: customerPhone ? `${customerName} (${customerPhone})` : customerName,
       customerPhone: customerPhone || undefined,
       nationalIdNumber: nationalIdNumber.trim() || undefined,
+      nationalIdType: nationalIdType || undefined,
       deviceModel,
       imei: imei.trim(),
       barcode: barcode.trim() || undefined,
@@ -280,7 +367,9 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
     if (res && typeof res === 'object' && 'success' in res && res.success === false) {
       const reason = String((res as { reason?: string }).reason || '');
       showSuccess(
-        reason === 'NO_CREDIT_TARGET'
+        reason.startsWith('IMEI_INVALIDE')
+          ? 'IMEI refusé : checksum Luhn invalide. Vérifiez la saisie ou utilisez un numéro de série.'
+          : reason === 'NO_CREDIT_TARGET'
           ? 'Crédit wallet impossible — sélectionnez d\'abord un client (aucun crédit portefeuille appliqué).'
           : reason.startsWith('DRAWER_DEPOSIT_FAILED')
           ? 'Reprise enregistrée mais le tiroir-caisse a échoué — vérifiez le journal de caisse.'
@@ -291,14 +380,29 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
       return;
     }
 
+    // The write SUCCEEDED — a duplicate IMEI is a warning, not a refusal. Say so
+    // loudly but never block: the unit in front of the operator must be recorded.
+    if (res && typeof res === 'object' && 'warning' in res && res.warning) {
+      showToast(
+        'Attention : cet IMEI existe déjà dans le système. Reprise enregistrée — vérifiez qu\'il ne s\'agit pas du même appareil.',
+        'warning',
+        9000
+      );
+    }
+
     showSuccess(`Reprise de ${deviceModel} enregistrée ! Produit injecté dans le catalogue d'occasion avec son code-barres et IMEI.`);
     // Portable signed buyback voucher alongside the A4 attestation (history
     // reprint): thermal bytes on desktop, sheet on mobile. Fire-and-forget —
     // the modal may already be closing via activeModal:null in the slice.
-    const createdImei = imei.trim();
+    // The slice stores the CANONICAL identifier, so the voucher lookup must
+    // compare canonically too — a hyphenated input used to find nothing and the
+    // buyback voucher was silently never printed.
+    const createdKey = normalizeDeviceKey(imei);
     resetForm();
     try {
-      const created = usePosStore.getState().tradeIns.find((t) => t.imei === createdImei);
+      const created = usePosStore
+        .getState()
+        .tradeIns.find((t) => normalizeDeviceKey(t.imei) === createdKey);
       if (created) {
         const { SavPrintCoordinator } = await import('../../utils/savPrintCoordinator');
         const ok = await SavPrintCoordinator.printTradeInVoucher(
@@ -427,6 +531,18 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
 
           {activeTab === 'Nouvelle' ? (
             <form onSubmit={handleSubmitTradeIn} className="space-y-3 sm:space-y-4 max-w-3xl mx-auto bg-pos-card border border-pos-border rounded-2xl p-3.5 sm:p-5 shadow-md">
+              {isIdentityEdit && editingTrade && (
+                <div className="p-2.5 sm:p-3 rounded-xl border border-cyan-500/40 bg-cyan-500/10 space-y-1">
+                  <p className="text-xs font-bold text-cyan-300">
+                    Complément de la pièce d&apos;identité — reprise {policeRegistryFolio(editingTrade)}
+                  </p>
+                  <p className="text-[10px] text-pos-muted">
+                    Seuls le type de pièce, le n° de pièce et le téléphone du vendeur sont
+                    modifiables. IMEI, montants et date d&apos;acquisition sont figés. Chaque
+                    modification est journalisée (valeurs masquées).
+                  </p>
+                </div>
+              )}
               {/* Customer Toolbar */}
               <div className="bg-pos-bg p-3 sm:p-3.5 rounded-xl border border-pos-border space-y-3">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -436,7 +552,8 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                   {(customers || []).length > 0 && (
                     <select
                       onChange={(e) => handleSelectCustomer(e.target.value)}
-                      className="w-full sm:w-auto min-h-[44px] bg-pos-card border border-pos-border text-pos-text text-sm sm:text-xs rounded-lg px-2.5 py-1 focus:border-emerald-400 focus:outline-none"
+                      disabled={isIdentityEdit}
+                      className="w-full sm:w-auto min-h-[44px] bg-pos-card border border-pos-border text-pos-text text-sm sm:text-xs rounded-lg px-2.5 py-1 focus:border-emerald-400 focus:outline-none disabled:opacity-60"
                     >
                       <option value="">Sélectionner un client du répertoire...</option>
                       {(customers || []).map(c => (
@@ -452,29 +569,52 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                     <input
                       type="text"
                       required
+                      readOnly={isIdentityEdit}
                       value={customerName}
                       onChange={(e) => setCustomerName(e.target.value)}
-                      className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
+                      className={`w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none ${isIdentityEdit ? 'opacity-60' : ''}`}
                       placeholder="Ex: Karim Hadj"
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Téléphone Vendeur</label>
-                    <input
-                      type="tel"
-                      inputMode="tel"
+                    <label htmlFor="tradein-customer-phone" className="text-[11px] text-pos-muted block mb-1 font-semibold">Téléphone Vendeur</label>
+                    <DzPhoneInput
+                      id="tradein-customer-phone"
                       value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
+                      onChange={setCustomerPhone}
                       placeholder="Ex: 0661 88 99 00"
+                      inputClassName="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="sm:col-span-2 lg:col-span-1">
+                    <label
+                      htmlFor="tradein-id-type"
+                      className="text-[11px] text-pos-muted mb-1 font-semibold flex flex-wrap items-center gap-1.5"
+                    >
+                      <span>Type de pièce d&apos;Identité</span>
+                    </label>
+                    <select
+                      id="tradein-id-type"
+                      value={nationalIdType}
+                      onChange={(e) =>
+                        setNationalIdType(normalizeNationalIdType(e.target.value) ?? '')
+                      }
+                      className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer"
+                    >
+                      <option value="">Non précisé</option>
+                      {NATIONAL_ID_TYPE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   <div>
                     <label className="text-[11px] text-pos-muted mb-1 font-semibold flex flex-wrap items-center gap-1.5">
-                      <span>N° Pièce d'Identité (CNI / Permis / Passeport) — Livre de Police</span>
+                      <span>N° Pièce d'Identité — Livre de Police</span>
                       {cniMissing && (
                         <span className="inline-flex items-center rounded-full border border-amber-500/60 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-300">
                           Pièce manquante — à compléter
@@ -499,7 +639,11 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                 </div>
               </div>
 
-              {/* Device Identification & Presets */}
+              {/* Device Identification & Presets — LOCKED in identity-edit mode.
+                  `display:contents` keeps the layout identical while `disabled`
+                  cascades to every control inside, so a completion can never
+                  restate the device it is completing a document for. */}
+              <fieldset disabled={isIdentityEdit} className="contents">
               <div className="space-y-2">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
@@ -621,8 +765,10 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                   </p>
                 </div>
               </div>
+              </fieldset>
 
               {/* Physical Condition Grade Selector */}
+              <fieldset disabled={isIdentityEdit} className="contents">
               <div className="space-y-1.5">
                 <label className="text-[11px] text-pos-muted block font-semibold">Grade d'État Physique & Cosmétique</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -641,14 +787,17 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                   ))}
                 </div>
               </div>
+              </fieldset>
 
               {/* Financial Valuation Engine */}
+              <fieldset disabled={isIdentityEdit} className="contents">
               <div className="bg-pos-bg border border-pos-border rounded-xl p-3 sm:p-3.5 space-y-3">
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:items-center">
                   <div>
                     <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Prix de Rachat Cash (DA)</label>
                     <MoneyInput
                       label="Prix de Rachat Cash (DA)"
+                      data-testid="buyback-price"
                       valueMinor={dinarsToMinor(buybackValue || 0)}
                       onChangeMinor={(minor) => setBuybackValue(toLegacyReal(minor))}
                       required
@@ -697,6 +846,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                 </div>
                 )}
               </div>
+              </fieldset>
 
               {/* Final Submit & Stock Injection Card — sticky so the CTA stays
                   above the mobile virtual keyboard (Phase 2 responsive). */}
@@ -709,7 +859,12 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                   type="submit"
                   className="w-full sm:w-auto min-h-[52px] px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm sm:text-xs flex items-center justify-center gap-2 transition shadow-lg shadow-emerald-500/20 cursor-pointer active:scale-[0.98]"
                 >
-                  <CheckCircle2 className="w-5 h-5 sm:w-4 sm:h-4" /> {isExchange ? 'Valider l’Échange' : 'Racheter & Injecter au Stock d\'Occasion'}
+                  <CheckCircle2 className="w-5 h-5 sm:w-4 sm:h-4" />{' '}
+                  {isIdentityEdit
+                    ? 'Enregistrer la pièce d\'identité'
+                    : isExchange
+                      ? 'Valider l’Échange'
+                      : 'Racheter & Injecter au Stock d\'Occasion'}
                 </button>
               </div>
             </form>

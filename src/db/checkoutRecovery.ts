@@ -42,6 +42,92 @@ export interface CheckoutRecoveryIntent {
 /** Legacy singleton key (pre-F1 builds) — reaped opportunistically, never written. */
 const LEGACY_INTENT_ID = 'active' as const;
 
+/** Max attempts before an intent is considered stuck and evicted. */
+const MAX_RECOVERY_ATTEMPTS = 3;
+
+/** Intents older than this are expired and cleaned up on replay. */
+const INTENT_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+/**
+ * Classify a replay error as fatal (business rule — retrying will never succeed)
+ * or transient (infrastructure — may resolve on next boot).
+ *
+ * Safely extracts all possible error representations (string, Error,
+ * Dexie error, { code, message } response object) into a single
+ * unified uppercase text before matching patterns.
+ */
+function classifyReplayError(error: unknown): 'fatal' | 'transient' {
+  if (!error) return 'transient';
+
+  const err = error as Record<string, unknown>;
+  const combinedText = [
+    typeof error === 'string' ? error : '',
+    typeof err.code === 'string' ? err.code : '',
+    typeof err.message === 'string' ? err.message : '',
+    typeof err.name === 'string' ? err.name : '',
+    String(error),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toUpperCase();
+
+  // Fatal / Non-retryable patterns
+  const fatalPatterns = [
+    'INSUFFICIENT_STOCK',
+    'ITEM_DISCONTINUED',
+    'DISCONTINUED',
+    'PRICE_MISMATCH',
+    'INVALID_PAYMENT',
+    'PAYMENT_METHOD_INVALID',
+    'INVALID_INPUT',
+    'CHECK CONSTRAINT',
+    'FOREIGN KEY',
+  ];
+
+  if (fatalPatterns.some((pattern) => combinedText.includes(pattern))) {
+    return 'fatal';
+  }
+
+  // Transient / Retryable patterns or default
+  return 'transient';
+}
+
+/** True when the intent has exceeded its TTL. */
+function isIntentExpired(createdAt: string): boolean {
+  return Date.now() - new Date(createdAt).getTime() > INTENT_TTL_MS;
+}
+
+/** Emit a toast from a non-React context via the window event bridge ToastProvider subscribes to. */
+function dispatchRecoveryToast(
+  message: string,
+  type: 'error' | 'warning' | 'info' = 'error',
+): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.dispatchEvent(new CustomEvent('mobi:toast', { detail: { message, type } }));
+  } catch (err) {
+    console.warn('[checkoutRecovery] Failed to dispatch toast notification:', err);
+  }
+}
+
+/** Delete an intent and alert the user (non-retryable). */
+async function evictRecoveryIntent(
+  transactionId: string,
+  reason: string,
+  notifyUser = false,
+  toastMessage?: string,
+): Promise<void> {
+  try {
+    await dexieDb.checkoutRecoveryIntents.delete(String(transactionId));
+  } catch (e) {
+    console.warn('[checkoutRecovery] Failed to evict intent:', e);
+  }
+  console.warn(`[checkoutRecovery] Evicted intent ${transactionId}: ${reason}`);
+  if (notifyUser && toastMessage) {
+    dispatchRecoveryToast(toastMessage, 'error');
+  }
+}
+
 function toIntent(row: CheckoutRecoveryIntentRow): CheckoutRecoveryIntent {
   return {
     id: row.id,
@@ -196,14 +282,25 @@ async function replayImeiMarks(
 
 /**
  * Boot replay: re-run writeCheckoutAtomic for every leftover intent,
- * oldest-first. Returns { replayed, remaining } so callers can refresh UI /
- * warn. Order rows are idempotent (ON CONFLICT on id); ledger/item/outbox
- * identities are deterministic per sale so re-execution converges instead of
- * double-applying.
+ * oldest-first. Returns { replayed, remaining, evicted, fatalErrors } so
+ * callers can refresh UI / warn. Order rows are idempotent (ON CONFLICT
+ * on id); ledger/item/outbox identities are deterministic per sale so
+ * re-execution converges instead of double-applying.
+ *
+ * Safeguards:
+ *  - Intents older than INTENT_TTL_MS are purged before replay.
+ *  - Intents that have already hit MAX_RECOVERY_ATTEMPTS are evicted.
+ *  - Fatal business errors (INSUFFICIENT_STOCK, CHECK/FOREIGN KEY,
+ *    discontinued, invalid payment) evict the intent immediately and
+ *    emit a user-facing toast — no retry.
+ *  - Transient errors (SQLITE_BUSY, network, 5xx) keep the intent
+ *    with an incremented attempt counter for the next boot.
  */
 export async function replayCheckoutRecoveryIntents(): Promise<{
   replayed: number;
   remaining: number;
+  evicted: number;
+  fatalErrors: string[];
   lastError?: string;
 }> {
   // Drain the legacy singleton first (one-time migration for pre-F1 builds).
@@ -217,21 +314,77 @@ export async function replayCheckoutRecoveryIntents(): Promise<{
   }
 
   const intents = await getCheckoutRecoveryIntents();
-  if (intents.length === 0) return { replayed: 0, remaining: 0 };
+  if (intents.length === 0) return { replayed: 0, remaining: 0, evicted: 0, fatalErrors: [] };
+
+  let evicted = 0;
+  const fatalErrors: string[] = [];
+
+  // ── Phase 1: purge expired or max-attempts-exceeded intents ──
+  const toEvict: CheckoutRecoveryIntent[] = [];
+  const toReplay: CheckoutRecoveryIntent[] = [];
+  for (const intent of intents) {
+    if (isIntentExpired(intent.createdAt)) {
+      toEvict.push(intent);
+    } else if ((intent.attempts ?? 0) >= MAX_RECOVERY_ATTEMPTS) {
+      toEvict.push(intent);
+    } else {
+      toReplay.push(intent);
+    }
+  }
+
+  for (const intent of toEvict) {
+    const expired = isIntentExpired(intent.createdAt);
+    if (expired) {
+      await evictRecoveryIntent(
+        intent.transactionId,
+        'TTL expired',
+        true,
+        `Vente #${intent.receiptNumber} expirée — intent de récupération nettoyé.`,
+      );
+    } else {
+      await evictRecoveryIntent(
+        intent.transactionId,
+        `Max attempts (${MAX_RECOVERY_ATTEMPTS}) exceeded`,
+        true,
+        `Vente #${intent.receiptNumber} — récupération abandonnée après ${MAX_RECOVERY_ATTEMPTS} tentatives.`,
+      );
+    }
+    evicted += 1;
+  }
+
+  if (toReplay.length === 0) {
+    return { replayed: 0, remaining: 0, evicted, fatalErrors };
+  }
 
   // B-061: never race a live sale or a concurrent refund — if the shared
   // checkout flight is held, leave the intents for the next boot/opportunity
   // instead of opening a second busy-retry:checkout loop on the same pool.
   const { tryAcquireCheckoutFlight, releaseCheckoutFlight } = await import('./checkoutFlight');
   if (!tryAcquireCheckoutFlight('boot-replay')) {
-    return { replayed: 0, remaining: intents.length, lastError: 'checkout-in-progress' };
+    return { replayed: 0, remaining: toReplay.length, evicted, fatalErrors, lastError: 'checkout-in-progress' };
+  }
+
+  // Task 2: Offline boot guard — do not burn attempts when the device
+  // has no connectivity. Recovery is deferred to the next boot when
+  // network is restored.
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    console.info('[checkoutRecovery] Device is offline; deferring replay to next boot.');
+    releaseCheckoutFlight('boot-replay');
+    return {
+      replayed: 0,
+      remaining: toReplay.length,
+      evicted,
+      fatalErrors,
+      lastError: 'offline',
+    };
   }
 
   let replayed = 0;
+  let fatalCount = 0;
   let lastError: string | undefined;
   try {
     const { writeCheckoutAtomic } = await import('./sqlPluginAdapter');
-    for (const intent of intents) {
+    for (const intent of toReplay) {
       try {
         await writeCheckoutAtomic(intent.payload);
 
@@ -262,27 +415,56 @@ export async function replayCheckoutRecoveryIntents(): Promise<{
         );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        lastError = msg;
-        console.warn('[checkoutRecovery] Replay failed, will retry next boot:', msg);
-        try {
-          const row = await dexieDb.checkoutRecoveryIntents.get(intent.transactionId).catch(() => undefined);
-          await dexieDb.checkoutRecoveryIntents.put({
-            id: intent.transactionId,
-            transactionId: intent.transactionId,
-            receiptNumber: intent.receiptNumber,
-            payload: intent.payload as unknown as Record<string, unknown>,
-            customerPayload: intent.customerPayload ?? null,
-            debtEntry: intent.debtEntry ?? null,
-            createdAt: intent.createdAt,
-            attempts: ((row?.attempts ?? intent.attempts) || 0) + 1,
-            lastError: msg.slice(0, 200),
-          });
-        } catch {
-          // keep original intent if update fails
+        if (classifyReplayError(e) === 'fatal') {
+          fatalErrors.push(msg);
+          fatalCount += 1;
+          await evictRecoveryIntent(
+            intent.transactionId,
+            `Fatal: ${msg.slice(0, 120)}`,
+            true,
+            `Récupération annulée : stock insuffisant pour un article de la vente #${intent.receiptNumber}.`,
+          );
+          evicted += 1;
+        } else {
+          // Task 2: offline/network failures must not burn attempts.
+          const isOfflineFailure =
+            msg.includes('FAILED TO FETCH') ||
+            msg.includes('NETWORKERROR') ||
+            msg.includes('OFFLINE');
+
+          lastError = msg;
+          console.warn('[checkoutRecovery] Replay failed (transient), will retry next boot:', msg);
+          try {
+            // Task 3: persist the incremented attempt count via Dexie update
+            // so the count survives app restarts.
+            // Task 2: offline/network failures must NOT burn attempts.
+            if (isOfflineFailure) {
+              console.info(
+                `[checkoutRecovery] Offline/network failure for ${intent.transactionId} — attempts preserved (not incremented).`
+              );
+              await dexieDb.checkoutRecoveryIntents.update(intent.transactionId, {
+                lastError: msg.slice(0, 200),
+              });
+            } else {
+              const newAttempts = (intent.attempts || 0) + 1;
+              await dexieDb.checkoutRecoveryIntents.update(intent.transactionId, {
+                attempts: newAttempts,
+                lastError: msg.slice(0, 200),
+              });
+            }
+          } catch {
+            // keep original intent if update fails
+          }
         }
       }
     }
-    return { replayed, remaining: intents.length - replayed, lastError };
+    return {
+      replayed,
+      remaining: toReplay.length - replayed - fatalCount,
+      evicted,
+      fatalErrors,
+      lastError,
+    };
   } finally {
     releaseCheckoutFlight('boot-replay');
   }

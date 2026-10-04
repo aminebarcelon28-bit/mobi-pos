@@ -7,6 +7,7 @@ from PyQt6.QtCore import (
     QEasingCurve,
     QPoint,
     QPropertyAnimation,
+    QRect,
     Qt,
     QTimer,
     pyqtSignal,
@@ -95,8 +96,12 @@ class ToastHost(QWidget):
     layout never overlaps them.
     """
 
-    #: Distance kept clear from the window edges, in pixels.
+    #: Horizontal inset from the window's right edge.
     MARGIN = 24
+
+    #: Vertical inset from the window's bottom edge, covering the 68px dock
+    #: plus a 20px gap so a toast never sits on the server-health card.
+    BOTTOM_CLEARANCE = 88
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
@@ -109,9 +114,82 @@ class ToastHost(QWidget):
         self._layout.addStretch()
         self._toasts = []
         self._parent = parent
-        #: Extra height reserved at the bottom, e.g. for a fixed dock, so a
-        #: tall stack never covers persistent controls.
-        self.bottom_inset = 0
+        #: Overridden by the window so the clearance tracks the real dock
+        #: height if it is ever resized.
+        self.bottom_clearance = self.BOTTOM_CLEARANCE
+        #: Callables returning QRect in parent coordinates that the toast stack
+        #: must not cover. Supplied as callables rather than rects because the
+        #: inspector drawer is shown, hidden, and animated, so its geometry has
+        #: to be re-read at every reposition.
+        self._avoid = []
+        self._last_parent_size = None
+
+    def set_avoid_regions(self, providers) -> None:
+        """Register widgets/regions the toast stack must stay clear of."""
+        self._avoid = list(providers)
+
+    def detach(self) -> None:
+        """
+        Stop observing the parent.
+
+        Called before the parent tears down. The filter is installed *on* the
+        parent, so it has to be removed from there, and the region providers
+        must go because they close over child widgets that are about to be
+        destroyed -- reading their geometry after that is undefined behaviour,
+        not a catchable Python error.
+        """
+        try:
+            self._parent.removeEventFilter(self)
+        except Exception:
+            pass
+        self._avoid = []
+
+        # Drop the toast list before the parent starts tearing down. Each
+        # Toast is connected to ``destroyed`` via a lambda that closes over
+        # itself, and letting those run while the parent is being destroyed
+        # reaches into half-freed C++ objects -- an access violation that kills
+        # the interpreter rather than raising anything catchable.
+        for toast in list(self._toasts):
+            try:
+                toast.destroyed.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        self._toasts.clear()
+
+    def _avoid_rects(self) -> list:
+        """
+        Resolve the registered regions to QRects in parent coordinates.
+
+        Entries may be a QWidget (whose geometry is read live, so an animated
+        or resized panel stays accurate) or a zero-argument callable returning
+        a QRect. Widgets are preferred: a callable supplied by the window has to
+        close over the window, which forms a MainWindow -> ToastHost -> lambda
+        -> MainWindow cycle and segfaults when the collector finally breaks it.
+        """
+        out = []
+        parent = self._parent
+        for item in self._avoid:
+            if item is None:
+                continue
+            try:
+                if isinstance(item, QWidget):
+                    # A hidden panel keeps reporting its last geometry, which
+                    # would push the toast stack up for a drawer the operator
+                    # cannot even see.
+                    if not item.isVisible():
+                        continue
+                    size = item.size()
+                    if not size.isValid() or size.height() <= 0:
+                        continue
+                    out.append(QRect(item.mapTo(parent, QPoint(0, 0)), size))
+                else:
+                    rect = item() if callable(item) else item
+                    if rect is not None and rect.isValid():
+                        out.append(rect)
+            except RuntimeError:
+                # Underlying C++ object already destroyed during teardown.
+                continue
+        return out
 
     def notify(self, message: str, kind: str = "info", msec: int = 3200) -> None:
         toast = Toast(message, kind, self._parent, msec)
@@ -138,21 +216,59 @@ class ToastHost(QWidget):
         return [t.geometry().translated(host_pos) for t in self._toasts if t.isVisible()]
 
     def reposition(self) -> None:
-        """Re-anchor to the bottom-right of the parent, above the dock."""
+        """
+        Anchor the stack to the bottom-right of the parent window, clear of the
+        dock and of any registered region.
+
+        A constant bottom inset is not enough: the inspector drawer is anchored
+        to the bottom-right and carries the primary [Appareils] and [WhatsApp]
+        buttons, so a stack sized only against the 68px dock lands on top of
+        them. The stack is therefore raised above the topmost avoid-region it
+        horizontally overlaps, and only falls back to ``bottom_clearance`` when
+        nothing is in the way.
+        """
         self._parent.installEventFilter(self)
         self.adjustSize()
-        parent_h = self._parent.height()
         parent_w = self._parent.width()
-        # bottom_inset keeps the stack clear of a fixed bottom dock, so a burst
-        # of toasts never hides the server-health card.
-        self.move(
-            max(0, parent_w - self.width() - self.MARGIN),
-            max(0, parent_h - self.height() - self.MARGIN - self.bottom_inset),
-        )
+        parent_h = self._parent.height()
+
+        left = max(0, parent_w - self.width() - self.MARGIN)
+        top = max(0, parent_h - self.height() - self.bottom_clearance)
+
+        avoid = self._avoid_rects()
+        if avoid:
+            right = left + self.width()
+            host_bottom = top + self.height()
+
+            # Stack above every region it horizontally overlaps and that
+            # actually reaches into its vertical span. The smallest such top
+            # edge is the binding constraint -- clearing the highest one clears
+            # them all. Regions entirely above the stack (e.g. the inspector's
+            # button row on a narrow window) are left where the layout put them.
+            blockers = [
+                rect.top()
+                for rect in avoid
+                if rect.right() > left
+                and rect.left() < right
+                and rect.bottom() > top
+                and rect.top() < host_bottom
+            ]
+            if blockers:
+                top = max(0, min(blockers) - self.height() - self.MARGIN)
+
+        # Only move when the target actually changed. reposition() runs from
+        # the parent's Resize event, and move() on a child can provoke another
+        # layout pass; issuing a redundant move on every pass recurses until
+        # the interpreter dies with 0xC0000409.
+        if self.pos() != QPoint(left, top):
+            self.move(left, top)
 
     def eventFilter(self, obj, event):
         if event.type() == event.Type.Resize:
-            self.reposition()
+            size = event.size()
+            if (size.width(), size.height()) != self._last_parent_size:
+                self._last_parent_size = (size.width(), size.height())
+                self.reposition()
         return False
 
 
@@ -297,6 +413,7 @@ class DismissibleAlertBanner(QFrame):
     """
 
     dismissed = pyqtSignal()
+    action_triggered = pyqtSignal()
 
     KINDS = {
         "info": ("ℹ️", "#1D4ED8", "#BFDBFE"),
@@ -331,11 +448,30 @@ class DismissibleAlertBanner(QFrame):
         self.close_button.setToolTip("Masquer cette alerte")
         self.close_button.clicked.connect(self.dismiss)
 
+        # Optional recovery affordance. An alert that only explains a problem
+        # leaves the operator stuck; this lets the banner offer the one action
+        # that can actually resolve it.
+        self.action_button = QPushButton()
+        self.action_button.setObjectName("AlertAction")
+        self.action_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.action_button.clicked.connect(self.action_triggered)
+        self.action_button.hide()
+
         layout.addWidget(self.icon, 0, Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.message, 1)
+        layout.addWidget(self.action_button, 0, Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.close_button, 0, Qt.AlignmentFlag.AlignTop)
 
         self.set_kind(kind)
+
+    def set_action(self, label: str = "", tooltip: str = "") -> None:
+        """Show a recovery button in the banner, or hide it with an empty label."""
+        if not label:
+            self.action_button.hide()
+            return
+        self.action_button.setText(label)
+        self.action_button.setToolTip(tooltip)
+        self.action_button.setVisible(True)
 
     def set_message(self, message: str) -> None:
         self.message.setText(message)
@@ -354,6 +490,11 @@ class DismissibleAlertBanner(QFrame):
             f" border: none; font-size: 12px; }}"
             f" QPushButton#AlertClose:hover {{ background-color: {border};"
             f" border-radius: 4px; }}"
+            f" QPushButton#AlertAction {{ background: transparent; color: {fg};"
+            f" border: 1px solid {border}; border-radius: 5px;"
+            f" padding: 3px 10px; font-size: 11px; font-weight: 600; }}"
+            f" QPushButton#AlertAction:hover {{ background-color: {border};"
+            f" border-radius: 5px; }}"
         )
 
     def dismiss(self) -> None:

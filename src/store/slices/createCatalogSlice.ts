@@ -4,6 +4,12 @@ import type { Product } from '../../types/pos';
 import { audioBus } from '../../utils/audioEvents';
 import { rebaseReconciledSales } from './rebaseReconciledSales';
 import { newId } from '../../utils/ids';
+import {
+  describeArchivedProduct,
+  resolveWarrantyMonths,
+} from '../../utils/warrantyResolver';
+import { validateDeviceIdentifierForIntake } from '../../utils/savValidation';
+import { normalizeDeviceKey } from '../../utils/deviceIdCodec';
 
 // P11.3: repositories pull sqliteAdapter -> dexie + libsql; catalog writes are
 // async user actions, so they resolve on first use, not at cold start.
@@ -29,7 +35,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
   setEditingProduct: (product) => set({ editingProduct: product, activeModal: 'product_editor' }),
 
   saveProduct: async (input, options) => {
-    const { products, logSecurityAction } = get();
+    const { products, imeiRecords, logSecurityAction } = get();
     // Pre-image for the stock-durability adjustment below: manual edits must
     // land in the ledger, or the next sale's recompute wipes them.
     const prevStock = input.id ? products.find((p) => p.id === input.id)?.stock : undefined;
@@ -37,6 +43,32 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
     // 1. Mandatory Title Validation
     if (!input.title || !input.title.trim()) {
       return { success: false, reason: 'La désignation du produit est obligatoire.' };
+    }
+
+    // 1b. W-43 — a serialized product carries a device identifier, so the
+    // catalog editor is an acquisition writer too and uses the SAME gate as the
+    // trade-in and the invoice import: a 15-digit Luhn failure is refused,
+    // a serial passes, a duplicate is a WARNING.
+    //
+    // The product's OWN previous identifier is excluded from the duplicate
+    // scan, otherwise re-saving a product without touching its IMEI would warn
+    // about itself on every edit.
+    const rawIdentifier = (input.imeiNumber ?? '').trim();
+    let canonicalIdentifier = rawIdentifier;
+    if (rawIdentifier) {
+      const ownRow = input.id ? (imeiRecords || []).find((r) => r.productId === input.id) : undefined;
+      const verdict = validateDeviceIdentifierForIntake(rawIdentifier, [
+        ...(imeiRecords || []).filter((r) => !(ownRow && r.imei === ownRow.imei)).map((r) => r.imei),
+        ...products.filter((p) => (input.id ? p.id !== input.id : true)).map((p) => p.imeiNumber),
+      ]);
+      if (!verdict.ok) {
+        return { success: false, reason: verdict.reason };
+      }
+      canonicalIdentifier = verdict.canonical;
+      if (verdict.warning) {
+        // Warn-only, by owner decision: the row is still saved.
+        console.warn('[saveProduct]', verdict.warning);
+      }
     }
 
     // 2. Barcode Duplicate Validation
@@ -80,6 +112,9 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
         ...(input as Product),
         isService,
         stock: isService ? 999999 : input.stock,
+        // Canonical storage form, so the till, SAV and the warranty resolver
+        // all agree on this device's identity.
+        imeiNumber: canonicalIdentifier || undefined,
       };
       logSecurityAction(
         'Modification Produit Catalogue',
@@ -94,6 +129,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
         id: newId('prod'),
         isService,
         stock: isService ? 999999 : input.stock,
+        imeiNumber: canonicalIdentifier || undefined,
       };
       logSecurityAction(
         'Création Produit Catalogue',
@@ -225,6 +261,65 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
       }
       // B-040: re-read after await so concurrent catalog edits survive.
       const latest = get().products;
+      // Q-C: ARCHIVE the registry rows before the product disappears.
+      //
+      // Deleting the product used to orphan `productId` on every device ever
+      // registered against it. The resolver then found no catalog entry and
+      // called `resolveWarrantyMonths(undefined)`, which returns the 12-month
+      // STORE DEFAULT — so a deleted "Grade B" occasion unit silently gained a
+      // year of warranty, and the dossier lost the model name entirely.
+      //
+      // Snapshotted into EXISTING fields only: the product title goes into
+      // `notes` (prefixed so it can be parsed back) and the term into
+      // `warrantyMonths`. `productId` is cleared so nothing keeps hunting for a
+      // catalog row that no longer exists. No new column, no migration.
+      const doomed = (latest || []).find((p) => p.id === id);
+      if (doomed) {
+        try {
+          const { db: dexieDb } = await import('../../db/database');
+          const rows = await dexieDb.imeiRecords
+            .where('productId')
+            .equals(id)
+            .toArray();
+          for (const rec of rows) {
+            const stamp = new Date().toISOString();
+            const months = resolveWarrantyMonths(doomed);
+            await dexieDb.imeiRecords.put({
+              ...rec,
+              productId: '',
+              warrantyMonths: rec.warrantyMonths ?? months,
+              notes: describeArchivedProduct(doomed.title, doomed.sku, stamp),
+            });
+          }
+          // Keep the in-memory mirror in step so the open inspector agrees.
+          set({
+            imeiRecords: (get().imeiRecords || []).map((r) =>
+              r.productId === id
+                ? {
+                    ...r,
+                    productId: '',
+                    warrantyMonths: r.warrantyMonths ?? resolveWarrantyMonths(doomed),
+                    notes: describeArchivedProduct(
+                      doomed.title,
+                      doomed.sku,
+                      new Date().toISOString()
+                    ),
+                  }
+                : r
+            ),
+          });
+          if (rows.length > 0) {
+            get().logSecurityAction(
+              'Suppression Produit (Dossiers Appareils archivés)',
+              `Produit supprimé — ${rows.length} dossier(s) appareil archivés (nom et durée de garantie conservés).`,
+              'Yacine (Admin)',
+              false
+            );
+          }
+        } catch (archiveErr) {
+          console.warn('[catalog:delete] Registry archive deferred:', archiveErr);
+        }
+      }
       set({
         products: latest.filter((p) => p.id !== id),
         cart: get().cart.filter((item) => item.product.id !== id),
@@ -239,9 +334,49 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
     const { products, imeiRecords, logSecurityAction } = get();
     if (updatedProducts.length === 0) return;
 
+    // W-43 — the invoice is an ACQUISITION surface, so it gets the same gate as
+    // every other writer: a 15-digit value that fails Luhn is refused (it would
+    // be a registry row nothing can ever resolve), serials pass, and a duplicate
+    // is a WARNING rather than a refusal.
+    //
+    // The refusal is per-row and non-fatal: a supplier invoice that carries one
+    // bad identifier must still import the other 40 lines, so the offending row
+    // is dropped, counted and surfaced instead of aborting the batch. Dropping
+    // silently is exactly what this gate exists to prevent.
+    const knownIdentifiers = [
+      ...(imeiRecords || []).map((r) => r.imei),
+      // The rows this very import is about to add, so two lines of the SAME
+      // invoice cannot collide with each other into two registry entries.
+      ...newImeis.map((r) => r.imei),
+      ...(products || []).map((p) => p.imeiNumber),
+    ];
+    const refused: string[] = [];
+    const duplicateWarnings: string[] = [];
+    const acceptedNewImeis = [];
+    // Keys accepted FROM THIS BATCH, kept apart from `knownIdentifiers` (which
+    // also holds pre-existing rows): re-receiving a known device must REPLACE
+    // its historic row, but two lines of the SAME invoice for the same device
+    // are a data-entry duplicate and must collapse into one — otherwise the
+    // import writes the same registry key twice.
+    const acceptedKeys = new Set<string>();
+    for (const rec of newImeis) {
+      const verdict = validateDeviceIdentifierForIntake(rec.imei, knownIdentifiers);
+      if (!verdict.ok) {
+        refused.push(`${rec.imei || '(vide)'} — ${verdict.reason}`);
+        continue;
+      }
+      if (verdict.warning) duplicateWarnings.push(verdict.warning);
+      if (acceptedKeys.has(verdict.key)) continue;
+      // Store the canonical form, so a hyphenated invoice line and its
+      // digits-only twin cannot become two devices.
+      acceptedNewImeis.push({ ...rec, imei: verdict.canonical });
+      acceptedKeys.add(verdict.key);
+      knownIdentifiers.push(verdict.canonical);
+    }
+
     await (await getProductRepo()).bulkSave(updatedProducts);
 
-    for (const rec of newImeis) {
+    for (const rec of acceptedNewImeis) {
       await (await getImeiRepo()).save(rec);
     }
 
@@ -317,14 +452,31 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
 
     const updatedMap = new Map<string, Product>(updatedProducts.map((p) => [p.id, p]));
     const nextProducts = products.map((p) => updatedMap.get(p.id) || p);
-    const nextImeis = newImeis.length > 0 ? [...newImeis, ...imeiRecords] : imeiRecords;
+    // Merge by CANONICAL key, not raw string: the incoming rows are canonical
+    // and a historic hyphenated row must be replaced by them rather than kept
+    // beside them as a phantom second device (the W-30 rule, applied here).
+    const incomingKeys = new Set(acceptedNewImeis.map((r) => normalizeDeviceKey(r.imei)));
+    const nextImeis =
+      acceptedNewImeis.length > 0
+        ? [
+            ...acceptedNewImeis,
+            ...(imeiRecords || []).filter((r) => !incomingKeys.has(normalizeDeviceKey(r.imei))),
+          ]
+        : imeiRecords;
 
+    const refusedNote = refused.length
+      ? ` — ${refused.length} refusé(s) (checksum Luhn): ${refused.slice(0, 3).join('; ')}`
+      : '';
     logSecurityAction(
       'Import Facture Fournisseur (CSV)',
-      `${updatedProducts.length} références mises à jour, ${newImeis.length} IMEI enregistrés`,
+      `${updatedProducts.length} références mises à jour, ${acceptedNewImeis.length} IMEI enregistrés${refusedNote}`,
       'Système (Import Facture)',
       false
     );
+    // A refused identifier is an integrity signal, not a cosmetic detail: the
+    // operator must be able to see WHICH line was dropped, because a dropped
+    // unit is a unit nobody can find at warranty lookup later.
+    for (const warning of duplicateWarnings) console.warn('[invoice:import]', warning);
 
     audioBus.emit('success');
     set({ products: nextProducts, imeiRecords: nextImeis });

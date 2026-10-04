@@ -6,6 +6,7 @@ import { KPISummaryBar } from './KPISummaryBar';
 import { FilterToolbar } from './FilterToolbar';
 import { SupplierCard } from './SupplierCard';
 import { ReplenishmentEmptyState } from './ReplenishmentEmptyState';
+import { stripAccents } from './searchText';
 import { useBodyScrollLock } from './useBodyScrollLock';
 import { useFocusTrap } from './useFocusTrap';
 
@@ -61,19 +62,23 @@ export const ReplenishmentModal: React.FC<ReplenishmentModalProps> = ({
   }, [suppliers]);
 
   const filteredSuppliers = useMemo(() => {
-    const needle = deferredSearchQuery.trim().toLowerCase();
+    // Accent/case-insensitive needle (§2.3): "ecran" must match "Écran".
+    // Literal substring scan only — never RegExp, so metacharacter
+    // payloads (§2.1: `*`, `(`, `[`, …) cannot compile or hang.
+    const needle = stripAccents(deferredSearchQuery.trim());
 
     return suppliers.filter((supplier) => {
       // Vector A — wholesaler name.
-      const name = supplier.name?.toLowerCase() ?? '';
+      const name = stripAccents(supplier.name ?? '');
       const matchesSupplierName = name.includes(needle);
 
       // Vector B — deep product / SKU / barcode inspection (Stage 2 line items).
       const matchesProductOrSku = Boolean(
         supplier.items?.some((item) => {
-          const title = item.title.toLowerCase();
-          const sku = item.sku.toLowerCase();
-          const barcode = (item.barcode ?? '').toLowerCase();
+          const title = stripAccents(item.title);
+          const sku = stripAccents(item.sku);
+          // String() cast: DB/sync payloads may carry numeric barcodes (§2.4).
+          const barcode = stripAccents(String(item.barcode ?? ''));
           return title.includes(needle) || sku.includes(needle) || barcode.includes(needle);
         })
       );

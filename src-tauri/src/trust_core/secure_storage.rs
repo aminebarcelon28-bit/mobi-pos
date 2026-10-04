@@ -148,8 +148,13 @@ fn assert_not_in_unit_tests(operation: &str) {
     );
 }
 
-/// Production no-op counterpart of the test gate.
-#[cfg(not(all(test, not(any(target_os = "android", target_os = "ios")))))]
+/// Production no-op counterpart of the test gate. Only `OsKeyStore` (the sole
+/// caller) exists off-mobile, so on mobile neither variant is compiled —
+/// a fn defined there would be dead code.
+#[cfg(all(
+    not(test),
+    not(any(target_os = "android", target_os = "ios"))
+))]
 fn assert_not_in_unit_tests(_operation: &str) {}
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

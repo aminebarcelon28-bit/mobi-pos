@@ -1,0 +1,14 @@
+
+running 4 tests
+test wrapper::tests::binding_range_guard_edges ... ok
+test wrapper::tests::integers_bind_exact_i64 ... ok
+test wrapper::tests::load_confined_to_exact_db_name ... ok
+test wrapper::tests::select_gate_allows_reads_rejects_writes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

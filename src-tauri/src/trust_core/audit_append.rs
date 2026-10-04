@@ -742,6 +742,50 @@ pub fn audit_append(
     )
 }
 
+/// Kernel-originated audit row (no IPC authorization: the kernel recording
+/// its own transition — clock quarantine entry, recovery decrypt — not
+/// WebView input). Opens the live DB from the app dir, chains like any other
+/// append when a key exists, advances the head. Best-effort by contract:
+/// callers log failures, never propagate them into the detection path.
+pub(crate) fn append_kernel_row(
+    app_data_dir: &std::path::Path,
+    req: &AuditAppendRequest,
+) -> Result<AuditAppendReceipt, TrustError> {
+    use super::export_snapshot::{resolve_manifest_mac_key, ManifestMac};
+    let path = app_data_dir.join("mobi_pos.db");
+    if !path.exists() {
+        return Err(TrustError::op_failed("live database missing".to_string()));
+    }
+    let mac_key = match resolve_manifest_mac_key(app_data_dir) {
+        ManifestMac::Key(k) => Some(k),
+        ManifestMac::Unavailable(_) => None,
+    };
+    let mut conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| TrustError::op_failed(format!("audit open: {e}")))?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| TrustError::op_failed(format!("audit busy_timeout: {e}")))?;
+    let event_id = format!(
+        "AUD-{}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+        &uuid::Uuid::new_v4().to_string()[..8]
+    );
+    let timestamp = chrono_iso8601_utc();
+    let receipt = append_audit_event(&mut conn, mac_key.as_deref(), req, &event_id, &timestamp)?;
+    if let Some(key) = mac_key.as_deref() {
+        let (store, _) = super::ipc_authorizer::select_store(app_data_dir);
+        if advance_audit_head(&conn, &*store, key).is_err() {
+            eprintln!("[trust_core] kernel-row head advance failed (heals on verify)");
+        }
+    }
+    Ok(receipt)
+}
+
 /// Flat verifier status for manifests and diagnostics. `broken` covers any
 /// integrity failure (link MAC, linkage, head mismatch, truncation);
 /// `unsealed` means no key was available (hashes still checked where
@@ -921,10 +965,19 @@ pub fn boot_audit_check(app_data_dir: &std::path::Path) {
             .ok()
             .flatten();
         let Some(key) = mac_key.as_deref() else {
+            if total == 0 {
+                return Ok("intact links=0".into());
+            }
             return Ok(format!("unsealed links={total}"));
         };
         match store.load_audit_head() {
-            Ok(None) => Ok(format!("no-head links={total}")),
+            Ok(None) => {
+                if total == 0 {
+                    Ok("intact links=0".into())
+                } else {
+                    Ok(format!("no-head links={total}"))
+                }
+            }
             Ok(Some(head)) => {
                 let expect = hex(&hmac_sha256_raw(
                     &domain_subkey(key, AUDIT_SUBKEY_LABEL),
@@ -959,8 +1012,9 @@ pub fn boot_audit_check(app_data_dir: &std::path::Path) {
     });
 }
 
-/// Minimal UTC ISO-8601 (no date crate on this path).
-fn chrono_iso8601_utc() -> String {
+/// Minimal UTC ISO-8601 (no date crate on this path). Shared with the
+/// kernel clock-anomaly emitter (ipc_authorizer), which stamps the same way.
+pub(crate) fn chrono_iso8601_utc() -> String {
     // Reuse the exporter's formatter shape (YYYY-MM-DDTHH:MM:SSZ).
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1159,6 +1213,75 @@ mod tests {
             "truncation must be detected, got {:?}",
             st.state
         );
+    }
+
+    #[test]
+    fn source_column_addition_preserves_chain() {
+        // FT-06/F3: the `source` provenance column (TS self-heal:
+        // `ADD COLUMN source TEXT NOT NULL DEFAULT 'local'`) must not disturb
+        // the HMAC chain. Canonical bytes cover only
+        // id/timestamp/user/action/details/requires_pin/device_id, so
+        // pre-existing links verify identically after the heal, new keyed
+        // appends inherit 'local' without mentioning the column, and an
+        // imported-style row (direct INSERT, no link — exactly what the
+        // backup merge writes) reads as unlinked history without breaking
+        // verification of the chained set.
+        use crate::trust_core::secure_storage::test_support::MemKeyStore;
+        let _g = serial_test_lock();
+        let mut conn = fixture_conn();
+        let store = MemKeyStore::new();
+        let key = b"audit-test-key-32bytes!!!!!!!!".to_vec();
+        for i in 0..2 {
+            append_audit_event(
+                &mut conn,
+                Some(&key),
+                &req(&format!("act-{i}")),
+                &format!("EV-{i}"),
+                "2026-01-01T00:00:00Z",
+            )
+            .unwrap();
+            advance_audit_head(&conn, &store, &key).unwrap();
+        }
+        // Production heal, verbatim (pre-existing rows inherit 'local').
+        conn.execute(
+            "ALTER TABLE security_audit_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'local';",
+            [],
+        )
+        .unwrap();
+        let src: String = conn
+            .query_row(
+                "SELECT source FROM security_audit_logs WHERE id='EV-0'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(src, "local");
+        // Imported-style row, as written by the backup merge (no chain link).
+        conn.execute(
+            "INSERT INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, source) VALUES ('EV-IMP', '2024-05-01T10:00:00Z', 'u', 'a', 'd', 0, 'imported') ON CONFLICT(id) DO NOTHING",
+            [],
+        )
+        .unwrap();
+        // New keyed appends after the heal inherit 'local' (column unmentioned).
+        append_audit_event(&mut conn, Some(&key), &req("act-2"), "EV-2", "2026-01-01T00:00:00Z").unwrap();
+        advance_audit_head(&conn, &store, &key).unwrap();
+        let src2: String = conn
+            .query_row(
+                "SELECT source FROM security_audit_logs WHERE id='EV-2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(src2, "local");
+        // The chained set still verifies intact; the unlinked imported row is
+        // not counted as a link.
+        let st = verify_audit_chain_full(&conn, &store, Some(&key));
+        assert!(
+            matches!(st.state, ChainState::Intact),
+            "heal must not break chain, got {:?}",
+            st.state
+        );
+        assert_eq!(st.total_links, 3);
     }
 
     #[test]

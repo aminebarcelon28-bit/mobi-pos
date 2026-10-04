@@ -240,7 +240,7 @@ export const CustomItemModal: React.FC = () => {
       }}
     >
       <div
-        className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90vh]"
+        className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90dvh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
@@ -252,10 +252,10 @@ export const CustomItemModal: React.FC = () => {
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-black text-pos-text">Touches Rapides & Article Divers</h2>
-                <span className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-1.5 py-0.5 rounded font-mono font-bold">
+                <span className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-1.5 py-0.5 rounded-full font-mono font-bold">
                   F9
                 </span>
-                <span className="text-[10px] bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 px-1.5 py-0.5 rounded font-bold">
+                <span className="text-[10px] bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 px-1.5 py-0.5 rounded-full font-bold">
                   Stock Illimité
                 </span>
               </div>
@@ -336,7 +336,7 @@ export const CustomItemModal: React.FC = () => {
         </div>
 
         {/* Modal Main Scrollable Content */}
-        <div className="p-4 space-y-4 overflow-y-auto flex-1">
+        <div className="p-4 space-y-4 overflow-y-auto overscroll-contain flex-1">
           {/* TAB 1: QUICK TOUCHES MATRIX */}
           {activeTab === 'quick' && (
             <div>
@@ -482,7 +482,7 @@ export const CustomItemModal: React.FC = () => {
                       >
                         <div className="flex items-center justify-between w-full">
                           <span className="text-xl">{touch.icon}</span>
-                          <span className="text-[11px] font-mono font-black px-1.5 py-0.5 rounded-md bg-slate-950/60 text-white shadow-xs">
+                          <span className="text-[11px] font-mono font-black px-1.5 py-0.5 rounded-full bg-slate-950/60 text-white shadow-xs">
                             {formatDZD(touch.price)}
                           </span>
                         </div>
@@ -522,7 +522,7 @@ export const CustomItemModal: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => handleOpenTouchEditor()}
-                      className="p-3 rounded-2xl border-2 border-dashed border-pos-border hover:border-emerald-500/50 hover:bg-emerald-500/5 transition-all flex flex-col items-center justify-center gap-1.5 text-pos-muted hover:text-emerald-400 cursor-pointer min-h-[78px]"
+                      className="p-3 rounded-2xl border border-dashed border-pos-border hover:border-emerald-500/50 hover:bg-emerald-500/5 transition-all flex flex-col items-center justify-center gap-1.5 text-pos-muted hover:text-emerald-400 cursor-pointer min-h-[78px]"
                     >
                       <Plus className="w-5 h-5" />
                       <span className="text-[11px] font-bold">Nouvelle Touche</span>

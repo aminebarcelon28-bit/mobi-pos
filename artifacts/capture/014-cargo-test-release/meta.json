@@ -1,0 +1,15 @@
+{
+  "slot": "014-cargo-test-release",
+  "name": "Gate 2: Cargo Test Release Profile",
+  "command": "cargo test --release",
+  "cwd": ".",
+  "expected_exit": 0,
+  "exit_code": 0,
+  "status": "PASS",
+  "start_local": "2026-10-01T03:16:40.450+01:00",
+  "start_utc": "2026-10-01T02:16:40.450Z",
+  "end_local": "2026-10-01T03:18:17.212+01:00",
+  "end_utc": "2026-10-01T02:18:17.212Z",
+  "stdout_sha256": "f346abb5694c461ec5aad1a267fae6c113dc3e1159e4a49c302271c4cb98166b",
+  "stderr_sha256": "2b7e0de428daba61d2176b511875d162b93ed63ce017a7ded4cf1a8b94dcb26f"
+}

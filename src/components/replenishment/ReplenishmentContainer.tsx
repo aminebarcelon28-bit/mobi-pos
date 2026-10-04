@@ -51,6 +51,17 @@ const notifyToast = (message: string, type: 'success' | 'error' | 'warning' | 'i
 };
 
 /**
+ * Same-window double-submit guard for PO draft creation (mirrors the
+ * slice's receiveInFlight): a double-click on "Créer PO" must mint at
+ * most one draft — the second click fails fast while the first persist
+ * (Dexie put + outbox append) is still in flight. Entries carry a
+ * timestamp backstop so an unexpected throw between set and release can
+ * never wedge a supplier's CTA forever (§4.3).
+ */
+const createPODraftInFlight = new Map<string, number>();
+const CREATE_PO_FLIGHT_TTL_MS = 10_000;
+
+/**
  * Stage 2 live container: replaces the mock-fixture demo as the mounted
  * orchestrator (Header bell). Derives suppliers, KPIs, line items and
  * contacts from the real POS store (calculateStockAlerts over `products`,
@@ -218,6 +229,9 @@ export const ReplenishmentContainer: React.FC<ReplenishmentContainerProps> = ({
         }
       } catch (error) {
         console.error('Contact action failed:', error);
+        // §6.2: surface the failed native hand-off instead of a silent
+        // console-only failure (no dialer / mail client configured).
+        notifyToast('Action impossible — aucune application associée.', 'warning');
       } finally {
         setActionStates((prev) => ({
           ...prev,
@@ -233,6 +247,13 @@ export const ReplenishmentContainer: React.FC<ReplenishmentContainerProps> = ({
     async (supplierId: string) => {
       const supplier = suppliers.find((s) => s.id === supplierId);
       if (!supplier) return;
+
+      // Double-submit guard (§4.3): the second click of a double-click
+      // is swallowed while the first draft is still being persisted.
+      const now = Date.now();
+      const flight = createPODraftInFlight.get(supplierId);
+      if (flight !== undefined && now - flight < CREATE_PO_FLIGHT_TTL_MS) return;
+      createPODraftInFlight.set(supplierId, now);
 
       setActionStates((prev) => ({
         ...prev,
@@ -282,6 +303,7 @@ export const ReplenishmentContainer: React.FC<ReplenishmentContainerProps> = ({
         console.error('Failed to initialize purchase order:', error);
         notifyToast('Erreur lors de la création du bon de commande.', 'error');
       } finally {
+        createPODraftInFlight.delete(supplierId);
         setActionStates((prev) => ({
           ...prev,
           [supplierId]: { ...prev[supplierId], isCreatingPO: false },

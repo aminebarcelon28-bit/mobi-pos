@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { Phone, MessageCircle, Mail, AlertTriangle, PackageCheck, Plus, ChevronRight, ChevronDown, Edit3, Loader2, MoreHorizontal, ClipboardList, Minus, CheckSquare, Square } from 'lucide-react';
+import React, { useId, useState } from 'react';
+import { Phone, MessageCircle, Mail, AlertTriangle, PackageCheck, Plus, ChevronRight, ChevronDown, ChevronUp, Edit3, Loader2, MoreHorizontal, ClipboardList, Minus, CheckSquare, Square } from 'lucide-react';
 import type { SupplierItem, SupplierActionState, ActiveOrderStatus, ContactDetails, ReplenishmentLineItem } from './types';
+import { DzPhoneInput } from '../ui/DzPhoneInput';
 import { formatDZD } from '../../types/pos';
 import { stripAccents, stripAccentsWithMap } from './searchText';
 
@@ -122,10 +123,12 @@ const ActionButton: React.FC<{
   className?: string;
   variant?: 'primary' | 'secondary';
   'aria-label'?: string;
-}> = ({ children, onClick, disabled, loading, className = '', variant = 'primary', 'aria-label': ariaLabel }) => {
+  'aria-expanded'?: boolean;
+  'aria-controls'?: string;
+}> = ({ children, onClick, disabled, loading, className = '', variant = 'primary', 'aria-label': ariaLabel, 'aria-expanded': ariaExpanded, 'aria-controls': ariaControls }) => {
   const isDisabled = disabled || loading;
 
-  const baseClasses = 'min-h-[44px] min-w-[44px] flex items-center justify-center gap-2 transition-colors font-medium rounded-lg';
+  const baseClasses = 'min-h-[44px] min-w-[44px] flex items-center justify-center gap-2 transition-colors font-medium rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-950';
   const variantClasses = {
     primary: 'bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 text-sm font-semibold shadow-sm w-full sm:w-auto sm:flex-initial sm:shrink-0 disabled:opacity-50 disabled:cursor-not-allowed',
     secondary: 'border border-gray-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-gray-50 dark:hover:bg-slate-800 text-gray-700 dark:text-slate-200 px-4 py-2.5 text-sm font-medium w-full sm:w-auto sm:flex-initial sm:shrink-0 disabled:opacity-50 disabled:cursor-not-allowed',
@@ -138,6 +141,8 @@ const ActionButton: React.FC<{
       disabled={isDisabled}
       className={`${baseClasses} ${variantClasses[variant]} ${className}`}
       aria-label={ariaLabel}
+      aria-expanded={ariaExpanded}
+      aria-controls={ariaControls}
       aria-disabled={isDisabled}
       aria-busy={loading}
     >
@@ -170,7 +175,15 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
   const showOrderCTA = isOrderView && !!latestOrder;
   const [menuOpen, setMenuOpen] = useState(false);
   // Stage 2: inline line-item inspection + native contact editing.
+  // Per-card state — expanding one supplier never affects the others.
   const [detailsOpen, setDetailsOpen] = useState(false);
+  // Unique accordion region id for aria-controls (per-card instance).
+  const uid = useId();
+  const detailsPanelId = `supplier-details-${uid.replace(/[^a-zA-Z0-9]/g, '')}`;
+  // Spec labels: collapsed "Voir détails" + ChevronDown, expanded "Masquer les détails" + ChevronUp.
+  const detailsLabel = detailsOpen ? 'Masquer les détails' : 'Voir détails';
+  // WCAG 2.5.3 prefix rule: aria-label begins verbatim with the visible label.
+  const detailsAriaLabel = detailsOpen ? `Masquer les détails de ${name}` : `Voir détails de ${name}`;
   const [editingContact, setEditingContact] = useState(false);
   const [phoneDraft, setPhoneDraft] = useState('');
   const [whatsappDraft, setWhatsappDraft] = useState('');
@@ -263,7 +276,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
                   }}
                 >
                   <ChevronRight aria-hidden="true" className="w-4 h-4" />
-                  {detailsOpen ? 'Masquer les lignes' : 'Voir détails'}
+                  {detailsOpen ? 'Masquer les détails' : 'Voir détails'}
                 </button>
                 <button
                   type="button"
@@ -325,24 +338,24 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
           <div className="flex flex-col sm:flex-row gap-2">
             <label className="flex-1 min-w-0">
               <span className="block text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-slate-500 mb-0.5">Téléphone</span>
-              <input
-                type="tel"
+              <DzPhoneInput
                 value={phoneDraft}
-                onChange={(e) => setPhoneDraft(e.target.value)}
+                onChange={setPhoneDraft}
                 placeholder="0550 12 34 56"
-                aria-label={`Téléphone de ${name}`}
-                className="w-full min-h-[44px] bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+                ariaLabel={`Téléphone de ${name}`}
+                showHint={false}
+                inputClassName="w-full min-h-[44px] bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
               />
             </label>
             <label className="flex-1 min-w-0">
               <span className="block text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-slate-500 mb-0.5">WhatsApp</span>
-              <input
-                type="tel"
+              <DzPhoneInput
                 value={whatsappDraft}
-                onChange={(e) => setWhatsappDraft(e.target.value)}
+                onChange={setWhatsappDraft}
                 placeholder="0550 12 34 56"
-                aria-label={`WhatsApp de ${name}`}
-                className="w-full min-h-[44px] bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
+                ariaLabel={`WhatsApp de ${name}`}
+                showHint={false}
+                inputClassName="w-full min-h-[44px] bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
               />
             </label>
             <label className="flex-1 min-w-0">
@@ -488,17 +501,34 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
         </div>
       )}
 
-      {/* SECTION 2b: LIVE LINE-ITEM INSPECTION PANEL (Stage 2) */}
-      {detailsOpen && lineItems.length > 0 && (
+      {/* SECTION 2b: LIVE LINE-ITEM INSPECTION PANEL (Stage 2) — accordion between info and actions */}
+      <div
+        id={detailsPanelId}
+        className={`grid w-full min-w-0 transition-[grid-template-rows,opacity,margin] duration-300 ease-in-out motion-reduce:transition-none ${
+          detailsOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0 -mt-3'
+        }`}
+      >
+        <div className="min-h-0 min-w-0 overflow-hidden">
+          {lineItems.length > 0 ? (
         <section
-          className="border-t border-gray-100 dark:border-slate-800/80 pt-3 flex flex-col gap-2 flex-shrink-0"
+          className="border-t border-gray-100 dark:border-slate-800/80 pt-3 flex flex-col gap-2 min-w-0 overflow-x-hidden"
           aria-label={`Lignes de commande pour ${name}`}
+          aria-hidden={!detailsOpen}
+          inert={!detailsOpen}
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 flex items-center gap-1.5">
-              <ChevronDown aria-hidden="true" className="w-3.5 h-3.5" />
-              Lignes de commande ({lineItems.length})
-            </span>
+            <button
+              type="button"
+              onClick={() => setDetailsOpen(false)}
+              aria-expanded={detailsOpen}
+              aria-controls={detailsPanelId}
+              aria-label={`Lignes de commande (${lineItems.length}) — Masquer les détails de ${name}`}
+              title={`Masquer les détails de ${name}`}
+              className="flex-1 min-w-0 min-h-[44px] flex items-center gap-1.5 rounded-md px-1 -ml-1 text-left text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-950"
+            >
+              <ChevronUp aria-hidden="true" className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Lignes de commande ({lineItems.length})</span>
+            </button>
             <div className="flex items-center gap-2 text-[11px] font-semibold">
               <button
                 type="button"
@@ -629,20 +659,52 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
             </span>
           </div>
         </section>
-      )}
+          ) : (
+            <section
+              className="border-t border-gray-100 dark:border-slate-800/80 pt-3 flex flex-col gap-2 min-w-0 overflow-x-hidden"
+              aria-label={`Lignes de commande pour ${name}`}
+              aria-hidden={!detailsOpen}
+              inert={!detailsOpen}
+            >
+              <button
+                type="button"
+                onClick={() => setDetailsOpen(false)}
+                aria-expanded={detailsOpen}
+                aria-controls={detailsPanelId}
+                aria-label={`Lignes de commande (0) — Masquer les détails de ${name}`}
+                title={`Masquer les détails de ${name}`}
+                className="flex-1 min-w-0 min-h-[44px] flex items-center gap-1.5 rounded-md px-1 -ml-1 text-left text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-950"
+              >
+                <ChevronUp aria-hidden="true" className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Lignes de commande (0)</span>
+              </button>
+              <p className="text-xs text-gray-500 dark:text-slate-400 italic min-w-0">
+                Aucune ligne de commande pour ce fournisseur.
+              </p>
+            </section>
+          )}
+        </div>
+      </div>
 
       {/* SECTION 3: ACTIONS — justify-between footer */}
       <footer className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 mt-1 border-t border-gray-100 dark:border-slate-800/80 flex-shrink-0">
         <div className="flex items-center gap-2 w-full sm:w-auto">
           {/* Mobile: Secondary actions as grid */}
-          <div className="sm:hidden grid grid-cols-2 gap-2 w-full">
+          <div className="sm:hidden grid grid-cols-2 gap-2 w-full min-w-0">
             <ActionButton
               onClick={() => setDetailsOpen((v) => !v)}
               variant="secondary"
-              aria-label={detailsOpen ? `Masquer les lignes de ${name}` : `Voir les détails de ${name}`}
+              aria-label={detailsAriaLabel}
+              aria-expanded={detailsOpen}
+              aria-controls={detailsPanelId}
+              className="px-3 text-[13px] min-w-0"
             >
-              <ChevronDown aria-hidden="true" className="w-4 h-4" />
-              {detailsOpen ? 'Masquer' : 'Voir'}
+              {detailsOpen ? (
+                <ChevronUp aria-hidden="true" className="w-4 h-4 shrink-0" />
+              ) : (
+                <ChevronDown aria-hidden="true" className="w-4 h-4 shrink-0" />
+              )}
+              <span className="min-w-0 break-words">{detailsLabel}</span>
             </ActionButton>
             <ActionButton
               onClick={startContactEdit}
@@ -660,11 +722,17 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
             <ActionButton
               onClick={() => setDetailsOpen((v) => !v)}
               variant="secondary"
-              aria-label={detailsOpen ? `Masquer lignes de ${name}` : `Voir détails de ${name}`}
+              aria-label={detailsAriaLabel}
+              aria-expanded={detailsOpen}
+              aria-controls={detailsPanelId}
               className="w-auto"
             >
-              <ChevronDown aria-hidden="true" className={`w-4 h-4 transition-transform ${detailsOpen ? 'rotate-180' : ''}`} />
-              {detailsOpen ? 'Masquer lignes' : 'Voir détails'}
+              {detailsOpen ? (
+                <ChevronUp aria-hidden="true" className="w-4 h-4" />
+              ) : (
+                <ChevronDown aria-hidden="true" className="w-4 h-4" />
+              )}
+              {detailsLabel}
             </ActionButton>
             <ActionButton
               onClick={startContactEdit}

@@ -287,13 +287,13 @@ export async function reconstructDexieTransactionsFromSql(
       for (let i = 0; i < ids.length; i += 500) {
         const chunk = ids.slice(i, i + 500);
         const part = (await db.select(
-          `SELECT * FROM transactions WHERE id IN (${chunk.map(() => '?').join(',')}) AND (deleted=0 OR deleted IS NULL)`,
+          `SELECT * FROM transactions WHERE id IN (${chunk.map(() => '?').join(',')}) AND (deleted=0 OR deleted IS NULL) ORDER BY created_at DESC, id DESC`,
           chunk,
         ).catch(() => [])) as Array<Record<string, unknown>>;
         rows.push(...part);
       }
     } else {
-      rows = (await db.select("SELECT * FROM transactions WHERE deleted=0 OR deleted IS NULL").catch(() => [])) as Array<Record<string, unknown>>;
+      rows = (await db.select("SELECT * FROM transactions WHERE deleted=0 OR deleted IS NULL ORDER BY created_at DESC, id DESC").catch(() => [])) as Array<Record<string, unknown>>;
     }
     if (rows.length === 0) return 0;
 
@@ -475,7 +475,10 @@ export async function reconstructDexieTransactionsFromSql(
           cashTendered: Number(r.cash_tendered ?? parsed.cashTendered ?? 0),
           changeDue: Number(r.change_due ?? parsed.changeDue ?? 0),
           status: (r.status as SaleTransaction['status']) ?? (parsed.status as SaleTransaction['status']) ?? 'COMPLETED',
-          createdAt: (r.created_at as string) ?? (parsed.createdAt as string) ?? utcNowIso(),
+          // Dateless legacy rows sink via the canonical comparator (empty
+          // string coerces to -Infinity) — never forge utcNowIso() here,
+          // which would promote an old row to "newest".
+          createdAt: ((typeof r.created_at === 'string' && r.created_at) || (parsed.createdAt as string) || '') as string,
           tenders: (parsed.tenders as SaleTransaction['tenders']) ?? [],
         } as SaleTransaction);
       } catch (err) {

@@ -218,7 +218,7 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
   },
 
   printXReport: async () => {
-    const { activeShift, receiptSettings, logSecurityAction, transactions } = get();
+    const { activeShift, receiptSettings, logSecurityAction, transactions, repairOrders } = get();
     if (!activeShift) {
       return false;
     }
@@ -253,12 +253,20 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
         .reduce((sum, m) => sum + m.amount, 0);
 
       const liveExpectedCash = activeShift.openingFloat + cashSales + deposits - expenses - cashRefunds;
+      // SAV atelier splits (informational only — never enter expected-cash math).
+      const { savDepositsFromRepairs, savSettledFromTxns } = await import('../../utils/cashTerms');
+      const xSavDeposits = savDepositsFromRepairs(
+        (repairOrders || []).filter((r) => !openedAt || !r.createdAt || r.createdAt >= openedAt)
+      );
+      const xSavSettled = savSettledFromTxns(sessionTxns);
       const enrichedShift = {
         ...activeShift,
         expectedCash: liveExpectedCash,
         totalSalesCount: sessionTxns.length,
         totalSalesRevenue: sessionTxns.reduce((sum, t) => sum + t.total, 0),
         totalProfits: sessionTxns.reduce((sum, t) => sum + (t.profit || 0), 0),
+        savDeposits: xSavDeposits,
+        savSettled: xSavSettled,
       };
 
       const { directPrintXReport } = await import('../../utils/escpos');

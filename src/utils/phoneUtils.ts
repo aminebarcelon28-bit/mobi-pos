@@ -302,7 +302,17 @@ export async function openUrl(url: string): Promise<boolean> {
 }
 
 /** Opens the platform print sheet for a plain-text business document. */
-export async function openNativePrint(title: string, content: string): Promise<boolean> {
+/**
+ * Open the platform print sheet. `signal` lets the SAV print queue cancel a
+ * queued sheet before it is opened (an aborted intake must not print stale
+ * content after the operator moved on).
+ */
+export async function openNativePrint(
+  title: string,
+  content: string,
+  signal?: AbortSignal
+): Promise<boolean> {
+  if (signal?.aborted) return false;
   if (!title.trim() || !content.trim()) return false;
 
   const escapeHtml = (s: string): string =>

@@ -76,6 +76,7 @@ import WarrantyTierSelector from '../ui/WarrantyTierSelector';
 import SignaturePad from '../ui/SignaturePad';
 import WarrantyBadge from '../ui/WarrantyBadge';
 import { QRCodeImage } from '../ui/QRCodeImage';
+import { DzPhoneInput } from '../ui/DzPhoneInput';
 import { isMobileDevice } from '../../utils/platform';
 import { cancelSavPrints, enqueueSavPrint } from '../../utils/savPrintQueue';
 import { purgeSavPhotos, saveSavPhoto } from '../../utils/savAttachments';
@@ -83,10 +84,14 @@ import { validateRepairIntake } from '../../store/slices/createRepairSlice';
 import {
   formatDzPhoneDisplay,
   imeiCheckState,
-  isValidDzPhone,
   sanitizeDzPhone,
 } from '../../utils/savValidation';
-import { resolveWarrantyDossier, sanitizeDeviceIdentifier } from '../../utils/warrantyResolver';
+import {
+  legacyWarrantySnapshot,
+  minimalTicketDossierSnapshot,
+  resolveWarrantyDossier,
+  sanitizeDeviceIdentifier,
+} from '../../utils/warrantyResolver';
 import type { DeviceIdentifierMode } from '../../utils/warrantyResolver';
 
 // Camera scanner is heavy (ZXing bundled): loaded on demand only, so opening
@@ -272,7 +277,6 @@ export const RepairWorkOrderModal: React.FC = () => {
   const [imeiTouched, setImeiTouched] = useState(false);
   /** Operator-facing explanation when blur rewrote the identifier. */
   const [imeiSanitizeNote, setImeiSanitizeNote] = useState<string | null>(null);
-  const [phoneTouched, setPhoneTouched] = useState(false);
   // v2 legal record state.
   const [intakeDamage, setIntakeDamage] = useState<IntakeDamageAssessment>(EMPTY_DAMAGE);
   const [signatureIntake, setSignatureIntake] = useState<string | null>(null);
@@ -307,8 +311,6 @@ export const RepairWorkOrderModal: React.FC = () => {
   const activePrintController = useRef<AbortController | null>(null);
 
   const imeiState = imeiTouched || imei ? imeiCheckState(imei) : 'idle';
-  const phoneValid = !customerPhone || isValidDzPhone(customerPhone);
-  const showPhoneHint = (phoneTouched || customerPhone) && customerPhone.trim() !== '' && !phoneValid;
   const damageSeverity = intakeDamageSeverity(intakeDamage);
   const money = repairFinancials({ laborCost, partsCost, depositAmount });
 
@@ -332,6 +334,10 @@ export const RepairWorkOrderModal: React.FC = () => {
     if (draft.customer.phone) setCustomerPhone(formatDzPhoneDisplay(draft.customer.phone) || draft.customer.phone);
     setWarrantyDossier(draft.warrantyDossier);
     setSuggestedTier(draft.warrantyDossier.suggestedTier);
+    // The frozen dossier decides the legacy boolean too — one source, so the SAV
+    // banner, the restitution document and the tier derivation cannot disagree
+    // with the dossier the operator inspected.
+    setWarrantySnapshot(legacyWarrantySnapshot(draft.warrantyDossier));
     showToast(
       `Dossier ${draft.sanitizedId} repris de l’inspecteur — vérifiez le constat avant enregistrement.`,
       'success'
@@ -422,16 +428,6 @@ export const RepairWorkOrderModal: React.FC = () => {
     setImei(sanitized.value);
     setWarrantyLoading(true);
     runWarrantyLookup(sanitized.value, nextMode);
-  };
-
-  const handlePhoneChange = (raw: string) => {
-    // Live mask 0X XX XX XX XX; store display string, sanitize on save.
-    const digits = raw.replace(/\D/g, '');
-    if (digits.length <= 10 || raw.trim() === '') {
-      setCustomerPhone(formatDzPhoneDisplay(raw) || raw);
-    } else {
-      setCustomerPhone(raw);
-    }
   };
 
   const handleApplyWarranty = () => {
@@ -538,7 +534,6 @@ export const RepairWorkOrderModal: React.FC = () => {
     setChecklist(initialChecklist);
     setPostChecklist(initialChecklist);
     setImeiTouched(false);
-    setPhoneTouched(false);
     setWarrantyDossier(null);
     setWarrantySnapshot(undefined);
     setSuggestedTier(null);
@@ -703,6 +698,12 @@ export const RepairWorkOrderModal: React.FC = () => {
 
     // Phone stored sanitized E.164 (213...); identifier already sanitized.
     const cleanPhone = sanitizeDzPhone(customerPhone.trim()) || customerPhone.trim();
+    // Projected once, and only PERSISTED when it is a well-formed envelope: a
+    // dossier that cannot be projected is not evidence, so the key is omitted
+    // entirely rather than written as an empty snapshot the reader must distrust.
+    const ticketDossierSnapshot = warrantyDossier
+      ? minimalTicketDossierSnapshot(warrantyDossier)
+      : null;
     const shared = {
       customerName: candidate.customerName,
       customerPhone: cleanPhone,
@@ -720,6 +721,17 @@ export const RepairWorkOrderModal: React.FC = () => {
       conditionChecklist: checklist,
       postRepairChecklist: postChecklist,
       ...(warrantySnapshot ? { warrantySnapshot } : {}),
+      // Persist the FROZEN dossier the operator inspected (device, original
+      // invoice, both warranty statuses). Previously only the legacy boolean
+      // travelled with the ticket, so the SAV record could not answer "what did
+      // this device's warranty say when the customer brought it in?" — the
+      // operator's screen was the only copy, and it was gone (W-37).
+      // Projected to the minimal, bounded shape: this rides inside the SYNCED
+      // `repair_orders.json_payload`, and one oversized field would cost the
+      // whole ticket row its place in the sync (Decision 1, condition 1).
+      ...(ticketDossierSnapshot
+        ? { warrantyDossierSnapshot: ticketDossierSnapshot }
+        : {}),
     };
 
     // The ticket is committed from here on: the staged photo bytes are now
@@ -810,6 +822,12 @@ export const RepairWorkOrderModal: React.FC = () => {
     setChecklist(order.conditionChecklist || initialChecklist);
     setPostChecklist(order.postRepairChecklist || initialChecklist);
     setWarrantySnapshot(order.warrantySnapshot);
+    // Re-open the FROZEN intake dossier so an edit shows the same warranty
+    // picture the customer was shown, instead of silently dropping to whatever
+    // the catalog says today. Projected on the way in as well as on the way
+    // out: a snapshot that reached us from a peer or an old build is untrusted
+    // data, and re-saving must not carry unknown or oversized fields forward.
+    setWarrantyDossier(order.warrantyDossierSnapshot ? minimalTicketDossierSnapshot(order.warrantyDossierSnapshot) : null);
     setIntakeDamage(order.intakeDamage ?? EMPTY_DAMAGE);
     setSignatureIntake(order.signatureCustomerIntake ?? order.signatureCustomer ?? null);
     setTermsAccepted(Boolean(order.legalTermsAcceptedAt));
@@ -819,9 +837,7 @@ export const RepairWorkOrderModal: React.FC = () => {
     // unset instead and let the operator choose from the presets.
     setWarrantyTier(order.warrantyTier ?? undefined);
     setIntakePhotos(order.intakePhotos ?? []);
-    setWarrantyDossier(null);
     setImeiTouched(false);
-    setPhoneTouched(false);
     setActiveTab('Nouveau');
   };
 
@@ -1266,23 +1282,15 @@ export const RepairWorkOrderModal: React.FC = () => {
                   </div>
                   <div>
                     <label htmlFor="sav-phone" className="text-xs font-medium text-pos-text block mb-1">Téléphone / Contact</label>
-                    <input
+                    <DzPhoneInput
                       id="sav-phone"
-                      type="tel"
-                      inputMode="tel"
                       required
                       tabIndex={2}
                       value={customerPhone}
-                      onChange={(e) => handlePhoneChange(e.target.value)}
-                      onBlur={() => setPhoneTouched(true)}
+                      onChange={setCustomerPhone}
                       placeholder="Ex: 0550 12 34 56"
-                      className={`w-full h-10 sm:h-9 bg-pos-card border rounded-lg px-3 py-1.5 text-base sm:text-xs font-normal font-mono tabular-nums tracking-normal text-pos-text placeholder:font-sans placeholder:text-pos-muted focus:outline-none focus:ring-1 focus:ring-emerald-500 ${showPhoneHint ? 'border-amber-500' : 'border-pos-border'}`}
+                      inputClassName="w-full h-10 sm:h-9 bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-base sm:text-xs font-normal font-mono tabular-nums tracking-normal text-pos-text placeholder:font-sans placeholder:text-pos-muted focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     />
-                    {showPhoneHint && (
-                      <p className="text-[10px] text-amber-800 dark:text-amber-400 font-medium mt-1">
-                        Format DZ attendu : 05/06/07 XX XX XX XX ou 213… — enregistré tel quel.
-                      </p>
-                    )}
                   </div>
                   <div>
                     <label className="text-xs font-medium text-pos-text block mb-1">Appareil / Modèle</label>

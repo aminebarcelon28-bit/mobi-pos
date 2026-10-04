@@ -27,7 +27,7 @@ export const UpdateModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none animate-in fade-in">
-      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 flex flex-col">
+      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 flex flex-col">
         {/* Mobile drag handle */}
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
@@ -75,7 +75,7 @@ export const UpdateModal: React.FC = () => {
             <h3 className="text-xs font-bold text-pos-muted uppercase tracking-wider">
               Nouveautés & Correctifs
             </h3>
-            <div className="text-xs text-pos-text/90 font-sans leading-relaxed whitespace-pre-wrap max-h-36 overflow-y-auto pr-1">
+            <div className="text-xs text-pos-text/90 font-sans leading-relaxed whitespace-pre-wrap max-h-36 overflow-y-auto overscroll-contain pr-1">
               {updateInfo?.body || 'Performances optimisées, sécurité renforcée et synchronisation cloud multi-tenant.'}
             </div>
           </div>

@@ -213,7 +213,9 @@ export class SavPrintCoordinator {
     transaction: SaleTransaction,
     item: CartItem,
     settings: ReceiptSettings,
-    warrantyMonths: number = 3
+    warrantyMonths: number = 3,
+    /** Frozen expiry from the registry row, so the certificate matches the till. */
+    anchoredExpiresAt?: string | null
   ): Promise<boolean> {
     try {
       const mobileSeller =
@@ -226,7 +228,7 @@ export class SavPrintCoordinator {
         const { warrantyCertificateText } = await import('./mobileDocPrint');
         return await openNativePrint(
           `Garantie ${item.imeiNumber || transaction.receiptNumber}`,
-          warrantyCertificateText(transaction, item, warrantyMonths, settings, mobileSeller)
+          warrantyCertificateText(transaction, item, warrantyMonths, settings, mobileSeller, anchoredExpiresAt)
         );
       }
       const payload = WarrantyCertificateBuilder.buildPreOwnedWarrantyCertificate(
@@ -237,7 +239,8 @@ export class SavPrintCoordinator {
         transaction.shiftOpenedByName ||
           (await shiftSeller()) ||
           transaction.cashierName ||
-          null
+          null,
+        anchoredExpiresAt
       );
       return await MobilePosRoutingEngine.dispatchDocument('WARRANTY_CERTIFICATE', payload);
     } catch (e) {

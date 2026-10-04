@@ -1,0 +1,217 @@
+
+running 180 tests
+test contract::tests::test_domain_event_serde_json ... ok
+test contract::tests::test_envelope_serde_roundtrip ... ok
+test emergency_export::tests::test_csv_escaping_and_injection_guard ... ok
+test emergency_export::tests::test_iso8601_formatting ... ok
+test emergency_export::tests::test_export_sql_matches_live_schema ... ok
+test emergency_export::tests::test_auth_rejects_wrong_pin_and_missing_credential ... ok
+test emergency_export::tests::test_setting_text_handles_all_stored_encodings ... ok
+test emergency_export::tests::test_auth_accepts_json_encoded_pin_hash ... ok
+test emergency_export::tests::test_table_allowlist_rejects_unknown ... ok
+test emergency_export::tests::test_verify_pin_fail_closed ... ok
+test gate::tests::test_auto_total_when_reported_is_zero ... ok
+test gate::tests::test_balanced_invoice ... ok
+test gate::tests::test_empty_invoice ... ok
+test db::tests::test_vec_version_available ... ok
+test gate::tests::test_faulty_row_and_delta ... ok
+test gate::tests::test_nan_and_inf_handling ... ok
+test geometry::tests::test_french_algerian_amount_parser ... ok
+test gate::tests::test_negative_quantities_and_costs ... ok
+test emergency_export::tests::test_generous_quota_exports_fully ... ok
+test emergency_export::tests::test_quota_exhaustion_fails_typed_storage_exhausted ... ok
+test db::tests::test_vendor_alias_unique ... ok
+test hardware::tests::test_categorize_printer_keywords ... ok
+test hardware::tests::test_discovered_device_matches_ts_contract ... ok
+test commands::tests::test_commit_happy_path_and_reference_cost ... ok
+test hardware::tests::test_sanitize_windows_ports ... ok
+test hardware::tests::test_vfd_payload_shape_two_lines ... ok
+test hardware::tests::test_vfd_payload_truncates_long_lines ... ok
+test hlc::tests::test_hlc_monotonic_under_clock_regression ... ok
+test hlc::tests::test_hlc_deterministic_tie_break ... ok
+test db::tests::test_vec_dimension_constraint ... ok
+test hlc::tests::test_hlc_observe_advances_clock ... ok
+test hlc::tests::test_hlc_text_roundtrip ... ok
+test intents::tests::direct_call_cleans_phone_input ... ok
+test intents::tests::test_url_allow_list ... ok
+test reducers::tests::test_reducer_lifecycle_and_accumulate_stock ... ok
+test tests::test_cloud_credentials_redaction_and_serialization ... ok
+test commands::tests::test_commit_rollback_on_invalid_row ... ok
+test trust_core::audit_append::tests::boot_latch_surfaces_through_gate_state ... ok
+test resolver::tests::test_barcode_tier0_and_alias_tier1 ... ok
+test resolver::tests::test_vector_tier2_and_unmatched ... ok
+test emergency_export::tests::test_export_excludes_pii_and_secrets ... ok
+test geometry::tests::test_gtin_checksums ... ok
+test geometry::tests::test_mice_trailing_accounting_math ... ok
+test geometry::tests::test_corrupted_boxes_nan_filtering ... ok
+test geometry::tests::test_oversized_box_payload_and_string_truncation ... ok
+test geometry::tests::test_user_tabular_invoice_parsing ... ok
+test geometry::tests::test_user_non_pipe_invoice_parsing ... ok
+test emergency_export::tests::test_read_only_connection_rejects_writes ... ok
+test trust_core::audit_append::tests::concurrent_appends_lose_no_writes ... ok
+test trust_core::audit_append::tests::chain_links_three_appends_and_verifies ... ok
+test trust_core::audit_append::tests::deleted_link_breaks_chain ... ok
+test trust_core::audit_append::tests::deleted_middle_row_breaks_chain ... ok
+test trust_core::audit_append::tests::export_gate_broken_fails_except_quarantine ... ok
+test trust_core::audit_append::tests::head_advance_and_truncation_detection ... ok
+test trust_core::audit_append::tests::head_rollback_with_valid_mac_is_broken ... ok
+test trust_core::audit_append::tests::head_tamper_detected ... ok
+test trust_core::audit_append::tests::keyless_status_is_unsealed_not_broken ... ok
+test trust_core::audit_append::tests::legacy_rows_form_genesis_boundary ... ok
+test trust_core::capability_policy::tests::directive_spot_checks ... ok
+test trust_core::capability_policy::tests::exhaustive_matrix_matches_spec ... ok
+test trust_core::audit_append::tests::missing_head_after_chain_fails_closed_no_reinitialize ... ok
+test trust_core::capability_policy::tests::no_state_grants_sync_or_hardware_except_operational ... ok
+test trust_core::capability_policy::tests::owner_confirmation_flags_cover_star_cells ... ok
+test trust_core::clocks::tests::manual_clock_advances_and_reports_boot ... ok
+test trust_core::audit_append::tests::no_key_still_appends_unsealed ... ok
+test trust_core::clocks::tests::production_source_reports_sane_value_on_host ... ok
+test trust_core::audit_append::tests::reordered_links_break_chain ... ok
+test trust_core::audit_append::tests::replaced_tail_breaks_against_head ... ok
+test trust_core::audit_append::tests::schema_tolerance_minimal_table ... ok
+test trust_core::audit_append::tests::stale_head_heals_forward_after_crash ... ok
+test trust_core::audit_append::tests::store_refuses_backwards_head_write ... ok
+test trust_core::audit_append::tests::swallowed_counter_is_monotonic_and_capped ... ok
+test trust_core::export_snapshot::tests::hmac_vector_rfc4231_case1 ... ok
+test trust_core::export_snapshot::tests::integrity_state_mapping_is_fail_closed_on_doubt ... ok
+test trust_core::export_snapshot::tests::manifest_canonical_bytes_are_stable_golden ... ok
+test trust_core::audit_append::tests::tampered_row_breaks_verification ... ok
+test trust_core::export_snapshot::tests::manifest_subkey_differs_from_master ... ok
+test trust_core::audit_append::tests::unreadable_chain_table_with_head_is_rollback ... ok
+test trust_core::audit_append::tests::validation_rejects_empty_and_oversized ... ok
+test trust_core::export_snapshot::tests::capability_gates_snapshot_export_states ... ok
+test trust_core::export_snapshot::tests::preflight_math_and_storage_exhausted ... ok
+test trust_core::export_snapshot::tests::no_cargo_profile_enables_debug_assertions ... ok
+test trust_core::export_snapshot::tests::fsync_dir_succeeds_on_host ... ok
+test trust_core::export_snapshot::tests::export_ownership_is_deterministic_busy_across_handles ... ok
+test trust_core::export_snapshot::tests::quarantine_states_may_export_without_changing_state ... ok
+test trust_core::export_snapshot::tests::manifest_without_key_records_absence_verifies_hashes_only ... ok
+test trust_core::export_snapshot::tests::staging_paths_shape_is_stable_per_os ... ok
+test trust_core::export_snapshot::tests::manifest_write_failure_is_typed_distinct_and_retryable ... ok
+test trust_core::export_snapshot::tests::staging_guard_removes_unfinalized_dir ... ok
+test trust_core::export_snapshot::tests::stale_tmp_cleanup_only_touches_export_tmps ... ok
+test trust_core::export_snapshot::tests::recomputed_hash_forgery_fails_mac_but_passes_hashes ... ok
+test trust_core::ipc_authorizer::tests::capability_reevaluated_every_call_no_caching ... ok
+test trust_core::ipc_authorizer::tests::client_supplied_state_cannot_override_kernel ... ok
+test trust_core::ipc_authorizer::tests::error_wire_shape_is_coarse_only ... ok
+test trust_core::ipc_authorizer::tests::every_handler_references_authorization ... ok
+test trust_core::export_snapshot::tests::manifest_roundtrip_and_tamper_detection ... ok
+test trust_core::export_snapshot::tests::raw_master_mac_is_rejected_subkey_required ... ok
+test trust_core::export_snapshot::tests::wal_fingerprint_stable_then_sensitive ... ok
+test trust_core::ipc_authorizer::tests::registry_covers_every_tauri_command ... ok
+test trust_core::ipc_authorizer::tests::fresh_machine_provisions_key_and_persists_even_with_bumped_counter ... ok
+test trust_core::ipc_authorizer::tests::get_gate_state_is_public_and_coarse ... ok
+test trust_core::ipc_authorizer::tests::operational_allows_all_and_denied_op_never_runs ... ok
+test trust_core::ipc_authorizer::tests::stale_generation_aborts_commit ... ok
+test trust_core::ipc_authorizer::tests::unactivated_allows_only_license_management ... ok
+test trust_core::ipc_authorizer::tests::unknown_denies_everything_including_license_management ... ok
+test trust_core::ipc_authorizer::tests::unregistered_command_is_denied ... ok
+test trust_core::license_state::tests::all_codes_roundtrip ... ok
+test trust_core::license_state::tests::default_is_deny_all_unknown ... ok
+test trust_core::license_state::tests::serde_rejects_unknown_variants ... ok
+test trust_core::license_state::tests::unknown_codes_resolve_to_corrupted_never_operational ... ok
+test trust_core::license_token::tests::device_binding_wildcard_semantics ... ok
+test trust_core::license_token::tests::production_pubkey_decodes_to_32_bytes ... ok
+test trust_core::license_token::tests::tampered_payload_breaks_signature ... ok
+test trust_core::license_token::tests::tampered_signature_is_policy_failure_not_protocol ... ok
+test trust_core::license_token::tests::valid_token_verifies_and_reports_device ... ok
+test trust_core::pin::tests::legacy_sha256_vector_and_fail_closed_shapes ... ok
+test trust_core::license_token::tests::wrong_algorithm_and_structure_are_protocol_errors ... ok
+test trust_core::license_token::tests::expiry_judgment_mirrors_typescript_leeway ... ok
+test trust_core::pin::tests::lockout_ladder_edges ... ok
+test trust_core::pin::tests::lockout_persists_across_loads ... ok
+test trust_core::pin::tests::lockout_query_shape_smoke ... ok
+test trust_core::pin::tests::policy_lengths_and_charset ... ok
+test trust_core::reanchor::tests::expired_assertion_rejected ... ok
+test trust_core::reanchor::tests::domain_isolation_between_protocols ... ok
+test trust_core::reanchor::tests::license_token_cannot_pose_as_time_assertion ... ok
+test trust_core::reanchor::tests::release_profile_refuses_without_production_key ... ok
+test trust_core::reanchor::tests::valid_assertion_verifies ... ok
+test trust_core::reanchor::tests::wrong_key_and_tampered_payload_rejected ... ok
+test trust_core::export_snapshot::tests::verify_status_distinguishes_clean_flagged_and_unauthenticated ... ok
+test trust_core::export_snapshot::tests::preflight_live_dir_with_tiny_db_passes ... ok
+test trust_core::export_snapshot::tests::preflight_with_fake_probe_fails_typed_on_zero_space ... ok
+test trust_core::pin::tests::lockout_survives_restart_via_file_vault ... ok
+test trust_core::pin::tests::read_stored_credential_shapes ... ok
+test trust_core::reanchor::tests::full_reanchor_flow_consumes_challenge ... ok
+test trust_core::export_snapshot::tests::corrupted_live_routes_to_copy_then_fails_typed_without_touching_live ... ok
+test trust_core::secure_storage::tests::counter_rollback_is_quarantine ... ok
+test trust_core::secure_storage::tests::crash_between_writes_heals_forward_no_tamper ... ok
+test trust_core::secure_storage::tests::gate_fires_in_test_profile_by_design ... ok
+test trust_core::secure_storage::tests::file_keystore_audit_head_contract ... ok
+test trust_core::secure_storage::tests::file_keystore_corrupt_head_is_unavailable_not_absent ... ok
+test trust_core::export_snapshot::tests::truncated_wal_copy_fails_safely ... ok
+test trust_core::secure_storage::tests::file_keystore_missing_file_head_is_absent ... ok
+test trust_core::secure_storage::tests::file_keystore_missing_file_is_the_only_absent_case ... ok
+test trust_core::secure_storage::tests::file_keystore_truncated_vault_head_is_unavailable ... ok
+test trust_core::secure_storage::tests::file_keystore_undecodable_key_is_backend_unavailable ... ok
+test trust_core::secure_storage::tests::file_keystore_write_is_atomic_and_leaves_no_tmp_residue ... ok
+test trust_core::secure_storage::tests::key_read_outcome_distinguishes_every_failure_mode ... ok
+test trust_core::secure_storage::tests::mem_keystore_audit_head_contract ... ok
+test trust_core::secure_storage::tests::mem_keystore_injected_failure_is_unavailable ... ok
+test trust_core::secure_storage::tests::missing_file_and_store_is_fresh_install ... ok
+test trust_core::secure_storage::tests::missing_file_with_counter_is_deletion_not_fresh ... ok
+test trust_core::secure_storage::tests::os_keystore_is_blocked_in_unit_tests ... ok
+test trust_core::secure_storage::tests::release_profile_ignores_env_override ... ok
+test trust_core::session::tests::boot_id_change_forces_new_session ... ok
+test trust_core::session::tests::monotonic_regression_forces_new_session ... ok
+test trust_core::session::tests::off_for_days_then_long_uptime_is_detected ... ok
+test trust_core::session::tests::same_boot_is_continuous ... ok
+test trust_core::session::tests::small_ntp_step_does_not_force_new_session ... ok
+test trust_core::session::tests::unavailable_clock_forces_new_session ... ok
+test trust_core::secure_storage::tests::unknown_state_and_version_are_corrupt ... ok
+test trust_core::time_engine::tests::forward_jump_beyond_warn_is_advisory_anchor_frozen ... ok
+test trust_core::time_engine::tests::new_session_plausible_wall_is_advisory_only ... ok
+test trust_core::time_engine::tests::new_session_wall_behind_anchor_is_reset ... ok
+test trust_core::time_engine::tests::rtc_reset_below_floor_is_reset_required ... ok
+test trust_core::time_engine::tests::same_boot_rollback_is_tamper ... ok
+test trust_core::time_engine::tests::small_ntp_adjustment_within_tolerance_does_not_alarm ... ok
+test trust_core::time_engine::tests::trusted_within_skew_advances_checkpoint ... ok
+test trust_core::time_engine::tests::unanchored_is_advisory_never_denial ... ok
+test trust_core::trusted_time::tests::stub_never_returns_time ... ok
+test trust_core::secure_storage::tests::tampered_file_is_corrupt_never_permissive ... ok
+test trust_core::secure_storage::tests::truncated_file_keystore_is_corrupt_not_absent_and_never_provisions ... ok
+test trust_core::secure_storage::tests::unavailable_key_never_provisions_when_prior_state_exists ... ok
+test trust_core::secure_storage::tests::roundtrip_v2_with_fsync ... ok
+test trust_core::secure_storage::tests::unreadable_store_with_history_quarantines ... ok
+test trust_core::secure_storage::tests::v1_after_v2_counter_is_downgrade_rejected ... ok
+test trust_core::export_snapshot::tests::backup_snapshot_is_consistent ... ok
+test trust_core::secure_storage::tests::v1_without_counter_migrates_once ... ok
+test trust_core::time_engine::tests::challenge_single_use_with_expiry ... ok
+test trust_core::export_snapshot::tests::concurrent_writer_during_snapshot ... ok
+test trust_core::export_snapshot::tests::copy_under_active_writer_never_silent_inconsistent ... ok
+
+test result: ok. 180 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.63s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test math::tests::test_cart_totals_and_profit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test tests::test_escpos_receipt_formatting ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

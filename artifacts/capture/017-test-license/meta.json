@@ -1,0 +1,15 @@
+{
+  "slot": "017-test-license",
+  "name": "Gate 5: Licensing & Crypto Unit Tests",
+  "command": "npm run test:license",
+  "cwd": ".",
+  "expected_exit": 0,
+  "exit_code": 0,
+  "status": "PASS",
+  "start_local": "2026-10-01T03:18:37.433+01:00",
+  "start_utc": "2026-10-01T02:18:37.433Z",
+  "end_local": "2026-10-01T03:18:39.005+01:00",
+  "end_utc": "2026-10-01T02:18:39.005Z",
+  "stdout_sha256": "a154c3c79843b77d0ce8309de7fc465fab546e7da330b23e038c833e1e324cf7",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

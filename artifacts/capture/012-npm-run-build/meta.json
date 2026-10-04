@@ -1,0 +1,15 @@
+{
+  "slot": "012-npm-run-build",
+  "name": "Ancillary Gate 1: Frontend Production Build",
+  "command": "npm run build",
+  "cwd": ".",
+  "expected_exit": 0,
+  "exit_code": 0,
+  "status": "PASS",
+  "start_local": "2026-10-01T03:06:08.989+01:00",
+  "start_utc": "2026-10-01T02:06:08.989Z",
+  "end_local": "2026-10-01T03:06:45.220+01:00",
+  "end_utc": "2026-10-01T02:06:45.220Z",
+  "stdout_sha256": "b330a3369dd10147241b51b56b3e286e5306d5e31bf31d2e3d37182084562832",
+  "stderr_sha256": "827d8015fe5afcc72efa47177b9eed9bd1ca45886d135d88417b12fb1164f234"
+}

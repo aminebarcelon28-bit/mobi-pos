@@ -1,0 +1,9 @@
+   Compiling mobi-pos v1.6.8 (C:\Users\Click\Desktop\phone3-sync-lab\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 50.22s
+     Running unittests src\lib.rs (target\debug\deps\mobi_pos_lib-1900f7cba137ed22.exe)
+     Running unittests src\main.rs (target\debug\deps\mobi_pos-1f944122a4a6f2df.exe)
+     Running unittests src\lib.rs (target\debug\deps\pos_core-771264a8366766d2.exe)
+     Running unittests src\lib.rs (target\debug\deps\pos_peripherals-fea95eb99aec08bb.exe)
+   Doc-tests mobi_pos_lib
+   Doc-tests pos_core
+   Doc-tests pos_peripherals

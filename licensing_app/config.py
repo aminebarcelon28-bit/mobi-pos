@@ -40,6 +40,23 @@ SECRET_NAMES = (
     "ADMIN_TOKEN",
 )
 
+# Secrets whose absence does NOT impair the console.
+#
+# LICENSE_ED25519_PRIVATE_JWK enables *offline* token generation. Signing is
+# performed by the Cloudflare Worker, which holds the signing key itself, so a
+# console without a local key is fully capable; it merely cannot mint tokens
+# while disconnected.
+#
+# ADMIN_TOKEN is a legacy credential. The worker authorises admins solely
+# against MASTER_ENCRYPTION_KEY (see isAuthorizedAdmin in the worker), and the
+# client only falls back to the master key when the token is empty. Treating it
+# as required produced a permanent "Mode degrade" warning on a fully working
+# installation.
+OPTIONAL_SECRET_NAMES = (
+    "LICENSE_ED25519_PRIVATE_JWK",
+    "ADMIN_TOKEN",
+)
+
 
 def is_frozen() -> bool:
     """True when running from a PyInstaller bundle."""
@@ -361,6 +378,68 @@ def _load_env_file(path: Path) -> None:
         pass
 
 
+# Secrets worth mirroring from a developer .env into the OS vault. Not all of
+# SECRET_NAMES: the peppers are deliberately left file-only, since they are only
+# read during local offline validation.
+HYDRATABLE_SECRETS = (
+    "MASTER_ENCRYPTION_KEY",
+    "ADMIN_TOKEN",
+    "LICENSE_ED25519_PRIVATE_JWK",
+)
+
+
+def load_env_to_vault(path: Optional[Path] = None) -> dict:
+    """
+    Mirror developer .env secrets into the OS credential vault.
+
+    A developer who configures .env.licensing should not also have to run
+    vault_set() by hand for the console to behave consistently. This copies a
+    file-based secret into the vault *only* when the vault has no value for it.
+
+    It never overwrites: an existing vault entry is operator-managed and wins.
+    It never writes an empty value: an empty file entry must not shadow a
+    working vault entry, nor create a useless empty entry.
+
+    Returns {key: "hydrated" | "skipped" | "empty" | "failed"}.
+    """
+    results: dict = {}
+    if is_frozen():
+        # A packaged build has no plaintext .env beside it by design.
+        return results
+
+    target = path or (Path(__file__).resolve().parent.parent / ".env.licensing")
+    if not target.exists():
+        return results
+
+    try:
+        raw = target.read_text(encoding="utf-8")
+    except OSError:
+        return results
+
+    file_values: dict = {}
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        file_values[key.strip()] = val.strip().strip('"').strip("'")
+
+    for name in HYDRATABLE_SECRETS:
+        val = file_values.get(name, "")
+        if not val:
+            results[name] = "empty"
+            continue
+        try:
+            if vault_get(name):
+                # Already in the vault. Never clobber an operator's value.
+                results[name] = "skipped"
+                continue
+            results[name] = "hydrated" if vault_set(name, val) else "failed"
+        except Exception:  # noqa: BLE001 - hydration must never break startup
+            results[name] = "failed"
+    return results
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable, fully resolved runtime configuration."""
@@ -384,8 +463,55 @@ class Settings:
 
     def missing(self) -> list:
         """Required-for-full-functionality secrets that are absent."""
-        return [name for name in SECRET_NAMES if name != "LICENSING_ENDPOINT"
-                and not self.secrets.get(name)]
+        absent = [
+            name
+            for name in SECRET_NAMES
+            if name != "LICENSING_ENDPOINT"
+            and name not in OPTIONAL_SECRET_NAMES
+            and not self.secrets.get(name)
+        ]
+        # The admin token is only load-bearing when nothing else can
+        # authenticate the worker calls.
+        if not self.has_admin_auth:
+            absent.append("ADMIN_TOKEN")
+        return absent
+
+    def secret_status(self) -> list:
+        """
+        Per-secret status rows for the inspector dialog.
+
+        Each row is (key, state, detail) where state is one of "ready",
+        "absent", or "optional". Never raises, so a secret that cannot even be
+        looked up is reported rather than crashing the dialog.
+        """
+        rows = []
+        for name in SECRET_NAMES:
+            if name == "LICENSING_ENDPOINT":
+                continue
+            try:
+                present = bool(self.secrets.get(name))
+            except Exception:  # noqa: BLE001 - a broken vault must not crash UI
+                present = False
+            if present:
+                if name == "LICENSE_ED25519_PRIVATE_JWK":
+                    rows.append((name, "ready", "Signature hors-ligne locale active."))
+                elif name == "ADMIN_TOKEN":
+                    rows.append((name, "ready", "Jeton admin present (non requis)."))
+                else:
+                    rows.append((name, "ready", "Charge utile chiffrement / pepper."))
+            elif name == "ADMIN_TOKEN" and self.has_admin_auth:
+                rows.append((
+                    name, "optional",
+                    "Non requis : le worker authentifie via MASTER_ENCRYPTION_KEY.",
+                ))
+            elif name == "LICENSE_ED25519_PRIVATE_JWK":
+                rows.append((
+                    name, "optional",
+                    "Deporte sur le Worker Cloudflare (signature distante).",
+                ))
+            else:
+                rows.append((name, "absent", "Requis : operation degradee."))
+        return rows
 
 
 def resolve_settings() -> Settings:

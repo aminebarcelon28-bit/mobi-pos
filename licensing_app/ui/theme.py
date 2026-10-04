@@ -26,7 +26,7 @@ STATUS_PALETTE = {
     LicenseStatus.TRIAL: ("TRIAL", "#312E81", "#4F46E5", "#A5B4FC"),
     LicenseStatus.EXPIRED: ("EXPIRED", "#450A0A", "#DC2626", "#FCA5A5"),
     LicenseStatus.UNREGISTERED: ("UNREGISTERED", "#362F0D", "#D97706", "#FCD34D"),
-    LicenseStatus.SUSPENDED: ("SUSPENDED", "#18181B", "#52525B", "#A1A1AA"),
+    LicenseStatus.SUSPENDED: ("SUSPENDED", "#27272A", "#52525B", "#A1A1AA"),
     LicenseStatus.REVOKED: ("REVOKED", "#18181B", "#52525B", "#A1A1AA"),
     LicenseStatus.PENDING_SYNC: ("PENDING", "#362F0D", "#D97706", "#FCD34D"),
 }
@@ -131,8 +131,8 @@ def status_palette(status) -> tuple:
 
 
 _FORMULA_LABELS = {
-    "LIFETIME": ("LIFETIME", "#064E3B", "#047857", "#6EE7B7"),
-    "LIFE": ("LIFETIME", "#064E3B", "#047857", "#6EE7B7"),
+    "LIFETIME": ("LIFETIME", "#1E1B4B", "#4338CA", "#C7D2FE"),
+    "LIFE": ("LIFETIME", "#1E1B4B", "#4338CA", "#C7D2FE"),
     "90D": ("90 JOURS", "#1E3A8A", "#1D4ED8", "#93C5FD"),
     "3_MONTHS": ("90 JOURS", "#1E3A8A", "#1D4ED8", "#93C5FD"),
     "TRIAL_90D": ("90 JOURS", "#1E3A8A", "#1D4ED8", "#93C5FD"),
@@ -256,6 +256,17 @@ QLabel#MetricLabel {
 }
 QLabel#SectionHeader { font-size: 15px; font-weight: 700; color: #e5e7eb; }
 QLabel#Muted { color: #94a3b8; font-size: 11px; }
+/* Standing degraded-mode marker (e.g. unconfigured secrets). Amber on a dark
+   pill so it reads as a persistent condition, not a transient toast. */
+QLabel#WarningPill {
+    color: #fcd34d;
+    background: rgba(245, 158, 11, 0.14);
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    border-radius: 9px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: 600;
+}
 QLabel#DetailTitle { font-size: 14px; font-weight: 800; color: #ffffff; }
 
 QPushButton {

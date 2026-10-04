@@ -13,6 +13,13 @@ interface MoneyInputProps {
   className?: string;
   id?: string;
   /**
+   * Stable test hook. This field is `type="text"`, so a spec CANNOT reach it by
+   * `input[type="number"]` — and a spec that tries ends up typing into whatever
+   * number input happens to be nearby, silently asserting the wrong field. The
+   * id is forwarded verbatim so the locator lives with the caller's intent.
+   */
+  'data-testid'?: string;
+  /**
    * Optional-field clearing: when the text is empty on blur, call onClear
    * (e.g. reset to undefined) instead of reverting to the committed value.
    * Absent: empty text reverts (required/owned fields).
@@ -42,6 +49,7 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
   className = '',
   id,
   onClear,
+  'data-testid': dataTestId,
 }) => {
   const [text, setText] = useState<string>(() => echoOf(valueMinor));
   const [touched, setTouched] = useState(false);
@@ -88,6 +96,7 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
       <span className="flex items-center gap-2">
         <input
           id={id}
+          data-testid={dataTestId}
           ref={inputRef}
           type="text"
           inputMode="decimal"

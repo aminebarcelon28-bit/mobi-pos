@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   Plus,
@@ -108,6 +108,8 @@ export const ExpenseManagerModal: React.FC = () => {
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [allExpenses, dateFilter, selectedCategoryFilter, searchQuery, todayStr, currentMonthStr]);
 
+  useEffect(() => { if (activeModal !== 'expense_manager') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
   if (activeModal !== 'expense_manager') return null;
 
   // ══════════════════════════════════════════════════════════════
@@ -194,12 +196,12 @@ export const ExpenseManagerModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-6xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-full sm:h-[90vh] font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(0.5rem,var(--safe-bottom))] sm:pb-0">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-sm select-none">
+      <div className="w-full max-w-5xl max-h-[90vh] sm:max-h-[90dvh] flex flex-col rounded-2xl bg-pos-panel border border-pos-border shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 font-sans">
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* HEADER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+        <div className="px-6 py-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               type="button"
@@ -238,9 +240,13 @@ export const ExpenseManagerModal: React.FC = () => {
         </div>
 
         {/* ══════════════════════════════════════════════════════════════ */}
+        {/* BODY — single scroll container */}
+        {/* ══════════════════════════════════════════════════════════════ */}
+        <div className="overflow-y-auto p-6 space-y-6 flex-1 overscroll-contain bg-pos-bg">
+        {/* ══════════════════════════════════════════════════════════════ */}
         {/* TOP KPI SUMMARY CARDS */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-2 sm:p-4 border-b border-pos-border bg-pos-bg grid grid-cols-2 lg:grid-cols-4 gap-2 shrink-0">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-pos-card border border-pos-border rounded-xl p-2 sm:p-3 flex items-center justify-between">
             <div className="min-w-0">
               <span className="text-[8px] sm:text-[10px] uppercase font-bold text-pos-muted tracking-wider block truncate">
@@ -301,8 +307,8 @@ export const ExpenseManagerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* TOOLBAR CONTROLS */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-2 sm:p-3 border-b border-pos-border bg-pos-panel flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 text-xs w-full sm:w-auto">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-1.5 overflow-x-auto overscroll-contain pb-0.5 text-xs w-full sm:w-auto">
             {(['month', 'today', 'all'] as const).map((df) => (
               <button
                 key={df}
@@ -371,7 +377,7 @@ export const ExpenseManagerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* EXPENSES LIST TABLE */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-2">
+        <div className="space-y-2">
           {(filteredExpenses || []).length === 0 ? (
             <div className="p-12 text-center bg-pos-card border border-pos-border rounded-2xl space-y-3">
               <FileSpreadsheet className="w-12 h-12 text-pos-muted mx-auto opacity-40" />
@@ -393,7 +399,7 @@ export const ExpenseManagerModal: React.FC = () => {
                   <div>
                     <div className="flex items-center gap-2">
                       <h4 className="font-bold text-sm text-pos-text">{exp.title}</h4>
-                      <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 border border-amber-500/30 text-amber-300">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/15 border border-amber-500/30 text-amber-300">
                         {exp.category}
                       </span>
                     </div>
@@ -423,14 +429,15 @@ export const ExpenseManagerModal: React.FC = () => {
             ))
           )}
         </div>
+        </div>
 
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* ADD EXPENSE SUB-MODAL */}
         {/* ══════════════════════════════════════════════════════════════ */}
         {showAddForm && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-60 flex items-center justify-center p-0 sm:p-4">
-            <div className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-lg overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col h-full sm:h-auto font-sans pt-[var(--safe-top)] sm:pt-0 pb-[var(--safe-bottom)] sm:pb-0">
-              <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-md">
+            <div className="w-full max-w-lg max-h-[90vh] sm:max-h-[90dvh] flex flex-col rounded-2xl bg-pos-panel border border-pos-border shadow-2xl overflow-hidden animate-in zoom-in-95 font-sans">
+              <div className="px-6 py-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
@@ -456,7 +463,7 @@ export const ExpenseManagerModal: React.FC = () => {
                 </button>
               </div>
 
-              <form onSubmit={handleSaveExpense} className="p-3 sm:p-4 space-y-3 text-xs flex-1 overflow-y-auto">
+              <form onSubmit={handleSaveExpense} className="p-3 sm:p-4 space-y-3 text-xs flex-1 overflow-y-auto overscroll-contain">
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">Catégorie :</label>
@@ -562,7 +569,7 @@ export const ExpenseManagerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* FOOTER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between shrink-0">
+        <div className="px-6 py-3.5 bg-pos-card border-t border-pos-border flex items-center justify-between shrink-0">
           <span className="text-xs text-pos-muted">
             • Toutes les dépenses sont synchronisées en temps réel avec la comptabilité générale SQLite WAL.
           </span>

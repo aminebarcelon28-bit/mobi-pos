@@ -16,6 +16,11 @@ use tauri::{
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use tauri::Manager;
 
+use crate::trust_core::{
+    capability_policy::Capability,
+    ipc_authorizer::{require_capability, TrustError},
+};
+
 #[cfg(target_os = "android")]
 const SCANNER_PLUGIN_IDENTIFIER: &str = "com.tauri.plugins.scanner";
 
@@ -55,17 +60,24 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
 
 /// Invokes the native Document Scanner UI on mobile (Android GMS / iOS VisionKit)
 /// and returns OCR bounding boxes.
+///
+/// Phase 1: authorized via an entry check (async entry points cannot hold the
+/// kernel read guard across `.await`). The scan itself is read-only device
+/// capture; downstream stock writes re-authorize through `po_commit_*`.
 #[tauri::command]
-pub async fn mobile_scan_document<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, String> {
+pub async fn mobile_scan_document<R: Runtime>(app: AppHandle<R>) -> Result<serde_json::Value, TrustError> {
+    // Entry authorization first: an unauthorized caller never reaches the
+    // platform plugin. No mutating commit happens in this handler.
+    let _auth = require_capability("mobile_scan_document", Capability::HardwareOperations)?;
     #[cfg(target_os = "android")]
     {
         if let Some(plugin) = app.try_state::<ScannerPlugin<R>>() {
             plugin
                 .0
                 .run_mobile_plugin::<serde_json::Value>("scanDocument", serde_json::json!({}))
-                .map_err(|error| error.to_string())
+                .map_err(TrustError::op_failed)
         } else {
-            Err("Module Android DocumentScannerPlugin non disponible sur ce build.".to_string())
+            Err(TrustError::op_failed("Module Android DocumentScannerPlugin non disponible sur ce build."))
         }
     }
     #[cfg(target_os = "ios")]
@@ -74,15 +86,15 @@ pub async fn mobile_scan_document<R: Runtime>(app: AppHandle<R>) -> Result<serde
             plugin
                 .0
                 .run_mobile_plugin::<serde_json::Value>("scanDocument", serde_json::json!({}))
-                .map_err(|error| error.to_string())
+                .map_err(TrustError::op_failed)
         } else {
-            Err("Module iOS DocumentScannerPlugin non disponible sur cet appareil.".to_string())
+            Err(TrustError::op_failed("Module iOS DocumentScannerPlugin non disponible sur cet appareil."))
         }
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let _ = app;
-        Err("Le scanner caméra ML Kit est uniquement disponible sur smartphone Android ou iPhone.".to_string())
+        Err(TrustError::op_failed("Le scanner caméra ML Kit est uniquement disponible sur smartphone Android ou iPhone."))
     }
 }
 

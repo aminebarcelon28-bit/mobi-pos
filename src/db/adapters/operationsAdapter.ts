@@ -10,6 +10,54 @@ import { db as dexieDb } from '../database';
 import { fireSync, fireSyncDelete, isTauriEnv } from './base';
 import { getLocalDb, isDeviceLocalSettingKey, stripDeviceLocalSettingValue } from '../sqlPluginAdapter';
 import { newId } from '../../utils/ids';
+import {
+  AUDIT_LEGACY_LIMIT,
+  auditSelectParams,
+  buildAuditSelect,
+  buildLegacyAuditSelect,
+  hasAuditBound,
+  type AuditQueryBounds,
+} from '../auditQuery';
+
+export type { AuditQueryBounds };
+export {
+  AUDIT_DEFAULT_LIMIT,
+  AUDIT_LEGACY_LIMIT,
+  auditSelectParams,
+  buildAuditSelect,
+  buildLegacyAuditSelect,
+  hasAuditBound,
+  isLegacyWallClock,
+} from '../auditQuery';
+
+interface AuditRow {
+  id: string;
+  timestamp: string;
+  user: string;
+  action: string;
+  details: string;
+  requires_pin: number;
+  device_id: string | null;
+  ip_address: string | null;
+}
+
+function toAuditEntry(r: AuditRow): SecurityAuditLogEntry {
+  return {
+    id: r.id,
+    timestamp: r.timestamp,
+    user: r.user,
+    action: r.action,
+    details: r.details,
+    requiresPin: Boolean(r.requires_pin),
+    deviceId: r.device_id || undefined,
+    ipAddress: r.ip_address || undefined,
+  };
+}
+
+/** Newest-first by the string form, which is what the ISO lane relies on. */
+function byNewestAudit(a: SecurityAuditLogEntry, b: SecurityAuditLogEntry): number {
+  return String(b.timestamp || '').localeCompare(String(a.timestamp || ''));
+}
 
 export const operationsAdapter = {
   // ── REPAIRS ──
@@ -90,39 +138,63 @@ export const operationsAdapter = {
     void fireSync('audit_log', safeEntry.id, safeEntry);
   },
 
-  async getAllAuditLogs(): Promise<SecurityAuditLogEntry[]> {
+  /**
+   * Read the audit register.
+   *
+   * `bounds` are pushed down into SQL rather than applied in memory. That is
+   * the whole point of this method: the register is read with a hard
+   * `LIMIT 300`, so a client-side date filter over the returned slice could
+   * only ever see the newest 300 actions. A cashier asking for « la semaine
+   * dernière » while 5 000 rows exist would get an empty or wrong window, and
+   * no amount of in-memory filtering could recover rows that were never
+   * fetched. `idx_audit_timestamp` (lib.rs) makes the bounded form a range
+   * scan rather than a table scan.
+   *
+   * Omitting `bounds` keeps the original behaviour — newest 300, no lower or
+   * upper bound — which is what « Toute la période… » means.
+   */
+  async getAuditLogs(bounds?: AuditQueryBounds): Promise<SecurityAuditLogEntry[]> {
     if (isTauriEnv()) {
       try {
         const db = await getLocalDb();
         const rows = (await db.select(
-          'SELECT id, timestamp, user, action, details, requires_pin, device_id, ip_address FROM security_audit_logs ORDER BY timestamp DESC LIMIT 300'
-        )) as Array<{
-          id: string;
-          timestamp: string;
-          user: string;
-          action: string;
-          details: string;
-          requires_pin: number;
-          device_id: string | null;
-          ip_address: string | null;
-        }>;
-        if (rows && rows.length > 0) {
-          return rows.map((r) => ({
-            id: r.id,
-            timestamp: r.timestamp,
-            user: r.user,
-            action: r.action,
-            details: r.details,
-            requiresPin: Boolean(r.requires_pin),
-            deviceId: r.device_id || undefined,
-            ipAddress: r.ip_address || undefined,
-          }));
+          buildAuditSelect(bounds),
+          auditSelectParams(bounds),
+        )) as AuditRow[];
+
+        // Legacy wall-clock rows are outside any ISO range by construction, so
+        // they are merged back in here and left to the caller's date filter —
+        // which already understands them. Dropping them would make rows that
+        // the previous in-memory filter could show unreachable.
+        let legacy: SecurityAuditLogEntry[] = [];
+        try {
+          const legacyRows = (await db.select(buildLegacyAuditSelect(), [
+            AUDIT_LEGACY_LIMIT,
+          ])) as AuditRow[];
+          legacy = legacyRows.map(toAuditEntry);
+        } catch (legacyErr) {
+          console.warn('[db:audit] legacy wall-clock lane unavailable:', legacyErr);
         }
+
+        // A bounded query that legitimately matches nothing is an empty
+        // register for that window, NOT a reason to fall back to Dexie (which
+        // has no range semantics and would show unrelated rows).
+        if (hasAuditBound(bounds) && rows.length === 0) return legacy;
+
+        const merged = new Map<string, SecurityAuditLogEntry>();
+        for (const r of rows) merged.set(r.id, toAuditEntry(r));
+        for (const r of legacy) if (!merged.has(r.id)) merged.set(r.id, r);
+        return Array.from(merged.values()).sort(byNewestAudit);
       } catch (err) {
         console.warn('[db:audit] SQLite query failed, falling back to Dexie:', err);
       }
     }
     return await dexieDb.securityAuditLogs.toArray();
+  },
+
+  /** Back-compat alias: the unbounded read used by the boot/hydrate paths. */
+  async getAllAuditLogs(): Promise<SecurityAuditLogEntry[]> {
+    return operationsAdapter.getAuditLogs();
   },
 
   // ── BUNDLES ──
@@ -154,14 +226,29 @@ export const operationsAdapter = {
           .select('SELECT version FROM app_settings WHERE key=$1', [key])
           .catch(() => [])) as Array<{ version: number }>;
         const nextVersion = (verRows?.length ?? 0) > 0 ? Number(verRows[0].version) + 1 : 1;
-        await db.execute(
-          `INSERT INTO app_settings (key, value_json, updated_at, version)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,
-             updated_at=excluded.updated_at, version=excluded.version`,
-          [key, JSON.stringify(value), utcNowIso(), nextVersion],
-        );
-      } catch {
+        try {
+          await db.execute(
+            `INSERT INTO app_settings (key, value_json, updated_at, version)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,
+               updated_at=excluded.updated_at, version=excluded.version`,
+            [key, JSON.stringify(value), utcNowIso(), nextVersion],
+          );
+        } catch {
+          // Fallback if version column does not exist on app_settings
+          await db.execute(
+            `INSERT INTO app_settings (key, value_json, updated_at)
+             VALUES ($1, $2, $3)
+             ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,
+               updated_at=excluded.updated_at`,
+            [key, JSON.stringify(value), utcNowIso()],
+          );
+        }
+      } catch (err) {
+        if (isDeviceLocalSettingKey(key)) {
+          console.error(`[setSetting] Failed to persist critical setting [${key}] to SQLite:`, err);
+          throw err;
+        }
         // Web preview / locked DB — Dexie remains the store.
       }
     }

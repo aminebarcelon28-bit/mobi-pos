@@ -206,6 +206,34 @@ export class MobiPosDatabase extends Dexie {
       checkoutRecoveryIntents: 'id, createdAt',
       saleBatchAllocations: 'id, saleId, batchId, productId',
     });
+
+    // v9: SAV lifecycle expansion (Livré/Annulé + warrantySnapshot).
+    // Status is a free-text value (not an index definition change) — the
+    // bump preserves the Dexie upgrade path for shipped devices.
+    this.version(9).stores({
+      products: 'id, sku, barcode, category, brand, title',
+      customers: 'id, phone, name, loyaltyCardCode, barcode',
+      transactions: 'id, receiptNumber, createdAt',
+      repairOrders: 'id, ticketNumber, status, imei, customerPhone',
+      purchaseOrders: 'id, poNumber, vendorName, status',
+      tradeIns: 'id, imei, brand, createdAt',
+      imeiRecords: 'imei, productId, receivedAt',
+      securityAuditLogs: 'id, timestamp, user',
+      cashDrops: 'id, timestamp',
+      payouts: 'id, timestamp',
+      bundles: 'id, barcode',
+      customerDebts: 'id, customerId, createdAt',
+      storeExpenses: 'id, category, createdAt',
+      cashSessions: 'id, status, openedAt, deviceId',
+      cashMovements: 'id, sessionId, type, createdAt',
+      appSettings: 'key',
+      inventoryLedger: 'id, productId, createdAt',
+      syncOutbox: 'idempotencyKey, status, entityType',
+      stockBatches: 'batchId, productId, receivedAt, purchaseOrderId',
+      creditVouchers: 'id, code, status, customerPhone, createdAt',
+      checkoutRecoveryIntents: 'id, createdAt',
+      saleBatchAllocations: 'id, saleId, batchId, productId',
+    });
   }
 }
 

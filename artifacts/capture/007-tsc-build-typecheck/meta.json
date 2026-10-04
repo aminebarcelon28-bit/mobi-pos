@@ -1,0 +1,15 @@
+{
+  "slot": "007-tsc-build-typecheck",
+  "name": "Gate 4: TypeScript Project Build Typecheck",
+  "command": "npx tsc -b",
+  "cwd": ".",
+  "expected_exit": 0,
+  "exit_code": 0,
+  "status": "PASS",
+  "start_local": "2026-10-01T03:04:49.527+01:00",
+  "start_utc": "2026-10-01T02:04:49.527Z",
+  "end_local": "2026-10-01T03:04:59.647+01:00",
+  "end_utc": "2026-10-01T02:04:59.647Z",
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

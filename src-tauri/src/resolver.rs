@@ -24,6 +24,8 @@ pub struct ProductCandidate {
     pub name: String,
     pub current_cost: f64,
     pub distance: f32, // Cosine distance (0.0 = exact match)
+    #[serde(default)]
+    pub match_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -106,32 +108,6 @@ impl InventoryResolver {
         Ok(())
     }
 
-    /// Pre-indexes active catalog products into sqlite-vec if the table is unseeded.
-    pub fn ensure_products_indexed(&self, conn: &Connection) -> Result<usize> {
-        let count: i64 = conn
-            .query_row("SELECT count(*) FROM vec_products", [], |r| r.get(0))
-            .unwrap_or(0);
-
-        if count > 0 {
-            return Ok(count as usize);
-        }
-
-        let mut stmt = conn.prepare(
-            "SELECT id, title FROM products WHERE COALESCE(deleted,0) = 0 LIMIT 500",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
-
-        let mut indexed = 0;
-        for row in rows.flatten() {
-            let (id, title) = row;
-            let _ = self.index_product(conn, &id, &title);
-            indexed += 1;
-        }
-        Ok(indexed)
-    }
-
     /// Resolves an invoice line item against the database.
     #[allow(clippy::too_many_arguments)]
     pub fn resolve_line(
@@ -144,10 +120,10 @@ impl InventoryResolver {
         unit_cost: f64,
         line_total: f64,
     ) -> Result<ResolvedPoLine> {
-        // TIER 0: Direct Barcode / GTIN Match (checking both barcode and sku)
+        // TIER 0: Direct Barcode Match (if available and valid)
         if let Some(bc) = barcode {
             let mut bc_stmt = conn.prepare(
-                "SELECT id, sku, title, cost_price FROM products WHERE (barcode = ?1 OR sku = ?1) AND COALESCE(deleted,0) = 0 LIMIT 1",
+                "SELECT id, sku, title, cost_price FROM products WHERE barcode = ?1 AND COALESCE(deleted,0) = 0 LIMIT 1",
             )?;
             let mut bc_rows = bc_stmt.query_map(params![bc], |r| {
                 Ok(ProductCandidate {
@@ -156,38 +132,11 @@ impl InventoryResolver {
                     name: r.get(2)?,
                     current_cost: r.get(3)?,
                     distance: 0.0,
+                    match_reason: Some("Code-barres exact".into()),
                 })
             })?;
 
             if let Some(Ok(cand)) = bc_rows.next() {
-                return Ok(ResolvedPoLine {
-                    raw_description: raw_desc.to_string(),
-                    quantity: qty,
-                    unit_cost,
-                    line_total,
-                    match_tier: MatchTier::Tier1ExactAlias,
-                    matched_product: Some(cand.clone()),
-                    candidate_suggestions: vec![cand],
-                });
-            }
-        }
-
-        // TIER 0.5: Direct SKU / Reference Code match from description
-        if let Some(r_code) = crate::geometry::extract_ref_code_from_text(raw_desc) {
-            let mut sku_stmt = conn.prepare(
-                "SELECT id, sku, title, cost_price FROM products WHERE (sku = ?1 OR barcode = ?1) AND COALESCE(deleted,0) = 0 LIMIT 1",
-            )?;
-            let mut sku_rows = sku_stmt.query_map(params![r_code], |r| {
-                Ok(ProductCandidate {
-                    id: r.get(0)?,
-                    sku: r.get(1)?,
-                    name: r.get(2)?,
-                    current_cost: r.get(3)?,
-                    distance: 0.0,
-                })
-            })?;
-
-            if let Some(Ok(cand)) = sku_rows.next() {
                 return Ok(ResolvedPoLine {
                     raw_description: raw_desc.to_string(),
                     quantity: qty,
@@ -218,6 +167,7 @@ impl InventoryResolver {
                 name: r.get(2)?,
                 current_cost: r.get(3)?,
                 distance: 0.0,
+                match_reason: Some("Alias fournisseur mémorisé".into()),
             })
         })?;
 
@@ -255,73 +205,29 @@ impl InventoryResolver {
             .collect();
 
         let mut candidates: Vec<ProductCandidate> = Vec::new();
-        for (tid, dist) in knn {
+        if !knn.is_empty() {
             let mut p_stmt = conn.prepare(
                 "SELECT id, sku, title, cost_price FROM products WHERE id = ?1 AND COALESCE(deleted,0) = 0 LIMIT 1",
             )?;
-            let mut rows = p_stmt.query_map(params![tid], |r| {
-                Ok(ProductCandidate {
-                    id: r.get(0)?,
-                    sku: r.get(1)?,
-                    name: r.get(2)?,
-                    current_cost: r.get(3)?,
-                    distance: dist,
-                })
-            })?;
-            if let Some(Ok(c)) = rows.next() {
-                candidates.push(c);
-            }
-        }
-
-        // TIER 2.5: Keyword search fallback if KNN found < 5 candidates
-        if candidates.len() < 5 {
-            let words: Vec<&str> = raw_desc
-                .split(|c: char| !c.is_alphanumeric())
-                .filter(|w| w.len() >= 3)
-                .collect();
-
-            for word in words.iter().take(3) {
-                if candidates.len() >= 5 {
-                    break;
-                }
-                let pattern = format!("%{word}%");
-                let mut kw_stmt = conn.prepare(
-                    "SELECT id, sku, title, cost_price FROM products WHERE (title LIKE ?1 OR sku LIKE ?1) AND COALESCE(deleted,0) = 0 LIMIT 3",
-                )?;
-                let rows = kw_stmt.query_map(params![pattern], |r| {
+            for (tid, dist) in knn {
+                let mut rows = p_stmt.query_map(params![tid], |r| {
                     Ok(ProductCandidate {
                         id: r.get(0)?,
                         sku: r.get(1)?,
                         name: r.get(2)?,
                         current_cost: r.get(3)?,
-                        distance: 0.35,
+                        distance: dist.clamp(0.0, 1.0),
+                        match_reason: None,
                     })
                 })?;
-                for row in rows.flatten() {
-                    if !candidates.iter().any(|c| c.id == row.id) {
-                        candidates.push(row);
-                    }
+                if let Some(Ok(c)) = rows.next() {
+                    candidates.push(c);
                 }
             }
         }
 
-        // TIER 3 Fallback: populate active catalog products so review dropdown is never empty
-        if candidates.is_empty() {
-            let mut fb_stmt = conn.prepare(
-                "SELECT id, sku, title, cost_price FROM products WHERE COALESCE(deleted,0) = 0 ORDER BY stock DESC LIMIT 5",
-            )?;
-            let rows = fb_stmt.query_map([], |r| {
-                Ok(ProductCandidate {
-                    id: r.get(0)?,
-                    sku: r.get(1)?,
-                    name: r.get(2)?,
-                    current_cost: r.get(3)?,
-                    distance: 0.99,
-                })
-            })?;
-            for row in rows.flatten() {
-                candidates.push(row);
-            }
+        if !candidates.is_empty() {
+            re_rank_candidates(raw_desc, unit_cost, &mut candidates);
         }
 
         let top_match = candidates.first().cloned();
@@ -345,6 +251,139 @@ impl InventoryResolver {
             candidate_suggestions: candidates,
         })
     }
+}
+
+fn extract_brand(s: &str) -> Option<&'static str> {
+    let lower = s.to_lowercase();
+    if lower.contains("apple") || lower.contains("iphone") || lower.contains("ipad") || lower.contains("appl") {
+        Some("Apple")
+    } else if lower.contains("samsung") || lower.contains("galaxy") {
+        Some("Samsung")
+    } else if lower.contains("anker") {
+        Some("Anker")
+    } else if lower.contains("belkin") {
+        Some("Belkin")
+    } else if lower.contains("xiaomi") || lower.contains("redmi") {
+        Some("Xiaomi")
+    } else if lower.contains("huawei") {
+        Some("Huawei")
+    } else if lower.contains("baseus") {
+        Some("Baseus")
+    } else {
+        None
+    }
+}
+
+fn extract_model(s: &str) -> Option<&'static str> {
+    let lower = s.to_lowercase();
+    if lower.contains("15 pro max") || lower.contains("15promax") || lower.contains("15pm") {
+        Some("iPhone 15 Pro Max")
+    } else if lower.contains("15 pro") {
+        Some("iPhone 15 Pro")
+    } else if lower.contains("15 plus") {
+        Some("iPhone 15 Plus")
+    } else if lower.contains("iphone 15") {
+        Some("iPhone 15")
+    } else if lower.contains("14 pro max") || lower.contains("14pm") {
+        Some("iPhone 14 Pro Max")
+    } else if lower.contains("14 pro") {
+        Some("iPhone 14 Pro")
+    } else if lower.contains("s24 ultra") || lower.contains("s24u") {
+        Some("Galaxy S24 Ultra")
+    } else if lower.contains("s24 plus") || lower.contains("s24+") {
+        Some("Galaxy S24+")
+    } else if lower.contains("s24") {
+        Some("Galaxy S24")
+    } else if lower.contains("s23 ultra") {
+        Some("Galaxy S23 Ultra")
+    } else {
+        None
+    }
+}
+
+fn extract_wattage(s: &str) -> Option<u32> {
+    let lower = s.to_lowercase();
+    for word in lower.split(|c: char| !c.is_alphanumeric()) {
+        if word.ends_with('w') && word.len() > 1 {
+            if let Ok(w) = word[..word.len() - 1].parse::<u32>() {
+                if (5..=300).contains(&w) {
+                    return Some(w);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn re_rank_candidates(
+    raw_desc: &str,
+    unit_cost: f64,
+    candidates: &mut [ProductCandidate],
+) {
+    let scanned_brand = extract_brand(raw_desc);
+    let scanned_model = extract_model(raw_desc);
+    let scanned_watt = extract_wattage(raw_desc);
+
+    for cand in candidates.iter_mut() {
+        let cand_brand = extract_brand(&cand.name);
+        let cand_model = extract_model(&cand.name);
+        let cand_watt = extract_wattage(&cand.name);
+
+        let mut adjusted_dist = cand.distance;
+        let mut reasons = Vec::new();
+
+        // 1. Brand Match vs Conflict
+        if let (Some(sb), Some(cb)) = (scanned_brand, cand_brand) {
+            if sb == cb {
+                adjusted_dist -= 0.10;
+                reasons.push(format!("Marque '{sb}' confirmée"));
+            } else {
+                adjusted_dist += 0.40;
+                reasons.push(format!("Conflit marque ({sb} vs {cb})"));
+            }
+        }
+
+        // 2. Model Generation Conflict
+        if let (Some(sm), Some(cm)) = (scanned_model, cand_model) {
+            if sm == cm {
+                adjusted_dist -= 0.10;
+                reasons.push(format!("Modèle '{sm}' confirmé"));
+            } else {
+                adjusted_dist += 0.35;
+                reasons.push(format!("Conflit modèle ({sm} vs {cm})"));
+            }
+        }
+
+        // 3. Wattage Match vs Conflict
+        if let (Some(sw), Some(cw)) = (scanned_watt, cand_watt) {
+            if sw == cw {
+                adjusted_dist -= 0.15;
+                reasons.push(format!("Puissance {sw}W confirmée"));
+            } else {
+                adjusted_dist += 0.30;
+                reasons.push(format!("Conflit puissance ({sw}W vs {cw}W)"));
+            }
+        }
+
+        // 4. Price Sanity Corroboration
+        if unit_cost > 0.0 && cand.current_cost > 0.0 {
+            let ratio = unit_cost / cand.current_cost;
+            if (0.80..=1.25).contains(&ratio) {
+                adjusted_dist -= 0.08;
+                reasons.push("Prix cohérent avec le coût catalogue".to_string());
+            } else if !(0.33..=3.0).contains(&ratio) {
+                adjusted_dist += 0.25;
+                reasons.push("Écart de prix anormal".to_string());
+            }
+        }
+
+        cand.distance = adjusted_dist.clamp(0.0, 1.0);
+        if !reasons.is_empty() {
+            cand.match_reason = Some(reasons.join(", "));
+        }
+    }
+
+    candidates.sort_by(|a, b| a.distance.total_cmp(&b.distance));
 }
 
 /// Deterministic 384-dim fallback embedding (no ONNX): token-hash averaging

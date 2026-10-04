@@ -80,6 +80,13 @@ const jsStatements = [...jsBoot.matchAll(/'((?:CREATE|ALTER|UPDATE)[^']*)'/g)]
 for (const stmt of jsStatements) {
   try { await local.execute(stmt); stmtCount++; } catch { /* expected dupes */ }
 }
+// FT-06/C provenance (mirrors the production TS self-heal in
+// sqlPluginAdapter.ts, whose single-quoted DEFAULT the extractor above
+// cannot capture — the regex stops at the first inner quote).
+try {
+  await local.execute("ALTER TABLE security_audit_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'local';");
+  stmtCount++;
+} catch { /* expected dupes */ }
 console.log(`  [schema] applied ${stmtCount} statements`);
 
 // ---------------------------------------------------------------------------
@@ -109,6 +116,17 @@ function walkClosure(rel) {
   try { body = readFileSync(SRC(...rel.split(/[\\/]/)), 'utf8'); } catch { return; }
   closure.add(rel);
   for (const m of body.matchAll(/from\s+'([^']+)'/g)) {
+    const spec = m[1];
+    if (!spec.startsWith('.')) continue;
+    const base = normalize(join(dirname(rel), spec));
+    const cands = [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`].map((c) => c.split(/[\\/]/).join('/'));
+    const found = cands.find((c) => { try { return statSync(SRC(...c.split(/[\\/]/))).isFile(); } catch { return false; } });
+    if (found) walkClosure(found);
+  }
+  // FT-06/C: maintenanceAdapter lazily imports the native audit plane via
+  // dynamic import() (chunk discipline) — follow those edges too, or the
+  // shim rewrites the specifier without copying the module.
+  for (const m of body.matchAll(/import\s*\(\s*'([^']+)'\s*\)/g)) {
     const spec = m[1];
     if (!spec.startsWith('.')) continue;
     const base = normalize(join(dirname(rel), spec));
@@ -229,19 +247,49 @@ const payload = {
   purchaseOrders: [{ id: 'h28-po-001', status: 'DRAFT' }],
   tradeIns: [{ id: 'h28-ti-001', status: 'EVALUATED' }],
   imeiRecords: [{ imei: 'h28-imei-001', productId }],
-  securityAuditLogs: [{ id: 'h28-audit-001', action: 'IMPORT' }],
+  securityAuditLogs: [{ id: 'h28-audit-001', action: 'IMPORT' }, { id: 'h28-audit-002', action: 'IMPORT2' }],
   cashDrops: [{ id: 'h28-cd-001', type: 'drop' }],
   payouts: [{ id: 'h28-po-002', type: 'payout' }],
   bundles: [{ id: 'h28-bun-001', title: 'H28 Forfait' }],
   customerDebts: [{ id: 'h28-debt-001', customerId, customerName: 'H28 Client', type: 'DEBT', amount: 5000, balanceAfter: 5000 }],
   storeExpenses: [{ id: 'h28-exp-001', amount: 1500 }],
-  appSettings: [{ key: 'store.name', value: 'H28 Store' }],
+  appSettings: [
+    { key: 'store.name', value: 'H28 Store' },
+    // Decision 2: hostile credential rows — must never enqueue, never land.
+    { key: 'manager_pin', value: 'v1$evil$stale' },
+    { key: 'cashier_users', value: '[{"id":"evil","pin":"v1$x$y"}]' },
+  ],
 };
 
 console.log('\n  --- running the real importJSON ---');
+// Follow-up a: the exact envelope bytes identify the backup. Hash them the
+// same way any verifier would (node:crypto, not the app primitive) so the
+// assertion proves the row carries the FILE hash, not a constant.
+const { createHash } = await import('node:crypto');
+const payloadStr = JSON.stringify(payload);
+const expectedSha = createHash('sha256').update(payloadStr, 'utf8').digest('hex');
+// FT-06/C: stub the native IPC transport. audit_append is recorded and
+// receipted (the row-write itself is native logic, covered by Rust tests);
+// every other command throws so a stray IPC dependency fails loudly.
+const nativeCalls = [];
+globalThis.window = {
+  __TAURI_INTERNALS__: {
+    invoke: async (cmd, args) => {
+      nativeCalls.push({ cmd, args });
+      if (cmd === 'audit_append') return { eventId: 'AUD-H28-1', entryHash: 'h28hash' };
+      throw new Error(`unexpected IPC in H28 harness: ${cmd}`);
+    },
+  },
+};
+// Pre-existing local evidence (same id as a backup row): the merge must keep
+// it byte-for-byte, provenance included.
+await local.execute(
+  `INSERT INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, source)
+   VALUES ('h28-audit-001', '2024-01-01T00:00:00.000Z', 'Local', 'Vente', 'LOCAL-TRUTH', 0, 'local')`
+);
 let importErr = null;
 try {
-  await adapter.maintenanceAdapter.importJSON(JSON.stringify(payload));
+  await adapter.maintenanceAdapter.importJSON(payloadStr);
 } catch (e) { importErr = e; }
 check('[0] importJSON does not throw (the original H28 ReferenceError)', importErr === null, importErr && (importErr.message || importErr));
 
@@ -270,10 +318,13 @@ check('[2g] order outbox op enqueued', orderOps.length >= 1, orderOps.length);
 console.log('\n  --- generic lanes ---');
 const expected = [
   ['customer', customerId], ['repair_order', 'h28-ro-001'], ['purchase_order', 'h28-po-001'],
-  ['trade_in', 'h28-ti-001'], ['imei', 'h28-imei-001'], ['audit_log', 'h28-audit-001'],
+  ['trade_in', 'h28-ti-001'], ['imei', 'h28-imei-001'],
   ['cash_drop', 'h28-cd-001'], ['cash_drop', 'h28-po-002'], ['bundle', 'h28-bun-001'],
   ['customer_debt', 'h28-debt-001'], ['store_expense', 'h28-exp-001'], ['setting', 'store.name'],
 ];
+// FT-06/F3: the backup's audit rows are deliberately NOT in the list above —
+// they merge insert-only into the audit tables (see below) instead of being
+// re-enqueued as stale outbox truth.
 for (const [ent, id] of expected) {
   const ops = await select(`SELECT * FROM sync_outbox WHERE entity_type='${ent}' AND entity_id='${id}'`);
   check(`[3] lane ${ent}/${id} enqueued`, ops.length >= 1, ops.length);
@@ -286,6 +337,44 @@ for (const [ent, id] of expected) {
   }
 }
 
+console.log('\n  --- credential exclusion (Decision 2) ---');
+for (const key of ['manager_pin', 'cashier_users']) {
+  const ops = await select(`SELECT * FROM sync_outbox WHERE entity_type='setting' AND entity_id='${key}'`);
+  check(`[3d] hostile credential row NOT enqueued (${key})`, ops.length === 0, ops.length);
+  const clock = await select(`SELECT version FROM entity_keys WHERE entity_type='setting' AND entity_id='${key}'`);
+  check(`[3e] no version clock for credential key (${key})`, clock.length === 0, clock.length);
+}
+
+console.log('\n  --- audit history lane (FT-06/F3 insert-only) ---');
+const auditOps = await select(`SELECT * FROM sync_outbox WHERE entity_type='audit_log' AND entity_id='h28-audit-001'`);
+check('[3a] backup audit row NOT re-enqueued to outbox', auditOps.length === 0, auditOps.length);
+const auditRows = await select(`SELECT * FROM security_audit_logs WHERE id='h28-audit-002'`);
+check('[3b] backup audit row merged into authority', auditRows.length === 1, auditRows.length);
+check('[3c] merged row keeps backup action', auditRows[0]?.action === 'IMPORT2', auditRows[0]?.action);
+check('[3d] merged row carries imported provenance', auditRows[0]?.source === 'imported', auditRows[0]?.source);
+const keptRows = await select(`SELECT * FROM security_audit_logs WHERE id='h28-audit-001'`);
+check('[3e] pre-existing row wins (action kept)', keptRows[0]?.action === 'Vente', keptRows[0]?.action);
+check('[3f] pre-existing details untouched', keptRows[0]?.details === 'LOCAL-TRUTH', keptRows[0]?.details);
+check('[3g] pre-existing provenance stays local', keptRows[0]?.source === 'local', keptRows[0]?.source);
+const importRows = nativeCalls.filter((c) => c.cmd === 'audit_append' && c.args?.request?.action === 'AUDIT_HISTORY_IMPORTED');
+check('[3h] import writes one native pre-action row', importRows.length === 1, importRows.length);
+const importDetails = JSON.parse(importRows[0]?.args?.request?.details ?? '{}');
+check(
+  '[3i] pre-action row carries backup id + counts + stage',
+  importDetails.stage === 'pre-replace' && importDetails.backupId === '2026-09-14T00:00:00.000Z / 2.0' && importDetails.received === 2 && importDetails.inserted === 1 && importDetails.kept === 1,
+  JSON.stringify(importDetails)
+);
+check('[3i2] pre-action row carries the envelope file hash', importDetails.backupSha256 === expectedSha, String(importDetails.backupSha256).slice(0, 16));
+check('[3j] pre-action row is PIN-flagged', importRows[0]?.args?.request?.requiresPin === true);
+const okRows = nativeCalls.filter((c) => c.cmd === 'audit_append' && c.args?.request?.action === 'AUDIT_HISTORY_IMPORTED_OK');
+check('[3k] import writes one native outcome row', okRows.length === 1, okRows.length);
+const okDetails = JSON.parse(okRows[0]?.args?.request?.details ?? '{}');
+check(
+  '[3l] outcome row records completion for the same backup',
+  okDetails.stage === 'completed' && okDetails.outcome === 'completed' && okDetails.backupId === importDetails.backupId && okDetails.backupSha256 === expectedSha,
+  JSON.stringify(okDetails)
+);
+
 console.log('\n  --- idempotency ---');
 const before = (await select('SELECT COUNT(*) AS c FROM sync_outbox'))[0]?.c;
 await adapter.maintenanceAdapter.importJSON(JSON.stringify(payload));
@@ -293,6 +382,52 @@ const after = (await select('SELECT COUNT(*) AS c FROM sync_outbox'))[0]?.c;
 check('[4a] re-import creates no phantom outbox rows', Number(after) === Number(before), `${before} -> ${after}`);
 const dupes = await select('SELECT idempotency_key, COUNT(*) AS c FROM sync_outbox GROUP BY idempotency_key HAVING c > 1');
 check('[4b] no duplicate idempotency_keys', dupes.length === 0, dupes.length);
+const reaudit = await select(`SELECT * FROM security_audit_logs WHERE id='h28-audit-002'`);
+check('[4c] re-import keeps single audit row (insert-only)', reaudit.length === 1, reaudit.length);
+
+console.log('\n  --- import audit-row fail-closed + actor ---');
+// Native down: the import refuses BEFORE the Dexie replace (auditable state
+// is never half-replaced while dropping evidence).
+globalThis.window.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
+  nativeCalls.push({ cmd, args });
+  throw new Error('simulated native audit down');
+};
+const failRes = await adapter.maintenanceAdapter.importJSON(JSON.stringify(payload), { actor: 'H28 Manager' });
+check('[5a] native audit failure aborts import', failRes.success === false, JSON.stringify(failRes));
+check('[5b] abort reason names the audit lane', String(failRes.reason || '').includes('traçabilité'), failRes.reason);
+// Retry with the kernel back: idempotent, actor threaded into the native row.
+globalThis.window.__TAURI_INTERNALS__.invoke = async (cmd, args) => {
+  nativeCalls.push({ cmd, args });
+  if (cmd === 'audit_append') return { eventId: 'AUD-H28-2', entryHash: 'h28hash2' };
+  throw new Error(`unexpected IPC in H28 harness: ${cmd}`);
+};
+const retryRes = await adapter.maintenanceAdapter.importJSON(JSON.stringify(payload), { actor: 'H28 Manager' });
+check('[5c] retry succeeds (resumable)', retryRes.success === true, JSON.stringify(retryRes));
+const actorRows = nativeCalls.filter((c) => c.cmd === 'audit_append' && c.args?.request?.user === 'H28 Manager');
+check('[5d] actor threaded into native import rows (pre + outcome)', actorRows.length >= 2, actorRows.length);
+const reaudit2 = await select(`SELECT * FROM security_audit_logs WHERE id='h28-audit-002'`);
+check('[5e] retry keeps single audit row', reaudit2.length === 1, reaudit2.length);
+
+// Follow-up b: the OK row fails AFTER the books are replaced. That is not
+// plain "failure" (the books ARE replaced — retrying would just duplicate
+// intent rows) and not success either: a distinct completed-but-unaudited
+// status the UI surfaces as a warning.
+{
+  let appends = 0;
+  globalThis.window.__TAURI_INTERNALS__.invoke = async (cmd, _args) => {
+    if (cmd === 'audit_append') {
+      appends += 1;
+      if (appends === 1) return { eventId: 'AUD-H28-3', entryHash: 'h3' };
+      throw new Error('simulated outcome-row failure');
+    }
+    throw new Error(`unexpected IPC in H28 harness: ${cmd}`);
+  };
+  const partial = await adapter.maintenanceAdapter.importJSON(payloadStr, { actor: 'H28 Manager' });
+  check('[5f] outcome-row failure is completed-but-unaudited', partial.success === true && partial.auditOk === false, JSON.stringify(partial));
+  check('[5f] status names the missing traceability', String(partial.reason || '').includes('traçabilité'), partial.reason);
+  const books = await select(`SELECT * FROM products WHERE id='h28-prod-001'`);
+  check('[5f] books ARE replaced despite the missing outcome row', books.length === 1, books.length);
+}
 
 // ---------------------------------------------------------------------------
 // 6. Cleanup

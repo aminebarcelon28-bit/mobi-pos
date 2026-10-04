@@ -59,7 +59,20 @@ const nameInput = (page: Page) => page.getByPlaceholder('Ex: Karim Hadj');
 const modelInput = (page: Page) => page.getByPlaceholder('ex: iPhone 14 Pro Max');
 const cniInput = (page: Page) => page.getByPlaceholder('Ex: 1987-44-112233');
 const tradeInDialog = (page: Page) => page.locator('div.fixed.inset-0').filter({ hasText: 'REPRISE & TRADE-IN' });
-const buybackInput = (page: Page) => tradeInDialog(page).locator('input[type="number"]').first();
+// The buyback price is a `MoneyInput` (`type="text"`), so `input[type="number"].first()`
+// resolved to the RESALE MARGIN spinner instead: the price never reached the
+// model, `buybackValue` stayed 0, and the submit no-op'd on
+// `if (buybackValue <= 0) return;` — surfacing as "no product minted", nowhere
+// near the cause. The field now carries its own stable test id.
+const buybackInput = (page: Page) => tradeInDialog(page).getByTestId('buyback-price');
+/**
+ * MoneyInput commits only a parseable amount and reports it in its `aria-live`
+ * echo line. Assert it before every submit so a silent no-op can never pass.
+ */
+const expectBuybackCommitted = async (page: Page) => {
+  const echo = buybackInput(page).locator('xpath=../../span[@aria-live="polite"]');
+  await expect(echo).toContainText('=', { timeout: 10_000 });
+};
 const intakeSubmit = (page: Page) => page.getByRole('button', { name: /Racheter & Injecter/ });
 
 async function standaloneIntake(
@@ -71,6 +84,7 @@ async function standaloneIntake(
   await imeiInput(page).fill(opts.imei);
   await imeiInput(page).blur();
   await buybackInput(page).fill(opts.buyback);
+  await expectBuybackCommitted(page);
   if (opts.cni !== undefined) await cniInput(page).fill(opts.cni);
   await intakeSubmit(page).click();
   // Standalone success closes the modal (slice sets activeModal null).
@@ -360,6 +374,7 @@ test.describe('Test 6 — adversarial payload matrix', () => {
     // Submit with the valid vector + hostile identity strings.
     await imeiInput(page).fill('490154203237518');
     await buybackInput(page).fill('45000');
+    await expectBuybackCommitted(page);
     await cniInput(page).fill(HOSTILE_CNI);
     await expect(page.getByText('Pièce manquante — à compléter')).toHaveCount(0);
     const before = await page.evaluate(async () => {

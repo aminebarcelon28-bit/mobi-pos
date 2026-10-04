@@ -1,0 +1,15 @@
+{
+  "slot": "021-test-cargo-workspace",
+  "name": "Test Cargo Workspace",
+  "command": "cargo test --workspace",
+  "cwd": ".",
+  "expected_exit": 0,
+  "exit_code": 0,
+  "status": "PASS",
+  "start_local": "2026-10-01T03:28:07.232+01:00",
+  "start_utc": "2026-10-01T02:28:07.232Z",
+  "end_local": "2026-10-01T03:30:05.400+01:00",
+  "end_utc": "2026-10-01T02:30:05.400Z",
+  "stdout_sha256": "a9bd86def315a40be09271c5ef573843f43e9f3212cb579ec4cd20a7aafd884a",
+  "stderr_sha256": "349a0cb3ca8abcbf4abf6edc206eaea20f9d4fd5604ddb0918554eb812eb47f3"
+}

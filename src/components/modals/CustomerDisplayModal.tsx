@@ -46,6 +46,8 @@ export const CustomerDisplayModal: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => { if (activeModal !== 'customer_display') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
   if (activeModal !== 'customer_display') return null;
 
   // Mirror CartPanel: tier-aware unit price with a safe fallback, so a
@@ -59,7 +61,7 @@ export const CustomerDisplayModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-0 sm:p-4 select-none">
-      <div className="w-full max-w-5xl bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[94vh] sm:h-[80vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+      <div className="w-full max-w-5xl bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[94dvh] sm:h-[80dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
         {/* Header */}
@@ -109,7 +111,7 @@ export const CustomerDisplayModal: React.FC = () => {
               </div>
             )}
             
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            <div className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-3">
               {cart.map((item) => (
                 <div key={item.product.id} className="flex justify-between items-center p-3 bg-pos-bg rounded-xl border border-pos-border">
                   <div>

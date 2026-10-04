@@ -1,0 +1,15 @@
+{
+  "slot": "003-dir-scripts",
+  "name": "Validation: Dir Scripts",
+  "command": "dir scripts",
+  "cwd": ".",
+  "expected_exit": 0,
+  "exit_code": 0,
+  "status": "PASS",
+  "start_local": "2026-10-01T01:56:53.650Z",
+  "start_utc": "2026-10-01T01:56:53.650Z",
+  "end_local": "2026-10-01T01:56:53.675Z",
+  "end_utc": "2026-10-01T01:56:53.675Z",
+  "stdout_sha256": "725b11886f6694c01537cefcc4286569753d1f7d698aea2e735dc67df0685b5b",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

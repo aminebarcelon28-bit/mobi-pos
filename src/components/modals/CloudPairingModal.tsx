@@ -65,7 +65,7 @@ export const CloudPairingModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-card border-t sm:border border-pos-border w-full max-w-lg rounded-t-3xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 max-h-[92vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+      <div className="bg-pos-card border-t sm:border border-pos-border w-full max-w-lg rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 max-h-[92dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
         {/* Header */}
@@ -114,7 +114,7 @@ export const CloudPairingModal: React.FC = () => {
         </div>
 
         {/* Body */}
-        <div className="p-5 space-y-4 text-xs max-h-[75vh] overflow-y-auto">
+        <div className="p-5 space-y-4 text-xs max-h-[75vh] overflow-y-auto overscroll-contain">
           {activeTab === 'download' ? (
             <div className="space-y-4">
               {/* Platform Selector Buttons */}
@@ -283,7 +283,7 @@ export const CloudPairingModal: React.FC = () => {
                         <span>{copied ? 'Copié !' : 'Copier le code'}</span>
                       </button>
                     </div>
-                    <div className="p-2 bg-pos-bg rounded-lg border border-pos-border font-mono text-[10px] text-pos-muted break-all select-all max-h-20 overflow-y-auto">
+                    <div className="p-2 bg-pos-bg rounded-lg border border-pos-border font-mono text-[10px] text-pos-muted break-all select-all max-h-20 overflow-y-auto overscroll-contain">
                       {pairingPayload}
                     </div>
                   </div>

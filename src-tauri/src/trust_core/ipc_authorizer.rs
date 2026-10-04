@@ -38,6 +38,10 @@
 use super::capability_policy::{authorize, Capability};
 use super::clocks::MonotonicSource;
 use super::license_state::LicenseState;
+// Desktop-only: `select_store` probes `OsKeyStore::load_counter` inline. The
+// mobile variant never names the concrete type (it boxes `FileKeyStore`
+// directly), so the import would be unused there.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use super::secure_storage::KeyStore;
 use parking_lot::{RwLock, RwLockReadGuard};
 use serde::ser::{SerializeStruct, Serializer};
@@ -401,6 +405,12 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     // (fail-closed outside Operational) PLUS a fresh manager PIN verified
     // inside the command through the unmodified pin_verify.
     ("prune_snapshots", Capability::OperationalWrites),
+    // Phase 4d: manual-recovery decrypt. EmergencyExport (quarantine-capable:
+    // recovery is needed most when the clock is suspect) PLUS a fresh manager
+    // PIN verified inside the command through the unmodified pin_verify.
+    // Produces a plaintext working copy for operator copy-out; the sealed
+    // original is never modified. Kernel audit row on every success.
+    ("decrypt_snapshot_for_recovery", Capability::EmergencyExport),
     ("pin_set", Capability::LicenseManagement),    // Audit verification is a read (locked-state diagnostics keep dedicated paths).
     ("audit_verify", Capability::ReadOperationalData),
     // Hardware / device egress.
@@ -812,6 +822,69 @@ pub(crate) fn select_store(app_data_dir: &std::path::Path) -> (Box<dyn super::se
     )
 }
 
+/// Emission decision for clock-anomaly rows (audit surface S4), pure and
+/// unit-tested: quarantine-entry ONLY. `prev` is the kernel state BEFORE
+/// this evaluation, `next` the state it just moved to. Threshold bouncing
+/// cannot spam: while quarantined the caller returns early (ineligible), so
+/// repeated bad verdicts never reach emission; re-entry after a heal is a
+/// new incident by definition (fresh row justified). The time-engine
+/// deadband underneath (SKEW_TOLERANCE ratchet + sticky states + no
+/// checkpoint update on bad verdicts) keeps borderline jitter out of the
+/// verdicts in the first place.
+fn quarantine_entry_emits(prev: LicenseState, next: LicenseState) -> Option<&'static str> {
+    match next {
+        LicenseState::ClockResetRequired if prev != LicenseState::ClockResetRequired => {
+            Some("CLOCK_RESET_REQUIRED")
+        }
+        LicenseState::TamperSuspected if prev != LicenseState::TamperSuspected => {
+            Some("TAMPER_SUSPECTED")
+        }
+        _ => None,
+    }
+}
+/// Kernel clock-anomaly evidence row. Called ONLY on the transition INTO a
+/// clock quarantine (an eligible state → CLOCK_RESET_REQUIRED or
+/// TAMPER_SUSPECTED), so exactly one row exists per incident — never one per
+/// heartbeat tick (the fn returns early while quarantined, and a healed
+/// kernel re-arms the transition). This is what turns the TS-side
+/// "Horloge locale décalée" display from a heuristic into kernel-backed
+/// evidence: the journal itself records that the clock jumped, with the
+/// verdict and both epochs in the details.
+/// Best-effort: failures are logged, never propagated — the evaluation that
+/// detected the jump must not fail over bookkeeping. No IPC authorization
+/// applies: this is the kernel recording its own transition (like a head
+/// advance), not WebView input. The row is chained like any other append
+/// when a key exists; without one it lands unsealed (hashes still checked).
+///
+/// Pure constructor, separated for unit tests: the row's action/details must
+/// keep classifying CRIT on the TS side (`anomalie` keyword) — see
+/// `test_pin_rotation.mts`'s forensic section and the assertion below.
+fn clock_anomaly_request(kind: &str, wall_now_ms: u64, anchor_ms: Option<u64>) -> super::audit_append::AuditAppendRequest {
+    let anchor = anchor_ms
+        .map(|ms| ms.to_string())
+        .unwrap_or_else(|| "aucune (non ancré)".to_string());
+    // "anomalie" is a deliberate keyword: the TS severity classifier
+    // raises any row containing it to critical, so the quarantine lands
+    // in the CRIT lane without a dedicated category.
+    super::audit_append::AuditAppendRequest {
+        action: "Horloge Appareil Anormale".to_string(),
+        details: format!(
+            "Anomalie d'horloge détectée par le noyau : verdict={kind} (mur={wall_now_ms} ms, ancre={anchor} ms). Les horodatages d'audit émis entre l'ancre et ce point sont suspects — corréler avec l'affichage « Horloge locale décalée »."
+        ),
+        user: Some("Système".to_string()),
+        requires_pin: Some(false),
+        device_id: None,
+        ip_address: None,
+    }
+}
+fn emit_clock_anomaly_row(kind: &str, wall_now_ms: u64, anchor_ms: Option<u64>) {
+    let Some(dir) = APP_DIR.get() else { return };
+    let req = clock_anomaly_request(kind, wall_now_ms, anchor_ms);
+    if let Err(e) = super::audit_append::append_kernel_row(dir, &req) {
+        eprintln!("[trust_core] clock-anomaly audit row dropped (telemetry only): {e:?}");
+    }
+}
+
 /// Run the time decision engine and enforce strong verdicts. Advisory
 /// verdicts change nothing. Clock states are sticky: only non-clock states
 /// may enter them, and only re-anchor exits. Trusted ratchets persist.
@@ -858,14 +931,23 @@ fn evaluate_time_policy() {
             }
         }
         te::TimeVerdict::ResetRequired => {
+            // Transition-only evidence (see quarantine_entry_emits): this arm
+            // runs solely on entry — the fn returns early for non-eligible
+            // states, i.e. while quarantined — so one row per incident.
             kernel.set_state(LicenseState::ClockResetRequired);
             eprintln!("[trust_core][time] CLOCK_RESET_REQUIRED (wall behind anchor)");
             persist_to_global_dir();
+            if quarantine_entry_emits(state, LicenseState::ClockResetRequired).is_some() {
+                emit_clock_anomaly_row("CLOCK_RESET_REQUIRED", wall_now_ms, tf.last_trusted_wall_utc_ms);
+            }
         }
         te::TimeVerdict::TamperSuspected => {
             kernel.set_state(LicenseState::TamperSuspected);
             eprintln!("[trust_core][time] TAMPER_SUSPECTED (same-boot rollback)");
             persist_to_global_dir();
+            if quarantine_entry_emits(state, LicenseState::TamperSuspected).is_some() {
+                emit_clock_anomaly_row("TAMPER_SUSPECTED", wall_now_ms, tf.last_trusted_wall_utc_ms);
+            }
         }
         te::TimeVerdict::Advisory => {}
     }
@@ -1040,6 +1122,7 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "pin_verify",
     "pin_lockout_remaining",
     "prune_snapshots",
+    "decrypt_snapshot_for_recovery",
     "pin_set",
 ];
 
@@ -1047,6 +1130,81 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn clock_anomaly_row_appends_and_chains() {
+        // End-to-end through the real append path (no key → honestly
+        // unsealed): the kernel evidence row must land in the journal AND in
+        // the chain, carrying the exact action string the TS classifier keys
+        // on, with both epochs in the details.
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE security_audit_logs (
+               id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, user TEXT NOT NULL,
+               action TEXT NOT NULL, details TEXT NOT NULL, requires_pin INTEGER,
+               device_id TEXT, ip_address TEXT, source TEXT DEFAULT 'local');",
+        )
+        .unwrap();
+        for (kind, wall, anchor) in [
+            ("CLOCK_RESET_REQUIRED", 1_700_000_000_000u64, Some(1_699_999_000_000u64)),
+            ("TAMPER_SUSPECTED", 1_700_000_100_000u64, None),
+        ] {
+            let req = clock_anomaly_request(kind, wall, anchor);
+            assert_eq!(req.action, "Horloge Appareil Anormale");
+            assert!(req.details.contains(kind), "verdict must be in the details");
+            assert!(req.details.contains(&wall.to_string()), "wall epoch must be in the details");
+            assert!(req.details.to_lowercase().contains("anomalie"), "CRIT keyword must survive");
+            let id = format!("AUD-test-{kind}");
+            let receipt = super::super::audit_append::append_audit_event(
+                &mut conn, None, &req, &id, "2026-10-02T00:00:00Z",
+            )
+            .unwrap();
+            assert!(receipt.entry_hash.is_none(), "keyless append stays honestly unsealed");
+            let stored: String = conn
+                .query_row(
+                    "SELECT action FROM security_audit_logs WHERE id = ?1",
+                    rusqlite::params![id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(stored, "Horloge Appareil Anormale");
+        }
+        let links: i64 = conn
+            .query_row("SELECT COUNT(*) FROM audit_chain", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(links, 2, "both incident rows must be chain-linked");
+    }
+
+    #[test]
+    fn clock_anomaly_rows_are_strictly_edge_triggered() {
+        use LicenseState::*;
+        // Entry: exactly one emission per incident.
+        assert_eq!(
+            quarantine_entry_emits(Operational, ClockResetRequired),
+            Some("CLOCK_RESET_REQUIRED")
+        );
+        assert_eq!(
+            quarantine_entry_emits(Operational, TamperSuspected),
+            Some("TAMPER_SUSPECTED")
+        );
+        assert_eq!(
+            quarantine_entry_emits(Unactivated, TamperSuspected),
+            Some("TAMPER_SUSPECTED")
+        );
+        // Bounce while quarantined: silent (the caller returns early for
+        // non-eligible states, so repeated bad verdicts never re-emit).
+        assert_eq!(quarantine_entry_emits(ClockResetRequired, ClockResetRequired), None);
+        assert_eq!(quarantine_entry_emits(TamperSuspected, TamperSuspected), None);
+        // Heal then re-jump: a NEW incident by definition — re-arms.
+        assert_eq!(
+            quarantine_entry_emits(Operational, ClockResetRequired),
+            Some("CLOCK_RESET_REQUIRED")
+        );
+        // Non-quarantine targets never emit.
+        assert_eq!(quarantine_entry_emits(Operational, Operational), None);
+        assert_eq!(quarantine_entry_emits(ClockResetRequired, Operational), None);
+        assert_eq!(quarantine_entry_emits(Unknown, Operational), None);
+    }
 
     fn set(state: LicenseState) {
         global_kernel().set_state(state);

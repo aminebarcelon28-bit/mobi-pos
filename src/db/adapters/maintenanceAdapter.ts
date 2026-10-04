@@ -3,7 +3,237 @@ import { isTauriEnv, type DbStats, type IntegrityReport } from './base';
 import { shiftAdapter } from './shiftAdapter';
 import { utcNowIso } from '../sqlPluginAdapter';
 import type { BackupPayload } from '../../schemas/backupSchema';
-import type { Customer, CustomerDebtEntry } from '../../types/pos';
+import type { Customer, CustomerDebtEntry, SecurityAuditLogEntry } from '../../types/pos';
+
+export interface AuditHistoryMergeResult {
+  received: number;
+  inserted: number;
+  kept: number;
+}
+
+export interface ImportPayloadCheck {
+  ok: boolean;
+  reason?: string;
+  summary?: { version?: string; counts?: Record<string, number> };
+}
+
+/**
+ * Phase 2: validate a JSON backup envelope with ZERO writes. Runs BEFORE
+ * the PIN (a malformed file must not burn native budget) and again before
+ * the point of no return (a swapped file must not reach it). Mirrors the
+ * checks importJSON enforces, minus any mutation.
+ */
+export function validateImportPayload(jsonString: string): ImportPayloadCheck {
+  let rawJson: unknown;
+  try {
+    rawJson = JSON.parse(jsonString);
+  } catch {
+    return { ok: false, reason: 'Format JSON invalide (erreur de syntaxe)' };
+  }
+  return validateImportPayloadObject(rawJson);
+}
+
+/** Object form (importJSON reuses it on the already-parsed payload). */
+export function validateImportPayloadObject(rawJson: unknown): ImportPayloadCheck {
+  const rawPayload = rawJson as Record<string, unknown>;
+  if (!rawPayload || typeof rawPayload !== 'object' || Array.isArray(rawPayload)) {
+    return { ok: false, reason: 'Sauvegarde refusée: contenu invalide' };
+  }
+  if (rawPayload.version === undefined || rawPayload.version === null || rawPayload.version === '') {
+    return { ok: false, reason: 'Sauvegarde refusée: marqueur de version manquant (fichier tronqué ou non-MobiPOS)' };
+  }
+  if (typeof rawPayload.exportedAt !== 'string' || (rawPayload.exportedAt as string).trim() === '') {
+    return { ok: false, reason: "Sauvegarde refusée: date d'export (exportedAt) manquante" };
+  }
+  const counts: Record<string, number> = {};
+  for (const [k, v] of Object.entries(rawPayload)) {
+    if (Array.isArray(v)) counts[k] = v.length;
+  }
+  return {
+    ok: true,
+    summary: { version: String(rawPayload.version), counts },
+  };
+}
+
+/**
+ * Decision 2: settings mirror replace that can never swap credentials.
+ * Extracted (not inline) so headless tests can drive it against the real
+ * Dexie instance: stash live `manager_pin`/`cashier_users`, clear, put the
+ * filtered incoming rows (credential keys dropped even if the envelope
+ * carries them), re-put the live rows. Returns which credential keys were
+ * preserved.
+ */
+export async function replaceMirrorSettings(incoming: unknown): Promise<{ keptCredentials: string[] }> {
+  const keepCreds: Array<{ key: string; value: unknown }> = [];
+  for (const k of ['manager_pin', 'cashier_users']) {
+    try {
+      const row = (await dexieDb.appSettings.get(k)) as { key: string; value: unknown } | undefined;
+      if (row && row.value !== undefined) keepCreds.push({ key: k, value: row.value });
+    } catch {
+      // Mirror unreadable — proceed; the SQLite authority still holds them.
+    }
+  }
+  const filtered = (Array.isArray(incoming) ? incoming : []).filter(
+    (s) => (s as { key?: string })?.key !== 'manager_pin' && (s as { key?: string })?.key !== 'cashier_users'
+  );
+  await dexieDb.appSettings.clear();
+  await dexieDb.appSettings.bulkPut(filtered as never[]);
+  if (keepCreds.length > 0) {
+    await dexieDb.appSettings.bulkPut(keepCreds as never[]);
+  }
+  return { keptCredentials: keepCreds.map((k) => k.key) };
+}
+
+/**
+ * FT-06/F3 — backup audit history merges INSERT-ONLY, never overwrites.
+ *
+ * Context: on a fresh device (or after reinstall) the local audit tables are
+ * empty and the backup JSON is the only copy of past evidence. Dropping it
+ * would silently amputate the journal, so backup rows land locally — but an
+ * existing row with the same id always wins (`ON CONFLICT DO NOTHING` /
+ * put-if-absent), on both lanes. Rows keep their ORIGINAL timestamps (a late
+ * merge must never look fresh) and are never re-enqueued to the outbox (the
+ * backup rows are stale evidence, not new truth — see the removed
+ * `audit_log` lane above).
+ *
+ * Chain honesty: these rows carry no `audit_chain` links (the chain lives in
+ * SQLite, not in the JSON envelope). They read as unverified history until
+ * the next keyed append folds them into a LEGACY-BOUNDARY — the same status
+ * as any pre-chain row — which FT-03 surfaces instead of hiding.
+ *
+ * Throws when the authority lane fails wholesale so importJSON aborts before
+ * the books are replaced while evidence is dropped. The Dexie mirror is
+ * best-effort per row (logged, never fatal). The returned counts describe
+ * the AUTHORITY lane (the evidence lane of record), not the mirror.
+ */
+export async function mergeImportAuditHistory(
+  rows: unknown,
+  deps: {
+    getDb?: () => Promise<{
+      execute: (sql: string, params: unknown[]) => Promise<unknown>;
+    }>;
+    mirror?: {
+      get: (id: string) => Promise<unknown>;
+      put: (e: SecurityAuditLogEntry) => Promise<unknown>;
+    };
+  } = {}
+): Promise<AuditHistoryMergeResult> {
+  const list = Array.isArray(rows) ? rows : [];
+  const result: AuditHistoryMergeResult = { received: list.length, inserted: 0, kept: 0 };
+  if (list.length === 0) return result;
+
+  const clean = (v: unknown, fallback = ''): string => {
+    const s = typeof v === 'string' ? v : String(v ?? fallback);
+    return s;
+  };
+  const entries: SecurityAuditLogEntry[] = [];
+  for (const r of list) {
+    if (!r || typeof r !== 'object') continue;
+    const row = r as Partial<SecurityAuditLogEntry>;
+    const id = clean(row.id).trim();
+    if (!id) continue;
+    entries.push({
+      id,
+      timestamp: clean(row.timestamp).trim() || new Date(0).toISOString(),
+      user: clean(row.user).trim() || 'unknown',
+      action: clean(row.action).trim().slice(0, 128) || 'Événement importé',
+      details: clean(row.details).slice(0, 8192),
+      requiresPin: Boolean(row.requiresPin),
+      // FT-06/C provenance: backup rows are imported history, never local
+      // evidence — even when the envelope already carries a source marker.
+      source: 'imported',
+      ...(row.deviceId ? { deviceId: clean(row.deviceId) } : {}),
+      ...(row.ipAddress ? { ipAddress: clean(row.ipAddress) } : {}),
+    });
+  }
+
+  // Authority lane (SQLite): INSERT-only. Full columns first, legacy shape
+  // fallback for pre-device schemas. A total failure throws (abort import).
+  // Lazy import preserved (P11.3 chunk discipline) — injectable for tests.
+  const getDb = deps.getDb ?? (async () => (await import('../sqlPluginAdapter')).getLocalDb());
+  const db = await getDb();
+  let authorityOk = 0;
+  for (const e of entries) {
+    const pin = e.requiresPin ? 1 : 0;
+    try {
+      const res = (await db.execute(
+        `INSERT INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, device_id, ip_address, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT(id) DO NOTHING`,
+        [e.id, e.timestamp, e.user, e.action, e.details, pin, e.deviceId ?? '', e.ipAddress ?? '', 'imported']
+      ).catch(() =>
+        db.execute(
+          `INSERT INTO security_audit_logs (id, timestamp, user, action, details, requires_pin)
+           VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT(id) DO NOTHING`,
+          [e.id, e.timestamp, e.user, e.action, e.details, pin]
+        )
+      )) as unknown as { rowsAffected?: number } | undefined;
+      authorityOk += 1;
+      const affected = typeof res?.rowsAffected === 'number' ? res.rowsAffected : 1;
+      if (affected > 0) result.inserted += 1;
+      else result.kept += 1;
+    } catch (err) {
+      console.warn('[audit-import] authority row skipped:', e.id, err);
+    }
+  }
+  if (entries.length > 0 && authorityOk === 0) {
+    throw new Error('Import historique audit impossible: écriture autorité SQLite refusée');
+  }
+
+  // Mirror lane (Dexie): put-if-absent, best-effort per row.
+  const mirror = deps.mirror ?? dexieDb.securityAuditLogs;
+  for (const e of entries) {
+    try {
+      const existing = await mirror.get(e.id).catch(() => undefined);
+      if (!existing) {
+        await mirror.put(e);
+      }
+    } catch (err) {
+      console.warn('[audit-import] mirror row skipped:', e.id, err);
+    }
+  }
+  return result;
+}
+
+/**
+ * FT-06/F1 — pure checkpoint verdict. Extracted so headless tests can prove
+ * the strictness rule (busy === 0 AND log === checkpointed) without a live
+ * SQLite handle; `checkpointWalStrict` above is the only production caller.
+ */
+export function evaluateCheckpointResult(
+  rows: unknown
+): { ok: boolean; busy: number; logFrames: number; checkpointed: number; message: string } {
+  const r = (Array.isArray(rows) ? rows[0] : undefined) as
+    | { busy?: unknown; log?: unknown; checkpointed?: unknown }
+    | undefined;
+  if (!r || typeof r.busy !== 'number') {
+    return {
+      ok: false,
+      busy: 0,
+      logFrames: 0,
+      checkpointed: 0,
+      message: 'Checkpoint WAL illisible (pilote) — effacement refusé.',
+    };
+  }
+  const busy = Number(r.busy);
+  const logFrames = Number(r.log ?? 0);
+  const checkpointed = Number(r.checkpointed ?? 0);
+  if (busy !== 0 || logFrames !== checkpointed) {
+    return {
+      ok: false,
+      busy,
+      logFrames,
+      checkpointed,
+      message: `Checkpoint WAL incomplet (busy=${busy}, ${checkpointed}/${logFrames} trames) — effacement refusé.`,
+    };
+  }
+  return {
+    ok: true,
+    busy,
+    logFrames,
+    checkpointed,
+    message: `Point de contrôle WAL exécuté (${checkpointed} trame(s)).`,
+  };
+}
 
 /**
  * Supplement to the shared H28 `mirrorImportToAuthority` below (kept
@@ -221,6 +451,55 @@ export const maintenanceAdapter = {
     return 'Mode SQLite WAL : Gestion automatique du WAL par le moteur de base de données.';
   },
 
+  /**
+   * FT-06/A — strict WAL checkpoint for pre-snapshot gating.
+   *
+   * Root cause it fixes: `checkpointWal()` above uses `execute` (which
+   * discards the `busy/log/checkpointed` result row) and folds every failure
+   * into a display string, so a caller cannot tell "checkpointed" from
+   * "busy, nothing moved". A snapshot taken over an un-checkpointed WAL can
+   * miss committed frames — exactly what a pre-wipe snapshot must not do.
+   * This variant reads the result row via `select` (the same pattern as
+   * getDatabaseStats/integrityCheck above) and reports `ok` ONLY when
+   * `busy === 0` AND every frame moved (`log === checkpointed`). Never
+   * throws; the wipe guard treats `!ok` as abort.
+   */
+  async checkpointWalStrict(): Promise<{
+    ok: boolean;
+    busy: number;
+    logFrames: number;
+    checkpointed: number;
+    message: string;
+  }> {
+    if (!isTauriEnv()) {
+      return {
+        ok: false,
+        busy: 0,
+        logFrames: 0,
+        checkpointed: 0,
+        message: 'Checkpoint disponible uniquement dans l\u2019application installée.',
+      };
+    }
+    try {
+      const { getLocalDb } = await import('../sqlPluginAdapter');
+      const db = await getLocalDb();
+      const rows = (await db.select('PRAGMA wal_checkpoint(TRUNCATE);').catch(() => [])) as Array<{
+        busy?: number;
+        log?: number;
+        checkpointed?: number;
+      }>;
+      return evaluateCheckpointResult(rows);
+    } catch (err) {
+      return {
+        ok: false,
+        busy: 0,
+        logFrames: 0,
+        checkpointed: 0,
+        message: `Échec du point de contrôle WAL: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  },
+
   async vacuum(): Promise<string> {
     if (isTauriEnv()) {
       try {
@@ -266,6 +545,15 @@ export const maintenanceAdapter = {
     } catch {
       // Web preview without SQLite — counts stay null, arrays still export.
     }
+    // - EXCLUDED (decision 2, 0b): `manager_pin` + `cashier_users` credential
+    //   rows. A backup carrying a fast hash that brute-forces in seconds is
+    //   a credential-export feature, not a backup. Credentials are
+    //   device-local: they never restore onto this or any other device (the
+    //   import side preserves the live rows — see below).
+    const allSettings = await dexieDb.appSettings.toArray();
+    const settings = allSettings.filter(
+      (s) => s?.key !== 'manager_pin' && s?.key !== 'cashier_users'
+    );
     const backupSnapshot = {
       exportedAt: new Date().toISOString(),
       engine: 'MobiPOS Unified Storage Engine',
@@ -287,7 +575,7 @@ export const maintenanceAdapter = {
       cashMovements: await dexieDb.cashMovements.toArray(),
       stockBatches: await dexieDb.stockBatches.toArray(),
       creditVouchers: await dexieDb.creditVouchers.toArray(),
-      settings: await dexieDb.appSettings.toArray(),
+      settings,
       // Frozen FIFO allocations + raw ledger deltas + pending recovery
       // intents: without them a JSON restore loses per-batch COGS, stock
       // truth and in-flight sales recovery (see importJSON below).
@@ -299,7 +587,7 @@ export const maintenanceAdapter = {
     return JSON.stringify(backupSnapshot, null, 2);
   },
 
-  async importJSON(jsonString: string): Promise<{ success: boolean; reason?: string }> {
+  async importJSON(jsonString: string, opts?: { actor?: string }): Promise<{ success: boolean; reason?: string; auditOk?: boolean }> {
     try {
       let rawJson: unknown;
       try {
@@ -317,16 +605,16 @@ export const maintenanceAdapter = {
       }
       const parsedDatabase = validation.data;
 
-      // Minimal payload validation beyond the zod shape: a backup without a
-      // version marker or export timestamp is not a MobiPOS export (truncated
+      // Minimal payload validation beyond the zod shape, shared with the
+      // pre-PIN validator (validateImportPayloadObject) so the two can never
+      // disagree about what a valid envelope is. A backup without a version
+      // marker or export timestamp is not a MobiPOS export (truncated
       // download, hand-edited file) — refuse it loudly instead of wiping
       // local tables with partial data (C6).
       const rawPayload = rawJson as Record<string, unknown>;
-      if (rawPayload.version === undefined || rawPayload.version === null || rawPayload.version === '') {
-        return { success: false, reason: 'Sauvegarde refusée: marqueur de version manquant (fichier tronqué ou non-MobiPOS)' };
-      }
-      if (typeof rawPayload.exportedAt !== 'string' || rawPayload.exportedAt.trim() === '') {
-        return { success: false, reason: 'Sauvegarde refusée: date d\'export (exportedAt) manquante' };
+      const precheck = validateImportPayloadObject(rawJson);
+      if (!precheck.ok) {
+        return { success: false, reason: precheck.reason };
       }
 
       // Write-through pass FIRST (SQLite authority + outbox), Dexie mirror
@@ -337,14 +625,75 @@ export const maintenanceAdapter = {
       // Two passes: the shared H28 mirror (products/transactions/generic
       // outbox) plus the customer-authority supplement (customers/debts rows
       // + remaining lanes) above.
+      //
+      // F2: the outcome row after the Dexie replace needs the merge counts +
+      // backup id + actor computed here — hoisted (not block-scoped) so the
+      // post-replace step can use them.
+      let auditMergeCounts = { received: 0, inserted: 0, kept: 0 };
+      let importBackupId = '? / ?';
+      let importActorName: string | undefined;
+      let importBackupSha256 = '?';
       try {
         await mirrorImportToAuthority(parsedDatabase);
         await mirrorImportCustomerAuthority(parsedDatabase);
+        // FT-06/F3: backup audit history merges insert-only (never replaces,
+        // never re-enqueues) so the journal survives disaster recovery.
+        const auditMerge = await mergeImportAuditHistory(parsedDatabase.securityAuditLogs);
+        // FT-06/C: the import itself leaves one NATIVE audit row (actor,
+        // backup id, merged/duplicates) BEFORE the books are replaced. A
+        // failed append aborts here — same contract as the authority writes
+        // above (never half-replace local state while dropping evidence).
+        // `stage: 'pre-replace'` marks it as intent, not completion: the OK
+        // row after the Dexie replace records the outcome (F2). No failure
+        // row exists by design — the error return plus the untouched Dexie
+        // mirror plus this pre-row is the complete record, and a failure
+        // row's own failure would recurse.
+        // Follow-up a: the envelope bytes themselves identify the backup —
+        // exportedAt/version can collide across re-exports, the SHA-256 of
+        // the exact bytes received cannot (barring a break of SHA-256).
+        const { sha256Hex } = await import('../../utils/auditIntel');
+        const backupSha256 = (await sha256Hex(jsonString).catch(() => null))?.hex ?? '?';
+        const importAt = new Date().toISOString();
+        const rawId = rawPayload as Record<string, unknown>;
+        const backupId = `${String(rawId.exportedAt ?? '?')} / ${String(rawId.version ?? '?')}`;
+        const importActor = opts?.actor?.trim() || undefined;
+        importBackupId = backupId;
+        importActorName = importActor;
+        importBackupSha256 = backupSha256;
+        auditMergeCounts = { received: auditMerge.received, inserted: auditMerge.inserted, kept: auditMerge.kept };
+        try {
+          const { auditAppend } = await import('../../api/audit');
+          await auditAppend({
+            action: 'AUDIT_HISTORY_IMPORTED',
+            details: JSON.stringify({
+              stage: 'pre-replace',
+              backupId,
+              backupSha256,
+              received: auditMerge.received,
+              inserted: auditMerge.inserted,
+              kept: auditMerge.kept,
+              at: importAt,
+            }),
+            user: importActor,
+            requiresPin: true,
+          });
+        } catch (auditErr: unknown) {
+          const reason = auditErr instanceof Error ? auditErr.message : String(auditErr);
+          return { success: false, reason: `Import interrompu avant modification locale: traçabilité d'import impossible (${reason})` };
+        }
       } catch (mirrorErr: unknown) {
         const reason = mirrorErr instanceof Error ? mirrorErr.message : String(mirrorErr);
         return { success: false, reason: `Import interrompu avant modification locale: écriture autorité SQLite impossible (${reason})` };
       }
 
+      // Follow-up c: this single Dexie transaction is the atomicity proof
+      // for the mirror replace. IndexedDB transactions commit atomically:
+      // if the callback throws (or any request fails), the transaction
+      // aborts and NONE of the clears/puts persist — the mirror is truly
+      // untouched, not half-replaced. The outer catch below turns that into
+      // a failure return. (The SQLite authority merges above are NOT covered
+      // by this transaction — they are idempotent by construction and a
+      // retry converges, which [5c] in test_h28 proves.)
       await dexieDb.transaction('rw', [
         dexieDb.products,
         dexieDb.customers,
@@ -353,7 +702,8 @@ export const maintenanceAdapter = {
         dexieDb.purchaseOrders,
         dexieDb.tradeIns,
         dexieDb.imeiRecords,
-        dexieDb.securityAuditLogs,
+        // FT-06: securityAuditLogs intentionally outside the write scope —
+        // import never replaces the audit mirror (see below).
         dexieDb.cashDrops,
         dexieDb.payouts,
         dexieDb.bundles,
@@ -396,10 +746,11 @@ export const maintenanceAdapter = {
           await dexieDb.imeiRecords.clear();
           await dexieDb.imeiRecords.bulkPut(parsedDatabase.imeiRecords);
         }
-        if (Array.isArray(parsedDatabase.securityAuditLogs)) {
-          await dexieDb.securityAuditLogs.clear();
-          await dexieDb.securityAuditLogs.bulkPut(parsedDatabase.securityAuditLogs);
-        }
+        // FT-06: the audit mirror is NEVER replaced by a backup. A backup's
+        // audit rows are a stale subset — clear+bulkPut would destroy newer
+        // local evidence, and the backup rows carry no chain links here.
+        // Local audit rows stay exactly as they are; the restore of books
+        // below does not touch them.
         if (Array.isArray(parsedDatabase.cashDrops)) {
           await dexieDb.cashDrops.clear();
           await dexieDb.cashDrops.bulkPut(parsedDatabase.cashDrops);
@@ -420,9 +771,12 @@ export const maintenanceAdapter = {
           await dexieDb.storeExpenses.clear();
           await dexieDb.storeExpenses.bulkPut(parsedDatabase.storeExpenses);
         }
+        // Decision 2: device-local credentials survive every import via
+        // replaceMirrorSettings (live rows stashed, envelope credential rows
+        // dropped, live rows re-put) — a backup's hashes (stale, or another
+        // device's) must never become this terminal's PINs.
         if (Array.isArray(parsedDatabase.settings)) {
-          await dexieDb.appSettings.clear();
-          await dexieDb.appSettings.bulkPut(parsedDatabase.settings);
+          await replaceMirrorSettings(parsedDatabase.settings);
         }
         const extra = parsedDatabase as unknown as Record<string, unknown>;
         if (Array.isArray(extra.cashSessions)) {
@@ -458,7 +812,39 @@ export const maintenanceAdapter = {
         }
       });
 
-      return { success: true };
+      // F2 outcome row: the Dexie replace above is the point of no return.
+      // The books are replaced — record completion natively (same actor,
+      // same backup id + file hash, outcome explicit), matching the wipe
+      // path's pre-action row with its own completion evidence.
+      //
+      // Follow-up b: if THIS append fails the books are already replaced, so
+      // plain "failure" would lie twice — it would invite a retry of an
+      // already-completed replace and hide that the outcome is untraced.
+      // Return a distinct completed-but-unaudited status instead; the caller
+      // surfaces it as a warning, never as success, never as failure.
+      try {
+        const { auditAppend: auditAppendOk } = await import('../../api/audit');
+        await auditAppendOk({
+          action: 'AUDIT_HISTORY_IMPORTED_OK',
+          details: JSON.stringify({
+            stage: 'completed',
+            backupId: importBackupId,
+            backupSha256: importBackupSha256,
+            received: auditMergeCounts.received,
+            inserted: auditMergeCounts.inserted,
+            kept: auditMergeCounts.kept,
+            outcome: 'completed',
+            at: new Date().toISOString(),
+          }),
+          user: importActorName,
+          requiresPin: true,
+        });
+      } catch (okErr: unknown) {
+        const reason = okErr instanceof Error ? okErr.message : String(okErr);
+        return { success: true, auditOk: false, reason: `Base restaurée MAIS traçabilité finale impossible (${reason}) — vérifiez le journal avant toute diffusion.` };
+      }
+
+      return { success: true, auditOk: true };
     } catch (e: unknown) {
       const reason = e instanceof Error ? e.message : 'Erreur lors de l\'importation';
       return { success: false, reason };
@@ -479,6 +865,13 @@ export const maintenanceAdapter = {
   },
 
   async clearAllData(): Promise<void> {
+    // FT-06 evidence preservation: this wipe NEVER touches the audit trail.
+    // `security_audit_logs` and `audit_chain` are excluded from BOTH lanes
+    // (SQLite authority + Dexie mirror) — unbounded retention means no
+    // pruning of any kind until the checkpoint-archive design exists. Any
+    // full wipe must go through `requestDataWipe` (src/db/wipeGuard.ts),
+    // which writes DATA_WIPE_BEFORE natively and fails closed. The chain
+    // stays verifiable across wipes because its rows never move.
     // B-014: Dexie-only clear left a full SQLite authority + populated outbox
     // beside an empty mirror (or demo data on top of residual authority).
     // On Tauri, truncate authority tables + outbox in one pass BEFORE the
@@ -497,7 +890,6 @@ export const maintenanceAdapter = {
           'purchase_orders',
           'trade_ins',
           'imei_records',
-          'security_audit_logs',
           'cash_drops',
           'payouts',
           'product_bundles',
@@ -536,7 +928,7 @@ export const maintenanceAdapter = {
       dexieDb.purchaseOrders.clear(),
       dexieDb.tradeIns.clear(),
       dexieDb.imeiRecords.clear(),
-      dexieDb.securityAuditLogs.clear(),
+      // FT-06: audit mirror preserved (see clearAllData header).
       dexieDb.cashDrops.clear(),
       dexieDb.payouts.clear(),
       dexieDb.bundles.clear(),
@@ -801,7 +1193,10 @@ async function mirrorImportToAuthority(parsed: BackupPayload): Promise<void> {
     ['purchase_order', parsed.purchaseOrders],
     ['trade_in', parsed.tradeIns],
     ['imei', parsed.imeiRecords],
-    ['audit_log', parsed.securityAuditLogs],
+    // FT-06: the backup's audit rows are NEVER re-enqueued. Re-enqueueing
+    // would bump their version clocks and push stale evidence to the cloud
+    // as if new (LWW stale-wins), and pulled rows carry no chain links.
+    // Local audit stays exactly as it is.
     ['cash_drop', parsed.cashDrops],
     ['cash_drop', parsed.payouts],
     ['bundle', parsed.bundles],
@@ -815,6 +1210,10 @@ async function mirrorImportToAuthority(parsed: BackupPayload): Promise<void> {
       const r = row as Record<string, unknown>;
       const id = String(r.id ?? r.imei ?? r.key ?? '');
       if (!id) continue;
+      // Decision 2: credential settings never re-enqueue — a backup's
+      // hashes must not reach the outbox (defense in depth alongside the
+      // push-side device-local predicate).
+      if (entity === 'setting' && (id === 'manager_pin' || id === 'cashier_users')) continue;
       await enqueueGenericSync(entity as never, id, r);
     }
   }

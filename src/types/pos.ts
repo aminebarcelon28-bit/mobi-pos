@@ -54,7 +54,25 @@ export interface Product {
   leadTimeDays: number;
   dailySalesVelocity: number;
   reorderPoint: number;
-  warrantyMonths?: number;
+  /**
+   * Included store warranty in months.
+   *
+   * `undefined`/`null` = UNDECIDED → the store default (12) applies.
+   * `0` or any positive number = an explicit owner decision, honoured verbatim.
+   *
+   * Never seed `0` as a form default: it is indistinguishable from a deliberate
+   * "Sans Garantie", which silently voids coverage (BUG-WAR-03). Use
+   * `warrantyExplicitlyDisabled` to express that intent instead.
+   */
+  warrantyMonths?: number | null;
+  /**
+   * Owner deliberately sells this item with NO warranty ("as-is" / clearance).
+   *
+   * This is the ONLY representation of a zero-coverage decision. A bare
+   * `warrantyMonths: 0` means undecided and resolves to the store default, so
+   * the two can never be confused.
+   */
+  warrantyExplicitlyDisabled?: boolean;
   shelfLocation?: string;
   minPrice?: number;
   isActive?: boolean;
@@ -131,6 +149,15 @@ export interface CartItem {
   lineProfit?: number;
   fifoAllocations?: FifoAllocation[];
   isReturn?: boolean; // When true, represents a returned/exchanged item (re-stocks and subtracts from cart total)
+  /**
+   * Warranty term in months, frozen at checkout and persisted on the order line
+   * as `warranty_months_at_sale`.
+   *
+   * The receipt renders THIS and nothing else — printing is presentation, so
+   * paper, database and SAV terminal all read the same snapshot. `undefined` on
+   * lines sold before Step A, which the receipt handles as a legacy reprint.
+   */
+  warrantyMonthsAtSale?: number;
 }
 
 export type LoyaltyTierName = 'Bronze' | 'Silver' | 'Gold' | 'Platinum' | 'VIP Diamond';
@@ -1109,6 +1136,19 @@ export interface RepairOrder {
   /** Exact RESTITUE date (ISO date) the warranty clock was anchored to. */
   deliveredAt?: string;
   warrantySnapshot?: WarrantySnapshot;
+  /**
+   * The FROZEN resolver snapshot the operator was looking at when this ticket
+   * was opened — device, original invoice, and both warranty statuses as they
+   * stood at intake.
+   *
+   * Without it the ticket kept only a boolean + label, so a dispute months later
+   * could not be settled against what the operator actually saw, and the SAV
+   * screen re-resolved live data instead of the record (W-37).
+   *
+   * Additive and optional: rides inside `repair_orders.json_payload`, so no SQL
+   * column and no Dexie version bump. Sync mapping is W-27 territory.
+   */
+  warrantyDossierSnapshot?: WarrantyDossierSnapshot;
   // Phase 4.6: enterprise-grade SAV enhancements.
   assignedTechnicianId?: string;
   technicianNotes?: string;
@@ -1270,6 +1310,13 @@ export interface TradeInItem {
   customerName: string;
   customerPhone?: string;
   nationalIdNumber?: string;
+  /**
+   * Which document `nationalIdNumber` is (Livre de Police). Optional and
+   * JSON-only: no SQL column, no Dexie version bump — rows written before the
+   * selector simply have none and display "Pièce (type non précisé)".
+   * Validate on read with `normalizeNationalIdType` (illegal value → undefined).
+   */
+  nationalIdType?: import('../utils/tradeInOrigin').NationalIdType;
   buybackValue: number;          // Cost basis for store (e.g. 50,000 DA)
   resaleMarginPercent: number;
   resalePrice: number;          // Retail listing price
@@ -1323,6 +1370,12 @@ export interface CashTenderBreakdown {
 
 export interface ImeiLifecycleDossier {
   imei: string;
+  /**
+   * Every identifier this device answers to, canonical-key form. A LIST so a
+   * future IMEI2 (owner decision: dual-SIM proposal only, no schema change yet)
+   * can be added without rewriting the lookup or `getWarrantyStatus`.
+   */
+  identifiers?: string[];
   productTitle: string;
   isSold: boolean;
   /** Included store warranty duration (months). Drives the dossier banner for
@@ -1337,6 +1390,23 @@ export interface ImeiLifecycleDossier {
   originalCustomerPhone?: string;
   purchasePrice?: number;
   repairHistoryCount: number;
+  /**
+   * The STORE warranty, resolved by `getWarrantyStatus`. Authoritative for all
+   * display; `isWarrantyValid` / `daysRemaining` above are kept as mirrors for
+   * existing consumers.
+   */
+  storeWarranty?: import('../utils/warrantyResolver').WarrantyStatus;
+  /**
+   * The REPAIR warranty on parts replaced by SAV, or null when there is none.
+   * Distinct from the store warranty and labelled separately (Q1 decoupling).
+   */
+  repairWarranty?: import('../utils/warrantyResolver').WarrantyStatus | null;
+  /** What the operator acts on — a live repair warranty outranks a store one. */
+  primaryWarranty?: import('../utils/warrantyResolver').WarrantyStatus;
+  /** Active repair ticket numbers for this device (newest first). */
+  savTickets?: Array<{ ticketNumber: string; status: string; createdAt: string }>;
+  /** True when the device was never registered anywhere (branch 5). */
+  isUnknownDevice?: boolean;
 }
 
 /**
@@ -1399,7 +1469,18 @@ export interface IMEIRecord {
   productId: string;
   purchaseOrderId?: string;
   saleTransactionId?: string;
+  /**
+   * Point-in-time warranty anchor, minted at sale and NEVER recomputed. Reads
+   * prefer it over the catalog, so a later `warrantyMonths` edit cannot
+   * retroactively re-date coverage a customer already bought.
+   *
+   * `undefined` = never anchored (rows predating Step A); the resolver then
+   * falls back to computing from `soldAt`. Present but equal to `soldAt` =
+   * deliberately sold with no warranty.
+   */
   warrantyExpiresAt?: string;
+  /** Warranty term in months as captured at sale; does not follow the catalog. */
+  warrantyMonths?: number;
   receivedAt: string;
   soldAt?: string;
   notes?: string;

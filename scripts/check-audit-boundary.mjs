@@ -7,12 +7,15 @@
  * register as if audited while being invisible to the audit chain — an
  * evidence forgery hole. This script makes the rule a build failure:
  *
- *  A. At most TWO WebView SQL writers to security_audit_logs exist in src/,
+ *  A. At most THREE WebView SQL writers to security_audit_logs exist in src/,
  *     each pinned by role:
  *       1. operationsAdapter.saveAuditLog — web-preview / Node-test fallback
  *          (the funnel's non-Tauri branch; rule B pins its callers).
  *       2. sync/genericApply.ts pull mirror — PEER rows landing locally.
  *          Evidence freeze (rule A2): INSERT-only, never rewrites a row.
+ *       3. maintenanceAdapter.mergeImportAuditHistory — BACKUP rows merging
+ *          on JSON restore (FT-06/F3 disaster recovery). Same freeze
+ *          (rule A3): INSERT-only ON CONFLICT DO NOTHING, existing rows win.
  *     Anything else is an alternate write path and fails the gate.
  *  B. saveAuditLog is called ONLY from the non-Tauri branch of the
  *     logSecurityAction funnel (createUISlice.ts). No other caller exists.
@@ -72,9 +75,9 @@ for (const f of tsFiles(SRC)) {
 }
 console.log(`  WebView SQL writers to security_audit_logs: ${writers.length === 0 ? '(none)' : ''}`);
 for (const w of writers) console.log(`    - ${w}`);
-const ALLOWED_WRITERS = ['db/adapters/operationsAdapter.ts', 'sync/genericApply.ts'];
+const ALLOWED_WRITERS = ['db/adapters/operationsAdapter.ts', 'sync/genericApply.ts', 'db/adapters/maintenanceAdapter.ts'];
 check(
-  'WebView SQL audit writers are exactly the pinned set (fallback + pull mirror)',
+  'WebView SQL audit writers are exactly the pinned set (fallback + pull mirror + import merge)',
   writers.length === ALLOWED_WRITERS.length && ALLOWED_WRITERS.every((w) => writers.includes(w)),
   `got [${writers.join(', ')}]`
 );
@@ -94,6 +97,29 @@ check(
   check(
     'pull mirror never rewrites row content (no DO UPDATE on the audit table)',
     !/DO\s+UPDATE/i.test(branch)
+  );
+}
+
+// ── A3. Evidence freeze, import merge: every audit statement INSERT-only ──
+{
+  const maint = read('db/adapters/maintenanceAdapter.ts');
+  const stripped = maint
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const stmts = stripped.match(/\b(?:INSERT|REPLACE|UPDATE|DELETE)\b[^;]*security_audit_logs[^;]*;/gis) || [];
+  console.log(`  maintenanceAdapter audit statements: ${stmts.length}`);
+  const allInsertOnly =
+    stmts.length > 0 &&
+    stmts.every(
+      (s) =>
+        /^\s*INSERT\b/i.test(s) &&
+        /ON CONFLICT\s*\(\s*id\s*\)\s*DO NOTHING/i.test(s) &&
+        !/\b(?:UPDATE|DELETE)\b/i.test(s.replace(/ON CONFLICT\s*\(\s*id\s*\)\s*DO NOTHING/i, ''))
+    );
+  check(
+    'import merge is INSERT-only ON CONFLICT DO NOTHING (no UPDATE/DELETE on the audit table)',
+    allInsertOnly,
+    `got ${stmts.length} statement(s)`
   );
 }
 
@@ -169,6 +195,137 @@ check(
   const noteBody = api.slice(noteIdx, noteIdx + 1500);
   check('surfacing is fire-and-forget (no await on the report)', !/await\s+invokeCommand<number>\('audit_note_swallowed'/.test(noteBody));
   check('surfacing failure is caught, never re-noted', /catch\s*\{\s*[^}]*\}/.test(noteBody) && !/noteSwallowedAuditFailure\(\s*\w*[Ee]rr/.test(noteBody));
+}
+
+// ── F. Wipe-path boundary (FT-06): clearAllData references are pinned ──
+// clearAllData wipes business tables. It must never be reachable except
+// through its definition, its repository delegation, and the guarded wipe
+// (fresh native PIN + pre-wipe snapshot + DATA_WIPE_BEFORE, fail-closed).
+// Anything else referencing it is an unguarded wipe path and fails the gate.
+// Test/script files are exempt (harness scope, never production flows).
+{
+  const allowed = new Set([
+    'db/adapters/maintenanceAdapter.ts', // definition (audit-excluding)
+    'db/repositories/backupRepository.ts', // definition + delegation (+ dev-only seed gate)
+    'db/wipeGuard.ts', // the guarded wipe (default clear path)
+  ]);
+  const refs = [];
+  for (const f of tsFiles(SRC)) {
+    const rel = f.slice(SRC.length + 1).split('\\').join('/');
+    if (/\.test\.tsx?$/.test(rel) || /\.spec\.tsx?$/.test(rel)) continue;
+    const src = readFileSync(f, 'utf8');
+    const stripped = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    if (/clearAllData\s*\(/.test(stripped) || /clearAllData\s*:/.test(stripped)) refs.push(rel);
+  }
+  console.log(`  clearAllData references: ${refs.length === 0 ? '(none)' : ''}`);
+  for (const r of refs) console.log(`    - ${r}`);
+  const extra = refs.filter((r) => !allowed.has(r));
+  check(
+    'clearAllData reachable only via definition, delegation, or guarded wipe',
+    extra.length === 0,
+    `extra: [${extra.join(', ')}]`
+  );
+  // seedDemoData (demo wipe via clearAllData) is DELETED (FT-06 follow-up
+  // e): it had zero callers in dev or prod — only a definition, a store
+  // action, and a type entry, all removed. Any reintroduction fails here.
+  const seedRefs = [];
+  for (const f of tsFiles(SRC)) {
+    const rel = f.slice(SRC.length + 1).split('\\').join('/');
+    const src = readFileSync(f, 'utf8');
+    const stripped = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    if (/seedDemoData/.test(stripped)) seedRefs.push(rel);
+  }
+  console.log(`  seedDemoData references in src: ${seedRefs.length === 0 ? '(none)' : ''}`);
+  for (const r of seedRefs) console.log(`    - ${r}`);
+  check(
+    'seedDemoData does not exist in src (deleted dead wipe path)',
+    seedRefs.length === 0,
+    `got [${seedRefs.join(', ')}]`
+  );
+  const repo = read('db/repositories/backupRepository.ts');
+  check('repository exposes no demo wipe', !/seedDemoData|bulkSaveProducts|bulkSaveCustomers/.test(repo));
+}
+
+// ── G. Dev-fold boundary (FT-06/B): isDevBuild must statically fold ──
+// `seedDemoData` (wipe-adjacent) is dev-gated. The gate is only real if Vite
+// replaces it with a compile-time constant: a cast or optional-chaining form
+// (`(import.meta as …).env?.DEV`) defeats the fold and stays runtime-
+// reachable. Pin the direct form in src, and — when a prod bundle exists —
+// prove the fold happened in dist (same evidence pattern as
+// test_bench_hook.mjs: marker present in src, absent-or-folded in dist).
+{
+  const gate = read('utils/auditGate.ts');
+  const gateStripped = gate
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+  check(
+    'isDevBuild reads import.meta.env.DEV directly (foldable)',
+    gateStripped.includes('import.meta.env.DEV'),
+    'direct read missing'
+  );
+  check(
+    'isDevBuild has no cast/optional-chain form (fold-defeating)',
+    !gateStripped.includes('import.meta as') && !gateStripped.includes('env?.DEV'),
+    'unfoldable form present'
+  );
+  const distAssets = join(ROOT, 'dist', 'assets');
+  if (!existsSync(distAssets)) {
+    console.log('  (dist/ absent — skipping bundle-fold proof; run `npx vite build` to check it)');
+  } else {
+    const chunks = readdirSync(distAssets).filter((f) => f.endsWith('.js'));
+    const hay = chunks
+      .map((f) => {
+        try {
+          return readFileSync(join(distAssets, f), 'utf8');
+        } catch {
+          return '';
+        }
+      })
+      .join('\n');
+    check('no import.meta.env survives in the prod bundle (folded)', !hay.includes('import.meta.env'));
+    check('deleted seedDemoData ships nowhere in prod (no demo wipe path)', !hay.includes('seedDemoData'));
+  }
+}
+
+// ── H. Checkpoint gate (FT-06/F1): the weak checkpoint is UI-only ──
+// `checkpointWal()` (string message, result row discarded) exists for the
+// maintenance UI button (non-destructive). Destructive paths — anything that
+// snapshots before deleting — must use `checkpointWalStrict()` (busy === 0
+// AND log === checkpointed). `checkpointWal(` below matches the weak call
+// only: `checkpointWalStrict(` has no paren after `checkpointWal`.
+// Allowed weak callers: the maintenance service (UI button) + tests.
+{
+  const weakCallers = [];
+  for (const f of tsFiles(SRC)) {
+    const rel = f.slice(SRC.length + 1).split('\\').join('/');
+    if (/\.test\.tsx?$/.test(rel) || /\.spec\.tsx?$/.test(rel)) continue;
+    const src = readFileSync(f, 'utf8');
+    let stripped = src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    if (rel === 'db/adapters/maintenanceAdapter.ts') {
+      // Definition site of both variants: drop the weak definition line so
+      // only real USES count (the strict variant never matches this regex —
+      // `checkpointWalStrict(` has no paren after `checkpointWal`).
+      stripped = stripped.replace(/async checkpointWal\(\): Promise<string> \{/, '');
+    }
+    if (/checkpointWal\s*\(/.test(stripped)) weakCallers.push(rel);
+  }
+  console.log(`  weak checkpointWal() callers: ${weakCallers.length === 0 ? '(none)' : ''}`);
+  for (const w of weakCallers) console.log(`    - ${w}`);
+  const allowedWeak = new Set(['services/maintenanceService.ts']);
+  const extra = weakCallers.filter((w) => !allowedWeak.has(w));
+  check(
+    'weak checkpointWal() reachable only from the maintenance service (never a destructive path)',
+    extra.length === 0,
+    `extra: [${extra.join(', ')}]`
+  );
+  const guard = read('db/wipeGuard.ts');
+  check('guarded wipe uses checkpointWalStrict', guard.includes('checkpointWalStrict'));
 }
 
 console.log('');

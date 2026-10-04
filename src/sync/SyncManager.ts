@@ -2706,7 +2706,10 @@ class SyncManager {
           total: rawPayload.total ?? Number(r.total ?? 0),
           status: rawPayload.status || r.status || 'COMPLETED',
           paymentMethod: rawPayload.paymentMethod || r.payment_method || 'Espèces',
-          createdAt: rawPayload.createdAt || r.created_at || utcNowIso(),
+          // Dateless rows keep the known Dexie value or sink as '' (canonical
+          // sort coerces '' to -Infinity) — never forge utcNowIso(), which
+          // would promote a legacy row above genuine newest receipts.
+          createdAt: rawPayload.createdAt || r.created_at || (existingDexie as { createdAt?: string } | undefined)?.createdAt || '',
         };
         // Defense in depth: a status-only payload (void/refund echo, legacy
         // backfill) must never wipe the receipt's line items or customer.

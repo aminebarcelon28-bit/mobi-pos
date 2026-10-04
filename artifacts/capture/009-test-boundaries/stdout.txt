@@ -1,0 +1,154 @@
+
+> phone3@1.6.8 test:boundaries
+> node scripts/check-boundaries.mjs && node scripts/check-trust-registry.mjs && node scripts/check-audit-boundary.mjs && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_audit_nofallback.mjs && node scripts/check-pin-boundary.mjs
+
+========================================================================
+MOBIPOS — MODULE BOUNDARY ENFORCEMENT
+========================================================================
+
+  [PASS] components/licensing/ActivationGateScreen.tsx — no forbidden imports
+  [PASS] licensing/emergencyExporter.ts — no forbidden imports
+
+  [INFO] src/features/ not present; the prefix is still blocked for when it lands.
+
+  Inspected import graph:
+    components/licensing/ActivationGateScreen.tsx
+      → ../../licensing/keyFormat
+      → ../../licensing/client
+      → ../../licensing/hwid
+      → ../../licensing/store
+      → ../../licensing/emergencyExporter
+      → ../../utils/platform
+      → ../../api/license
+    licensing/emergencyExporter.ts
+      → ../platform/invoke
+
+RESULT: 2 guarded file(s), 0 violations — boundary intact.
+========================================================================
+MOBIPOS — TRUST REGISTRY ENFORCEMENT (Phase 1)
+========================================================================
+
+  [PASS] po_process_raw_scan — registry (OperationalWrites)
+  [PASS] po_commit_stock_batch — registry (OperationalWrites)
+  [PASS] process_raw_scan — registry (OperationalWrites)
+  [PASS] commit_stock_batch — registry (OperationalWrites)
+  [PASS] emergency_export_ledger — registry (EmergencyExport)
+  [PASS] hardware_scan_devices — registry (HardwareOperations)
+  [PASS] hardware_update_vfd — registry (HardwareOperations)
+  [PASS] get_hardware_fingerprint — registry (LicenseManagement)
+  [PASS] get_license_token — registry (LicenseManagement)
+  [PASS] set_license_token — registry (LicenseManagement)
+  [PASS] delete_license_token — registry (LicenseManagement)
+  [PASS] launch_dialer — registry (HardwareOperations)
+  [PASS] launch_call — registry (HardwareOperations)
+  [PASS] launch_whatsapp — registry (HardwareOperations)
+  [PASS] launch_print — registry (HardwareOperations)
+  [PASS] launch_print_label — registry (HardwareOperations)
+  [PASS] mobile_wifi_print — registry (HardwareOperations)
+  [PASS] mobile_bluetooth_printers — registry (HardwareOperations)
+  [PASS] mobile_bluetooth_print — registry (HardwareOperations)
+  [PASS] launch_url — registry (HardwareOperations)
+  [PASS] sqlite_print_raw_escpos — registry (HardwareOperations)
+  [PASS] sqlite_open_cash_drawer — registry (HardwareOperations)
+  [PASS] get_cloud_credentials — registry (LicenseManagement)
+  [PASS] set_cloud_credentials — registry (LicenseManagement)
+  [PASS] delete_cloud_credentials — registry (LicenseManagement)
+  [PASS] create_database_backup — registry (ReadOperationalData)
+  [PASS] list_database_backups — registry (ReadOperationalData)
+  [PASS] sqlite_db_maintenance — public
+  [PASS] sqlite_check_db_version — public
+  [PASS] mobile_scan_document — registry (HardwareOperations)
+  [PASS] audit_append — registry (OperationalWrites)
+  [PASS] audit_note_swallowed — registry (OperationalWrites)
+  [PASS] audit_verify — registry (ReadOperationalData)
+  [PASS] get_gate_state — public
+  [PASS] trust_sync_license — registry (LicenseManagement)
+  [PASS] trust_report_revocation — registry (LicenseManagement)
+  [PASS] pin_verify — registry (LicenseManagement)
+  [PASS] pin_set — registry (LicenseManagement)
+  [PASS] trust_reanchor_challenge — registry (LicenseManagement)
+  [PASS] trust_reanchor_time — registry (LicenseManagement)
+
+RESULT: 40 command(s), registry intact.
+========================================================================
+MOBIPOS — AUDIT WRITE-PATH BOUNDARY (Phase 4.5 WP2b)
+========================================================================
+
+  WebView SQL writers to security_audit_logs: 
+    - db/adapters/operationsAdapter.ts
+    - sync/genericApply.ts
+  [PASS] WebView SQL audit writers are exactly the pinned set (fallback + pull mirror)
+  [PASS] pull mirror branch exists
+  [PASS] pull mirror is INSERT-only (ON CONFLICT DO NOTHING)
+  [PASS] pull mirror never rewrites row content (no DO UPDATE on the audit table)
+  saveAuditLog callers: 
+    - store/slices/createUISlice.ts
+  [PASS] saveAuditLog called only from the funnel (createUISlice)
+  [PASS] funnel has Tauri guard
+  [PASS] saveAuditLog call sits after the non-Tauri else
+  [PASS] Tauri branch contains no saveAuditLog
+  [PASS] Tauri branch contains no direct audit SQL
+  [PASS] funnel has native-failure catch
+  [PASS] catch notes the swallow
+  [PASS] catch returns without fallback
+  [PASS] catch performs no DB write
+  [PASS] payoutWatch has no saveAuditLog
+  [PASS] payoutWatch has no direct audit INSERT
+  [PASS] payoutWatch files via logSecurityAction
+  [PASS] noteSwallowedAuditFailure invokes 'audit_note_swallowed'
+  [PASS] surfacing is fire-and-forget (no await on the report)
+  [PASS] surfacing failure is caught, never re-noted
+
+RESULT: audit write-path boundary intact — no alternate write path.
+========================================================================
+MOBIPOS — AUDIT NO-FALLBACK RUNTIME (Phase 4.5 WP2b)
+========================================================================
+
+== R1: counter mechanics (real module) ==
+  [PASS] counter starts at 0
+  [PASS] first note returns 1
+  [PASS] getter agrees
+== R2: failure path + non-throwing note ==
+  [PASS] auditAppend throws when the audit path is down
+  [PASS] note() never throws, even with backend down
+  [PASS] note() returns the running total
+  [PASS] getter agrees after failure handling
+== R3: no alternate write issued at runtime ==
+  [PASS] only audit_append + audit_note_swallowed were ever invoked
+  [PASS] exactly one report for the R2 swallow (no retry storm, no fan-out)
+
+RESULT: audit failure handling performs no alternate write.
+========================================================================
+MOBIPOS — PIN EXPOSURE BOUNDARY (Phase 4.5 WP3f)
+========================================================================
+
+== P1: sync egress ==
+  [PASS] 'manager_pin' + 'cashier_users' in the device-local set
+  [PASS] db/adapters/operationsAdapter.ts honors the device-local predicate
+  [PASS] db/backfill.ts honors the device-local predicate
+  [PASS] sync/repairResync.ts honors the device-local predicate
+  [PASS] sync/genericApply.ts honors the device-local predicate
+  [PASS] sync/migrationManager.ts honors the device-local predicate
+  [PASS] sync/SyncManager.ts honors the device-local predicate
+  [PASS] no sync call line carries a credential key
+== P2: log leakage ==
+  [PASS] no console.* call passes a PIN-bearing identifier
+  [PASS] no audit entry interpolates a PIN value
+== P3: persisted state ==
+  [PASS] persist partialize excludes PIN material
+== P4: login path ==
+  [PASS] lock screen imports the native PIN plane
+  [PASS] lock screen calls pin_verify with a userId
+  [PASS] lock screen honors mustRotate
+  [PASS] lock screen surfaces the native lockout
+  [PASS] native verdict is final (no local fallback after it)
+  [PASS] local verifyPin frozen in store/slices/createUISlice.ts (<= 4)
+  [PASS] local verifyPin frozen in components/LockScreenOverlay.tsx (<= 4)
+  [PASS] local verifyPin frozen in components/modals/SettingsModal.tsx (<= 5)
+  [PASS] local verifyPin frozen in db/adapters/shiftAdapter.ts (<= 1)
+  [PASS] manager-gate call sites frozen (<= 15 incl. definition)
+== P5: credential-key readers ==
+  [PASS] no new credential-key reader
+  [PASS] pinned readers still present
+
+RESULT: PIN exposure boundary intact.

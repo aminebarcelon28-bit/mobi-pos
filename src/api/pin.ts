@@ -25,6 +25,14 @@ export interface NativePinVerifyResult {
 export interface NativePinSetRequest {
   userId: string;
   newPin: string;
+  /**
+   * Pepper-dead recovery reset (tech-recovery flow only): re-provisions a
+   * fresh device pepper and re-keys the MASTER in one step. Effective only
+   * when the pepper is actually gone; rejected on healthy installs and for
+   * non-master targets. Callers set this ONLY as a second attempt after the
+   * plain rotation fails with a pepper-absent error — never preemptively.
+   */
+  recoveryReset?: boolean;
 }
 
 /**
@@ -85,4 +93,30 @@ export async function pinSet(request: NativePinSetRequest): Promise<NativePinSet
   return invokeCommand<NativePinSetResult>('pin_set', {
     request,
   });
+}
+
+/**
+ * French user-facing text for a failed `pinSet`. The native reasons are
+ * stable wire strings (`TrustError` variants carry fixed reasons, never
+ * secrets), so matching them here is safe. Unknown failures stay generic —
+ * never echo raw wire text (it leaks internals, not help).
+ */
+export function friendlyPinSetError(err: unknown): string {
+  const msg = String((err as { message?: unknown })?.message ?? err ?? '').toLowerCase();
+  if (msg.includes('pepper absent')) {
+    return 'Clé de sécurité appareil manquante — poursuivez avec la récupération technicien.';
+  }
+  if (msg.includes('already used')) {
+    return 'Chaque personne doit avoir un code PIN différent (code déjà utilisé).';
+  }
+  if (msg.includes('guessable')) {
+    return 'Code trop simple (suite, répétition ou code banal) — choisissez un code moins prévisible.';
+  }
+  if (msg.includes('length invalid') || msg.includes('digits only') || msg.includes('oversized') || msg.includes('user id invalid')) {
+    return 'Code PIN invalide (chiffres uniquement : 6 à 8 pour le gérant, 4 pour un caissier).';
+  }
+  if (msg.includes('unknown cashier') || msg.includes('roster')) {
+    return 'Profil introuvable — actualisez et réessayez.';
+  }
+  return "Échec de l'enregistrement du nouveau PIN. Réessayez.";
 }

@@ -9,7 +9,7 @@ import type {
 import { db as dexieDb } from '../database';
 import { fireSync, fireSyncDelete, isTauriEnv } from './base';
 import { newId } from '../../utils/ids';
-import { verifyPin } from '../../utils/security';
+import { verifyManagerGate } from '../../utils/pinGate';
 import { cashSalesFromTxns, cashRefundsFromTxns } from '../../utils/cashTerms';
 
 /**
@@ -588,9 +588,9 @@ export const shiftAdapter = {
     // Variance gate (enforced here, not just in the modal): any non-zero
     // discrepancy requires a non-empty justification note, and a discrepancy
     // at/above SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD additionally requires a
-    // manager PIN verified with the same helper the store's verifyManagerPin
-    // uses for price overrides (utils/security verifyPin, hash-aware with
-    // legacy-plaintext fallback). All cash math stays in integer DZD.
+    // manager PIN. Phase 1: verified natively (fail-closed, counted on the
+    // native ladder) — the old Dexie-hash read + counter-free local compare
+    // is gone. All cash math stays in integer DZD.
     if (discrepancy !== 0 && !(closingNote || '').trim()) {
       throw codedError(
         SHIFT_CLOSING_NOTE_REQUIRED,
@@ -605,17 +605,16 @@ export const shiftAdapter = {
           `Écart de caisse de ${discrepancy} DA (seuil ${SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD} DA) : validation par code PIN Manager requise.`
         );
       }
-      // Same backing store the settings repository reads (appSettings key
-      // 'manager_pin'). No hardcoded default: an unset PIN reads as the empty
-      // string, which verifyPin rejects fail-closed (utils/security) — a
-      // missing PIN can never authorize a high-variance close.
-      const storedPin = await dexieDb.appSettings.get('manager_pin')
-        .then((row) => (row?.value as string | undefined) ?? '')
-        .catch(() => '');
-      if (!verifyPin(cleanPin, storedPin)) {
+      // No hash ever enters JS here: the kernel compares against the stored
+      // credential through its own handle. An unset PIN fails closed natively
+      // (missing credential is an error, never a default).
+      const gate = await verifyManagerGate(cleanPin);
+      if (!gate.ok) {
         throw codedError(
           SHIFT_MANAGER_PIN_INVALID,
-          'Code PIN Manager incorrect — clôture à écart refusée.'
+          gate.locked
+            ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+            : 'Code PIN Manager incorrect — clôture à écart refusée.'
         );
       }
     }

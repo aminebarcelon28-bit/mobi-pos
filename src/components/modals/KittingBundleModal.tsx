@@ -102,6 +102,8 @@ export const KittingBundleModal: React.FC = () => {
     });
   }, [bundles, debouncedSearch]);
 
+  useEffect(() => { if (activeModal !== 'kitting_bundle') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
   if (activeModal !== 'kitting_bundle') return null;
 
   // KPI Computations
@@ -202,7 +204,7 @@ export const KittingBundleModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94vh] sm:h-[90vh] flex flex-col">
+      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col">
         {/* Mobile drag handle */}
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
@@ -215,7 +217,7 @@ export const KittingBundleModal: React.FC = () => {
             <div className="min-w-0">
               <h2 className="text-xs sm:text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2 truncate">
                 <span>PACKS & BUNDLES (KITTING)</span>
-                <span className="text-[9px] sm:text-[10px] bg-emerald-500/10 text-emerald-400 font-bold px-1.5 sm:px-2 py-0.5 rounded border border-emerald-500/30 shrink-0">
+                <span className="text-[9px] sm:text-[10px] bg-emerald-500/10 text-emerald-400 font-bold px-1.5 sm:px-2 py-0.5 rounded-full border border-emerald-500/30 shrink-0">
                   ENTERPRISE
                 </span>
               </h2>
@@ -224,7 +226,7 @@ export const KittingBundleModal: React.FC = () => {
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition min-h-[38px] min-w-[38px] flex items-center justify-center cursor-pointer shrink-0"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer shrink-0"
             aria-label="Fermer"
           >
             <X className="w-5 h-5" />
@@ -285,7 +287,7 @@ export const KittingBundleModal: React.FC = () => {
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-5 relative bg-pos-bg">
+        <div className="flex-1 overflow-y-auto overscroll-contain p-5 relative bg-pos-bg">
           {activeTab === 'Existants' ? (
             <div className="space-y-4 max-w-4xl mx-auto">
               
@@ -424,7 +426,7 @@ export const KittingBundleModal: React.FC = () => {
                 <span className="text-[11px] font-extrabold text-pos-text flex items-center gap-1.5">
                   <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Modèles de Packs Pré-configurés (Templates Rapides)
                 </span>
-                <div className="flex items-center gap-2 overflow-x-auto">
+                <div className="flex items-center gap-2 overflow-x-auto overscroll-contain">
                   {PACK_PRESETS.map((preset) => (
                     <button
                       key={preset.title}
@@ -497,7 +499,7 @@ export const KittingBundleModal: React.FC = () => {
                   />
                 </div>
 
-                <div className="flex-1 overflow-y-auto space-y-1 pr-1">
+                <div className="flex-1 overflow-y-auto overscroll-contain space-y-1 pr-1">
                   {(filteredProducts || []).map((p) => {
                     const isSelected = selectedSkus.includes(p.sku);
                     return (
@@ -517,7 +519,7 @@ export const KittingBundleModal: React.FC = () => {
                         <div className="flex items-center gap-3">
                           <span className="text-[10px] font-bold text-pos-muted">{formatDZD(p.price)}</span>
                           <span
-                            className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                            className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
                               p.stock > 0 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
                             }`}
                           >

@@ -1,0 +1,2 @@
+[audit] swallowed failure #1 (r1-probe) — audit telemetry degraded, primary flow unaffected
+[audit] swallowed failure #2 (r2-failure-handling) — audit telemetry degraded, primary flow unaffected

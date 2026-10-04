@@ -5,6 +5,7 @@ import type {
   SecurityAuditLogEntry,
 } from '../../types/pos';
 import { db as dexieDb } from '../database';
+import { sortTransactionsNewestFirst } from '../../utils/dateUtils';
 import { fireSync, isTauriEnv } from './base';
 import { getLocalDb, beginImmediate } from '../sqlPluginAdapter';
 import { withWriteLock } from '../writeMutex';
@@ -115,7 +116,15 @@ export const transactionAdapter = {
   },
 
   async getAllTransactions(): Promise<SaleTransaction[]> {
-    return await dexieDb.transactions.toArray();
+    // Newest-first: Dexie index scan (createdAt, see database.ts) for the
+    // coarse order, then the canonical comparator defensively re-sorts so
+    // legacy / non-ISO strings still land deterministically (invalid sinks).
+    try {
+      const ordered = await dexieDb.transactions.orderBy('createdAt').reverse().toArray();
+      return sortTransactionsNewestFirst(ordered);
+    } catch {
+      return sortTransactionsNewestFirst(await dexieDb.transactions.toArray());
+    }
   },
 
   async voidTransactionAtomic(

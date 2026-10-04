@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Percent, Check, DollarSign, Tag } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
@@ -7,6 +7,7 @@ import { parseLocalizedAmount } from '../../utils/moneyInput';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { PROMO_TRACKING } from '../../constants';
+import { verifyManagerGate } from '../../utils/pinGate';
 
 interface PromoCodeDef {
   type: 'percent' | 'amount';
@@ -65,7 +66,7 @@ function incrementPromoRedemption(code: string): void {
 }
 
 export const DiscountModal: React.FC = () => {
-  const { activeModal, closeModal, applyCartDiscountPercent, cart, pricingTier, verifyManagerPin } = usePosStore();
+  const { activeModal, closeModal, applyCartDiscountPercent, cart, pricingTier } = usePosStore();
 
   const [discountMode, setDiscountMode] = useState<'percent' | 'amount'>('percent');
   const [percentValue, setPercentValue] = useState(10);
@@ -76,6 +77,8 @@ export const DiscountModal: React.FC = () => {
   const [appliedPromoCode, setAppliedPromoCode] = useState<string | null>(null);
   const [managerPinInput, setManagerPinInput] = useState('');
   const [pinError, setPinError] = useState<string | null>(null);
+
+  useEffect(() => { if (activeModal !== 'discount') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
   if (activeModal !== 'discount') return null;
 
@@ -118,7 +121,7 @@ export const DiscountModal: React.FC = () => {
     setPromoStatus(`Code "${clean}" Appliqué : ${code.label}`);
   };
 
-  const handleApply = () => {
+  const handleApply = async () => {
     let effectivePercent = 0;
     if (discountMode === 'percent') {
       effectivePercent = isNaN(percentValue) ? 0 : percentValue;
@@ -138,8 +141,14 @@ export const DiscountModal: React.FC = () => {
         setPinError('Remise > 10% : PIN Manager requis.');
         return;
       }
-      if (!verifyManagerPin(managerPinInput)) {
-        setPinError('Code PIN Manager incorrect.');
+      // Phase 1: native gate (fail-closed); Locked shows the countdown.
+      const gate = await verifyManagerGate(managerPinInput);
+      if (!gate.ok) {
+        setPinError(
+          gate.locked
+            ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+            : 'Code PIN Manager incorrect.'
+        );
         return;
       }
       applyFn(safePercent, true);
@@ -166,7 +175,7 @@ export const DiscountModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[92vh]">
+      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[92dvh]">
         {/* Mobile Pull Handle */}
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
@@ -179,7 +188,7 @@ export const DiscountModal: React.FC = () => {
             <div className="min-w-0">
               <h2 className="text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2 truncate">
                 REMISE SUR PANIER
-                <span className="text-[10px] bg-purple-500/10 text-purple-400 font-bold px-2 py-0.5 rounded border border-purple-500/30 shrink-0">
+                <span className="text-[10px] bg-purple-500/10 text-purple-400 font-bold px-2 py-0.5 rounded-full border border-purple-500/30 shrink-0">
                   MARKDOWN
                 </span>
               </h2>
@@ -188,7 +197,7 @@ export const DiscountModal: React.FC = () => {
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
             aria-label="Fermer"
           >
             <X className="w-5 h-5" />

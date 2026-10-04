@@ -1,5 +1,34 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
+
+static RE_TAG: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\[(?:GTIN|S/N|SN|EAN|BARCODE|CODE)[:\s]*([A-Z0-9]+)\]").unwrap()
+});
+static RE_TAG2: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:GTIN|S/N|SN|EAN|BARCODE)[:\s]+([A-Z0-9]+)\b").unwrap()
+});
+static RE_DIGITS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(\d{8}|\d{12}|\d{13}|\d{14})\b").unwrap()
+});
+static RE_REF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\[(?:REF|P/N|PN|ART|SKU)[:\s]*([^\]]+)\]").unwrap()
+});
+static RE_BRACKET: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[([A-Z0-9_\-\./]+)\]").unwrap()
+});
+static RE_AMT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(\d{1,3}(?:[ \u{a0}]\d{3})*(?:[.,]\d{2})|\d+[.,]\d{2}|\b\d{3,}\b)").unwrap()
+});
+static RE_INVOICE_NUM: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:facture|bl|invoice)\s*(?:n[°o\.]*|#)\s*[:\s]*([A-Z0-9_\-\./]+)").unwrap()
+});
+static RE_DATE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b").unwrap()
+});
+static RE_SUPPLIER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)fournisseur\s*[:\s]+([^\n\|]+)").unwrap()
+});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OcrBoundingBox {
@@ -155,20 +184,17 @@ pub fn is_metadata_or_subline(s: &str) -> bool {
 
 /// Extracts a barcode, GTIN, or Serial Number from explicit tags or raw digit sequences.
 pub fn extract_barcode_or_sn_from_text(s: &str) -> Option<String> {
-    let re_tag = Regex::new(r"(?i)\[(?:GTIN|S/N|SN|EAN|BARCODE|CODE)[:\s]*([A-Z0-9]+)\]").unwrap();
-    if let Some(cap) = re_tag.captures(s) {
+    if let Some(cap) = RE_TAG.captures(s) {
         if let Some(m) = cap.get(1) {
             return Some(m.as_str().to_string());
         }
     }
-    let re_tag2 = Regex::new(r"(?i)\b(?:GTIN|S/N|SN|EAN|BARCODE)[:\s]+([A-Z0-9]+)\b").unwrap();
-    if let Some(cap) = re_tag2.captures(s) {
+    if let Some(cap) = RE_TAG2.captures(s) {
         if let Some(m) = cap.get(1) {
             return Some(m.as_str().to_string());
         }
     }
-    let re_digits = Regex::new(r"\b(\d{8}|\d{12}|\d{13}|\d{14})\b").unwrap();
-    for cap in re_digits.captures_iter(s) {
+    for cap in RE_DIGITS.captures_iter(s) {
         if let Some(m) = cap.get(1) {
             return Some(m.as_str().to_string());
         }
@@ -178,14 +204,12 @@ pub fn extract_barcode_or_sn_from_text(s: &str) -> Option<String> {
 
 /// Extracts reference / part numbers from bracketed or prefixed expressions.
 pub fn extract_ref_code_from_text(s: &str) -> Option<String> {
-    let re_ref = Regex::new(r"(?i)\[(?:REF|P/N|PN|ART|SKU)[:\s]*([^\]]+)\]").unwrap();
-    if let Some(cap) = re_ref.captures(s) {
+    if let Some(cap) = RE_REF.captures(s) {
         if let Some(m) = cap.get(1) {
             return Some(m.as_str().trim().to_string());
         }
     }
-    let re_bracket = Regex::new(r"\[([A-Z0-9_\-\./]+)\]").unwrap();
-    if let Some(cap) = re_bracket.captures(s) {
+    if let Some(cap) = RE_BRACKET.captures(s) {
         if let Some(m) = cap.get(1) {
             let val = m.as_str().trim();
             if val.len() >= 3 && !val.chars().all(|c| c.is_ascii_digit()) {
@@ -241,8 +265,7 @@ pub fn is_document_summary_line(s: &str) -> bool {
 
 pub fn extract_summary_amounts(line: &str, summary: &mut ExtractedDocumentSummary) {
     let lower = line.to_lowercase();
-    let re_amt = Regex::new(r"(\d{1,3}(?:[ \u{a0}]\d{3})*(?:[.,]\d{2})|\d+[.,]\d{2}|\b\d{3,}\b)").unwrap();
-    let amounts: Vec<f64> = re_amt
+    let amounts: Vec<f64> = RE_AMT
         .captures_iter(line)
         .filter_map(|cap| cap.get(1))
         .filter_map(|m| parse_french_algerian_amount(m.as_str()))
@@ -307,8 +330,7 @@ pub fn extract_invoice_metadata(line: &str, summary: &mut ExtractedDocumentSumma
             || lower.contains("bl n")
             || lower.contains("invoice #"))
     {
-        let re = Regex::new(r"(?i)(?:facture|bl|invoice)\s*(?:n[°o\.]*|#)\s*[:\s]*([A-Z0-9_\-\./]+)").unwrap();
-        if let Some(cap) = re.captures(line) {
+        if let Some(cap) = RE_INVOICE_NUM.captures(line) {
             if let Some(m) = cap.get(1) {
                 summary.detected_invoice_number = Some(m.as_str().trim().to_string());
                 matched = true;
@@ -318,8 +340,7 @@ pub fn extract_invoice_metadata(line: &str, summary: &mut ExtractedDocumentSumma
     if summary.detected_date.is_none()
         && (lower.contains("date") || lower.contains("le :") || lower.starts_with("le "))
     {
-        let re_date = Regex::new(r"\b(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})\b").unwrap();
-        if let Some(cap) = re_date.captures(line) {
+        if let Some(cap) = RE_DATE.captures(line) {
             if let Some(m) = cap.get(1) {
                 summary.detected_date = Some(m.as_str().trim().to_string());
                 matched = true;
@@ -328,8 +349,7 @@ pub fn extract_invoice_metadata(line: &str, summary: &mut ExtractedDocumentSumma
     }
     if summary.detected_supplier.is_none() {
         if lower.contains("fournisseur") {
-            let re_sup = Regex::new(r"(?i)fournisseur\s*[:\s]+([^\n\|]+)").unwrap();
-            if let Some(cap) = re_sup.captures(line) {
+            if let Some(cap) = RE_SUPPLIER.captures(line) {
                 if let Some(m) = cap.get(1) {
                     let s = m.as_str().trim();
                     if s.len() >= 2 {
@@ -586,8 +606,39 @@ impl SpatialLayoutParser {
             };
         }
 
-        // Sort boxes vertically by top-y coordinate (safe float sort)
-        boxes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal));
+        // 1. Guard against memory exhaustion: cap to 5,000 bounding boxes
+        if boxes.len() > 5000 {
+            boxes.truncate(5000);
+        }
+
+        // 2. Reject non-finite floats, negative dimensions, or empty whitespace text
+        boxes.retain(|b| {
+            b.x.is_finite()
+                && b.y.is_finite()
+                && b.w.is_finite()
+                && b.h.is_finite()
+                && b.confidence.is_finite()
+                && b.w >= 0.0
+                && b.h >= 0.0
+                && !b.text.trim().is_empty()
+        });
+
+        // 3. Bound text length per box to prevent memory bloat
+        for b in &mut boxes {
+            if b.text.len() > 2048 {
+                b.text.truncate(2048);
+            }
+        }
+
+        if boxes.is_empty() {
+            return ParsedDocumentResult {
+                rows: Vec::new(),
+                summary: ExtractedDocumentSummary::default(),
+            };
+        }
+
+        // Sort boxes vertically by top-y coordinate using IEEE 754 total_cmp
+        boxes.sort_by(|a, b| a.y.total_cmp(&b.y));
 
         let mut lines: Vec<Vec<OcrBoundingBox>> = Vec::new();
         for b in boxes {
@@ -627,15 +678,15 @@ impl SpatialLayoutParser {
         lines.sort_by(|l1, l2| {
             let y1 = l1.iter().map(|b| b.y).sum::<f64>() / l1.len() as f64;
             let y2 = l2.iter().map(|b| b.y).sum::<f64>() / l2.len() as f64;
-            y1.partial_cmp(&y2).unwrap_or(std::cmp::Ordering::Equal)
+            y1.total_cmp(&y2)
         });
 
         let mut structured_rows: Vec<ExtractedTableRow> = Vec::new();
         let mut summary = ExtractedDocumentSummary::default();
 
         for mut line in lines {
-            // Sort line tokens horizontally from left to right (safe float sort)
-            line.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+            // Sort line tokens horizontally from left to right using total_cmp
+            line.sort_by(|a, b| a.x.total_cmp(&b.x));
 
             // Reconstruct text, inserting column spaces when horizontal gaps exceed 4% width
             let mut line_raw = String::new();
@@ -1075,5 +1126,67 @@ mod tests {
         assert_eq!(m2.1, 5.0);
         assert_eq!(m2.2, 12500.0);
         assert_eq!(m2.3, 62500.0);
+    }
+
+    #[test]
+    fn test_corrupted_boxes_nan_filtering() {
+        let parser = SpatialLayoutParser::new();
+        let boxes = vec![
+            OcrBoundingBox {
+                text: "Ligne Valide 1 100 100".into(),
+                x: 0.1,
+                y: 0.1,
+                w: 0.8,
+                h: 0.05,
+                confidence: 0.99,
+            },
+            OcrBoundingBox {
+                text: "Corrupted NaN Box".into(),
+                x: f64::NAN,
+                y: 0.2,
+                w: 0.8,
+                h: 0.05,
+                confidence: 0.99,
+            },
+            OcrBoundingBox {
+                text: "Corrupted Negative Box".into(),
+                x: 0.1,
+                y: 0.3,
+                w: -1.0,
+                h: 0.05,
+                confidence: 0.99,
+            },
+            OcrBoundingBox {
+                text: "   ".into(),
+                x: 0.1,
+                y: 0.4,
+                w: 0.8,
+                h: 0.05,
+                confidence: 0.99,
+            },
+        ];
+
+        let result = parser.parse_document(boxes);
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].description, "Ligne Valide");
+    }
+
+    #[test]
+    fn test_oversized_box_payload_and_string_truncation() {
+        let parser = SpatialLayoutParser::new();
+        let mut boxes = Vec::new();
+        let huge_text = "A".repeat(5000);
+        boxes.push(OcrBoundingBox {
+            text: format!("Produit Test 1 500 500 {huge_text}"),
+            x: 0.1,
+            y: 0.1,
+            w: 0.8,
+            h: 0.05,
+            confidence: 0.99,
+        });
+
+        let result = parser.parse_document(boxes);
+        assert_eq!(result.rows.len(), 1);
+        assert!(result.rows[0].raw_line.len() <= 2048);
     }
 }

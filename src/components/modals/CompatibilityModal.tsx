@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Smartphone, X, ShieldCheck, Plus, Package } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
@@ -28,11 +28,13 @@ export const CompatibilityModal: React.FC = () => {
     );
   }, [products, selectedModel]);
 
+  useEffect(() => { if (activeModal !== 'compatibility') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
   if (activeModal !== 'compatibility') return null;
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-emerald-500/50 rounded-t-3xl sm:rounded-2xl w-full max-w-4xl h-[94vh] sm:h-[85vh] flex flex-col overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95">
+      <div className="bg-pos-panel border border-emerald-500/50 rounded-t-2xl sm:rounded-2xl w-full max-w-4xl h-[94dvh] sm:h-[85dvh] flex flex-col overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95">
         {/* Mobile drag handle */}
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
         
@@ -44,7 +46,7 @@ export const CompatibilityModal: React.FC = () => {
           </div>
           <button
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-white rounded-xl transition cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center shrink-0"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-white rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
             aria-label="Fermer"
           >
             <X className="w-5 h-5" />
@@ -74,7 +76,7 @@ export const CompatibilityModal: React.FC = () => {
               </div>
             </div>
 
-            <div className="p-3 sm:p-4 flex-1 overflow-y-auto hide-scrollbar space-y-2">
+            <div className="p-3 sm:p-4 flex-1 overflow-y-auto overscroll-contain hide-scrollbar space-y-2">
               <span className="text-xs font-bold text-pos-muted uppercase tracking-wider mb-2 block">2. Modèle</span>
               {modelsForBrand.length === 0 ? (
                 <p className="text-xs text-pos-muted italic py-4">Aucun modèle spécifique répertorié</p>
@@ -118,7 +120,7 @@ export const CompatibilityModal: React.FC = () => {
               )}
             </div>
 
-            <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3">
+            <div className="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4 space-y-3">
               {!selectedModel ? (
                 <div className="h-full flex flex-col items-center justify-center text-pos-muted">
                   <Smartphone className="w-12 h-12 opacity-20 mb-3" />
@@ -141,7 +143,7 @@ export const CompatibilityModal: React.FC = () => {
                           <p className="text-xs font-semibold text-pos-text leading-tight line-clamp-2" title={prod.title}>
                             {prod.title}
                           </p>
-                          <span className="text-[10px] text-emerald-500 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded inline-block mt-1">
+                          <span className="text-[10px] text-emerald-500 font-bold bg-emerald-500/10 px-1.5 py-0.5 rounded-full inline-block mt-1">
                             En stock: {prod.stock}
                           </span>
                         </div>

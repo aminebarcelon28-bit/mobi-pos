@@ -94,6 +94,8 @@ export const LabelPrinterModal: React.FC = () => {
     }
   }, [selectedProduct, labelSize, activeModal]);
 
+  useEffect(() => { if (activeModal !== 'label_printer') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
   if (activeModal !== 'label_printer') return null;
 
   const handlePrintLabels = async () => {
@@ -236,7 +238,7 @@ export const LabelPrinterModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[94vh] sm:max-h-[90vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[94dvh] sm:max-h-[90dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
         {/* Header */}
@@ -317,7 +319,7 @@ export const LabelPrinterModal: React.FC = () => {
             </div>
 
             {/* Product Selection List */}
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            <div className="flex-1 overflow-y-auto overscroll-contain space-y-2 pr-1">
               {filteredProducts.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-pos-muted py-8 text-center">
                   <Search className="w-8 h-8 opacity-40 mb-2" />
@@ -365,7 +367,7 @@ export const LabelPrinterModal: React.FC = () => {
           </div>
 
           {/* Right Panel: Label Configuration & Live Studio Preview */}
-          <div className="w-full lg:w-5/12 flex-1 lg:flex-initial flex flex-col p-3 sm:p-5 bg-pos-panel space-y-3 sm:space-y-4 overflow-y-auto">
+          <div className="w-full lg:w-5/12 flex-1 lg:flex-initial flex flex-col p-3 sm:p-5 bg-pos-panel space-y-3 sm:space-y-4 overflow-y-auto overscroll-contain">
             
             {/* Format & Quantity Controls */}
             <div className="space-y-3 bg-pos-card border border-pos-border p-3.5 rounded-xl">
@@ -477,7 +479,7 @@ export const LabelPrinterModal: React.FC = () => {
                         {receiptSettings.storeName || 'ACCESSOIRES MOBI'}
                       </span>
                     ) : <span />}
-                    <span className="text-[8px] font-bold text-gray-700 bg-gray-200 px-1 rounded">
+                    <span className="text-[8px] font-bold text-gray-700 bg-gray-200 px-1 rounded-full">
                       {selectedProduct.brand}
                     </span>
                   </div>

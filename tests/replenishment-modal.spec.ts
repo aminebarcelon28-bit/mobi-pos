@@ -180,8 +180,8 @@ test.describe('Réapprovisionnement — live store wiring (Stage 2)', () => {
   test('inline contact editor persists to the vendor directory', async ({ page }) => {
     await openHarness(page, true, LG, 900);
     await page.getByRole('button', { name: 'Ajouter contact pour Grossiste Algerien Mobile' }).first().click();
-    await page.getByLabel('Téléphone de Grossiste Algerien Mobile').fill('0550 12 34 56');
-    await page.getByLabel('WhatsApp de Grossiste Algerien Mobile').fill('0550 12 34 56');
+    await page.getByLabel('Téléphone de Grossiste Algerien Mobile').fill('0550123456');
+    await page.getByLabel('WhatsApp de Grossiste Algerien Mobile').fill('0550123456');
     await page.getByLabel('E-mail de Grossiste Algerien Mobile').fill('commandes@gam.dz');
     await page.getByRole('button', { name: 'Enregistrer les coordonnées de Grossiste Algerien Mobile' }).click();
     const saved = await page.evaluate(() => {
@@ -189,11 +189,12 @@ test.describe('Réapprovisionnement — live store wiring (Stage 2)', () => {
       return s.vendorDirectory['Grossiste Algerien Mobile'] ?? null;
     });
     expect(saved).not.toBeNull();
-    expect(saved!.phone).toBe('0550 12 34 56');
-    expect(saved!.whatsapp).toBe('0550 12 34 56');
+    // DzPhoneInput masks live to the canonical 0X XX XX XX XX grouping.
+    expect(saved!.phone).toBe('05 50 12 34 56');
+    expect(saved!.whatsapp).toBe('05 50 12 34 56');
     expect(saved!.email).toBe('commandes@gam.dz');
     const persisted = await page.evaluate(() => localStorage.getItem('mobi_vendor_directory_v1'));
-    expect(persisted).toContain('0550 12 34 56');
+    expect(persisted).toContain('05 50 12 34 56');
   });
 
   test('Créer PO assembles selected lines, persists a draft PO and routes to the PO review', async ({ page }) => {

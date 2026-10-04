@@ -7,7 +7,8 @@
     "tauri": "tauri",
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "node scripts/test_pos_math.js && node scripts/test_money_fixes.mjs && node scripts/test_receipt_math.mjs && node scripts/test_cloud_sync_and_migration.mjs && node scripts/test_sync_contract.mjs && node scripts/test_offline_chaos.mjs && node scripts/test_mobile_invariants.mjs && node scripts/test_mobile_release_pipeline.mjs && node scripts/verify-bidirectional-fix.mjs && node scripts/test_mobile_desktop_bidirectional_sync.mjs && node --experimental-strip-types scripts/test_bindings_and_hlc.mjs && node --experimental-strip-types scripts/test_p1_replay_equality.mjs && node --experimental-strip-types scripts/test_full_es_lfp_lifecycle.mjs && node --experimental-strip-types scripts/test_sync_hygiene.mjs && node --experimental-strip-types scripts/test_quota_storage.mjs && npm run test:license && npm run test:audit && npm run test:sav-intake && npm run test:boundaries",
+    "typecheck": "tsc -b --pretty false",
+    "test": "node scripts/test_pos_math.js && node scripts/test_money_fixes.mjs && node scripts/test_receipt_math.mjs && node scripts/test_cloud_sync_and_migration.mjs && node scripts/test_sync_contract.mjs && node scripts/test_offline_chaos.mjs && node scripts/test_mobile_invariants.mjs && node scripts/test_mobile_release_pipeline.mjs && node scripts/verify-bidirectional-fix.mjs && node scripts/test_mobile_desktop_bidirectional_sync.mjs && node --experimental-strip-types scripts/test_bindings_and_hlc.mjs && node --experimental-strip-types scripts/test_p1_replay_equality.mjs && node --experimental-strip-types scripts/test_full_es_lfp_lifecycle.mjs && node --experimental-strip-types scripts/test_sync_hygiene.mjs && node --experimental-strip-types scripts/test_quota_storage.mjs && npm run test:license && npm run test:audit && npm run test:sav-intake && npm run test:boundaries && npm run test:warranty",
     "test:license": "node --experimental-strip-types scripts/test_license_crypto.mjs && node --experimental-strip-types scripts/test_clock_guard.mjs && node --experimental-strip-types scripts/test_license_flow.mjs && npm run test:license:failclosed",
     "test:license:failclosed": "node --experimental-strip-types scripts/test_licensing_failclosed.mjs",
     "test:boundaries": "node scripts/check-boundaries.mjs && node scripts/check-trust-registry.mjs && node scripts/check-audit-boundary.mjs && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_audit_nofallback.mjs && node scripts/check-pin-boundary.mjs && node scripts/check-aria-label-name.mjs && node scripts/check-money-boundary.mjs && node scripts/test_money_entry_display.mjs && node scripts/test_zero_tax.mjs",
@@ -29,6 +30,7 @@
     "test:convergence": "node scripts/test_convergence_divergence.mjs",
     "test:customer-versions": "node scripts/test_customer_version_divergence.mjs",
     "test:checkout-ordering": "node scripts/test_checkout_ordering.mjs",
+    "test:transaction-ordering": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_transaction_ordering.mts",
     "test:oversell": "node scripts/test_oversell_guard.mjs",
     "test:refund-revenue": "node scripts/test_refund_revenue.mjs",
     "test:outbox": "node scripts/test_outbox_inflight.mjs",
@@ -92,7 +94,10 @@
     "test:e2e:sync": "node scripts/test_e2e_two_device_sync.mjs",
     "test:outbox-inflight": "node scripts/test_outbox_inflight.mjs",
     "test:sav-intake": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_sav_intake_v2.mts",
-    "test:tradein-exchange": "node scripts/test_tradein_exchange.mjs && node scripts/verify-tradein-phase01.mjs"
+    "test:tradein-exchange": "node scripts/test_tradein_exchange.mjs && node scripts/verify-tradein-phase01.mjs",
+    "test:warranty": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_warranty_boundary_parity.mts && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_warranty_anchoring.mts && node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_warranty_policy.mts && npm run test:warranty:scenarios",
+    "test:warranty:scenarios": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_warranty_chain_scenarios.mts",
+    "audit:warranty": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/audit_warranty_exposure.mjs"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",

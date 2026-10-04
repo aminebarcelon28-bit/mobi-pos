@@ -1,0 +1,15 @@
+{
+  "slot": "019-test-plugin-sql-patch",
+  "name": "Gate 7: Patched Tauri Plugin SQL Wrapper Tests",
+  "command": "cargo test -p tauri-plugin-sql",
+  "cwd": ".",
+  "expected_exit": 0,
+  "exit_code": 0,
+  "status": "PASS",
+  "start_local": "2026-10-01T03:18:40.393+01:00",
+  "start_utc": "2026-10-01T02:18:40.393Z",
+  "end_local": "2026-10-01T03:18:41.548+01:00",
+  "end_utc": "2026-10-01T02:18:41.548Z",
+  "stdout_sha256": "5c1d074aa75ab06d533af0d886bc8d7c7a682adbc05ee590b5976e802d6fa213",
+  "stderr_sha256": "d1907b6f79370d963f67a6889368254013a7e0758c6339daa2521bb0376718d8"
+}

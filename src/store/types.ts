@@ -393,7 +393,7 @@ export interface UISlice {
   createBundle: (bundle: Omit<ProductBundle, 'id'>) => Promise<void>;
   deleteBundle: (bundleId: string) => Promise<void>;
   addBundleToCart: (bundleId: string) => { success: boolean; reason?: string };
-  processTradeIn: (tradeIn: Omit<TradeInItem, 'id' | 'createdAt' | 'resalePrice'>) => Promise<{ success: true } | { success: false; reason: string }>;
+  processTradeIn: (tradeIn: Omit<TradeInItem, 'id' | 'createdAt' | 'resalePrice'>) => Promise<{ success: true; warning?: string } | { success: false; reason: string }>;
   /**
    * Two-way exchange staging (Phase 2): validated trade-in payload held in
    * memory ONLY — zero DB writes until the atomic checkout flight commits
@@ -411,6 +411,28 @@ export interface UISlice {
   tradeInExchangeRequest: { initial: Partial<StagedTradeIn>; nonce: number } | null;
   openTradeInExchange: (initial?: Partial<StagedTradeIn>) => void;
   clearTradeInExchangeRequest: () => void;
+  /**
+   * Request bus for the "Compléter la pièce" flow: the Inspector hands over a
+   * trade-in id, the modal opens in IDENTITY-EDIT mode (pre-filled, and locked
+   * to the identity fields — IMEI, amounts and `createdAt` are not editable).
+   */
+  tradeInEditRequest: { tradeInId: string; nonce: number } | null;
+  openTradeInIdentityEdit: (tradeInId: string) => void;
+  clearTradeInEditRequest: () => void;
+  /**
+   * The ONLY write path for seller identity data after intake. Patches the
+   * existing record (so `createdAt`, IMEI and amounts cannot drift), persists
+   * it through `saveTradeIn`, and writes one audit line per edit with the old
+   * and new values MASKED to the last 4 characters.
+   */
+  updateTradeInIdentity: (
+    tradeInId: string,
+    patch: {
+      nationalIdType?: TradeInItem['nationalIdType'] | null;
+      nationalIdNumber?: string | null;
+      customerPhone?: string | null;
+    }
+  ) => Promise<{ success: true } | { success: false; reason: string }>;
   /**
    * Soulte payout choice for a Net<0 exchange (shop owes the customer).
    * Explicit selection only — no default (a pre-selected default would

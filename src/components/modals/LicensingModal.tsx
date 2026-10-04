@@ -66,6 +66,8 @@ export const LicensingModal: React.FC = () => {
     });
   }, [activeModal]);
 
+  useEffect(() => { if (activeModal !== 'licensing') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
   if (activeModal !== 'licensing') return null;
 
   const isLicensed = Boolean(tokenPayload);
@@ -151,7 +153,7 @@ export const LicensingModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 max-h-[92vh] flex flex-col pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 max-h-[92dvh] flex flex-col pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
         {/* Modal Header */}
@@ -171,7 +173,7 @@ export const LicensingModal: React.FC = () => {
         </div>
 
         {/* Modal Body */}
-        <div className="p-4 sm:p-5 space-y-4 flex-1 overflow-y-auto">
+        <div className="p-4 sm:p-5 space-y-4 flex-1 overflow-y-auto overscroll-contain">
           {/* Status Badge */}
           <div
             className={

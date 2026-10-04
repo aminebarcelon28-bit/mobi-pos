@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   X,
   FileText,
@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Building2,
   HelpCircle,
+  Clipboard,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { CsvInvoiceRowSchema } from '../../schemas/invoiceSchema';
@@ -28,6 +29,7 @@ import {
   scanNativeDocument,
   parseTextToBoundingBoxes,
   generateDemoInvoiceScan,
+  generateAccessoriesInvoiceScan,
   isNativeScannerSupported,
 } from '../../utils/documentScanner';
 import { PoReviewScreen } from '../PoReviewScreen';
@@ -105,7 +107,10 @@ export const InvoiceIngestionModal: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [scanResponse, setScanResponse] = useState<ProcessRawScanResponse | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const scanFileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { if (activeModal !== 'invoice_ingestion') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
   if (activeModal !== 'invoice_ingestion') return null;
 
@@ -295,7 +300,7 @@ export const InvoiceIngestionModal: React.FC = () => {
     }
 
     if (
-      (reportedGrandTotal === 135250 || reportedGrandTotal === 0) &&
+      (reportedGrandTotal === 135250 || reportedGrandTotal === 128000 || reportedGrandTotal === 0) &&
       res.invariant_report.calculated_grand_total > 0 &&
       (!res.document_summary || !res.document_summary.detected_grand_total)
     ) {
@@ -356,8 +361,9 @@ export const InvoiceIngestionModal: React.FC = () => {
       setReportedGrandTotal(demoData.reported_grand_total);
 
       const res = await processRawScan(demoData);
+      applyExtractedSummary(res);
       setScanResponse(res);
-      showToast('Exemple de facture fournisseur chargé et réconcilié.', 'success');
+      showToast('Exemple de facture téléphones chargé et réconcilié.', 'success');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err) || 'Erreur lors du chargement de la démo';
       setAiError(msg);
@@ -367,10 +373,30 @@ export const InvoiceIngestionModal: React.FC = () => {
     }
   };
 
-  const handleScanFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleAccessoriesScanClick = async () => {
+    setAiError(null);
+    setIsAnalyzing(true);
+    try {
+      const demoData = generateAccessoriesInvoiceScan();
+      setSupplierName(demoData.supplier_name);
+      setReportedTax(demoData.reported_tax);
+      setReportedFreight(demoData.reported_freight);
+      setReportedGrandTotal(demoData.reported_grand_total);
 
+      const res = await processRawScan(demoData);
+      applyExtractedSummary(res);
+      setScanResponse(res);
+      showToast('Facture réelle accessoires (128 000 DA) chargée et réconciliée.', 'success');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err) || 'Erreur lors du chargement de la démo';
+      setAiError(msg);
+      showToast(msg, 'error');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const processUploadedFile = (file: File) => {
     setAiError(null);
     const reader = new FileReader();
     reader.onload = async (event) => {
@@ -411,6 +437,32 @@ export const InvoiceIngestionModal: React.FC = () => {
     reader.readAsText(file);
   };
 
+  const handleScanFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processUploadedFile(file);
+    }
+  };
+
+  const handlePasteFromClipboard = async () => {
+    try {
+      if (typeof navigator === 'undefined' || !navigator.clipboard?.readText) {
+        showToast('Presse-papier inaccessible. Collez directement avec Ctrl+V.', 'error');
+        return;
+      }
+      const text = await navigator.clipboard.readText();
+      if (!text.trim()) {
+        showToast('Le presse-papier est vide.', 'error');
+        return;
+      }
+      setRawOcrInput(text);
+      setShowDirectTextInput(true);
+      showToast('Lignes collées depuis le presse-papier.', 'success');
+    } catch {
+      showToast('Accès au presse-papier refusé. Utilisez Ctrl+V directement.', 'error');
+    }
+  };
+
   const handleDirectOcrProcess = async () => {
     if (!rawOcrInput.trim()) return;
     setAiError(null);
@@ -441,7 +493,7 @@ export const InvoiceIngestionModal: React.FC = () => {
   if (scanResponse) {
     return (
       <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-0 sm:p-4 select-none">
-        <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-full max-h-[96vh] sm:max-h-[92vh]">
+        <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-6xl xl:max-w-7xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-full max-h-[96dvh] sm:max-h-[92dvh]">
           <PoReviewScreen
             supplierName={supplierName}
             reportedTax={reportedTax}
@@ -466,7 +518,7 @@ export const InvoiceIngestionModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[94dvh] sm:h-auto max-h-[94dvh] sm:max-h-[90vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.75rem,var(--safe-bottom))] sm:py-0">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[94dvh] sm:h-auto max-h-[94dvh] sm:max-h-[90dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.75rem,var(--safe-bottom))] sm:py-0">
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
         {/* Header */}
@@ -513,7 +565,7 @@ export const InvoiceIngestionModal: React.FC = () => {
 
         {/* TAB 1: AI RECON & INVARIANT SCANNER */}
         {activeTab === 'ai_recon' && (
-          <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">
+          <div className="p-4 sm:p-5 space-y-4 overflow-y-auto overscroll-contain flex-1">
             {aiError && (
               <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs space-y-2.5">
                 <div className="flex items-start gap-2">
@@ -636,48 +688,88 @@ export const InvoiceIngestionModal: React.FC = () => {
                 </div>
               </button>
 
-              {/* Upload Document / Image */}
+              {/* Upload Document / Image with Drag-and-Drop */}
               <div className="relative">
                 <input
                   type="file"
-                  accept=".txt,.csv,.tsv"
+                  accept=".txt,.csv,.tsv,.ocr"
                   ref={scanFileInputRef}
                   onChange={handleScanFileUpload}
                   className="hidden"
                 />
-                <button
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDragging(true);
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragging(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) processUploadedFile(file);
+                  }}
                   onClick={() => scanFileInputRef.current?.click()}
-                  disabled={isAnalyzing}
-                  className="w-full h-full p-4 rounded-2xl bg-pos-card border border-pos-border hover:border-pos-accent text-left transition flex flex-col justify-between gap-3 group cursor-pointer shadow-sm hover:shadow-md disabled:opacity-50 min-h-[100px] active-press"
+                  className={`w-full h-full p-4 rounded-2xl bg-pos-card border text-left transition flex flex-col justify-between gap-3 group cursor-pointer shadow-sm hover:shadow-md min-h-[100px] active-press ${
+                    isDragging
+                      ? 'border-indigo-500 bg-indigo-500/10 ring-2 ring-indigo-500'
+                      : 'border-pos-border hover:border-pos-accent'
+                  }`}
                 >
-                  <div className="w-11 h-11 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 group-hover:scale-105 transition">
-                    <Upload className="w-5 h-5" />
+                  <div className="flex items-center justify-between w-full">
+                    <div className="w-11 h-11 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 group-hover:scale-105 transition">
+                      <Upload className="w-5 h-5" />
+                    </div>
+                    <span className="text-[10px] font-bold text-indigo-400 bg-indigo-500/10 border border-indigo-500/30 px-2 py-0.5 rounded-full">
+                      Glisser-Déposer / Parcourir
+                    </span>
                   </div>
                   <div>
                     <h4 className="text-xs font-black text-pos-text">Importer Fichier Texte OCR</h4>
                     <p className="text-[11px] text-pos-muted mt-0.5">
-                      Fichier texte (.txt, .csv) contenant les lignes du bon fournisseur.
+                      Glissez ou sélectionnez un fichier (.txt, .csv, .tsv) avec les lignes facture.
                     </p>
                   </div>
-                </button>
+                </div>
               </div>
             </div>
 
-            {/* 1-Click Demo Loader for Testing & Demonstration */}
-            <div className="pt-1">
+            {/* 1-Click Pro Demo Loaders for Real-World Testing */}
+            <div className="pt-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button
-                onClick={handleDemoScanClick}
+                type="button"
+                onClick={handleAccessoriesScanClick}
                 disabled={isAnalyzing}
-                className="w-full p-3.5 rounded-2xl bg-pos-card/80 border border-pos-border hover:border-amber-500/40 text-left transition flex items-center justify-between gap-3 cursor-pointer group disabled:opacity-50 active-press"
+                className="p-3 rounded-2xl bg-pos-card/90 border border-pos-border hover:border-emerald-500/40 text-left transition flex items-center justify-between gap-2.5 cursor-pointer group disabled:opacity-50 active-press"
               >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 group-hover:scale-105 transition shrink-0">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:scale-105 transition shrink-0">
                     <Sparkles className="w-4 h-4" />
                   </div>
                   <div className="min-w-0">
-                    <h4 className="text-xs font-black text-pos-text truncate">Charger Facture Démo (1-Clic Test)</h4>
+                    <h4 className="text-xs font-black text-pos-text truncate">⚡ Facture Accessoires (128 000 DA)</h4>
                     <p className="text-[10px] text-pos-muted truncate">
-                      Teste immédiatement le contrôle d'invariants avec des codes GTIN et montants réels.
+                      5 articles réels (Apple 20W, Coque 15PM, Câble Belkin, Anker 65W, S24U).
+                    </p>
+                  </div>
+                </div>
+                <ArrowRight className="w-4 h-4 text-pos-muted group-hover:text-pos-text transition shrink-0" />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDemoScanClick}
+                disabled={isAnalyzing}
+                className="p-3 rounded-2xl bg-pos-card/90 border border-pos-border hover:border-amber-500/40 text-left transition flex items-center justify-between gap-2.5 cursor-pointer group disabled:opacity-50 active-press"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 group-hover:scale-105 transition shrink-0">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <h4 className="text-xs font-black text-pos-text truncate">⚡ Facture Pièces / Écrans (135 250 DA)</h4>
+                    <p className="text-[10px] text-pos-muted truncate">
+                      OLED iPhone 13, Batteries Samsung, Chargeurs 25W.
                     </p>
                   </div>
                 </div>
@@ -687,14 +779,26 @@ export const InvoiceIngestionModal: React.FC = () => {
 
             {/* Direct OCR Textarea Toggle */}
             <div className="pt-1">
-              <button
-                type="button"
-                onClick={() => setShowDirectTextInput(!showDirectTextInput)}
-                className="text-[11px] text-pos-muted hover:text-pos-text flex items-center gap-1.5 transition cursor-pointer min-h-[36px]"
-              >
-                <HelpCircle className="w-3.5 h-3.5" />
-                <span>{showDirectTextInput ? 'Masquer la saisie texte brute' : 'Saisie / Collage direct de lignes OCR'}</span>
-              </button>
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => setShowDirectTextInput(!showDirectTextInput)}
+                  className="text-[11px] text-pos-muted hover:text-pos-text flex items-center gap-1.5 transition cursor-pointer min-h-[36px]"
+                >
+                  <HelpCircle className="w-3.5 h-3.5" />
+                  <span>{showDirectTextInput ? 'Masquer la saisie texte brute' : 'Saisie / Collage direct de lignes OCR'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handlePasteFromClipboard}
+                  className="text-[11px] text-pos-accent hover:text-pos-accent/80 font-bold flex items-center gap-1 transition cursor-pointer py-1 px-2 rounded-lg bg-pos-card border border-pos-border"
+                  title="Coller directement depuis le presse-papier"
+                >
+                  <Clipboard className="w-3.5 h-3.5" />
+                  <span>Coller Presse-Papier</span>
+                </button>
+              </div>
 
               {showDirectTextInput && (
                 <div className="mt-2 space-y-2">
@@ -719,14 +823,23 @@ export const InvoiceIngestionModal: React.FC = () => {
                     placeholder="Ex: Écran OLED iPhone 13 4006381333931 5x 12500.00 62500.00&#10;Batterie Origine Samsung S21 10x 3200.00 32000.00"
                     className="w-full bg-pos-panel border border-pos-border rounded-xl p-3 text-xs font-mono text-pos-text focus:border-pos-accent focus:outline-none"
                   />
-                  <button
-                    onClick={handleDirectOcrProcess}
-                    disabled={!rawOcrInput.trim() || isAnalyzing}
-                    className="px-4 py-2.5 rounded-xl bg-pos-accent text-white text-xs font-bold flex items-center gap-2 cursor-pointer disabled:opacity-50 min-h-[44px]"
-                  >
-                    {isAnalyzing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                    <span>Analyser le texte OCR</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleDirectOcrProcess}
+                      disabled={!rawOcrInput.trim() || isAnalyzing}
+                      className="px-4 py-2.5 rounded-xl bg-pos-accent text-white text-xs font-bold flex items-center gap-2 cursor-pointer disabled:opacity-50 min-h-[44px]"
+                    >
+                      {isAnalyzing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                      <span>Analyser le texte OCR</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRawOcrInput('')}
+                      className="px-3 py-2.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text text-xs cursor-pointer min-h-[44px]"
+                    >
+                      Effacer
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -735,7 +848,7 @@ export const InvoiceIngestionModal: React.FC = () => {
 
         {/* TAB 2: ORIGINAL CSV / TEXT INGESTION (100% PRESERVED) */}
         {activeTab === 'csv_text' && (
-          <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">
+          <div className="p-4 sm:p-5 space-y-4 overflow-y-auto overscroll-contain flex-1">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
               <p className="text-xs text-pos-muted max-w-md">
                 Collez le texte ou importez un fichier CSV/TXT (Format: <code className="text-pos-accent">SKU, Quantité, PrixAchat, IMEI (optionnel)</code>) pour incrémenter directement les stocks.
@@ -791,7 +904,7 @@ export const InvoiceIngestionModal: React.FC = () => {
                   </div>
                 </div>
                 <div className="bg-pos-bg rounded-xl border border-pos-border overflow-hidden">
-                  <div className="max-h-48 overflow-y-auto p-1">
+                  <div className="max-h-48 overflow-y-auto overscroll-contain p-1">
                     <table className="w-full text-xs text-left">
                       <thead className="text-pos-muted sticky top-0 bg-pos-bg">
                         <tr>

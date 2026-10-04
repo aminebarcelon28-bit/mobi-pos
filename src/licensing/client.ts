@@ -21,6 +21,7 @@ import {
   getLastActiveLicenseKey,
 } from './store';
 import { setCloudCredentials, deleteCloudCredentials } from '../sync/keychain';
+import { trustSyncLicense, trustReportRevocation } from '../api/license';
 import { isMobileDevice, isAndroid, isIOS } from '../utils/platform';
 
 export const DEFAULT_LICENSING_ENDPOINT =
@@ -191,6 +192,15 @@ export async function activateLicense(params: {
       lastVerifiedAt: now,
     });
 
+    // 7. Phase 1: advance the native kernel from its own Ed25519
+    // verification (same token). Non-fatal to the TS flow: a failure leaves
+    // the kernel fail-closed and boot re-sync heals transients.
+    try {
+      await trustSyncLicense(data.token);
+    } catch (err) {
+      console.warn('[licensing] native kernel sync failed after activation:', err);
+    }
+
     return {
       success: true,
       payload,
@@ -259,6 +269,13 @@ export async function activateWithOfflineToken(
     lastKnownTimestamp: now,
     lastVerifiedAt: now,
   });
+
+  // 6. Phase 1: native kernel sync (same guarantees as online activation).
+  try {
+    await trustSyncLicense(cleanToken);
+  } catch (err) {
+    console.warn('[licensing] native kernel sync failed after offline activation:', err);
+  }
 
   return {
     success: true,
@@ -393,6 +410,15 @@ export async function checkBootLicense(options?: {
       await deleteCloudCredentials();
       emitLicenseRevoked(reason);
 
+      // Phase 1: propagate the revocation into the native kernel so a stale
+      // OPERATIONAL snapshot cannot survive revocation (honest-client path;
+      // residual gap documented in the Phase 1 report).
+      try {
+        await trustReportRevocation(true);
+      } catch (err) {
+        console.warn('[licensing] native revocation propagation failed:', err);
+      }
+
       return {
         licensed: false,
         status: 'SUSPENDED',
@@ -411,6 +437,15 @@ export async function checkBootLicense(options?: {
     }
   } catch {
     // Silent fallback to offline token within grace period if network unreachable
+  }
+
+  // Phase 1: boot-time kernel sync — the stored token was just verified
+  // above (signature + device binding), so bring the kernel to the same
+  // verdict. Heals transient sync failures from earlier activations.
+  try {
+    await trustSyncLicense(token);
+  } catch (err) {
+    console.warn('[licensing] native kernel sync failed at boot:', err);
   }
 
   return {
@@ -495,6 +530,13 @@ export function startLicenseHeartbeat(options?: {
         // Wipe cached tokens & cloud credentials
         await clearStoredLicenseToken();
         await deleteCloudCredentials();
+
+        // Phase 1: propagate heartbeat revocation into the native kernel.
+        try {
+          await trustReportRevocation(true);
+        } catch (err) {
+          console.warn('[licensing] native revocation propagation failed:', err);
+        }
 
         // Emit revocation to drop screen to suspension wall
         emitLicenseRevoked(reason);

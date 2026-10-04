@@ -71,6 +71,14 @@ function normalizeLicenseKey(rawKey: string): string {
   return rawKey.trim().toUpperCase().replace(/[^0-9A-Z]/g, '');
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 const DUMMY_CIPHERTEXT =
   'v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
 
@@ -656,9 +664,20 @@ export default {
               ORDER BY l.created_at DESC`,
       });
 
+      // Attach any escrowed ciphertext. Only licences that have one pay the
+      // extra KV read; the audit namespace is shared, so each lookup is an
+      // exact key rather than a list-then-filter.
+      const licenses = await Promise.all(
+        licRes.rows.map(async (row: any) => {
+          if (!row?.id) return row;
+          const escrow = await env.AUDIT_KV.get(`escrow:${await sha256Hex(String(row.id))}`);
+          return escrow ? { ...row, encrypted_key_escrow: escrow } : row;
+        })
+      );
+
       return jsonResponse({
         status: 'success',
-        licenses: licRes.rows,
+        licenses,
       });
     }
 
@@ -831,7 +850,46 @@ export default {
       }
     }
 
-    // 12. Admin: Audit Checkpoint (detects ledger head truncation)
+    // 12. Admin: Key Escrow (encrypted plaintext key recovery)
+    //
+    // Licences live in Turso, whose schema the desktop client does not own, and
+    // the signing endpoint is stateless. Escrow is therefore kept in KV under a
+    // distinct "escrow:" prefix so it never collides with the audit documents
+    // in the same namespace, and never has to migrate the shared database.
+    //
+    // The payload is an opaque AES-256-GCM envelope produced with the vendor
+    // master key. The worker can neither read nor validate it; it is storage.
+    if (request.method === 'POST' && path === '/api/v1/admin/key-escrow') {
+      if (!isAuthorizedAdmin(request)) {
+        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
+      }
+      let body: any;
+      try {
+        body = await request.json();
+      } catch {
+        return jsonResponse({ error: 'INVALID_JSON', message: 'Payload JSON invalide.' }, 400);
+      }
+      const licenseId = typeof body?.license_id === 'string' ? body.license_id.trim() : '';
+      const envelope = typeof body?.encrypted_key_escrow === 'string'
+        ? body.encrypted_key_escrow.trim()
+        : '';
+      if (!licenseId || !envelope) {
+        return jsonResponse(
+          { error: 'MISSING_FIELDS', message: 'license_id et encrypted_key_escrow requis.' },
+          400
+        );
+      }
+      if (envelope.length > 8192) {
+        return jsonResponse({ error: 'PAYLOAD_TOO_LARGE', message: 'Enveloppe trop volumineuse.' }, 413);
+      }
+      // Keyed on a hash of the id so a hostile licence_id cannot be crafted to
+      // collide with (or enumerate) an audit document key in the same namespace.
+      const escrowKey = `escrow:${await sha256Hex(licenseId)}`;
+      await env.AUDIT_KV.put(escrowKey, envelope);
+      return jsonResponse({ status: 'stored' });
+    }
+
+    // 13. Admin: Audit Checkpoint (detects ledger head truncation)
     if (request.method === 'POST' && path === '/api/v1/admin/audit/checkpoint') {
       if (!isAuthorizedAdmin(request)) {
         return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
@@ -897,16 +955,91 @@ export default {
         );
       }
 
-      await env.AUDIT_KV.put(
-        client_id,
-        JSON.stringify({
-          sequence_number,
-          head_audit_hash: head_audit_hash.toLowerCase(),
-          synced_at: new Date().toISOString(),
-        })
-      );
+      const checkpoint = JSON.stringify({
+        sequence_number,
+        head_audit_hash: head_audit_hash.toLowerCase(),
+        synced_at: new Date().toISOString(),
+      });
+
+      // Automated runs use an ephemeral client id so they can never collide
+      // with a real installation. Such records self-expire so a test run does
+      // not leave permanent state behind, and -- more importantly -- so a
+      // stray test sequence can never become a baseline that locks out a real
+      // client later.
+      if (client_id.startsWith('test_ephemeral_')) {
+        await env.AUDIT_KV.put(client_id, checkpoint, { expirationTtl: 60 });
+      } else {
+        await env.AUDIT_KV.put(client_id, checkpoint);
+      }
 
       return jsonResponse({ status: 'anchored', server_time: new Date().toISOString() });
+    }
+
+    // 14. Admin: Audit Anchor Reset (recovers a client from a false lockout)
+    //
+    // A 409 regression normally means a real truncation attack and must never
+    // be waved away. But there is one legitimate cause: the local ledger was
+    // lost (wiped machine, restored backup, reinstall) while the anchor
+    // survived. The client can then never make progress, because every
+    // legitimate sequence it proposes is "lower" than the server baseline.
+    //
+    // This endpoint is the deliberate, audited escape hatch. It requires the
+    // same admin auth as every other admin route, takes an explicit
+    // `confirm` token so it cannot be triggered by a stray or replayed call,
+    // and records the previous checkpoint in the response so an operator has
+    // the discarded evidence in hand.
+    if (request.method === 'POST' && path === '/api/v1/admin/audit/reset') {
+      if (!isAuthorizedAdmin(request)) {
+        return jsonResponse({ error: 'UNAUTHORIZED', message: 'Accès administrateur non autorisé.' }, 401);
+      }
+      if (!env.AUDIT_KV) {
+        return jsonResponse(
+          { error: 'KV_UNBOUND', message: 'Namespace KV AUDIT_KV non lié sur ce worker.' },
+          503
+        );
+      }
+
+      let body: any;
+      try {
+        body = await request.json();
+      } catch {
+        return jsonResponse({ error: 'INVALID_JSON', message: 'Payload JSON invalide.' }, 400);
+      }
+
+      const { client_id, confirm } = body ?? {};
+      if (typeof client_id !== 'string' || client_id.length === 0) {
+        return jsonResponse({ error: 'MISSING_FIELDS', message: 'client_id requis.' }, 400);
+      }
+      // Ephemeral test ids are already disposable, but they get a weaker
+      // token so that a stray harness call can never reset a real
+      // installation's anchor by reusing a familiar-looking client id.
+      const isEphemeral = client_id.startsWith('test_ephemeral_');
+      const expected = isEphemeral ? 'RESET_EPHEMERAL' : 'RESET_AUDIT_ANCHOR';
+      if (confirm !== expected) {
+        return jsonResponse(
+          {
+            error: 'CONFIRMATION_REQUIRED',
+            message: `Confirmation explicite "${expected}" requise.`,
+          },
+          400
+        );
+      }
+
+      const previous = (await env.AUDIT_KV.get(client_id, 'json')) as
+        | { sequence_number: number; head_audit_hash: string; synced_at?: string }
+        | null;
+
+      if (previous) {
+        await env.AUDIT_KV.delete(client_id);
+      }
+
+      return jsonResponse({
+        status: 'reset',
+        client_id,
+        discarded_checkpoint: previous,
+        had_checkpoint: previous !== null,
+        server_time: new Date().toISOString(),
+      });
     }
 
     return jsonResponse({ error: 'NOT_FOUND', message: 'Route non trouvée.' }, 404);

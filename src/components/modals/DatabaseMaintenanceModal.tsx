@@ -16,6 +16,8 @@ import { usePosStore } from '../../store/usePosStore';
 import { maintenanceService, type DbStats, type IntegrityReport } from '../../services/maintenanceService';
 import { useToast } from '../ui/Toast';
 import { audioBus } from '../../utils/audioEvents';
+import { verifyManagerGate } from '../../utils/pinGate';
+import { Lock, ShieldAlert } from 'lucide-react';
 
 export const DatabaseMaintenanceModal: React.FC = () => {
   const {
@@ -41,11 +43,14 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   const [actionOutput, setActionOutput] = useState<string>('');
   const [repairTicketId, setRepairTicketId] = useState<string>('');
 
-  useEffect(() => {
-    if (activeModal === 'db_maintenance') {
-      loadStats();
-    }
-  }, [activeModal]);
+  // Decision 2: the maintenance center exposes the full-JSON export and
+  // snapshot creation — fresh manager PIN per open (native gate,
+  // fail-closed), same bar as the journal. Covers every launcher
+  // (Header/BottomBar/ManagementTab) authoritatively at the modal.
+  const [maintUnlocked, setMaintUnlocked] = useState(false);
+  const [maintPin, setMaintPin] = useState('');
+  const [maintError, setMaintError] = useState<string | null>(null);
+  const [maintVerifying, setMaintVerifying] = useState(false);
 
   const loadStats = async () => {
     try {
@@ -57,6 +62,50 @@ export const DatabaseMaintenanceModal: React.FC = () => {
       console.error('Failed to load DB stats:', e);
     }
   };
+
+  useEffect(() => {
+    if (activeModal === 'db_maintenance') {
+      setMaintUnlocked(false);
+      setMaintPin('');
+      setMaintError(null);
+    }
+  }, [activeModal]);
+
+  const handleMaintUnlock = async () => {
+    const clean = maintPin.trim();
+    if (!/^\d+$/.test(clean) || clean.length < 4 || clean.length > 32) {
+      setMaintError('PIN manager : 4 chiffres minimum.');
+      return;
+    }
+    setMaintVerifying(true);
+    setMaintError(null);
+    try {
+      const gate = await verifyManagerGate(clean);
+      if (gate.locked) {
+        const secs = Math.max(1, Math.ceil(gate.remainingMs / 1000));
+        setMaintError(`Verrouillé — réessayez dans ${secs}s.`);
+        return;
+      }
+      if (!gate.ok) {
+        setMaintError('PIN manager incorrect.');
+        return;
+      }
+      setMaintUnlocked(true);
+      setMaintPin('');
+      setMaintError(null);
+      void loadStats();
+    } finally {
+      setMaintVerifying(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeModal === 'db_maintenance') {
+      loadStats();
+    }
+  }, [activeModal]);
+
+  useEffect(() => { if (activeModal !== 'db_maintenance') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
   if (activeModal !== 'db_maintenance') return null;
 
@@ -250,7 +299,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[94vh] sm:h-[90vh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[94dvh] sm:h-[90dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
         <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
 
         {/* ══════════════════════════════════════════════════════════════ */}
@@ -284,9 +333,63 @@ export const DatabaseMaintenanceModal: React.FC = () => {
           </button>
         </div>
 
-        {/* ══════════════════════════════════════════════════════════════ */}
-        {/* TOP TELEMETRY CARDS */}
-        {/* ══════════════════════════════════════════════════════════════ */}
+        {!maintUnlocked ? (
+          /* ── Decision 2 gate screen (authoritative for all launchers) ── */
+          <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center gap-4 text-center">
+            <div className="w-12 h-12 rounded-full bg-cyan-500/15 flex items-center justify-center border border-cyan-500/30">
+              <Lock className="w-6 h-6 text-cyan-400" aria-hidden="true" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-pos-text">Accès réservé — PIN manager requis</h3>
+              <p className="text-[11px] text-pos-muted mt-1 max-w-sm">
+                Le centre de maintenance expose l'export JSON intégral et les instantanés. Contrôle d'accès
+                occasionnel — ne résiste pas à un WebView modifié.
+              </p>
+            </div>
+            <form
+              className="w-full max-w-xs space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!maintVerifying) void handleMaintUnlock();
+              }}
+            >
+              <input
+                type="password"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoComplete="current-password"
+                enterKeyHint="done"
+                aria-label="PIN manager"
+                maxLength={12}
+                value={maintPin}
+                onChange={(e) => {
+                  setMaintError(null);
+                  setMaintPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 12));
+                }}
+                placeholder="PIN manager"
+                className="w-full min-h-[52px] bg-pos-card border border-pos-border rounded-xl px-4 text-center text-2xl font-mono font-black tracking-[0.5em] text-pos-text focus:outline-none focus:border-cyan-500 transition"
+              />
+              {maintError && (
+                <p className="text-[11px] text-pos-danger" role="alert">
+                  {maintError}
+                </p>
+              )}
+              <button
+                type="submit"
+                disabled={maintVerifying || maintPin.trim().length < 4}
+                className="w-full min-h-[48px] rounded-xl font-bold bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition cursor-pointer"
+              >
+                {maintVerifying ? 'Vérification…' : 'Déverrouiller la maintenance'}
+              </button>
+            </form>
+            <p className="text-[10px] text-pos-muted max-w-xs flex items-center gap-1.5">
+              <ShieldAlert className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              Chaque ouverture demande le PIN — aucune session prolongée.
+            </p>
+          </div>
+        ) : (
+        <>
+        {/* ── TOP TELEMETRY CARDS ── */}
         <div className="p-4 border-b border-pos-border bg-pos-bg grid grid-cols-2 sm:grid-cols-4 gap-3 shrink-0">
           <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
             <div>
@@ -348,7 +451,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* MAIN BODY */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-4">
           {/* PRAGMAs & System Info */}
           <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3">
             <h3 className="text-xs font-black text-pos-text uppercase tracking-wider flex items-center gap-2">
@@ -562,6 +665,8 @@ export const DatabaseMaintenanceModal: React.FC = () => {
             Fermer (Échap)
           </button>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

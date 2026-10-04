@@ -194,6 +194,7 @@ PRAGMA foreign_keys = ON;       -- per-connection; forgetting it disables FKs si
 ---
 
 ## SECTION 4 — TURSO EMBEDDED REPLICA SYNC (S) — HIGHEST PRIORITY
+> SUPERSEDED (owner decision, Phase 4.x): §§S1–S5 and Appendix B describe a libSQL-replica architecture with no implementation — the store is plain SQLite with TS outbox sync. Do not implement or reference; see AGENTS.md.
 
 ### S1 — Topology & Truth Model
 
@@ -636,6 +637,7 @@ export async function createUser(payload: CreateUserPayload): Promise<User> {
 ---
 
 ## APPENDIX B — TURSO SYNC PATTERNS
+> SUPERSEDED (owner decision, Phase 4.x): see the note at Section 4 above — plain SQLite + TS outbox sync is authoritative, not this appendix.
 
 ```rust
 // src-tauri/src/db/connection.rs — replica construction (S2.1, S4.1)

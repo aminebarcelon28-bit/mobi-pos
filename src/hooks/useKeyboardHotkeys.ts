@@ -190,8 +190,19 @@ export const useKeyboardHotkeys = () => {
       // Shift+Delete or Ctrl+Delete: Reset / Clear Cart (with verification)
       if ((e.key === 'Delete' || e.key === 'Backspace') && (e.shiftKey || e.ctrlKey) && !isInputFocused && !activeModal) {
         e.preventDefault();
-        const currentCart = usePosStore.getState().cart;
+        const st = usePosStore.getState();
+        const currentCart = st.cart;
         if (currentCart.length > 0) {
+          // Audit parity with the desktop full-clear path: a hotkey wipe is
+          // still a cart wipe. Honest flag (no PIN verified here) + real
+          // operator name — never a hardcoded role or an unearned PIN chip.
+          const units = currentCart.reduce((a, i) => a + i.quantity, 0);
+          void st.logSecurityAction(
+            'Annulation Complète Panier (Raccourci)',
+            `Panier vidé au clavier (${units} unités)`,
+            st.activeCashier?.name?.trim() || 'Caissier',
+            false,
+          );
           clearCart();
         }
         return;

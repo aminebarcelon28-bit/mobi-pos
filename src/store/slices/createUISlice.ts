@@ -20,8 +20,10 @@ import { markBoot, printBootSummary } from '../../utils/bootTimings';
 import { checkPinLockout, recordPinFailure, resetPinLockout } from '../../utils/security';
 import { computeEffectiveUnitPrice } from '../../utils/pricingEngine';
 import { generateUniqueEan13Barcode, generateUniqueSku } from '../../utils/barcodeGenerator';
-import { luhnCheckImei } from '../../utils/savValidation';
+import { luhnCheckImei, validateDeviceIdentifierForIntake } from '../../utils/savValidation';
+import { normalizeDeviceKey } from '../../utils/warrantyResolver';
 import { isImeiAllocatedInCart } from '../../utils/tradeInExchange';
+import { maskNationalId, maskPhone, normalizeNationalIdType } from '../../utils/tradeInOrigin';
 import { isTauriEnv } from '../../db/adapters/base';
 // P11.3: sqliteAdapter -> adapters -> dexie + libsql is the heaviest static chain
 // left in the entry. initDatabase() runs from a useEffect, so load it on demand.
@@ -44,6 +46,7 @@ async function getBackupRepo() {
   return backupRepository;
 }
 import { hashPin, verifyPin, hashDeviceLocalPin } from '../../utils/security';
+import { sortedTransactions } from '../transactionOrder';
 import { STORAGE_KEYS } from '../../constants';
 import { usePosStore } from '../usePosStore';
 
@@ -208,6 +211,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
   imeiRecords: [],
   stagedTradeIn: null,
   tradeInExchangeRequest: null,
+  tradeInEditRequest: null,
   exchangeSoultePayout: null,
   activeImeiDossier: null,
   // SECURITY: unset until first-boot setup (App.tsx blocks the till until set).
@@ -790,7 +794,35 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         };
       }
 
-      const resalePrice = Math.round(tradeInput.buybackValue * (1 + tradeInput.resaleMarginPercent / 100));
+      // W-30/W-43 — identity discipline at the WRITE boundary, through the ONE
+      // gate every acquisition writer shares.
+      //
+      // The modal already compacts the identifier and refuses a bad checksum,
+      // but the modal is WebView code and can be bypassed
+      // (docs/webview-sql-residual.md), so the guard is repeated here where the
+      // registry row is actually minted.
+      const intake = validateDeviceIdentifierForIntake(
+        tradeInput.imei,
+        (imeiRecords || []).map((r) => r.imei)
+      );
+      if (!intake.ok) {
+        return {
+          success: false as const,
+          reason:
+            intake.code === 'IMEI_LUHN_INVALID'
+              ? `IMEI_INVALIDE:${intake.reason}`
+              : `IDENTIFIANT_ABSENT:${intake.reason}`,
+        };
+      }
+      const canonicalImei = intake.canonical;
+      // A duplicate is a WARNING, never a block. Intake has always allowed it
+      // (a mis-keyed handset, a unit re-taken after a dispute) and turning it
+      // into a hard failure would strand the operator with no way to record the
+      // device at all. The operator is told; the record is written either way.
+      const duplicateKey = intake.key;
+      const duplicateWarning = intake.warning ?? undefined;
+
+      const resalePrice = Math.round(tradeInput.buybackValue * (1 + (tradeInput.resaleMarginPercent || 0) / 100));
 
       // Generate genuine product barcode:
       // If user scanned/entered a real packaging/product barcode, use it.
@@ -801,6 +833,9 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
 
       const newTradeIn: TradeInItem = {
         ...tradeInput,
+        // Canonical, so the origin join, the registry row and the sold-gate all
+        // agree on one spelling (they compared raw strings before).
+        imei: canonicalImei,
         barcode: realBarcode,
         resalePrice,
         id: newId('trade'),
@@ -822,7 +857,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         imageUrl:
           'https://images.unsplash.com/photo-1592899677977-9c10ca588bbd?w=300&auto=format&fit=crop&q=80',
         isSerialized: true,
-        imeiNumber: tradeInput.imei.trim(),
+        imeiNumber: canonicalImei,
         vendorName: 'Client Buyback',
         leadTimeDays: 0,
         dailySalesVelocity: 0.5,
@@ -830,7 +865,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       };
 
       const imeiRecord: IMEIRecord = {
-        imei: tradeInput.imei.trim(),
+        imei: canonicalImei,
         productId: convertedProduct.id,
         receivedAt: new Date().toISOString(),
         notes: `Rachat d'occasion: ${tradeInput.deviceModel} - Client: ${newTradeIn.customerName}`,
@@ -840,7 +875,12 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       const updatedProducts = [convertedProduct, ...products];
       const updatedTradeIns = [newTradeIn, ...tradeIns];
       const currentImeis = imeiRecords || [];
-      const updatedImeiRecords = [imeiRecord, ...currentImeis.filter((r) => r.imei !== imeiRecord.imei)];
+      // Canonical-keyed dedupe: a hyphenated legacy row must be replaced by the
+      // canonical one, not survive beside it as a phantom second device.
+      const updatedImeiRecords = [
+        imeiRecord,
+        ...currentImeis.filter((r) => normalizeDeviceKey(r.imei) !== duplicateKey),
+      ];
 
       // Ledger-first ordering (double-count fix): the RECEIVE delta must land
       // BEFORE the product save. save() → syncProductUpsert mints an
@@ -1024,7 +1064,11 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       });
       // Backward compatible: historic callers ignore the return value (the
       // declared type stays Promise<void>, and any value is assignable to void).
-      return { success: true as const };
+      // `warning` is additive and optional: the duplicate-IMEI notice rides here
+      // so the modal can toast it without a second store channel.
+      return duplicateWarning
+        ? { success: true as const, warning: duplicateWarning }
+        : { success: true as const };
     } catch (error) {
       console.error('Failed to process trade-in:', error);
       return { success: false as const, reason: 'TRADE_IN_FAILED' };
@@ -1046,6 +1090,101 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
 
   clearTradeInExchangeRequest: () => {
     set({ tradeInExchangeRequest: null });
+  },
+
+  openTradeInIdentityEdit: (tradeInId) => {
+    set({ tradeInEditRequest: { tradeInId, nonce: Date.now() } });
+    get().openModal('trade_in_buyback');
+  },
+
+  clearTradeInEditRequest: () => {
+    set({ tradeInEditRequest: null });
+  },
+
+  /**
+   * Seller identity edit — the ONLY post-intake write path for the police
+   * register. Everything outside the identity fields is copied from the stored
+   * record, so a "completion" can never rewrite the acquisition itself (IMEI,
+   * amounts, acquisition date) or silently re-date the row.
+   */
+  updateTradeInIdentity: async (tradeInId, patch) => {
+    const existing = get().tradeIns.find((t) => t.id === tradeInId);
+    if (!existing) {
+      return { success: false as const, reason: 'TRADE_IN_NOT_FOUND' };
+    }
+
+    // Validate on write exactly as on read: an illegal document type is dropped
+    // rather than stored, so the row can never hold a value the UI cannot label.
+    const nextType =
+      patch.nationalIdType === null || patch.nationalIdType === undefined
+        ? existing.nationalIdType
+        : normalizeNationalIdType(patch.nationalIdType);
+    const nextNumber =
+      patch.nationalIdNumber === null || patch.nationalIdNumber === undefined
+        ? existing.nationalIdNumber
+        : patch.nationalIdNumber.trim() || undefined;
+    const nextPhone =
+      patch.customerPhone === null || patch.customerPhone === undefined
+        ? existing.customerPhone
+        : patch.customerPhone.trim() || undefined;
+
+    const before = {
+      nationalIdType: existing.nationalIdType,
+      nationalIdNumber: existing.nationalIdNumber,
+      customerPhone: existing.customerPhone,
+    };
+    const unchanged =
+      before.nationalIdType === nextType &&
+      (before.nationalIdNumber ?? undefined) === (nextNumber ?? undefined) &&
+      (before.customerPhone ?? undefined) === (nextPhone ?? undefined);
+    if (unchanged) {
+      return { success: true as const };
+    }
+
+    // `createdAt`, `imei`, `buybackValue`, `resalePrice` and the whole rest of
+    // the record are carried over untouched: this patches identity data only.
+    const updated: TradeInItem = {
+      ...existing,
+      nationalIdType: nextType,
+      nationalIdNumber: nextNumber,
+      customerPhone: nextPhone,
+    };
+
+    try {
+      await (await getSqlite()).saveTradeIn(updated);
+    } catch (err) {
+      console.error('[updateTradeInIdentity] persist failed:', err);
+      return { success: false as const, reason: 'TRADE_IN_SAVE_FAILED' };
+    }
+
+    set({ tradeIns: get().tradeIns.map((t) => (t.id === tradeInId ? updated : t)) });
+
+    // One audit line per edit, MASKED both ways — the audit table is itself
+    // synced and backed up, so an unmasked value here would undo the masking.
+    const detailParts = [`Appareil ${existing.imei}`];
+    if ((before.nationalIdNumber ?? undefined) !== (nextNumber ?? undefined)) {
+      detailParts.push(
+        `Pièce ${maskNationalId(before.nationalIdNumber) || '(vide)'} → ${maskNationalId(nextNumber) || '(vide)'}`
+      );
+    }
+    if (before.nationalIdType !== nextType) {
+      detailParts.push(`Type ${before.nationalIdType ?? '(non précisé)'} → ${nextType ?? '(non précisé)'}`);
+    }
+    if ((before.customerPhone ?? undefined) !== (nextPhone ?? undefined)) {
+      detailParts.push(`Téléphone ${maskPhone(before.customerPhone) || '(vide)'} → ${maskPhone(nextPhone) || '(vide)'}`);
+    }
+    try {
+      await get().logSecurityAction(
+        'Complément pièce d\'identité reprise',
+        detailParts.join(' — '),
+        get().activeCashier?.name || 'Yacine (Admin)',
+        true
+      );
+    } catch (err) {
+      console.warn('[updateTradeInIdentity] audit write failed:', err);
+    }
+
+    return { success: true as const };
   },
 
   setExchangeSoultePayout: (choice) => {
@@ -1070,6 +1209,29 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           reason: 'CART_IMEI_COLLISION:Impossible d’échanger un appareil présent dans le panier actif',
         };
       }
+      // Same shared gate as the standalone leg (W-30/W-43): canonical
+      // identifier everywhere, Luhn fail-closed for a 15-digit value only,
+      // duplicate warn-only.
+      const intake = validateDeviceIdentifierForIntake(
+        staged.imei,
+        (imeiRecords || []).map((r) => r.imei)
+      );
+      if (!intake.ok) {
+        return {
+          success: false as const,
+          reason:
+            intake.code === 'IMEI_LUHN_INVALID'
+              ? `IMEI_INVALIDE:${intake.reason}`
+              : `IDENTIFIANT_ABSENT:${intake.reason}`,
+        };
+      }
+      const canonicalImei = intake.canonical;
+      const duplicateKey = intake.key;
+      const duplicateWarning = intake.warning;
+      if (duplicateWarning) {
+        console.warn('[commitStagedTradeInIntake]', duplicateWarning);
+      }
+
       const resalePrice = Math.round(buybackCost * (1 + (Number(staged.resaleMarginPercent) || 0) / 100));
       const realBarcode = staged.barcode?.trim()
         ? staged.barcode.trim()
@@ -1079,6 +1241,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       // retry converge via upsert (no duplicate product/trade rows).
       const newTradeIn: TradeInItem = {
         ...staged,
+        imei: canonicalImei,
         barcode: realBarcode,
         resalePrice,
         creditToWallet: false,
@@ -1101,7 +1264,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         imageUrl:
           'https://images.unsplash.com/photo-1592899677977-9c10ca588bbd?w=300&auto=format&fit=crop&q=80',
         isSerialized: true,
-        imeiNumber: staged.imei.trim(),
+        imeiNumber: canonicalImei,
         vendorName: 'Client Buyback',
         leadTimeDays: 0,
         dailySalesVelocity: 0.5,
@@ -1109,7 +1272,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       };
 
       const imeiRecord: IMEIRecord = {
-        imei: staged.imei.trim(),
+        imei: canonicalImei,
         productId: convertedProduct.id,
         receivedAt: new Date().toISOString(),
         notes: `Rachat d'occasion (échange): ${staged.deviceModel} - Client: ${newTradeIn.customerName}`,
@@ -1194,7 +1357,10 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       set({
         products: [convertedProduct, ...products],
         tradeIns: [newTradeIn, ...tradeIns],
-        imeiRecords: [imeiRecord, ...imeiRecords.filter((r) => r.imei !== imeiRecord.imei)],
+        imeiRecords: [
+          imeiRecord,
+          ...(imeiRecords || []).filter((r) => normalizeDeviceKey(r.imei) !== duplicateKey),
+        ],
       });
       return { success: true as const, tradeId: newTradeIn.id, productId: convertedProduct.id };
     } catch (error) {
@@ -1301,6 +1467,16 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     }
   },
 
+  /**
+   * Legacy whole-record validator, kept for the existing store surface.
+   *
+   * @deprecated Use `validateDeviceIdentifierForIntake`
+   * (src/utils/savValidation.ts) — the gate every acquisition writer shares.
+   * This action refuses every non-15-digit value, so a serial-numbered device
+   * can never pass it, and it refuses duplicates, which the owner ruled must be
+   * a warning. It is NOT deleted (scripts/verify-tradein-phase01.mjs pins this
+   * implementation) and it must not be used at ingest.
+   */
   validateIMEI: (imei) => {
     if (!/^\d{15}$/.test(imei)) {
       return { valid: false, reason: 'L\'IMEI doit contenir exactement 15 chiffres.' };
@@ -1311,7 +1487,11 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       return { valid: false, reason: 'IMEI invalide (checksum Luhn).' };
     }
     const { imeiRecords } = get();
-    const duplicate = imeiRecords.find((r) => r.imei === imei);
+    // Canonical key, not `===`: the cart now stores digits-only while historic
+    // rows keep their hyphenated form, so a raw compare would let the same
+    // handset be registered twice (and then sold twice).
+    const key = normalizeDeviceKey(imei);
+    const duplicate = imeiRecords.some((r) => normalizeDeviceKey(r.imei) === key);
     if (duplicate) {
       return { valid: false, reason: 'Cet IMEI existe déjà dans le système.' };
     }
@@ -1320,7 +1500,8 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
 
   searchByIMEI: (imei) => {
     const { products, purchaseOrders, transactions } = get();
-    const product = products.find((p) => p.imeiNumber === imei);
+    const key = normalizeDeviceKey(imei);
+    const product = products.find((p) => normalizeDeviceKey(p.imeiNumber ?? '') === key);
     if (!product) return null;
 
     const po = product.purchaseOrderId
@@ -1328,7 +1509,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       : undefined;
 
     const transaction = transactions.find((t) =>
-      t.items.some((item) => item.imeiNumber === imei)
+      t.items.some((item) => normalizeDeviceKey(item.imeiNumber ?? '') === key)
     );
 
     return { product, po, transaction };
@@ -1540,7 +1721,9 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           ]);
           set({
             customers,
-            transactions,
+            // Store invariant: newest-first (adapter already sorts; the
+            // helper keeps boot immune to any unsorted producer).
+            transactions: sortedTransactions(transactions),
             repairOrders: repairOrders.map((r) => migrateRepairOrder(r)),
             purchaseOrders,
             tradeIns,
@@ -1630,7 +1813,9 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       set({
         products,
         customers,
-        transactions,
+        // Post-pull invariant: newest-first (sync lands rows in cursor
+        // order; the helper restores recency before paint).
+        transactions: sortedTransactions(transactions),
         repairOrders: repairOrders.map((r) => migrateRepairOrder(r)),
         purchaseOrders,
         tradeIns,
@@ -1713,7 +1898,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           (await getSqlite()).getAllTransactions(),
           (await getSqlite()).getAllCustomers(),
         ]);
-        next.transactions = transactions;
+        next.transactions = sortedTransactions(transactions);
         next.customers = customers;
         const selected = get().currentCustomer;
         if (selected) {

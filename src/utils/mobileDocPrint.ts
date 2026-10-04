@@ -22,6 +22,7 @@ import type {
 } from '../types/pos';
 import { formatDZD, formatDateTime, faitALine } from '../types/pos';
 import { fiscalIdentifierLine, tvaSplitFromTotal } from './receiptMath';
+import { warrantyCertificateDates } from './warrantyResolver';
 import {
   STORE_RETURN_POLICY,
   TRADE_IN_LEGAL_STATEMENT,
@@ -654,12 +655,18 @@ export function warrantyCertificateText(
   item: CartItem,
   months: number,
   settings?: ReceiptSettings | null,
-  seller?: string | null
+  seller?: string | null,
+  /** Frozen expiry from the registry row; wins over recomputation. */
+  anchoredExpiresAt?: string | null
 ): string {
   const imei = item.imeiNumber || item.serialNumber || 'Non specifie';
-  const start = new Date(tx.createdAt);
-  const expiry = new Date(start);
-  expiry.setMonth(expiry.getMonth() + months);
+  // SAME helper as the 80 mm builder: clamped month arithmetic in UTC, anchor
+  // aware, and rendered without a timezone shift. Layout below is unchanged.
+  const dates = warrantyCertificateDates({
+    startIso: tx.createdAt,
+    months,
+    anchoredExpiresAt,
+  });
   const vendeur =
     (tx.shiftOpenedByName || '').trim() ||
     (seller || '').trim() ||
@@ -674,11 +681,11 @@ export function warrantyCertificateText(
     '-'.repeat(32),
     `Modele: ${(item.product.title || '').slice(0, 24)}`,
     `IMEI: ${imei.slice(0, 25)}`,
-    `Achat: ${start.toLocaleDateString('fr-DZ')}`,
+    `Achat: ${dates.start}`,
     row32('Prix:', formatDZD(item.appliedPrice)),
     '-'.repeat(32),
     center32(`GARANTIE ${months} MOIS`),
-    center32(`au ${expiry.toLocaleDateString('fr-DZ')}`),
+    center32(`au ${dates.expiry}`),
     '-'.repeat(32),
     center32('Pannes internes uniquement'),
     center32('(hors chocs/eau/demontage)'),

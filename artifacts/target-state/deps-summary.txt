@@ -1,0 +1,30 @@
+﻿[KNOWN] (source: target/debug/deps)
+Timestamp Collected (Local): 2026-10-01T02:53:40+01:00
+Timestamp Collected (UTC):   2026-10-01T01:53:40Z
+Total files in target/debug/deps: 25227
+
+=== OLDEST 5 FILES ===
+
+Name                                   Length LastWriteTime        LastWriteTimeUtc    
+----                                   ------ -------------        ----------------    
+cfg_if-1882ad8dc550c23a.d                 637 9/17/2026 3:10:55 PM 9/17/2026 2:10:55 PM
+libcfg_if-1882ad8dc550c23a.rmeta         5484 9/17/2026 3:10:55 PM 9/17/2026 2:10:55 PM
+unicode_ident-4b2ad876a2cfab1e.d         1103 9/17/2026 3:10:55 PM 9/17/2026 2:10:55 PM
+windows_link-e9b19eeac25fe02f.d          1096 9/17/2026 3:10:55 PM 9/17/2026 2:10:55 PM
+libwindows_link-e9b19eeac25fe02f.rmeta   4116 9/17/2026 3:10:55 PM 9/17/2026 2:10:55 PM
+
+
+
+
+=== NEWEST 5 FILES ===
+
+Name                    Length LastWriteTime        LastWriteTimeUtc    
+----                    ------ -------------        ----------------    
+libmobi_pos_lib.rlib 402106880 10/1/2026 2:37:19 AM 10/1/2026 1:37:19 AM
+mobi_pos.d                 209 10/1/2026 2:37:25 AM 10/1/2026 1:37:25 AM
+mobi_pos.exp              1076 10/1/2026 2:37:32 AM 10/1/2026 1:37:32 AM
+mobi_pos.exe          31309824 10/1/2026 2:37:36 AM 10/1/2026 1:37:36 AM
+mobi_pos.pdb         209670144 10/1/2026 2:37:36 AM 10/1/2026 1:37:36 AM
+
+
+
