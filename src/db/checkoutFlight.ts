@@ -44,11 +44,14 @@ export function tryAcquireCheckoutFlight(owner: string): boolean {
 
 /**
  * Refresh activity while the owner is still working (called from withBusyRetry
- * on every attempt). No-op when the flight is free or owned by someone else.
+ * on every attempt when the lane holds the flight). Owner is REQUIRED:
+ * anonymous renewals once let a pull-row retry keep a sale's flight alive
+ * past the idle watchdog (IPC-007). No-op when the flight is free, owned by
+ * someone else, or no owner is given.
  */
 export function renewCheckoutFlight(owner?: string): void {
   if (!flightActive) return;
-  if (owner !== undefined && owner !== flightOwner) return;
+  if (owner === undefined || owner !== flightOwner) return;
   lastActivityAt = Date.now();
 }
 

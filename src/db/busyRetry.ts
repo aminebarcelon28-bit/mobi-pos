@@ -18,15 +18,40 @@
  * a half-written transaction — idempotency keys make re-execution safe.
  */
 
+/**
+ * BEGIN IMMEDIATE was refused for a non-transient reason (missing plugin
+ * capability, not BUSY or a stale pooled txn). Callers must fail closed —
+ * falling back to sequential autocommit writes would persist a half-sale
+ * (order without items/ledger/outbox). Never swallowed, never retried.
+ */
+export class BeginUnavailableError extends Error {
+  readonly code = 'DB_BEGIN_UNAVAILABLE';
+  constructor(label: string, cause: unknown) {
+    super(
+      `[${label}] BEGIN IMMEDIATE unavailable (non-transient): ` +
+        `${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    this.name = 'BeginUnavailableError';
+  }
+}
+
 export interface BusyRetryOptions<T = unknown> {
-  /** Total attempts including the first try. Default 6. */
+  /** Total attempts including the first try. Default 8. */
   attempts?: number;
-  /** Base backoff in ms before retry #1; doubles each time. Default 80. */
+  /** Base backoff in ms before retry #1; doubles each time. Default 120. */
   baseDelayMs?: number;
-  /** Hard cap per backoff step in ms. Default 2500. */
+  /** Hard cap per backoff step in ms. Default 3000. */
   maxDelayMs?: number;
   /** Label for console diagnostics. Default 'db-write'. */
   label?: string;
+  /**
+   * Checkout-flight owner to renew per attempt (e.g. 'processPayment',
+   * 'boot-replay', 'refund-write'). Renewals are owner-scoped: a retry
+   * loop that does NOT hold the flight must not keep someone else's alive
+   * (a pull-row retry once defeated the idle watchdog this way). Omit to
+   * skip renewal entirely.
+   */
+  flightOwner?: string;
   /**
    * B-001 FIX-3: fired on the FINAL BUSY failure only. May RETURN a value of
    * type T to recover (suppress the throw) — e.g. fall back to Dexie or a
@@ -113,14 +138,20 @@ export async function withBusyRetry<T>(fn: () => Promise<T>, opts: BusyRetryOpti
 
   let lastError: unknown = null;
   let exhausted: BusyRetryOptions<T>['onExhausted'] | undefined;
+  const flightOwner = opts.flightOwner;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    // B-063: keep an active checkout flight's heartbeat fresh while this
-    // retry loop is still working — otherwise the idle watchdog force-releases
+    // B-063: keep the HELD checkout flight's heartbeat fresh while this retry
+    // loop is still working — otherwise the idle watchdog force-releases
     // mid-retry and a second busy-retry:checkout starts on the same pool.
-    try {
-      const { renewCheckoutFlight } = await import('./checkoutFlight');
-      renewCheckoutFlight();
-    } catch { /* heartbeat is best-effort */ }
+    // Owner-scoped (IPC-007): only the lane holding the flight renews it.
+    // Lanes without a flight (pull-row retries, outbox marks, reconciles)
+    // pass no owner and never touch the watchdog.
+    if (flightOwner) {
+      try {
+        const { renewCheckoutFlight } = await import('./checkoutFlight');
+        renewCheckoutFlight(flightOwner);
+      } catch { /* heartbeat is best-effort */ }
+    }
     try {
       return await fn();
     } catch (error) {

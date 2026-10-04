@@ -28,7 +28,7 @@ function devBenchMark(label: string): void {
     // Timing must never break production flows.
   }
 }
-import { withBusyRetry, isBusyError, isStaleTxnError, isRetryableDbError } from './busyRetry';
+import { withBusyRetry, isBusyError, isStaleTxnError, isRetryableDbError, BeginUnavailableError } from './busyRetry';
 export { isRetryableDbError, isBusyError, isStaleTxnError, withBusyRetry };
 import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL, CUSTOMER_DEBTS_HEAL_PROBE_SQL } from './schemaHeal';
 import { markBoot } from '../utils/bootTimings';
@@ -393,9 +393,14 @@ export async function ensureBusyTimeout(db: Database, ms = 15000): Promise<void>
  * Returns true when a transaction is open on "some" pool connection for this
  * critical section (best-effort under multiplexing — same model the rest of
  * the adapter uses). Throws BUSY/stale-txn so withBusyRetry re-runs the
- * whole section; only genuine capability failures return false.
+ * whole section. Genuine capability failures throw BeginUnavailableError
+ * instead of degrading to sequential autocommit writes (IPC-008): a
+ * half-written sale (order without items/ledger/outbox) is worse than a
+ * loud failure, and every caller already funnels errors through
+ * withBusyRetry or an explicit catch. Callers keep their `if (useTxn)`
+ * guards untouched — they are now statically always-true.
  */
-export async function beginImmediate(db: Database, label = 'db'): Promise<boolean> {
+export async function beginImmediate(db: Database, label = 'db'): Promise<true> {
   await ensureBusyTimeout(db, 15000);
   try {
     await db.execute('BEGIN IMMEDIATE;');
@@ -404,9 +409,7 @@ export async function beginImmediate(db: Database, label = 'db'): Promise<boolea
     // BUSY = racing lane holds the write lock → outer withBusyRetry.
     if (isBusyError(beginErr)) throw beginErr;
     if (!isStaleTxnError(beginErr)) {
-      // Capability doubt (missing plugin, etc.) — caller may go sequential.
-      console.warn(`[${label}] BEGIN IMMEDIATE unavailable — sequential writes:`, beginErr);
-      return false;
+      throw new BeginUnavailableError(label, beginErr);
     }
     // Stale pooled txn: spray ROLLBACK (pool may hand us different members),
     // then retry BEGIN once. Still stale → throw so withBusyRetry re-runs.
@@ -419,8 +422,7 @@ export async function beginImmediate(db: Database, label = 'db'): Promise<boolea
       return true;
     } catch (retryErr) {
       if (isRetryableDbError(retryErr)) throw retryErr;
-      console.warn(`[${label}] BEGIN IMMEDIATE still unavailable after ROLLBACK spray — sequential writes:`, retryErr);
-      return false;
+      throw new BeginUnavailableError(label, retryErr);
     }
   }
 }
@@ -470,7 +472,9 @@ export function getLocalDb(): Promise<Database> {
  * Executes database hygiene: WAL truncation checkpoint + incremental vacuum.
  * Reclaims disk space and bounds SQLite file growth (ES-LFP §18.1).
  */
-export async function runDbMaintenance(db?: Database): Promise<{ checkpoint: unknown; vacuum: unknown }> {
+export async function runDbMaintenance(
+  db?: Database,
+): Promise<{ checkpoint: unknown; vacuum: unknown; fkViolations: number }> {
   const targetDb = db || (await getLocalDb());
   const checkpoint = await targetDb.execute('PRAGMA wal_checkpoint(TRUNCATE);').catch((e: unknown) => {
     console.warn('[DB Maintenance] WAL checkpoint warning:', e);
@@ -480,7 +484,28 @@ export async function runDbMaintenance(db?: Database): Promise<{ checkpoint: unk
     console.warn('[DB Maintenance] Incremental vacuum warning:', e);
     return null;
   });
-  return { checkpoint, vacuum };
+  // DB-015 detection control: PRAGMA foreign_keys is per-connection on the
+  // unpinned pool, so enforcement cannot be guaranteed from the TS lane
+  // (the native lane sets it per connection). foreign_key_check scans for
+  // violations the pragma may have missed and reports them loudly instead
+  // of letting orphan rows accumulate silently. Detection-backed, matching
+  // this repo's posture for pool-uncertain guarantees.
+  let fkViolations = 0;
+  try {
+    const rows = (await targetDb
+      .select('PRAGMA foreign_key_check;')
+      .catch(() => [])) as Array<{ table?: unknown; rowid?: unknown; fkid?: unknown }>;
+    fkViolations = Array.isArray(rows) ? rows.length : 0;
+    if (fkViolations > 0) {
+      console.warn(
+        '[DB Maintenance] foreign_key_check found violations (orphan rows FK enforcement missed):',
+        rows.slice(0, 10),
+      );
+    }
+  } catch (err) {
+    console.warn('[DB Maintenance] foreign_key_check unavailable:', err);
+  }
+  return { checkpoint, vacuum, fkViolations };
 }
 
 export async function checkAndRunScheduledDbMaintenance(db: Database): Promise<void> {
@@ -697,14 +722,21 @@ export interface CheckoutWriteResult {
   }>;
 }
 
-export function writeCheckoutAtomic(input: CheckoutWriteInput): Promise<CheckoutWriteResult> {
+export function writeCheckoutAtomic(
+  input: CheckoutWriteInput,
+  opts?: { flightOwner?: string },
+): Promise<CheckoutWriteResult> {
   // Retry OUTSIDE the mutex: every attempt re-acquires the lock fresh, so a
   // BUSY collision with a racing sync lane becomes a short wait, not a lost
   // sale. Idempotency keys keep re-execution safe (INSERT … ON CONFLICT).
+  // flightOwner threads the checkout-flight owner (processPayment /
+  // boot-replay / refund-write) into the retry heartbeat so only the lane
+  // holding the flight renews it (IPC-007).
   return withBusyRetry(() => withWriteLock(() => writeCheckoutAtomicInner(input)), {
     attempts: 8,
     baseDelayMs: 120,
     label: 'checkout',
+    flightOwner: opts?.flightOwner,
     // B-001 FIX-3: on exhausted BUSY, surface a coded reason so processPayment
     // can distinguish "still retryable later" from a hard schema/disk error.
     // No return preserves the historical rethrow (B-004 recovery intent still

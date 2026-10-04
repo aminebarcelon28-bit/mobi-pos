@@ -1018,7 +1018,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           // before a failed order write, while the UI reported the sale as
           // never recorded: a phantom debit with no in-product signal.
           const { writeCheckoutAtomic, enqueueGenericSync } = await import('../../db/sqlPluginAdapter');
-          const checkoutResult = await writeCheckoutAtomic(checkoutPayload);
+          const checkoutResult = await writeCheckoutAtomic(checkoutPayload, { flightOwner: 'processPayment' });
           // FIFO authority (STRICT LEDGER, v104): the durable write resolved
           // the true batch-blended COGS. MANDATORILY adopt it here so the
           // in-memory transaction, the Dexie mirror below, the printed
@@ -2510,7 +2510,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         refundWarnings.push('Avoir enregistré : écriture du ticket en file — réessayer après la vente en cours.');
       } else {
         try {
-      await writeCheckoutAtomic(refundPayload);
+      await writeCheckoutAtomic(refundPayload, { flightOwner: 'refund-write' });
       await clearCheckoutRecoveryIntent(refundTxnId).catch(() => {});
       const { syncManager } = await import('../../sync/SyncManager');
       syncManager.notifyLocalWrite();

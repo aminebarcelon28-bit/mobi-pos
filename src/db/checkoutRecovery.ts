@@ -386,7 +386,7 @@ export async function replayCheckoutRecoveryIntents(): Promise<{
     const { writeCheckoutAtomic } = await import('./sqlPluginAdapter');
     for (const intent of toReplay) {
       try {
-        await writeCheckoutAtomic(intent.payload);
+        await writeCheckoutAtomic(intent.payload, { flightOwner: 'boot-replay' });
 
         // Order row is durable — apply the customer mutation snapshot if present
         // (same order as live processPayment: order first, then customer/debt).
