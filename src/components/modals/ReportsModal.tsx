@@ -43,7 +43,7 @@ import { useReceiptLedgerCogs } from '../../hooks/useReceiptLedgerCogs';
 import { computeSalesMetrics, grossFromTransaction, isExchangeSaleTx } from '../../utils/receiptMath';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
-import { todayLocalKey, toLocalDayKey, sortTransactionsNewestFirst } from '../../utils/dateUtils';
+import { todayLocalKey, toLocalDayKey, sortTransactionsNewestFirst, isRefundReceipt, isRevenueSale, resolveTransactionStanding } from '../../utils/dateUtils';
 import { verifyManagerGate } from '../../utils/pinGate';
 
 export const ReportsModal: React.FC = () => {
@@ -196,7 +196,12 @@ export const ReportsModal: React.FC = () => {
     });
   }, [transactions, dateRangeFilter]);
 
-  const validSales = (dateFilteredTransactions || []).filter((t) => t.status !== 'VOIDED' && !t.isRefund);
+  // Canonical standing (CT-007/CT-008): identical to the old predicate on
+  // the four known statuses; unknown statuses quarantine (never revenue).
+  const validSales = (dateFilteredTransactions || []).filter(isRevenueSale);
+  const quarantinedCount = (dateFilteredTransactions || []).filter(
+    (t) => resolveTransactionStanding(t) === 'unknown'
+  ).length;
   // Canonical unified metrics (shared with Mobile LiveActivityTab /
   // ManagementTab): CA Net = Σ net(valid) − Σ refunds(isRefund), NOT gross.
   // The previous code summed gross(subtotal) here, overstating CA and profit
@@ -307,7 +312,7 @@ export const ReportsModal: React.FC = () => {
   const openingFloat = activeShift?.openingFloat ?? (allShifts && allShifts.length > 0 ? allShifts[0].openingFloat : 20000);
   const cashSales = useMemo(() => {
     return (dateFilteredTransactions || [])
-      .filter((t) => t.status !== 'VOIDED' && !t.isRefund)
+      .filter(isRevenueSale)
       .reduce((acc, t) => {
         if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
           const cashTenderTotal = t.tenders.filter((tender) => tender.method === 'Espèces').reduce((sum, tender) => sum + (tender.amount || 0), 0);
@@ -425,13 +430,13 @@ export const ReportsModal: React.FC = () => {
 
       let matchesStatus = true;
       if (statusFilter === 'COMPLETED') {
-        matchesStatus = t.status !== 'VOIDED' && !t.isRefund;
+        matchesStatus = isRevenueSale(t);
       } else if (statusFilter === 'VOIDED') {
-        matchesStatus = t.status === 'VOIDED';
+        matchesStatus = resolveTransactionStanding(t) === 'void';
       } else if (statusFilter === 'REFUNDED') {
         matchesStatus = t.status === 'REFUNDED' || t.status === 'PARTIALLY_REFUNDED';
       } else if (statusFilter === 'isRefund') {
-        matchesStatus = Boolean(t.isRefund);
+        matchesStatus = isRefundReceipt(t);
       }
 
       const q = historySearch.trim().toLowerCase();
@@ -591,11 +596,14 @@ export const ReportsModal: React.FC = () => {
           return Number.isFinite(v) && v >= 0 ? v : undefined;
         })();
         const basisRow = displayCostBasisFor(t);
-        const cost = t.status === 'VOIDED' ? 0 : basisRow ?? allocRow ?? t.costTotal ?? 0;
-        const netTotal = t.status === 'VOIDED' ? 0 : t.isRefund ? -t.total : t.total;
-        const profit = t.status === 'VOIDED' || t.isRefund ? 0 : netTotal - cost;
+        // Canonical standing: identical numbers on known rows; quarantined
+        // (unknown-status) rows contribute nothing and label INCONNU.
+        const standing = resolveTransactionStanding(t);
+        const cost = standing === 'sale' ? basisRow ?? allocRow ?? t.costTotal ?? 0 : 0;
+        const netTotal = standing === 'void' ? 0 : standing === 'refund' ? -t.total : standing === 'sale' ? t.total : 0;
+        const profit = standing === 'sale' ? netTotal - cost : 0;
         const margin = netTotal > 0 ? ((profit / netTotal) * 100).toFixed(1) : '0';
-        const statusLabel = t.status === 'VOIDED' ? 'ANNULÉ' : t.isRefund ? 'AVOIR' : 'VALIDÉ';
+        const statusLabel = standing === 'void' ? 'ANNULÉ' : standing === 'refund' ? 'AVOIR' : standing === 'sale' ? 'VALIDÉ' : 'INCONNU';
 
         return `"${t.receiptNumber}";"${statusLabel}";"${dateStr}";"${customerName}";${itemCount};${subtotal};${discount};${netTotal};${cost};${profit};${margin}%;"${payment}"`;
       })
@@ -633,9 +641,10 @@ export const ReportsModal: React.FC = () => {
           const v = Number(raw);
           return Number.isFinite(v) && v >= 0 ? v : undefined;
         })();
-        const copyCost = t.status === 'VOIDED' ? 0 : displayCostBasisFor(t) ?? allocCopy ?? t.costTotal ?? 0;
-        const copyNet = t.status === 'VOIDED' ? 0 : t.isRefund ? -t.total : t.total;
-        const copyProfit = t.status === 'VOIDED' || t.isRefund ? 0 : copyNet - copyCost;
+        const copyStanding = resolveTransactionStanding(t);
+        const copyCost = copyStanding === 'sale' ? displayCostBasisFor(t) ?? allocCopy ?? t.costTotal ?? 0 : 0;
+        const copyNet = copyStanding === 'void' ? 0 : copyStanding === 'refund' ? -t.total : copyStanding === 'sale' ? t.total : 0;
+        const copyProfit = copyStanding === 'sale' ? copyNet - copyCost : 0;
         return `${t.receiptNumber}\t${t.createdAt}\t${customerName}\t${itemCount}\t${t.total}\t${copyProfit}\t${t.paymentMethod}\t${t.status}`;
       })
       .join('\n');
@@ -1349,6 +1358,19 @@ export const ReportsModal: React.FC = () => {
                       </div>
                     </div>
                   </div>
+
+                  {/* Quarantine banner (CT-008 fail-closed): tickets whose
+                      status is unreadable are excluded from every total —
+                      never counted as sales, refunds, or voids. */}
+                  {quarantinedCount > 0 && (
+                    <div
+                      role="status"
+                      className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-200"
+                    >
+                      {quarantinedCount} ticket(s) exclu(s) des totaux — statut illisible
+                      (ni vente, ni avoir, ni annulation). Contrôle requis avant clôture.
+                    </div>
+                  )}
 
                   {/* Transactions History Table */}
                   <div className="bg-pos-card border border-pos-border rounded-xl overflow-hidden shadow-sm">

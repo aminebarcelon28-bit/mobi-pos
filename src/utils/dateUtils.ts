@@ -72,3 +72,54 @@ export function compareTransactionsNewestFirst(
 export function sortTransactionsNewestFirst<T extends TransactionOrderKeys>(list: readonly T[]): T[] {
   return [...list].sort(compareTransactionsNewestFirst);
 }
+
+/**
+ * Canonical transaction standing (single source of truth for every money
+ * question: revenue, void, refund, quarantine).
+ *
+ * Two axes collapse to one verdict: VOIDED dominates everything; a
+ * well-formed non-void row is a `sale`, or a `refund` receipt when
+ * `isRefund` is set (refund rows are stamped COMPLETED at creation, so
+ * status alone can never identify them). Anything else — null, empty,
+ * typo, lowercase, future value — is `unknown` and quarantined: it counts
+ * NOWHERE (not as a sale, not as a refund) until repaired.
+ *
+ * Behavior-preserving by construction: for the four known statuses every
+ * consumer below computes exactly what it computed before (verified per
+ * call site); only unknown statuses move — from silent revenue into the
+ * quarantine count. Case-sensitive on purpose: writers emit uppercase
+ * constants, so any other casing is corruption, not a variant.
+ */
+export type TransactionStanding = 'sale' | 'refund' | 'void' | 'unknown';
+
+const KNOWN_TRANSACTION_STATUSES: ReadonlySet<string> = new Set([
+  'COMPLETED',
+  'VOIDED',
+  'REFUNDED',
+  'PARTIALLY_REFUNDED',
+]);
+
+export function resolveTransactionStanding(
+  t: { status?: unknown; isRefund?: unknown } | null | undefined,
+): TransactionStanding {
+  const status = typeof t?.status === 'string' ? t.status : '';
+  if (status === 'VOIDED') return 'void';
+  if (!KNOWN_TRANSACTION_STATUSES.has(status)) return 'unknown';
+  if (t?.isRefund === true) return 'refund';
+  return 'sale';
+}
+
+/** Revenue-eligible (matches the historic validSales rule on known rows). */
+export function isRevenueSale(t: { status?: unknown; isRefund?: unknown } | null | undefined): boolean {
+  return resolveTransactionStanding(t) === 'sale';
+}
+
+/** Cancelled (matches the historic `status === 'VOIDED'` rule, all rows). */
+export function isVoidedTransaction(t: { status?: unknown; isRefund?: unknown } | null | undefined): boolean {
+  return resolveTransactionStanding(t) === 'void';
+}
+
+/** Avoir/credit-note receipt (matches `Boolean(isRefund)` on known rows). */
+export function isRefundReceipt(t: { status?: unknown; isRefund?: unknown } | null | undefined): boolean {
+  return resolveTransactionStanding(t) === 'refund';
+}

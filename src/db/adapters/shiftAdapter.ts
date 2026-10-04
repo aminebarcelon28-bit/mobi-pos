@@ -9,6 +9,7 @@ import type {
 import { db as dexieDb } from '../database';
 import { fireSync, fireSyncDelete, isTauriEnv } from './base';
 import { newId } from '../../utils/ids';
+import { resolveTransactionStanding } from '../../utils/dateUtils';
 import { verifyManagerGate } from '../../utils/pinGate';
 import { cashSalesFromTxns, cashRefundsFromTxns } from '../../utils/cashTerms';
 
@@ -55,11 +56,16 @@ export interface CloseScopeSession {
  * can no longer leak into a booked Z. VOIDED never counts.
  */
 export function isTxInCloseScope(
-  t: { status?: string; createdAt?: string; shiftId?: string },
+  t: { status?: string; createdAt?: string; shiftId?: string; isRefund?: boolean },
   session: CloseScopeSession,
   nowIso?: string
 ): boolean {
-  if (t.status === 'VOIDED') return false;
+  // Canonical standing (CT-007/CT-008): VOIDED never counts, and
+  // unknown-status rows quarantine out of the close. Everything else —
+  // including refund receipts, whose signs the close math handles — keeps
+  // the historic scope exactly.
+  const standing = resolveTransactionStanding(t);
+  if (standing === 'void' || standing === 'unknown') return false;
   const stamp = t.shiftId ? String(t.shiftId) : '';
   const sid = session.id ? String(session.id) : '';
   if (stamp && sid) {
