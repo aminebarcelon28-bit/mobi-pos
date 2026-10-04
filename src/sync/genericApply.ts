@@ -23,6 +23,7 @@ import type Database from '@tauri-apps/plugin-sql';
 import { db as dexieDb } from '../db/database';
 import type { CreditVoucher, Customer, LoyaltyLedgerEntry } from '../types/pos';
 import { sanitizeSyncPayload, utcNowIso, isDeviceLocalSettingKey, RECEIPT_SETTINGS_KEY, isRetryableDbError } from '../db/sqlPluginAdapter';
+import { tombstoneVersionPredicate } from './causalVersion';
 
 /** Singular push entity_type -> plural remote KV table. */
 export const GENERIC_TABLES: Record<string, string> = {
@@ -707,16 +708,27 @@ export async function applyGenericRemoteRow(
     // (authority = entity_keys clock + Dexie replica) and stay as-is: their
     // tombstone is the Dexie delete below.
     if (table === 'customers') {
-      await db.execute('UPDATE customers SET deleted = 1 WHERE id = $1', [id]).catch((err: unknown) => {
-        if (isSchemaMissingError(err)) {
-          console.warn(`[sync:generic] Failed to tombstone customers.${id}:`, err);
-          return;
-        }
-        throw err;
-      });
+      // A2: version-predicated tombstone — a stale delete arriving after a
+      // newer local edit must not delete the row (TOCTOU between the H19
+      // pre-guard and this write). Delete-wins-ties keeps the outcome
+      // deterministic across replicas; see tombstoneVersionPredicate().
+      await db
+        .execute(
+          `UPDATE customers SET deleted = 1 WHERE ${tombstoneVersionPredicate('customers', 'id', '$1', '$2')}`,
+          [id, version],
+        )
+        .catch((err: unknown) => {
+          if (isSchemaMissingError(err)) {
+            console.warn(`[sync:generic] Failed to tombstone customers.${id}:`, err);
+            return;
+          }
+          throw err;
+        });
     }
     if (table === 'customer_debts') {
-      await db.execute('UPDATE customer_debts SET deleted = 1, version = $1, updated_at = $2 WHERE id = $3', [version, utcNowIso(), id]).catch((err: unknown) => {
+      // A2: predicated like customers above; also stops the statement from
+      // rewinding a raced-ahead clock to the tombstone's older version.
+      await db.execute(`UPDATE customer_debts SET deleted = 1, version = $1, updated_at = $2 WHERE ${tombstoneVersionPredicate('customer_debts', 'id', '$3', '$1')}`, [version, utcNowIso(), id]).catch((err: unknown) => {
         if (isSchemaMissingError(err)) {
           console.warn(`[sync:generic] Failed to tombstone customer_debts.${id}:`, err);
           return;
@@ -730,7 +742,7 @@ export async function applyGenericRemoteRow(
       // batch the cloud has deleted (UI/authority split).
       await db.execute(
         `UPDATE stock_batches SET deleted = 1, version = $1, updated_at = $2, sync_status = 'synced'
-         WHERE batch_id = $3`,
+         WHERE ${tombstoneVersionPredicate('stock_batches', 'batch_id', '$3', '$1')}`,
         [version, utcNowIso(), id],
       ).catch((err: unknown) => {
         if (isSchemaMissingError(err)) {
@@ -746,7 +758,7 @@ export async function applyGenericRemoteRow(
       // cloud has deleted it (UI/authority split, double-spend risk).
       await db.execute(
         `UPDATE credit_vouchers SET deleted = 1, status = 'EXHAUSTED', version = $1, updated_at = $2, sync_status = 'synced'
-         WHERE id = $3`,
+         WHERE ${tombstoneVersionPredicate('credit_vouchers', 'id', '$3', '$1')}`,
         [version, utcNowIso(), id],
       ).catch((err: unknown) => {
         if (isSchemaMissingError(err)) {

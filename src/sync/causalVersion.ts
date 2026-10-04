@@ -331,6 +331,30 @@ export async function runOptimisticWriteLoop(
 }
 
 /**
+ * Tombstone version predicate (A2: SYNC-007). A delete must win only when
+ * the local row is NOT newer than the tombstone — otherwise a stale delete
+ * resurrects over a concurrent edit (and, where the statement also stamps
+ * `version`, rewinds the clock). Single-statement predicate, so there is no
+ * check-then-act race between the H19 pre-guard and the write itself.
+ * `COALESCE` keeps versionless legacy rows tombstonable. Equal versions
+ * apply the delete: delete-wins-ties is the deterministic rule every
+ * replica shares (same two versions in, same decision out).
+ * Placeholders are parameterized because the Tauri lane uses `$n` while
+ * tests/remote use `?`.
+ */
+export function tombstoneVersionPredicate(
+  table: string,
+  idColumn: string,
+  idPlaceholder: string,
+  versionPlaceholder: string,
+): string {
+  return (
+    `${idColumn} = ${idPlaceholder} ` +
+    `AND COALESCE(${table}.version, 0) <= ${versionPlaceholder}`
+  );
+}
+
+/**
  * Optimistic-bump helper for the write side (DB-013): read the version,
  * write with `UPDATE ... WHERE version = :read` (or an upsert whose guard
  * carries the read version), and RETRY the whole read-modify-write on a
