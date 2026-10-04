@@ -2554,6 +2554,84 @@ class SyncManager {
     }
   }
 
+  /**
+   * A3 shared pull-lane wiring: after a guarded upsert, a proven miss
+   * (affected === 0 exactly) on equal versions with divergent content is
+   * observed as a version conflict via conflictWatch (local
+   * `sync_conflicts` row + audit entry). Winners apply, so each divergence
+   * is observed once, on the loser's side. Best-effort: never throws,
+   * never blocks the pull. One call per lane; lane shapes stay here so the
+   * comparables on both sides share the same keys.
+   */
+  private async observePullGuardMiss(
+    db: Database,
+    table: 'transactions' | 'transaction_items' | 'products',
+    id: string,
+    affectedRaw: unknown,
+    incoming: { version: unknown; device: unknown; scalars: Record<string, unknown>; jsonRaw: unknown },
+  ): Promise<void> {
+    try {
+      const { observePullGuardMiss } = await import('./conflictWatch');
+      const selects = {
+        transactions: 'SELECT version, device_id, status, total, json_payload FROM transactions WHERE id = $1',
+        transaction_items:
+          'SELECT version, device_id, quantity, applied_price, discount, json_payload FROM transaction_items WHERE id = $1',
+        products:
+          'SELECT version, device_id, price, stock, title, sku, json_payload FROM products WHERE id = $1',
+      } as const;
+      const scalarKeys = {
+        transactions: ['status', 'total'],
+        transaction_items: ['quantity', 'applied_price', 'discount'],
+        products: ['price', 'stock', 'title', 'sku'],
+      } as const;
+      const parseJson = (raw: unknown): Record<string, unknown> => {
+        try {
+          const parsed: unknown = JSON.parse(String(raw ?? '{}'));
+          return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : {};
+        } catch {
+          return {};
+        }
+      };
+      const rows = (await db.select(selects[table], [id]).catch(() => [])) as Array<Record<string, unknown>>;
+      const local = rows?.[0] ?? null;
+      const pickScalars = (row: Record<string, unknown> | null): Record<string, unknown> => {
+        const out: Record<string, unknown> = {};
+        if (!row) return out;
+        for (const k of scalarKeys[table]) out[k] = row[k];
+        return out;
+      };
+      const { usePosStore } = await import('../store/usePosStore');
+      await observePullGuardMiss(
+        db as unknown as import('./conflictWatch').ConflictDb,
+        async (action, details) => {
+          await usePosStore.getState().logSecurityAction(action, details, 'Système (Sync)', false);
+        },
+        {
+          table,
+          id,
+          affectedRaw,
+          local: local
+            ? {
+                version: local['version'],
+                device: local['device_id'],
+                comparable: { ...pickScalars(local), json: parseJson(local['json_payload']) },
+              }
+            : null,
+          incoming: {
+            version: incoming.version,
+            device: incoming.device,
+            comparable: { ...incoming.scalars, json: parseJson(incoming.jsonRaw) },
+          },
+          at: utcNowIso(),
+        },
+      );
+    } catch {
+      // Observation must never fail or stall the pull lane.
+    }
+  }
+
   private async applyRemoteRow(db: Database, table: string, r: Record<string, unknown>) {
     const generic = GENERIC_PULL[table];
     const version = Number(r.version ?? 1);
@@ -2647,59 +2725,12 @@ class SyncManager {
             : null,
         ],
       );
-      // A3: an equal-version guard miss with divergent content is a version
-      // conflict, not a silent keep-local. Guard winners apply (no miss), so
-      // every divergence is observed exactly once — here, on the loser's
-      // side. Observation is best-effort and never blocks the pull.
-      try {
-        const { guardMissNeedsObservation, observeVersionConflict } = await import('./conflictWatch');
-        const localRows = (await db
-          .select('SELECT version, device_id, status, total, json_payload FROM transactions WHERE id = $1', [txId])
-          .catch(() => [])) as Array<{
-            version?: unknown; device_id?: unknown; status?: unknown; total?: unknown; json_payload?: unknown;
-          }>;
-        const localRow = localRows?.[0] ?? null;
-        if (guardMissNeedsObservation({ affectedRaw: txApplyResult, local: localRow, incomingVersion: version })) {
-          const parseJson = (raw: unknown): Record<string, unknown> => {
-            try {
-              const parsed: unknown = JSON.parse(String(raw ?? '{}'));
-              return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-                ? (parsed as Record<string, unknown>)
-                : {};
-            } catch {
-              return {};
-            }
-          };
-          const { usePosStore } = await import('../store/usePosStore');
-          await observeVersionConflict(
-            db as unknown as import('./conflictWatch').ConflictDb,
-            async (action, details) => {
-              await usePosStore.getState().logSecurityAction(action, details, 'Système (Sync)', false);
-            },
-            {
-              table: 'transactions',
-              id: txId,
-              localVersion: localRow?.version,
-              incomingVersion: version,
-              localDevice: localRow?.device_id,
-              incomingDevice: r.device_id,
-              localPayload: {
-                status: localRow?.status,
-                total: localRow?.total,
-                json: parseJson(localRow?.json_payload),
-              },
-              incomingPayload: {
-                status: r.status,
-                total: r.total,
-                json: parseJson(cleanRemoteJson(r.json_payload)),
-              },
-              at: utcNowIso(),
-            },
-          );
-        }
-      } catch {
-        // Observation must never fail or stall the pull lane.
-      }
+      await this.observePullGuardMiss(db, 'transactions', txId, txApplyResult, {
+        version,
+        device: r.device_id,
+        scalars: { status: r.status, total: r.total },
+        jsonRaw: cleanRemoteJson(r.json_payload),
+      });
       // v105 ATOMIC MATERIALIZATION (peer convergence): the originator's
       // exact FIFO sum rides the receipt JSON envelope. Fill the local
       // materialized column from it ONLY when locally unknown (NULL) —
@@ -2809,7 +2840,7 @@ class SyncManager {
       if (await this.shouldSkipSparseApply(db, 'transaction_items', String(r.id || ''), r, version)) {
         return;
       }
-      await db.execute(
+      const itemApplyResult: unknown = await db.execute(
         `INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price, discount,
           imei_number, cost_price, unit_price_charged, unit_cost_at_sale, discount_amount, line_profit,
           json_payload, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
@@ -2833,6 +2864,16 @@ class SyncManager {
           Number(r.deleted ?? 0),
         ],
       );
+      await this.observePullGuardMiss(db, 'transaction_items', itemId, itemApplyResult, {
+        version,
+        device: r.device_id,
+        scalars: {
+          quantity: r.quantity,
+          applied_price: r.applied_price,
+          discount: r.discount,
+        },
+        jsonRaw: cleanRemoteJson(r.json_payload),
+      });
       return;
     }
 
@@ -2846,7 +2887,7 @@ class SyncManager {
       // stock + price/catalog columns ARE updated on conflict (LWW): the ledger
       // recompute after pull remains the stock authority, but the row must not
       // pin a stale cache when ledger history is incomplete on this device.
-      await db.execute(
+      const productApplyResult: unknown = await db.execute(
         `INSERT INTO products (id, sku, barcode, title, brand, compatible_model, category, price, wholesale_price,
           cost_price, stock, image_url, is_serialized, imei_number, vendor_name, lead_time_days,
           daily_sales_velocity, reorder_point, json_payload, device_id, idempotency_key, sync_status,
@@ -2874,6 +2915,17 @@ class SyncManager {
           Number(r.deleted ?? 0),
         ],
       );
+      await this.observePullGuardMiss(db, 'products', pId, productApplyResult, {
+        version,
+        device: r.device_id,
+        scalars: {
+          price: r.price,
+          stock: r.stock,
+          title: r.title,
+          sku: r.sku,
+        },
+        jsonRaw: cleanRemoteJson(r.json_payload),
+      });
 
       // Mirror into Dexie
       try {

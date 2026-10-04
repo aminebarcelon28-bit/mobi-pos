@@ -99,6 +99,62 @@ function toFiniteVersion(value: unknown): number {
   return Number.isFinite(n) ? Math.floor(n) : 0;
 }
 
+export interface PullGuardMissSide {
+  version: unknown;
+  device: unknown;
+  /** Lane-specific comparable content (parsed JSON, money fields, …). */
+  comparable: unknown;
+}
+
+export interface PullGuardMissInput {
+  table: string;
+  id: string;
+  /** Raw driver result of the guarded upsert. */
+  affectedRaw: unknown;
+  /** Local row AFTER the miss (intact — the guard rejected the overwrite). */
+  local: PullGuardMissSide | null | undefined;
+  incoming: PullGuardMissSide;
+  at?: string;
+}
+
+/**
+ * Shared pull-lane wiring: gate the miss, then delegate to
+ * observeVersionConflict(). Thin by design — lane code only fetches its
+ * local row and builds its comparables; everything else is shared and
+ * unit-tested. Never throws, never blocks the pull.
+ */
+export async function observePullGuardMiss(
+  db: ConflictDb,
+  fileAudit: ConflictAuditSink,
+  input: PullGuardMissInput,
+): Promise<ObserveOutcome> {
+  try {
+    if (
+      !guardMissNeedsObservation({
+        affectedRaw: input.affectedRaw,
+        local: input.local ? { version: input.local.version } : null,
+        incomingVersion: input.incoming.version,
+      })
+    ) {
+      return 'skipped';
+    }
+    return await observeVersionConflict(db, fileAudit, {
+      table: input.table,
+      id: input.id,
+      localVersion: input.local?.version,
+      incomingVersion: input.incoming.version,
+      localDevice: input.local?.device,
+      incomingDevice: input.incoming.device,
+      localPayload: input.local?.comparable,
+      incomingPayload: input.incoming.comparable,
+      at: input.at,
+    });
+  } catch (err) {
+    console.warn('[sync:conflict] pull-miss observation failed (pipeline unaffected):', err);
+    return 'skipped';
+  }
+}
+
 export interface GuardMissInput {
   /** Raw driver result of the guarded upsert (number, {rowsAffected}, or unknown). */
   affectedRaw: unknown;

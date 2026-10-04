@@ -16,6 +16,7 @@ import {
   conflictRecordId,
   ensureConflictTable,
   guardMissNeedsObservation,
+  observePullGuardMiss,
   observeVersionConflict,
   type ConflictDb,
 } from '../src/sync/conflictWatch.ts';
@@ -192,7 +193,40 @@ async function main() {
       guardMissNeedsObservation({ affectedRaw: { rowsAffected: 0 }, local, incomingVersion: 6 }) === true);
   }
 
-  // 8. Keys sanitized + deterministic; ensure is idempotent.
+  // 8. Shared pull-lane wiring delegates through gate + observation.
+  {
+    const mkInput = (affectedRaw: unknown, version: number) => ({
+      table: 'transactions',
+      id: 'TX-9',
+      affectedRaw,
+      local: { version: 6, device: 'till-01', comparable: { total: 100 } },
+      incoming: { version, device: 'till-02', comparable: { total: 200 } },
+      at: '2026-01-01T00:00:00.000Z',
+    });
+    const { db, state } = makeFakeDb();
+    const audit = makeAudit();
+    check('wiring records on proven miss',
+      (await observePullGuardMiss(db, audit.sink, mkInput(0, 6))) === 'recorded' && state.rows.size === 1);
+    check('wiring skips applied rows (no db touch)',
+      (await observePullGuardMiss(db, audit.sink, mkInput(1, 6))) === 'skipped');
+    const { db: db2 } = makeFakeDb();
+    check('wiring identical content → identical',
+      (await observePullGuardMiss(db2, audit.sink, {
+        ...mkInput(0, 6),
+        local: { version: 6, device: 'till-01', comparable: { total: 200 } },
+      })) === 'identical');
+    const boom: ConflictDb = {
+      select: async () => { throw new Error('down'); },
+      execute: async () => { throw new Error('down'); },
+    };
+    let threw = false;
+    try {
+      await observePullGuardMiss(boom, audit.sink, mkInput(0, 6));
+    } catch { threw = true; }
+    check('wiring never throws', threw === false);
+  }
+
+  // 9. Keys sanitized + deterministic; ensure is idempotent.
   {
     check('record id sanitizes hostile input',
       conflictRecordId('trans actions', 'TX/1', 'AA', 'BB') === 'CONFLICT-transactions-TX1-AA-BB');
