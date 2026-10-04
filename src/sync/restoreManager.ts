@@ -19,6 +19,12 @@ import { ALL_REMOTE_SYNC_TABLES, assertValidSyncTable } from './remoteSchema';
 // H25: the generic-KV apply path (SQLite authority + Dexie replica + version
 // clock) is shared with the live pull path so the two can never diverge.
 import { applyGenericRemoteRow } from './genericApply';
+import {
+  insertLedgerReversalRecord,
+  planLedgerDelete,
+  recordPendingLedgerDelete,
+} from './conflictWatch';
+import { tiedVersionGuardSql, transactionPullGuardSql } from './causalVersion';
 import type { Product, SaleTransaction } from '../types/pos';
 
 export interface RestoreProgress {
@@ -56,6 +62,70 @@ async function validateCloudSource(
       `Source cloud invalide: tables manquantes (${missing.join(', ')}). ` +
       `Vérifiez l'URL et le jeton — restauration refusée avant toute modification locale.`
     );
+  }
+}
+
+type LocalDb = {
+  select: (sql: string, args?: unknown[]) => Promise<unknown>;
+  execute: (sql: string, args?: unknown[]) => Promise<unknown>;
+};
+
+/**
+ * A2: applies a tombstoned ledger row from a restore batch through the same
+ * compensating-reversal planner as the live pull lane (shared
+ * planLedgerDelete). History is never mutated; out-of-order deletes land in
+ * the pending lane for a later original to resolve. Best-effort, never
+ * throws — restore must not abort a 500-row page over one tombstone.
+ */
+async function restoreLedgerDeleteReversal(
+  local: LocalDb,
+  ledId: string,
+  r: Record<string, unknown>,
+  version: number,
+  now: string,
+): Promise<void> {
+  try {
+    if (!ledId) return;
+    const origRows = (await local
+      .select('SELECT id, product_id, delta, version FROM inventory_ledger WHERE id = $1', [ledId])
+      .catch(() => [])) as Array<{ id?: unknown; product_id?: unknown; delta?: unknown; version?: unknown }>;
+    const orig = origRows?.[0] ?? null;
+    const revRows = (await local
+      .select('SELECT id FROM inventory_ledger WHERE id = $1', [`REV-${ledId}`])
+      .catch(() => [])) as Array<{ id?: unknown }>;
+    const plan = planLedgerDelete({
+      original: orig
+        ? {
+            id: String(orig.id ?? ledId),
+            product_id: String(orig.product_id ?? 'unknown'),
+            delta: Number(orig.delta ?? 0),
+            version: orig.version,
+          }
+        : null,
+      reversalExists: Array.isArray(revRows) && revRows.length > 0,
+      incomingVersion: version,
+      deleterDevice: String(r.device_id ?? 'remote'),
+      now,
+    });
+    if (plan.action === 'noop') return;
+    const { usePosStore } = await import('../store/usePosStore');
+    const fileAudit = async (action: string, details: string): Promise<void> => {
+      await usePosStore.getState().logSecurityAction(action, details, 'Système (Sync)', false);
+    };
+    if (plan.action === 'pending') {
+      await recordPendingLedgerDelete(
+        local as unknown as import('./conflictWatch').ConflictDb,
+        { ledId, version, deleterDevice: String(r.device_id ?? 'remote'), now },
+      );
+      return;
+    }
+    await insertLedgerReversalRecord(
+      local as unknown as import('./conflictWatch').ConflictDb,
+      fileAudit,
+      plan.reversal,
+    );
+  } catch {
+    // Best-effort: a failed reversal must not abort the restore page.
   }
 }
 
@@ -233,7 +303,7 @@ export class RestoreManager {
                 ON CONFLICT(id) DO UPDATE SET
                   status=excluded.status, total=excluded.total, json_payload=excluded.json_payload,
                   version=excluded.version, updated_at=excluded.updated_at, deleted=excluded.deleted, sync_status='synced'
-                  WHERE excluded.version >= transactions.version`,
+                  WHERE ${transactionPullGuardSql()}`,
               [
                 id, r.receipt_number, r.customer_id ?? null, Number(r.subtotal ?? 0), Number(r.tax ?? 0),
                 Number(r.discount_total ?? 0), Number(r.total ?? 0), Number(r.cost_total ?? 0),
@@ -266,13 +336,22 @@ export class RestoreManager {
           } else if (table === 'transaction_items') {
             const txnId = String(r.transaction_id || '');
             const prodId = String(r.product_id || 'unknown');
+            // A2: same guarded upsert as the live pull lane (B-0 rules were
+            // DO NOTHING, so a newer tombstone in the backup lost to any
+            // local row). device_id rides the INSERT for the tiebreak only.
             await local.execute(
               `INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price,
                 discount, imei_number, cost_price, unit_price_charged, unit_cost_at_sale,
                 discount_amount, line_profit, json_payload, device_id, idempotency_key, sync_status,
                 version, created_at, updated_at, deleted)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'synced',$16,$17,$18,$19)
-               ON CONFLICT(id) DO NOTHING`,
+               ON CONFLICT(id) DO UPDATE SET quantity=excluded.quantity, applied_price=excluded.applied_price,
+                 discount=excluded.discount, imei_number=excluded.imei_number, cost_price=excluded.cost_price,
+                 unit_price_charged=excluded.unit_price_charged, unit_cost_at_sale=excluded.unit_cost_at_sale,
+                 discount_amount=excluded.discount_amount, line_profit=excluded.line_profit,
+                 json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at,
+                 deleted=excluded.deleted, sync_status='synced'
+               WHERE ${tiedVersionGuardSql('transaction_items')}`,
               [
                 id, txnId, prodId, Number(r.quantity ?? 1), Number(r.applied_price ?? 0),
                 Number(r.discount ?? 0), r.imei_number ? String(r.imei_number) : null, Number(r.cost_price ?? 0),
@@ -285,17 +364,25 @@ export class RestoreManager {
 
           } else if (table === 'inventory_ledger') {
             const prodId = String(r.product_id || 'unknown');
-            await local.execute(
-              `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
-                idempotency_key, sync_status, version, created_at, updated_at, deleted)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'synced',$9,$10,$11,$12)
-               ON CONFLICT(id) DO NOTHING`,
-              [
-                id, prodId, Number(r.delta ?? 0), String(r.reason ?? 'SALE'), r.ref_type ? String(r.ref_type) : null, r.ref_id ? String(r.ref_id) : null,
-                String(r.device_id ?? 'remote'), String(r.idempotency_key ?? id), Number(r.version ?? 1),
-                String(r.created_at ?? now), String(r.updated_at ?? now), Number(r.deleted ?? 0),
-              ]
-            );
+            // A2: tombstoned ledger rows take the reversal path (shared
+            // planner with the live pull lane) — history is append-only, so
+            // a delete never lands as a mutation. Live rows keep the
+            // DO NOTHING first-wins rule.
+            if (Number(r.deleted ?? 0) === 1) {
+              await restoreLedgerDeleteReversal(local, id, r, Number(r.version ?? 1), now);
+            } else {
+              await local.execute(
+                `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
+                  idempotency_key, sync_status, version, created_at, updated_at, deleted)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'synced',$9,$10,$11,$12)
+                 ON CONFLICT(id) DO NOTHING`,
+                [
+                  id, prodId, Number(r.delta ?? 0), String(r.reason ?? 'SALE'), r.ref_type ? String(r.ref_type) : null, r.ref_id ? String(r.ref_id) : null,
+                  String(r.device_id ?? 'remote'), String(r.idempotency_key ?? id), Number(r.version ?? 1),
+                  String(r.created_at ?? now), String(r.updated_at ?? now), Number(r.deleted ?? 0),
+                ]
+              );
+            }
 
           } else {
             // H25: generic KV tables go through the ONE shared apply path

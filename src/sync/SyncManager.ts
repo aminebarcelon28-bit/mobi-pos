@@ -2716,32 +2716,17 @@ class SyncManager {
       version: number; created_at: string; updated_at: string;
     },
   ): Promise<void> {
-    await db.execute(
-      `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
-        idempotency_key, sync_status, version, created_at, updated_at, deleted)
-       VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?,?,0) ON CONFLICT(id) DO NOTHING`,
-      [
-        reversal.id, reversal.product_id, reversal.delta, reversal.reason,
-        reversal.ref_type, reversal.ref_id, reversal.device_id, reversal.idempotency_key,
-        reversal.version, reversal.created_at, reversal.updated_at,
-      ],
+    // Single implementation lives in conflictWatch (shared with the restore
+    // lane); this stays a thin private so call sites don't change.
+    const { insertLedgerReversalRecord } = await import('./conflictWatch');
+    const { usePosStore } = await import('../store/usePosStore');
+    await insertLedgerReversalRecord(
+      db as unknown as import('./conflictWatch').ConflictDb,
+      async (action, details) => {
+        await usePosStore.getState().logSecurityAction(action, details, 'Système (Sync)', false);
+      },
+      reversal,
     );
-    await db.execute(
-      `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
-       VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
-      [reversal.idempotency_key, reversal.id, JSON.stringify({ ...reversal, sync_status: 'pending' })],
-    ).catch(() => {});
-    try {
-      const { usePosStore } = await import('../store/usePosStore');
-      await usePosStore.getState().logSecurityAction(
-        'Contre-passation stock (sync)',
-        `Ligne ${reversal.ref_id} supprimée par ${reversal.device_id} — contre-passation ${reversal.id} (${reversal.delta}). Historique préservé, aucun effacement.`,
-        'Système (Sync)',
-        false,
-      );
-    } catch {
-      // Audit is best-effort; the reversal row itself is durable.
-    }
   }
 
   /**
@@ -2786,20 +2771,11 @@ class SyncManager {
       });
       if (plan.action === 'noop') return;
       if (plan.action === 'pending') {
-        const { ensureConflictTable } = await import('./conflictWatch');
-        await ensureConflictTable(db as unknown as import('./conflictWatch').ConflictDb);
-        await (db as unknown as { execute: (sql: string, args?: unknown[]) => Promise<unknown> })
-          .execute(
-            `INSERT INTO sync_conflicts (id, table_name, row_id, local_version, incoming_version,
-              local_device, incoming_device, local_fp, incoming_fp, winner, detected_at, resolved, note)
-             VALUES ($1,'inventory_ledger',$2,0,$3,'',$4,'','','', $5, 0,$6)
-             ON CONFLICT(id) DO NOTHING`,
-            [
-              `PENDDEL-${ledId}`, ledId, version, String(r.device_id ?? 'remote'), now,
-              `pending-delete: original ${ledId} absent when v${version} tombstone arrived`,
-            ],
-          )
-          .catch(() => {});
+        const { recordPendingLedgerDelete } = await import('./conflictWatch');
+        await recordPendingLedgerDelete(
+          db as unknown as import('./conflictWatch').ConflictDb,
+          { ledId, version, deleterDevice: String(r.device_id ?? 'remote'), now },
+        );
         return;
       }
       await this.insertLedgerReversal(db, plan.reversal);

@@ -101,6 +101,85 @@ function toFiniteVersion(value: unknown): number {
 }
 
 /**
+ * Shared ledger-reversal executor (A2): inserts the compensating row from
+ * a LedgerDeletePlan, enqueues it for onward sync with an inline outbox
+ * row, and files an audit entry. The outbox row is inline (never a
+ * self-serializing enqueue helper): pull/restore lanes already hold the
+ * non-reentrant withWriteLock, which a locking enqueue would deadlock.
+ * Never throws; callers treat a silent return as done-or-impossible.
+ */
+export async function insertLedgerReversalRecord(
+  db: ConflictDb,
+  fileAudit: ConflictAuditSink,
+  reversal: {
+    id: string; product_id: string; delta: number; reason: string;
+    ref_type: string; ref_id: string; device_id: string; idempotency_key: string;
+    version: number; created_at: string; updated_at: string;
+  },
+): Promise<void> {
+  try {
+    // NOTE: callers must never route this through a self-serializing
+    // enqueue helper: pull/restore lanes already hold the non-reentrant
+    // withWriteLock, which would deadlock. Inline INSERTs only.
+    await db.execute(
+      `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id,
+        idempotency_key, sync_status, version, created_at, updated_at, deleted)
+       VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?,?,0) ON CONFLICT(id) DO NOTHING`,
+      [
+        reversal.id, reversal.product_id, reversal.delta, reversal.reason,
+        reversal.ref_type, reversal.ref_id, reversal.device_id, reversal.idempotency_key,
+        reversal.version, reversal.created_at, reversal.updated_at,
+      ],
+    );
+    await db
+      .execute(
+        `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+         VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
+        [reversal.idempotency_key, reversal.id, JSON.stringify({ ...reversal, sync_status: 'pending' })],
+      )
+      .catch(() => {});
+    try {
+      await fileAudit(
+        'Contre-passation stock (sync)',
+        `Ligne ${reversal.ref_id} supprimée par ${reversal.device_id} — contre-passation ${reversal.id} (${reversal.delta}). Historique préservé, aucun effacement.`,
+      );
+    } catch (auditErr) {
+      console.warn('[sync:conflict] reversal audit failed (row is durable):', auditErr);
+    }
+  } catch (err) {
+    console.warn('[sync:conflict] reversal insert failed (lane unaffected):', err);
+  }
+}
+
+/**
+ * Records a pending delete: the tombstone arrived before its original.
+ * Resolved later by whoever lands the original (pull insert path). Returns
+ * nothing; never throws.
+ */
+export async function recordPendingLedgerDelete(
+  db: ConflictDb,
+  input: { ledId: string; version: number; deleterDevice: string; now: string },
+): Promise<void> {
+  try {
+    await ensureConflictTable(db);
+    await db
+      .execute(
+        `INSERT INTO sync_conflicts (id, table_name, row_id, local_version, incoming_version,
+          local_device, incoming_device, local_fp, incoming_fp, winner, detected_at, resolved, note)
+         VALUES ($1,'inventory_ledger',$2,0,$3,'',$4,'','','', $5, 0,$6)
+         ON CONFLICT(id) DO NOTHING`,
+        [
+          `PENDDEL-${input.ledId}`, input.ledId, input.version, input.deleterDevice, input.now,
+          `pending-delete: original ${input.ledId} absent when v${input.version} tombstone arrived`,
+        ],
+      )
+      .catch(() => {});
+  } catch (err) {
+    console.warn('[sync:conflict] pending-delete record failed:', err);
+  }
+}
+
+/**
  * Ledger-delete planner (A2: SYNC-007 — append-only lanes never apply
  * tombstones, so a delete would resurrect on every repair/restore).
  * History is never mutated: a delete becomes a compensating REVERSAL row
