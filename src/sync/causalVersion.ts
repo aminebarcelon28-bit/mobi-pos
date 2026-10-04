@@ -166,6 +166,22 @@ export function reportConflict(conflict: VersionConflict): void {
 }
 
 /**
+ * Canonical SQL guard shared by every version-guarded upsert (push + pull).
+ * Use it instead of hand-writing the predicate so all lanes resolve equal
+ * versions identically: strictly-newer wins, else greater-or-equal device
+ * wins ties. `COALESCE` keeps NULL/missing device ids total and
+ * deterministic (they rank lowest). Same-device re-pushes still apply
+ * (idempotent re-apply, harmless).
+ */
+export function tiedVersionGuardSql(table: string): string {
+  return (
+    `excluded.version > ${table}.version ` +
+    `OR (excluded.version = ${table}.version ` +
+    `AND COALESCE(excluded.device_id,'') >= COALESCE(${table}.device_id,''))`
+  );
+}
+
+/**
  * Optimistic-bump helper for the write side (DB-013): read the version,
  * write with `UPDATE ... WHERE version = :read` (or an upsert whose guard
  * carries the read version), and RETRY the whole read-modify-write on a

@@ -17,6 +17,7 @@ import type { Product } from '../types/pos';
 import { newId } from '../utils/ids';
 import { withWriteLock } from '../db/writeMutex';
 import { withBusyRetry, isRetryableDbError } from '../db/busyRetry';
+import { tiedVersionGuardSql } from './causalVersion';
 
 /**
  * Additive sync-visibility extension (SyncStatus itself lives in
@@ -1435,8 +1436,10 @@ class SyncManager {
           await markOutboxMany(batchKeys, { status: 'inflight' });
           this.claimedInflightKeys = batchKeys;
           const batchResults = (await remote.batch(validOps.map((v) => v.stmt), 'write')) as Array<{ rowsAffected?: number }>;
-          // Guarded-upsert truth (C6): a `WHERE excluded.version >= X.version`
-          // upsert that matches 0 rows is a REJECTED stale edit, not a success.
+          // Guarded-upsert truth (C6): a version-guarded upsert (strictly newer,
+          // else equal-version with greater-or-equal device_id — see
+          // sync/causalVersion.ts) that matches 0 rows is a REJECTED stale edit,
+          // not a success.
           // The old code marked it synced and deleted it — silent loss. Stale
           // rows stay pending with an actionable error (quarantined after 10
           // retries like any other failure) and trigger a pull so the device
@@ -1783,7 +1786,7 @@ class SyncManager {
             VALUES (?,?,?,?,'synced',?,?,?,1)
             ON CONFLICT(id) DO UPDATE SET deleted=1, version=excluded.version, updated_at=excluded.updated_at,
             sync_status='synced'
-            WHERE excluded.version >= products.version`,
+            WHERE ${tiedVersionGuardSql('products')}`,
           args: [v(op.entity_id), v(title), v(this.deviceId || 'default'), v(op.idempotency_key || `del-${op.entity_id}`), v(version + 1), v(createdAt), v(now)],
         };
       }
@@ -1796,7 +1799,7 @@ class SyncManager {
             VALUES (?,?,0,?,?,'synced',?,?,?,1)
             ON CONFLICT(id) DO UPDATE SET deleted=1, version=excluded.version, updated_at=excluded.updated_at,
             sync_status='synced'
-            WHERE excluded.version >= transactions.version`,
+            WHERE ${tiedVersionGuardSql('transactions')}`,
           args: [v(op.entity_id), v(receiptNo), v(this.deviceId || 'default'), v(op.idempotency_key || `del-${op.entity_id}`), v(version + 1), v(createdAt), v(now)],
         };
       }
@@ -1810,7 +1813,7 @@ class SyncManager {
             VALUES (?,?,?,?,0,?,?,'synced',?,?,?,1)
             ON CONFLICT(id) DO UPDATE SET deleted=1, version=excluded.version, updated_at=excluded.updated_at,
             sync_status='synced'
-            WHERE excluded.version >= transaction_items.version`,
+            WHERE ${tiedVersionGuardSql('transaction_items')}`,
           args: [v(op.entity_id), v(txnId), v(prodId), v(Number(payload.quantity ?? 1)), v(this.deviceId || 'default'), v(op.idempotency_key || `del-${op.entity_id}`), v(version + 1), v(createdAt), v(now)],
         };
       }
@@ -1823,7 +1826,7 @@ class SyncManager {
             VALUES (?,?,0,'DELETE',?,?,'synced',?,?,?,1)
             ON CONFLICT(id) DO UPDATE SET deleted=1, version=excluded.version, updated_at=excluded.updated_at,
             sync_status='synced'
-            WHERE excluded.version >= inventory_ledger.version`,
+            WHERE ${tiedVersionGuardSql('inventory_ledger')}`,
           args: [v(op.entity_id), v(prodId), v(this.deviceId || 'default'), v(op.idempotency_key || `del-${op.entity_id}`), v(version + 1), v(createdAt), v(now)],
         };
       }
@@ -1859,7 +1862,7 @@ class SyncManager {
             idempotency_key=excluded.idempotency_key, sync_status='synced',
             version=excluded.version, updated_at=excluded.updated_at,
             deleted=excluded.deleted, id=excluded.id, data_json=excluded.data_json
-            WHERE excluded.version >= stock_batches.version`,
+            WHERE ${tiedVersionGuardSql('stock_batches')}`,
         args: [
           v(batchId),
           v(payload.product_id ?? payload.productId ?? 'unknown'),
@@ -1889,7 +1892,7 @@ class SyncManager {
             VALUES (?,?,?,?,'synced',?,?,1)
             ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, version=excluded.version,
             updated_at=excluded.updated_at, sync_status='synced', deleted=1
-            WHERE excluded.version >= ${genericTable}.version`,
+            WHERE ${tiedVersionGuardSql(genericTable)}`,
           args: [
             v(op.entity_id), v(toBoundedSyncJson(payload ?? {})), v(payload.device_id ?? this.deviceId ?? 'default'),
             v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`), v(version + 1),
@@ -1902,7 +1905,7 @@ class SyncManager {
           VALUES (?,?,?,?,'synced',?,?,0)
           ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json, version=excluded.version,
           updated_at=excluded.updated_at, sync_status='synced', deleted=0
-          WHERE excluded.version >= ${genericTable}.version`,
+          WHERE ${tiedVersionGuardSql(genericTable)}`,
         args: [
           v(op.entity_id), v(toBoundedSyncJson(payload ?? {})), v(payload.device_id ?? this.deviceId ?? 'default'),
           v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${op.entity_id}`), v(version || 1),
@@ -1938,7 +1941,7 @@ class SyncManager {
           ON CONFLICT(id) DO UPDATE SET status=excluded.status, total=excluded.total,
             json_payload=excluded.json_payload, version=excluded.version, updated_at=excluded.updated_at, sync_status='synced',
             deleted=excluded.deleted, shift_id=excluded.shift_id
-          WHERE excluded.version >= transactions.version`,
+            WHERE ${tiedVersionGuardSql('transactions')}`,
         args: [
           v(payload.id ?? op.entity_id),
           v(payload.receipt_number ?? payload.receiptNumber ?? payload.id ?? op.entity_id),
@@ -2004,7 +2007,7 @@ class SyncManager {
           reorder_point=excluded.reorder_point, json_payload=excluded.json_payload,
           version=excluded.version, updated_at=excluded.updated_at,
           deleted=excluded.deleted, sync_status='synced'
-          WHERE excluded.version >= products.version`,
+          WHERE ${tiedVersionGuardSql('products')}`,
         args: [
           v(pId), v(payload.sku ?? ''), v(payload.barcode ?? ''),
           v(payload.title ?? payload.id ?? op.entity_id ?? 'Sans Titre'),
