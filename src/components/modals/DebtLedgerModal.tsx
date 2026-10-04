@@ -1,8 +1,12 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { parseLocalizedAmount } from '../../utils/moneyInput';
 
 const foldForSearch = (s: string | undefined | null): string =>
   (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+/** Tab candidates for the modal focus trap (defect I6). */
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 import {
   X,
   CreditCard,
@@ -137,6 +141,69 @@ export const DebtLedgerModal: React.FC = () => {
   }, [allIndebted, debouncedSearch, filterType]);
 
   useEffect(() => { if (activeModal !== 'debt_ledger') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+
+  // ══════════════════════════════════════════════════════════════
+  // FOCUS MANAGEMENT (WCAG 2.4.3 — defect I6)
+  // Capture the trigger, move focus into the ledger on open, keep Tab
+  // inside the topmost panel, restore the trigger on close. Escape keeps
+  // its shipped behaviour (closes the whole stack) — see the effect above.
+  // ══════════════════════════════════════════════════════════════
+  const modalRootRef = useRef<HTMLDivElement>(null);
+  const versementRootRef = useRef<HTMLDivElement>(null);
+  const plafondRootRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (activeModal !== 'debt_ledger') return;
+    const trigger = document.activeElement;
+    triggerRef.current = trigger instanceof HTMLElement ? trigger : null;
+    // After paint: the overlay is mounted, so the input can take focus.
+    const focusTimer = window.setTimeout(() => searchInputRef.current?.focus(), 0);
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+      // The sub-panels are nested in the overlay, so the topmost one owns
+      // the trap: Tab can never reach the (visually inert) ledger behind.
+      const panel = plafondRootRef.current ?? versementRootRef.current ?? modalRootRef.current;
+      if (!panel) return;
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+        (el) => el.tabIndex !== -1 && el.getClientRects().length > 0
+      );
+      if (focusable.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || !panel.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+        return;
+      }
+      if (active === last || !panel.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [activeModal, closeModal]);
+
+  // Restore focus to whatever opened the ledger once it unmounts.
+  useEffect(() => {
+    if (activeModal === 'debt_ledger') return;
+    const trigger = triggerRef.current;
+    triggerRef.current = null;
+    if (trigger && document.contains(trigger)) trigger.focus();
+  }, [activeModal]);
 
   if (activeModal !== 'debt_ledger') return null;
 
@@ -286,7 +353,14 @@ export const DebtLedgerModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/50 backdrop-blur-sm select-none">
+    <div
+      ref={modalRootRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="kredy-modal-title"
+      data-testid="kredy-modal"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/50 backdrop-blur-sm select-none"
+    >
       <div className="w-full max-w-5xl max-h-[90vh] flex flex-col rounded-2xl bg-pos-panel border border-pos-border shadow-2xl overflow-hidden animate-in zoom-in-95">
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* HEADER */}
@@ -298,7 +372,7 @@ export const DebtLedgerModal: React.FC = () => {
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 sm:gap-2">
-                <h2 className="text-xs sm:text-base font-black text-pos-text uppercase tracking-wider truncate">
+                <h2 id="kredy-modal-title" className="text-xs sm:text-base font-black text-pos-text uppercase tracking-wider truncate">
                   Grand Livre Dettes Clients (Kredy)
                 </h2>
                 <span className="px-2 py-0.2 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold text-[10px] sm:text-xs shrink-0">
@@ -323,7 +397,7 @@ export const DebtLedgerModal: React.FC = () => {
         {/* TOP METRICS CARDS */}
         {/* ══════════════════════════════════════════════════════════════ */}
         <div className="px-6 py-4 border-b border-pos-border bg-pos-bg grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 shrink-0">
-          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
+          <div data-testid="kredy-card-encours" className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
             <div>
               <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
                 Total Encours Dettes
@@ -335,7 +409,7 @@ export const DebtLedgerModal: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
+          <div data-testid="kredy-card-debiteurs" className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
             <div>
               <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
                 Clients Débiteurs
@@ -347,7 +421,7 @@ export const DebtLedgerModal: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
+          <div data-testid="kredy-card-plafond-depasse" className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
             <div>
               <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
                 Plafond Dépassé
@@ -359,7 +433,7 @@ export const DebtLedgerModal: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
+          <div data-testid="kredy-card-plafond-global" className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
             <div>
               <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
                 Plafond Global Alloué
@@ -378,6 +452,7 @@ export const DebtLedgerModal: React.FC = () => {
         <div className="px-6 py-3.5 border-b border-pos-border bg-pos-panel flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-1.5 overflow-x-auto overscroll-contain pb-1 text-xs w-full sm:w-auto">
             <button
+              data-testid="kredy-tab-tous"
               onClick={() => setFilterType('all')}
               className={`px-3 py-1.5 rounded-xl font-bold border transition cursor-pointer ${
                 filterType === 'all'
@@ -388,6 +463,7 @@ export const DebtLedgerModal: React.FC = () => {
               Tous les Débiteurs ({allIndebted.length})
             </button>
             <button
+              data-testid="kredy-tab-plafond"
               onClick={() => setFilterType('over_limit')}
               className={`px-3 py-1.5 rounded-xl font-bold border transition cursor-pointer ${
                 filterType === 'over_limit'
@@ -398,6 +474,7 @@ export const DebtLedgerModal: React.FC = () => {
               🚨 Plafond Dépassé ({overLimitCount})
             </button>
             <button
+              data-testid="kredy-tab-elevees"
               onClick={() => setFilterType('high_debt')}
               className={`px-3 py-1.5 rounded-xl font-bold border transition cursor-pointer ${
                 filterType === 'high_debt'
@@ -412,6 +489,8 @@ export const DebtLedgerModal: React.FC = () => {
           <div className="relative w-full sm:w-72">
             <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
             <input
+              ref={searchInputRef}
+              data-testid="kredy-search"
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -426,7 +505,7 @@ export const DebtLedgerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         <div className="flex-1 overflow-y-auto overscroll-contain p-6 space-y-6">
           {filteredDebtors.length === 0 ? (
-            <div className="p-12 text-center bg-pos-card border border-pos-border rounded-2xl space-y-3">
+            <div data-testid="kredy-empty" className="p-12 text-center bg-pos-card border border-pos-border rounded-2xl space-y-3">
               <CheckCircle2 className="w-12 h-12 text-emerald-400 mx-auto opacity-60" />
               <h3 className="font-bold text-sm text-pos-text">Aucun débiteur dans cette catégorie</h3>
               <p className="text-xs text-pos-muted max-w-sm mx-auto">
@@ -446,6 +525,7 @@ export const DebtLedgerModal: React.FC = () => {
               return (
                 <div
                   key={customer.id}
+                  data-testid="kredy-row"
                   className={`bg-pos-card border rounded-2xl overflow-hidden transition-all duration-150 shadow-sm ${
                     isOver ? 'border-red-500/50 hover:border-red-500/70' : 'border-pos-border hover:border-rose-500/40'
                   }`}
@@ -486,6 +566,7 @@ export const DebtLedgerModal: React.FC = () => {
                         </div>
                         <div className="w-full h-2 bg-pos-bg rounded-full overflow-hidden">
                           <div
+                            data-testid="kredy-bar"
                             className={`h-full rounded-full transition-all duration-300 ${
                               isOver ? 'bg-red-500' : ratio > 75 ? 'bg-amber-500' : 'bg-rose-500'
                             }`}
@@ -496,7 +577,7 @@ export const DebtLedgerModal: React.FC = () => {
 
                       <div className="text-right pr-2">
                         <span className="text-[9px] uppercase font-bold text-pos-muted block">Dette Actuelle</span>
-                        <span className="text-base font-black text-rose-400 font-mono">{formatDZD(debt)}</span>
+                        <span data-testid="kredy-dette" className="text-base font-black text-rose-400 font-mono">{formatDZD(debt)}</span>
                       </div>
 
                       {/* Action Buttons */}
@@ -513,6 +594,7 @@ export const DebtLedgerModal: React.FC = () => {
                         <button
                           onClick={() => handleSendWhatsAppReminder(customer)}
                           className="min-h-[38px] min-w-[38px] p-2 bg-pos-bg hover:bg-emerald-500/20 border border-pos-border hover:border-emerald-500/40 text-emerald-400 rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95"
+                          aria-label="Envoyer un rappel de solde via WhatsApp"
                           title="Envoyer un rappel de solde via WhatsApp"
                         >
                           <MessageSquare className="w-4 h-4" />
@@ -521,6 +603,7 @@ export const DebtLedgerModal: React.FC = () => {
                         <button
                           onClick={() => handlePrintStatement(customer)}
                           className="min-h-[38px] min-w-[38px] p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95"
+                          aria-label="Imprimer le relevé de compte 80mm"
                           title="Imprimer le relevé de compte 80mm"
                         >
                           <Printer className="w-4 h-4" />
@@ -532,6 +615,8 @@ export const DebtLedgerModal: React.FC = () => {
                             setNewLimitInput(String(customer.debtLimit ?? DEFAULT_CREDIT_LIMIT));
                           }}
                           className="min-h-[38px] min-w-[38px] p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95"
+                          aria-haspopup="dialog"
+                          aria-label="Ajuster le plafond de crédit autorisé (PIN Manager)"
                           title="Ajuster le plafond de crédit autorisé (PIN Manager)"
                         >
                           <Lock className="w-4 h-4 text-cyan-400" />
@@ -540,6 +625,9 @@ export const DebtLedgerModal: React.FC = () => {
                         <button
                           onClick={() => setExpandedCustomerId(isExpanded ? null : customer.id)}
                           className="min-h-[38px] min-w-[38px] p-2 bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer flex items-center justify-center active:scale-95"
+                          data-testid="kredy-expand"
+                          aria-expanded={isExpanded}
+                          aria-label="Voir l'historique des opérations"
                           title="Voir l'historique des opérations"
                         >
                           {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -550,7 +638,7 @@ export const DebtLedgerModal: React.FC = () => {
 
                   {/* Expandable History Timeline */}
                   {isExpanded && (
-                    <div className="p-4 border-t border-pos-border bg-pos-bg space-y-2 animate-in fade-in">
+                    <div data-testid="kredy-historique" className="p-4 border-t border-pos-border bg-pos-bg space-y-2 animate-in fade-in">
                       <div className="flex items-center justify-between pb-1 border-b border-pos-border">
                         <h5 className="text-xs font-bold text-pos-muted uppercase tracking-wider flex items-center gap-1.5">
                           <History className="w-3.5 h-3.5 text-rose-400" /> Historique des Écritures ({customerHistory.length}) :
@@ -598,7 +686,14 @@ export const DebtLedgerModal: React.FC = () => {
         {/* PAYMENT SUB-MODAL */}
         {/* ══════════════════════════════════════════════════════════════ */}
         {payingCustomer && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4">
+          <div
+            ref={versementRootRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="kredy-versement-title"
+            data-testid="kredy-versement-modal"
+            className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4"
+          >
             <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col">
               <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
                 <div className="flex items-center gap-2">
@@ -606,12 +701,13 @@ export const DebtLedgerModal: React.FC = () => {
                     <DollarSign className="w-5 h-5" />
                   </div>
                   <div>
-                    <h3 className="font-black text-sm text-pos-text">Enregistrer un Versement</h3>
+                    <h3 id="kredy-versement-title" className="font-black text-sm text-pos-text">Enregistrer un Versement</h3>
                     <p className="text-[10px] text-pos-muted">Client : {payingCustomer.name}</p>
                   </div>
                 </div>
                 <button
                   onClick={() => setPayingCustomer(null)}
+                  aria-label="Fermer l'encaissement du versement"
                   className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
                 >
                   <X className="w-5 h-5" />
@@ -701,6 +797,7 @@ export const DebtLedgerModal: React.FC = () => {
                   </button>
                   <button
                     type="submit"
+                    data-testid="kredy-submit"
                     disabled={isProcessing}
                     className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs rounded-xl shadow-lg transition cursor-pointer flex items-center gap-2"
                   >
@@ -717,15 +814,22 @@ export const DebtLedgerModal: React.FC = () => {
         {/* CREDIT LIMIT ADJUSTMENT SUB-MODAL */}
         {/* ══════════════════════════════════════════════════════════════ */}
         {adjustingCustomer && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4">
+          <div
+            ref={plafondRootRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="kredy-plafond-title"
+            className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4"
+          >
             <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col">
               <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
                 <div className="flex items-center gap-2">
                   <Lock className="w-5 h-5 text-cyan-400" />
-                  <h3 className="font-black text-sm text-pos-text">Modifier Plafond de Crédit</h3>
+                  <h3 id="kredy-plafond-title" className="font-black text-sm text-pos-text">Modifier Plafond de Crédit</h3>
                 </div>
                 <button
                   onClick={() => setAdjustingCustomer(null)}
+                  aria-label="Fermer la modification du plafond"
                   className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
                 >
                   <X className="w-5 h-5" />
