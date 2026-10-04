@@ -101,6 +101,22 @@ function toFiniteVersion(value: unknown): number {
 }
 
 /**
+ * Batch-clamp observation gate (B1: SYNC-006). The stock_batches pull lane
+ * clamps negative quantities to 0 so a lost-update race cannot freeze the
+ * lane — but the clamp also hides the race. Observe exactly when the clamp
+ * engaged on an equal-version row (genuine concurrent depletion, not
+ * newer-wins convergence): that is the phantom-stock suspect.
+ */
+export function batchClampNeedsObservation(input: {
+  clamped: boolean;
+  localVersion: unknown;
+  incomingVersion: unknown;
+}): boolean {
+  if (!input.clamped) return false;
+  return toFiniteVersion(input.localVersion) === toFiniteVersion(input.incomingVersion);
+}
+
+/**
  * Shared ledger-reversal executor (A2): inserts the compensating row from
  * a LedgerDeletePlan, enqueues it for onward sync with an inline outbox
  * row, and files an audit entry. The outbox row is inline (never a

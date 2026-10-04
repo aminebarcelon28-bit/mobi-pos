@@ -23,6 +23,8 @@ import type Database from '@tauri-apps/plugin-sql';
 import { db as dexieDb } from '../db/database';
 import type { CreditVoucher, Customer, LoyaltyLedgerEntry } from '../types/pos';
 import { sanitizeSyncPayload, utcNowIso, isDeviceLocalSettingKey, RECEIPT_SETTINGS_KEY, isRetryableDbError } from '../db/sqlPluginAdapter';
+import { batchClampNeedsObservation, observeVersionConflict } from './conflictWatch';
+import { tiedVersionGuardSql } from './causalVersion';
 import { tombstoneVersionPredicate } from './causalVersion';
 
 /** Singular push entity_type -> plural remote KV table. */
@@ -356,8 +358,55 @@ async function mirrorGenericToSqlite(
     const rawCost = Number(b.unit_cost ?? b.unitCost ?? 0);
     const qty = Math.max(0, rawQty);
     const cost = Math.max(0, rawCost);
-    if (qty !== rawQty || cost !== rawCost) {
+    const clamped = qty !== rawQty || cost !== rawCost;
+    if (clamped) {
       console.warn(`[sync:generic] stock_batches.${id} clamped (qty ${rawQty}->${qty}, cost ${rawCost}->${cost})`);
+    }
+    // B1: a clamp on an equal-version row is a lost-update race made
+    // visible (phantom-stock suspect): both tills depleted concurrently and
+    // the absolute quantities no longer reconcile. Newer-wins convergence
+    // is normal and stays silent. Best-effort, never blocks the lane.
+    if (clamped) {
+      try {
+        const localBatchRows = (await db
+          .select('SELECT version, device_id, quantity_remaining, unit_cost FROM stock_batches WHERE batch_id = $1', [id])
+          .catch(() => [])) as Array<{
+            version?: unknown; device_id?: unknown; quantity_remaining?: unknown; unit_cost?: unknown;
+          }>;
+        const localBatch = localBatchRows?.[0] ?? null;
+        if (
+          localBatch &&
+          batchClampNeedsObservation({
+            clamped: true,
+            localVersion: localBatch.version,
+            incomingVersion: version,
+          })
+        ) {
+          const { usePosStore } = await import('../store/usePosStore');
+          await observeVersionConflict(
+            db as unknown as import('./conflictWatch').ConflictDb,
+            async (action, details) => {
+              await usePosStore.getState().logSecurityAction(action, details, 'Système (Sync)', false);
+            },
+            {
+              table: 'stock_batches',
+              id,
+              localVersion: localBatch.version,
+              incomingVersion: version,
+              localDevice: localBatch.device_id,
+              incomingDevice: b.device_id ?? b.deviceId,
+              localPayload: {
+                quantity_remaining: localBatch.quantity_remaining,
+                unit_cost: localBatch.unit_cost,
+              },
+              incomingPayload: { quantity_remaining: rawQty, unit_cost: rawCost },
+              at: utcNowIso(),
+            },
+          );
+        }
+      } catch {
+        // Observation must never stall the stock_batches lane.
+      }
     }
     // FK parent stub: a batch can land before its product (the purchase-order
     // lane and the product lane are separate cursors). INSERT ... DO NOTHING
@@ -406,9 +455,9 @@ async function mirrorGenericToSqlite(
            device_id=excluded.device_id, idempotency_key=excluded.idempotency_key,
            sync_status='synced', version=excluded.version, updated_at=excluded.updated_at,
            deleted=excluded.deleted,
-           shadow_sale_id=excluded.shadow_sale_id, shadow_item_id=excluded.shadow_item_id,
-           shadow_qty=excluded.shadow_qty, shadow_resolved=excluded.shadow_resolved
-           WHERE excluded.version >= stock_batches.version`,
+            shadow_sale_id=excluded.shadow_sale_id, shadow_item_id=excluded.shadow_item_id,
+            shadow_qty=excluded.shadow_qty, shadow_resolved=excluded.shadow_resolved
+            WHERE ${tiedVersionGuardSql('stock_batches')}`,
         batchArgs,
       );
     } catch (schemaErr) {
@@ -428,10 +477,10 @@ async function mirrorGenericToSqlite(
            unit_cost=CASE WHEN excluded.unit_cost > 0 THEN excluded.unit_cost ELSE stock_batches.unit_cost END,
            received_at=COALESCE(excluded.received_at, stock_batches.received_at),
            purchase_order_id=COALESCE(excluded.purchase_order_id, stock_batches.purchase_order_id),
-           device_id=excluded.device_id, idempotency_key=excluded.idempotency_key,
-           sync_status='synced', version=excluded.version, updated_at=excluded.updated_at,
-           deleted=excluded.deleted
-           WHERE excluded.version >= stock_batches.version`,
+            device_id=excluded.device_id, idempotency_key=excluded.idempotency_key,
+            sync_status='synced', version=excluded.version, updated_at=excluded.updated_at,
+            deleted=excluded.deleted
+            WHERE ${tiedVersionGuardSql('stock_batches')}`,
         batchArgs.slice(0, 12),
       );
     }

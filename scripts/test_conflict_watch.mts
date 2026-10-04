@@ -12,6 +12,7 @@ import {
   projectionFingerprint,
 } from '../src/sync/causalVersion.ts';
 import {
+  batchClampNeedsObservation,
   conflictAuditKey,
   conflictRecordId,
   ensureConflictTable,
@@ -301,7 +302,17 @@ async function main() {
       planLedgerDelete({ ...base, incomingVersion: Number.NaN }).action === 'noop');
   }
 
-  // 11. Keys sanitized + deterministic; ensure is idempotent.
+  // 11. Batch-clamp gate: only clamped equal-version rows observe.
+  check('unclamped apply never observes',
+    batchClampNeedsObservation({ clamped: false, localVersion: 6, incomingVersion: 6 }) === false);
+  check('clamped newer-wins convergence stays silent',
+    batchClampNeedsObservation({ clamped: true, localVersion: 5, incomingVersion: 6 }) === false);
+  check('clamped stale incoming stays silent',
+    batchClampNeedsObservation({ clamped: true, localVersion: 7, incomingVersion: 6 }) === false);
+  check('clamped equal versions observe (phantom-stock suspect)',
+    batchClampNeedsObservation({ clamped: true, localVersion: 6, incomingVersion: 6 }) === true);
+
+  // 12. Keys sanitized + deterministic; ensure is idempotent.
   {
     check('record id sanitizes hostile input',
       conflictRecordId('trans actions', 'TX/1', 'AA', 'BB') === 'CONFLICT-transactions-TX1-AA-BB');
