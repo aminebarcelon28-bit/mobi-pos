@@ -42,6 +42,7 @@ import {
 } from 'node:fs';
 import { dirname, join, normalize, relative } from 'node:path';
 import { createClient } from '@libsql/client';
+import { tiedVersionGuardSql } from '../src/sync/causalVersion.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -314,7 +315,7 @@ const stmt = mgr.toRemoteUpsert(op, '2026-09-14T10:00:01.000Z');
 check('[2a] toRemoteUpsert returns a statement (was null before H29)', stmt !== null && stmt !== undefined, stmt);
 if (stmt) {
   check('[2b] statement targets credit_vouchers', /INTO credit_vouchers /.test(stmt.sql), stmt.sql.slice(0, 60));
-  check('[2c] statement carries the version guard', /WHERE excluded\.version >= credit_vouchers\.version/.test(stmt.sql));
+  check('[2c] statement carries the canonical tied version guard', stmt.sql.includes(`WHERE ${tiedVersionGuardSql('credit_vouchers')}`), stmt.sql.slice(-120));
   check('[2d] args carry the entity id + payload', stmt.args[0] === voucherId, stmt.args[0]);
   // Actually execute it against the REAL remote DB.
   await remote.execute({ sql: stmt.sql, args: stmt.args });

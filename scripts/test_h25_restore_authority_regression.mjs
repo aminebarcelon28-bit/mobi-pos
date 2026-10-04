@@ -13,6 +13,7 @@ import { createClient } from '@libsql/client';
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, rmSync, readdirSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
+import { tiedVersionGuardSql } from '../src/sync/causalVersion.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -89,9 +90,15 @@ const genUpsertRaw = (() => {
   return end > start ? sm.slice(start + 1, end) : '';
 })();
 function toLibsql(sql) { let n = 0; return sql.replace(/\?/g, () => `$${++n}`); }
-const genUpsert = toLibsql(genUpsertRaw.replace(/\$\{genericTable\}/g, 'customers'));
+// Resolve the push lane's WHERE clause the way the lane itself does — through the
+// canonical guard helper — instead of retyping the predicate, and fill in
+// `genericTable` so the executed statement is the real one.
+const genUpsert = toLibsql(genUpsertRaw
+  .replace(/\$\{genericTable\}/g, 'customers')
+  .replace(/\$\{tiedVersionGuardSql\(genericTable\)\}/g, tiedVersionGuardSql('customers')));
 check('extracted the real generic push upsert SQL', /ON CONFLICT\(id\) DO UPDATE SET/.test(genUpsert));
-check('push upsert carries the version guard', /WHERE excluded\.version >= customers\.version/.test(genUpsert));
+check('the extracted SQL has no unsubstituted interpolation left', !genUpsert.includes('${'), genUpsert.slice(-60));
+check('push upsert carries the canonical tied version guard', genUpsert.includes(`WHERE ${tiedVersionGuardSql('customers')}`));
 
 function extractSql(src, startMarker, endMarker) {
   const s = src.indexOf(startMarker);

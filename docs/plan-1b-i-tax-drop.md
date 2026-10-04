@@ -392,20 +392,26 @@ the build, so the gate cannot silently loosen).
 
 ### 13.4 Cross-lane items found while verifying (NOT tax defects — not fixed here)
 
-- **R-4 — stale `tiedVersionGuardSql` expectations in three harnesses.**
+- **R-4 — stale `tiedVersionGuardSql` expectations in three harnesses (CLOSED).**
   `causalVersion.ts:176-182` (commit `e9d1f0b`) replaced
   `excluded.version >= t.version` with the tied guard
   (`> version OR (= version AND device_id ≥)`), but three harnesses still
-  assert/slice the old predicate:
-  `test_h29_credit_vouchers_sync.mjs:317` ([2c] fails),
+  asserted/sliced the old predicate:
+  `test_h29_credit_vouchers_sync.mjs:317` ([2c] failed),
   `test_h25_restore_authority_regression.mjs:94` + the SQL slice at `:85-92`,
   `test_h27_stock_batches_dropped.mjs` ("the real push SQL INSERTs the batch").
-  Static proof the extraction is broken at HEAD: the sliced SQL still contains
-  the literal `${tiedVersionGuardSql(genericTable)}`, hence
-  `SQLITE_ERROR: unrecognized token: "$"`. The tax diff does not touch
-  `causalVersion.ts` or the guard call sites (`git diff src/sync/SyncManager.ts`
-  is tax-only), so these fail identically without this changeset. Owner of that
-  lane decides whether the assertions follow the tied guard.
+  Two distinct failures, both confirmed against the pre-fix tree: h29 asserted
+  the removed literal against live `toRemoteUpsert` output; h25/h27 sliced the
+  template and executed it, so the literal `${tiedVersionGuardSql(...)}` reached
+  SQLite as `SQLITE_ERROR: unrecognized token: "$"`.
+  Fixed test-only: each harness now imports the canonical
+  `tiedVersionGuardSql` from `src/sync/causalVersion.ts` and asserts/substitutes
+  from that function (no retyped predicate), plus a new no-unsubstituted-`${`
+  assertion so an unresolved interpolation fails loudly instead of surfacing as
+  a SQL error. A fourth, independent staleness surfaced while fixing these: the
+  `RESTITUTE_VERSION_CONFLICT` OCC retry block pushed h27's
+  `version: restituteVersion0` stamp past the fixed 60-line site window — that
+  one window is now 80. All three suites green.
 - **Harness-compat shim fixes (mechanical, applied here so the suites can run
   at all):** the uncommitted IMEI-anchor work added
   `import … from '../db/imeiAnchorSchema'` to `genericApply.ts`, which the

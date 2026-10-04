@@ -36,6 +36,7 @@ import { createClient } from '@libsql/client';
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, rmSync, readdirSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
+import { tiedVersionGuardSql } from '../src/sync/causalVersion.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -266,7 +267,7 @@ console.log('\n[8] FIXED: the REAL push SQL writes real columns + KV + guard');
     check('the branch conflicts on the real PK batch_id', /ON CONFLICT\(batch_id\)/.test(segment));
     check('the branch writes the real FIFO columns', /quantity_remaining=excluded\.quantity_remaining/.test(segment));
     check('the branch writes the KV pair (id, data_json)', /id=excluded\.id/.test(segment) && /data_json=excluded\.data_json/.test(segment));
-    check('the branch carries the version guard', /WHERE excluded\.version >= stock_batches\.version/.test(segment));
+    check('the branch carries the canonical tied version guard (causalVersion helper, not a retyped predicate)', segment.includes("WHERE ${tiedVersionGuardSql('stock_batches')}"));
 
     // Count the placeholders in the real SQL and run it against a real v6-shaped
     // remote DB. This is the exact statement the push lane executes.
@@ -279,7 +280,13 @@ console.log('\n[8] FIXED: the REAL push SQL writes real columns + KV + guard');
         // a backtick inside the SQL would be an escape; this branch's SQL has none
         break;
       }
-      const realSql = segment.slice(sqlStart, sqlEnd);
+      const realSql = segment
+        .slice(sqlStart, sqlEnd)
+        // The push lane builds its WHERE clause from the canonical guard helper
+        // (src/sync/causalVersion.ts). Resolve it from that function rather than
+        // retyping the predicate, so this stays exact when the guard changes.
+        .replace(/\$\{tiedVersionGuardSql\('stock_batches'\)\}/g, tiedVersionGuardSql('stock_batches'));
+      check('the sliced SQL has no unsubstituted interpolation left', !realSql.includes('${'), realSql.slice(-60));
       // 15 columns, but `sync_status` is the literal 'synced' -> 14 placeholders.
       const placeholderCount = (realSql.match(/\?/g) || []).length;
       check('the real SQL has 14 placeholders for 15 columns (sync_status is a literal)', placeholderCount === 14, placeholderCount);
@@ -357,7 +364,10 @@ console.log('\n[9] FIXED: the outbox payloads carry the bumped version');
   const dbSrc = readFileSync(join(ROOT, 'src', 'db', 'sqlPluginAdapter.ts'), 'utf8');
   const sites = [
     { name: 'checkout FIFO depletion', anchor: 'SET quantity_remaining = quantity_remaining - $1' },
-    { name: 'restitute existing batch', anchor: 'SET quantity_remaining = $1,' },
+    // Enclosing-object window: the payload stamp sits after the OCC retry block
+    // (`RESTITUTE_VERSION_CONFLICT` re-read + second UPDATE), which pushed the
+    // `version:` stamp past the default 60-line window.
+    { name: 'restitute existing batch', anchor: 'SET quantity_remaining = $1,', window: 80 },
     // Enclosing-object window: the REFUND payload stamps `version: 1` just
     // above the anchor (the stamp belongs to the same object literal).
     { name: 'restitute new batch', anchor: "purchase_order_id: 'REFUND',", before: 10, window: 10 },
