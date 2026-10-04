@@ -74,23 +74,41 @@ export const customerAdapter = {
     // the pushed outbox payload disagree: the payload claimed v2 while the row
     // had advanced to v3, so a peer holding v3 rejected the cloud row and the
     // merchant's customer edit never converged. Read the authoritative value.
-    let nextVersion = Number((customer as unknown as { version?: number }).version || 0) + 1;
-    try {
-      const { getLocalDb } = await import('../sqlPluginAdapter');
-      const db = await getLocalDb();
-      const verRows = (await db
-        .select('SELECT version FROM customers WHERE id=$1', [customer.id])
-        .catch(() => [])) as Array<{ version: number }>;
-      if (verRows && verRows.length > 0) nextVersion = Number(verRows[0].version) + 1;
-    } catch {
-      // SQLite unavailable (web mode) — keep the in-memory fallback above.
-    }
-    const customerWithVersion = { ...customer, version: nextVersion };
-    await dexieDb.customers.put(customerWithVersion);
-    try {
-      const { getLocalDb, utcNowIso } = await import('../sqlPluginAdapter');
-      const db = await getLocalDb();
-      const now = utcNowIso();
+    //
+    // A3 (DB-013): the read-then-write below is additionally guarded —
+    // concurrent writers that both read v3 no longer both land v4. Each
+    // attempt upserts only if the row still carries the version that was
+    // read (`WHERE customers.version = $read`), then verifies what landed.
+    // Verification by version equality is sound under this repo's id
+    // discipline: same-id writes are same-op retries (identical content) or
+    // deterministic-id convergence (designed to collapse). Transient races
+    // converge inside the retry loop; only adversarial hammering reaches
+    // the force-write fallback, which warns loudly instead of losing
+    // silently. No new throw paths: BUSY/Tauri failures behave as before.
+    const OPTIMISTIC_WRITE_ATTEMPTS = 3;
+    const fallbackBase = Number((customer as unknown as { version?: number }).version || 0);
+    let nextVersion = fallbackBase + 1;
+    const baseArgs = [
+      customer.id,
+      customer.name,
+      customer.phone,
+      customer.email || null,
+      customer.loyaltyPoints || 0,
+      customer.storeCredit || 0,
+      customer.pricingTier || 'Retail',
+      customer.totalSpent || 0,
+    ];
+    const idemKey =
+      (customer as unknown as { idempotency_key?: string }).idempotency_key || `cust-${customer.id}`;
+    const writeRow = async (
+      db: { execute: (sql: string, args?: unknown[]) => Promise<unknown>; select: (sql: string, args?: unknown[]) => Promise<unknown> },
+      baseVersion: number,
+      version: number,
+      now: string,
+      guarded: boolean,
+      rowJson: string,
+    ): Promise<void> => {
+      const predicate = guarded ? ' AND customers.version = $14' : '';
       await db.execute(
         `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12)
@@ -98,24 +116,77 @@ export const customerAdapter = {
            loyalty_points=excluded.loyalty_points, store_credit=excluded.store_credit,
            pricing_tier=excluded.pricing_tier, total_spent=excluded.total_spent,
            json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
-         version = excluded.version`,
+         version = excluded.version${predicate}`,
         [
-          customer.id,
-          customer.name,
-          customer.phone,
-          customer.email || null,
-          customer.loyaltyPoints || 0,
-          customer.storeCredit || 0,
-          customer.pricingTier || 'Retail',
-          customer.totalSpent || 0,
-          JSON.stringify(customerWithVersion),
+          ...baseArgs,
+          rowJson,
           now,
-          nextVersion,
+          version,
           // UNIQUE index on idempotency_key rejects the '' default twice:
           // every local row gets its own stable key (updates keep theirs).
-          (customerWithVersion as unknown as { idempotency_key?: string }).idempotency_key || `cust-${customer.id}`,
+          idemKey,
+          baseVersion,
         ],
       );
+    };
+    const readCurrent = async (
+      db: { select: (sql: string, args?: unknown[]) => Promise<unknown> },
+    ): Promise<number | null> => {
+      const verRows = (await db
+        .select('SELECT version FROM customers WHERE id=$1', [customer.id])
+        .catch(() => [])) as Array<{ version: number }>;
+      if (verRows && verRows.length > 0) return Number(verRows[0].version ?? 0);
+      return null;
+    };
+    try {
+      const { getLocalDb, utcNowIso } = await import('../sqlPluginAdapter');
+      const { runOptimisticWriteLoop, payloadFingerprint } = await import('../../sync/causalVersion');
+      const db = await getLocalDb();
+      const now = utcNowIso();
+      const rowJson = (version: number): string => JSON.stringify({ ...customer, version });
+      const parseJson = (raw: unknown): Record<string, unknown> => {
+        try {
+          const parsed: unknown = JSON.parse(String(raw ?? '{}'));
+          return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : {};
+        } catch {
+          return {};
+        }
+      };
+      const outcome = await runOptimisticWriteLoop(
+        {
+          read: () => readCurrent(db),
+          write: (base, next, guarded) => writeRow(db, base, next, now, guarded, rowJson(next)),
+          inspect: async () => {
+            const rows = (await db
+              .select('SELECT version, json_payload FROM customers WHERE id=$1', [customer.id])
+              .catch(() => [])) as Array<{ version?: unknown; json_payload?: unknown }>;
+            const row = rows?.[0];
+            if (!row) return { version: null, fingerprint: null };
+            return {
+              version: Number((row as { version?: unknown }).version ?? NaN),
+              fingerprint: payloadFingerprint(parseJson((row as { json_payload?: unknown }).json_payload)),
+            };
+          },
+          fingerprintFor: (version: number) => payloadFingerprint(parseJson(rowJson(version))),
+        },
+        fallbackBase,
+        OPTIMISTIC_WRITE_ATTEMPTS,
+      );
+      nextVersion = outcome.next;
+      if (outcome.forced) {
+        const msg =
+          `[customer] Concurrent writes to [${customer.id}] survived ${outcome.attemptsUsed} guarded attempts — ` +
+          `last-writer-wins at v${outcome.next}. Review the customer ledger if balances look off.`;
+        console.warn(msg);
+        try {
+          const { usePosStore } = await import('../../store/usePosStore');
+          await usePosStore.getState().logSecurityAction('Écriture concurrente (client)', msg, 'Système', false);
+        } catch {
+          // Audit is best-effort; the warning above already surfaced it.
+        }
+      }
     } catch (err) {
       // B-016: a bare catch made BUSY and real authority failures look like
       // "web mode". Rethrow BUSY (retryable) and any Tauri failure (caller
@@ -125,8 +196,13 @@ export const customerAdapter = {
         console.error('[customer] SQLite authority write failed:', err);
         throw err;
       }
-      // Non-Tauri (web) — no local authority; Dexie + fireSync still ran above.
+      // Non-Tauri (web) — no local authority; Dexie + fireSync still run below.
     }
+    // Authority-first: Dexie mirrors only what SQLite durable holds (or the
+    // in-memory fallback in web mode). Previously Dexie was written before
+    // SQLite even attempted, so a Tauri SQLite failure left Dexie ahead.
+    const customerWithVersion = { ...customer, version: nextVersion };
+    await dexieDb.customers.put(customerWithVersion);
     void fireSync('customer', customer.id, customerWithVersion);
   },
 

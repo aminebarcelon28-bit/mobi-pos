@@ -261,6 +261,76 @@ export function transactionPullGuardSql(): string {
 }
 
 /**
+ * Generic optimistic write loop (DB-013 second half): read the clock, write
+ * guarded on the read value, verify what landed, retry on mismatch.
+ *
+ * - `read()` returns the current version or null when the row is absent.
+ * - `write(base, next, guarded)` performs the upsert; when `guarded` it
+ *   must apply ONLY if the row still carries `base` (e.g. SQL
+ *   `... WHERE <table>.version = $base`), otherwise write unconditionally.
+ * - `inspect()` re-reads `{version, fingerprint}` (fingerprint null when
+ *   absent/unparseable). `fingerprintFor(next)` is the fingerprint of the
+ *   exact content this attempt wrote.
+ * - Verification is version AND content: version-only equality would still
+ *   lose silently when two distinct writers land the same version number
+ *   (A reads 3, B reads 3, A writes v4, B's guarded write misses, B
+ *   verifies "v4 == my v4" — B's content lost). Content mismatch retries;
+ *   only identical content counts as applied.
+ * - Errors (BUSY, transport) propagate untouched — retrying blindly would
+ *   mask them; callers keep their existing error contracts.
+ * - After `attempts` mismatches the loss is real contention, not a race:
+ *   returns `forced: true` after one final unguarded write so the caller
+ *   can warn/audit loudly instead of losing silently. Never throws itself.
+ * - Absent-after-write keeps the old code's obliviousness (concurrent
+ *   delete mid-flight corner): only a present row can disprove our write.
+ */
+export interface OptimisticWriteIo {
+  read: () => Promise<number | null>;
+  write: (base: number, next: number, guarded: boolean) => Promise<void>;
+  inspect: () => Promise<{ version: number | null; fingerprint: string | null }>;
+  fingerprintFor: (version: number) => string;
+}
+
+export interface OptimisticWriteResult {
+  /** Version the caller should stamp on mirrors/outbox payloads. */
+  next: number;
+  /** True when the guarded path never converged (adversarial contention). */
+  forced: boolean;
+  attemptsUsed: number;
+}
+
+export async function runOptimisticWriteLoop(
+  io: OptimisticWriteIo,
+  fallbackBase: number,
+  attempts = 3,
+): Promise<OptimisticWriteResult> {
+  const maxAttempts = Math.max(1, Math.floor(attempts) || 3);
+  let next = normalizeVersion(fallbackBase) + 1;
+  let attemptsUsed = 0;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    attemptsUsed = attempt;
+    const seen = await io.read();
+    const base = seen === null ? normalizeVersion(fallbackBase) : seen;
+    next = base + 1;
+    await io.write(base, next, true);
+    const actual = await io.inspect();
+    if (
+      actual.version !== null &&
+      actual.version === next &&
+      actual.fingerprint !== null &&
+      actual.fingerprint === io.fingerprintFor(next)
+    ) {
+      return { next, forced: false, attemptsUsed };
+    }
+  }
+  const seen = await io.read();
+  const base = seen === null ? next : seen;
+  next = base + 1;
+  await io.write(base, next, false);
+  return { next, forced: true, attemptsUsed };
+}
+
+/**
  * Optimistic-bump helper for the write side (DB-013): read the version,
  * write with `UPDATE ... WHERE version = :read` (or an upsert whose guard
  * carries the read version), and RETRY the whole read-modify-write on a

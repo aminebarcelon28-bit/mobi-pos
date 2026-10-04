@@ -34,6 +34,7 @@
     "test:causal-version": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_causal_version.mts",
     "test:sync-tiebreak": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_sync_tiebreak.mts",
     "test:conflict-watch": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_conflict_watch.mts",
+    "test:optimistic-write": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_optimistic_write.mts",
     "test:oversell": "node scripts/test_oversell_guard.mjs",
     "test:refund-revenue": "node scripts/test_refund_revenue.mjs",
     "test:outbox": "node scripts/test_outbox_inflight.mjs",
