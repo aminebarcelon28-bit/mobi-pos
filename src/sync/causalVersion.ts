@@ -182,6 +182,56 @@ export function tiedVersionGuardSql(table: string): string {
 }
 
 /**
+ * Volatile sync metadata: differs on every write (timestamps, sync state,
+ * attempt-scoped keys) and must NEVER count as a conflict. Device identity
+ * is excluded too — it is tiebreak level 2, not content.
+ */
+export const VOLATILE_SYNC_KEYS: readonly string[] = [
+  'updated_at',
+  'sync_status',
+  'idempotency_key',
+  'device_id',
+  'deviceId',
+];
+
+/**
+ * Canonical conflict projection: the payload minus volatile metadata.
+ * Two rows with equal versions are in conflict IFF their projections differ
+ * (money/identity divergence), not when only volatile fields differ (which
+ * is every write). Extra per-lane volatile keys via `extraVolatile`.
+ */
+export function canonicalProjection(
+  payload: unknown,
+  extraVolatile: readonly string[] = [],
+): Record<string, unknown> {
+  const banned = new Set<string>([...VOLATILE_SYNC_KEYS, ...extraVolatile]);
+  const project = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(project);
+    if (value !== null && typeof value === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+        if (banned.has(k)) continue;
+        out[k] = project((value as Record<string, unknown>)[k]);
+      }
+      return out;
+    }
+    return value;
+  };
+  const projected = project(payload);
+  return (projected !== null && typeof projected === 'object' && !Array.isArray(projected)
+    ? (projected as Record<string, unknown>)
+    : {}) as Record<string, unknown>;
+}
+
+/** Conflict fingerprint: hash of the canonical projection, not raw payload. */
+export function projectionFingerprint(
+  payload: unknown,
+  extraVolatile: readonly string[] = [],
+): string {
+  return payloadFingerprint(canonicalProjection(payload, extraVolatile));
+}
+
+/**
  * Optimistic-bump helper for the write side (DB-013): read the version,
  * write with `UPDATE ... WHERE version = :read` (or an upsert whose guard
  * carries the read version), and RETRY the whole read-modify-write on a
