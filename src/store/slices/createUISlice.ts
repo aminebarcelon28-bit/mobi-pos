@@ -1738,6 +1738,11 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
             securityAuditLog: auditLogs && auditLogs.length > 0 ? auditLogs : get().securityAuditLog,
           });
           markBoot('init:wave2-data');
+          // C1 (DB-011): converge any crash-split status mirrors toward the
+          // SQLite authority. Non-blocking by design (never delays paint).
+          void import('../../db/statusReconcile')
+            .then(({ reconcileAfterHydrate }) => reconcileAfterHydrate(get().transactions))
+            .catch(() => {});
         } catch (e) {
           console.warn('[boot] Deferred history load skipped:', e);
         }
@@ -1835,6 +1840,10 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         activeCashier,
         managerPin: typeof pulledManagerPin === 'string' ? pulledManagerPin : get().managerPin,
       });
+      // C1 (DB-011): same convergence after every pull refresh (non-blocking).
+      void import('../../db/statusReconcile')
+        .then(({ reconcileAfterHydrate }) => reconcileAfterHydrate(get().transactions))
+        .catch(() => {});
     } catch (e) {
       console.warn('Post-pull refresh skipped:', e);
     }
