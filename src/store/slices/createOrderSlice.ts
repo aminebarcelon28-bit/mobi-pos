@@ -2191,14 +2191,21 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     const refundTxnId = deterministicId('REF', originalTransaction.id, canonicalKey, refundMethod, Math.round(refundTotal));
 
     // Online compensation claim (ad.md §10): when reachable, claim the
-    // deterministic refund id in the cloud BEFORE paying out. A peer till
-    // refunding the same items holds the same claim id — the loser aborts
-    // here instead of double-paying. Offline (or claim-table trouble) the
-    // payout proceeds: offline-first is inviolable and deterministic ids
-    // guarantee the books still converge.
+    // deterministic refund LEG (not the transaction id) in the cloud BEFORE
+    // paying out. The key is method-independent on purpose: two tills
+    // refunding the SAME items through DIFFERENT methods is the both-offline
+    // double-payout, so they must converge on one claim — the loser aborts
+    // here instead of double-paying. Different items (or tickets) still
+    // diverge, so legitimate partial refunds proceed. Offline (or
+    // claim-table trouble) the payout proceeds: offline-first is inviolable
+    // and deterministic ids guarantee the books still converge.
     try {
-      const { tryClaimCompensation } = await import('../../sync/claims');
-      const claim = await tryClaimCompensation('REFUND', `CLAIM-${refundTxnId}`, originalTransaction.id);
+      const { tryClaimCompensation, refundLegClaimId } = await import('../../sync/claims');
+      const claim = await tryClaimCompensation(
+        'REFUND',
+        refundLegClaimId(originalTransaction.id, canonicalKey),
+        originalTransaction.id,
+      );
       if (!claim.claimed && claim.reason === 'HELD_BY_PEER') {
         return { success: false, reason: 'REFUND_ALREADY_IN_PROGRESS' };
       }
