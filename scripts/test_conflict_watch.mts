@@ -226,7 +226,55 @@ async function main() {
     check('wiring never throws', threw === false);
   }
 
-  // 9. Keys sanitized + deterministic; ensure is idempotent.
+  // 9. Push-side divergence: columnar row-vs-row comparison.
+  {
+    const { observePushDivergence } = await import('../src/sync/conflictWatch.ts');
+    const row = (over: Record<string, unknown> = {}) => ({
+      id: 'TX-1', version: 6, device_id: 'till-01', status: 'COMPLETED',
+      total: 100, created_at: 't1', updated_at: 't1', sync_status: 'x', ...over,
+    });
+    const noopAudit = async () => {};
+    {
+      // Equal versions, divergent money → recorded.
+      const { db, state } = makeFakeDb();
+      const out = await observePushDivergence(db, noopAudit, {
+        table: 'transactions', id: 'TX-1',
+        localRow: row(), remoteRow: row({ device_id: 'till-02', total: 200 }),
+      });
+      check('push tie loss with divergent total → recorded', out === 'recorded' && state.rows.size === 1);
+    }
+    {
+      // Unequal versions → newer-wins path, not a conflict.
+      const { db, state } = makeFakeDb();
+      const out = await observePushDivergence(db, noopAudit, {
+        table: 'transactions', id: 'TX-1',
+        localRow: row({ version: 5 }), remoteRow: row({ version: 6, total: 200 }),
+      });
+      check('version mismatch → skipped before table ensure', out === 'skipped' && state.created === false);
+    }
+    {
+      // created_at-only drift (clock skew) is not a conflict.
+      const { db, state } = makeFakeDb();
+      const out = await observePushDivergence(db, noopAudit, {
+        table: 'transactions', id: 'TX-1',
+        localRow: row({ created_at: 't1' }), remoteRow: row({ created_at: 't2', device_id: 'till-01' }),
+      });
+      check('created_at-only drift → identical', out === 'identical' && state.rows.size === 0);
+    }
+    {
+      // Missing rows → skipped, never throws.
+      const { db } = makeFakeDb();
+      let threw = false;
+      try {
+        const a = await observePushDivergence(db, noopAudit, { table: 't', id: 'x', localRow: null, remoteRow: row() });
+        const b = await observePushDivergence(db, noopAudit, { table: 't', id: 'x', localRow: row(), remoteRow: null });
+        check('null rows → skipped', a === 'skipped' && b === 'skipped');
+      } catch { threw = true; }
+      check('null rows never throw', threw === false);
+    }
+  }
+
+  // 10. Keys sanitized + deterministic; ensure is idempotent.
   {
     check('record id sanitizes hostile input',
       conflictRecordId('trans actions', 'TX/1', 'AA', 'BB') === 'CONFLICT-transactions-TX1-AA-BB');

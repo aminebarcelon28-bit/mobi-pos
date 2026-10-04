@@ -1680,6 +1680,76 @@ class SyncManager {
         error: detail,
       });
     }
+    // A3: a guard-miss means the remote row won. Observe genuine
+    // equal-version divergences (fire-and-forget: the op stays pending and
+    // re-observes on retry, deduped by the conflicts table).
+    void this.observePushGuardRejection(op).catch(() => {});
+  }
+
+  /**
+   * A3 push-side wiring: fetch the local row and the remote winner
+   * columnar (identical schema both sides, so the canonical projection is
+   * sound) and delegate to observePushDivergence. Newer-version wins are
+   * already covered by the GUARD-STALE message above. Best-effort: never
+   * throws, never delays the push loop.
+   */
+  private async observePushGuardRejection(op: OutboxRow): Promise<void> {
+    try {
+      const entityType = String(op.entity_type ?? '');
+      const entityId = String(op.entity_id ?? '');
+      if (!entityType || !entityId) return;
+      let table: string | null = null;
+      let idColumn = 'id';
+      switch (entityType) {
+        case 'product':
+          table = 'products';
+          break;
+        case 'order':
+          table = 'transactions';
+          break;
+        case 'order_item':
+          table = 'transaction_items';
+          break;
+        case 'ledger':
+          table = 'inventory_ledger';
+          break;
+        default: {
+          const mapped = GENERIC_TABLES[entityType];
+          if (!mapped) return;
+          assertValidSyncTable(mapped);
+          table = mapped;
+          if (mapped === 'app_settings') idColumn = 'key';
+          if (mapped === 'stock_batches') idColumn = 'batch_id';
+        }
+      }
+      if (!table) return;
+      const { getLocalDb } = await import('../db/sqlPluginAdapter');
+      const localDb = await getLocalDb().catch(() => null);
+      if (!localDb) return;
+      const localRows = (await localDb
+        .select(`SELECT * FROM ${table} WHERE ${idColumn} = $1`, [entityId])
+        .catch(() => [])) as Array<Record<string, unknown>>;
+      const localRow = localRows?.[0] ?? null;
+      if (!localRow) return;
+      const remote = await getTursoClient().catch(() => null);
+      if (!remote) return;
+      const remoteRes = (await remote
+        .execute({ sql: `SELECT * FROM ${table} WHERE ${idColumn} = ?`, args: [entityId] })
+        .catch(() => null)) as { rows?: Array<Record<string, unknown>> } | null;
+      const remoteRow = remoteRes?.rows?.[0] ?? null;
+      if (!remoteRow) return;
+      const { observePushDivergence } = await import('./conflictWatch');
+      const { usePosStore } = await import('../store/usePosStore');
+      await observePushDivergence(
+        localDb as unknown as import('./conflictWatch').ConflictDb,
+        async (action, details) => {
+          await usePosStore.getState().logSecurityAction(action, details, 'Système (Sync)', false);
+        },
+        { table, id: entityId, localRow, remoteRow },
+      );
+    } catch {
+      // Best-effort observation: never fail the push over it.
+    }
   }
 
   /**

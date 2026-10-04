@@ -20,6 +20,7 @@
  */
 
 import {
+  canonicalProjection,
   compareStamps,
   projectionFingerprint,
 } from './causalVersion';
@@ -97,6 +98,56 @@ export function conflictAuditKey(
 function toFiniteVersion(value: unknown): number {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) ? Math.floor(n) : 0;
+}
+
+/**
+ * Push-side divergence check (A3): after a push guard-miss, compare the
+ * local row against the remote winner fetched back. Versions differ →
+ * newer-wins path, already covered by the GUARD-STALE message ('skipped').
+ * Versions equal → genuine tiebreak loss → full observation (fingerprints
+ * decide identical vs conflict). `created_at` is stripped from the
+ * comparison: same id+version rows can carry clock-skewed stamps while
+ * versions+devices carry order and money fields carry substance.
+ */
+export async function observePushDivergence(
+  db: ConflictDb,
+  fileAudit: ConflictAuditSink,
+  input: {
+    table: string;
+    id: string;
+    localRow: Record<string, unknown> | null | undefined;
+    remoteRow: Record<string, unknown> | null | undefined;
+  },
+): Promise<ObserveOutcome> {
+  try {
+    if (!input.localRow || !input.remoteRow) return 'skipped';
+    const localVersion = toFiniteVersion(
+      (input.localRow as Record<string, unknown>)['version'],
+    );
+    const remoteVersion = toFiniteVersion(
+      (input.remoteRow as Record<string, unknown>)['version'],
+    );
+    if (localVersion !== remoteVersion) return 'skipped';
+    const strip: readonly string[] = ['created_at'];
+    const project = (row: Record<string, unknown>): Record<string, unknown> =>
+      canonicalProjection(row, strip) as Record<string, unknown>;
+    const localFp = projectionFingerprint(project(input.localRow));
+    const remoteFp = projectionFingerprint(project(input.remoteRow));
+    if (localFp === remoteFp) return 'identical';
+    return await observeVersionConflict(db, fileAudit, {
+      table: input.table,
+      id: input.id,
+      localVersion,
+      incomingVersion: remoteVersion,
+      localDevice: (input.localRow as Record<string, unknown>)['device_id'],
+      incomingDevice: (input.remoteRow as Record<string, unknown>)['device_id'],
+      localPayload: project(input.localRow),
+      incomingPayload: project(input.remoteRow),
+    });
+  } catch (err) {
+    console.warn('[sync:conflict] push-divergence check failed (pipeline unaffected):', err);
+    return 'skipped';
+  }
 }
 
 export interface PullGuardMissSide {
