@@ -18,7 +18,7 @@ import { WARRANTY_TIER_DAYS, WARRANTY_TIER_ORDER, computeWarrantyExpiryISO } fro
 import type { ImeiLifecycleDossier, WarrantyDossierSnapshot } from '../types/pos';
 import { luhnCheckImei } from './savValidation';
 import { canonicalDeviceId, normalizeDeviceKey } from './deviceIdCodec';
-import { sortTransactionsNewestFirst, transactionTimeMs } from './dateUtils';
+import { sortTransactionsNewestFirst, transactionTimeMs, utcNowIso } from './dateUtils';
 
 export const DEFAULT_WARRANTY_MONTHS = 12;
 
@@ -347,7 +347,7 @@ export function computeDeviceWarranty(args: {
   anchoredExpiresAt?: string | null;
 }): DeviceWarrantyState {
   const months = Math.max(0, Math.floor(args.warrantyMonths || 0));
-  const now = new Date(args.nowIso || new Date().toISOString());
+  const now = new Date(args.nowIso || utcNowIso());
   const anchored = args.anchoredExpiresAt ? new Date(args.anchoredExpiresAt) : null;
   const useAnchored = anchored !== null && !Number.isNaN(anchored.getTime());
 
@@ -560,7 +560,7 @@ export function getWarrantyStatus(
   device: WarrantyStatusInput,
   nowIso?: string
 ): WarrantyStatus {
-  const now = new Date(nowIso || device.nowIso || new Date().toISOString());
+  const now = new Date(nowIso || device.nowIso || utcNowIso());
   const nowMs = now.getTime();
   const s = device.store;
 
@@ -646,7 +646,7 @@ export function getRepairWarrantyStatus(
   const startMs = r.startIso ? new Date(r.startIso).getTime() : NaN;
   if (Number.isNaN(startMs)) return null;
 
-  const now = new Date(nowIso || device.nowIso || new Date().toISOString());
+  const now = new Date(nowIso || device.nowIso || utcNowIso());
   const anchoredMs = r.expiresAtIso ? new Date(r.expiresAtIso).getTime() : NaN;
   const useAnchor = !Number.isNaN(anchoredMs);
   const endMs = useAnchor
@@ -987,7 +987,7 @@ export function lookupDeviceWarrantyByImei(
   /** Injectable clock so boundary behaviour is testable. Defaults to now. */
   clockIso?: string
 ): ImeiLifecycleDossier {
-  const now = new Date(clockIso || new Date().toISOString());
+  const now = new Date(clockIso || utcNowIso());
   const nowIso = now.toISOString();
   const transactions = deps.transactions || [];
   const products = deps.products || [];
@@ -1581,7 +1581,7 @@ export function resolveWarrantyDossier(
       idMode: mode,
       dossier,
       suggestedTier,
-      resolvedAt: new Date().toISOString(),
+      resolvedAt: utcNowIso(),
     },
   };
 }
@@ -1616,7 +1616,7 @@ export function buildSavIntakeDraft(snapshot: WarrantyDossierSnapshot): IntakeDr
     deviceTitle: d.productTitle,
     customer: { name: usableName, phone: usablePhone },
     warrantyDossier: snapshot,
-    createdAt: new Date().toISOString(),
+    createdAt: utcNowIso(),
   };
 }
 

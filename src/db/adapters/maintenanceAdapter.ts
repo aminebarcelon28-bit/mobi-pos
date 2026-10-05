@@ -417,14 +417,14 @@ export const maintenanceAdapter = {
           is_healthy: isHealthy,
           integrity_messages: messages,
           foreign_key_violations: fkRows.map((r) => JSON.stringify(r)),
-          checked_at: new Date().toISOString(),
+          checked_at: utcNowIso(),
         };
       } catch (err) {
         return {
           is_healthy: false,
           integrity_messages: [err instanceof Error ? err.message : String(err)],
           foreign_key_violations: [],
-          checked_at: new Date().toISOString(),
+          checked_at: utcNowIso(),
         };
       }
     }
@@ -433,7 +433,7 @@ export const maintenanceAdapter = {
       is_healthy: true,
       integrity_messages: ['ok (Vérification locale d\'intégrité des tables validée sans anomalie)'],
       foreign_key_violations: [],
-      checked_at: new Date().toISOString(),
+      checked_at: utcNowIso(),
     };
   },
 
@@ -555,7 +555,7 @@ export const maintenanceAdapter = {
       (s) => s?.key !== 'manager_pin' && s?.key !== 'cashier_users'
     );
     const backupSnapshot = {
-      exportedAt: new Date().toISOString(),
+      exportedAt: utcNowIso(),
       engine: 'MobiPOS Unified Storage Engine',
       version: '2.0.0-hybrid',
       products: await dexieDb.products.toArray(),
@@ -653,7 +653,7 @@ export const maintenanceAdapter = {
         // the exact bytes received cannot (barring a break of SHA-256).
         const { sha256Hex } = await import('../../utils/auditIntel');
         const backupSha256 = (await sha256Hex(jsonString).catch(() => null))?.hex ?? '?';
-        const importAt = new Date().toISOString();
+        const importAt = utcNowIso();
         const rawId = rawPayload as Record<string, unknown>;
         const backupId = `${String(rawId.exportedAt ?? '?')} / ${String(rawId.version ?? '?')}`;
         const importActor = opts?.actor?.trim() || undefined;
@@ -834,7 +834,7 @@ export const maintenanceAdapter = {
             inserted: auditMergeCounts.inserted,
             kept: auditMergeCounts.kept,
             outcome: 'completed',
-            at: new Date().toISOString(),
+            at: utcNowIso(),
           }),
           user: importActorName,
           requiresPin: true,
@@ -856,7 +856,7 @@ export const maintenanceAdapter = {
     const valuation = await shiftAdapter.getInventoryValuation();
     const backup = {
       backupType: 'CASH_SESSION_Z_REPORT_BACKUP',
-      generatedAt: new Date().toISOString(),
+      generatedAt: utcNowIso(),
       session,
       inventoryValuationSnapshot: valuation,
       mode: 'IndexedDB Redundant Mirror',
