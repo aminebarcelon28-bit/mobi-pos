@@ -7,15 +7,39 @@ import { clampStoreCreditAmount } from '../../utils/loyaltyEngine';
 import { computeCartTotals } from '../../utils/receiptMath';
 import { newId } from '../../utils/ids';
 import { canonicalDeviceId } from '../../utils/warrantyResolver';
+import {
+  CONSUMED_HOLDS_STORAGE_KEY,
+  loadConsumedHoldIds,
+  mergeConsumedHoldIds,
+  recordConsumedHoldId,
+} from '../consumedHolds';
 
 // Holds reserve NO stock: a held sale is a cart snapshot only (customer +
 // items + prices). Stock is checked at payment time against the live ledger,
 // so two holds on the last unit resolve at the till, not at suspend time.
 const HOLD_TTL_MS = 48 * 60 * 60 * 1000; // 48 h default hold lifetime
 
-// A hold id restores exactly once per session: blocks double-restore when a
-// stale modal button or a double-tap replays retrieveSale for the same ticket.
-const consumedHoldIds = new Set<string>();
+// A hold id restores exactly once: blocks double-restore when a stale modal
+// button or a double-tap replays retrieveSale for the same ticket.
+// Durable across reloads (STATE-009): the set hydrates from localStorage at
+// module load and every consume persists synchronously in the same tick as
+// the hold-list persist (list first, consume second — a kill between the two
+// leaves a missing hold, which cannot double-restore). Cross-tab consumes
+// merge via the storage event below; simultaneous same-ms retrieves across
+// tabs remain a documented residual (sale-time guards backstop serialized
+// goods). Holds are single-device by design (see HELD_SALES_STORAGE_KEY).
+const consumedHoldIds = loadConsumedHoldIds();
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', (event) => {
+    try {
+      if (event.key !== CONSUMED_HOLDS_STORAGE_KEY || !event.newValue) return;
+      mergeConsumedHoldIds(consumedHoldIds, JSON.parse(event.newValue));
+    } catch {
+      // A malformed cross-tab payload must never break the cart slice.
+    }
+  });
+}
 
 function holdExpiryOf(h: HeldSale): number | null {
   const raw = (h as unknown as { expiresAt?: unknown }).expiresAt;
@@ -513,6 +537,10 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
       return { success: false, reason: wasExpired ? 'HOLD_EXPIRED' : 'HOLD_NOT_FOUND' };
     }
     consumedHoldIds.add(saleId);
+    // Durable consume (STATE-009): persisted synchronously AFTER the
+    // hold-list persist below, so a kill between the two leaves a missing
+    // hold (unrestorable, safe) rather than a restorable unconsumed one.
+    // The storage event this write fires also arms every other open tab.
     let updatedHeldSales = liveHolds.filter((h) => h.id !== saleId);
       if (cart.length > 0) {
         updatedHeldSales.push({
@@ -524,6 +552,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
         } as HeldSale & { expiresAt: string });
       }
       persistHeldSales(updatedHeldSales);
+      recordConsumedHoldId(saleId);
       const activeTier = target.customer ? target.customer.pricingTier : 'Retail';
       // Revalidate hold prices against the CURRENT tier price: the hold price
       // is kept (merchant promise) but any catalog move is surfaced so the

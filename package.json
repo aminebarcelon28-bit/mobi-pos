@@ -39,6 +39,7 @@
     "test:refund-bound": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_refund_bound.mts",
     "test:store-refresh": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_store_refresh.mts",
     "test:push-closure": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_push_closure.mts",
+    "test:consumed-holds": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_consumed_holds.mts",
     "test:restore-guards": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_restore_guards.mts",
     "test:close-status": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_close_status.mts",
     "test:casefold": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_casefold.mts",
