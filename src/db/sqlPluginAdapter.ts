@@ -3411,6 +3411,14 @@ export async function insertStockBatch(batch: {
 }
 
 /**
+ * Canonical inventory-batches ledger: every unit of on-hand stock lives in
+ * exactly one batch row, and checkout depletion consumes those rows in
+ * (received_at, rowid) order, freezing each line's unit cost at sale time
+ * (see sale_batch_allocations). Reports sum the frozen allocations — the
+ * ledger is never repriced globally, so reported COGS is never COGS-at-current-prices,
+ * only the frozen batch sum; a later invoice cost cannot rewrite history,
+ * only future batches.
+ *
  * Returns active stock batches for a given product, sorted oldest first (FIFO).
  */
 export async function getProductStockBatches(productId: string): Promise<Array<{
