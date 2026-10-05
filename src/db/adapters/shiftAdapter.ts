@@ -11,7 +11,7 @@ import { fireSync, fireSyncDelete, isTauriEnv } from './base';
 import { newId } from '../../utils/ids';
 import { resolveTransactionStanding, transactionTimeMs } from '../../utils/dateUtils';
 import { verifyManagerGate } from '../../utils/pinGate';
-import { cashSalesFromTxns, cashRefundsFromTxns } from '../../utils/cashTerms';
+import { cashSalesFromTxns, cashRefundsFromTxns, closeRowStatus } from '../../utils/cashTerms';
 
 /**
  * Minimal close-window transaction shape. Both the SQLite authority reader
@@ -174,9 +174,17 @@ async function readCloseTxnsAuthority(openedAt: string | null): Promise<CloseWin
             (it as { is_return?: unknown }).is_return
         ) || Number((it as { quantity?: unknown }).quantity) < 0
     );
-  return (rows ?? []).map((r) => {
+  // D2/CT-003 divergence watch: envelope-vs-column status disagreements
+  // are collected here and warned once below (never per-row spam).
+  const divergedIds: string[] = [];
+  const mapped: CloseWindowTxn[] = (rows ?? []).map((r) => {
     const payload = safeParseTxPayload(r.json_payload);
     const tendersRaw = payload.tenders;
+    const columnStatus = typeof r.status === 'string' ? r.status : '';
+    const envelopeStatus = typeof payload.status === 'string' ? payload.status : '';
+    if (columnStatus && envelopeStatus && columnStatus !== envelopeStatus) {
+      divergedIds.push(String(r.id ?? ''));
+    }
     return {
       id: String(r.id ?? ''),
       total: toCloseAmount(payload.total ?? r.total ?? 0),
@@ -195,7 +203,7 @@ async function readCloseTxnsAuthority(openedAt: string | null): Promise<CloseWin
           }))
         : undefined,
       changeDue: toCloseAmount(payload.changeDue ?? payload.change_due ?? 0),
-      status: String(payload.status ?? r.status ?? 'COMPLETED'),
+      status: closeRowStatus(r.status, payload.status),
       createdAt: String(payload.createdAt ?? payload.created_at ?? r.created_at ?? ''),
       shiftId:
         typeof payload.shiftId === 'string'
@@ -208,6 +216,15 @@ async function readCloseTxnsAuthority(openedAt: string | null): Promise<CloseWin
       deviceId: (payload.deviceId ?? payload.device_id ?? r.device_id ?? undefined) as string | undefined,
     };
   });
+  if (divergedIds.length > 0) {
+    // Stale envelopes converge on the next pull (which rewrites both
+    // sides); a count that never drains indicates mirror corruption.
+    console.warn(
+      `[close] ${divergedIds.length} ticket(s) ont un statut d'enveloppe périmé (autorité colonne utilisée) :`,
+      divergedIds.slice(0, 10),
+    );
+  }
+  return mapped;
 }
 
 /** Legacy reader: Dexie IS the store on web preview (no SQLite authority). */

@@ -49,6 +49,23 @@ export const DRAWER_REASON_PREFIXES = {
  * correct: balance payments have no source row either. */
 export const MANUAL_MOVEMENT_TAG = '[saisie manuelle]';
 
+/**
+ * Close-scope status resolution (D2/CT-003): the SQLite column wins over
+ * the receipt-JSON envelope. Void/refund flips write columns only, in the
+ * same atomic txn as the money, while the envelope keeps its sale-time
+ * snapshot until a later pull refreshes it — payload-first counted voided
+ * tickets as valid sales inside the close window. Empty columns fall back
+ * to the envelope (legacy rows), then COMPLETED (pre-status rows):
+ * identical outcomes wherever envelope and column agree (the normal case).
+ * A corrupt-but-present column passes through untouched so the D3
+ * quarantine (not revenue) receives it.
+ */
+export function closeRowStatus(columnStatus: unknown, payloadStatus: unknown): string {
+  if (typeof columnStatus === 'string' && columnStatus.length > 0) return columnStatus;
+  if (typeof payloadStatus === 'string' && payloadStatus.length > 0) return payloadStatus;
+  return 'COMPLETED';
+}
+
 export interface CashTxnLike {
   tenders?: Array<{ method?: string; amount?: number }> | null;
   paymentMethod?: string;
