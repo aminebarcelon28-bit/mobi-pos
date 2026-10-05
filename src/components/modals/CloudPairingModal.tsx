@@ -16,7 +16,7 @@ export const CloudPairingModal: React.FC = () => {
   const { closeModal } = usePosStore();
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<'download' | 'pair'>('download');
-  const [creds, setCreds] = useState<{ url: string; token: string } | null>(null);
+  const [creds, setCreds] = useState<{ url: string; token: string; ts: number } | null>(null);
   const [copied, setCopied] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState<'android' | 'ios' | null>(null);
   const [showToken, setShowToken] = useState(false);
@@ -29,7 +29,11 @@ export const CloudPairingModal: React.FC = () => {
         setLoading(true);
         const stored = await getCloudCredentials();
         if (stored && stored.url && stored.token) {
-          setCreds(stored);
+          // Mint the payload timestamp once per credential load, inside the
+          // effect (render-purity): per-render minting churned the QR value
+          // under the scanner and defeated memoization. ts is informational —
+          // the phone pairs with url+token — so load-time stability is exact.
+          setCreds({ url: stored.url, token: stored.token, ts: Date.now() });
         }
       } catch (e) {
         console.warn('Failed to load cloud credentials for pairing:', e);
@@ -39,12 +43,14 @@ export const CloudPairingModal: React.FC = () => {
     })();
   }, []);
 
+  // Pure render of state: ts was minted in the load effect above, so the
+  // payload is stable per credential load (no per-render QR churn).
   const pairingPayload = creds ? JSON.stringify({
     v: 1,
     type: 'mobipos-pair',
     url: creds.url,
     token: creds.token,
-    ts: Date.now(),
+    ts: creds.ts,
   }) : '';
 
   const handleCopy = () => {

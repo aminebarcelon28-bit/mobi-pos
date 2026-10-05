@@ -135,7 +135,11 @@ export const CommandTicketDashboardModal: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   // Rafraîchit les anciennetés « il y a X min » toutes les 30 s (affichage seul).
-  const [, setAgeTick] = useState(0);
+  // Render-purity clock (react(purity)): the "now" behind every KPI age
+  // label lives in state, refreshed on open + every 30s by the effect
+  // below. The old bare Date.now() in the render body shifted all ages on
+  // unrelated re-renders; the old ageTick re-rendered without being read.
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   // Portaled overflow menus — meatball triggers live inside cards that sit in
   // an overflow-y-auto scroller, so an absolutely-positioned child would be
@@ -238,7 +242,9 @@ export const CommandTicketDashboardModal: React.FC = () => {
 
   useEffect(() => {
     if (activeModal !== 'command_tickets') return;
-    const id = setInterval(() => setAgeTick((t) => t + 1), 30000);
+    // Wall-clock sync on open (legitimate effect work: the render clock).
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 30000);
     return () => clearInterval(id);
   }, [activeModal]);
 
@@ -247,7 +253,6 @@ export const CommandTicketDashboardModal: React.FC = () => {
   // ══════════════════════════════════════════════════════════════
   // GLOBAL KPIS CALCULATIONS
   // ══════════════════════════════════════════════════════════════
-  const nowMs = Date.now();
   const waitingPOs = (purchaseOrders || []).filter(
     (po) => po.status === 'Waiting List' || po.status === 'Draft' || po.status === 'Partially Received'
   );

@@ -47,6 +47,11 @@ export const CloudSyncPanel: React.FC = () => {
   const [showToken, setShowToken] = useState(false);
   const [hasStoredCreds, setHasStoredCreds] = useState(false);
   const [copiedPairing, setCopiedPairing] = useState(false);
+  // Render-purity clock for the pairing QR (react(purity)): ts is minted in
+  // effects/events below, never in render, so the QR value is stable per
+  // credential snapshot instead of churning on every re-render. ts is
+  // informational — the phone pairs with url+token.
+  const [pairingTs, setPairingTs] = useState(0);
 
   // Testing & Migration State
   const [isTesting, setIsTesting] = useState(false);
@@ -95,6 +100,7 @@ export const CloudSyncPanel: React.FC = () => {
         setDbUrl(creds.url);
         setAuthToken(creds.token);
         setHasStoredCreds(true);
+        setPairingTs(Date.now());
         void loadStorageReport();
       }
     })();
@@ -107,6 +113,8 @@ export const CloudSyncPanel: React.FC = () => {
       const connectionResult = await testTursoConnection(dbUrl, authToken);
       setTestResult(connectionResult);
       if (connectionResult.ok) {
+        // Freshly verified credentials → fresh pairing snapshot timestamp.
+        setPairingTs(Date.now());
         showToast(`Connexion établie avec succès (${connectionResult.latencyMs} ms).`, 'success');
       } else {
         showToast(connectionResult.error ?? 'Erreur de connexion', 'error');
@@ -560,7 +568,7 @@ export const CloudSyncPanel: React.FC = () => {
                   type: 'mobipos-pair',
                   url: dbUrl.trim(),
                   token: authToken.trim(),
-                  ts: Date.now(),
+                  ts: pairingTs,
                 })}
                 size={140}
                 margin={3}
