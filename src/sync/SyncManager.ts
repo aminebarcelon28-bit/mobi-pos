@@ -1346,12 +1346,31 @@ class SyncManager {
       // Numeric clock compare (TIME-009): all outbox rows are minted via
       // utcNowIso today, but lexicographic order is one mixed format away
       // from mis-sequencing a push batch. Identical order on uniform input.
-      const batch = candidates.sort(
+      let batch = candidates.sort(
         (a, b) =>
           (rank[a.entity_type] ?? 9) - (rank[b.entity_type] ?? 9) ||
           (transactionTimeMs(a.created_at) - transactionTimeMs(b.created_at)) ||
           ((a.rowid ?? 0) - (b.rowid ?? 0))
       ).slice(0, 50);
+      // SYNC-002 dependency closure: ranking alone strands children whose
+      // parents sit beyond the planning cut. Pull each missing parent in
+      // directly ahead of its child (bounded: only batch children, only
+      // pending parents, indexed fetch). Best-effort — an unresolvable
+      // parent rides next cycle exactly as before.
+      try {
+        const { closePushBatch } = await import('./outboxFamily');
+        const { getOutboxRow } = await import('../db/sqlPluginAdapter');
+        const closed = await closePushBatch(batch, async (parent) => {
+          const row = await getOutboxRow(parent.entity_type, parent.entity_id).catch(() => null);
+          return (row as unknown as (typeof batch)[number]) ?? null;
+        });
+        if (closed.pulled > 0) {
+          this.logEvent('push', `${closed.pulled} parent(s) pré-chargé(s) devant leurs lignes dépendantes`, 'info');
+        }
+        batch = closed.batch;
+      } catch {
+        // Closure is an optimization on top of ranking, never a gate.
+      }
 
       const remote = await getTursoClient();
 
@@ -1550,14 +1569,26 @@ class SyncManager {
             this.quotaBlockedAt = Date.now();
             this.lastError = 'Quota cloud Turso dépassé. Synchronisation suspendue.';
             this.logEvent('quota', this.lastError, 'error');
-            await markOutbox(op.idempotency_key, { status: 'pending', error: rawMsg });
+            // SYNC-001: infra failures must not burn retry strikes (that path
+            // leads to quarantine for a dead credential), but the row must
+            // also not stay immediately eligible (hot retry burst on latch
+            // release). Sleep per backoff, keep the strike count untouched.
+            await markOutbox(op.idempotency_key, {
+              status: 'pending',
+              error: rawMsg,
+              nextRetryAt: new Date(Date.now() + backoffMs(op.retry_count ?? 0)).toISOString(),
+            });
             break;
           }
 
           // F1: dead credential — never burn retry strikes or quarantine on it.
           if (SyncManager.isAuthError(rawMsg)) {
             await this.handleAuthFailure(rawMsg);
-            await markOutbox(op.idempotency_key, { status: 'pending', error: `[AUTH] ${rawMsg}` });
+            await markOutbox(op.idempotency_key, {
+              status: 'pending',
+              error: `[AUTH] ${rawMsg}`,
+              nextRetryAt: new Date(Date.now() + backoffMs(op.retry_count ?? 0)).toISOString(),
+            });
             break;
           }
 

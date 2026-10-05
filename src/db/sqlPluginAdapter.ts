@@ -2215,6 +2215,24 @@ export async function getPendingOutbox(limit = 50): Promise<Array<Record<string,
   )) as Array<Record<string, unknown>>;
 }
 
+/**
+ * Single pending outbox row for the push-batch dependency closure
+ * (SYNC-002): pulls a missing parent into the batch ahead of its child.
+ * Served by idx_outbox_entity — one indexed read, never a scan. Returns
+ * null when the parent already synced (or never existed).
+ */
+export async function getOutboxRow(
+  entityType: string,
+  entityId: string,
+): Promise<Record<string, unknown> | null> {
+  const db = await getLocalDb();
+  const rows = (await db.select(
+    `SELECT * FROM sync_outbox WHERE entity_type = $1 AND entity_id = $2 AND status = 'pending' LIMIT 1`,
+    [entityType, entityId],
+  ).catch(() => [])) as Array<Record<string, unknown>>;
+  return rows?.[0] ?? null;
+}
+
 export async function markOutbox(
   idempotencyKey: string,
   patch: { status: 'inflight' | 'pending' | 'synced' | 'failed'; retryCount?: number; nextRetryAt?: string | null; error?: string | null },

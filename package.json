@@ -38,6 +38,7 @@
     "test:claim-contention": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_claim_contention.mts",
     "test:refund-bound": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_refund_bound.mts",
     "test:store-refresh": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_store_refresh.mts",
+    "test:push-closure": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_push_closure.mts",
     "test:casefold": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_casefold.mts",
     "test:ipc-guards": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_ipc_guards.mts",
     "test:tombstone-guard": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_tombstone_guard.mts",
