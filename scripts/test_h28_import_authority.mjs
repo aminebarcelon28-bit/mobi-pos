@@ -25,7 +25,7 @@ import {
   readFileSync, writeFileSync, unlinkSync, existsSync,
   mkdirSync, rmSync, statSync, readdirSync,
 } from 'node:fs';
-import { dirname, join, normalize, relative } from 'node:path';
+import { dirname, join, normalize, relative, sep } from 'node:path';
 import { createClient } from '@libsql/client';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -167,9 +167,13 @@ for (const rel of closure) {
 // back any open transaction on release, so a manual BEGIN in one call and
 // a COMMIT in a later call cannot survive in the raw client. Emulate the
 // Rust pool here: track depth in the stub so BEGIN..work..COMMIT holds.
+// The stub MUST open the same DB the assertions read (DB_PATH above). A
+// hardcoded checkout path here once routed the lane into a sibling clone:
+// the import succeeded ([0] green) while every assertion read zero rows.
+const STUB_DB_URL = 'file:' + DB_PATH.split(sep).join('/') + '';
 writeFileSync(DST('tauriStub.js'), `
 import { createClient } from '@libsql/client';
-const client = createClient({ url: 'file:C:/Users/Click/Desktop/phone3-sync-lab/tmp-h28-authority.db' });
+const client = createClient({ url: '${STUB_DB_URL}' });
 let txnDepth = 0;
 function norm(s) { return String(s ?? '').replace(/\\r?\\n/g, ' ').trim(); }
 export default class Database {

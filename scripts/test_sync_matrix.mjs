@@ -155,12 +155,27 @@ console.log('\n[6] store-profile pull lands the SQLite authority row');
   mkdirSync(join(SHIM, 'db'), { recursive: true });
   mkdirSync(join(SHIM, 'lane'), { recursive: true });
   copyFileSync(join(ROOT, 'src', 'sync', 'genericApply.ts'), join(SHIM, 'lane', 'genericApply.ts'));
+  // Zero-dependency lane siblings travel as copies (same pattern as the H25
+  // shim); conflictWatch's lone dateUtils import (utcNowIso) resolves to
+  // the sqlPluginAdapter stub that already exports it.
+  copyFileSync(join(ROOT, 'src', 'sync', 'causalVersion.ts'), join(SHIM, 'lane', 'causalVersion.ts'));
+  copyFileSync(join(ROOT, 'src', 'sync', 'conflictWatch.ts'), join(SHIM, 'lane', 'conflictWatch.ts'));
   {
     const p = join(SHIM, 'lane', 'genericApply.ts');
+    const realIds = pathToFileURL(join(ROOT, 'src', 'utils', 'ids.ts')).href;
     let t = readFileSync(p, 'utf8');
     t = t.replace(/from '\.\.\/db\/database'/g, "from '../db/database.js'")
-         .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'");
+         .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'")
+         .replace(/from '\.\/causalVersion'/g, "from './causalVersion.ts'")
+         .replace(/from '\.\/conflictWatch'/g, "from './conflictWatch.ts'")
+         .replace(/from '\.\.\/utils\/dateUtils'/g, "from '../db/sqlPluginAdapter.js'")
+         .replace(/from '\.\.\/utils\/ids'/g, `from '${realIds}'`);
     writeFileSync(p, t);
+    const cp = join(SHIM, 'lane', 'conflictWatch.ts');
+    let ct = readFileSync(cp, 'utf8');
+    ct = ct.replace(/from '\.\/causalVersion'/g, "from './causalVersion.ts'")
+           .replace(/from '\.\.\/utils\/dateUtils'/g, "from '../db/sqlPluginAdapter.js'");
+    writeFileSync(cp, ct);
   }
   writeFileSync(join(SHIM, 'db', 'database.js'), `
 const noop = { put: async () => {}, delete: async () => {}, get: async () => undefined };
@@ -231,7 +246,9 @@ console.log('\n[8] online compensation claims (no physical double-payout)');
   check('own-claim retry proceeds (no self-wedge)', /own claim — proceed/.test(claimsSrc));
   check('remote v8 creates refund_claims', /CREATE TABLE IF NOT EXISTS refund_claims/.test(remoteSrc));
   check('LATEST_REMOTE_VERSION covers v8', /LATEST_REMOTE_VERSION\s*=\s*([8-9]|[1-9][0-9])/.test(remoteSrc));
-  check('refund claims before payout', /tryClaimCompensation\('REFUND'/.test(SRC('src/store/slices/createOrderSlice.ts')));
+  // A4 wraps the kind onto the next line (method-independent leg key);
+  // match across the newline so the assertion tracks the call, not its layout.
+  check('refund claims before payout', /tryClaimCompensation\(\s*'REFUND'/.test(SRC('src/store/slices/createOrderSlice.ts')));
   check('void claims before restore', /tryClaimCompensation\('VOID'/.test(SRC('src/store/slices/createOrderSlice.ts')));
   check('refund UI explains peer in-progress', /REFUND_ALREADY_IN_PROGRESS/.test(SRC('src/components/modals/RefundModal.tsx')));
   check('void UI explains peer in-progress', /VOID_ALREADY_IN_PROGRESS/.test(SRC('src/components/modals/ReportsModal.tsx')));

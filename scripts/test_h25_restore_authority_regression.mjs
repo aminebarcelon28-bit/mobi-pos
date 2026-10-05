@@ -55,13 +55,17 @@ copyFileSync(join(SRC_SYNC, 'genericApply.ts'), join(SHIM, 'lane', 'genericApply
        .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'")
        .replace(/from '\.\/causalVersion'/g, "from './causalVersion.ts'")
        .replace(/from '\.\/conflictWatch'/g, "from './conflictWatch.ts'")
+       .replace(/from '\.\.\/utils\/dateUtils'/g, "from '../db/sqlPluginAdapter.js'")
        .replace(/from '\.\.\/utils\/ids'/g, `from '${realIds}'`);
   writeFileSync(p, t);
   {
-    // conflictWatch.ts copy: extension its own relative import.
+    // conflictWatch.ts copy: extension its own relative import; its lone
+    // dateUtils import (utcNowIso, TIME-001) resolves to the stub that
+    // already exports it — same re-export the app uses.
     const cp = join(SHIM, 'lane', 'conflictWatch.ts');
     let ct = readFileSync(cp, 'utf8');
-    ct = ct.replace(/from '\.\/causalVersion'/g, "from './causalVersion.ts'");
+    ct = ct.replace(/from '\.\/causalVersion'/g, "from './causalVersion.ts'")
+           .replace(/from '\.\.\/utils\/dateUtils'/g, "from '../db/sqlPluginAdapter.js'");
     writeFileSync(cp, ct);
   }
   writeFileSync(p, t);

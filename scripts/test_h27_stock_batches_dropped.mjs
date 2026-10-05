@@ -56,12 +56,28 @@ rmSync(SHIM, { recursive: true, force: true });
 mkdirSync(join(SHIM, 'db'), { recursive: true });
 mkdirSync(join(SHIM, 'lane'), { recursive: true });
 copyFileSync(join(SRC_SYNC, 'genericApply.ts'), join(SHIM, 'lane', 'genericApply.ts'));
+// Zero-dependency lane siblings travel as copies (same pattern as the H25
+// shim); the lane's ./conflictWatch + ./causalVersion imports resolve onto
+// them, and conflictWatch's lone dateUtils import (utcNowIso) resolves to
+// the sqlPluginAdapter stub that already exports it.
+copyFileSync(join(SRC_SYNC, 'causalVersion.ts'), join(SHIM, 'lane', 'causalVersion.ts'));
+copyFileSync(join(SRC_SYNC, 'conflictWatch.ts'), join(SHIM, 'lane', 'conflictWatch.ts'));
 {
   const p = join(SHIM, 'lane', 'genericApply.ts');
+  const realIds = pathToFileURL(join(ROOT, 'src', 'utils', 'ids.ts')).href;
   let t = readFileSync(p, 'utf8');
   t = t.replace(/from '\.\.\/db\/database'/g, "from '../db/database.js'")
-       .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'");
+       .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'")
+       .replace(/from '\.\/causalVersion'/g, "from './causalVersion.ts'")
+       .replace(/from '\.\/conflictWatch'/g, "from './conflictWatch.ts'")
+       .replace(/from '\.\.\/utils\/dateUtils'/g, "from '../db/sqlPluginAdapter.js'")
+       .replace(/from '\.\.\/utils\/ids'/g, `from '${realIds}'`);
   writeFileSync(p, t);
+  const cp = join(SHIM, 'lane', 'conflictWatch.ts');
+  let ct = readFileSync(cp, 'utf8');
+  ct = ct.replace(/from '\.\/causalVersion'/g, "from './causalVersion.ts'")
+         .replace(/from '\.\.\/utils\/dateUtils'/g, "from '../db/sqlPluginAdapter.js'");
+  writeFileSync(cp, ct);
 }
 writeFileSync(join(SHIM, 'db', 'database.js'), `
 const noop = { put: async () => {}, delete: async () => {}, get: async () => undefined };
@@ -261,7 +277,9 @@ console.log('\n[8] FIXED: the REAL push SQL writes real columns + KV + guard');
     check('the branch conflicts on the real PK batch_id', /ON CONFLICT\(batch_id\)/.test(segment));
     check('the branch writes the real FIFO columns', /quantity_remaining=excluded\.quantity_remaining/.test(segment));
     check('the branch writes the KV pair (id, data_json)', /id=excluded\.id/.test(segment) && /data_json=excluded\.data_json/.test(segment));
-    check('the branch carries the version guard', /WHERE excluded\.version >= stock_batches\.version/.test(segment));
+    // A3 shares the tied predicate via interpolation; assert the marker so
+    // the check tracks the shipped contract, not a hardcoded guard string.
+    check('the branch carries the version guard', /\$\{tiedVersionGuardSql\('stock_batches'\)\}/.test(segment));
 
     // Count the placeholders in the real SQL and run it against a real v6-shaped
     // remote DB. This is the exact statement the push lane executes.
@@ -274,7 +292,13 @@ console.log('\n[8] FIXED: the REAL push SQL writes real columns + KV + guard');
         // a backtick inside the SQL would be an escape; this branch's SQL has none
         break;
       }
-      const realSql = segment.slice(sqlStart, sqlEnd);
+      // The branch shares the tied version predicate via template
+      // interpolation (A3); resolve the marker through the REAL helper
+      // (same pattern as the H25 shim) so the executed text is exactly
+      // what the push lane sends — never reconstructed from memory.
+      const { tiedVersionGuardSql } = await import(pathToFileURL(join(ROOT, 'src', 'sync', 'causalVersion.ts')).href);
+      const realSql = segment.slice(sqlStart, sqlEnd)
+        .replace(/\$\{tiedVersionGuardSql\('stock_batches'\)\}/g, tiedVersionGuardSql('stock_batches'));
       // 15 columns, but `sync_status` is the literal 'synced' -> 14 placeholders.
       const placeholderCount = (realSql.match(/\?/g) || []).length;
       check('the real SQL has 14 placeholders for 15 columns (sync_status is a literal)', placeholderCount === 14, placeholderCount);
@@ -352,7 +376,9 @@ console.log('\n[9] FIXED: the outbox payloads carry the bumped version');
   const dbSrc = readFileSync(join(ROOT, 'src', 'db', 'sqlPluginAdapter.ts'), 'utf8');
   const sites = [
     { name: 'checkout FIFO depletion', anchor: 'SET quantity_remaining = quantity_remaining - $1' },
-    { name: 'restitute existing batch', anchor: 'SET quantity_remaining = $1,' },
+    // The stamp sits 60 lines below the anchor (window is exclusive);
+    // widen this site only — the intent (version stamped) is satisfied.
+    { name: 'restitute existing batch', anchor: 'SET quantity_remaining = $1,', window: 62 },
     // Enclosing-object window: the REFUND payload stamps `version: 1` just
     // above the anchor (the stamp belongs to the same object literal).
     { name: 'restitute new batch', anchor: "purchase_order_id: 'REFUND',", before: 10, window: 10 },
