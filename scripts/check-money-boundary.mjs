@@ -86,7 +86,7 @@ console.log('\n--- Rule 3: money-path float registry (Stage E expiry) ---');
 {
   // file -> max allowed hits (author-time baseline, Stage A).
   const REGISTRY = {
-    'src/utils/receiptMath.ts': 23,
+    'src/utils/receiptMath.ts': 25, // UI-005: 2x single-round-at-boundary Math.round (averageReceiptUnitCost, debtLimitGauge)
     'src/utils/taxEngine.ts': 1,
     'src/utils/moneyInput.ts': 1,
     'src/utils/cashTerms.ts': 8,
