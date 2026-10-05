@@ -29,6 +29,7 @@ import { DEFAULT_CREDIT_LIMIT } from '../../store/slices/createCustomerSlice';
 import { formatDZD, formatDateTime } from '../../types/pos';
 import type { Customer, PaymentMethodType } from '../../types/pos';
 import { calculateCustomerTier, normalizeLoyaltyConfig } from '../../utils/loyaltyEngine';
+import { debtLimitGauge } from '../../utils/receiptMath';
 
 /** Display-only tier resolution — the cached loyaltyTier string may be stale after renames. */
 const resolveCustomerTierName = (customer: Customer): string => {
@@ -531,10 +532,11 @@ export const DebtLedgerModal: React.FC = () => {
             </div>
           ) : (
             filteredDebtors.map((customer) => {
-              const debt = customer.currentDebt || 0;
-              const limit = customer.debtLimit ?? DEFAULT_CREDIT_LIMIT;
-              const ratio = Math.min(100, Math.round((debt / limit) * 100));
-              const isOver = debt >= limit;
+            const debt = customer.currentDebt || 0;
+            const limit = customer.debtLimit ?? DEFAULT_CREDIT_LIMIT;
+            // UI-005: zero/missing limits divided by zero (Infinity%) and
+            // flagged empty debts as over-limit. Central gauge instead.
+            const { ratio, isOver } = debtLimitGauge(debt, limit);
               const isExpanded = expandedCustomerId === customer.id;
 
               const customerHistory = historyByCustomerId.get(customer.id) || [];

@@ -33,6 +33,7 @@ import {
   isNativeScannerSupported,
 } from '../../utils/documentScanner';
 import { PoReviewScreen } from '../PoReviewScreen';
+import { addReceiptLineCost, averageReceiptUnitCost } from '../../utils/receiptMath';
 import type { Product, IMEIRecord } from '../../types/pos';
 import type { ProcessRawScanResponse } from '../../types/po';
 
@@ -217,7 +218,7 @@ export const InvoiceIngestionModal: React.FC = () => {
             const prevSum = prevReceipt?.costSum ?? 0;
             receiptMap.set(updated.id, {
               qty: prevQty + qty,
-              costSum: prevSum + qty * Math.max(0, Math.round(invoiceCost)),
+              costSum: addReceiptLineCost(prevSum, qty, invoiceCost),
             });
 
             if (imei) {
@@ -241,7 +242,7 @@ export const InvoiceIngestionModal: React.FC = () => {
         const receipts = Array.from(receiptMap.entries()).map(([productId, r]) => ({
           productId,
           qty: r.qty,
-          unitCost: r.qty > 0 ? Math.round(r.costSum / r.qty) : 0,
+          unitCost: averageReceiptUnitCost(r.costSum, r.qty),
         }));
         await ingestInvoiceBatch(updatedList, newImeis, receipts, { importKey: contentHash });
       }

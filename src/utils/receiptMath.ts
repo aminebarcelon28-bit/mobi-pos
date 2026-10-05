@@ -26,6 +26,41 @@ import { computeTax } from './taxEngine';
  * items, before discounts. Falls back to `total` only for legacy rows where
  * `subtotal` was never persisted (backfill / older sync payloads).
  */
+/**
+ * Receipt cost blending for invoice ingestion (UI-005): accumulate the
+ * EXACT line extensions and round ONCE at the average. The old code rounded
+ * per line (`qty * round(cost)`) and again at the average, drifting blended
+ * batch costs by ±1 DA per line — small per receipt, systematic across a
+ * catalog, and it feeds FIFO unit costs downstream.
+ */
+export function addReceiptLineCost(costSum: number, qty: number, unitCost: number): number {
+  const safeQty = Number.isFinite(qty) && qty > 0 ? qty : 0;
+  const safeCost = Number.isFinite(unitCost) && unitCost > 0 ? unitCost : 0;
+  return costSum + safeQty * safeCost;
+}
+
+/** Integer-DA average of a blended receipt (0 when quantity is absent). */
+export function averageReceiptUnitCost(costSum: number, qty: number): number {
+  if (!Number.isFinite(costSum) || !Number.isFinite(qty) || qty <= 0) return 0;
+  return Math.round(costSum / qty);
+}
+
+/**
+ * Debt-limit gauge (UI-005): percentage + over-limit flag that stay sane
+ * when the limit is zero/missing (old code divided by zero → Infinity% and
+ * flagged a zero debt as over-limit). A zero limit means "no credit
+ * allowed": any positive debt is over, an empty debt is not.
+ */
+export function debtLimitGauge(debt: number, limit: number | null | undefined): {
+  ratio: number;
+  isOver: boolean;
+} {
+  const safeDebt = Number.isFinite(debt) && debt > 0 ? debt : 0;
+  const safeLimit = Number.isFinite(limit) && (limit as number) > 0 ? (limit as number) : 0;
+  if (safeLimit <= 0) return { ratio: safeDebt > 0 ? 100 : 0, isOver: safeDebt > 0 };
+  return { ratio: Math.min(100, Math.round((safeDebt / safeLimit) * 100)), isOver: safeDebt >= safeLimit };
+}
+
 export function grossFromTransaction(tx: SaleTransaction): number {
   return Math.max(0, tx.subtotal || tx.total || 0);
 }
