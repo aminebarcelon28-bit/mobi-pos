@@ -39,13 +39,31 @@ mkdirSync(join(SHIM, 'db'), { recursive: true });
 // onto the stub dir (from SHIM/lane, `../db/x` -> SHIM/db/x).
 mkdirSync(join(SHIM, 'lane'), { recursive: true });
 copyFileSync(join(SRC_SYNC, 'genericApply.ts'), join(SHIM, 'lane', 'genericApply.ts'));
-// Node's ESM loader needs explicit extensions. Rewrite ONLY the two bare
-// import specifiers in the copy — no logic is touched.
+// Node's ESM loader needs explicit extensions. Rewrite the bare
+// import specifiers in the copy — no logic is touched. Heavy lanes
+// (Dexie, sqlPluginAdapter) resolve to stubs; zero-dependency modules
+// (causalVersion, ids) resolve to the REAL sources.
 {
   const p = join(SHIM, 'lane', 'genericApply.ts');
+  // Zero-dependency modules travel as copies (their own relative imports
+  // get extensioned below); heavy lanes resolve to stubs.
+  copyFileSync(join(SRC_SYNC, 'causalVersion.ts'), join(SHIM, 'lane', 'causalVersion.ts'));
+  copyFileSync(join(SRC_SYNC, 'conflictWatch.ts'), join(SHIM, 'lane', 'conflictWatch.ts'));
+  const realIds = pathToFileURL(join(ROOT, 'src', 'utils', 'ids.ts')).href;
   let t = readFileSync(p, 'utf8');
   t = t.replace(/from '\.\.\/db\/database'/g, "from '../db/database.js'")
-       .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'");
+       .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'")
+       .replace(/from '\.\/causalVersion'/g, "from './causalVersion.ts'")
+       .replace(/from '\.\/conflictWatch'/g, "from './conflictWatch.ts'")
+       .replace(/from '\.\.\/utils\/ids'/g, `from '${realIds}'`);
+  writeFileSync(p, t);
+  {
+    // conflictWatch.ts copy: extension its own relative import.
+    const cp = join(SHIM, 'lane', 'conflictWatch.ts');
+    let ct = readFileSync(cp, 'utf8');
+    ct = ct.replace(/from '\.\/causalVersion'/g, "from './causalVersion.ts'");
+    writeFileSync(cp, ct);
+  }
   writeFileSync(p, t);
 }
 
@@ -84,9 +102,18 @@ const genUpsertRaw = (() => {
   return end > start ? sm.slice(start + 1, end) : '';
 })();
 function toLibsql(sql) { let n = 0; return sql.replace(/\?/g, () => `$${++n}`); }
-const genUpsert = toLibsql(genUpsertRaw.replace(/\$\{genericTable\}/g, 'customers'));
+// The extracted SQL carries the shared-predicate marker verbatim; resolve it
+// through the REAL helper (zero-dependency, same predicate production runs).
+import { tiedVersionGuardSql } from '../src/sync/causalVersion.ts';
+const genUpsert = toLibsql(
+  genUpsertRaw
+    .replace(/\$\{genericTable\}/g, 'customers')
+    .replace(/\$\{tiedVersionGuardSql\(genericTable\)\}/g, tiedVersionGuardSql('customers'))
+);
 check('extracted the real generic push upsert SQL', /ON CONFLICT\(id\) DO UPDATE SET/.test(genUpsert));
-check('push upsert carries the version guard', /WHERE excluded\.version >= customers\.version/.test(genUpsert));
+check('push upsert carries the version guard (shared tiebreak predicate)',
+  /excluded\.version > customers\.version/.test(genUpsert) &&
+  /COALESCE\(excluded\.device_id/.test(genUpsert));
 
 function extractSql(src, startMarker, endMarker) {
   const s = src.indexOf(startMarker);
@@ -133,7 +160,7 @@ await local.execute(`CREATE TABLE customer_debts (
   amount REAL NOT NULL DEFAULT 0, balance_after REAL NOT NULL DEFAULT 0, receipt_number TEXT,
   payment_method TEXT, notes TEXT, recorded_by TEXT, created_at TEXT NOT NULL,
   json_payload TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL,
-  deleted INTEGER NOT NULL DEFAULT 0)`);
+  deleted INTEGER NOT NULL DEFAULT 0, device_id TEXT DEFAULT 'legacy')`);
 await local.execute(`CREATE TABLE entity_keys (
   entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (entity_type, entity_id))`);
