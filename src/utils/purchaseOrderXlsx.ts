@@ -15,6 +15,7 @@
  */
 import type { PurchaseOrder } from '../types/pos';
 import { formatDateTime } from '../types/pos';
+import { utcNowIso } from './dateUtils';
 
 export interface PurchaseOrderStoreInfo {
   storeName?: string;
@@ -517,7 +518,7 @@ export function downloadVendorProcurementXlsx(
   const poData: PurchaseOrderExportData = {
     poNumber,
     vendorName,
-    createdAt: new Date().toISOString(),
+    createdAt: utcNowIso(),
     notes: 'Réapprovisionnement intelligent Just-In-Time',
     items,
   };

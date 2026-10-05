@@ -16,6 +16,7 @@ import { usePosStore } from '../../store/usePosStore';
 import { maintenanceService, type DbStats, type IntegrityReport } from '../../services/maintenanceService';
 import { useToast } from '../ui/Toast';
 import { audioBus } from '../../utils/audioEvents';
+import { utcNowIso } from '../../utils/dateUtils';
 import { verifyManagerGate } from '../../utils/pinGate';
 import { Lock, ShieldAlert } from 'lucide-react';
 
@@ -247,7 +248,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   const handleCreateSnapshot = async () => {
     setIsProcessing(true);
     try {
-      const now = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const now = utcNowIso().replace(/[:.]/g, '-').slice(0, 19);
       const fileName = `MobiPOS_Backup_${now}.db`;
       const backupResult = await maintenanceService.backupDatabaseToFile(fileName);
       setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] Instantané créé : ${backupResult}`);
@@ -264,7 +265,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
 
   const handleExportFullJson = () => {
     const backupData = {
-      timestamp: new Date().toISOString(),
+      timestamp: utcNowIso(),
       appVersion: '1.5.8',
       products: products || [],
       customers: customers || [],
@@ -281,7 +282,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `MobiPOS_Full_Database_Backup_${new Date().toISOString().slice(0, 10)}.json`);
+    link.setAttribute('download', `MobiPOS_Full_Database_Backup_${utcNowIso().slice(0, 10)}.json`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

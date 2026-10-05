@@ -13,6 +13,7 @@ import {
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
 import { formatDZD, APP_VERSION, type CashierUser } from '../../types/pos';
+import { utcNowIso } from '../../utils/dateUtils';
 import { verifyPin, hashDeviceLocalPin, isCommonPin, needsPinRotation } from '../../utils/security';
 import { verifyManagerGate, verifyUserGate } from '../../utils/pinGate';
 import { friendlyPinSetError } from '../../api/pin';
@@ -90,7 +91,7 @@ const INITIAL_DEVICE_REGISTRY: PeripheralDevice[] = [
     driver: 'ESC/POS Standard (Fallback Impression Windows/PDF)',
     protocol: 'ESC/POS',
     capabilities: ['Impression 80mm', 'Code QR', 'Code-barres', 'Logo', 'Découpe auto', 'Impression NV'],
-    lastSeen: new Date().toISOString(),
+    lastSeen: utcNowIso(),
     signalStrength: 0,
     isAutoDetected: false,
   },
@@ -107,7 +108,7 @@ const INITIAL_DEVICE_REGISTRY: PeripheralDevice[] = [
     driver: 'ZPL II',
     protocol: 'ZPL/EPL',
     capabilities: ['Étiquettes 100x50mm', 'Code-barres 1D/2D', 'QR Code', 'Impression thermique directe'],
-    lastSeen: new Date().toISOString(),
+    lastSeen: utcNowIso(),
     signalStrength: 0,
     isAutoDetected: false,
   },
@@ -123,7 +124,7 @@ const INITIAL_DEVICE_REGISTRY: PeripheralDevice[] = [
     driver: 'HID Keyboard Wedge (Automatique Windows)',
     protocol: 'USB-HID',
     capabilities: ['1D Barcode', '2D Barcode', 'QR Code', 'DataMatrix', 'PDF417', 'GS1', 'Omnidirectionnel'],
-    lastSeen: new Date().toISOString(),
+    lastSeen: utcNowIso(),
     signalStrength: 0,
     isAutoDetected: false,
   },
@@ -139,7 +140,7 @@ const INITIAL_DEVICE_REGISTRY: PeripheralDevice[] = [
     driver: 'SNAPI / HID',
     protocol: 'USB-HID / SNAPI',
     capabilities: ['QR Code', 'Code-barres 1D', 'DataMatrix', 'Lecture écran mobile', 'PDF417'],
-    lastSeen: new Date().toISOString(),
+    lastSeen: utcNowIso(),
     signalStrength: 0,
     isAutoDetected: false,
   },
@@ -155,7 +156,7 @@ const INITIAL_DEVICE_REGISTRY: PeripheralDevice[] = [
     driver: 'WebView2',
     protocol: 'HDMI 1080p',
     capabilities: ['Affichage client', 'Promotions', 'Panier temps réel', 'Publicité dynamique'],
-    lastSeen: new Date().toISOString(),
+    lastSeen: utcNowIso(),
     signalStrength: 100,
     isAutoDetected: true,
   },
@@ -1116,7 +1117,7 @@ export const SettingsModal: React.FC = () => {
 
   // ── Simulate Diagnostic Run ──
   const simulateDiagnosticRun = useCallback((tests: Omit<DiagnosticTest, 'timestamp'>[]): void => {
-    const timestamped = tests.map(t => ({ ...t, timestamp: new Date().toISOString() }));
+    const timestamped = tests.map(t => ({ ...t, timestamp: utcNowIso() }));
     setDiagnosticTests(timestamped);
 
     timestamped.forEach((test, idx) => {
@@ -1153,7 +1154,7 @@ export const SettingsModal: React.FC = () => {
 
         const duration = 40 + Math.floor(Math.random() * 150);
         setDiagnosticTests(prev => prev.map(t =>
-          t.id === test.id ? { ...t, result, duration, message, timestamp: new Date().toISOString() } : t
+          t.id === test.id ? { ...t, result, duration, message, timestamp: utcNowIso() } : t
         ));
       }, idx * 500 + 450);
     });
@@ -1189,15 +1190,15 @@ export const SettingsModal: React.FC = () => {
 
       setDevices(prev => prev.map(d => {
         if (d.category === 'display') {
-          return { ...d, status: 'active', signalStrength: 100, isAutoDetected: true, lastSeen: new Date().toISOString() };
+          return { ...d, status: 'active', signalStrength: 100, isAutoDetected: true, lastSeen: utcNowIso() };
         }
         // Physical devices (printers & scanners): only mark connected if physical USB/HID devices are plugged into the PC
         if (totalDetected > 0) {
           const newStatus = d.category.includes('printer') ? 'connected' : 'ready';
-          return { ...d, status: newStatus, signalStrength: 100, isAutoDetected: true, lastSeen: new Date().toISOString() };
+          return { ...d, status: newStatus, signalStrength: 100, isAutoDetected: true, lastSeen: utcNowIso() };
         }
         // If 0 devices detected on USB/HID, set/keep offline
-        return { ...d, status: 'offline', signalStrength: 0, isAutoDetected: false, lastSeen: new Date().toISOString() };
+        return { ...d, status: 'offline', signalStrength: 0, isAutoDetected: false, lastSeen: utcNowIso() };
       }));
 
       if (!isSilent) {

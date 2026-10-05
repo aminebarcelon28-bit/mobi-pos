@@ -3,6 +3,7 @@
 // is created idempotently and versioned migrations are tracked.
 
 import type { Client } from '@libsql/client';
+import { utcNowIso } from '../utils/dateUtils';
 
 export interface RemoteMigration {
   version: number;
@@ -438,7 +439,7 @@ export async function applyRemoteMigrations(client: Client): Promise<number> {
 
     await client.execute({
       sql: 'INSERT INTO schema_migrations (version, applied_at, description) VALUES (?, ?, ?)',
-      args: [mig.version, new Date().toISOString(), mig.description],
+      args: [mig.version, utcNowIso(), mig.description],
     });
     appliedCount++;
   }

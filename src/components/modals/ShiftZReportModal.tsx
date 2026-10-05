@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Printer, ShieldAlert, CheckCircle2, ArrowDownCircle } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
+import { utcNowIso } from '../../utils/dateUtils';
 import { useToast } from '../../components/ui/Toast';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
@@ -138,7 +139,7 @@ export const ShiftZReportModal: React.FC = () => {
     cashDrops: cashDrops || [],
     payouts: payouts || [],
     countedCash: actualCountedCash,
-    closedAtISO: new Date().toISOString(),
+    closedAtISO: utcNowIso(),
     closedShiftCount,
     fallbackCashier: lockScreenCashier,
   });

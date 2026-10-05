@@ -66,6 +66,7 @@ import type {
   WarrantySnapshot,
   WarrantyTier,
 } from '../../types/pos';
+import { utcNowIso } from '../../utils/dateUtils';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { useToast } from '../ui/Toast';
 import { MoneyInput } from '../ui/MoneyInput';
@@ -657,7 +658,7 @@ export const RepairWorkOrderModal: React.FC = () => {
     // exactly three values and a ticket must never contain a UI-only one.
     const storedKind: NonNullable<RepairOrder['imeiKind']> =
       imeiKind === 'manual' ? 'none' : imeiKind;
-    const acceptedAt = termsAccepted ? new Date().toISOString() : undefined;
+    const acceptedAt = termsAccepted ? utcNowIso() : undefined;
 
     // A v1 dossier is validated against the DESCRIPTIVE minimum only: the full
     // v2 legal gate must not block a typo correction, and equally must not be
@@ -757,7 +758,7 @@ export const RepairWorkOrderModal: React.FC = () => {
               ...(signatureIntake
                 ? {
                     signatureCustomerIntake: signatureIntake,
-                    signatureIntakeAt: new Date().toISOString(),
+                    signatureIntakeAt: utcNowIso(),
                   }
                 : {}),
               ...(acceptedAt ? { legalTermsAcceptedAt: acceptedAt } : {}),
@@ -775,7 +776,7 @@ export const RepairWorkOrderModal: React.FC = () => {
         ...shared,
         intakeDamage,
         signatureCustomerIntake: signatureIntake ?? undefined,
-        signatureIntakeAt: new Date().toISOString(),
+        signatureIntakeAt: utcNowIso(),
         legalTermsAcceptedAt: acceptedAt,
         warrantyTier,
         intakePhotos,

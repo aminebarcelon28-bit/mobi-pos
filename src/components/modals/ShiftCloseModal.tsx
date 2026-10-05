@@ -28,6 +28,7 @@ import { verifyManagerGate } from '../../utils/pinGate';
 import { useAllocationCogs } from '../../hooks/useAllocationCogs';
 import { isExchangeSaleTx } from '../../utils/receiptMath';
 import { DRAWER_REASON_PREFIXES } from '../../utils/cashTerms';
+import { utcNowIso } from '../../utils/dateUtils';
 
 // Lock-screen cashier fallback (createUISlice owns `activeCashier`; absent
 // from the shared PosState type, so read via structural cast).
@@ -126,7 +127,7 @@ export const ShiftCloseModal: React.FC = () => {
 
   // Compute live system metrics for the active shift
   const openingFloat = activeShift?.openingFloat || 0;
-  const openedAt = activeShift?.openedAt || new Date().toISOString();
+  const openedAt = activeShift?.openedAt || utcNowIso();
 
   const sessionTxns = useMemo(() => {
     return transactions.filter((t) => {
@@ -386,7 +387,7 @@ export const ShiftCloseModal: React.FC = () => {
     const preClosedCount = (usePosStore.getState().allShifts || []).filter(
       (s) => s.status === 'CLOSED'
     ).length;
-    const closedAtISO = new Date().toISOString();
+    const closedAtISO = utcNowIso();
     try {
       const closeShiftResult = await (closeShift as CloseShiftWithPin)(
         physicalCount,

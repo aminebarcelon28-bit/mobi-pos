@@ -1,4 +1,5 @@
 import { formatDZD } from '../types/pos';
+import { utcNowIso } from './dateUtils';
 import { buildWhatsAppUrl, normalizeAlgerianPhone } from './phoneUtils';
 import type { EditableReviewLine } from '../types/po';
 
@@ -67,7 +68,7 @@ export function generateVendorDisputeBrief(params: {
   const {
     supplierName,
     supplierPhone = '',
-    invoiceNumber = 'BL-' + new Date().toISOString().slice(0, 10).replace(/-/g, ''),
+    invoiceNumber = 'BL-' + utcNowIso().slice(0, 10).replace(/-/g, ''),
     invoiceDate = new Date().toLocaleDateString('fr-DZ', {
       day: '2-digit',
       month: '2-digit',

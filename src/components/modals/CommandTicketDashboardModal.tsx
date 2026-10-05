@@ -30,6 +30,7 @@ import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { buildWhatsAppUrl } from '../../utils/phoneUtils';
 import { soundEngine } from '../../utils/audioFeedback';
+import { utcNowIso } from '../../utils/dateUtils';
 import { PurchaseOrderA4Document } from './PurchaseOrderA4Document';
 
 // ─── Affichage seul : ancienneté relative en français ───
@@ -1207,7 +1208,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                       actualCosts: { ...verifiedCostMap },
                       reasons: { ...discrepancyReasons },
                       supplierInvoice: supplierInvoiceNo.trim() || undefined,
-                      receivedAt: new Date().toISOString(),
+                      receivedAt: utcNowIso(),
                     });
                     setPrintingPO(receivingPO);
                     const { printCoordinator } = await import('../../utils/printCoordinator');

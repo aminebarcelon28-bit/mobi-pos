@@ -14,6 +14,7 @@
  */
 import type { IntakePhotoRef } from '../types/pos';
 import { isTauriEnv } from '../db/adapters/base';
+import { utcNowIso } from './dateUtils';
 
 export interface SavAttachmentResult extends IntakePhotoRef {
   /** False when the bytes could not be persisted (web preview / native down). */
@@ -98,7 +99,7 @@ export async function saveSavPhoto({
   file,
   label,
 }: SaveSavPhotoArgs): Promise<SavAttachmentResult> {
-  const capturedAt = new Date().toISOString();
+  const capturedAt = utcNowIso();
   const { dataBase64, byteSize } = await toWebpBase64(file);
 
   if (!isTauriEnv()) {

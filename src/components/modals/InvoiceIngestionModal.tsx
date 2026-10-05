@@ -23,6 +23,7 @@ import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { resolveReferenceCost } from '../../utils/referenceCost';
 import { formatDZD } from '../../types/pos';
+import { utcNowIso } from '../../utils/dateUtils';
 import { useToast } from '../ui/Toast';
 import { processRawScan } from '../../api/po';
 import {
@@ -225,7 +226,7 @@ export const InvoiceIngestionModal: React.FC = () => {
               const imeiRec: IMEIRecord = {
                 imei,
                 productId: currentProd.id,
-                receivedAt: new Date().toISOString(),
+                receivedAt: utcNowIso(),
               };
               newImeis.push(imeiRec);
             }

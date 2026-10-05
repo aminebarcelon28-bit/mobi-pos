@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
+import { utcNowIso } from '../../utils/dateUtils';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import type { PurchaseOrder, PaymentMethodType, Product } from '../../types/pos';
@@ -66,7 +67,7 @@ export const PurchaseOrderModal: React.FC = () => {
 
   // New Flexible PO Draft State
   const [newVendorName, setNewVendorName] = useState('');
-  const [newOrderDate, setNewOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [newOrderDate, setNewOrderDate] = useState(() => utcNowIso().slice(0, 10));
   const [newOrderNotes, setNewOrderNotes] = useState('');
   const [newPoItems, setNewPoItems] = useState<DraftPOLineItem[]>([]);
   const [catalogSearchTerm, setCatalogSearchTerm] = useState('');

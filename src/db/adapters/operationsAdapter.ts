@@ -10,7 +10,7 @@ import { db as dexieDb } from '../database';
 import { fireSync, fireSyncDelete, isTauriEnv } from './base';
 import { getLocalDb, isDeviceLocalSettingKey, stripDeviceLocalSettingValue } from '../sqlPluginAdapter';
 import { newId } from '../../utils/ids';
-import { sortTransactionsNewestFirst } from '../../utils/dateUtils';
+import { sortTransactionsNewestFirst, utcNowIso } from '../../utils/dateUtils';
 import {
   AUDIT_DEFAULT_LIMIT,
   AUDIT_LEGACY_LIMIT,
@@ -116,7 +116,7 @@ export const operationsAdapter = {
 
     const safeEntry: SecurityAuditLogEntry = {
       id: entry.id || newId('audit'),
-      timestamp: entry.timestamp || new Date().toISOString(),
+      timestamp: entry.timestamp || utcNowIso(),
       user: entry.user || 'Yacine (Admin)',
       action: entry.action || 'ACTION',
       details: entry.details || '',

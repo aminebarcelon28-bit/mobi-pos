@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
+import { utcNowIso } from '../../utils/dateUtils';
 import type { ExpenseCategory, PaymentMethodType, StoreExpense } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { soundEngine } from '../../utils/audioFeedback';
@@ -134,7 +135,7 @@ export const ExpenseManagerModal: React.FC = () => {
       paidTo: paidTo.trim() || undefined,
       notes: notes.trim() || undefined,
       recordedBy: activeShift?.cashierName || 'Administrateur',
-      createdAt: new Date().toISOString(),
+      createdAt: utcNowIso(),
     };
 
     await addStoreExpense(newExpense);
@@ -171,7 +172,7 @@ export const ExpenseManagerModal: React.FC = () => {
   const handleExportCsv = () => {
     const BOM = '\uFEFF';
     let csv = `${BOM}JOURNAL DES DÉPENSES ET CHARGES D'EXPLOITATION\n`;
-    csv += `Généré le: ${formatDateTime(new Date().toISOString())}\n\n`;
+    csv += `Généré le: ${formatDateTime(utcNowIso())}\n\n`;
     csv += 'ID;Date;Catégorie;Libellé / Objet;Bénéficiaire;Mode Paiement;Montant (DA);Enregistré Par;Notes\n';
 
     let sum = 0;

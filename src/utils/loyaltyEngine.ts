@@ -1,6 +1,6 @@
 import type { Customer, LoyaltyLedgerEntry, LoyaltyTierInfo, LoyaltyTierDef, LoyaltyProgramConfig, SpendMilestone, MilestoneAward, FinancialProfitImpact, CartItem, SaleTransaction, RefundItem, LoyaltyPointBucket, PromoCampaignRule } from '../types/pos';
 import { newId } from './ids';
-import { transactionTimeMs } from './dateUtils';
+import { transactionTimeMs, utcNowIso } from './dateUtils';
 
 // ══════════════════════════════════════════════════════════════
 // DEFAULT GRANULAR LOYALTY PROGRAM CONFIGURATION
@@ -537,7 +537,7 @@ export const createLedgerEntry = (
      // overwrites a prior entry and a points movement disappears (C6).
      id: newId('LEDGER'),
     customerId,
-    timestamp: new Date().toISOString(),
+    timestamp: utcNowIso(),
     type,
     points,
     balanceAfter,
@@ -731,7 +731,7 @@ export const createDatedPointBucket = (
     earnedOnNetSpendDzd,
     expiresAt,
     isFullyConsumed: false,
-    createdAt: new Date().toISOString(),
+    createdAt: utcNowIso(),
   };
 };
 

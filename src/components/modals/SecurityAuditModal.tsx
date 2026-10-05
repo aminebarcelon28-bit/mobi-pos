@@ -12,6 +12,7 @@ import { DateRangePicker } from '../ui/DateRangePicker';
 import { runGatedAuditExport } from '../../utils/auditExport';
 import type { AuditExportOptions } from '../../utils/auditExport';
 import { ensureDeviceInfoLoaded, getDeviceId } from '../../utils/deviceInfo';
+import { utcNowIso } from '../../utils/dateUtils';
 import { useAuditLiveFeed } from '../../hooks/useAuditLiveFeed';
 import { useVirtualRows } from '../../hooks/useVirtualRows';
 import { useSharedClock } from '../../hooks/useSharedClock';
@@ -76,7 +77,7 @@ function openAuditTargetModal(modal: Parameters<ReturnType<typeof usePosStore.ge
 
 const persistDeepLink = (target: string, entityId: string, entityType: string) => {
   try {
-    sessionStorage.setItem('mobi:deep-link', JSON.stringify({ target, entityId, entityType, at: new Date().toISOString() }));
+    sessionStorage.setItem('mobi:deep-link', JSON.stringify({ target, entityId, entityType, at: utcNowIso() }));
   } catch {
     // sessionStorage unavailable — the mobi:navigate event below is the channel.
   }
