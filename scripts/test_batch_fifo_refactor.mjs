@@ -134,8 +134,10 @@ console.log('\n--- Part 2: production wiring ---');
     !proc.includes('costPrice: actualCost,'));
   check('invoice import freezes costPrice at first-known',
     modal.includes('resolveReferenceCost(currentProd.costPrice, invoiceCost)'));
+  // The call gained an idempotency options arg after this check was written;
+  // match the prefix so the assertion tracks the forwarding, not the arity.
   check('invoice import passes receipt lines for batch tracking',
-    modal.includes('receiptMap') && modal.includes('ingestInvoiceBatch(updatedList, newImeis, receipts)'));
+    modal.includes('receiptMap') && modal.includes('ingestInvoiceBatch(updatedList, newImeis, receipts,'));
   check('invoice ingestion mints batches + RECEIVE ledger deltas',
     catalog.includes('INVOICE_IMPORT') && catalog.includes('insertStockBatch'));
   check('JIT restock is batch-tracked (not untracked stock)',

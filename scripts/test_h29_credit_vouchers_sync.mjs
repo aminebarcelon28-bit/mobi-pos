@@ -314,7 +314,10 @@ const stmt = mgr.toRemoteUpsert(op, '2026-09-14T10:00:01.000Z');
 check('[2a] toRemoteUpsert returns a statement (was null before H29)', stmt !== null && stmt !== undefined, stmt);
 if (stmt) {
   check('[2b] statement targets credit_vouchers', /INTO credit_vouchers /.test(stmt.sql), stmt.sql.slice(0, 60));
-  check('[2c] statement carries the version guard', /WHERE excluded\.version >= credit_vouchers\.version/.test(stmt.sql));
+  // A3 replaced the bare `>=` guard with the shared tied predicate
+  // (strict `>` + device tiebreak); assert the resolved contract.
+  check('[2c] statement carries the version guard', /excluded\.version > credit_vouchers\.version/.test(stmt.sql)
+    && /COALESCE\(excluded\.device_id,''\) >= COALESCE\(credit_vouchers\.device_id,''\)/.test(stmt.sql));
   check('[2d] args carry the entity id + payload', stmt.args[0] === voucherId, stmt.args[0]);
   // Actually execute it against the REAL remote DB.
   await remote.execute({ sql: stmt.sql, args: stmt.args });

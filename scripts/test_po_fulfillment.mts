@@ -107,8 +107,10 @@ try {
       !waitingRegion.includes('p.stock +'));
 
     // Invoice path: receipt lines reach the slice; slice mints batches.
+    // UI-005: the per-line Math.round became a single-round average helper;
+    // the receipt-lines forwarding (receiptMap -> receipts -> ingest) is intact.
     check('invoice modal forwards receipt lines (qty + unitCost per product)',
-      modal.includes('receiptMap') && modal.includes('unitCost: Math.max(0, Math.round(invoiceCost))'));
+      modal.includes('receiptMap') && modal.includes('unitCost: averageReceiptUnitCost(r.costSum, r.qty)'));
     check('invoice ingestion mints batches + RECEIVE deltas',
       catalog.includes('INVOICE_IMPORT') && catalog.includes('insertStockBatch'));
   }
