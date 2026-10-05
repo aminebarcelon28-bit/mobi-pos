@@ -81,7 +81,11 @@ const sku3 = bc.generateUniqueSku([], "Téléphones d'Occasion (Reprise)", 'Sams
 check('Samsung maps OCC-SAM', sku3.startsWith('OCC-SAM-'), sku3);
 
 console.log('=== Phase 1: luhnCheckImei ===');
-const savSrc = fs.readFileSync(`${ROOT}/src/utils/savValidation.ts`, 'utf8');
+// savValidation delegates canonicalization to the zero-dependency
+// deviceIdCodec; inline it the same way so the data: URL has no relative edge.
+const codecUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/deviceIdCodec.ts`));
+let savSrc = fs.readFileSync(`${ROOT}/src/utils/savValidation.ts`, 'utf8');
+savSrc = savSrc.replace(/from\s+(['"])\.\/deviceIdCodec\1/g, `from '${codecUrl}'`);
 const savOut = ts.transpileModule(savSrc, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
   fileName: 'savValidation.ts',

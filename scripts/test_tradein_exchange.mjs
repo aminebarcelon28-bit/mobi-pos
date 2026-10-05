@@ -47,6 +47,17 @@ const transpileFile = (p) => {
 };
 const taxUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/taxEngine.ts`));
 const pricingUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/pricingEngine.ts`));
+// savValidation delegates to the zero-dependency deviceIdCodec; inline it
+// too so data: URLs carry no relative edge (same trick as above).
+const codecUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/deviceIdCodec.ts`));
+const transpileSav = () => {
+  let s = fs.readFileSync(`${ROOT}/src/utils/savValidation.ts`, 'utf8');
+  s = s.replace(/from\s+(['"])\.\/deviceIdCodec\1/g, `from '${codecUrl}'`);
+  return ts.transpileModule(s, {
+    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
+    fileName: 'savValidation.ts',
+  }).outputText;
+};
 let rmSrc = fs.readFileSync(`${ROOT}/src/utils/receiptMath.ts`, 'utf8');
 rmSrc = rmSrc.replace(/from\s+(['"])\.\.\/types\/pos\1/g, `from '${toDataUrl('export {};')}'`);
 rmSrc = rmSrc.replace(/from\s+(['"])\.\/pricingEngine\1/g, `from '${pricingUrl}'`);
@@ -56,7 +67,7 @@ const rm = await import(toDataUrl(ts.transpileModule(rmSrc, {
   fileName: 'receiptMath.ts',
 }).outputText));
 const bc = await import(toDataUrl(transpileFile(`${ROOT}/src/utils/barcodeGenerator.ts`)));
-const sav = await import(toDataUrl(transpileFile(`${ROOT}/src/utils/savValidation.ts`)));
+const sav = await import(toDataUrl(transpileSav()));
 const sliceSrc = fs.readFileSync(`${ROOT}/src/store/slices/createUISlice.ts`, 'utf8');
 const modalSrc = fs.readFileSync(`${ROOT}/src/components/modals/TradeInBuybackModal.tsx`, 'utf8');
 
@@ -311,7 +322,7 @@ const fl = await import(toDataUrl(transpileFile(`${ROOT}/src/db/checkoutFlight.t
 // tradeInExchange.ts imports ./savValidation (value import) — data: URLs
 // cannot resolve relative specifiers, so transpile the dependency first
 // (same trick as the receiptMath loader above).
-const savUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/savValidation.ts`));
+const savUrl = toDataUrl(transpileSav());
 let txSrc = fs.readFileSync(`${ROOT}/src/utils/tradeInExchange.ts`, 'utf8');
 txSrc = txSrc.replace(/from\s+(['"])\.\/savValidation\1/g, `from '${savUrl}'`);
 const tx = await import(toDataUrl(ts.transpileModule(txSrc, {

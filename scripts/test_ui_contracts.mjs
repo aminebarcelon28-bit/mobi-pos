@@ -44,9 +44,11 @@ check('slice stores qty and unit cost into SEPARATE batch columns',
 
 console.log('--- 2. integer-DA cost inputs ---');
 {
-  const costParses = (modal.match(/parseLocalizedAmount\(e\.target\.value\)/g) ?? []).length;
-  check('both PO cost inputs parse localized amounts', costParses >= 2, `got ${costParses}`);
-  check('verified cost lands whole dinars', modal.includes('[item.productId]: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0))'));
+  // Phase 1c: inline parseLocalizedAmount became the MoneyInput component
+  // (localized entry in, exact integer minor out); assert the shipped wiring.
+  const costInputs = (modal.match(/label="Coût Unitaire Estimé \(DA\)"|label="Prix Achat Facturé \(DA\)"/g) ?? []).length;
+  check('both PO cost inputs parse localized amounts', costInputs >= 2, `got ${costInputs}`);
+  check('verified cost lands whole dinars', modal.includes('[item.productId]: toLegacyReal(minor)'));
 }
 
 console.log('--- 3. selling price isolation ---');
