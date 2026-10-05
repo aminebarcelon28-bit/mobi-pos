@@ -41,6 +41,7 @@
     "test:push-closure": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_push_closure.mts",
     "test:consumed-holds": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_consumed_holds.mts",
     "test:money-display": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_money_display.mts",
+    "perf:probe": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/perf_probe.mts",
     "test:restore-guards": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_restore_guards.mts",
     "test:close-status": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_close_status.mts",
     "test:casefold": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_casefold.mts",
