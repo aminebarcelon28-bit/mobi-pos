@@ -7,6 +7,7 @@ import {
   renderWebViewUpdateScreen,
 } from './utils/webviewCompat'
 import { observeLcpOnce } from './utils/bootTimings'
+import { utcNowIso } from './utils/dateUtils'
 
 function boot() {
   // Field LCP attribution (logs one line per LCP candidate, disconnects
@@ -43,7 +44,7 @@ function recordCrashReport(kind: CrashReport['kind'], message: unknown, stack?: 
       kind,
       message: String(message ?? 'unknown').slice(0, 500),
       stack: String(stack ?? '').slice(0, 1000),
-      at: new Date().toISOString(),
+      at: utcNowIso(),
     });
     localStorage.setItem(CRASH_REPORT_KEY, JSON.stringify(arr.slice(0, MAX_CRASH_REPORTS)));
   } catch {

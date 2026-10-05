@@ -12,6 +12,18 @@ export function businessTimeZone(): string {
   return APP_CONFIG?.TIMEZONE || 'Africa/Algiers';
 }
 
+/**
+ * Single timestamp mint gate (TIME-001). Every business record in the app
+ * must mint "now" through this function — never raw `new Date()` variants
+ * scattered per file. Output is byte-identical to `new
+ * Date().toISOString()` (UTC ISO-8601 with millis + Z); the value is the
+ * grep-verifiable single source, so a future local-time or sliced variant
+ * stands out in review instead of blending into twelve identical calls.
+ */
+export function utcNowIso(): string {
+  return new Date().toISOString();
+}
+
 export function todayLocalKey(timeZone?: string): string {
   return toLocalDayKey(new Date(), timeZone);
 }

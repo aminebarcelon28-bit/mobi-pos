@@ -4,6 +4,7 @@ import type { Product } from '../../types/pos';
 import { audioBus } from '../../utils/audioEvents';
 import { rebaseReconciledSales } from './rebaseReconciledSales';
 import { newId } from '../../utils/ids';
+import { utcNowIso } from '../../utils/dateUtils';
 import {
   describeArchivedProduct,
   resolveWarrantyMonths,
@@ -223,7 +224,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
           .catch(() => [])) as Array<{ batch_id: string }>;
         const batchIds = [...new Set((live ?? []).map((r) => String(r.batch_id)).filter(Boolean))];
         if (batchIds.length > 0) {
-          const now = new Date().toISOString();
+          const now = utcNowIso();
           await db.execute(
             `UPDATE stock_batches SET deleted = 1, version = version + 1, updated_at = $1, sync_status = 'pending' WHERE product_id = $2 AND deleted = 0`,
             [now, id]
@@ -282,7 +283,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
             .equals(id)
             .toArray();
           for (const rec of rows) {
-            const stamp = new Date().toISOString();
+            const stamp = utcNowIso();
             const months = resolveWarrantyMonths(doomed);
             await dexieDb.imeiRecords.put({
               ...rec,
@@ -302,7 +303,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
                     notes: describeArchivedProduct(
                       doomed.title,
                       doomed.sku,
-                      new Date().toISOString()
+                      utcNowIso()
                     ),
                   }
                 : r
@@ -433,7 +434,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
               productId: r.productId,
               quantityRemaining: qty,
               unitCost,
-              receivedAt: new Date().toISOString(),
+              receivedAt: utcNowIso(),
             });
           } catch (dexieErr) {
             console.warn('[invoice:batch] Failed to insert stock batch in Dexie:', dexieErr);

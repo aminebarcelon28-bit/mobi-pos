@@ -25,6 +25,7 @@
 
 import { getTursoClient, probeOnline } from './tursoClient';
 import { deterministicId } from '../utils/ids';
+import { utcNowIso } from '../utils/dateUtils';
 
 // NOTE: device identity is resolved LAZILY (never statically imported): this
 // module is itself dynamically imported on the checkout critical path, and a
@@ -110,7 +111,7 @@ export async function tryClaimCompensation(
   try {
     const remote = await getTursoClient();
     await sweepExpired(remote as unknown as { execute: (stmt: unknown) => Promise<unknown> });
-    const now = new Date().toISOString();
+    const now = utcNowIso();
     const expires = new Date(Date.now() + CLAIM_TTL_MIN * 60_000).toISOString();
     const res = (await remote.execute({
       sql: `INSERT INTO refund_claims (id, ticket_id, kind, device_id, created_at, expires_at)

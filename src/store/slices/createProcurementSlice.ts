@@ -11,6 +11,7 @@ async function getSqlite() {
 }
 import { calculateStockAlerts, getDynamicThreshold } from '../../utils/alertEngine';
 import { newId, newReceiptNumber } from '../../utils/ids';
+import { utcNowIso } from '../../utils/dateUtils';
 
 // P11.3: productRepository pulls sqliteAdapter -> dexie + libsql into the entry.
 async function getProductRepo() {
@@ -167,7 +168,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
     set((s) => {
       const next = {
         ...s.vendorDirectory,
-        [trimmed]: { ...s.vendorDirectory[trimmed], ...contact, updatedAt: new Date().toISOString() },
+        [trimmed]: { ...s.vendorDirectory[trimmed], ...contact, updatedAt: utcNowIso() },
       };
       saveVendorDirectory(next);
       return { vendorDirectory: next };
@@ -260,7 +261,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
        id: newId('po'),
        poNumber: newReceiptNumber('PO'),
       vendorName,
-      createdAt: new Date().toISOString(),
+      createdAt: utcNowIso(),
       items: lineItems,
       totalAmount,
       status: status || 'Waiting List',
@@ -333,7 +334,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
        id: newId('po'),
        poNumber: newReceiptNumber('PO'),
       vendorName,
-      createdAt: new Date().toISOString(),
+      createdAt: utcNowIso(),
       items: lineItems,
       totalAmount,
       status: 'Waiting List',
@@ -551,8 +552,8 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
       items: updatedLineItems,
       actualTotalAmount: (targetPO.actualTotalAmount || 0) + totalReceivedCost,
       status: newStatus,
-      validatedAt: new Date().toISOString(),
-      receivedAt: new Date().toISOString(),
+      validatedAt: utcNowIso(),
+      receivedAt: utcNowIso(),
       notes: notes || targetPO.notes,
       expenseRecorded: recordExpense ? true : targetPO.expenseRecorded,
     };
@@ -625,7 +626,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
                 productId: vi.productId,
                 quantityRemaining: vi.receivedQty,
                 unitCost: actualCost,
-                receivedAt: new Date().toISOString(),
+                receivedAt: utcNowIso(),
                 purchaseOrderId: targetPO.id,
               });
             } catch (dexieErr) {
@@ -916,7 +917,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
                 productId: l.productId,
                 quantityRemaining: l.qty,
                 unitCost: l.unitCost,
-                receivedAt: new Date().toISOString(),
+                receivedAt: utcNowIso(),
               });
             } catch (dexieErr) {
               console.warn('[jit:batch] Failed to insert stock batch in Dexie:', dexieErr);
@@ -1009,7 +1010,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
                 productId: l.productId,
                 quantityRemaining: l.qty,
                 unitCost: l.unitCost,
-                receivedAt: new Date().toISOString(),
+                receivedAt: utcNowIso(),
                 purchaseOrderId: approvedPO.id,
               });
             } catch (dexieErr) {

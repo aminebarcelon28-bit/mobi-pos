@@ -9,6 +9,7 @@ import {
   type SnapshotKind,
 } from '../api/backup';
 import { db as dexieDb } from './database';
+import { utcNowIso } from '../utils/dateUtils';
 
 const isTauri = (): boolean => {
   return typeof window !== 'undefined' && Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown; __TAURI__?: unknown }).__TAURI_INTERNALS__ || (window as unknown as { __TAURI__?: unknown }).__TAURI__);
@@ -36,7 +37,7 @@ export interface LocalBackupResult {
  * `kind` files the snapshot into its filename (wipe/restore/migration/manual).
  */
 export async function createPreMigrationBackup(kind: SnapshotKind = 'manual'): Promise<LocalBackupResult> {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const timestamp = utcNowIso().replace(/[:.]/g, '-');
   let sqliteBackupPath: string | undefined;
   let snapshotMeta: DatabaseBackupMeta | undefined;
 
@@ -57,7 +58,7 @@ export async function createPreMigrationBackup(kind: SnapshotKind = 'manual'): P
   let quotaExceeded = false;
   try {
     const dexieSnapshot = {
-      timestamp: new Date().toISOString(),
+      timestamp: utcNowIso(),
       products: await dexieDb.products.toArray(),
       customers: await dexieDb.customers.toArray(),
       transactions: await dexieDb.transactions.toArray(),

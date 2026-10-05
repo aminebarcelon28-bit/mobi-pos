@@ -25,6 +25,7 @@ import { normalizeDeviceKey } from '../../utils/warrantyResolver';
 import { isImeiAllocatedInCart } from '../../utils/tradeInExchange';
 import { maskNationalId, maskPhone, normalizeNationalIdType } from '../../utils/tradeInOrigin';
 import { isTauriEnv } from '../../db/adapters/base';
+import { utcNowIso } from '../../utils/dateUtils';
 // P11.3: sqliteAdapter -> adapters -> dexie + libsql is the heaviest static chain
 // left in the entry. initDatabase() runs from a useEffect, so load it on demand.
 // P11.3: repositories each pull sqliteAdapter -> dexie + libsql; all four are only
@@ -70,7 +71,7 @@ async function mirrorTradeBatchToDexie(args: {
   tradeId: string;
 }): Promise<void> {
   const { dexieDb } = await import('../../db/database');
-  const now = new Date().toISOString();
+  const now = utcNowIso();
   await dexieDb.stockBatches.put({
     batchId: args.batchId,
     productId: args.productId,
@@ -220,7 +221,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
   securityAuditLog: [
     {
       id: 'log-1',
-      timestamp: new Date().toISOString(),
+      timestamp: utcNowIso(),
       user: 'Yacine (Admin)',
       action: 'Initialisation Système POS',
       details: 'Moteur de base de données IndexedDB activé',
@@ -442,7 +443,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     }
     const newEntry: SecurityAuditLogEntry = {
       id: newId('audit'),
-      timestamp: new Date().toISOString(),
+      timestamp: utcNowIso(),
       user,
       action,
       details,
@@ -839,7 +840,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         barcode: realBarcode,
         resalePrice,
         id: newId('trade'),
-        createdAt: new Date().toISOString(),
+        createdAt: utcNowIso(),
       };
 
       const convertedProduct: Product = {
@@ -867,7 +868,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       const imeiRecord: IMEIRecord = {
         imei: canonicalImei,
         productId: convertedProduct.id,
-        receivedAt: new Date().toISOString(),
+        receivedAt: utcNowIso(),
         notes: `Rachat d'occasion: ${tradeInput.deviceModel} - Client: ${newTradeIn.customerName}`,
         version: 1,
       };
@@ -1246,7 +1247,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         resalePrice,
         creditToWallet: false,
         id: `trade-${staged.stagedId}`,
-        createdAt: new Date().toISOString(),
+        createdAt: utcNowIso(),
       };
 
       const convertedProduct: Product = {
@@ -1274,7 +1275,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       const imeiRecord: IMEIRecord = {
         imei: canonicalImei,
         productId: convertedProduct.id,
-        receivedAt: new Date().toISOString(),
+        receivedAt: utcNowIso(),
         notes: `Rachat d'occasion (échange): ${staged.deviceModel} - Client: ${newTradeIn.customerName}`,
         version: 1,
       };
@@ -1383,7 +1384,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         title: expenseInput.title.trim(),
         amount: validAmount,
          id: newId('EXP'),
-        createdAt: new Date().toISOString(),
+        createdAt: utcNowIso(),
       };
       const updated = [newExpense, ...storeExpenses];
       await (await getSqlite()).saveStoreExpense(newExpense);
@@ -1974,7 +1975,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `MOBI_POS_INDEXEDDB_BACKUP_${new Date().toISOString().slice(0, 10)}.json`;
+        a.download = `MOBI_POS_INDEXEDDB_BACKUP_${utcNowIso().slice(0, 10)}.json`;
         a.click();
         URL.revokeObjectURL(url);
       }

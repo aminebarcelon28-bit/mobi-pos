@@ -14,6 +14,7 @@
 import type { CheckoutLine, Envelope, PaymentInfo } from '../bindings/bindings.ts';
 import type { SqlExecutor } from './reducers.ts';
 import { recordShadowEvent, generateUlid } from '../sync/eventInterceptor.ts';
+import { utcNowIso } from '../utils/dateUtils';
 
 export interface CommandResult<T = unknown> {
   success: boolean;
@@ -75,7 +76,7 @@ export async function setCommandFlipped(
   commandName: string,
   enabled: boolean
 ): Promise<void> {
-  const nowIso = new Date().toISOString();
+  const nowIso = utcNowIso();
   await db.execute(
     `INSERT INTO sync_state (key, value, updated_at)
      VALUES (?, ?, ?)

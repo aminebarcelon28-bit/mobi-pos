@@ -12,6 +12,7 @@ import type { SqlExecutor } from '../domain/reducers.ts';
 import { reduceEnvelope } from '../domain/reducers.ts';
 import { getClock } from './eventInterceptor.ts';
 import { withWriteLock } from '../db/writeMutex.ts';
+import { utcNowIso } from '../utils/dateUtils';
 import { withBusyRetry } from '../db/busyRetry.ts';
 
 export interface EventSyncStatus {
@@ -132,7 +133,7 @@ export async function pullRemoteEventBatch(
 
   const clock = getClock();
   let maxHlc = lastPulledHlc;
-  const nowIso = new Date().toISOString();
+  const nowIso = utcNowIso();
 
   // Serialized with sales (then retried): row inserts + projection reduces
   // must not interleave with a checkout on the pooled connection.
@@ -223,7 +224,7 @@ export async function syncEventsOnce(
     const pulled = await pullRemoteEventBatch(db, cloudClient, deviceId);
 
     syncPhase = 'idle';
-    lastSyncTime = new Date().toISOString();
+    lastSyncTime = utcNowIso();
     lastError = null;
     retryCount = 0;
 

@@ -27,6 +27,7 @@ async function getCustomerRepo() {
   return customerRepository;
 }
   import { newId, newReceiptNumber, deterministicId } from '../../utils/ids';
+  import { utcNowIso } from '../../utils/dateUtils';
   import { sortedTransactions } from '../transactionOrder';
   import { saveCheckoutRecoveryIntent, clearCheckoutRecoveryIntent, cartFingerprintOfPayload, clearSiblingRecoveryIntents } from '../../db/checkoutRecovery';
   import { tryAcquireCheckoutFlight, releaseCheckoutFlight } from '../../db/checkoutFlight';
@@ -816,7 +817,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             receiptNumber,
             paymentMethod: 'Crédit Client',
             notes: `Vente à Crédit #${receiptNumber} - Transaction #${transactionId}`,
-            createdAt: new Date().toISOString(),
+            createdAt: utcNowIso(),
             // Attribution follows mid-shift handovers: currentCashier (set via
             // setShiftCashier) wins when present, cashierName is the fallback.
             recordedBy:
@@ -878,7 +879,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
               .reduce((acc: number, t: PaymentTender) => acc + t.amount, 0)
           : cashTendered,
         changeDue,
-        createdAt: new Date().toISOString(),
+        createdAt: utcNowIso(),
         cashierName: shiftOpenerName || 'Caisse Principale',
         debtAdded: creditDebtAmount > 0 ? creditDebtAmount : undefined,
         debtRemainingTotal: updatedCustomer?.currentDebt,
@@ -1671,7 +1672,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           receiptNumber: txn.receiptNumber,
           paymentMethod: 'Crédit Client',
           notes: `Annulation Vente à Crédit #${txn.receiptNumber} (${reason}) - Créance annulée`,
-          createdAt: new Date().toISOString(),
+          createdAt: utcNowIso(),
           recordedBy: cashierName || 'Manager',
         };
         try {
@@ -1717,7 +1718,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       ...txn,
       status: 'VOIDED',
       voidReason: reason,
-      voidedAt: new Date().toISOString(),
+      voidedAt: utcNowIso(),
       voidedBy: cashierName || 'Manager',
     };
 
@@ -1728,7 +1729,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
 
     const auditEntry: SecurityAuditLogEntry = {
       id: newId('AUDIT'),
-      timestamp: new Date().toISOString(),
+      timestamp: utcNowIso(),
       user: cashierName || 'Manager',
       action: 'Annulation Vente (Erreur de Caisse)',
       details: `Ticket #${txn.receiptNumber} (${txn.total} DA) annulé. Motif: ${reason}`,
@@ -2271,7 +2272,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       paymentMethod: refundMethod,
       cashTendered: cashOut,
       changeDue: 0,
-      createdAt: new Date().toISOString(),
+      createdAt: utcNowIso(),
     };
 
     const totalOrigItems = (originalTransaction.items || []).reduce((acc, i) => acc + i.quantity, 0);
@@ -2292,7 +2293,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
 
     const auditEntry: SecurityAuditLogEntry = {
       id: newId('AUDIT'),
-      timestamp: new Date().toISOString(),
+      timestamp: utcNowIso(),
       user: cashierName || 'Manager',
       action: 'Remboursement / Avoir Émis',
       details: `Avoir #${refundReceiptNumber} (net ${netRefund} DA, brut ${refundTotal} DA, espèces ${cashOut} DA en ${refundMethod}${

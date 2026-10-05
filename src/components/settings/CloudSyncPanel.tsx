@@ -30,6 +30,7 @@ import { testTursoConnection, type ConnectionTestResult } from '../../sync/turso
 import { MigrationManager, type MigrationSummary } from '../../sync/migrationManager';
 import { RestoreManager, type RestoreProgress } from '../../sync/restoreManager';
 import { QuotaManager, type StorageUsageReport } from '../../sync/quotaManager';
+import { utcNowIso } from '../../utils/dateUtils';
 import { syncManager } from '../../sync/SyncManager';
 import { getStableDeviceId } from '../../sync/device';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
@@ -312,7 +313,7 @@ export const CloudSyncPanel: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `mobi_pos_sync_logs_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `mobi_pos_sync_logs_${utcNowIso().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
     showToast('Journal d\'événements exporté avec succès.', 'success');

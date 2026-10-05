@@ -81,14 +81,14 @@ async function enrichAuditTelemetry(
     const { getDeviceId, getIpAddress } = await import('../../utils/deviceInfo');
     return {
       ...entry,
-      timestamp: needsTs ? new Date().toISOString() : entry.timestamp,
+      timestamp: needsTs ? utcNowIso() : entry.timestamp,
       deviceId: entry.deviceId || getDeviceId(),
       ipAddress: entry.ipAddress || (await getIpAddress().catch(() => 'Non détectée (hors-ligne)')),
     };
   } catch {
     return {
       ...entry,
-      timestamp: needsTs ? new Date().toISOString() : entry.timestamp,
+      timestamp: needsTs ? utcNowIso() : entry.timestamp,
     };
   }
 }
@@ -212,7 +212,7 @@ export const transactionAdapter = {
           // COMPLETED while Dexie is VOIDED (stale-echo split-brain).
           await db.execute(
             `UPDATE transactions SET status='VOIDED', updated_at=$2, version = version + 1, sync_status='pending' WHERE id=$1`,
-            [voidedTransaction.id, new Date().toISOString()]
+            [voidedTransaction.id, utcNowIso()]
           ).catch((updErr: unknown) => {
             if (isBusyError(updErr)) throw updErr;
             // Row may not exist yet in SQLite lane — non-fatal (enqueue later).

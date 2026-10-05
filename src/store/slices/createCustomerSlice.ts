@@ -12,6 +12,7 @@ import {
 } from '../../utils/loyaltyEngine';
 import { audioBus } from '../../utils/audioEvents';
 import { newId, newReceiptNumber } from '../../utils/ids';
+import { utcNowIso } from '../../utils/dateUtils';
 import { verifyManagerGate } from '../../utils/pinGate';
 
 // ══════════════════════════════════════════════════════════════
@@ -419,7 +420,7 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
                 ? ` (surplus ${overpayConvertedToCredit} DA en avoir, confirmé client)`
                 : ` (monnaie rendue ${changeDue} DA)`
               : ''),
-        createdAt: new Date().toISOString(),
+        createdAt: utcNowIso(),
         recordedBy: 'Caisse 1 (Yacine)',
       };
 

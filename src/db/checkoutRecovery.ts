@@ -21,6 +21,7 @@
 // loudly on the live path instead.
 
 import { db as dexieDb } from './database';
+import { utcNowIso } from '../utils/dateUtils';
 import type { CheckoutWriteInput } from './sqlPluginAdapter';
 import type { CheckoutRecoveryIntentRow } from './database';
 import type { IMEIRecord } from '../types/pos';
@@ -156,7 +157,7 @@ export async function saveCheckoutRecoveryIntent(
       payload: intent.payload as unknown as Record<string, unknown>,
       customerPayload: intent.customerPayload ?? null,
       debtEntry: intent.debtEntry ?? null,
-      createdAt: new Date().toISOString(),
+      createdAt: utcNowIso(),
       lastError: intent.lastError,
       attempts: intent.attempts ?? 0,
     };

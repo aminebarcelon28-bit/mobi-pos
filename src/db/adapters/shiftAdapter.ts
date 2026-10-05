@@ -9,7 +9,7 @@ import type {
 import { db as dexieDb } from '../database';
 import { fireSync, fireSyncDelete, isTauriEnv } from './base';
 import { newId } from '../../utils/ids';
-import { resolveTransactionStanding, transactionTimeMs } from '../../utils/dateUtils';
+import { resolveTransactionStanding, transactionTimeMs, utcNowIso } from '../../utils/dateUtils';
 import { verifyManagerGate } from '../../utils/pinGate';
 import { cashSalesFromTxns, cashRefundsFromTxns, closeRowStatus } from '../../utils/cashTerms';
 
@@ -86,7 +86,7 @@ export function isTxInCloseScope(
     const openedMs = transactionTimeMs(openedAt);
     if (!Number.isFinite(openedMs) || !(tMs >= openedMs)) return false;
   }
-  const upper = session.closedAt ?? nowIso ?? new Date().toISOString();
+  const upper = session.closedAt ?? nowIso ?? utcNowIso();
   const upperMs = transactionTimeMs(upper);
   if (!Number.isFinite(upperMs) || !(tMs < upperMs)) return false;
   return true;
@@ -367,7 +367,7 @@ export const shiftAdapter = {
     const opener = (openedBy || '').trim() || cashierName || 'Caissier Principal';
     const baseSession: CashSession = {
       id: newId('SHIFT'),
-      openedAt: new Date().toISOString(),
+      openedAt: utcNowIso(),
       closedAt: null,
       openingFloat: Math.round(openingFloat),
       expectedCash: null,
@@ -379,7 +379,7 @@ export const shiftAdapter = {
       discrepancy: 0,
       denominations: denominations || null,
       movements: [],
-      updatedAt: new Date().toISOString(),
+      updatedAt: utcNowIso(),
       deviceId: devId,
       terminalName: typeof window !== 'undefined' && (window.__TAURI_INTERNALS__ || window.__TAURI__) ? 'Caisse Comptoir' : 'Terminal Mobile',
     };
@@ -422,7 +422,7 @@ export const shiftAdapter = {
       amount: Math.round(amount),
       reason,
       cashierName: cashierName || 'Caissier',
-      createdAt: new Date().toISOString(),
+      createdAt: utcNowIso(),
     };
 
     await dexieDb.cashMovements.put(movement);
@@ -497,7 +497,7 @@ export const shiftAdapter = {
     // stamped rows belong to exactly one session, legacy rows keep the
     // createdAt window — now UPPER-BOUNDED by the close instant so post-close
     // sales can never leak into a booked Z.
-    const closeNowIso = new Date().toISOString();
+    const closeNowIso = utcNowIso();
     const inScope = (t: CloseWindowTxn) => {
       if (!isTxInCloseScope(t, openSession, closeNowIso)) return false;
       if (!openDeviceId) return true;
@@ -655,7 +655,7 @@ export const shiftAdapter = {
     const closedSession: CashSession = {
       ...openSession,
       status: 'CLOSED',
-      closedAt: new Date().toISOString(),
+      closedAt: utcNowIso(),
       expectedCash,
       actualCash,
       discrepancy,
@@ -664,7 +664,7 @@ export const shiftAdapter = {
       totalProfits,
       closingNote: closingNote || '',
       movements,
-      updatedAt: new Date().toISOString(),
+      updatedAt: utcNowIso(),
     };
 
     await dexieDb.cashSessions.put(closedSession);
@@ -692,7 +692,7 @@ export const shiftAdapter = {
       ...open,
       ...{ currentCashier: clean },
       cashierName: clean,
-      updatedAt: new Date().toISOString(),
+      updatedAt: utcNowIso(),
     };
     await dexieDb.cashSessions.put(updated);
     void fireSync('cash_session', updated.id, updated);

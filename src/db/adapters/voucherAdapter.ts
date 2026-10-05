@@ -2,6 +2,7 @@ import type { CreditVoucher } from '../../types/pos';
 import { db as dexieDb } from '../database';
 import { fireSync, isTauriEnv } from './base';
 import { newId, normalizeVoucherCode } from '../../utils/ids';
+import { utcNowIso } from '../../utils/dateUtils';
 import { getLocalDb } from '../sqlPluginAdapter';
 import { withBusyRetry } from '../busyRetry';
 
@@ -33,7 +34,7 @@ export const voucherAdapter = {
       const codeNum = Math.floor(100000 + Math.random() * 900000);
       const code = `AV-${codeNum}`;
       const id = newId('VOUCH');
-      const now = new Date().toISOString();
+      const now = utcNowIso();
 
       const voucher: CreditVoucher = {
         id,
@@ -197,7 +198,7 @@ export const voucherAdapter = {
     const deduct = Math.min(voucher.remainingAmount, Math.round(amountToDeduct));
     const newRemaining = voucher.remainingAmount - deduct;
     const newStatus: CreditVoucher['status'] = newRemaining <= 0 ? 'EXHAUSTED' : 'ACTIVE';
-    const now = new Date().toISOString();
+    const now = utcNowIso();
 
     const updated: CreditVoucher = {
       ...voucher,
@@ -338,7 +339,7 @@ export const voucherAdapter = {
       return { success: true, restored: 0, remaining: voucher.remainingAmount, alreadyApplied: true };
     }
     const target = Math.min(voucher.initialAmount, voucher.remainingAmount + restore);
-    const now = new Date().toISOString();
+    const now = utcNowIso();
     const updated: CreditVoucher = {
       ...voucher,
       remainingAmount: target,

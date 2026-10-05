@@ -11,6 +11,7 @@
 // 4. Idempotent: re-applying an envelope results in an identical projection state.
 
 import type { Envelope } from '../bindings/bindings.ts';
+import { utcNowIso } from '../utils/dateUtils';
 
 export interface SqlExecutor {
   execute(sql: string, params?: unknown[]): Promise<unknown>;
@@ -19,7 +20,7 @@ export interface SqlExecutor {
 
 export async function reduceEnvelope(db: SqlExecutor, envelope: Envelope): Promise<void> {
   const { event_id, hlc, device_id, event } = envelope;
-  const nowIso = new Date().toISOString();
+  const nowIso = utcNowIso();
 
   switch (event.type) {
     case 'product_created': {

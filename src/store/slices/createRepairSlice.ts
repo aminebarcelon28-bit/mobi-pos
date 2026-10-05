@@ -11,6 +11,7 @@ import {
 } from '../../types/pos';
 import { repairRemainingBalance } from '../../types/pos';
 import { newId, newReceiptNumber } from '../../utils/ids';
+import { utcNowIso } from '../../utils/dateUtils';
 import {
   buildSavBalanceProduct,
   linkSavCartItem,
@@ -161,7 +162,7 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
     if (!verdict.ok) {
       throw new Error(`Dossier SAV incomplet: ${verdict.reasons.join(' • ')}`);
     }
-    const createdAt = new Date().toISOString();
+    const createdAt = utcNowIso();
     const newOrder: RepairOrder = {
       ...orderInput,
       id: newId('rep'),
@@ -217,7 +218,7 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
   updateRepairOrderStatus: async (orderId, newStatus) => {
     const { repairOrders } = get();
     const target = repairOrders.find((r) => r.id === orderId);
-    const nowIso = new Date().toISOString();
+    const nowIso = utcNowIso();
     // Phase 4.6: append to the immutable status timeline on every transition.
     const withHistory = target
       ? { ...target, statusHistory: appendRepairStatusHistory(target, newStatus, get().activeCashier?.name || 'Caissier') }
@@ -329,7 +330,7 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
         partsCost: money.partsCost,
         depositAmount: money.depositAmount,
         totalCost: money.totalCost,
-        updatedAt: new Date().toISOString(),
+        updatedAt: utcNowIso(),
       };
     });
     const target = updated.find((r) => r.id === orderId);

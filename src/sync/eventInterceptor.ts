@@ -8,6 +8,7 @@
 import type { DomainEvent, Envelope } from '../bindings/bindings.ts';
 import { ClientHlcClock } from '../bindings/bindings.ts';
 import { reduceEnvelope, type SqlExecutor } from '../domain/reducers.ts';
+import { utcNowIso } from '../utils/dateUtils';
 
 // Crockford Base32 charset for ULID generation
 const ENCODING = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -104,7 +105,7 @@ export async function recordShadowEvent(
           envelope.schema_v,
           envelope.event.type,
           JSON.stringify(envelope.event.data),
-          new Date().toISOString(),
+          utcNowIso(),
         ]
       );
 

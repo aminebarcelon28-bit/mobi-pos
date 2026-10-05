@@ -4,6 +4,7 @@ import type { SecurityAuditLogEntry } from '../types/pos';
 import { computeAuditSignature, sha256Hex, signaturePreimage } from './auditIntel';
 import { isPinLengthValidForRole, verifyManagerStepUp } from './auditGate';
 import { auditAppend } from '../api/audit';
+import { utcNowIso } from './dateUtils';
 import {
   CANONICALIZATION_RULES,
   CURRENT_RULESET,
@@ -192,7 +193,7 @@ export function buildAuditManifest(
 }
 
 async function buildAuditChain(logs: ParsedLogEntry[], options: AuditExportOptions): Promise<AuditChain> {
-  const exportedAt = new Date().toISOString();
+  const exportedAt = utcNowIso();
   let prev = 'MOBIPOS-AUDIT-GENESIS';
   let algo = 'SHA-256';
   const hashes: string[] = [];
@@ -986,7 +987,7 @@ export async function triggerAuditExport(
   format: 'pdf' | 'xlsx',
   options: AuditExportOptions = {},
 ): Promise<{ report: AuditVerificationReport; verdict: AuditVerificationVerdict }> {
-  const now = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  const now = utcNowIso().split('T')[0].replace(/-/g, '');
   const time = new Date().toTimeString().split(' ')[0].replace(/:/g, '');
 
   // Build the manifest and chain once, up front, and use them for the artefact
@@ -1041,7 +1042,7 @@ export interface BuiltAuditExport {
 }
 
 function exportFilename(format: 'pdf' | 'xlsx'): string {
-  const now = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  const now = utcNowIso().split('T')[0].replace(/-/g, '');
   const time = new Date().toTimeString().split(' ')[0].replace(/:/g, '');
   return `journal-audit-securite-${now}-${time}.${format === 'pdf' ? 'pdf' : 'xlsx'}`;
 }

@@ -31,6 +31,7 @@ import { formatDZD, type CategoryType, type BrandName } from '../types/pos';
 import { commitStockBatch } from '../api/po';
 import { usePosStore } from '../store/usePosStore';
 import { newId } from '../utils/ids';
+import { utcNowIso } from '../utils/dateUtils';
 import { extractScanAttributes } from '../utils/intelligentScanEngine';
 import { printCoordinator } from '../utils/printCoordinator';
 import { parseTextToBoundingBoxes } from '../utils/documentScanner';
@@ -711,7 +712,7 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
   const handleExportJson = () => {
     const exportPayload = {
       supplier: supplierName,
-      exported_at: new Date().toISOString(),
+      exported_at: utcNowIso(),
       reported_tax: reportedTax,
       reported_freight: reportedFreight,
       target_grand_total: mathState.targetTotal,

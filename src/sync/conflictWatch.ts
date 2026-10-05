@@ -24,6 +24,7 @@ import {
   compareStamps,
   projectionFingerprint,
 } from './causalVersion';
+import { utcNowIso } from '../utils/dateUtils';
 
 /** Minimal driver surface — real plugin-sql db in prod, fakes in tests. */
 export interface ConflictDb {
@@ -432,7 +433,7 @@ export async function observeVersionConflict(
       ) >= 0
         ? 'incoming'
         : 'local';
-    const at = typeof obs.at === 'string' && obs.at ? obs.at : new Date().toISOString();
+    const at = typeof obs.at === 'string' && obs.at ? obs.at : utcNowIso();
     await db.execute(
       `INSERT INTO sync_conflicts (id, table_name, row_id, local_version, incoming_version,
         local_device, incoming_device, local_fp, incoming_fp, winner, detected_at, resolved, note)

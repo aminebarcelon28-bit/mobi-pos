@@ -243,8 +243,8 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
   if (!healAlreadyDone) {
     await db
       .execute(
-        "INSERT INTO app_settings (id, key, value_json, updated_at, version) VALUES ('schema.heal.v103_services', 'schema.heal.v103_services.done', 'true', $1, 1) ON CONFLICT(id) DO UPDATE SET value_json='true', updated_at=excluded.updated_at;",
-        [new Date().toISOString()]
+          "INSERT INTO app_settings (id, key, value_json, updated_at, version) VALUES ('schema.heal.v103_services', 'schema.heal.v103_services.done', 'true', $1, 1) ON CONFLICT(id) DO UPDATE SET value_json='true', updated_at=excluded.updated_at;",
+          [utcNowIso()]
       )
       .catch(async () => {
         // Cross-shape latch: DBs created by the Rust lane carry app_settings
@@ -255,7 +255,7 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
         await db
           .execute(
             "INSERT INTO app_settings (key, value_json, updated_at, version) VALUES ('schema.heal.v103_services.done', 'true', $1, 1) ON CONFLICT(key) DO UPDATE SET value_json='true', updated_at=excluded.updated_at;",
-            [new Date().toISOString()]
+            [utcNowIso()]
           )
           .catch((e: unknown) => console.warn('[heal] flag write skipped:', e));
       });
@@ -549,9 +549,11 @@ export async function checkAndRunScheduledDbMaintenance(db: Database): Promise<v
   }
 }
 
-export function utcNowIso(): string {
-  return new Date().toISOString();
-}
+// Single mint gate lives in utils/dateUtils (TIME-001); imported for local
+// use and re-exported so the dozens of existing import sites keep working
+// unchanged.
+import { utcNowIso } from '../utils/dateUtils';
+export { utcNowIso };
 
 export function newIdempotencyKey(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();

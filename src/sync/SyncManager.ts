@@ -365,7 +365,7 @@ class SyncManager {
   logEvent(type: SyncEventLog['type'], summary: string, level: SyncEventLog['level'] = 'info', details?: Record<string, unknown>) {
     const entry: SyncEventLog = {
       id: newId('log'),
-      timestamp: new Date().toISOString(),
+      timestamp: utcNowIso(),
       type,
       summary,
       details,

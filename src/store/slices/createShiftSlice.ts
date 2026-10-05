@@ -3,6 +3,7 @@ import type { PosState, ShiftSlice } from '../types';
 import type { CashDropEntry, CashSession } from '../../types/pos';
 import { audioBus } from '../../utils/audioEvents';
 import { newId } from '../../utils/ids';
+import { utcNowIso } from '../../utils/dateUtils';
 
 // P11.3: sqliteAdapter -> dexie + libsql graph; shift actions are all async and
 // never run during cold start, so the adapter resolves on first use.
@@ -34,7 +35,7 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
     const newDrop: CashDropEntry = {
       ...entry,
        id: newId('drop'),
-      timestamp: new Date().toISOString(),
+      timestamp: utcNowIso(),
     };
     const updated = [newDrop, ...cashDrops];
     try {
