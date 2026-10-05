@@ -12,6 +12,7 @@ import { getLocalDb, isDeviceLocalSettingKey, stripDeviceLocalSettingValue } fro
 import { newId } from '../../utils/ids';
 import { sortTransactionsNewestFirst } from '../../utils/dateUtils';
 import {
+  AUDIT_DEFAULT_LIMIT,
   AUDIT_LEGACY_LIMIT,
   auditSelectParams,
   buildAuditSelect,
@@ -190,7 +191,19 @@ export const operationsAdapter = {
         console.warn('[db:audit] SQLite query failed, falling back to Dexie:', err);
       }
     }
-    return await dexieDb.securityAuditLogs.toArray();
+    // DB-006: the fallback used to return the whole table unordered — a
+    // different (and unbounded) answer than the SQL lane's newest-300.
+    // Dexie has no range semantics (bounds stay SQL-only by design), but
+    // order + limit mirror the default lane through the timestamp index.
+    try {
+      return await dexieDb.securityAuditLogs
+        .orderBy('timestamp')
+        .reverse()
+        .limit(AUDIT_DEFAULT_LIMIT)
+        .toArray();
+    } catch {
+      return await dexieDb.securityAuditLogs.toArray();
+    }
   },
 
   /** Back-compat alias: the unbounded read used by the boot/hydrate paths. */

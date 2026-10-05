@@ -10,6 +10,7 @@
 import {
   compareStamps,
   fnv1a32Hex,
+  hashStringList,
   nextVersionForWrite,
   normalizeDeviceId,
   normalizeVersion,
@@ -155,6 +156,18 @@ function check(name: string, cond: boolean, extra = '') {
 {
   check('bump increments', nextVersionForWrite(6) === 7);
   check('bump coerces garbage to 1', nextVersionForWrite(undefined) === 1 && nextVersionForWrite('x') === 1);
+}
+
+// 10. Order-independent list hash (DB-005 scope keys).
+{
+  check('order independent', hashStringList(['b', 'a', 'c']) === hashStringList(['c', 'b', 'a']));
+  check('content sensitive', hashStringList(['a', 'b']) !== hashStringList(['a', 'c']));
+  check('separator-injected (no join collision)',
+    hashStringList(['ab', 'c']) !== hashStringList(['a', 'bc']));
+  check('empty/null/undefined → stable empty hash',
+    hashStringList([]) === hashStringList(null) && hashStringList(null) === hashStringList(undefined));
+  check('duplicates matter', hashStringList(['a', 'a']) !== hashStringList(['a']));
+  check('8-char hex', /^[0-9A-F]{8}$/.test(hashStringList(['x'])));
 }
 
 console.log(`\ncausal-version: ${pass} passed, ${fail} failed`);

@@ -456,7 +456,7 @@ export interface UISlice {
   validateIMEI: (imei: string) => { valid: boolean; reason?: string };
   searchByIMEI: (imei: string) => { product?: Product; po?: PurchaseOrder; transaction?: SaleTransaction } | null;
 
-  initDatabase: () => Promise<void>;
+  initDatabase: (opts?: { force?: boolean }) => Promise<void>;
   refreshAfterPull: () => Promise<void>;
   refreshPullTargets: (summary: PullTouchSummary) => Promise<void>;
   exportDatabase: () => void;

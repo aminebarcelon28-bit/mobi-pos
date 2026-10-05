@@ -81,6 +81,27 @@ export function fnv1a32Hex(input: string): string {
   return (h >>> 0).toString(16).padStart(8, '0').toUpperCase();
 }
 
+/**
+ * Order-independent fingerprint of a string list (DB-005): sorts a copy
+ * and folds incrementally, so a 100k-id scope never materializes a
+ * megabyte join string just to key a memo.Separator-injected so
+ * ['ab','c'] and ['a','bc'] hash differently.
+ */
+export function hashStringList(values: readonly string[] | null | undefined): string {
+  const sorted = [...(values ?? [])].sort();
+  let h = 0x811c9dc5;
+  const feed = (s: string): void => {
+    for (let i = 0; i < s.length; i += 1) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    h ^= 0;
+    h = Math.imul(h, 0x01000193);
+  };
+  for (const s of sorted) feed(String(s ?? ''));
+  return (h >>> 0).toString(16).padStart(8, '0').toUpperCase();
+}
+
 /** Content fingerprint for the tiebreak's third level. */
 export function payloadFingerprint(payload: unknown): string {
   return fnv1a32Hex(stableStringify(payload));

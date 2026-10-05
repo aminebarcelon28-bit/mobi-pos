@@ -1,4 +1,5 @@
 import type { PosState } from '../types';
+import { sortedTransactions } from '../transactionOrder';
 
 /**
  * Rebase in-memory `transactions` corrected by reconcileShadowBatches().
@@ -28,17 +29,22 @@ export async function rebaseReconciledSales(
     if (fresh.size === 0) return;
     const { transactions } = get();
     const known = new Set(transactions.map((t) => t.id));
+    // C3 (STATE-005): the merged array keeps the newest-first invariant —
+    // an unsorted spread silently drifted the inspector away from boot/pull
+    // order on every reconcile.
     set({
-      transactions: [
+      transactions: sortedTransactions([
         ...transactions.map((t) => {
           const f = fresh.get(t.id);
           return f ? { ...t, ...f } : t;
         }),
         ...[...fresh.values()].filter((r) => !known.has(r.id)),
-      ],
+      ]),
     });
-  } catch {
+  } catch (err) {
     // Best-effort mirror rebase — durable layers are already correct and the
-    // next boot/pull refresh converges regardless.
+    // next boot/pull refresh converges regardless. Loud (was silent): a
+    // broken rebase means the inspector shows pre-reconcile COGS.
+    console.warn('[rebaseReconciledSales] mirror rebase skipped:', err);
   }
 }

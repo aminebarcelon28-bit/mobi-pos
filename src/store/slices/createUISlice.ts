@@ -46,7 +46,7 @@ async function getBackupRepo() {
   return backupRepository;
 }
 import { hashPin, verifyPin, hashDeviceLocalPin } from '../../utils/security';
-import { sortedTransactions } from '../transactionOrder';
+import { rebaseStoreSelections, settleRefreshValue, sortedTransactions } from '../transactionOrder';
 import { STORAGE_KEYS } from '../../constants';
 import { usePosStore } from '../usePosStore';
 
@@ -1515,12 +1515,23 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     return { product, po, transaction };
   },
 
-  initDatabase: async () => {
+  initDatabase: async (opts?: { force?: boolean }) => {
       // P11.3: initDatabase is called from App boot, the mobile pairing wizard, and
       // importDatabase. Without sharing, concurrent callers each fire 16 parallel
       // loads and race on set() — the last writer wins, and the DB graph module
       // gets imported twice. Memoize the in-flight promise; all callers await it.
-      if (initDatabaseInFlight) return initDatabaseInFlight;
+      // C3 (STATE-004): a restore must NOT reuse a boot promise started before
+      // the restore — it would resolve with pre-restore data. force awaits the
+      // in-flight run (never two hydrates racing) and then starts a fresh one.
+      if (initDatabaseInFlight) {
+        if (!opts?.force) return initDatabaseInFlight;
+        try {
+          await initDatabaseInFlight;
+        } catch {
+          // Prior run failed — the fresh run below is the recovery.
+        }
+        initDatabaseInFlight = null;
+      }
       initDatabaseInFlight = (async () => {
         markBoot('init:start');
         try {
@@ -1533,10 +1544,28 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           // below boots that way), and every set() re-renders subscribers.
           // P3.3: loads within a wave are independent — one parallel wave
           // (latency = max, not sum).
-          const [products, activeShift] = await Promise.all([
-            sqlite.getAllProducts(),
-            sqlite.getActiveShift(),
-          ]);
+          // C3 (STATE-002): one bounded retry on the wave-1 pair. A transient
+          // SQLITE_BUSY at cold boot otherwise paints an empty till with no
+          // recovery until the next pull or restart.
+          let products: Awaited<ReturnType<typeof sqlite.getAllProducts>> | null = null;
+          let activeShift: Awaited<ReturnType<typeof sqlite.getActiveShift>> | null = null;
+          let wave1Error: unknown = null;
+          for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+              [products, activeShift] = await Promise.all([
+                sqlite.getAllProducts(),
+                sqlite.getActiveShift(),
+              ]);
+              wave1Error = null;
+              break;
+            } catch (err) {
+              wave1Error = err;
+              if (attempt < 2) await new Promise<void>((r) => setTimeout(r, 500));
+            }
+          }
+          // No open shift (null) is a valid state, never a failure — only a
+          // failed load or an empty product read fails the wave.
+          if (wave1Error || products === null) throw wave1Error ?? new Error('INIT_WAVE1_EMPTY');
           markBoot('init:wave1-data');
 
           if (typeof localStorage !== 'undefined') {
@@ -1766,6 +1795,10 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
 
   refreshAfterPull: async () => {
     try {
+      // C3 (STATE-001): per-lane settlement — one rejected table keeps its
+      // previous slice with a loud warning instead of aborting all 16 and
+      // freezing the UI on pre-pull data indefinitely.
+      const prev = get();
       const [
         products,
         customers,
@@ -1784,24 +1817,24 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         inventoryValuation,
         auditLogs,
       ] = await Promise.all([
-        (await getSqlite()).getAllProducts(),
-        (await getSqlite()).getAllCustomers(),
-        (await getSqlite()).getAllTransactions(),
-        (await getSqlite()).getAllRepairOrders(),
-        (await getSqlite()).getAllPurchaseOrders(),
-        (await getSqlite()).getAllTradeIns(),
-        (await getSqlite()).getAllIMEIRecords(),
-        (await getSqlite()).getCashDrops(false),
-        (await getSqlite()).getCashDrops(true),
-        (await getSqlite()).getAllBundles(),
-        (await getSqlite()).getAllCustomerDebts(),
-        (await getSqlite()).getAllStoreExpenses(),
-        (await getSqlite()).getActiveShift(),
-        (await getSqlite()).getAllShifts(),
-        (await getSqlite()).getInventoryValuation(),
-        (await getSqlite()).getAllAuditLogs(),
+        settleRefreshValue('products', getSqlite().then((s) => s.getAllProducts()), prev.products),
+        settleRefreshValue('customers', getSqlite().then((s) => s.getAllCustomers()), prev.customers),
+        settleRefreshValue('transactions', getSqlite().then((s) => s.getAllTransactions()), prev.transactions),
+        settleRefreshValue('repairOrders', getSqlite().then((s) => s.getAllRepairOrders()), prev.repairOrders),
+        settleRefreshValue('purchaseOrders', getSqlite().then((s) => s.getAllPurchaseOrders()), prev.purchaseOrders),
+        settleRefreshValue('tradeIns', getSqlite().then((s) => s.getAllTradeIns()), prev.tradeIns),
+        settleRefreshValue('imeiRecords', getSqlite().then((s) => s.getAllIMEIRecords()), prev.imeiRecords),
+        settleRefreshValue('cashDrops', getSqlite().then((s) => s.getCashDrops(false)), prev.cashDrops),
+        settleRefreshValue('payouts', getSqlite().then((s) => s.getCashDrops(true)), prev.payouts),
+        settleRefreshValue('bundles', getSqlite().then((s) => s.getAllBundles()), prev.bundles),
+        settleRefreshValue('customerDebts', getSqlite().then((s) => s.getAllCustomerDebts()), prev.customerDebts),
+        settleRefreshValue('storeExpenses', getSqlite().then((s) => s.getAllStoreExpenses()), prev.storeExpenses),
+        settleRefreshValue('activeShift', getSqlite().then((s) => s.getActiveShift()), prev.activeShift),
+        settleRefreshValue('allShifts', getSqlite().then((s) => s.getAllShifts()), prev.allShifts),
+        settleRefreshValue('inventoryValuation', getSqlite().then((s) => s.getInventoryValuation()), prev.inventoryValuation),
+        settleRefreshValue('auditLogs', getSqlite().then((s) => s.getAllAuditLogs()), prev.securityAuditLog),
       ]);
-      const receiptSettings = await loadReceiptSettings();
+      const receiptSettings = await loadReceiptSettings().catch(() => get().receiptSettings);
       // Team precision: cashier roster + manager PIN arrive via the settings
       // lane (a hire on desktop must unlock the phone). Reload them with every
       // pull refresh so peer edits converge without a restart.
@@ -1811,10 +1844,15 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       const activeCashier = roster.find((u) => u.id === get().activeCashier?.id) || roster[0] || get().activeCashier;
       // Precision: a debt paid (or credit granted) on a peer device refreshes
       // the customer list below, but the cart's SELECTED customer object would
-      // keep showing the stale debt/credit until reselected. Rebase it.
-      const currentCustomer = get().currentCustomer
-        ? customers.find((c) => c.id === get().currentCustomer?.id) ?? get().currentCustomer
-        : get().currentCustomer;
+      // keep showing the stale debt/credit until reselected. Rebase it — and
+      // drop selections whose rows vanished (peer delete) instead of acting
+      // on ghosts (C3: STATE-003). Empty fresh lists mean fetch-over-fallback,
+      // so selections are kept untouched.
+      const rebasedSelections = rebaseStoreSelections(customers, transactions, {
+        currentCustomer: get().currentCustomer,
+        selectedTransactionForRefund: get().selectedTransactionForRefund,
+      });
+      const currentCustomer = rebasedSelections.currentCustomer;
       set({
         products,
         customers,
@@ -1836,6 +1874,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         securityAuditLog: auditLogs && auditLogs.length > 0 ? auditLogs : get().securityAuditLog,
         receiptSettings,
         currentCustomer,
+        selectedTransactionForRefund: rebasedSelections.selectedTransactionForRefund,
         cashierUsers: roster,
         activeCashier,
         managerPin: typeof pulledManagerPin === 'string' ? pulledManagerPin : get().managerPin,
@@ -1884,7 +1923,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         });
         return;
       }
-      const next: { products?: Product[]; transactions?: Awaited<ReturnType<SqliteAdapter['getAllTransactions']>>; customers?: Awaited<ReturnType<SqliteAdapter['getAllCustomers']>>; currentCustomer?: Awaited<ReturnType<SqliteAdapter['getAllCustomers']>>[number] } = {};
+      const next: { products?: Product[]; transactions?: Awaited<ReturnType<SqliteAdapter['getAllTransactions']>>; customers?: Awaited<ReturnType<SqliteAdapter['getAllCustomers']>>; currentCustomer?: Awaited<ReturnType<SqliteAdapter['getAllCustomers']>>[number] | null; selectedTransactionForRefund?: Awaited<ReturnType<SqliteAdapter['getAllTransactions']>>[number] | null } = {};
       if (wantsProducts) {
         if (productIds.length > 0 && productIds.length <= 200) {
           const subset = await (await getSqlite()).getProductsByIds(productIds);
@@ -1909,11 +1948,12 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         ]);
         next.transactions = sortedTransactions(transactions);
         next.customers = customers;
-        const selected = get().currentCustomer;
-        if (selected) {
-          const rebased = customers.find((c) => c.id === selected.id);
-          if (rebased) next.currentCustomer = rebased;
-        }
+        const rebased = rebaseStoreSelections(customers, transactions, {
+          currentCustomer: get().currentCustomer,
+          selectedTransactionForRefund: get().selectedTransactionForRefund,
+        });
+        next.currentCustomer = rebased.currentCustomer;
+        next.selectedTransactionForRefund = rebased.selectedTransactionForRefund;
       }
       if (Object.keys(next).length > 0) set(next as Partial<PosState>);
     } catch (e) {
@@ -1965,7 +2005,9 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         // Audit lane trouble must not mask the restore outcome.
       }
       if (importResult.success) {
-        await get().initDatabase();
+        // Force past the in-flight memo (STATE-004): a boot hydrate started
+        // before the restore would otherwise resolve with pre-restore data.
+        await get().initDatabase({ force: true });
       }
       return importResult;
     } catch (error) {

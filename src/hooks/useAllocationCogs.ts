@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { hashStringList } from '../sync/causalVersion';
 
 /**
  * Frozen-ledger COGS feed for report surfaces (STRICT FIFO LEDGER, v104).
@@ -21,9 +22,12 @@ export function useAllocationCogs(saleIds?: string[]): {
   const [map, setMap] = useState<Record<string, number>>({});
   const [loaded, setLoaded] = useState(false);
 
-  // Scope key: re-query when the sale set identity changes. Cap the key
-  // length so a 10k-ticket history cannot blow the dep string.
-  const scopeKey = saleIds ? [...saleIds].sort().slice(0, 2000).join(',') : '';
+  // Scope key: re-query when the sale set identity changes. The old code
+  // truncated to the first 2000 ids, so edits beyond the cut never
+  // invalidated the memo (stale COGS on large histories — the query itself
+  // was always complete). A fixed-width order-independent hash covers the
+  // whole set without materializing a megabyte dep string.
+  const scopeKey = saleIds ? `${saleIds.length}:${hashStringList(saleIds)}` : '';
 
   useEffect(() => {
     let cancelled = false;
