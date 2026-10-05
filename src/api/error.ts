@@ -8,6 +8,7 @@ export type ApiErrorCode =
   | 'PERMISSION_DENIED'
   | 'PATH_TRAVERSAL'
   | 'HARDWARE_ERROR'
+  | 'IPC_TIMEOUT'
   | 'INTERNAL_ERROR';
 
 export class ApiError extends Error {
@@ -59,6 +60,9 @@ export function toApiError(error: unknown, fallbackCode: ApiErrorCode = 'INTERNA
   }
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
+    if (msg.includes('timed out after')) {
+      return new ApiError('IPC_TIMEOUT', 'Délai de communication dépassé, veuillez réessayer.', error);
+    }
     if (msg.includes('busy') || msg.includes('locked')) {
       return new ApiError('DATABASE_BUSY', 'La base de données est occupée, veuillez réessayer.', error);
     }
