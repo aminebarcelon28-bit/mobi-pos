@@ -43,6 +43,8 @@ export interface RestoreSummary {
   /** Native pre-restore backup path (taken before any merge), when available. */
   backupPath?: string;
   error?: string;
+  /** Per-table source row counts (SYNC-012 fingerprint — visible merges). */
+  sourceCounts?: Record<string, number>;
 }
 
 /**
@@ -50,10 +52,17 @@ export interface RestoreSummary {
  * the sync schema (products + transactions at least). A missing schema means
  * wrong credentials / an empty foreign DB — merging from it would advance
  * cursors past nothing and poison later pulls, so refuse loudly (C6).
+ *
+ * SYNC-012: also returns per-table source counts. No merchant identity
+ * exists on either end (no tenant column local or remote), so a foreign
+ * NON-empty DB cannot be distinguished cryptographically — that is
+ * gateway/enrollment work. What this buys: an empty source merged into a
+ * non-empty device says so in the summary instead of reporting a bare
+ * "0 restored", and every merge carries its source fingerprint for audit.
  */
 async function validateCloudSource(
   remote: { execute: (q: string | { sql: string; args?: InArgs }) => Promise<{ rows: Array<Record<string, unknown>> }> },
-): Promise<void> {
+): Promise<{ counts: Record<string, number>; empty: boolean }> {
   const res = await remote.execute("SELECT name FROM sqlite_master WHERE type='table'");
   const names = new Set(res.rows.map((r) => String((r as Record<string, unknown>).name ?? '')));
   const missing = ['products', 'transactions'].filter((t) => !names.has(t));
@@ -63,6 +72,20 @@ async function validateCloudSource(
       `Vérifiez l'URL et le jeton — restauration refusée avant toute modification locale.`
     );
   }
+  const { isSourceEmpty } = await import('./restoreGuards');
+  const counts: Record<string, number> = {};
+  for (const table of ['transactions', 'products', 'customers', 'customer_debts', 'credit_vouchers', 'stock_batches']) {
+    try {
+      const rows = await remote.execute({
+        sql: `SELECT COUNT(*) as n FROM ${table}`,
+        args: [],
+      });
+      counts[table] = Number((rows.rows[0] as Record<string, unknown> | undefined)?.n ?? 0) || 0;
+    } catch {
+      counts[table] = 0;
+    }
+  }
+  return { counts, empty: isSourceEmpty(counts) };
 }
 
 type LocalDb = {
@@ -134,15 +157,47 @@ export class RestoreManager {
    * Checks if local database has existing user data.
    */
   static async hasExistingLocalData(): Promise<boolean> {
+    // SYNC-012: emptiness spans ALL user-data tables — a customers/debts/
+    // vouchers/batches-only device was deemed "empty" and took the wrong
+    // branch. Tables share one COUNT shape so the set stays extensible.
+    const { hasLocalRestoreData } = await import('./restoreGuards');
+    const tables = [
+      'transactions',
+      'products',
+      'customers',
+      'customer_debts',
+      'credit_vouchers',
+      'stock_batches',
+    ];
     try {
       const local = await getLocalDb();
-      const txnCount = ((await local.select('SELECT COUNT(*) as n FROM transactions').catch(() => [{ n: 0 }])) as Array<{ n: number }>)[0]?.n ?? 0;
-      const prodCount = ((await local.select('SELECT COUNT(*) as n FROM products').catch(() => [{ n: 0 }])) as Array<{ n: number }>)[0]?.n ?? 0;
-      return txnCount > 0 || prodCount > 0;
+      const counts: Record<string, unknown> = {};
+      for (const table of tables) {
+        try {
+          const rows = (await local
+            .select(`SELECT COUNT(*) as n FROM ${table}`)
+            .catch(() => [{ n: 0 }])) as Array<{ n: number }>;
+          counts[table] = rows?.[0]?.n ?? 0;
+        } catch {
+          counts[table] = 0;
+        }
+      }
+      return hasLocalRestoreData(counts);
     } catch {
-      const dTxns = await dexieDb.transactions.count().catch(() => 0);
-      const dProds = await dexieDb.products.count().catch(() => 0);
-      return dTxns > 0 || dProds > 0;
+      const dexieTables = [
+        dexieDb.transactions.count().catch(() => 0),
+        dexieDb.products.count().catch(() => 0),
+        dexieDb.customers.count().catch(() => 0),
+        dexieDb.customerDebts.count().catch(() => 0),
+        dexieDb.creditVouchers.count().catch(() => 0),
+        dexieDb.stockBatches.count().catch(() => 0),
+      ];
+      const settled = await Promise.all(dexieTables);
+      const counts: Record<string, unknown> = {};
+      tables.forEach((t, i) => {
+        counts[t] = settled[i] ?? 0;
+      });
+      return hasLocalRestoreData(counts);
     }
   }
 
@@ -184,7 +239,7 @@ export class RestoreManager {
     }
 
     const remote = await getTursoClient();
-    await validateCloudSource(remote);
+    const source = await validateCloudSource(remote);
     const local = await getLocalDb();
     let totalRestored = 0;
     let tablesVerified = 0;
@@ -433,7 +488,15 @@ export class RestoreManager {
     }
 
     const skippedNote = skippedRows > 0 ? ` (${skippedRows} ligne(s) sans identifiant ignorée(s))` : '';
-    const userSummary = `Restauration terminée : ${totalRestored} enregistrements récupérés et vérifiés depuis le cloud Turso${skippedNote}.`;
+    // SYNC-012: an empty source merged into a non-empty device is a no-op
+    // that must SAY SO (wrong-DB suspicion starts with "0 restored" and no
+    // explanation). A foreign non-empty source remains indistinguishable
+    // without a merchant identity protocol — gateway-class work, documented.
+    const emptyNote =
+      source.empty && hasLocal
+        ? ' Source cloud vide — aucune donnée distante à fusionner (vérifiez l’URL et le jeton si ce n’est pas attendu).'
+        : '';
+    const userSummary = `Restauration terminée : ${totalRestored} enregistrements récupérés et vérifiés depuis le cloud Turso${skippedNote}.${emptyNote}`;
     return {
       success: true,
       totalRestored,
@@ -441,6 +504,7 @@ export class RestoreManager {
       userSummary,
       isMerged: hasLocal,
       backupPath,
+      sourceCounts: source.counts,
     };
   }
 }
