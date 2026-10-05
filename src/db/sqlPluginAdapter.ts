@@ -109,7 +109,7 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
       batch_id TEXT NOT NULL,
       qty_consumed INTEGER NOT NULL CHECK (qty_consumed > 0),
       unit_cost_at_sale REAL NOT NULL CHECK (unit_cost_at_sale >= 0),
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       product_id TEXT,
       sale_item_id TEXT,
       device_id TEXT NOT NULL DEFAULT 'local',

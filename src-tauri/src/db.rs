@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS vendor_aliases (
     supplier_name TEXT NOT NULL,
     raw_vendor_name TEXT NOT NULL,
     product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL DEFAULT (datetime('now', 'utc')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     UNIQUE(supplier_name, raw_vendor_name)
 );
 CREATE INDEX IF NOT EXISTS idx_vendor_alias_lookup
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS scan_audit_log (
     grand_total REAL NOT NULL,
     delta REAL NOT NULL,
     is_balanced INTEGER NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now', 'utc'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_scan_audit_log_trace
 ON scan_audit_log(trace_id);
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS vendor_aliases (
     supplier_name TEXT NOT NULL,
     raw_vendor_name TEXT NOT NULL,
     product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-    created_at TEXT NOT NULL DEFAULT (datetime('now', 'utc')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     UNIQUE(supplier_name, raw_vendor_name)
 );
 CREATE INDEX IF NOT EXISTS idx_vendor_alias_lookup
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS scan_audit_log (
     grand_total REAL NOT NULL,
     delta REAL NOT NULL,
     is_balanced INTEGER NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now', 'utc'))
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_scan_audit_log_trace
 ON scan_audit_log(trace_id);
@@ -185,6 +185,57 @@ mod tests {
                 "unexpected error for {bad_dim}-dim insert: {msg}"
             );
         }
+    }
+
+    /// TIME-002: all SQLite timestamp defaults mint ISO8601 UTC
+    /// (`strftime('%Y-%m-%dT%H:%M:%fZ','now')`), never `datetime('now','utc')`
+    /// (`YYYY-MM-DD HH:MM:SS`, space-separated, second precision) or bare
+    /// `CURRENT_TIMESTAMP`. Mixed formats break lexicographic cross-table
+    /// ordering and lose causal tiebreak precision.
+    /// NOTE (bounded residual): the live v104 `sale_batch_allocations` body
+    /// in lib.rs is sqlx-checksum-frozen and keeps `CURRENT_TIMESTAMP` on
+    /// already-migrated DBs; TS writers stamp `created_at` explicitly so the
+    /// default never fires there. This test pins the forward-mint points.
+    #[test]
+    fn test_timestamp_defaults_unified_iso8601() {
+        for sql in [PO_RECON_MIGRATION_V106, PO_RECON_PLUGIN_MIGRATION_V106] {
+            let lower = sql.to_lowercase();
+            assert!(
+                !lower.contains("datetime('now'"),
+                "legacy datetime('now') default still present"
+            );
+            assert!(
+                !lower.contains("current_timestamp"),
+                "legacy CURRENT_TIMESTAMP default still present"
+            );
+            assert!(
+                sql.contains("strftime('%Y-%m-%dT%H:%M:%fZ','now')"),
+                "ISO8601 strftime default missing"
+            );
+        }
+        // End-to-end: a default-minted row parses as ISO8601 T/Z with millis.
+        let conn = open_test_db();
+        conn.execute(
+            "INSERT INTO products(id, sku, barcode, title) VALUES ('p1','SKU1','BC1','Widget')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO vendor_aliases(supplier_name, raw_vendor_name, product_id) VALUES ('ACME','widgit','p1')",
+            [],
+        )
+        .unwrap();
+        let minted: String = conn
+            .query_row(
+                "SELECT created_at FROM vendor_aliases WHERE supplier_name='ACME'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            minted.len() == 24 && minted.contains('T') && minted.ends_with('Z'),
+            "default-minted created_at is not ISO8601 millis UTC: {minted}"
+        );
     }
 
     #[test]
