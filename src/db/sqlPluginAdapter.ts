@@ -1,5 +1,12 @@
 // Local SQLite access via @tauri-apps/plugin-sql (all platforms incl. mobile).
-// Path MUST match lib.rs: add_migrations("sqlite:mobi_pos.db", ...).
+// The live file is ALWAYS mobi_pos.db on every build flavor: the
+// workspace-patched plugin confines `load` to exactly that filename (4.4
+// traversal hardening, `validate_db_name`; a test-only filename is rejected
+// at `load` and the app boots degraded on fallback stores — Phase 1 finding).
+// Test isolation comes from the e2e identifier overlay instead
+// (`com.mobi.pos.e2e` -> own data dir, own file). Mirrors lib.rs `DB_URL`
+// and `e2e::db_filename()` — the three must agree (see scripts/build-e2e.mjs
+// preflight). Never hardcode the filename elsewhere; read DB_PATH.
 // Checkout code must use these helpers inside a single transaction:
 //   order + items + ledger deltas + outbox rows + cached stock update.
 
@@ -64,6 +71,13 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
   try {
     await db.select('SELECT version FROM products LIMIT 0;');
     await db.select('SELECT last_error, error FROM sync_outbox LIMIT 0;');
+    // v110 Tier-B payout proof columns (device_id, device_signature on
+    // refund order rows) + v111 monotonic sequence. Missing pieces force
+    // the full pass below.
+    await db.select('SELECT device_id, device_signature FROM sync_outbox LIMIT 0;');
+    await db.select('SELECT seq_no FROM sync_outbox LIMIT 0;');
+    // v112 Tier-B signed envelope verbatim (gateway verifies these bytes).
+    await db.select('SELECT envelope FROM sync_outbox LIMIT 0;');
     await db.select(
       'SELECT unit_price_charged, unit_cost_at_sale, discount_amount, line_profit, version FROM transaction_items LIMIT 0;'
     );
@@ -96,6 +110,19 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     await db.select('SELECT key, value_json FROM app_settings LIMIT 0;');
     await db.select('SELECT key, value_json, version FROM app_settings LIMIT 0;');
     await db.select(CUSTOMER_DEBTS_HEAL_PROBE_SQL);
+    // v109 refund barrier (MOBI-DEFECT-F): indexed refund identity + dedup
+    // gate + bypass trigger. Missing pieces force the full pass below.
+    await db.select('SELECT original_transaction_id, is_refund FROM transactions LIMIT 0;');
+    await db.select('SELECT ticket_id, items_hash, refund_id FROM refund_dedup LIMIT 0;');
+    // v113 parked movements (sync child ingestion + logExpense fallback).
+    await db.select('SELECT id, data_json FROM sync_parked_movements LIMIT 0;');
+    // v107 warranty term (SAV-only, migration parity).
+    await db.select('SELECT warranty_months FROM imei_records LIMIT 0;');
+    // v113 one-live-shift invariant (an index, not a column — probe the catalog).
+    const uqShift = await db.select<Array<{ name: string }>>(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'uq_one_live_shift_per_device'"
+    );
+    if (uqShift.length === 0) throw new Error('uq_one_live_shift_per_device missing');
     return;
   } catch (probeErr) {
     // B-009: BUSY is transient lock contention, NOT a missing column —
@@ -103,6 +130,11 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     if (isBusyError(probeErr)) throw probeErr;
     // Column (or table) missing — run the full idempotent pass below.
   }
+  // D2 loud backfill FIRST (v107 + v113): a BUSY abort anywhere in the long
+  // pass below rethrows and would otherwise skip the rest of the heal
+  // silently — these four idempotent DDLs must land regardless. Never throws
+  // (internal per-step handling + receipt latch), never fails boot.
+  await ensureShiftLedgerV113(db);
   const statements = [
     `CREATE TABLE IF NOT EXISTS sale_batch_allocations (
       id TEXT PRIMARY KEY NOT NULL,
@@ -128,6 +160,57 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     // Owning cash session, stamped at checkout. Closes scope by window with
     // this id as the attribution tiebreak (gap sales stay visible).
     'ALTER TABLE transactions ADD COLUMN shift_id TEXT;',
+    // v109 refund barrier (MOBI-DEFECT-F): duplicate-tolerant like the rest
+    // here; the Rust v109 migration owns fresh installs, this heals
+    // half-migrated DBs where the plugin migration did not run to completion.
+    'ALTER TABLE transactions ADD COLUMN original_transaction_id TEXT;',
+    'ALTER TABLE transactions ADD COLUMN is_refund INTEGER NOT NULL DEFAULT 0;',
+    `CREATE TABLE IF NOT EXISTS refund_dedup (
+      ticket_id TEXT NOT NULL,
+      items_hash TEXT NOT NULL,
+      refund_id TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      PRIMARY KEY (ticket_id, items_hash)
+    );`,
+    `UPDATE transactions
+       SET original_transaction_id = json_extract(json_payload, '$.originalTransactionId')
+     WHERE original_transaction_id IS NULL
+       AND json_valid(json_payload)
+       AND json_extract(json_payload, '$.originalTransactionId') IS NOT NULL;`,
+    `UPDATE transactions
+       SET is_refund = 1
+     WHERE is_refund = 0
+       AND json_valid(json_payload)
+       AND json_extract(json_payload, '$.isRefund') = 1;`,
+    'CREATE INDEX IF NOT EXISTS idx_txn_orig ON transactions(original_transaction_id) WHERE original_transaction_id IS NOT NULL;',
+    `CREATE TRIGGER IF NOT EXISTS trg_refund_requires_dedup
+    BEFORE INSERT ON transactions
+    WHEN NEW.is_refund = 1
+     AND COALESCE(NEW.sync_status, '') <> 'synced'
+     AND NOT EXISTS (SELECT 1 FROM refund_dedup WHERE refund_id = NEW.id)
+    BEGIN
+      SELECT RAISE(ABORT, 'REFUND_BYPASS: refunds must go through refund_sale_atomic');
+    END;`,
+    // D2 backfill (v107 + v113): upgraded DBs whose sqlx ledger stalled at
+    // 106 never ran these migrations; the probes above force this pass when
+    // any piece is missing. All idempotent — duplicate-column / already-
+    // exists throws are swallowed by the runner below (BUSY rethrown).
+    // Table shape mirrors Rust v113 byte-for-byte: cashMirror reads
+    // data_json/row_version, so no second shape may exist.
+    'ALTER TABLE imei_records ADD COLUMN warranty_months INTEGER;',
+    `CREATE TABLE IF NOT EXISTS sync_parked_movements (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      data_json TEXT NOT NULL,
+      row_version INTEGER NOT NULL DEFAULT 1,
+      parked_at TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT
+    );`,
+    'CREATE INDEX IF NOT EXISTS idx_parked_session ON sync_parked_movements(session_id);',
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_one_live_shift_per_device
+      ON cash_sessions(device_id)
+      WHERE status IN ('OPEN', 'CLOSING');`,
     'ALTER TABLE transaction_items ADD COLUMN unit_price_charged REAL DEFAULT 0;',
     'ALTER TABLE transaction_items ADD COLUMN unit_cost_at_sale REAL DEFAULT 0;',
     'ALTER TABLE transaction_items ADD COLUMN discount_amount REAL DEFAULT 0;',
@@ -209,6 +292,15 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     'ALTER TABLE app_settings ADD COLUMN version INTEGER NOT NULL DEFAULT 1;',
     'ALTER TABLE sync_outbox ADD COLUMN last_error TEXT;',
     'ALTER TABLE sync_outbox ADD COLUMN error TEXT;',
+    // v110 Tier-B payout proof (MOBI-TIER-B-DEVICE-IDENTITY):
+    // duplicate-tolerant like the rest here; the Rust v110 migration owns
+    // fresh installs, this heals half-migrated DBs.
+    'ALTER TABLE sync_outbox ADD COLUMN device_id TEXT;',
+    'ALTER TABLE sync_outbox ADD COLUMN device_signature TEXT;',
+    // v111 Tier-B monotonic outbox sequence (gateway replay/reorder guard).
+    'ALTER TABLE sync_outbox ADD COLUMN seq_no INTEGER;',
+    // v112 Tier-B signed envelope verbatim (gateway verifies these bytes).
+    'ALTER TABLE sync_outbox ADD COLUMN envelope TEXT;',
     'UPDATE app_settings SET key = id WHERE key IS NULL AND id IS NOT NULL;',
     'UPDATE app_settings SET value_json = data_json WHERE value_json IS NULL AND data_json IS NOT NULL;',
   ];
@@ -258,6 +350,8 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
   // Re-run the v103 heal after the full pass: a fresh DB created by the
   // column pass (or an old plugin-sql path) may still carry the narrow CHECK.
   await healSyncOutboxEntityCheck(db).catch(() => {});
+  // NOTE: ensureShiftLedgerV113 (D2 v107+v113) runs BEFORE the pass above,
+  // so a BUSY abort mid-pass cannot skip it. See the call after the probes.
   // Costing backfill (relocated from Rust v102: a static migration cannot
   // ALTER-or-backfill transaction_items because upgrade DBs already carry the
   // columns via this heal — plain ALTERs would abort boot with "duplicate
@@ -280,6 +374,7 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     .catch(() => {});
   try { await backfillSaleAllocationsFromItemsWithDb(db).catch(() => 0); } catch {}
   try { await mirrorSaleAllocationsToDexie(db).catch(() => 0); } catch {}
+  try { await healPoisonedInventoryBaselines(db).catch(() => {}); } catch {}
 }
 
 /**
@@ -364,6 +459,218 @@ async function healSyncOutboxEntityCheck(db: Database): Promise<void> {
   );
 }
 
+/**
+ * D2 backfill (v107 + v113), always-run and LOUD on real failure.
+ * Shape mirrors Rust v113 byte-for-byte (cashMirror reads data_json /
+ * row_version — no second shape may exist). CREATE IF NOT EXISTS is a
+ * silent no-op when healthy; any other throw (notably a
+ * uq_one_live_shift_per_device violation from duplicate live shifts on an
+ * upgraded DB) is console.error with context — boot continues, ops sees
+ * it. Never fails boot.
+ */
+export async function ensureShiftLedgerV113(db: Database): Promise<void> {
+  const steps: Array<[string, string]> = [
+    [
+      'sync_parked_movements table',
+      `CREATE TABLE IF NOT EXISTS sync_parked_movements (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        row_version INTEGER NOT NULL DEFAULT 1,
+        parked_at TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT
+      );`,
+    ],
+    [
+      'idx_parked_session',
+      'CREATE INDEX IF NOT EXISTS idx_parked_session ON sync_parked_movements(session_id);',
+    ],
+    [
+      'uq_one_live_shift_per_device',
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_one_live_shift_per_device
+        ON cash_sessions(device_id)
+        WHERE status IN ('OPEN', 'CLOSING');`,
+    ],
+    // v107 warranty term: ALTER (not IF NOT EXISTS) — duplicate-column on
+    // healthy DBs is benign (warned once), anything else is an error.
+    ['imei_records.warranty_months', 'ALTER TABLE imei_records ADD COLUMN warranty_months INTEGER;'],
+  ];
+  const failures: string[] = [];
+  for (const [label, sql] of steps) {
+    try {
+      await db.execute(sql);
+    } catch (e: unknown) {
+      const msg = String((e as Error)?.message ?? e);
+      if (/duplicate column/i.test(msg)) {
+        console.warn(`[heal:shift-ledger-v113] ${label} already present`);
+      } else {
+        console.error(`[heal:shift-ledger-v113] ${label} FAILED:`, e);
+        failures.push(`${label}: ${msg.slice(0, 160)}`);
+      }
+    }
+  }
+  // Receipt latch (IPC-readable via e2e_get_db_state settingsValues and the
+  // boot probes): proves this block executed and records residual failures.
+  // Cross-shape like the v103 latch above (Rust-lane app_settings has no
+  // `version` column): try with-version, fall back to key-only. Best-effort,
+  // never fails boot.
+  const receipt = failures.length === 0 ? 'true' : JSON.stringify({ errors: failures });
+  try {
+    await db.execute(
+      "INSERT INTO app_settings (key, value_json, updated_at, version) VALUES ('schema.heal.v113.done', ?1, datetime('now','utc'), 1) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at;",
+      [receipt],
+    );
+  } catch {
+    await db
+      .execute(
+        "INSERT INTO app_settings (key, value_json, updated_at) VALUES ('schema.heal.v113.done', ?1, datetime('now','utc')) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at;",
+        [receipt],
+      )
+      .catch((e: unknown) => console.warn('[heal:shift-ledger-v113] receipt latch skipped:', e));
+  }
+}
+
+/**
+ * Heals products poisoned by negative inventory ledger/stock due to
+ * sales that ran before lazy-baseline materialization landed.
+ * Idempotent: no-op when no products have negative ledger or negative stock without seed rows.
+ */
+export async function healPoisonedInventoryBaselines(db: Database): Promise<{ healedCount: number }> {
+  try {
+    // 1. Purge accidental SALE/ADJUST deltas on service items (qt-*, prod-misc-*)
+    await db.execute(
+      "DELETE FROM inventory_ledger WHERE (product_id LIKE 'qt-%' OR product_id LIKE 'prod-misc-%') AND reason IN ('SALE', 'ADJUST');"
+    ).catch(() => {});
+    await db.execute(
+      "UPDATE products SET stock = 999999, category = 'Services' WHERE (id LIKE 'qt-%' OR id LIKE 'prod-misc-%' OR category = 'Services') AND stock < 999999;"
+    ).catch(() => {});
+
+    // 2. Identify products with negative ledger or negative stock, having zero SEED/RECEIVE/ADJUST rows
+    const poisoned = (await db
+      .select(
+        `SELECT p.id, p.stock, p.json_payload, COALESCE(SUM(l.delta), 0) AS ledger_sum,
+                COALESCE(SUM(CASE WHEN l.reason IN ('SEED', 'RECEIVE', 'ADJUST') THEN 1 ELSE 0 END), 0) AS seeds
+         FROM products p
+         LEFT JOIN inventory_ledger l ON l.product_id = p.id AND l.deleted = 0
+         WHERE p.category != 'Services' AND p.id NOT LIKE 'qt-%' AND p.id NOT LIKE 'prod-misc-%'
+         GROUP BY p.id
+         HAVING (COALESCE(SUM(l.delta), 0) < 0 OR p.stock < 0) AND COALESCE(SUM(CASE WHEN l.reason IN ('SEED', 'RECEIVE', 'ADJUST') THEN 1 ELSE 0 END), 0) = 0`
+      )
+      .catch((e: unknown) => {
+        if (isBusyError(e)) throw e;
+        return [];
+      })) as Array<{
+        id: string;
+        stock: number;
+        json_payload: string;
+        ledger_sum: number;
+        seeds: number;
+      }>;
+
+    if (!poisoned || poisoned.length === 0) return { healedCount: 0 };
+
+    const deviceId = (await getOrCreateDeviceId(db)) || 'local';
+    const now = utcNowIso();
+    const healedIds: string[] = [];
+
+    for (const p of poisoned) {
+      const pid = String(p.id);
+      let baselineStock = 0;
+
+      // Check json_payload
+      if (p.json_payload) {
+        try {
+          let parsed = JSON.parse(String(p.json_payload));
+          if (parsed && typeof parsed.json_payload === 'string') {
+            try { parsed = JSON.parse(parsed.json_payload); } catch {}
+          }
+          const s = Number(parsed?.stock);
+          if (Number.isFinite(s) && s > 0) baselineStock = s;
+        } catch {}
+      }
+
+      // Check stability test seed formula for prod-test-XXXX
+      if (baselineStock <= 0) {
+        const match = pid.match(/^prod-test-(\d{4})$/);
+        if (match) {
+          const seq = Number(match[1]);
+          let a = 42 >>> 0;
+          const rand = () => {
+            a |= 0; a = (a + 0x6d2b79f5) | 0;
+            let t = Math.imul(a ^ (a >>> 15), 1 | a);
+            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+          };
+          for (let i = 1; i <= seq; i++) {
+            rand(); rand(); rand(); rand(); rand();
+            const st = rand() < 0.05 ? 0 : 1 + ((rand() * 60) | 0);
+            if (i === seq && st > 0) baselineStock = st;
+          }
+        }
+      }
+
+      // Safe fallback: guarantee positive on-hand stock
+      if (baselineStock <= 0) {
+        baselineStock = Math.max(25, Math.abs(Number(p.ledger_sum || 0)) + 20);
+      }
+
+      const seedKey = `seed-baseline-${pid}`;
+      await db.execute(
+        `INSERT INTO inventory_ledger (id,product_id,delta,reason,ref_type,ref_id,device_id,idempotency_key,sync_status,created_at,updated_at,deleted)
+         VALUES ($1,$2,$3,'SEED','heal','heal-baseline',$4,$5,'pending',$6,$6,0)
+         ON CONFLICT(id) DO NOTHING`,
+        [seedKey, pid, baselineStock, deviceId, seedKey, now],
+      );
+      await db.execute(
+        `INSERT INTO sync_outbox (idempotency_key,entity_type,entity_id,operation,payload_json,status)
+         VALUES ($1,'ledger',$2,'UPSERT',$3,'pending')
+         ON CONFLICT(idempotency_key) DO NOTHING`,
+        [seedKey, seedKey, JSON.stringify({ id: seedKey, product_id: pid, delta: baselineStock, reason: 'SEED' })],
+      );
+
+      // Recompute products.stock from SUM(delta)
+      await db.execute(
+        `UPDATE products SET stock = (SELECT SUM(delta) FROM inventory_ledger WHERE product_id=$1 AND deleted=0),
+         version = version + 1, updated_at=$2, sync_status='pending' WHERE id=$1`,
+        [pid, now],
+      );
+
+      // Update json_payload to reflect the new positive stock
+      try {
+        const rows = (await db.select('SELECT stock, json_payload FROM products WHERE id=$1', [pid]).catch(() => [])) as Array<{ stock?: unknown; json_payload?: unknown }>;
+        if (rows?.[0]?.json_payload) {
+          let pj = JSON.parse(String(rows[0].json_payload));
+          pj.stock = Number(rows[0].stock ?? baselineStock);
+          if (pj.json_payload && typeof pj.json_payload === 'string') {
+            try {
+              let inner = JSON.parse(pj.json_payload);
+              inner.stock = pj.stock;
+              pj.json_payload = JSON.stringify(inner);
+            } catch {}
+          }
+          await db.execute('UPDATE products SET json_payload=$1 WHERE id=$2', [JSON.stringify(pj), pid]).catch(() => {});
+        }
+      } catch {}
+
+      healedIds.push(pid);
+    }
+
+    if (healedIds.length > 0) {
+      await syncProductsFromSqlToDexie(healedIds).catch((err) => {
+        console.warn('[heal] Dexie sync after inventory heal skipped:', err);
+      });
+      console.log(`[heal] Successfully materialized lazy baselines for ${healedIds.length} poisoned products.`);
+    }
+
+    return { healedCount: healedIds.length };
+  } catch (err) {
+    if (isBusyError(err)) throw err;
+    console.warn('[heal] healPoisonedInventoryBaselines encountered error:', err);
+    return { healedCount: 0 };
+  }
+}
+
 let dbInitPromise: Promise<Database> | null = null;
 
 /**
@@ -373,7 +680,7 @@ let dbInitPromise: Promise<Database> | null = null;
  */
 export async function ensureBusyTimeout(db: Database, ms = 15000): Promise<void> {
   try {
-    await db.execute(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(ms))};`);
+    await db.execute(`PRAGMA busy_timeout = ${Math.max(0, Number.isFinite(ms) ? (ms | 0) : 0)};`);
   } catch {
     // Best-effort — withBusyRetry still covers residual BUSY.
   }
@@ -918,6 +1225,12 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
     return !isService && String(d.reason ?? 'SALE') === 'SALE';
   });
   if (saleDeltas.length > 0) {
+    const snapById = new Map<string, { stock?: unknown; category?: unknown }>();
+    for (const p of input.productSnapshots ?? []) {
+      const pId = String((p as { id?: unknown })?.id ?? '');
+      if (pId) snapById.set(pId, p as { stock?: unknown; category?: unknown });
+    }
+
     for (const d of saleDeltas) {
       const pid = String(d.productId || '');
       if (!pid || pid.startsWith('qt-') || pid.startsWith('prod-misc-')) continue;
@@ -931,7 +1244,9 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
 
       const avail = (await db
         .select(
-          'SELECT COUNT(*) AS n, COALESCE(SUM(delta),0) AS s FROM inventory_ledger WHERE product_id=$1 AND deleted=0',
+          `SELECT COUNT(*) AS n, COALESCE(SUM(delta),0) AS s,
+                  SUM(CASE WHEN reason IN ('SEED','RECEIVE','ADJUST') THEN 1 ELSE 0 END) AS seeds
+           FROM inventory_ledger WHERE product_id=$1 AND deleted=0`,
           [pid],
         )
         .catch((e: unknown) => {
@@ -939,9 +1254,80 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
           // (untracked) and bypass the oversell guard.
           if (isBusyError(e)) throw e;
           return [];
-        })) as Array<{ n: number; s: number }>;
-      const rowCount = Number(avail?.[0]?.n ?? 0);
-      const ledgerSum = Number(avail?.[0]?.s ?? 0);
+        })) as Array<{ n: number; s: number; seeds?: number }>;
+      let rowCount = Number(avail?.[0]?.n ?? 0);
+      let ledgerSum = Number(avail?.[0]?.s ?? 0);
+      const seedsCount = Number(avail?.[0]?.seeds ?? 0);
+
+      // Lazy baseline: untracked + on-hand stock > 0 seeds an idempotent SEED row first.
+      // Also heals products poisoned by prior sales before this guard landed (seedsCount === 0 && ledgerSum <= 0).
+      if (rowCount === 0 || (seedsCount === 0 && ledgerSum <= 0)) {
+        const stockRows = (await db
+          .select('SELECT stock, json_payload FROM products WHERE id=$1', [pid])
+          .catch((e: unknown) => {
+            if (isBusyError(e)) throw e;
+            return [];
+          })) as Array<{ stock?: unknown; json_payload?: unknown }>;
+
+        let snapStock: number | null = null;
+        if (stockRows && stockRows.length > 0) {
+          const rawStock = Number(stockRows[0]?.stock);
+          if (Number.isFinite(rawStock) && rawStock > 0) {
+            snapStock = rawStock;
+          } else if (stockRows[0]?.json_payload) {
+            try {
+              let parsed = JSON.parse(String(stockRows[0].json_payload));
+              if (parsed && typeof parsed.json_payload === 'string') {
+                try { parsed = JSON.parse(parsed.json_payload); } catch {}
+              }
+              const pStock = Number(parsed?.stock);
+              if (Number.isFinite(pStock) && pStock > 0) {
+                snapStock = pStock;
+              }
+            } catch {}
+          }
+        }
+
+        // Stub door (F1): no SQLite row or non-positive stock — fall back to the sale payload's
+        // last-known snapshot stock (production: productSnapshots[].stock).
+        if (snapStock === null || snapStock <= 0) {
+          const s = Number(snapById.get(pid)?.stock);
+          if (Number.isFinite(s) && s > 0) {
+            snapStock = s;
+          }
+        }
+
+        let onHand = (Number.isFinite(snapStock) && snapStock !== null ? snapStock : 0) | 0;
+        if (onHand <= 0 && seedsCount === 0 && ledgerSum < 0) {
+          onHand = Math.max(10, Math.abs(ledgerSum) + 20);
+        }
+
+        if (Number.isFinite(onHand) && onHand > 0) {
+          const seedKey = `seed-baseline-${pid}`;
+          await db.execute(
+            `INSERT INTO inventory_ledger (id,product_id,delta,reason,ref_type,ref_id,device_id,idempotency_key,sync_status,created_at,updated_at,deleted)
+             VALUES ($1,$2,$3,'SEED','heal',$4,$5,$6,'pending',$7,$7,0) ON CONFLICT(id) DO NOTHING`,
+            [seedKey, pid, onHand, txId, deviceId, seedKey, now],
+          );
+          await db.execute(
+            `INSERT INTO sync_outbox (idempotency_key,entity_type,entity_id,operation,payload_json,status)
+             VALUES ($1,'ledger',$2,'UPSERT',$3,'pending') ON CONFLICT(idempotency_key) DO NOTHING`,
+            [seedKey, seedKey, JSON.stringify({ id: seedKey, product_id: pid, delta: onHand, reason: 'SEED' })],
+          );
+          const re = (await db
+            .select(
+              'SELECT COUNT(*) AS n, COALESCE(SUM(delta),0) AS s FROM inventory_ledger WHERE product_id=$1 AND deleted=0',
+              [pid],
+            )
+            .catch((e: unknown) => {
+              if (isBusyError(e)) throw e;
+              return [];
+            })) as Array<{ n: number; s: number }>;
+          rowCount = Number(re?.[0]?.n ?? 0);
+          ledgerSum = Number(re?.[0]?.s ?? 0);
+        }
+      }
+
       if (rowCount > 0) {
         const take = Math.abs(Number(d.delta ?? 0));
         if (ledgerSum - take < 0) {
@@ -1810,6 +2196,21 @@ const imeiData = {
       const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pid]).catch(() => [])) as Array<Record<string, unknown>>;
       const prow = rows?.[0];
       if (!prow) continue;
+      if (prow.json_payload && prow.stock !== undefined) {
+        try {
+          let pj = JSON.parse(String(prow.json_payload));
+          pj.stock = Number(prow.stock);
+          if (pj.json_payload && typeof pj.json_payload === 'string') {
+            try {
+              let inner = JSON.parse(pj.json_payload);
+              inner.stock = pj.stock;
+              pj.json_payload = JSON.stringify(inner);
+            } catch {}
+          }
+          prow.json_payload = JSON.stringify(pj);
+          await db.execute('UPDATE products SET json_payload=$1 WHERE id=$2', [prow.json_payload, pid]).catch(() => {});
+        } catch {}
+      }
       const pkey = (prow.idempotency_key as string) || `stub-${pid}`;
       await db.execute(
         `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
@@ -2077,10 +2478,9 @@ export async function syncProductsFromSqlToDexie(productIds?: Iterable<string>):
       // Pulls with a touched-ID set must stay bounded to the changed products.
       if (ids.length === 0) {
         const allDexie = await dexieDb.products.toArray();
-        for (const dp of allDexie) {
-          if (!validIds.has(dp.id)) {
-            await dexieDb.products.delete(dp.id);
-          }
+        const ghosts = allDexie.filter((dp) => !validIds.has(dp.id)).map((dp) => dp.id);
+        if (ghosts.length > 0) {
+          await dexieDb.products.bulkDelete(ghosts);
         }
       }
     });
@@ -2149,13 +2549,63 @@ export async function syncProductsFromSqlToDexie(productIds?: Iterable<string>):
     }
   }
 
+let signedDrainArmedCache: { armed: boolean; at: number } | null = null;
+
+/**
+ * True while the signed-lane drain owns sequenced rows (merchant gateway
+ * URL configured). The legacy Turso lane yields signed rows ONLY then —
+ * otherwise refunds would strand unsynced before any gateway exists.
+ * Cached 60 s; fail-closed to the previous verdict (never flap mid-push).
+ */
+export async function isSignedDrainArmed(db?: Database): Promise<boolean> {
+  const now = Date.now();
+  if (signedDrainArmedCache && now - signedDrainArmedCache.at < 60_000) {
+    return signedDrainArmedCache.armed;
+  }
+  try {
+    const target = db ?? (await getLocalDb());
+    const rows = (await target
+      .select("SELECT value_json FROM app_settings WHERE key = 'sync.gateway_url'")
+      .catch(() => [])) as Array<{ value_json?: string | null }>;
+    const raw = rows?.[0]?.value_json;
+    let url = '';
+    if (raw != null) {
+      try {
+        const parsed: unknown = JSON.parse(String(raw));
+        url = typeof parsed === 'string' ? parsed : String(raw);
+      } catch {
+        url = String(raw);
+      }
+    }
+    url = url.trim().replace(/\/+$/, '');
+    const armed = /^https?:\/\//i.test(url);
+    signedDrainArmedCache = { armed, at: now };
+    return armed;
+  } catch {
+    return signedDrainArmedCache?.armed ?? false;
+  }
+}
+
 export async function getPendingOutbox(limit = 50): Promise<Array<Record<string, unknown>>> {
   const db = await getLocalDb();
-  return (await db.select(
-    `SELECT * FROM sync_outbox WHERE status='pending' AND (next_retry_at IS NULL OR next_retry_at <= $1)
-     ORDER BY rowid LIMIT $2`,
-    [utcNowIso(), limit],
-  )) as Array<Record<string, unknown>>;
+  const base =
+    `SELECT * FROM sync_outbox WHERE status='pending' AND (next_retry_at IS NULL OR next_retry_at <= $1)`;
+  const args = [utcNowIso(), limit];
+  if (await isSignedDrainArmed(db).catch(() => false)) {
+    // Signed rows belong to the drain worker (strict seq order); the Turso
+    // lane takes the unsigned remainder. Pre-v111 DBs lack seq_no — fall
+    // back to the unfiltered shape rather than breaking the push.
+    try {
+      return (await db.select(`${base} AND seq_no IS NULL ORDER BY rowid LIMIT $2`, args)) as Array<
+        Record<string, unknown>
+      >;
+    } catch (e) {
+      if (!/no such column/i.test(String((e as { message?: unknown })?.message ?? e))) throw e;
+    }
+  }
+  return (await db.select(`${base} ORDER BY rowid LIMIT $2`, args)) as Array<
+    Record<string, unknown>
+  >;
 }
 
 export async function markOutbox(

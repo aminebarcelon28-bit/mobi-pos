@@ -356,14 +356,21 @@ const FirstBootPinSetup: React.FC = () => {
   const pinInputClass =
     'w-full px-4 py-3 rounded-xl bg-pos-bg border border-pos-border text-pos-text text-center font-mono text-2xl tracking-[0.5em] outline-none focus:border-amber-500 transition';
   const nameInputClass =
-    'w-full px-4 py-2.5 rounded-xl bg-pos-bg border border-pos-border text-pos-text text-sm font-semibold outline-none focus:border-amber-500 transition placeholder:text-pos-muted/60 placeholder:font-normal';
+    'w-full px-4 py-2.5 rounded-xl bg-pos-bg border border-pos-border text-pos-text text-base sm:text-sm font-semibold outline-none focus:border-amber-500 transition placeholder:text-pos-muted/60 placeholder:font-normal';
 
   return (
-    <div className="fixed inset-0 z-[200] bg-slate-950/95 backdrop-blur-xl flex items-center justify-center p-4 select-none overflow-y-auto">
+    <div
+      data-testid="setup-pin-root"
+      className="fixed inset-0 z-[200] bg-slate-950/95 backdrop-blur-xl flex items-center justify-center p-4 select-none overflow-y-auto"
+      style={{
+        paddingTop: 'max(var(--safe-top, 16px), 1rem)',
+        paddingBottom: 'max(var(--safe-bottom, 16px), 1rem)',
+      }}
+    >
       <div className="w-full max-w-lg bg-pos-panel border border-amber-500/40 rounded-2xl shadow-2xl p-6 my-auto">
         <div className="flex flex-col items-center mb-5 text-center">
           <div className="w-12 h-12 rounded-full bg-amber-500/20 flex items-center justify-center mb-3 text-amber-400">
-            <ShieldCheck size={28} />
+            <ShieldCheck size={28} aria-hidden="true" />
           </div>
           <h2 className="text-lg font-bold text-pos-text mb-1">
             {managerPin === '' ? 'Configuration initiale — Votre équipe' : 'Sécurité — PIN par défaut détecté'}
@@ -389,6 +396,7 @@ const FirstBootPinSetup: React.FC = () => {
               <input
                 type="text"
                 autoComplete="off"
+                data-testid="setup-manager-name"
                 maxLength={40}
                 value={managerName}
                 onChange={(e) => setManagerName(e.target.value)}
@@ -403,6 +411,7 @@ const FirstBootPinSetup: React.FC = () => {
                 </label>
                 <input
                   type="password"
+                  data-testid="setup-manager-new"
                   inputMode="numeric"
                   pattern="[0-9]*"
                   autoComplete="new-password"
@@ -423,6 +432,7 @@ const FirstBootPinSetup: React.FC = () => {
                 </label>
                 <input
                   type="password"
+                  data-testid="setup-manager-confirm"
                   inputMode="numeric"
                   pattern="[0-9]*"
                   autoComplete="new-password"
@@ -451,7 +461,7 @@ const FirstBootPinSetup: React.FC = () => {
                 onClick={addRow}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-xs font-bold transition active:scale-95 min-h-[40px]"
               >
-                <Plus className="w-4 h-4" />
+                <Plus className="w-4 h-4" aria-hidden="true" />
                 <span>Ajouter un caissier</span>
               </button>
             </div>
@@ -495,7 +505,7 @@ const FirstBootPinSetup: React.FC = () => {
                       title="Retirer ce caissier"
                       aria-label={`Retirer ${r.name || 'cette ligne'}`}
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-4 h-4" aria-hidden="true" />
                     </button>
                   </div>
                 ))}
@@ -560,6 +570,7 @@ const FirstBootPinSetup: React.FC = () => {
 
           <button
             type="button"
+            data-testid="setup-save"
             onClick={handleSubmit}
             disabled={saving}
             className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-sm transition active:scale-[0.99] min-h-[48px]"
@@ -809,6 +820,23 @@ export const App: React.FC = () => {
       try {
         await initDatabase();
         dbReady = true;
+        try {
+          const { runShiftBootAdoption } = await import('./db/shiftBootAdoption');
+          await runShiftBootAdoption();
+        } catch (bootShiftErr) {
+          console.warn('[boot] Shift boot adoption error:', bootShiftErr);
+        }
+        try {
+          // D2 eager ledger backfill (v107 warranty_months + v113 parked/uq):
+          // idempotent, never throws, independent of the lazy probe-gated
+          // heal below — upgraded-shape DBs (lying sqlx ledger) cannot rely
+          // on the migrator, and a BUSY abort mid-pass must not skip these.
+          const { ensureShiftLedgerV113 } = await import('./db/sqlPluginAdapter');
+          const { getLocalDb } = await import('./db/sqlPluginAdapter');
+          await ensureShiftLedgerV113(await getLocalDb());
+        } catch (bootLedgerErr) {
+          console.warn('[boot] Shift ledger backfill error:', bootLedgerErr);
+        }
         // LCP: no refreshAfterPull() here — initDatabase just populated every
         // slice seconds ago; re-reading all 16 tables would double boot I/O.
         // The onPullApplied subscription below + initialPull() cover updates.
@@ -845,6 +873,23 @@ export const App: React.FC = () => {
         });
         await syncManager.start(await getStableDeviceId());
         if (!cancelled) await syncManager.initialPull();
+        // Signed-lane drain (non-blocking, best-effort): idles without a
+        // gateway URL; never blocks boot or checkout on failure.
+        if (!cancelled) {
+          try {
+            usePosStore.getState().startSyncDrain();
+          } catch (e) {
+            console.warn('[boot] Sync drain start skipped:', e);
+          }
+        }
+        // TIER-B device handshake (non-blocking, best-effort): prove the
+        // natively enrolled id matches sync authorship. A mismatch is logged
+        // as tamper evidence; refunds enforce the native id regardless.
+        if (!cancelled) {
+          import('./api/device')
+            .then((m) => m.verifyDeviceIdentityConsistency())
+            .catch((e: unknown) => console.warn('[boot] Device handshake skipped:', e));
+        }
       } catch (e) {
         console.warn('[boot] SyncManager background start skipped:', e);
       }

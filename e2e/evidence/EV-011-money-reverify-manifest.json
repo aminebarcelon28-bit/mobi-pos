@@ -1,0 +1,9 @@
+{
+  "gitSha": "3fdd298ca04638153ba4db98dc054a605414f5b5",
+  "dirty": true,
+  "binary": "C:\\Users\\Click\\Desktop\\phone3-sync-lab\\target-e2e\\debug\\mobi-pos.exe",
+  "profile": "debug",
+  "driver": "embedded",
+  "node": "v24.18.0",
+  "platform": "win32"
+}

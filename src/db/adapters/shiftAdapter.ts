@@ -448,7 +448,7 @@ export const shiftAdapter = {
     };
 
     if (isTauriEnv()) {
-      const { getLocalDb, getSyncDeviceId } = await import('../sqlPluginAdapter');
+      const { getLocalDb } = await import('../sqlPluginAdapter');
       const sql = (await getLocalDb()) as unknown as SqlDb;
       try {
         await ensureSessionInSqlite(sql, fallbackSession);
@@ -469,23 +469,18 @@ export const shiftAdapter = {
       ]);
 
       if (res.rowsAffected === 0) {
-        const devId = (await getSyncDeviceId()) || 'local';
+        // Park in the v113 envelope shape (id, session_id, data_json,
+        // row_version, parked_at, attempts) — the ONLY shape
+        // sync_parked_movements carries (Rust v113 + cashMirror drain read
+        // data_json/row_version). The full movement rides as data_json.
         await sql.execute(
-          `INSERT INTO sync_parked_movements (
-            id, session_id, type, amount, reason, cashier_name, created_at,
-            json_payload, version, device_id, parked_at, park_reason
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'PARENT_NOT_OPEN_AT_INSERT')
-          ON CONFLICT(id) DO NOTHING`,
+          `INSERT INTO sync_parked_movements (id, session_id, data_json, row_version, parked_at, attempts)
+           VALUES (?, ?, ?, 1, ?, 0)
+           ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json, row_version = excluded.row_version`,
           [
             movement.id,
             movement.sessionId,
-            movement.type,
-            movement.amount,
-            movement.reason,
-            movement.cashierName,
-            movement.createdAt,
             JSON.stringify(movement),
-            devId,
             new Date().toISOString(),
           ]
         );

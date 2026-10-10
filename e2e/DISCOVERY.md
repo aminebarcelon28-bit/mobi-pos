@@ -622,3 +622,55 @@ shift id as sqlShiftId (EV-008: refund OK, ALREADY_REFUNDED,
 REFUND_EXCEEDS) - the seed shift and e2e_mirror_shift_open bridge are no
 longer on the path. Regression: smoke 16/16 (EV-007), money 11/11
 (EV-008), tsc -b clean. money.ts / money.rs confirmed byte-frozen.
+
+---
+
+## 19. Pre-Phase-4 remediation: D2, D5, D7 (2026-10-10, EV-009…012)
+
+### D2 backfill (v107 + v113) — IMPLEMENTED + PROVEN
+
+Code (`sqlPluginAdapter.ts`, `shiftAdapter.ts`, `App.tsx`):
+- Probes: parked table, `warranty_months`, uq index via sqlite_master.
+- Pass statements: warranty ALTER + parked CREATE (Rust-v113 byte shape) +
+  parked index + uq index.
+- Always-run loud `ensureShiftLedgerV113` (exported): the 3 DDL + warranty
+  ALTER; duplicate-column warns, real failures console.error with a
+  `schema.heal.v113.done` receipt latch (IPC-readable).
+- `logExpense` parked fallback rewritten to the Rust envelope shape
+  (`data_json`/`row_version`) — the old 12-column shape matched nothing
+  and would have thrown against v113.
+- Eager call in the App boot effect (after adoption): the backfill no
+  longer depends on the lazy probe-gated heal or on surviving a BUSY
+  abort mid-pass.
+
+Findings that shaped it (all evidenced):
+- The sqlx ledger LIES on upgraded DBs: old-shape table carrying rows
+  1-113, so the migrator no-ops while v107 objects are absent. Object-
+  existence probes (not ledger numbers) are the correct detector.
+- The v113 migrator application was proven live (ledger 112→113, Rust-text
+  parked DDL on a stripped fixture boot).
+- Boot-heal verification needs a QUIESCED boot: 20 s bail-out runs die
+  before the boot effect completes — the passing proof used a 100 s dwell
+  (receipt `true` + `warranty_months` present, EV-012). Phase-4 suites must
+  allow boot to complete before asserting (already the case).
+- Open follow-up (no money impact): why the probe-gated pass appeared not
+  to apply the warranty ALTER on short boots — likely BUSY-abort or
+  never-reached; the eager loud block now covers it regardless.
+
+### D5 — desktop PROVEN (C1 red→green, EV-009), mobile mask added
+
+`MobileCheckoutTab handleApplyCustomQty` now hard-rejects `[.,]` like the
+desktop mask (toast `Quantité invalide : entier uniquement`). Scanner
+multiplier regex is digits-only (safe). No mobile e2e target exists to
+prove the mask — flagged, same as before.
+
+### D7 — S13 poll 100 ms (EV-010, Z seen)
+
+Sampling-race mechanism from the audit stands (250–1600 ms view lifetime
+vs 500 ms poll). No app change.
+
+### Not committed this round
+
+`test/specs/smoke/phase2-smoke.e2e.ts` remains untracked (Phase 3's money
+spec was committed as 3fdd298 scope; smoke spec + D2/D5/D7 code edits above
+are working-tree). `money.ts` / `money.rs` re-verified byte-frozen.

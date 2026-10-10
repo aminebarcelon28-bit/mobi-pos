@@ -95,6 +95,9 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
   const [tenderedStr, setTenderedStr] = useState<number>(0);
   const [isTenderDirty, setIsTenderDirty] = useState(false);
 
+  // Cart Item Row Swipe Action State
+  const [swipedItemId, setSwipedItemId] = useState<string | null>(null);
+
   // Post-Checkout Celebration & WhatsApp Receipt Sheet
   const [saleCelebrationData, setSaleCelebrationData] = useState<{
     receiptNumber: string;
@@ -187,17 +190,23 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
 
   const handleQtyChange = (productId: string, newQty: number) => {
     soundEngine.playKeyBeep?.();
+    const targetItem = cart.find((i) => i.product.id === productId);
+    if (newQty > (targetItem?.quantity ?? 0) && targetItem?.product?.isSerialized) {
+      soundEngine.playError?.();
+      showToast('Appareil sérialisé : limité à 1 unité par IMEI', 'warning');
+      return;
+    }
     if (newQty <= 0) {
       // Qty-to-zero removes the line: audit parity with desktop removal.
-      const doomed = cart.find((i) => i.product.id === productId);
-      if (doomed) {
+      if (targetItem) {
         void logSecurityAction(
           'Suppression Article Panier (Mobile)',
-          `Article: ${doomed.product.title} (${doomed.quantity} unités)`,
+          `Article: ${targetItem.product.title} (${targetItem.quantity} unités)`,
           operatorName,
           false,
         );
       }
+      if (swipedItemId === productId) setSwipedItemId(null);
       removeFromCart(productId);
     } else {
       setCartItemQty(productId, newQty);
@@ -215,6 +224,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
         false,
       );
     }
+    if (swipedItemId === productId) setSwipedItemId(null);
     removeFromCart(productId);
   };
 
@@ -678,9 +688,25 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
 
   const handleApplyCustomQty = () => {
     if (!editingQtyItem) return;
+    // D5 parity with desktop CartQtyInput: decimal entries are hard-rejected,
+    // never truncated (parseInt("1.5") would silently commit 1).
+    if (/[.,]/.test(customQtyInput)) {
+      soundEngine.playError?.();
+      showToast('Quantité invalide : entier uniquement', 'warning');
+      return;
+    }
     const parsed = parseInt(customQtyInput, 10);
     if (isNaN(parsed) || parsed < 0) {
+      soundEngine.playError?.();
       showToast('Quantité invalide', 'warning');
+      return;
+    }
+    if (editingQtyItem.product?.isSerialized && parsed > 1) {
+      soundEngine.playError?.();
+      showToast('Appareil sérialisé : limité à 1 unité par IMEI', 'warning');
+      handleQtyChange(editingQtyItem.product.id, 1);
+      setEditingQtyItem(null);
+      setCustomQtyInput('');
       return;
     }
     soundEngine.playKeyBeep?.();
@@ -704,16 +730,25 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
         pinnedTop={
           <div className="px-3.5 pt-3 pb-2.5 space-y-2.5 bg-pos-bg">
             {/* iOS-Style Segmented Pricing Tier Control */}
-            <div className="flex items-center gap-1 bg-pos-panel/90 p-1 rounded-2xl border border-pos-border shadow-xs">
+            <div
+              role="radiogroup"
+              aria-label="Grille tarifaire"
+              className="flex items-center gap-1 bg-pos-panel/90 p-1 rounded-2xl border border-pos-border shadow-xs"
+            >
               {(['Retail', 'VIP', 'Wholesale'] as PricingTier[]).map((tier) => (
                 <button
                   key={tier}
                   type="button"
-                  onClick={() => setPricingTier(tier)}
-                  className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer min-h-[38px] ${
+                  role="radio"
+                  aria-checked={pricingTier === tier}
+                  onClick={() => {
+                    soundEngine.playKeyBeep?.();
+                    setPricingTier(tier);
+                  }}
+                  className={`flex-1 py-2 px-2 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer min-h-[44px] flex items-center justify-center active:scale-[0.98] ${
                     pricingTier === tier
-                      ? 'bg-emerald-500 text-slate-950 font-black shadow-sm'
-                      : 'text-pos-muted hover:text-pos-text'
+                      ? 'bg-emerald-500 text-slate-950 font-black shadow-sm shadow-emerald-500/20'
+                      : 'text-pos-muted hover:text-pos-text hover:bg-pos-card/40'
                   }`}
                 >
                   {tier === 'Retail' ? 'Détail' : tier === 'VIP' ? 'Demi-Gros' : 'Gros'}
@@ -755,7 +790,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                     title="Détacher le client"
                     aria-label="Détacher le client"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <X className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
                 )}
 
@@ -840,7 +875,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                     onClick={handleOpenCashTender}
                     className="py-3 px-3 min-h-[52px] rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 active-press text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer disabled:opacity-50"
                   >
-                    <Coins className="w-4 h-4" />
+                    <Coins className="w-4 h-4" aria-hidden="true" />
                     <span>Espèces</span>
                   </button>
 
@@ -850,7 +885,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                     onClick={handleCheckoutCredit}
                     className="py-3 px-3 min-h-[52px] rounded-xl bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 active-press text-amber-400 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 shadow-xs"
                   >
-                    <CreditCard className="w-4 h-4" />
+                    <CreditCard className="w-4 h-4" aria-hidden="true" />
                     <span>Crédit Kredy</span>
                   </button>
                 </div>
@@ -867,7 +902,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
           {stagedTradeIn && (
             <div className="overflow-x-auto no-scrollbar -mx-0.5 px-0.5">
               <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-xl px-3 py-2 flex items-center gap-2 min-w-max shadow-xs">
-                <RefreshCw className="w-4 h-4 text-emerald-300 shrink-0" />
+                <RefreshCw className="w-4 h-4 text-emerald-300 shrink-0" aria-hidden="true" />
                 <div className="min-w-0">
                   <p className="text-[11px] font-black text-emerald-200 truncate">
                     {stagedTradeIn.deviceModel} <span className="font-mono font-bold text-emerald-300/80">· {stagedTradeIn.imei}</span>
@@ -886,7 +921,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   className="ml-1 shrink-0 w-9 h-9 min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-pos-card border border-pos-border text-pos-text"
                   aria-label="Modifier l’évaluation"
                 >
-                  <Pencil className="w-3.5 h-3.5" />
+                  <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
                 <button
                   type="button"
@@ -898,7 +933,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   className="shrink-0 w-9 h-9 min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-pos-card border border-pos-border text-pos-muted"
                   aria-label="Retirer la reprise"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -935,7 +970,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   className="text-[11px] text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1.5 cursor-pointer py-1 px-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 active:scale-95 transition min-h-[36px]"
                   title="Voir et reprendre les ventes en attente"
                 >
-                  <PauseCircle className="w-3.5 h-3.5" />
+                  <PauseCircle className="w-3.5 h-3.5" aria-hidden="true" />
                   <span>En Attente</span>
                   <span className="w-4 h-4 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black flex items-center justify-center">
                     {heldSales.length}
@@ -958,7 +993,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   className="text-[11px] text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 cursor-pointer py-1 px-2 rounded-xl bg-amber-500/10 border border-amber-500/20 active:scale-95 transition min-h-[36px]"
                   title="Suspendre le ticket actuel pour servir un autre client"
                 >
-                  <PauseCircle className="w-3.5 h-3.5" />
+                  <PauseCircle className="w-3.5 h-3.5" aria-hidden="true" />
                   <span className="hidden xs:inline">Attente</span>
                 </button>
               )}
@@ -968,7 +1003,8 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 onClick={() => setIsScannerOpen(true)}
                 className="text-[11px] text-cyan-400 hover:text-cyan-300 font-bold flex items-center gap-1 cursor-pointer py-1 px-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/20 active:scale-95 transition min-h-[36px]"
               >
-                <Camera className="w-3.5 h-3.5" /> Scanner
+                <Camera className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Scanner</span>
               </button>
 
               <button
@@ -977,7 +1013,8 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 className="text-[11px] text-teal-400 hover:text-teal-300 font-bold flex items-center gap-1 cursor-pointer py-1 px-2.5 rounded-xl bg-teal-500/10 border border-teal-500/20 active:scale-95 transition min-h-[36px]"
                 title="Scanner ou importer une facture fournisseur (Entrée en stock)"
               >
-                <FileText className="w-3.5 h-3.5" /> Facture
+                <FileText className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Facture</span>
               </button>
 
               {cart.length > 0 && (
@@ -987,7 +1024,8 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   className="text-[11px] text-purple-400 hover:text-purple-300 font-bold flex items-center gap-1 cursor-pointer py-1 px-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20 active:scale-95 transition min-h-[36px]"
                   title="Appliquer une remise globale sur le panier"
                 >
-                  <Percent className="w-3.5 h-3.5" /> Remise
+                  <Percent className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Remise</span>
                 </button>
               )}
 
@@ -997,7 +1035,8 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 className="text-[11px] text-emerald-300 hover:text-emerald-200 font-bold flex items-center gap-1 cursor-pointer py-1 px-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 active:scale-95 transition min-h-[36px]"
                 title="Échanger un appareil (Trade-In) — déduit du panier"
               >
-                <RefreshCw className="w-3.5 h-3.5" /> + Ajouter Reprise
+                <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>+ Ajouter Reprise</span>
               </button>
 
               {cart.length > 0 && (
@@ -1019,7 +1058,8 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   }}
                   className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1 cursor-pointer py-1 px-2 rounded-xl hover:bg-rose-500/10 transition min-h-[36px]"
                 >
-                  <Trash2 className="w-3.5 h-3.5" /> Vider
+                  <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Vider</span>
                 </button>
               )}
             </div>
@@ -1029,7 +1069,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
           {cart.length === 0 ? (
             <div className="p-8 my-4 text-center bg-pos-panel/60 border border-dashed border-pos-border rounded-2xl flex flex-col items-center justify-center space-y-3">
               <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shadow-xs">
-                <ShoppingBag className="w-7 h-7" />
+                <ShoppingBag className="w-7 h-7" aria-hidden="true" />
               </div>
               <div>
                 <h4 className="text-sm font-black text-pos-text">Votre panier est vide</h4>
@@ -1044,7 +1084,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   onClick={() => setIsScannerOpen(true)}
                   className="w-full min-h-[44px] px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-md shadow-emerald-500/20"
                 >
-                  <Camera className="w-4 h-4" />
+                  <Camera className="w-4 h-4" aria-hidden="true" />
                   <span>Scanner un Code-Barres</span>
                 </button>
 
@@ -1054,7 +1094,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                     onClick={onNavigateToCatalog}
                     className="w-full min-h-[44px] px-4 py-2 rounded-xl bg-pos-card border border-pos-border hover:border-cyan-400 text-pos-text font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
                   >
-                    <Search className="w-4 h-4 text-cyan-400" />
+                    <Search className="w-4 h-4 text-cyan-400" aria-hidden="true" />
                     <span>Catalogue Articles</span>
                   </button>
                 )}
@@ -1097,7 +1137,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                         }`}
                         title="Modifier le prix / accorder une remise"
                       >
-                        <Tag className="w-3 h-3 text-amber-400 shrink-0" />
+                        <Tag className="w-3 h-3 text-amber-400 shrink-0" aria-hidden="true" />
                         <span>{formatDZD(unitPrice)}</span>
                         {isOverridden && (
                           <span className="text-[9px] bg-amber-500/20 text-amber-300 font-bold px-1 rounded ml-0.5">
@@ -1126,7 +1166,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                       className="w-9 h-9 min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg bg-pos-card text-pos-muted hover:text-pos-text active-press cursor-pointer"
                       aria-label="Diminuer la quantité"
                     >
-                      <Minus className="w-4 h-4" />
+                      <Minus className="w-4 h-4" aria-hidden="true" />
                     </button>
 
                     <button
@@ -1148,7 +1188,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                       className="w-9 h-9 min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg bg-pos-card text-emerald-400 hover:text-emerald-300 active-press cursor-pointer"
                       aria-label="Augmenter la quantité"
                     >
-                      <Plus className="w-4 h-4" />
+                      <Plus className="w-4 h-4" aria-hidden="true" />
                     </button>
 
                     <button
@@ -1158,7 +1198,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                       title="Supprimer la ligne"
                       aria-label="Supprimer la ligne"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-4 h-4" aria-hidden="true" />
                     </button>
                   </div>
                 </div>
@@ -1182,7 +1222,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
               className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
               aria-label="Fermer la caméra"
             >
-              <X className="w-5 h-5" />
+              <X className="w-5 h-5" aria-hidden="true" />
             </button>
           </div>
 
@@ -1198,10 +1238,10 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
 
       {/* Bottom Sheet Customer Selection Modal */}
       {customerModalOpen && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(1rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))]">
-          <div className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh] animate-in slide-in-from-bottom-5">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+          <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[94dvh] sm:max-h-[85dvh] animate-in slide-in-from-bottom-5">
             {/* Sheet Handle */}
-            <div className="w-12 h-1.5 bg-pos-border rounded-full mx-auto mt-2 sm:hidden" />
+            <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
             <div className="p-3.5 border-b border-pos-border flex items-center justify-between gap-2">
               <h3 className="text-xs sm:text-sm font-black text-pos-text truncate min-w-0">
@@ -1213,29 +1253,30 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 className="p-1 text-pos-muted hover:text-pos-text min-h-[40px] min-w-[40px] flex items-center justify-center shrink-0 rounded-lg hover:bg-pos-card cursor-pointer"
                 aria-label="Fermer"
               >
-                <X className="w-4 h-4" />
+                <X className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
 
             {/* Customer Search Bar & New Customer Action */}
             <div className="p-3 border-b border-pos-border bg-pos-card/50 flex items-center gap-2">
               <div className="relative flex-1">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" aria-hidden="true" />
                 <input
                   type="text"
                   value={customerSearch}
                   onChange={(e) => setCustomerSearch(e.target.value)}
                   placeholder="Rechercher par nom ou numéro..."
-                  className="w-full min-h-[40px] bg-pos-card border border-pos-border rounded-xl pl-9 pr-8 py-1.5 text-xs text-pos-text placeholder-pos-muted focus:border-cyan-400 focus:outline-none"
+                  className="w-full min-h-[40px] bg-pos-card border border-pos-border rounded-xl pl-9 pr-9 py-1.5 text-base sm:text-xs text-pos-text placeholder-pos-muted focus:border-cyan-400 focus:outline-none"
                   autoFocus
                 />
                 {customerSearch && (
                   <button
                     type="button"
                     onClick={() => setCustomerSearch('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-pos-muted hover:text-pos-text text-xs p-1"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-pos-muted hover:text-pos-text min-h-[36px] min-w-[36px] flex items-center justify-center cursor-pointer active-press"
+                    aria-label="Effacer le champ"
                   >
-                    ✕
+                    <span aria-hidden="true">✕</span>
                   </button>
                 )}
               </div>
@@ -1248,12 +1289,12 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 className="min-h-[40px] px-3 rounded-xl bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 font-bold text-xs flex items-center gap-1.5 shrink-0 transition active:scale-95 cursor-pointer"
                 title="Créer un nouveau client (Fichier CRM)"
               >
-                <UserPlus className="w-3.5 h-3.5" />
+                <UserPlus className="w-3.5 h-3.5" aria-hidden="true" />
                 <span className="hidden xs:inline">+ Nouveau</span>
               </button>
             </div>
 
-            <div className="p-3 overflow-y-auto overscroll-contain space-y-1.5 flex-1 max-h-72">
+            <div className="p-3 overflow-y-auto overscroll-contain space-y-1.5 flex-1 max-h-72 pb-[max(1rem,var(--safe-bottom))] sm:pb-3">
               <button
                 type="button"
                 onClick={() => {
@@ -1263,7 +1304,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 className="w-full min-h-[48px] text-left p-3 rounded-xl bg-pos-card border border-pos-border text-xs font-bold text-pos-muted hover:text-pos-text transition cursor-pointer flex items-center justify-between"
               >
                 <span>Client Comptoir (Anonyme)</span>
-                <ArrowRight className="w-3.5 h-3.5 text-pos-muted" />
+                <ArrowRight className="w-3.5 h-3.5 text-pos-muted" aria-hidden="true" />
               </button>
 
               {filteredCustomers.length === 0 ? (
@@ -1302,14 +1343,14 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       {editingItem && (
         <div 
           onClick={() => setEditingItem(null)}
-          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(1rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none"
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none"
         >
           <div 
             onClick={(e) => e.stopPropagation()}
-            className="bg-pos-panel border border-pos-border rounded-t-3xl sm:rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh] shadow-2xl animate-in slide-in-from-bottom-5"
+            className="bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[94dvh] sm:max-h-[90dvh] shadow-2xl animate-in slide-in-from-bottom-5"
           >
             {/* Sheet Handle */}
-            <div className="w-12 h-1.5 bg-pos-border rounded-full mx-auto my-2 sm:hidden shrink-0" />
+            <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
             <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between gap-2">
               <div className="flex items-center gap-2.5 min-w-0">
@@ -1331,11 +1372,11 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 className="p-1.5 text-pos-muted hover:text-pos-text min-h-[40px] min-w-[40px] flex items-center justify-center shrink-0 rounded-lg hover:bg-pos-card cursor-pointer"
                 aria-label="Fermer"
               >
-                <X className="w-4 h-4" />
+                <X className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
 
-            <div className="p-4 space-y-3.5 overflow-y-auto overscroll-contain">
+            <div className="p-4 space-y-3.5 overflow-y-auto overscroll-contain pb-[max(1.5rem,var(--safe-bottom))] sm:pb-4">
               {/* Product Info Pills */}
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border">
@@ -1463,7 +1504,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                             setOverrideError(null);
                           }}
                           placeholder="Code PIN Manager (ex: 1234)"
-                          className="w-full min-h-[44px] bg-pos-card border border-rose-500/40 rounded-xl px-3 py-2 text-sm text-pos-text focus:outline-none text-center font-mono tracking-widest"
+                          className="w-full min-h-[44px] bg-pos-card border border-rose-500/40 rounded-xl px-3 py-2 text-base sm:text-sm text-pos-text focus:outline-none text-center font-mono tracking-widest"
                         />
                       </div>
                     )}
@@ -1503,14 +1544,14 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       {isCashTenderOpen && (
         <div
           onClick={() => setIsCashTenderOpen(false)}
-          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(1rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none"
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[92vh] shadow-2xl animate-in slide-in-from-bottom-5"
+            className="bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[94dvh] sm:max-h-[92dvh] shadow-2xl animate-in slide-in-from-bottom-5 pb-[max(1rem,var(--safe-bottom))] sm:pb-0"
           >
             {/* Sheet Handle */}
-            <div className="sheet-handle sm:hidden" />
+            <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
             {/* Header */}
             <div className="px-4 py-3 border-b border-pos-border flex items-center justify-between">
@@ -1529,7 +1570,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 className="w-9 h-9 min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl bg-pos-card text-pos-muted hover:text-pos-text cursor-pointer"
                 aria-label="Fermer"
               >
-                <X className="w-4 h-4" />
+                <X className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
 
@@ -1758,10 +1799,10 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
 
       {/* Post-Checkout Celebration & WhatsApp Share Sheet */}
       {saleCelebrationData && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(1rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-          <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[92vh] shadow-2xl animate-in slide-in-from-bottom-5">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+          <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[94dvh] sm:max-h-[92dvh] shadow-2xl animate-in slide-in-from-bottom-5 pb-[max(1.25rem,var(--safe-bottom))] sm:pb-0">
             {/* Sheet Handle */}
-            <div className="sheet-handle sm:hidden" />
+            <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
             <div className="p-5 text-center space-y-3 overflow-y-auto overscroll-contain">
               {/* Success Icon */}
@@ -1854,14 +1895,14 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       {editingQtyItem && (
         <div
           onClick={() => setEditingQtyItem(null)}
-          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(1rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none"
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh] shadow-2xl animate-in slide-in-from-bottom-5"
+            className="bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[94dvh] sm:max-h-[85dvh] shadow-2xl animate-in slide-in-from-bottom-5 pb-[max(1.25rem,var(--safe-bottom))] sm:pb-0"
           >
             {/* Sheet Handle */}
-            <div className="sheet-handle sm:hidden" />
+            <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
             <div className="p-3.5 border-b border-pos-border flex items-center justify-between">
               <div>
@@ -1876,8 +1917,9 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                 type="button"
                 onClick={() => setEditingQtyItem(null)}
                 className="w-8 h-8 min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-pos-card text-pos-muted hover:text-pos-text cursor-pointer"
+                aria-label="Fermer"
               >
-                <X className="w-4 h-4" />
+                <X className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
 
@@ -1893,7 +1935,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   className="w-12 h-12 rounded-2xl bg-pos-card border border-pos-border text-pos-text hover:border-pos-text active-press flex items-center justify-center cursor-pointer"
                   aria-label="Moins un"
                 >
-                  <Minus className="w-5 h-5" />
+                  <Minus className="w-5 h-5" aria-hidden="true" />
                 </button>
 
                 <div className="w-32">
@@ -1917,7 +1959,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   className="w-12 h-12 rounded-2xl bg-pos-card border border-pos-border text-emerald-400 hover:border-emerald-400 active-press flex items-center justify-center cursor-pointer"
                   aria-label="Plus un"
                 >
-                  <Plus className="w-5 h-5" />
+                  <Plus className="w-5 h-5" aria-hidden="true" />
                 </button>
               </div>
 

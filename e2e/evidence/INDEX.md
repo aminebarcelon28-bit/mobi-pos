@@ -19,6 +19,10 @@
 | EV-006 | D4 proof | pin-mint 1/1: `pin_set` mints v2, `pin_verify` ok (no NOT NULL failure) | wdio `--spec pin-mint --bail 1`, `POS_E2E_WIPE=1` | `e2e/evidence/EV-006-d4-pin.log` + `-manifest.json` | `03e62656` | 2026-10-10 |
 | EV-007 | D6 verify | smoke 16/16 re-green after remediation (no app fixes in-spec) | wdio `--spec smoke/phase2-smoke --bail 1`, `POS_E2E_WIPE=1` | `e2e/evidence/EV-007-smoke-verify.log` + `-manifest.json` | `03e62656` | 2026-10-10 |
 | EV-008 | D6 proof | money 11/11 with M5/M6 on the UI-shift id (no seed, no mirror): refund OK, `ALREADY_REFUNDED` + `REFUND_EXCEEDS`, linkage 8/8 | wdio `--spec money/phase3-money --bail 1`, `POS_E2E_WIPE=1` | `e2e/evidence/EV-008-d6-money.log` + `-manifest.json` | `03e62656` | 2026-10-10 |
+| EV-009 | D5 proof | numeric-boundaries 2/2: C1 hard-reject flipped red→green, C2 exact | wdio `--spec numeric-boundaries --bail 1`, `POS_E2E_WIPE=1` | `e2e/evidence/EV-009-c1.log` + `-manifest.json` | `3fdd298` | 2026-10-10 |
+| EV-010 | D5/D7 regression | smoke 16/16 re-green (S13 100 ms poll, Z seen) | wdio `--spec smoke/phase2-smoke --bail 1`, `POS_E2E_WIPE=1` | `e2e/evidence/EV-010-smoke-reverify.log` + `-manifest.json` | `3fdd298` | 2026-10-10 |
+| EV-011 | D2 regression | money 11/11 re-green (refund OK, guards exact, linkage 8/8) | wdio `--spec money/phase3-money --bail 1`, `POS_E2E_WIPE=1` | `e2e/evidence/EV-011-money-reverify.log` + `-manifest.json` | `3fdd298` | 2026-10-10 |
+| EV-012 | D2 proof | dwell boot on stripped upgraded-shape fixture: receipt `schema.heal.v113.done=true`, `warranty_months` present; parked/uq enforced; integrity ok | temp dwell probe (deleted after) + direct DB inspection | `e2e/evidence/EV-012-d2probe.log` + `-manifest.json` | `3fdd298` | 2026-10-10 |
 
 ## Gate 3 parity evidence (re-runnable commands, all green 2026-10-10)
 
