@@ -1,0 +1,540 @@
+{
+  "version": 1,
+  "generated": "2026-10-10T16:43:07.170Z",
+  "generator": "scripts/generate-golden.mjs (independent BigInt minor-unit math, no app imports)",
+  "currency": {
+    "code": "DZD",
+    "label": "DA",
+    "exponent": 2
+  },
+  "scope": "HT-only, no tax; integer qty; non-negative invoice values",
+  "counts": {
+    "display": 11,
+    "parse": 12,
+    "parseError": 4,
+    "invoice": 28
+  },
+  "vectors": {
+    "display": [
+      {
+        "id": "D-001",
+        "minorMinor": "0",
+        "display": "0.00 DA",
+        "note": "zero"
+      },
+      {
+        "id": "D-002",
+        "minorMinor": "1",
+        "display": "0.01 DA",
+        "note": "smallest minor 0.01 DA"
+      },
+      {
+        "id": "D-003",
+        "minorMinor": "10",
+        "display": "0.10 DA",
+        "note": "0.10 DA"
+      },
+      {
+        "id": "D-004",
+        "minorMinor": "13050",
+        "display": "130.50 DA",
+        "note": "130.50 DA (doc example)"
+      },
+      {
+        "id": "D-005",
+        "minorMinor": "13005",
+        "display": "130.05 DA",
+        "note": "130.05 DA zero-pad"
+      },
+      {
+        "id": "D-006",
+        "minorMinor": "4500000",
+        "display": "45 000.00 DA",
+        "note": "45 000.00 DA grouping"
+      },
+      {
+        "id": "D-007",
+        "minorMinor": "1250050",
+        "display": "12 500.50 DA",
+        "note": "12 500,50 input shape"
+      },
+      {
+        "id": "D-008",
+        "minorMinor": "-13550",
+        "display": "-135.50 DA",
+        "note": "negative display"
+      },
+      {
+        "id": "D-009",
+        "minorMinor": "99999999999",
+        "display": "999 999 999.99 DA",
+        "note": "999 999 999.99 DA near-limit"
+      },
+      {
+        "id": "D-010",
+        "minorMinor": "100",
+        "display": "1.00 DA",
+        "note": "1.00 DA"
+      },
+      {
+        "id": "D-011",
+        "minorMinor": "5",
+        "display": "0.05 DA",
+        "note": "0.05 DA"
+      }
+    ],
+    "parse": [
+      {
+        "id": "P-001",
+        "input": "130.50",
+        "minorMinor": "13050",
+        "note": "plain decimal"
+      },
+      {
+        "id": "P-002",
+        "input": "130.5",
+        "minorMinor": "13050",
+        "note": "one decimal"
+      },
+      {
+        "id": "P-003",
+        "input": "130",
+        "minorMinor": "13000",
+        "note": "integer"
+      },
+      {
+        "id": "P-004",
+        "input": "0.01",
+        "minorMinor": "1",
+        "note": "smallest"
+      },
+      {
+        "id": "P-005",
+        "input": "0",
+        "minorMinor": "0",
+        "note": "zero"
+      },
+      {
+        "id": "P-006",
+        "input": "45 000.00",
+        "minorMinor": "4500000",
+        "note": "ASCII-space group"
+      },
+      {
+        "id": "P-007",
+        "input": "12.500,50",
+        "minorMinor": "1250050",
+        "note": "strict FR grouped"
+      },
+      {
+        "id": "P-008",
+        "input": "130,5",
+        "minorMinor": "13050",
+        "note": "comma decimal"
+      },
+      {
+        "id": "P-009",
+        "input": "١٣٥٫٥٠",
+        "minorMinor": "13550",
+        "note": "Arabic-Indic 135.50"
+      },
+      {
+        "id": "P-010",
+        "input": "99999.99",
+        "minorMinor": "9999999",
+        "note": "edge price max"
+      },
+      {
+        "id": "P-011",
+        "input": "0.05",
+        "minorMinor": "5",
+        "note": "edge nickel"
+      },
+      {
+        "id": "P-012",
+        "input": "130.555",
+        "minorMinor": "13055500",
+        "note": "FR-grouped integer 130555 DA (both engines: ^\\d{1,3}(\\.\\d{3})+$)"
+      }
+    ],
+    "parseError": [
+      {
+        "id": "PE-01",
+        "input": "-5",
+        "note": "sign rejected both sides"
+      },
+      {
+        "id": "PE-02",
+        "input": "1.23.45",
+        "note": "malformed groups rejected both sides"
+      },
+      {
+        "id": "PE-03",
+        "input": "",
+        "note": "empty rejected"
+      },
+      {
+        "id": "PE-04",
+        "input": "12,500.50",
+        "note": "US-grouped rejected (1000x guard)"
+      }
+    ],
+    "invoice": [
+      {
+        "id": "I-001",
+        "lines": [
+          {
+            "unitMinor": "10000",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "10000",
+        "note": "100 DA x1"
+      },
+      {
+        "id": "I-002",
+        "lines": [
+          {
+            "unitMinor": "1",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "1",
+        "note": "0.01 DA edge x1"
+      },
+      {
+        "id": "I-003",
+        "lines": [
+          {
+            "unitMinor": "9999999",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "9999999",
+        "note": "99999.99 DA edge x1"
+      },
+      {
+        "id": "I-004",
+        "lines": [
+          {
+            "unitMinor": "1999",
+            "qty": 3
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "5997",
+        "note": "19.99 x3 no drift"
+      },
+      {
+        "id": "I-005",
+        "lines": [
+          {
+            "unitMinor": "3333",
+            "qty": 3
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "9999",
+        "note": "33.33 x3"
+      },
+      {
+        "id": "I-006",
+        "lines": [
+          {
+            "unitMinor": "3333",
+            "qty": 7
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "23331",
+        "note": "33.33 x7"
+      },
+      {
+        "id": "I-007",
+        "lines": [
+          {
+            "unitMinor": "995",
+            "qty": 2
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "1990",
+        "note": "9.95 x2"
+      },
+      {
+        "id": "I-008",
+        "lines": [
+          {
+            "unitMinor": "123456",
+            "qty": 2
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "246912",
+        "note": "1234.56 x2"
+      },
+      {
+        "id": "I-009",
+        "lines": [
+          {
+            "unitMinor": "100",
+            "qty": 7
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "700",
+        "note": "1.00 x7"
+      },
+      {
+        "id": "I-010",
+        "lines": [
+          {
+            "unitMinor": "100000",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 500,
+        "expectedTotalMinor": "95000",
+        "note": "5% of 1000"
+      },
+      {
+        "id": "I-011",
+        "lines": [
+          {
+            "unitMinor": "100000",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 1000,
+        "expectedTotalMinor": "90000",
+        "note": "10% of 1000"
+      },
+      {
+        "id": "I-012",
+        "lines": [
+          {
+            "unitMinor": "100000",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 3333,
+        "expectedTotalMinor": "66670",
+        "note": "33.33% of 1000"
+      },
+      {
+        "id": "I-013",
+        "lines": [
+          {
+            "unitMinor": "100000",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 5000,
+        "expectedTotalMinor": "50000",
+        "note": "50% of 1000"
+      },
+      {
+        "id": "I-014",
+        "lines": [
+          {
+            "unitMinor": "100000",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 10000,
+        "expectedTotalMinor": "0",
+        "note": "100% zeroes the line"
+      },
+      {
+        "id": "I-015",
+        "lines": [
+          {
+            "unitMinor": "1",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 5000,
+        "expectedTotalMinor": "0",
+        "note": "tie: 0.01 x 50% -> 0.01 (0.5 rounds up)"
+      },
+      {
+        "id": "I-016",
+        "lines": [
+          {
+            "unitMinor": "3",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 5000,
+        "expectedTotalMinor": "1",
+        "note": "tie: 0.03 x 50% -> 0.02 (1.5 rounds up)"
+      },
+      {
+        "id": "I-017",
+        "lines": [
+          {
+            "unitMinor": "5",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 1000,
+        "expectedTotalMinor": "4",
+        "note": "tie: 0.05 x 10% -> 0.01 (0.5 rounds up)"
+      },
+      {
+        "id": "I-018",
+        "lines": [
+          {
+            "unitMinor": "15",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 1000,
+        "expectedTotalMinor": "13",
+        "note": "0.15 x 10% -> 0.02 (1.5 rounds up)"
+      },
+      {
+        "id": "I-019",
+        "lines": [
+          {
+            "unitMinor": "100000",
+            "qty": 1,
+            "discountFixedMinor": "1"
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "99999",
+        "note": "fixed 0.01 off 1000"
+      },
+      {
+        "id": "I-020",
+        "lines": [
+          {
+            "unitMinor": "100000",
+            "qty": 1,
+            "discountFixedMinor": "100000"
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "0",
+        "note": "fixed == line zeroes it"
+      },
+      {
+        "id": "I-021",
+        "lines": [
+          {
+            "unitMinor": "50000",
+            "qty": 2,
+            "discountFixedMinor": "15000"
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "85000",
+        "note": "fixed off multi-qty line"
+      },
+      {
+        "id": "I-022",
+        "lines": [
+          {
+            "unitMinor": "100000",
+            "qty": 1
+          },
+          {
+            "unitMinor": "250000",
+            "qty": 2
+          },
+          {
+            "unitMinor": "150000",
+            "qty": 3
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "1050000",
+        "note": "mixed basket 10500"
+      },
+      {
+        "id": "I-023",
+        "lines": [
+          {
+            "unitMinor": "250000",
+            "qty": 2
+          },
+          {
+            "unitMinor": "150000",
+            "qty": 3
+          },
+          {
+            "unitMinor": "100000",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "1050000",
+        "note": "permuted basket (order-independence)"
+      },
+      {
+        "id": "I-024",
+        "lines": [
+          {
+            "unitMinor": "100",
+            "qty": 3
+          },
+          {
+            "unitMinor": "200",
+            "qty": 7
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "1700",
+        "note": "small lines"
+      },
+      {
+        "id": "I-025",
+        "lines": [],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "0",
+        "note": "empty basket zeroes"
+      },
+      {
+        "id": "I-026",
+        "lines": [
+          {
+            "unitMinor": "100000",
+            "qty": 1
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "100000",
+        "note": "baseline re-pin"
+      },
+      {
+        "id": "I-027",
+        "lines": [
+          {
+            "unitMinor": "1000",
+            "qty": 1,
+            "discountFixedMinor": "1001"
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedError": "discount exceeds line",
+        "note": "fixed exceeds line (must reject)"
+      },
+      {
+        "id": "I-028",
+        "lines": [
+          {
+            "unitMinor": "9999999999",
+            "qty": 7
+          }
+        ],
+        "cartPctBp": 0,
+        "expectedTotalMinor": "69999999993",
+        "note": "near-limit x7"
+      }
+    ]
+  }
+}

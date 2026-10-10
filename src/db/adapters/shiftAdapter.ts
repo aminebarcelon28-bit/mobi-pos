@@ -11,6 +11,14 @@ import { fireSync, fireSyncDelete, isTauriEnv } from './base';
 import { newId } from '../../utils/ids';
 import { verifyManagerGate } from '../../utils/pinGate';
 import { cashSalesFromTxns, cashRefundsFromTxns } from '../../utils/cashTerms';
+import { toWholeDa, type SqlDb } from './wholeDinar';
+import {
+  INSERT_SESSION_SQL,
+  INSERT_MOVEMENT_SQL,
+  sessionParams,
+  ensureSessionInSqlite,
+  ShiftSqliteError,
+} from './shiftSqlite';
 
 /**
  * Minimal close-window transaction shape. Both the SQLite authority reader
@@ -331,12 +339,27 @@ export const shiftAdapter = {
       // Fallback
     }
 
+    if (isTauriEnv()) {
+      const { getLocalDb } = await import('../sqlPluginAdapter');
+      const sql = (await getLocalDb()) as unknown as SqlDb;
+      const liveInSql = await sql.select<{ id: string; cashier_name: string }>(
+        `SELECT id, cashier_name FROM cash_sessions WHERE device_id = ? AND status IN ('OPEN', 'CLOSING') LIMIT 1`,
+        [devId]
+      );
+      if (liveInSql.length > 0) {
+        throw codedError(
+          SHIFT_ALREADY_OPEN,
+          `Une session de caisse est déjà ouverte sur cet appareil (ID: ${liveInSql[0].id}, Caissier: ${liveInSql[0].cashier_name}).`,
+        );
+      }
+    }
+
     const opener = (openedBy || '').trim() || cashierName || 'Caissier Principal';
     const baseSession: CashSession = {
       id: newId('SHIFT'),
       openedAt: new Date().toISOString(),
       closedAt: null,
-      openingFloat: Math.round(openingFloat),
+      openingFloat: toWholeDa(openingFloat),
       expectedCash: null,
       actualCash: null,
       status: 'OPEN',
@@ -369,6 +392,32 @@ export const shiftAdapter = {
       ...{ openedBy: opener, currentCashier: baseSession.cashierName },
     };
 
+    if (isTauriEnv()) {
+      const { getLocalDb } = await import('../sqlPluginAdapter');
+      const sql = (await getLocalDb()) as unknown as SqlDb;
+      try {
+        await sql.execute(INSERT_SESSION_SQL, sessionParams(newSession, devId));
+      } catch (err) {
+        const msg = String((err as Error)?.message ?? err);
+        if (msg.includes('uq_one_live_shift_per_device') || msg.includes('cash_sessions.device_id')) {
+          throw codedError(
+            SHIFT_ALREADY_OPEN,
+            'Une session est déjà ouverte sur cet appareil (contrainte SQLite)',
+          );
+        }
+        throw new ShiftSqliteError('SQLITE_OPEN_FAILED', `Échec d'ouverture de session dans SQLite: ${msg}`, err);
+      }
+
+      // Read back to verify
+      const rows = await sql.select<{ id: string; status: string }>(
+        'SELECT id, status FROM cash_sessions WHERE id = ?',
+        [newSession.id]
+      );
+      if (!rows[0] || rows[0].status !== 'OPEN') {
+        throw new ShiftSqliteError('SQLITE_OPEN_FAILED', 'Vérification SQLite échouée : session non trouvée en statut OPEN');
+      }
+    }
+
     await dexieDb.cashSessions.put(newSession);
     void fireSync('cash_session', newSession.id, newSession);
     return newSession;
@@ -376,21 +425,72 @@ export const shiftAdapter = {
 
   async logExpense(
     amount: number,
-    movementType: 'EXPENSE' | 'MANUAL_DEPOSIT' = 'EXPENSE',
+    movementType: 'EXPENSE' | 'MANUAL_DEPOSIT' | 'ALLOCATION' = 'EXPENSE',
     reason: string,
     cashierName?: string,
-    sessionId?: string
+    sessionId?: string,
+    movementId?: string
   ): Promise<CashMovement> {
     const fallbackSession = sessionId || (await dexieDb.cashSessions.where('status').equals('OPEN').first())?.id || 'DEFAULT_SHIFT';
+    const cleanReason = (reason || '').trim() || 'Mouvement de caisse';
+    const wholeAmount = toWholeDa(amount);
     const movement: CashMovement = {
-      id: newId('MOV'),
+      // Explicit idempotency key (debt-settlement double-submit guard):
+      // repeated writes with the same id collapse via Dexie put-upsert and
+      // the stable outbox key instead of minting duplicate drawer rows.
+      id: movementId || newId('MOV'),
       sessionId: fallbackSession,
       type: movementType,
-      amount: Math.round(amount),
-      reason,
+      amount: wholeAmount,
+      reason: cleanReason,
       cashierName: cashierName || 'Caissier',
       createdAt: new Date().toISOString(),
     };
+
+    if (isTauriEnv()) {
+      const { getLocalDb, getSyncDeviceId } = await import('../sqlPluginAdapter');
+      const sql = (await getLocalDb()) as unknown as SqlDb;
+      try {
+        await ensureSessionInSqlite(sql, fallbackSession);
+      } catch (err) {
+        console.warn('[logExpense] ensureSessionInSqlite warning:', err);
+      }
+
+      const res = await sql.execute(INSERT_MOVEMENT_SQL, [
+        movement.id,
+        movement.sessionId,
+        movement.type,
+        movement.amount,
+        movement.reason,
+        movement.cashierName,
+        movement.createdAt,
+        JSON.stringify(movement),
+        movement.sessionId,
+      ]);
+
+      if (res.rowsAffected === 0) {
+        const devId = (await getSyncDeviceId()) || 'local';
+        await sql.execute(
+          `INSERT INTO sync_parked_movements (
+            id, session_id, type, amount, reason, cashier_name, created_at,
+            json_payload, version, device_id, parked_at, park_reason
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'PARENT_NOT_OPEN_AT_INSERT')
+          ON CONFLICT(id) DO NOTHING`,
+          [
+            movement.id,
+            movement.sessionId,
+            movement.type,
+            movement.amount,
+            movement.reason,
+            movement.cashierName,
+            movement.createdAt,
+            JSON.stringify(movement),
+            devId,
+            new Date().toISOString(),
+          ]
+        );
+      }
+    }
 
     await dexieDb.cashMovements.put(movement);
     void fireSync('cash_movement', movement.id, movement);
@@ -622,17 +722,63 @@ export const shiftAdapter = {
     const closedSession: CashSession = {
       ...openSession,
       status: 'CLOSED',
-      closedAt: new Date().toISOString(),
-      expectedCash,
-      actualCash,
-      discrepancy,
+      closedAt: closeNowIso,
+      expectedCash: toWholeDa(expectedCash),
+      actualCash: toWholeDa(actualCash),
+      discrepancy: toWholeDa(discrepancy),
       totalSalesCount: sessionTxns.length,
       totalSalesRevenue: sessionTxns.reduce((sum, t) => sum + t.total, 0),
-      totalProfits,
+      totalProfits: toWholeDa(totalProfits),
+      // Net of session EXPENSE movements — same definition the close-modal
+      // preview shows (`totalSaleMargins - expenses`). Previously unset, so
+      // the shift-close audit logged "Profit Net: undefined DA".
+      dailyNetProfit: toWholeDa(totalProfits - expenses),
       closingNote: closingNote || '',
       movements,
-      updatedAt: new Date().toISOString(),
+      updatedAt: closeNowIso,
     };
+
+    if (isTauriEnv()) {
+      const { getLocalDb } = await import('../sqlPluginAdapter');
+      const sql = (await getLocalDb()) as unknown as SqlDb;
+      try {
+        await ensureSessionInSqlite(sql, openSession.id);
+      } catch (err) {
+        console.warn('[closeShift] ensureSessionInSqlite warning:', err);
+      }
+
+      await sql.execute(
+        `UPDATE cash_sessions
+         SET status = 'CLOSED',
+             closed_at = ?,
+             expected_cash = ?,
+             actual_cash = ?,
+             discrepancy = ?,
+             closing_note = ?,
+             json_payload = ?,
+             updated_at = ?,
+             version = version + 1
+         WHERE id = ?`,
+        [
+          closeNowIso,
+          toWholeDa(expectedCash),
+          toWholeDa(actualCash),
+          toWholeDa(discrepancy),
+          closingNote || '',
+          JSON.stringify(closedSession),
+          closeNowIso,
+          openSession.id,
+        ]
+      );
+
+      const rows = await sql.select<{ id: string; status: string }>(
+        'SELECT id, status FROM cash_sessions WHERE id = ?',
+        [openSession.id]
+      );
+      if (!rows[0] || rows[0].status !== 'CLOSED') {
+        throw new ShiftSqliteError('SQLITE_CLOSE_FAILED', 'Vérification SQLite échouée : session non trouvée en statut CLOSED');
+      }
+    }
 
     await dexieDb.cashSessions.put(closedSession);
     void fireSync('cash_session', closedSession.id, closedSession);
@@ -661,6 +807,25 @@ export const shiftAdapter = {
       cashierName: clean,
       updatedAt: new Date().toISOString(),
     };
+    if (isTauriEnv()) {
+      try {
+        const { getLocalDb } = await import('../sqlPluginAdapter');
+        const sql = (await getLocalDb()) as unknown as SqlDb;
+        await sql.execute(
+          `UPDATE cash_sessions
+           SET cashier_name = ?,
+               json_payload = CASE WHEN json_valid(json_payload)
+                                   THEN json_set(json_payload, '$.cashierName', ?, '$.currentCashier', ?)
+                                   ELSE json_payload END,
+               updated_at = ?,
+               version = version + 1
+           WHERE id = ?`,
+          [clean, clean, clean, updated.updatedAt, open.id]
+        );
+      } catch (err) {
+        console.warn('[setShiftCashier] SQLite update warning:', err);
+      }
+    }
     await dexieDb.cashSessions.put(updated);
     void fireSync('cash_session', updated.id, updated);
     const movements = await dexieDb.cashMovements.where('sessionId').equals(updated.id).toArray();

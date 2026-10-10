@@ -816,6 +816,8 @@ pub struct PinSetRequest {
     /// the flag converts brick → re-keyable, then the manager rotates every
     /// other profile from Settings).
     pub recovery_reset: Option<bool>,
+    /// Supervisor authorization for manager re-keying (step-up verification).
+    pub supervisor_pin: Option<String>,
 }
 
 /// Result of a successful rotation.
@@ -1007,7 +1009,7 @@ fn db_path_for(app: &tauri::AppHandle) -> Result<std::path::PathBuf, TrustError>
         .path()
         .app_data_dir()
         .map_err(|e| TrustError::op_failed(format!("app dir: {e}")))?;
-    let p = dir.join("mobi_pos.db");
+    let p = crate::e2e::live_db_path(&dir);
     if !p.exists() {
         return Err(TrustError::op_failed("live database missing".to_string()));
     }
@@ -1063,9 +1065,13 @@ fn write_app_setting_json(
     key: &str,
     encoded_json: &str,
 ) -> Result<(), TrustError> {
+    // updated_at is NOT NULL without a default: omitting it fails the write
+    // even on the UPDATE path (SQLite checks NOT NULL during record assembly,
+    // before ON CONFLICT arbitration). Phase 3 P1: this omission bricked all
+    // native rotation.
     conn.execute(
-        "INSERT INTO app_settings (key, value_json) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+        "INSERT INTO app_settings (key, value_json, updated_at) VALUES (?1, ?2, datetime('now','utc'))
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
         rusqlite::params![key, encoded_json],
     )
     .map_err(|e| TrustError::op_failed(format!("credential write: {e}")))?;
@@ -1203,6 +1209,30 @@ pub fn pin_set(
             } else {
                 ensure_pin_pepper(&probe, &app_dir_pepper)?
             };
+            // Privilege escalation boundary (B4): re-keying a manager profile (master or
+            // primary admin) requires step-up proof if an active credential already exists.
+            if is_manager {
+                if let Ok((stored_mgr, _)) = read_manager_credential(&probe) {
+                    let s = stored_mgr.trim();
+                    if !s.is_empty() {
+                        let is_recovery = request.recovery_reset.unwrap_or(false);
+                        if !is_recovery {
+                            let sup_pin = request.supervisor_pin.as_ref().map(|p| p.trim()).unwrap_or("");
+                            if sup_pin.is_empty() {
+                                return Err(TrustError::SecurityPolicyFailure {
+                                    reason: "manager credential modification requires supervisor authorization",
+                                });
+                            }
+                            let sup_secret = SecretPin::new(sup_pin.to_string());
+                            if !credential_matches(&sup_secret, s, &pepper) {
+                                return Err(TrustError::SecurityPolicyFailure {
+                                    reason: "invalid supervisor PIN",
+                                });
+                            }
+                        }
+                    }
+                }
+            }
             // Cross-user uniqueness, enforced where the hashes live: the
             // WebView cannot compare against Argon2id credentials (its verifier
             // fails closed on `v2$`), so without this check two profiles could
@@ -1849,22 +1879,24 @@ mod tests {
       }
 
     /// Roster fixture: primary admin first, secondary admin + cashier after.
+    /// Mirrors the production DDL (updated_at NOT NULL, no default) so
+    /// credential writes exercise the real statement shape.
     fn roster_db() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value_json TEXT);",
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value_json TEXT, updated_at TEXT NOT NULL);",
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO app_settings (key, value_json) VALUES ('manager_pin', '\"v1$m$m\"')",
+            "INSERT INTO app_settings (key, value_json, updated_at) VALUES ('manager_pin', '\"v1$m$m\"', datetime('now'))",
             [],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO app_settings (key, value_json) VALUES ('cashier_users',
+            "INSERT INTO app_settings (key, value_json, updated_at) VALUES ('cashier_users',
              '[{\"id\":\"adm-1\",\"role\":\"admin\",\"pin\":\"\"},
                {\"id\":\"adm-2\",\"role\":\"admin\",\"pin\":\"v1$s$s2\"},
-               {\"id\":\"c-9\",\"role\":\"cashier\",\"pin\":\"v1$s$s9\"}]')",
+               {\"id\":\"c-9\",\"role\":\"cashier\",\"pin\":\"v1$s$s9\"}]', datetime('now'))",
             [],
         )
         .unwrap();
@@ -1982,7 +2014,7 @@ mod tests {
         // tolerates the missing roster; store writes the master directly).
         let bare = rusqlite::Connection::open_in_memory().unwrap();
         bare.execute_batch(
-            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value_json TEXT);",
+            "CREATE TABLE app_settings (key TEXT PRIMARY KEY, value_json TEXT, updated_at TEXT NOT NULL);",
         )
         .unwrap();
         assert!(reject_duplicate_pin(&bare, "manager", &secret("482916"), &PEPPER).is_ok());
