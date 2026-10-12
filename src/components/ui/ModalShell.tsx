@@ -121,7 +121,7 @@ export const ModalShell: React.FC<ModalShellProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center bg-black/60 p-0 sm:p-4 overflow-hidden select-none animate-in fade-in"
+      className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center bg-black/60 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:p-4 overflow-hidden select-none animate-in fade-in"
       style={keyboardInset > 0 ? { paddingBottom: keyboardInset } : undefined}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -132,12 +132,12 @@ export const ModalShell: React.FC<ModalShellProps> = ({
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        className={`w-full ${WIDTH_CLASS[width]} flex flex-col max-h-[100dvh] sm:max-h-[90dvh] bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl overflow-hidden shadow-2xl outline-none animate-in slide-in-from-bottom-5 sm:zoom-in-95 ${className}`}
+        className={`w-full ${WIDTH_CLASS[width]} flex flex-col max-h-[94dvh] sm:max-h-[90dvh] bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl overflow-hidden shadow-2xl outline-none animate-in slide-in-from-bottom-5 sm:zoom-in-95 ${className}`}
       >
         {/* Zone 1 — non-shrinking header (mobile swipe handle + close). */}
         <div className="flex-none">
           <div
-            className="w-10 h-1 rounded-full bg-slate-300 dark:bg-pos-muted/50 mx-auto mt-2.5 mb-2 sm:hidden"
+            className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0"
             aria-hidden="true"
           />
           <div className="p-3 sm:p-3.5 border-b border-pos-border bg-pos-card flex items-center justify-between gap-2">
@@ -175,7 +175,7 @@ export const ModalShell: React.FC<ModalShellProps> = ({
 
         {/* Zone 3 — pinned action bar (flex sibling, never sticky). */}
         {footer && (
-          <div className="flex-none border-t border-pos-border bg-pos-card px-3 sm:px-3.5 py-2.5 sm:py-3 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
+          <div className="flex-none border-t border-pos-border bg-pos-card px-3 sm:px-3.5 py-2.5 sm:py-3 pb-[max(1rem,var(--safe-bottom))]">
             {footer}
           </div>
         )}

@@ -674,3 +674,95 @@ vs 500 ms poll). No app change.
 `test/specs/smoke/phase2-smoke.e2e.ts` remains untracked (Phase 3's money
 spec was committed as 3fdd298 scope; smoke spec + D2/D5/D7 code edits above
 are working-tree). `money.ts` / `money.rs` re-verified byte-frozen.
+
+---
+
+## 20. Gate 4 verification (2026-10-10, Phase 4 — stress/soak/fault)
+
+Harness (all dep-free, no new dependencies): `scripts/test_money_properties.mts`
+(Tier A node) · `src-tauri/tests/money_properties.rs` (Tier A Rust) ·
+`src/main.tsx` `window.__posStress.runBatch` (VITE_E2E=1 only; prod dist
+golf-proven absent) · `test/specs/stress/phase4-stress.e2e.ts` (B1/B2/B3/B4) ·
+`phase4-close.e2e.ts` (T-B4s small-scale) · `phase4-race.e2e.ts` (isolated
+parallel race) · `phase4-soak.e2e.ts` (C1 burst + C2 loop) ·
+`scripts/sample-proc.mjs` · `phase4-fault.e2e.ts` + `scripts/fault-kill.mjs`
++ `scripts/fault-campaign.mjs` + `scripts/check-atomicity.mjs`.
+New npm scripts: `test:smoke`, `test:money:e2e`, `golden:generate`,
+`test:oracle`, `test:golden` (package.json still working-tree).
+
+### Results (EV-013…017)
+
+- Tier A: node 100k x P1-P7 green; Rust 4 x 100k green (seed 20260410).
+- Tier B (N=1000, seed 20260410, DEBUG profile — functional signal only):
+  B1 1000/1000, p50=480.8ms p95=509.4 p99=531.5, ledger exact, receipts
+  unique, stocks non-negative; B2 5/8 sold, STOCK_EMPTY exact, stock 0;
+  B3 1xOK + 5xREFUND_EXCEEDS, single refund row. B4@1000 STALLED (>25 min,
+  defect below); B4s@60 green incl. NO_ACTIVE_SHIFT refusal.
+- Tier C: 30/30 UI burst exact; 1021 soak sales/12 min, ledger clean every
+  5th; sampler 25 samples, RSS 65.2→72.6 MB drift 11.4% PASS, handles
+  614→616. Full 200-sale/60-min shape is nightly (same spec, POS_SOAK_MIN).
+- Tier D: 12 cycles (seed 20260410), 9 survivors green, 3 kills landed,
+  12/12 atomicity CLEAN (integrity ok, no headless/orphan/negative/dup).
+- Race probe (isolated): 3 parallel native refunds → exactly one OK +
+  2xREFUND_EXCEEDS, no stall, ledger clean.
+
+### Defects / anomalies
+
+- **P1 PERF (new): shift-close stall after volume.** Identical close flow
+  greens at 60 sales (32 s, T-B4s) but never completes in 25 min after 1000
+  sales (T-B4). Suspects: getInventoryValuation/getAllShifts scaling,
+  close-modal live recompute over 1000 rows, mirror convergence. Needs
+  profiling + a close-time budget before release. Logic itself proven.
+- **Native contention stall (bounded, contained):** one 6-parallel refund
+  execute unsettled (session wedged for later commands); fan-out-3 probe
+  resolves cleanly. Refund bursts above ~3 parallel callers need backoff
+  semantics or a documented concurrency limit — owner call.
+- **Runner notes (fixed in-tree):** mocha ignores per-test timeout args in
+  this runner (suite `this.timeout` wins); `tauri build` serves the bundled
+  frontend, NOT devUrl (wdio.conf comment corrected — vite was never
+  needed for e2e); VITE_E2E=1 stamps the e2e bundle (build-e2e.mjs).
+- 10k-sale Tier B, 60-min soak, 100-cycle fault: nightly shapes, same
+  harness (STRESS_SALES / POS_SOAK_MIN / --cycles).
+
+## 21. Gate 4.4 re-verification (2026-10-12, EV-018/018b/019) — both P4 anomalies closed
+
+Re-ran the Phase 4 Tier B gate after the harness fix below. SHA `f25d5b9` dirty,
+seed `20260410`, `POS_E2E_WIPE=1`, DEBUG e2e profile (functional signal only).
+
+### Root cause — `ALREADY_PROCESSING` storm at N≥100 (harness, not app)
+
+The storm was **not** an app defect. `browser.execute` on an async callback that
+runs longer than the WebDriver page **script timeout (~30 s)** is re-invoked by
+the driver while the ORIGINAL async wrapper is still executing in the page.
+Instrumented proof (`window.__batchDiag`, since reverted): two entries with the
+identical wrapper stack `Object.runBatch ← async <anonymous>:55:42`, **30326 ms
+apart**, overlapping (`__ppActive` reached 2); CALL1 ran clean sales 0→59, CALL2
+restarted at sale 0 and raced all 100 against the single-flight guard still held
+by CALL1 → every call denied at 1–7 ms. A 100-sale execute at ~0.47 s/sale ≈ 47 s
+> 30 s, so it always tripped; a 30-sale run (≈14 s) never did (why T-B1@30 was
+green). The result array returned to the test was nondeterministically CALL1's
+(partial ok) or CALL2's (all denied) — explaining the 0/100 … 63/100 variance.
+The app's guard behaved exactly as designed (fail-closed; no double-book; the
+ledger stayed consistent — T-B4 variance was already 0 at N=30).
+
+**Fix (harness only):** `phase4-stress.e2e.ts` `runBatch` and the close-spec
+loop now chunk `browser.execute` to **20 sales per call** (~9 s), awaiting
+between calls; order preserved by concatenation. Each execute stays well under
+the script timeout, so one `processPayment` stream reaches the guard at a time.
+No `src/` change was needed for the storm.
+
+### Results (all green)
+
+- **T-B1 1000/1000 ok**, p50=479.1 ms p95=517.6 p99=544.4 **`ms>5000=0`**,
+  receipts unique, ledger exact, stocks ≥0 — 8 m 27 s (EV-018).
+- **T-B2** oversell guard 5/8 sold, `STOCK_EMPTY`; **T-B3** 1×OK + 5×
+  `REFUND_EXCEEDS`, single refund row (EV-018).
+- **T-B4** booked `expected=6706500 counted=6706500` **variance=0**; post-close
+  sale `NO_ACTIVE_SHIFT` (EV-018). ⇒ **P1 PERF shift-close stall CLOSED.**
+- **T-B4s close isolation** (60 sales + UI close): 60/60 ok, **close duration
+  124 ms** («10 s budget), post-close `NO_ACTIVE_SHIFT` (EV-018b).
+- **Race probe, 6-parallel native refunds:** exactly one `OK` + 5×
+  `REFUND_EXCEEDS:E2E-STR-A:requested=2:remaining=0`, **no stall**, 6 s
+  (EV-019). ⇒ **native 6-way contention no longer wedges** (prior §20 note
+  observed a 6-parallel stall; now resolves cleanly — the Rust BUSY-retry loop
+  fixed it).

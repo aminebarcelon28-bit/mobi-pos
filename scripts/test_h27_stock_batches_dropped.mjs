@@ -56,17 +56,36 @@ function check(name, cond, extra) {
 rmSync(SHIM, { recursive: true, force: true });
 mkdirSync(join(SHIM, 'db'), { recursive: true });
 mkdirSync(join(SHIM, 'lane'), { recursive: true });
+mkdirSync(join(SHIM, 'utils'), { recursive: true });
 copyFileSync(join(SRC_SYNC, 'genericApply.ts'), join(SHIM, 'lane', 'genericApply.ts'));
 // genericApply also imports `../db/imeiAnchorSchema` (the IMEI-anchor column
-// probe). It is a dependency-free module, so the REAL source is copied next to
+// probe) and `../utils/isoInstant` (zero-dependency instant normalizer).
+// Both are dependency-free modules, so the REAL sources are copied next to
 // the stubs — no behaviour is faked.
 copyFileSync(join(ROOT, 'src', 'db', 'imeiAnchorSchema.ts'), join(SHIM, 'db', 'imeiAnchorSchema.ts'));
+copyFileSync(join(ROOT, 'src', 'utils', 'isoInstant.ts'), join(SHIM, 'utils', 'isoInstant.ts'));
 {
   const p = join(SHIM, 'lane', 'genericApply.ts');
   let t = readFileSync(p, 'utf8');
   t = t.replace(/from '\.\.\/db\/database'/g, "from '../db/database.js'")
        .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'")
-       .replace(/from '\.\.\/db\/imeiAnchorSchema'/g, "from '../db/imeiAnchorSchema.ts'");
+       .replace(/from '\.\.\/db\/imeiAnchorSchema'/g, "from '../db/imeiAnchorSchema.ts'")
+       .replace(/from '\.\.\/utils\/isoInstant'/g, "from '../utils/isoInstant.ts'");
+  // Self-healing: any FUTURE `../utils/*` import gained by genericApply is
+  // copied from the real source automatically instead of breaking the shim
+  // with ERR_MODULE_NOT_FOUND (root cause of the 2026-10-06 harness outage).
+  const missing = [...new Set([...t.matchAll(/from '(\.\.\/utils\/[^']+)'/g)].map((m) => m[1]))];
+  for (const rel of missing) {
+    const base = rel.split('/').pop().replace(/\.ts$/, '');
+    const real = join(ROOT, 'src', 'utils', `${base}.ts`);
+    const dest = join(SHIM, 'utils', `${base}.ts`);
+    try {
+      copyFileSync(real, dest);
+      t = t.split(`from '${rel}'`).join(`from '../utils/${base}.ts'`);
+    } catch {
+      throw new Error(`h27 shim: cannot resolve new dependency ${rel} — stub it explicitly`);
+    }
+  }
   writeFileSync(p, t);
 }
 writeFileSync(join(SHIM, 'db', 'database.js'), `
@@ -260,7 +279,11 @@ console.log('\n[8] FIXED: the REAL push SQL writes real columns + KV + guard');
 // reconstruct it from memory — the placeholder count must match exactly.
 {
   const sm = readFileSync(join(SRC_SYNC, 'SyncManager.ts'), 'utf8');
-  const branchIdx = sm.indexOf("if (op.entity_type === 'stock_batches')");
+  // Anchor on the push statement itself, not the first `if (op.entity_type`
+  // mention: guard helpers (markGuardStale self-heal) and observers match the
+  // same entity string earlier in the file — indexOf would slice the wrong
+  // 4000-char window and fail every branch check.
+  const branchIdx = sm.indexOf('INSERT INTO stock_batches (batch_id, product_id, quantity_remaining');
   check('toRemoteUpsert has an explicit stock_batches branch', branchIdx !== -1);
   if (branchIdx !== -1) {
     const segment = sm.slice(branchIdx, branchIdx + 4000);

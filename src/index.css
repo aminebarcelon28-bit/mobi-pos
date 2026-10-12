@@ -25,14 +25,31 @@
 
   /* Material Design 3 Tonal Surface Tokens */
   --md-surface: #f8fafc;
+  --md-surface-dim: #edeef2;
+  --md-surface-bright: #ffffff;
+  --md-surface-container-lowest: #ffffff;
   --md-surface-container-low: #f1f5f9;
   --md-surface-container: #ffffff;
   --md-surface-container-high: #e2e8f0;
   --md-surface-container-highest: #cbd5e1;
+  --md-on-surface: #0f172a;
+  --md-on-surface-variant: #475569;
+  --md-outline: #cbd5e1;
+  --md-outline-variant: #e2e8f0;
 
   /* iOS 18 Frosted Glass Tokens */
   --ios-glass-bg: rgba(255, 255, 255, 0.85);
   --ios-glass-border: rgba(0, 0, 0, 0.08);
+  --ios-glass-highlight: rgba(255, 255, 255, 0.65);
+  --ios-glass-blur: 24px;
+  --ios-glass-saturate: 180%;
+
+  /* Motion physics tokens (M3 Expressive + iOS 18 Spring) */
+  --motion-spring-press: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --motion-press-in: cubic-bezier(0.25, 1, 0.5, 1);
+  --motion-sheet-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-sheet-exit: cubic-bezier(0.7, 0, 0.84, 0);
+  --motion-duration-sheet: 280ms;
 
   /* Universal safe-area tokens (enterprise App Shell).
      Guaranteed minimums keep headers/footers clear of the status bar,
@@ -41,6 +58,7 @@
   --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
   --safe-left: max(env(safe-area-inset-left, 0px), 0px);
   --safe-right: max(env(safe-area-inset-right, 0px), 0px);
+  --keyboard-height: 0px;
 
   /* Centralized shape + status tokens (values already repeated 3+ times
      across the codebase: rounded-2xl cards, M3 28px sheets, status tints). */
@@ -61,14 +79,24 @@ html.dark {
 
   /* Material Design 3 Dark Tonal Surface Tokens */
   --md-surface: #0b0f19;
+  --md-surface-dim: #070a12;
+  --md-surface-bright: #161e2e;
+  --md-surface-container-lowest: #080c14;
   --md-surface-container-low: #0f1420;
   --md-surface-container: #121824;
   --md-surface-container-high: #1a2234;
   --md-surface-container-highest: #243046;
+  --md-on-surface: #e2e8f0;
+  --md-on-surface-variant: #8e9bb0;
+  --md-outline: #2a364f;
+  --md-outline-variant: #1a2234;
 
   /* iOS 18 Dark Frosted Glass Tokens */
   --ios-glass-bg: rgba(18, 24, 36, 0.85);
   --ios-glass-border: rgba(255, 255, 255, 0.08);
+  --ios-glass-highlight: rgba(255, 255, 255, 0.12);
+  --ios-glass-blur: 24px;
+  --ios-glass-saturate: 180%;
 }
 
 @layer base {
@@ -84,6 +112,9 @@ html.dark {
     background-color: var(--pos-bg);
     color: var(--pos-text);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", Inter, Roboto, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
@@ -142,11 +173,11 @@ html.dark .text-pos-accent-indigo { color: #818cf8; }
 @layer utilities {
   .pt-safe { padding-top: var(--safe-top); }
   .pb-safe { padding-bottom: var(--safe-bottom); }
-  .pl-safe { padding-left: max(env(safe-area-inset-left, 0px), 0px); }
-  .pr-safe { padding-right: max(env(safe-area-inset-right, 0px), 0px); }
+  .pl-safe { padding-left: var(--safe-left); }
+  .pr-safe { padding-right: var(--safe-right); }
   .px-safe {
-    padding-left: max(env(safe-area-inset-left, 0px), 0px);
-    padding-right: max(env(safe-area-inset-right, 0px), 0px);
+    padding-left: var(--safe-left);
+    padding-right: var(--safe-right);
   }
   .py-safe {
     padding-top: var(--safe-top);
@@ -154,6 +185,28 @@ html.dark .text-pos-accent-indigo { color: #818cf8; }
   }
   .mt-safe-top { margin-top: var(--safe-top); }
   .mb-safe-bottom { margin-bottom: var(--safe-bottom); }
+  .ml-safe { margin-left: var(--safe-left); }
+  .mr-safe { margin-right: var(--safe-right); }
+  .mx-safe {
+    margin-left: var(--safe-left);
+    margin-right: var(--safe-right);
+  }
+  .pb-keyboard-safe { padding-bottom: max(var(--safe-bottom), var(--keyboard-height, 0px)); }
+
+  /* Material Design 3 Tonal Surface Utilities */
+  .bg-md-surface { background-color: var(--md-surface); }
+  .bg-md-surface-dim { background-color: var(--md-surface-dim); }
+  .bg-md-surface-bright { background-color: var(--md-surface-bright); }
+  .bg-md-surface-container-lowest { background-color: var(--md-surface-container-lowest); }
+  .bg-md-surface-container-low { background-color: var(--md-surface-container-low); }
+  .bg-md-surface-container { background-color: var(--md-surface-container); }
+  .bg-md-surface-container-high { background-color: var(--md-surface-container-high); }
+  .bg-md-surface-container-highest { background-color: var(--md-surface-container-highest); }
+  .text-md-on-surface { color: var(--md-on-surface); }
+  .text-md-on-surface-variant { color: var(--md-on-surface-variant); }
+  .border-md-outline { border-color: var(--md-outline); }
+  .border-md-outline-variant { border-color: var(--md-outline-variant); }
+
   /* Dynamic viewport height (keyboard / browser-chrome resilient) */
   .h-dvh-shell { height: 100dvh; }
   .min-h-dvh-shell { min-height: 100dvh; }
@@ -197,12 +250,17 @@ html.dark .text-pos-accent-indigo { color: #818cf8; }
     opacity: 0.35;
     margin: 8px auto;
   }
-  /* Tactile button press feedback */
+  /* Tactile button press feedback with authentic spring rebound */
   .active-press {
-    transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform 0.2s var(--motion-spring-press, cubic-bezier(0.34, 1.4, 0.64, 1));
+    will-change: transform;
+    -webkit-user-select: none;
+    user-select: none;
   }
   .active-press:active {
     transform: scale(0.96);
+    transition-duration: 0.08s;
+    transition-timing-function: var(--motion-press-in, cubic-bezier(0.25, 1, 0.5, 1));
   }
   /* M3 28dp sheet corner radius */
   .rounded-t-m3 {
@@ -215,12 +273,18 @@ html.dark .text-pos-accent-indigo { color: #818cf8; }
       border-top-right-radius: 28px !important;
     }
   }
-  /* iOS 18 Frosted Glass Material */
+  /* iOS 18 Frosted Glass Material with specular top sheen */
   .ios-glass {
     background-color: var(--ios-glass-bg);
-    backdrop-filter: blur(24px) saturate(180%);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(var(--ios-glass-blur, 24px)) saturate(var(--ios-glass-saturate, 180%));
+    -webkit-backdrop-filter: blur(var(--ios-glass-blur, 24px)) saturate(var(--ios-glass-saturate, 180%));
     border-color: var(--ios-glass-border);
+    box-shadow: inset 0 1px 0 0 var(--ios-glass-highlight, rgba(255, 255, 255, 0.4));
+  }
+  @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    .ios-glass {
+      background-color: var(--pos-panel);
+    }
   }
   /* Strict 48x48dp mobile touch hitbox floor */
   .touch-target {
@@ -248,6 +312,133 @@ html.dark .text-pos-accent-indigo { color: #818cf8; }
   /* Centralized card radius alias (same pixels as rounded-2xl). */
   .rounded-pos-card {
     border-radius: var(--pos-radius-card);
+  }
+
+  /* Entrance animations for bottom sheets, modals, and toasts */
+  .animate-in {
+    animation-duration: var(--motion-duration-sheet, 280ms);
+    animation-timing-function: var(--motion-sheet-enter, cubic-bezier(0.16, 1, 0.3, 1));
+    animation-fill-mode: both;
+  }
+  .slide-in-from-bottom-5 {
+    animation-name: enter-from-bottom-5;
+  }
+  .slide-in-from-bottom-2 {
+    animation-name: enter-from-bottom-2;
+  }
+  .slide-in-from-bottom-full,
+  .bottom-sheet-slide-in {
+    animation-name: sheet-enter-bottom;
+  }
+  .slide-in-from-top-1 {
+    animation-name: enter-from-top-1;
+  }
+  .slide-in-from-top-2 {
+    animation-name: enter-from-top-2;
+  }
+  .slide-in-from-top-4 {
+    animation-name: enter-from-top-4;
+  }
+  .fade-in {
+    animation-name: enter-fade;
+  }
+  .zoom-in-95 {
+    animation-name: enter-zoom-95;
+  }
+  @media (min-width: 640px) {
+    .sm\:zoom-in-95 {
+      animation-name: enter-zoom-95;
+    }
+    .sm\:fade-in {
+      animation-name: enter-fade;
+    }
+  }
+}
+
+/* Keyframes for entrance transitions */
+@keyframes sheet-enter-bottom {
+  from {
+    transform: translateY(100%);
+    opacity: 0.8;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes enter-from-bottom-5 {
+  from {
+    transform: translateY(1.25rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes enter-from-bottom-2 {
+  from {
+    transform: translateY(0.5rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes enter-from-top-1 {
+  from {
+    transform: translateY(-0.25rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes enter-from-top-2 {
+  from {
+    transform: translateY(-0.5rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes enter-from-top-4 {
+  from {
+    transform: translateY(-1rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes enter-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes enter-zoom-95 {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
   }
 }
 
@@ -1196,5 +1387,52 @@ html.dark .hotkey-badge {
 
 .animate-lock-shake {
   animation: lock-shake 0.35s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+/* MoneyInput — Option B decoupled unit badge (no CSS modules in repo).
+   Logical properties throughout → RTL-safe. */
+.money-input-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.money-input__control {
+  position: relative; /* anchor for the absolute unit badge */
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.money-input__field {
+  width: 100%;
+  padding-inline-end: 3rem; /* room for the badge */
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.money-input__unit {
+  position: absolute;
+  inset-inline-end: 1rem;
+  pointer-events: none; /* badge never steals clicks */
+  user-select: none;
+  opacity: 0.7;
+  font-weight: 600;
+}
+
+.money-input__live {
+  display: block;
+  min-height: 1rem; /* no layout shift when the rejection appears */
+}
+
+.money-input__echo {
+  color: var(--pos-muted);
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.money-input__error {
+  color: #b3261e;
+  font-size: 0.75rem;
 }
 

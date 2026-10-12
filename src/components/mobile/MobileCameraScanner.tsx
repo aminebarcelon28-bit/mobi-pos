@@ -42,6 +42,8 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
   const [hasTorch, setHasTorch] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [isScanningActive, setIsScanningActive] = useState(false);
+  const [isSuccessPulsing, setIsSuccessPulsing] = useState(false);
+  const pulseTimeoutRef = useRef<number | null>(null);
 
   // Refs (not state/deps): re-creating startCamera tears down getUserMedia
   // and blinds the scanner for ~1s — the main cause of flaky screen-QR reads.
@@ -51,6 +53,39 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
   onErrorRef.current = onError;
   const busyRef = useRef(false);
   const lastScanRef = useRef<{ data: string; at: number } | null>(null);
+
+  // Decode success handler: triggers visual reticle pulse, soundEngine beep,
+  // and medium haptic vibration with time-based duplicate suppression.
+  const emitScan = useCallback((content: string) => {
+    const trimmed = (content || '').trim();
+    if (!trimmed) return;
+
+    const now = Date.now();
+    const last = lastScanRef.current;
+    if (!last || last.data !== trimmed || now - last.at > 2000) {
+      lastScanRef.current = { data: trimmed, at: now };
+
+      // 1. Visual scan reticle pulse confirmation
+      setIsSuccessPulsing(true);
+      if (pulseTimeoutRef.current) {
+        window.clearTimeout(pulseTimeoutRef.current);
+      }
+      pulseTimeoutRef.current = window.setTimeout(() => {
+        setIsSuccessPulsing(false);
+      }, 900);
+
+      // 2. Audio & Haptic feedback: instant beep via soundEngine + medium haptic vibration
+      soundEngine.playScan();
+      soundEngine.triggerHaptic('medium');
+
+      // 3. Emit decoded payload to consumer
+      onScanRef.current(trimmed);
+    }
+  }, []);
+
+  const emitScanRef = useRef(emitScan);
+  emitScanRef.current = emitScan;
+
   // jsQR is lazy-loaded (P3.1) so its ~100 KB stays out of the eager boot
   // chunk; decode frames are skipped until it arrives (first frames only).
   // Structural type mirrors jsqr's d.ts (its export map defeats type queries);
@@ -79,6 +114,10 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
       window.clearInterval(scanIntervalRef.current);
       scanIntervalRef.current = null;
     }
+    if (pulseTimeoutRef.current) {
+      window.clearTimeout(pulseTimeoutRef.current);
+      pulseTimeoutRef.current = null;
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => {
         try {
@@ -95,6 +134,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
     setTorchOn(false);
     setHasTorch(false);
     setIsScanningActive(false);
+    setIsSuccessPulsing(false);
   }, []);
 
   // Initialize and start camera
@@ -236,26 +276,6 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
         if (streamRef.current === stream) streamRef.current = null;
         return;
       }
-      const emitScan = (content: string) => {
-        // Time-based duplicate suppression (ref, no re-render, no restart).
-        const now = Date.now();
-        const last = lastScanRef.current;
-        if (!last || last.data !== content || now - last.at > 2000) {
-          lastScanRef.current = { data: content, at: now };
-
-          // Audio & Haptic feedback
-          soundEngine.playScan();
-          if (typeof navigator !== 'undefined' && navigator.vibrate) {
-            try {
-              navigator.vibrate([40, 30, 80]);
-            } catch {
-              // Ignore vibration failure
-            }
-          }
-
-          onScanRef.current(content);
-        }
-      };
       const interval = window.setInterval(() => {
         // Skip while a frame is still decoding: overlapping runs jank
         // mid-range phones and delay the very detection we wait for.
@@ -276,7 +296,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
                   .map((c) => c?.rawValue)
                   .find((v) => v && v.trim().length > 0);
                 if (raw) {
-                  emitScan(raw.trim());
+                  emitScanRef.current(raw.trim());
                   return;
                 }
               } catch {
@@ -311,7 +331,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
               : null;
 
             if (code && code.data && code.data.trim().length > 0) {
-              emitScan(code.data.trim());
+              emitScanRef.current(code.data.trim());
             }
           } finally {
             busyRef.current = false;
@@ -426,9 +446,11 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
 
             {/* Viewfinder Target Frame (wide 288x160 for barcode, 256x256 for QR) */}
             <div
-              className={`relative rounded-2xl border-2 border-cyan-400/40 bg-transparent flex items-center justify-center overflow-hidden transition-all duration-300 ${
-                mode === 'barcode' ? 'w-72 h-40' : 'w-64 h-64'
-              }`}
+              className={`relative rounded-2xl border-2 flex items-center justify-center overflow-hidden transition-all duration-300 ${
+                isSuccessPulsing
+                  ? 'border-emerald-400 bg-emerald-500/20 scale-105 shadow-[0_0_24px_#34d399]'
+                  : 'border-cyan-400/40 bg-transparent scale-100'
+              } ${mode === 'barcode' ? 'w-72 h-40' : 'w-64 h-64'}`}
             >
               {/* Corner Accents */}
               <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-cyan-400 rounded-tl-lg" />
@@ -450,7 +472,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
           {/* Bottom dark veil with instruction hint */}
           <div className="w-full flex-1 bg-black/60 backdrop-blur-[1px] flex flex-col items-center justify-start pt-4 px-6 text-center">
             <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-slate-900/85 border border-cyan-500/40 text-cyan-300 text-xs font-bold shadow-lg">
-              <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" aria-hidden="true" />
               <span>
                 {hintText || (mode === 'barcode' ? "Alignez le code-barres de l'article" : 'Cadrez le QR Code affiché sur la caisse PC')}
               </span>
@@ -479,7 +501,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
               }`}
               title={torchOn ? 'Éteindre la torche' : 'Allumer la torche'}
             >
-              {torchOn ? <Flashlight className="w-4 h-4" /> : <FlashlightOff className="w-4 h-4" />}
+              {torchOn ? <Flashlight className="w-4 h-4" aria-hidden="true" /> : <FlashlightOff className="w-4 h-4" aria-hidden="true" />}
             </button>
           )}
 
@@ -490,7 +512,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
             className="min-h-[44px] min-w-[44px] flex items-center justify-center p-2.5 rounded-xl bg-black/50 text-white border border-white/20 hover:bg-black/70 backdrop-blur-md transition cursor-pointer"
             title="Changer de caméra"
           >
-            <SwitchCamera className="w-4 h-4" />
+            <SwitchCamera className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
       )}
@@ -499,7 +521,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
       {hasPermission === false && (
         <div className="absolute inset-0 bg-pos-card/95 backdrop-blur-md p-6 flex flex-col items-center justify-center text-center space-y-3.5 z-20 overflow-y-auto">
           <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 shadow-lg shadow-rose-500/10">
-            <AlertCircle className="w-6 h-6" />
+            <AlertCircle className="w-6 h-6" aria-hidden="true" />
           </div>
           <div className="space-y-1">
             <h4 className="text-sm font-black text-pos-text">{errorTitle}</h4>
@@ -524,7 +546,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
             onClick={startCamera}
             className="min-h-[44px] px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-cyan-500/20 active:scale-95"
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className="w-4 h-4" aria-hidden="true" />
             <span>Réessayer l'accès</span>
           </button>
         </div>

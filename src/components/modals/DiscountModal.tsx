@@ -174,10 +174,10 @@ export const DiscountModal: React.FC = () => {
       : 0;
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[92dvh]">
+    <div role="dialog" aria-modal="true" aria-label="Remise sur panier" data-testid="discount-dialog" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[94dvh] sm:max-h-[90dvh]">
         {/* Mobile Pull Handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* Header */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
@@ -279,6 +279,7 @@ export const DiscountModal: React.FC = () => {
             {discountMode === 'percent' ? (
               <input
                 type="number"
+                data-testid="discount-percent"
                 inputMode="decimal"
                 min="0"
                 max="100"
@@ -348,7 +349,7 @@ export const DiscountModal: React.FC = () => {
 
             <div className="flex justify-between items-baseline pt-2 border-t border-pos-border/60">
               <span className="font-extrabold text-pos-text uppercase text-[11px]">Nouveau Total à Payer :</span>
-              <span className="text-lg font-black text-emerald-400 tracking-tight">{formatDZD(finalTotal)}</span>
+              <span data-testid="discount-live-total" className="text-lg font-black text-emerald-400 tracking-tight">{formatDZD(finalTotal)}</span>
             </div>
           </div>
 
@@ -360,6 +361,7 @@ export const DiscountModal: React.FC = () => {
               </p>
               <input
                 type="password"
+                data-testid="discount-pin"
                 inputMode="numeric"
                 pattern="[0-9]*"
                 autoComplete="current-password"
@@ -377,7 +379,7 @@ export const DiscountModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col-reverse sm:flex-row justify-end gap-2 shrink-0">
+        <div className="p-3.5 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex flex-col-reverse sm:flex-row justify-end gap-2 shrink-0">
           <button
             onClick={closeModal}
             className="w-full sm:w-auto min-h-[42px] px-4 py-2 text-xs font-bold text-pos-muted hover:text-pos-text transition cursor-pointer text-center"
@@ -385,6 +387,7 @@ export const DiscountModal: React.FC = () => {
             Annuler
           </button>
           <button
+            data-testid="discount-apply"
             onClick={handleApply}
             className="w-full sm:w-auto min-h-[46px] px-6 py-2.5 bg-gradient-to-r from-purple-600 to-emerald-500 hover:from-purple-500 hover:to-emerald-400 text-slate-950 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-lg shadow-purple-600/20 cursor-pointer active:scale-95 transition"
           >

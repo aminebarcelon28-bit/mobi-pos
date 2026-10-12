@@ -8,6 +8,10 @@ interface UseMobileBackNavigationOptions {
   setActiveTab?: (tab: MobileTab) => void;
   isMobile?: boolean;
   onRequestCartProtection?: () => boolean;
+  isCartProtectionOpen?: boolean;
+  onDismissCartProtection?: () => void;
+  isCustomModalOpen?: boolean;
+  onDismissCustomModal?: () => void;
 }
 
 export function useMobileBackNavigation({
@@ -15,48 +19,85 @@ export function useMobileBackNavigation({
   setActiveTab,
   isMobile = true,
   onRequestCartProtection,
+  isCartProtectionOpen = false,
+  onDismissCartProtection,
+  isCustomModalOpen = false,
+  onDismissCustomModal,
 }: UseMobileBackNavigationOptions = {}) {
   const { activeModal, closeModal } = usePosStore();
   const { showToast } = useToast();
   const lastBackPressTimeRef = useRef<number>(0);
   const isPopstateHandlingRef = useRef<boolean>(false);
   const prevModalRef = useRef<string | null>(null);
+  const prevSheetRef = useRef<boolean>(false);
 
-  // Sync history state when modals open or close programmatically
+  // Sync history state when modals or bottom sheets open/close programmatically
   useEffect(() => {
     if (!isMobile || typeof window === 'undefined') return;
 
-    // When a modal opens, push history state
-    if (activeModal !== null && prevModalRef.current === null) {
-      window.history.pushState({ mobiModal: activeModal }, '');
-    } else if (activeModal === null && prevModalRef.current !== null) {
-      // Modal closed programmatically
-      if (!isPopstateHandlingRef.current && window.history.state?.mobiModal) {
+    const hasOpenModal = activeModal !== null;
+    const hasOpenSheet = isCartProtectionOpen || isCustomModalOpen;
+    const hadOpenModal = prevModalRef.current !== null;
+    const hadOpenSheet = prevSheetRef.current;
+
+    // When a modal or sheet opens, push history state if not already pushed
+    if ((hasOpenModal && !hadOpenModal) || (hasOpenSheet && !hadOpenSheet)) {
+      window.history.pushState(
+        { mobiModal: activeModal, mobiSheet: hasOpenSheet },
+        ''
+      );
+    } else if ((!hasOpenModal && hadOpenModal) || (!hasOpenSheet && hadOpenSheet)) {
+      // Modal or sheet closed programmatically
+      if (
+        !isPopstateHandlingRef.current &&
+        (window.history.state?.mobiModal || window.history.state?.mobiSheet)
+      ) {
         window.history.back();
       }
     }
+
     prevModalRef.current = activeModal;
+    prevSheetRef.current = hasOpenSheet;
     isPopstateHandlingRef.current = false;
-  }, [activeModal, isMobile]);
+  }, [activeModal, isCartProtectionOpen, isCustomModalOpen, isMobile]);
 
   // Hook into popstate, native Android back, and keyboard Escape
   useEffect(() => {
     if (!isMobile || typeof window === 'undefined') return;
 
     // Ensure root state exists so back button can be intercepted
-    if (!window.history.state || (!window.history.state.mobiRoot && !window.history.state.mobiModal)) {
+    if (
+      !window.history.state ||
+      (!window.history.state.mobiRoot &&
+        !window.history.state.mobiModal &&
+        !window.history.state.mobiSheet)
+    ) {
       window.history.replaceState({ mobiRoot: true }, '');
     }
 
     const handleBackAction = (e?: Event) => {
-      // 1. If a modal is currently open, close it!
+      // 1. If an active store modal is currently open, gracefully dismiss it first!
       if (usePosStore.getState().activeModal !== null) {
         if (e && e.cancelable) e.preventDefault();
         closeModal();
         return;
       }
 
-      // 2. If user is in checkout and has items in cart, protect active cart!
+      // 2. If a cart protection bottom sheet is currently open, dismiss it gracefully!
+      if (isCartProtectionOpen) {
+        if (e && e.cancelable) e.preventDefault();
+        onDismissCartProtection?.();
+        return;
+      }
+
+      // 3. If any custom modal/sheet is open, dismiss it!
+      if (isCustomModalOpen) {
+        if (e && e.cancelable) e.preventDefault();
+        onDismissCustomModal?.();
+        return;
+      }
+
+      // 4. If user is in checkout and has items in cart, guard active cart!
       if (activeTab === 'checkout' && usePosStore.getState().cart.length > 0) {
         if (onRequestCartProtection && onRequestCartProtection()) {
           if (e && e.cancelable) e.preventDefault();
@@ -64,14 +105,14 @@ export function useMobileBackNavigation({
         }
       }
 
-      // 3. If user is in a secondary tab (checkout, catalog, kredy, management), go back to main activity!
+      // 5. If user is in a secondary tab (checkout, catalog, kredy, management, diagnostics), go back to main activity!
       if (activeTab && activeTab !== 'activity' && setActiveTab) {
         if (e && e.cancelable) e.preventDefault();
         setActiveTab('activity');
         return;
       }
 
-      // 3. At root: double-tap prevention
+      // 6. At root ('activity' tab): double-tap prevention before app exit
       const now = Date.now();
       if (now - lastBackPressTimeRef.current < 2000) {
         // Allow default Android exit / window close
@@ -88,6 +129,9 @@ export function useMobileBackNavigation({
     const onPopState = (e: PopStateEvent) => {
       isPopstateHandlingRef.current = true;
       handleBackAction(e);
+      requestAnimationFrame(() => {
+        isPopstateHandlingRef.current = false;
+      });
     };
 
     // Native Android WebView event from MainActivity.kt
@@ -111,5 +155,17 @@ export function useMobileBackNavigation({
       window.removeEventListener('mobi:back-pressed', onAndroidBack);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [activeModal, activeTab, closeModal, setActiveTab, showToast, isMobile]);
+  }, [
+    activeModal,
+    activeTab,
+    closeModal,
+    isCartProtectionOpen,
+    isCustomModalOpen,
+    isMobile,
+    onDismissCartProtection,
+    onDismissCustomModal,
+    onRequestCartProtection,
+    setActiveTab,
+    showToast,
+  ]);
 }

@@ -173,7 +173,8 @@ export interface ShiftSlice {
     amount: number,
     type: 'EXPENSE' | 'MANUAL_DEPOSIT',
     reason: string,
-    cashierName?: string
+    cashierName?: string,
+    movementId?: string
   ) => Promise<{ success: boolean; movement?: CashMovement; reason?: string }>;
   closeShift: (
     blindCount: number,
@@ -360,7 +361,7 @@ export interface UISlice {
    * a local mint under Tauri (that would re-plant a fast hash AND violate
    * native-write-only). Returns the minted envelope generation (`v2`/`v1`).
    */
-  rotatePinCredential: (userId: string, newPin: string, isManager: boolean, opts?: { recoveryReset?: boolean }) => Promise<{ format: string }>;
+  rotatePinCredential: (userId: string, newPin: string, isManager: boolean, opts?: { recoveryReset?: boolean; supervisorPin?: string }) => Promise<{ format: string }>;
   /**
    * Re-read `manager_pin` + `cashier_users` from the SQLite authority into
    * the Dexie mirror and memory (Tauri only). Used after native `pin_set`,
@@ -370,7 +371,7 @@ export interface UISlice {
   // P11.3: returns a Promise so callers that need the audit row persisted before
   // proceeding (PIN change, customer delete) can await it. Callers that ignore the
   // return value still compile (fire-and-forget stays valid).
-  logSecurityAction: (action: string, details: string, user?: string, requiresPin?: boolean) => Promise<void>;
+  logSecurityAction: (action: string, details: string, user?: string, requiresPin?: boolean, idempotencyKey?: string) => Promise<void>;
   verifyManagerPin: (pin: string) => boolean;
 
   lockScreen: () => void;
@@ -463,6 +464,20 @@ export interface UISlice {
   importDatabase: (jsonString: string, actor?: string) => Promise<{ success: boolean; reason?: string; auditOk?: boolean }>;
 }
 
+export interface SyncSlice {
+  /** Signed-lane backlog (drain worker telemetry; Turso badge keeps globals). */
+  outboxPendingCount: number;
+  outboxInFlightCount: number;
+  isSyncing: boolean;
+  lastDrainAt: string | null;
+  lastDrainError: string | null;
+  /** True while a gateway URL is configured (worker armed). */
+  drainArmed: boolean;
+  startSyncDrain: () => void;
+  stopSyncDrain: () => void;
+  refreshSyncHealth: () => Promise<void>;
+}
+
 export type PosState = CartSlice &
   CatalogSlice &
   CustomerSlice &
@@ -470,4 +485,5 @@ export type PosState = CartSlice &
   OrderSlice &
   RepairSlice &
   ProcurementSlice &
-  UISlice;
+  UISlice &
+  SyncSlice;

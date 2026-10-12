@@ -491,7 +491,11 @@ export const PaymentModal: React.FC = () => {
 
   return (
     <div 
-      className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none"
+      role="dialog"
+      data-testid="pay-dialog"
+      aria-modal="true"
+      aria-label="Encaissement et règlement"
+      className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none"
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
@@ -499,9 +503,9 @@ export const PaymentModal: React.FC = () => {
         }
       }}
     >
-      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[92dvh]">
+      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[94dvh] sm:max-h-[90dvh]">
         {/* Mobile Pull Handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* Header */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
@@ -545,7 +549,7 @@ export const PaymentModal: React.FC = () => {
                 </span>
               </div>
               <div className="text-right">
-                <span className={`text-3xl font-black tracking-tight font-mono ${isRefundDue ? 'text-rose-400' : 'text-emerald-400'}`}>
+                <span data-testid="pay-net" className={`text-3xl font-black tracking-tight font-mono ${isRefundDue ? 'text-rose-400' : 'text-emerald-400'}`}>
                   {isRefundDue ? `-${formatDZD(refundDue)}` : formatDZD(netToPay)}
                 </span>
                 {isRefundDue && (
@@ -940,6 +944,7 @@ export const PaymentModal: React.FC = () => {
                       </div>
                       <div className="text-right">
                         <span
+                          data-testid="pay-change"
                           className={`text-3xl font-black tracking-tight font-mono ${
                             currentCashGiven >= netToPay ? 'text-emerald-300' : 'text-red-400'
                           }`}
@@ -961,6 +966,7 @@ export const PaymentModal: React.FC = () => {
                       <MoneyInput
                         label="Espèces Reçues du Client (DA)"
                         id="payment-cash-input"
+                        data-testid="tendered-input"
                         valueMinor={dinarsToMinor(cashTenderAmount || 0)}
                         onChangeMinor={(minor) => setCashTenderAmount(toLegacyReal(minor))}
                         placeholder={netToPay.toString()}
@@ -976,6 +982,7 @@ export const PaymentModal: React.FC = () => {
                       <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
                         <button
                           type="button"
+                          data-testid="pay-exact"
                           onClick={() => {
                             setCashTenderAmount(netToPay);
                             document.getElementById('payment-cash-input')?.focus();
@@ -1017,6 +1024,7 @@ export const PaymentModal: React.FC = () => {
                       </div>
                       <button
                         type="button"
+                        data-testid="pay-mixed-confirm"
                         onClick={() => handleProcessPayment(true)}
                         className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-xl transition cursor-pointer shadow-md"
                       >
@@ -1136,8 +1144,9 @@ export const PaymentModal: React.FC = () => {
         </div>
 
         {/* Footer */}
-        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col-reverse sm:flex-row items-center justify-between gap-2 shrink-0">
+        <div className="p-3.5 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex flex-col-reverse sm:flex-row items-center justify-between gap-2 shrink-0">
           <button
+            data-testid="pay-cancel"
             onClick={closeModal}
             className="w-full sm:w-auto min-h-[42px] px-4 py-2.5 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text hover:bg-pos-hover transition cursor-pointer text-center"
           >
@@ -1145,6 +1154,7 @@ export const PaymentModal: React.FC = () => {
           </button>
           <button
             type="button"
+            data-testid="pay-confirm"
             onClick={() => handleProcessPayment(false)}
             disabled={
               isProcessing ||

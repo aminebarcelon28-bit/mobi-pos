@@ -266,13 +266,14 @@ async function mirrorImportCustomerAuthority(parsed: BackupPayload): Promise<voi
     const nextVersion = (verRows?.length ?? 0) > 0 ? Number(verRows[0].version) + 1 : 1;
     const withVersion = { ...c, version: nextVersion };
     await db.execute(
-      `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12)
+      `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $10)
        ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, email=excluded.email,
          loyalty_points=excluded.loyalty_points, store_credit=excluded.store_credit,
          pricing_tier=excluded.pricing_tier, total_spent=excluded.total_spent,
          json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
-       version = excluded.version`,
+       version = excluded.version,
+       created_at = CASE WHEN COALESCE(customers.created_at, '') = '' THEN excluded.created_at ELSE customers.created_at END`,
       [c.id, c.name ?? 'Client', c.phone ?? '', c.email ?? null, c.loyaltyPoints ?? 0,
         intDzd(c.storeCredit), c.pricingTier ?? 'Retail', intDzd(c.totalSpent),
         JSON.stringify(withVersion), now, nextVersion,

@@ -9,6 +9,7 @@ import { createOrderSlice } from './slices/createOrderSlice';
 import { createRepairSlice } from './slices/createRepairSlice';
 import { createProcurementSlice } from './slices/createProcurementSlice';
 import { createUISlice } from './slices/createUISlice';
+import { createSyncSlice } from './slices/createSyncSlice';
 
 export type { PosState, ActiveModalType };
 
@@ -87,6 +88,7 @@ export const usePosStore = create<PosState>()(
       ...createRepairSlice(...args),
       ...createProcurementSlice(...args),
       ...createUISlice(...args),
+      ...createSyncSlice(...args),
     }),
     {
       name: PROCUREMENT_DRAFT_KEY,

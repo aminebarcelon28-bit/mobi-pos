@@ -225,8 +225,8 @@ export const CustomItemModal: React.FC = () => {
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-3 select-none animate-in fade-in"
+    <div role="dialog" aria-modal="true" aria-label="Touches rapides et article divers"
+      className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none animate-in fade-in"
       onClick={closeModal}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
@@ -240,9 +240,11 @@ export const CustomItemModal: React.FC = () => {
       }}
     >
       <div
-        className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90dvh]"
+        className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 flex flex-col max-h-[94dvh] sm:max-h-[90dvh]"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Mobile Pull Handle */}
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
         {/* Modal Header */}
         <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
           <div className="flex items-center gap-3">
@@ -641,7 +643,7 @@ export const CustomItemModal: React.FC = () => {
         </div>
 
         {/* Modal Footer */}
-        <div className="p-3.5 border-t border-pos-border flex items-center justify-between bg-pos-card">
+        <div className="p-3.5 pb-[max(1rem,var(--safe-bottom))] sm:pb-3.5 border-t border-pos-border flex items-center justify-between bg-pos-card">
           <button
             type="button"
             onClick={closeModal}

@@ -154,7 +154,7 @@ export const PinDialog: React.FC<PinDialogProps> = ({
           }
         `}
       </style>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
         <div 
           ref={dialogRef}
           tabIndex={-1}
@@ -162,8 +162,11 @@ export const PinDialog: React.FC<PinDialogProps> = ({
           aria-modal="true"
           aria-labelledby="pin-dialog-title"
           aria-describedby="pin-dialog-desc"
-          className={`w-full max-w-sm bg-pos-panel border border-pos-border rounded-2xl shadow-2xl p-6 outline-none ${error ? 'animate-shake' : ''}`}
+          className={`w-full max-w-sm bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl shadow-2xl p-6 pb-[max(1.5rem,var(--safe-bottom))] sm:pb-6 outline-none ${error ? 'animate-shake' : ''}`}
         >
+          {/* M3 Standard Drag Handle */}
+          <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto -mt-2 mb-4 sm:hidden shrink-0" aria-hidden="true" />
+
           <div className="flex flex-col items-center mb-6 text-center">
             <div className="w-12 h-12 rounded-full bg-emerald-500/20 flex items-center justify-center mb-4 text-emerald-500" aria-hidden="true">
               <ShieldCheck size={28} />
@@ -186,6 +189,7 @@ export const PinDialog: React.FC<PinDialogProps> = ({
           >
             <input
               ref={pinInputRef}
+              data-testid="pin-gate-input"
               type="password"
               inputMode="numeric"
               pattern="[0-9]*"
@@ -209,6 +213,7 @@ export const PinDialog: React.FC<PinDialogProps> = ({
             </span>
             <button
               type="submit"
+              data-testid="pin-gate-submit"
               disabled={pin.trim().length < minLength || error || verifying}
               className="mt-4 w-full min-h-[48px] rounded-xl font-bold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition"
             >

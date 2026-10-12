@@ -473,6 +473,14 @@ export interface ProcessRefundPayload {
   refundMethod: PaymentMethodType;
   refundReason: string;
   cashierName?: string;
+  /**
+   * Supervisor authorization for offline containment (Module C): ISO instant
+   * captured immediately after a real `verifyManagerGate` pass, plus the
+   * authorizing supervisor id. The native command requires it for large
+   * offline cash and records it in the in-txn audit row.
+   */
+  supervisorPinVerifiedAt?: string;
+  supervisorUserId?: string;
 }
 
 export interface SaleTransaction {
@@ -972,11 +980,13 @@ export function appendRepairStatusHistory(
   ];
 }
 
-/** Compute an exact calendar expiry date (YYYY-MM-DD) from a start date + tier. */
+/** Compute an exact calendar expiry date (YYYY-MM-DD) from a start date + tier.
+ * Fail-closed: an unparseable start yields '' (invalid signal — every reader
+ * treats it as no-expiry), never a silently-wrong "today". */
 export function computeWarrantyExpiryISO(startIso: string, tier: WarrantyTier): string {
   const days = WARRANTY_TIER_DAYS[tier] || 0;
   const d = new Date(startIso);
-  if (Number.isNaN(d.getTime())) return new Date().toISOString().slice(0, 10);
+  if (Number.isNaN(d.getTime())) return '';
   const utc = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   utc.setUTCDate(utc.getUTCDate() + days);
   return utc.toISOString().slice(0, 10);
@@ -1625,7 +1635,13 @@ export interface DenominationCount {
 export interface CashMovement {
   id: string;
   sessionId: string;
-  type: 'EXPENSE' | 'MANUAL_DEPOSIT';
+  /**
+   * ALLOCATION rows are double-entry allocation records (Fix 4: cross-shift
+   * refund attribution) — informational only. Every cash-math reader
+   * allowlists EXPENSE / MANUAL_DEPOSIT, so ALLOCATION never enters drawer
+   * totals; it exists for the audit trail and syncs like any movement.
+   */
+  type: 'EXPENSE' | 'MANUAL_DEPOSIT' | 'ALLOCATION';
   amount: number; // In DA
   reason: string;
   cashierName?: string;

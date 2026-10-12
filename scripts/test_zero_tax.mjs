@@ -201,22 +201,22 @@ const TAX_RE = /\btax(es)?\b|\bvatRate\b|\btva\b/i;
  */
 const WHITELIST = new Set([
   // Documented removals (comments recording what was deleted and why).
-  'src/db/sqlPluginAdapter.ts:771',
-  'src/db/sqlPluginAdapter.ts:1464',
-  'src/db/sqlPluginAdapter.ts:1466',
+  'src/db/sqlPluginAdapter.ts:970',
+  'src/db/sqlPluginAdapter.ts:1742',
+  'src/db/sqlPluginAdapter.ts:1744',
   // Legacy `vatRate` scrub on the settings lane (push strip + pull apply).
-  'src/db/sqlPluginAdapter.ts:2903',
-  'src/db/sqlPluginAdapter.ts:2904',
-  'src/db/sqlPluginAdapter.ts:2916',
-  'src/db/sqlPluginAdapter.ts:2917',
-  'src/sync/genericApply.ts:618',
-  'src/sync/genericApply.ts:624',
-  'src/sync/genericApply.ts:625',
-  'src/store/slices/createOrderSlice.ts:474',
+  'src/db/sqlPluginAdapter.ts:3245',
+  'src/db/sqlPluginAdapter.ts:3246',
+  'src/db/sqlPluginAdapter.ts:3258',
+  'src/db/sqlPluginAdapter.ts:3259',
+  'src/sync/genericApply.ts:621',
+  'src/sync/genericApply.ts:627',
+  'src/sync/genericApply.ts:628',
+  'src/store/slices/createOrderSlice.ts:479',
   'src/sync/payloadHygiene.ts:37',
-  'src/sync/SyncManager.ts:132',
-  'src/components/modals/SettingsModal.tsx:1614',
+  'src/sync/SyncManager.ts:133',
   'src/components/modals/SettingsModal.tsx:1616',
+  'src/components/modals/SettingsModal.tsx:1618',
   'src/utils/receiptMath.ts:241',
   'src/utils/receiptMath.ts:243',
   'src/utils/receiptMath.ts:396',
@@ -225,7 +225,7 @@ const WHITELIST = new Set([
   'src/utils/mobileDocPrint.ts:162',
   'src/components/modals/PurchaseOrderA4Document.tsx:243',
   'src/types/po.ts:68',
-  'src/sync/SyncManager.ts:1227', // "pure tax on the network" — English usage
+  'src/sync/SyncManager.ts:1228', // "pure tax on the network" — English usage
   // Remote migration v13 (the drop itself + its tolerance note).
   'src/sync/remoteSchema.ts:355',
   'src/sync/remoteSchema.ts:357',
@@ -236,11 +236,11 @@ const WHITELIST = new Set([
   // Local migration v108 + the vestigial creation column it removes on every
   // install (kept: the plugin migrator is transactional, so v1 must still
   // describe the pre-drop shape for v108 to drop; tracked in plan §13 R-5).
-  'src-tauri/src/lib.rs:976',
-  'src-tauri/src/lib.rs:1551',
-  'src-tauri/src/lib.rs:1555',
-  'src-tauri/src/lib.rs:1565',
-  'src-tauri/src/lib.rs:1569',
+  'src-tauri/src/lib.rs:1025',
+  'src-tauri/src/lib.rs:1600',
+  'src-tauri/src/lib.rs:1604',
+  'src-tauri/src/lib.rs:1614',
+  'src-tauri/src/lib.rs:1618',
   // §10-B2 whitelist — supplier-OCR noise-skip, each carrying the
   // "noise-skip, not a tax feature" comment.
   'src-tauri/src/geometry.rs:61',

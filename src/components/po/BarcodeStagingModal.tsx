@@ -89,8 +89,11 @@ export const BarcodeStagingModal: React.FC<BarcodeStagingModalProps> = ({
   const activePreviewItem = stagedItems.find((it) => it.selected) || stagedItems[0];
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in">
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-3xl max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 overflow-y-auto animate-in fade-in select-none">
+      <div className="bg-slate-900 border-t sm:border border-slate-800 rounded-t-[28px] sm:rounded-3xl w-full max-w-3xl max-h-[94dvh] sm:max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden">
+        {/* M3 Standard Drag Handle */}
+        <div className="w-12 h-1.5 rounded-full bg-slate-700/60 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
+
         {/* Header */}
         <div className="p-4 bg-gradient-to-r from-indigo-950/50 via-slate-900 to-slate-900 border-b border-slate-800 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2.5">
@@ -112,7 +115,8 @@ export const BarcodeStagingModal: React.FC<BarcodeStagingModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+            className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
+            aria-label="Fermer la file d'attente d'impression"
           >
             <X className="w-5 h-5" />
           </button>
@@ -260,12 +264,12 @@ export const BarcodeStagingModal: React.FC<BarcodeStagingModalProps> = ({
             </div>
 
             {/* Print Launch Button */}
-            <div className="pt-2">
+            <div className="pt-2 pb-[max(1rem,var(--safe-bottom))] sm:pb-0">
               <button
                 type="button"
                 onClick={handlePrint}
                 disabled={totalLabelsCount === 0 || isPrinting}
-                className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-950 transition active:scale-95 cursor-pointer"
+                className="w-full min-h-[48px] py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-950 transition active:scale-95 cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
                 <span>Imprimer {totalLabelsCount} Étiquettes (1-Clic)</span>

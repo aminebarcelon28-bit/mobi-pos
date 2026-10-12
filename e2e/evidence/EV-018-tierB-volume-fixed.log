@@ -1,0 +1,81 @@
+[wdio] binary : C:\Users\<user>\Desktop\phone3-sync-lab\target-e2e\debug\mobi-pos.exe
+[wdio] profile: debug
+[wdio] driver : embedded
+[wdio] logs   : C:\Users\<user>\Desktop\phone3-sync-lab\test-logs
+[wdio] provenance OK (overlay=com.mobi.pos.e2e, binary=C:\Users\<user>\Desktop\phone3-sync-lab\target-e2e\debug\mobi-pos.exe)
+[wdio] wiped .e2e container: C:\Users\<user>\AppData\Roaming\com.mobi.pos.e2e
+[wdio] wiped .e2e WebView profile: C:\Users\<user>\AppData\Local\com.mobi.pos.e2e
+[wdio] e2e data dir: C:\Users\<user>\AppData\Roaming\com.mobi.pos.e2e
+[wdio] manifest: gitSha=f25d5b9f93e52c228bd44245f5d6e29b6db884af dirty=true
+
+Execution of 1 workers started at 2026-10-12T16:42:32.490Z
+
+[0-0] STRESS_SEED=20260410 STRESS_SALES=1000
+[0-0] RUNNING in undefined - file:///C:/Users/<user>/Desktop/phone3-sync-lab/test/specs/stress/phase4-stress.e2e.ts
+[0-0] [stress] T-B1 block 1/10: 100/100 ok p50=470.8ms firstErr=
+[0-0] [stress] T-B1 block 1/10 slowest: #1 ok=true ms=1636 re= | #35 ok=true ms=499 re= | #98 ok=true ms=499 re=
+[0-0] [stress] T-B1 block 1/10 ms>5000=0
+[0-0] [stress] T-B1 block 2/10: 100/100 ok p50=476.6ms firstErr=
+[0-0] [stress] T-B1 block 2/10 slowest: #17 ok=true ms=546 re= | #94 ok=true ms=541 re= | #34 ok=true ms=540 re=
+[0-0] [stress] T-B1 block 2/10 ms>5000=0
+[0-0] [stress] T-B1 block 3/10: 100/100 ok p50=489.3ms firstErr=
+[0-0] [stress] T-B1 block 3/10 slowest: #38 ok=true ms=631 re= | #86 ok=true ms=618 re= | #32 ok=true ms=564 re=
+[0-0] [stress] T-B1 block 3/10 ms>5000=0
+[0-0] [stress] T-B1 block 4/10: 100/100 ok p50=494.5ms firstErr=
+[0-0] [stress] T-B1 block 4/10 slowest: #13 ok=true ms=547 re= | #31 ok=true ms=547 re= | #17 ok=true ms=531 re=
+[0-0] [stress] T-B1 block 4/10 ms>5000=0
+[0-0] [stress] T-B1 block 5/10: 100/100 ok p50=484.5ms firstErr=
+[0-0] [stress] T-B1 block 5/10 slowest: #46 ok=true ms=544 re= | #53 ok=true ms=540 re= | #45 ok=true ms=534 re=
+[0-0] [stress] T-B1 block 5/10 ms>5000=0
+[0-0] [stress] T-B1 block 6/10: 100/100 ok p50=485.8ms firstErr=
+[0-0] [stress] T-B1 block 6/10 slowest: #72 ok=true ms=638 re= | #62 ok=true ms=536 re= | #73 ok=true ms=530 re=
+[0-0] [stress] T-B1 block 6/10 ms>5000=0
+[0-0] [stress] T-B1 block 7/10: 100/100 ok p50=481.4ms firstErr=
+[0-0] [stress] T-B1 block 7/10 slowest: #59 ok=true ms=531 re= | #31 ok=true ms=530 re= | #30 ok=true ms=524 re=
+[0-0] [stress] T-B1 block 7/10 ms>5000=0
+[0-0] [stress] T-B1 block 8/10: 100/100 ok p50=475.2ms firstErr=
+[0-0] [stress] T-B1 block 8/10 slowest: #57 ok=true ms=506 re= | #63 ok=true ms=506 re= | #17 ok=true ms=505 re=
+[0-0] [stress] T-B1 block 8/10 ms>5000=0
+[0-0] [stress] T-B1 block 9/10: 100/100 ok p50=472.8ms firstErr=
+[0-0] [stress] T-B1 block 9/10 slowest: #67 ok=true ms=518 re= | #54 ok=true ms=511 re= | #13 ok=true ms=511 re=
+[0-0] [stress] T-B1 block 9/10 ms>5000=0
+[0-0] [stress] T-B1 block 10/10: 100/100 ok p50=473.8ms firstErr=
+[0-0] [stress] T-B1 block 10/10 slowest: #92 ok=true ms=502 re= | #13 ok=true ms=502 re= | #78 ok=true ms=499 re=
+[0-0] [stress] T-B1 block 10/10 ms>5000=0
+[0-0] [stress] T-B1 total: 1000/1000 ok p50=479.1ms p95=517.6ms p99=544.4ms firstErr=
+[0-0] [stress] T-B2: 5/8 sold, denials=[STOCK_EMPTY]
+[0-0] [stress] T-B3 codes: OK | REFUND_EXCEEDS:E2E-STR-B:requested=2:remaining=0 | REFUND_EXCEEDS:E2E-STR-B:requested=2:remaining=0 | REFUND_EXCEEDS:E2E-STR-B:requested=2:remaining=0 | REFUND_EXCEEDS:E2E-STR-B:requested=2:remaining=0 | REFUND_EXCEEDS:E2E-STR-B:requested=2:remaining=0
+[0-0] [stress] T-B3 mirror project: {"flipped":true,"refundPut":true}
+[0-0] [stress] T-B4 series: modal=6706500 entered=6706500
+[0-0] [stress] T-B4 booked: expected=6706500 counted=6706500 variance=0
+[0-0] [stress] T-B4 post-close sale: ok=false reason=NO_ACTIVE_SHIFT
+[0-0] PASSED in undefined - file:///C:/Users/<user>/Desktop/phone3-sync-lab/test/specs/stress/phase4-stress.e2e.ts
+
+ "spec" Reporter:
+------------------------------------------------------------------
+[msedge 154.0.0.0 windows #0-0] Running: msedge (v154.0.0.0) on windows
+[msedge 154.0.0.0 windows #0-0] Session ID: f91b60bb-3c24-4e67-9297-6aa7fe3e07f8
+[msedge 154.0.0.0 windows #0-0]
+[msedge 154.0.0.0 windows #0-0] » test\specs\stress\phase4-stress.e2e.ts
+[msedge 154.0.0.0 windows #0-0] STRESS Tier B (Phase 4)
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B1-setup] generate baskets + baseline
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B1-block 1/10] 100 exact sales
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B1-block 2/10] 100 exact sales
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B1-block 3/10] 100 exact sales
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B1-block 4/10] 100 exact sales
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B1-block 5/10] 100 exact sales
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B1-block 6/10] 100 exact sales
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B1-block 7/10] 100 exact sales
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B1-block 8/10] 100 exact sales
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B1-block 9/10] 100 exact sales
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B1-block 10/10] 100 exact sales
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B1-aggregate] volume sales balance to the minor unit
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B2] oversell guard: stock-5 product sells at most 5 under burst
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B3] refund contention: 6 sequential full refunds yield exactly one
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B4] close resilience: shift closes after burst, post-close sale refused
+[msedge 154.0.0.0 windows #0-0]
+[msedge 154.0.0.0 windows #0-0] 15 passing (8m 24.3s)
+
+
+Spec Files:	 1 passed, 1 total (100% completed) in 00:08:27  
+

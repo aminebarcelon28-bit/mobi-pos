@@ -159,12 +159,18 @@ console.log('\n[6] store-profile pull lands the SQLite authority row');
   // probe). Dependency-free module, so the REAL source is copied beside the
   // stubs — no behaviour is faked.
   copyFileSync(join(ROOT, 'src', 'db', 'imeiAnchorSchema.ts'), join(SHIM, 'db', 'imeiAnchorSchema.ts'));
+  // genericApply also imports `../utils/isoInstant` (canonical instant
+  // normalizer). Zero-dependency module, so the REAL source is copied beside
+  // the stubs — no behaviour is faked (same treatment as imeiAnchorSchema).
+  mkdirSync(join(SHIM, 'utils'), { recursive: true });
+  copyFileSync(join(ROOT, 'src', 'utils', 'isoInstant.ts'), join(SHIM, 'utils', 'isoInstant.ts'));
   {
     const p = join(SHIM, 'lane', 'genericApply.ts');
     let t = readFileSync(p, 'utf8');
     t = t.replace(/from '\.\.\/db\/database'/g, "from '../db/database.js'")
          .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'")
-         .replace(/from '\.\.\/db\/imeiAnchorSchema'/g, "from '../db/imeiAnchorSchema.ts'");
+         .replace(/from '\.\.\/db\/imeiAnchorSchema'/g, "from '../db/imeiAnchorSchema.ts'")
+         .replace(/from '\.\.\/utils\/isoInstant'/g, "from '../utils/isoInstant.ts'");
     writeFileSync(p, t);
   }
   writeFileSync(join(SHIM, 'db', 'database.js'), `

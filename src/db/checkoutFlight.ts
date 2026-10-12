@@ -34,7 +34,9 @@ export const CHECKOUT_FLIGHT_TIMEOUT_MS = 60_000;
  * `releaseCheckoutFlight(owner)` in `finally`.
  */
 export function tryAcquireCheckoutFlight(owner: string): boolean {
-  if (flightActive) return false;
+  if (flightActive) {
+    return false;
+  }
   flightActive = true;
   flightOwner = owner;
   lastActivityAt = Date.now();
@@ -45,10 +47,19 @@ export function tryAcquireCheckoutFlight(owner: string): boolean {
 /**
  * Refresh activity while the owner is still working (called from withBusyRetry
  * on every attempt). No-op when the flight is free or owned by someone else.
+ *
+ * Gate 4 hardening: an owner-less call MUST NOT extend a live holder —
+ * perpetual background lanes (sync flusher/poll, each running bounded
+ * withBusyRetry loops forever) used to heartbeat-refresh a DEAD holder on
+ * every attempt, so the 60 s idle watchdog could never fire and one wedged
+ * sale denied every later sale indefinitely (ALREADY_PROCESSING storm).
+ * Renewal is now owner-scoped: pass the owner's own label. withBusyRetry
+ * invocations are individually bounded (~30 s worst case), so a live sale
+ * always settles before the watchdog window elapses.
  */
 export function renewCheckoutFlight(owner?: string): void {
   if (!flightActive) return;
-  if (owner !== undefined && owner !== flightOwner) return;
+  if (owner === undefined || owner !== flightOwner) return;
   lastActivityAt = Date.now();
 }
 
@@ -79,6 +90,11 @@ export function isCheckoutFlightActive(): boolean {
 /** Current owner label for diagnostics ('' when free). */
 export function checkoutFlightOwner(): string {
   return flightOwner;
+}
+
+/** Milliseconds since the last activity/renew (diagnostic; probes watchdog health). */
+export function checkoutFlightIdleMs(): number {
+  return flightActive ? Date.now() - lastActivityAt : 0;
 }
 
 function armIdleWatchdog(owner: string): void {

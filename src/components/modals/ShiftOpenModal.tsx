@@ -159,10 +159,10 @@ export const ShiftOpenModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94dvh] sm:max-h-[92dvh] flex flex-col">
+    <div role="dialog" aria-modal="true" aria-label="Ouverture de session caisse" data-testid="shift-open-dialog" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94dvh] sm:max-h-[92dvh] flex flex-col">
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* Header */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
@@ -234,6 +234,7 @@ export const ShiftOpenModal: React.FC = () => {
                 </button>
                 <button
                   type="button"
+                  data-testid="shift-open-direct"
                   onClick={() => setUseDenominations(false)}
                   className={`py-1 text-xs font-bold rounded-md transition ${
                     !useDenominations
@@ -372,6 +373,7 @@ export const ShiftOpenModal: React.FC = () => {
               </label>
               <MoneyInput
                 label="Fond de Caisse Initial Direct (DA)"
+                data-testid="shift-open-float"
                 valueMinor={dinarsToMinor(directFloat || 0)}
                 onChangeMinor={(minor) => setDirectFloat(toLegacyReal(minor))}
                 placeholder="20 000 DA"
@@ -396,12 +398,12 @@ export const ShiftOpenModal: React.FC = () => {
         </div>
 
         {/* Footer */}
-        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 shrink-0">
+        <div className="p-3.5 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 shrink-0">
           <div className="flex items-center justify-between sm:block">
             <span className="text-[10px] uppercase font-bold text-pos-muted block">
               Fond de Caisse Validé
             </span>
-            <span className="text-base font-black text-emerald-400 font-mono">
+            <span data-testid="shift-open-total" className="text-base font-black text-emerald-400 font-mono">
               {formatDZD(finalFloat)}
             </span>
           </div>
@@ -416,6 +418,7 @@ export const ShiftOpenModal: React.FC = () => {
             </button>
             <button
               type="button"
+              data-testid="shift-open-confirm"
               onClick={handleOpenShift}
               disabled={isSubmitting}
               className="flex-2 sm:flex-none min-h-[44px] px-4 sm:px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"

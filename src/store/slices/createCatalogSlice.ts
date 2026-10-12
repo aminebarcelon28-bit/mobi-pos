@@ -35,7 +35,8 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
   setEditingProduct: (product) => set({ editingProduct: product, activeModal: 'product_editor' }),
 
   saveProduct: async (input, options) => {
-    const { products, imeiRecords, logSecurityAction } = get();
+    const { products, imeiRecords, logSecurityAction, activeCashier } = get();
+    const actor = activeCashier?.name?.trim() || 'Admin';
     // Pre-image for the stock-durability adjustment below: manual edits must
     // land in the ledger, or the next sale's recompute wipes them.
     const prevStock = input.id ? products.find((p) => p.id === input.id)?.stock : undefined;
@@ -119,7 +120,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
       logSecurityAction(
         'Modification Produit Catalogue',
         `Mise à jour fiche: ${targetProduct.title} (SKU: ${targetProduct.sku}, Stock: ${targetProduct.stock})`,
-        'Yacine (Admin)',
+        actor,
         false
       );
     } else {
@@ -134,7 +135,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
       logSecurityAction(
         'Création Produit Catalogue',
         `Nouveau produit: ${targetProduct.title} (Code-barres: ${targetProduct.barcode}, Stock: ${targetProduct.stock})`,
-        'Yacine (Admin)',
+        actor,
         false
       );
     }
@@ -210,6 +211,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
 
   deleteProduct: async (id) => {
     try {
+      const actor = get().activeCashier?.name?.trim() || 'Admin';
       await (await getProductRepo()).delete(id);
       // Orphan-batch tombstone: deleting only the product row leaves live
       // stock_batches behind — valuation keeps their cost (retail 0 via the
@@ -228,16 +230,35 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
             `UPDATE stock_batches SET deleted = 1, version = version + 1, updated_at = $1, sync_status = 'pending' WHERE product_id = $2 AND deleted = 0`,
             [now, id]
           );
+          // Tombstone version discipline (H27 pattern): the remote version guard
+          // checks excluded.version, so the payload MUST carry the post-UPDATE
+          // clock. A version-less payload pushes as v1 and loses to ANY
+          // previously-synced remote row -> 10 wasted retries -> quarantine
+          // badge. Never enqueue version-less: the repair lane re-enqueues from
+          // the authority row (with version) if this read-back fails.
+          const versed = (await db
+            .select('SELECT batch_id, version FROM stock_batches WHERE product_id = $1 AND deleted = 1', [id])
+            .catch(() => [])) as Array<{ batch_id: string; version: number }>;
+          const versionByBatch = new Map(
+            (versed ?? []).map((r) => [String(r.batch_id), Number(r.version)])
+          );
           for (const bid of batchIds) {
+            const bv = versionByBatch.get(bid);
+            if (!Number.isFinite(bv)) {
+              console.warn(
+                `[catalog:delete] Skipping version-less tombstone for batch [${bid}] — repair lane re-enqueues from authority.`
+              );
+              continue;
+            }
             await db
               .execute(
                 `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
                  VALUES ($1, 'stock_batches', $2, 'UPSERT', $3, 'pending')
-                 ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, status='pending', updated_at=$4`,
+                 ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, status='pending', retry_count=0, next_retry_at=NULL, last_error=NULL, updated_at=$4`,
                 [
                   `sb-${bid}-tombstone`,
                   bid,
-                  JSON.stringify({ batch_id: bid, product_id: id, deleted: 1, updated_at: now }),
+                  JSON.stringify({ batch_id: bid, product_id: id, deleted: 1, version: bv, updated_at: now }),
                   now,
                 ]
               )
@@ -252,7 +273,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
           get().logSecurityAction(
             'Suppression Produit (Lots Soldés)',
             `Produit supprimé — ${batchIds.length} lot(s) en stock soldé(s) (valeur retirée de l'actif).`,
-            'Yacine (Admin)',
+            actor,
             false
           );
         }
@@ -312,7 +333,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
             get().logSecurityAction(
               'Suppression Produit (Dossiers Appareils archivés)',
               `Produit supprimé — ${rows.length} dossier(s) appareil archivés (nom et durée de garantie conservés).`,
-              'Yacine (Admin)',
+              actor,
               false
             );
           }
@@ -487,7 +508,8 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
   },
 
   bulkSaveProducts: async (newProducts: Product[]) => {
-    const { products, logSecurityAction } = get();
+    const { products, logSecurityAction, activeCashier } = get();
+    const actor = activeCashier?.name?.trim() || 'Admin';
     if (newProducts.length === 0) return;
 
     // Save to DB (Dexie + SQLite + Outbox)
@@ -501,7 +523,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
     void logSecurityAction(
       'Génération Matrice Variantes',
       `${newProducts.length} variantes enregistrées dans le catalogue`,
-      'Yacine (Admin)',
+      actor,
       false
     );
 
@@ -510,7 +532,8 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
   },
 
   applyStocktakeAudit: async (items: { productId: string; countedStock: number; previousStock: number }[]) => {
-    const { products, logSecurityAction } = get();
+    const { products, logSecurityAction, activeCashier } = get();
+    const actor = activeCashier?.name?.trim() || 'Manager';
     if (items.length === 0) return;
 
     const countMap = new Map<string, number>(items.map((i) => [i.productId, i.countedStock]));
@@ -552,7 +575,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
       void logSecurityAction(
         'Inventaire Physique (Audit Douchette)',
         `${updatedProducts.length} articles ajustés. Écart net total: ${sign} pièces`,
-        'Manager',
+        actor,
         true
       );
 

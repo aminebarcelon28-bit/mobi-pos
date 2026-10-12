@@ -54,8 +54,11 @@ export const VendorDisputeModal: React.FC<VendorDisputeModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in">
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-2xl max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 overflow-y-auto animate-in fade-in select-none">
+      <div className="bg-slate-900 border-t sm:border border-slate-800 rounded-t-[28px] sm:rounded-3xl w-full max-w-2xl max-h-[94dvh] sm:max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden">
+        {/* M3 Standard Drag Handle */}
+        <div className="w-12 h-1.5 rounded-full bg-slate-700/60 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
+
         {/* Header */}
         <div className="p-4 bg-gradient-to-r from-rose-950/50 via-slate-900 to-slate-900 border-b border-slate-800 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2.5">
@@ -77,7 +80,8 @@ export const VendorDisputeModal: React.FC<VendorDisputeModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+            className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
+            aria-label="Fermer le dossier de litige"
           >
             <X className="w-5 h-5" />
           </button>
@@ -238,11 +242,11 @@ export const VendorDisputeModal: React.FC<VendorDisputeModalProps> = ({
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-3 shrink-0">
+        <div className="p-4 bg-slate-950 border-t border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 shrink-0 pb-[max(1rem,var(--safe-bottom))] sm:pb-4">
           <button
             type="button"
             onClick={handlePrintDisputeSheet}
-            className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+            className="min-h-[44px] px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition active-press cursor-pointer"
           >
             <Printer className="w-3.5 h-3.5 text-indigo-400" />
             <span>Imprimer Bordereau Litige</span>
@@ -252,14 +256,14 @@ export const VendorDisputeModal: React.FC<VendorDisputeModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-3.5 py-2 text-xs font-bold text-slate-400 hover:text-white cursor-pointer"
+              className="min-h-[44px] px-3.5 py-2 text-xs font-bold text-slate-400 hover:text-white cursor-pointer active-press flex-1 sm:flex-initial"
             >
               Fermer
             </button>
             <button
               type="button"
               onClick={handleOpenWhatsApp}
-              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold flex items-center gap-2 shadow-lg shadow-emerald-950 transition active:scale-95 cursor-pointer"
+              className="min-h-[44px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold flex items-center justify-center gap-2 shadow-lg shadow-emerald-950 transition active-press cursor-pointer flex-1 sm:flex-initial"
             >
               <Send className="w-3.5 h-3.5" />
               <span>Envoyer sur WhatsApp (1-Clic)</span>

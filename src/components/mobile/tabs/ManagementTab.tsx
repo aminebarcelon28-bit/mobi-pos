@@ -36,12 +36,15 @@ import {
   FileText,
   RotateCcw,
   Unlock,
+  Printer,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
 import { AppTabContent } from '../AppScreenLayout';
 import { useDeviceMode } from '../../../hooks/useDeviceMode';
 import { PinDialog } from '../../ui/PinDialog';
 import { canSeeJournalLauncher } from '../../../utils/auditGate';
+import { MobilePrinterModal } from '../MobilePrinterModal';
+import { loadMobilePrinter } from '../../../utils/mobilePrinter';
 // P11.3: sync engine loads on demand (static import pulls ~267 kB into entry).
 import type { SyncStatus } from '../../../sync/types';
 import { soundEngine } from '../../../utils/audioFeedback';
@@ -97,6 +100,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
   // renders labels to PNG and opens the Android print sheet instead.
 
   const [isPinOpen, setIsPinOpen] = useState(false);
+  const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
 
   const handleNoSaleDrawerOpen = () => {
     soundEngine.playKeyBeep?.();
@@ -239,7 +243,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           aria-label="Sections de gestion"
           className="px-3.5 pt-2.5 pb-2 bg-pos-bg border-b border-pos-border/60"
         >
-          <div className="flex gap-1.5 overflow-x-auto">
+          <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
             {MGMT_SECTIONS.map((s) => (
               <button
                 key={s.id}
@@ -260,7 +264,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-cyan-500 to-emerald-500 flex items-center justify-center text-slate-950 font-black shadow-md shadow-emerald-500/20 shrink-0">
-                <Store className="w-5 h-5 stroke-[2.5]" />
+                <Store className="w-5 h-5 stroke-[2.5]" aria-hidden="true" />
               </div>
               <div className="min-w-0">
                 <h2 className="text-sm font-black text-pos-text leading-tight truncate">
@@ -306,7 +310,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               onClick={() => openModal('shift_zreport')}
               className="min-h-[44px] px-2 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex flex-col items-center justify-center gap-1 font-bold text-[11px] text-pos-text cursor-pointer active:scale-98 transition shadow-xs"
             >
-              <Receipt className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <Receipt className="w-3.5 h-3.5 text-cyan-400 shrink-0" aria-hidden="true" />
               <span className="truncate">Rapport Z</span>
             </button>
             <button
@@ -314,7 +318,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               onClick={() => openModal('shift_movement')}
               className="min-h-[44px] px-2 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex flex-col items-center justify-center gap-1 font-bold text-[11px] text-pos-text cursor-pointer active:scale-98 transition shadow-xs"
             >
-              <DollarSign className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <DollarSign className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
               <span className="truncate">Sortie Caisse</span>
             </button>
             <button
@@ -323,7 +327,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               className="min-h-[44px] px-2 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex flex-col items-center justify-center gap-1 font-bold text-[11px] text-pos-text cursor-pointer active:scale-98 transition shadow-xs"
               title="Ouvrir le tiroir-caisse sans vente (Code PIN requis)"
             >
-              <Unlock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <Unlock className="w-3.5 h-3.5 text-emerald-400 shrink-0" aria-hidden="true" />
               <span className="truncate">Ouvrir Tiroir</span>
             </button>
           </div>
@@ -334,7 +338,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="relative w-11 h-11 rounded-2xl bg-emerald-500 text-slate-950 flex items-center justify-center font-black shadow-md shadow-emerald-500/25 shrink-0">
-                <Camera className="w-5 h-5" />
+                <Camera className="w-5 h-5" aria-hidden="true" />
                 <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-cyan-400 ring-2 ring-pos-panel animate-ping" />
               </div>
               <div className="min-w-0">
@@ -361,7 +365,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               className="min-h-[44px] px-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shrink-0 cursor-pointer active:scale-95 transition shadow-sm shadow-emerald-500/20 flex items-center gap-1.5"
               title="Ouvrir le scanner de documents et factures"
             >
-              <Sparkles className="w-3.5 h-3.5" />
+              <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Scanner</span>
             </button>
           </div>
@@ -371,11 +375,11 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
         <div id="mgmt-activite" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3 scroll-mt-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-pos-text font-black text-xs">
-              <TrendingUp className="w-4 h-4 text-emerald-400" />
+              <TrendingUp className="w-4 h-4 text-emerald-400" aria-hidden="true" />
               <span>Aperçu d'Activité</span>
             </div>
             <span className="text-[10px] text-pos-muted font-bold flex items-center gap-1 bg-pos-panel px-2.5 py-0.5 rounded-full border border-pos-border/50">
-              <Clock className="w-3 h-3 text-cyan-400" />
+              <Clock className="w-3 h-3 text-cyan-400" aria-hidden="true" />
               Aujourd'hui
             </span>
           </div>
@@ -412,7 +416,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 <span className="text-xs text-pos-muted font-bold">tickets</span>
               </div>
               <span className="text-[10px] text-cyan-400 font-medium mt-1 truncate flex items-center gap-1">
-                <ShoppingBag className="w-3 h-3" />
+                <ShoppingBag className="w-3 h-3" aria-hidden="true" />
                 {todayMetrics.validCount === 0 ? 'En attente du premier ticket' : 'Activité en direct'}
               </span>
             </div>
@@ -425,10 +429,12 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
             className="w-full min-h-[46px] px-3.5 rounded-2xl bg-gradient-to-r from-cyan-500/15 via-emerald-500/10 to-cyan-500/15 border border-cyan-500/30 hover:border-cyan-400 text-cyan-300 font-bold text-xs flex items-center justify-between transition cursor-pointer active:scale-98 shadow-xs"
           >
             <div className="flex items-center gap-2.5 min-w-0">
-              <BarChart3 className="w-4 h-4 text-cyan-400 shrink-0" />
-              <span className="truncate font-black">Rapports Financiers & Statistiques (F9)</span>
+              <BarChart3 className="w-4 h-4 text-cyan-400 shrink-0" aria-hidden="true" />
+              <span className="truncate font-black">
+                Rapports Financiers & Statistiques <span className="hidden sm:inline font-mono font-medium">(F9)</span>
+              </span>
             </div>
-            <ChevronRight className="w-4 h-4 text-cyan-400 shrink-0" />
+            <ChevronRight className="w-4 h-4 text-cyan-400 shrink-0" aria-hidden="true" />
           </button>
         </div>
 
@@ -448,7 +454,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center shrink-0">
-                <Wrench className="w-4 h-4" />
+                <Wrench className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs flex items-center gap-1.5 text-pos-text truncate">
@@ -462,26 +468,11 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 <span className="text-[10px] text-pos-muted block truncate">Fiches de réparation, diagnostics & devis</span>
               </div>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span
-                role="button"
-                tabIndex={0}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openModal('repair_work_order');
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.stopPropagation();
-                    openModal('repair_work_order');
-                  }
-                }}
-                className="min-h-[48px] min-w-[48px] px-2.5 rounded-xl bg-emerald-500 text-slate-950 text-[11px] font-black flex items-center justify-center active:scale-95"
-                title="Nouveau ticket SAV direct"
-              >
-                + Nouveau SAV
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="hidden xs:inline-flex px-2 py-1 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-black">
+                + Nouveau
               </span>
-              <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+              <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
             </div>
           </button>
 
@@ -492,14 +483,14 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-cyan-500/15 text-cyan-400 flex items-center justify-center shrink-0">
-                <RefreshCw className="w-4 h-4" />
+                <RefreshCw className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Reprise Occasion (Trade-In)</span>
                 <span className="text-[10px] text-pos-muted block truncate">Évaluation d'état, rachat cash & bon d'achat</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -509,14 +500,14 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
-                <Package className="w-4 h-4" />
+                <Package className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Packs & Bundles d'Articles</span>
                 <span className="text-[10px] text-pos-muted block truncate">Composition d'offres groupées (Téléphone + Accessoires)</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -526,14 +517,14 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-indigo-500/15 text-indigo-400 flex items-center justify-center shrink-0">
-                <Smartphone className="w-4 h-4" />
+                <Smartphone className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Traçabilité IMEI & Garantie</span>
                 <span className="text-[10px] text-pos-muted block truncate">Recherche d'historique de garantie par IMEI</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -543,14 +534,14 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0">
-                <Sparkles className="w-4 h-4" />
+                <Sparkles className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Compatibilité Accessoires</span>
                 <span className="text-[10px] text-pos-muted block truncate">Trouver verres trempés & coques par modèle</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -560,14 +551,16 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-rose-500/15 text-rose-400 flex items-center justify-center shrink-0">
-                <RotateCcw className="w-4 h-4" />
+                <RotateCcw className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Retours & Remboursements (F11)</span>
+                <span className="font-bold text-xs block text-pos-text truncate">
+                  Retours & Remboursements <span className="hidden sm:inline font-mono font-medium">(F11)</span>
+                </span>
                 <span className="text-[10px] text-pos-muted block truncate">Restitution d'articles et annulations de ventes</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -577,14 +570,14 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center shrink-0">
-                <Clock className="w-4 h-4" />
+                <Clock className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Commandes & Ventes Suspendues</span>
                 <span className="text-[10px] text-pos-muted block truncate">File d'attente clients et tickets en pause</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
         </div>
 
@@ -601,14 +594,16 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0">
-                <Layers className="w-4 h-4" />
+                <Layers className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Articles & Inventaire (F10)</span>
+                <span className="font-bold text-xs block text-pos-text truncate">
+                  Articles & Inventaire <span className="hidden sm:inline font-mono font-medium">(F10)</span>
+                </span>
                 <span className="text-[10px] text-pos-muted block truncate font-mono">{products?.length || 0} références en stock</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -618,14 +613,14 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-teal-500/15 text-teal-400 flex items-center justify-center shrink-0">
-                <Truck className="w-4 h-4" />
+                <Truck className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Fournisseurs & Réapprovisionnement</span>
                 <span className="text-[10px] text-pos-muted block truncate">Commandes grossistes & alertes stock</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -635,7 +630,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0">
-                <FileText className="w-4 h-4" />
+                <FileText className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <div className="flex items-center gap-1.5">
@@ -645,7 +640,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 <span className="text-[10px] text-pos-muted block truncate">Numérisation caméra, contrôle d'invariants & stock</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -656,7 +651,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0">
-                <Barcode className="w-4 h-4" />
+                <Barcode className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Étiquettes Codes-barres</span>
@@ -665,7 +660,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 </span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
         </div>
 
@@ -682,14 +677,16 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-blue-500/15 text-blue-400 flex items-center justify-center shrink-0">
-                <Users className="w-4 h-4" />
+                <Users className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">CRM & Fichier Clients (F3)</span>
+                <span className="font-bold text-xs block text-pos-text truncate">
+                  CRM & Fichier Clients <span className="hidden sm:inline font-mono font-medium">(F3)</span>
+                </span>
                 <span className="text-[10px] text-pos-muted block truncate">Gestion des comptes, plafonds & fidélité</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -699,14 +696,14 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-rose-500/15 text-rose-400 flex items-center justify-center shrink-0">
-                <CreditCard className="w-4 h-4" />
+                <CreditCard className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Grand Livre des Dettes (Kredy)</span>
                 <span className="text-[10px] text-pos-muted block truncate">Registre des créances & encaissement remboursements</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -716,14 +713,14 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center shrink-0">
-                <DollarSign className="w-4 h-4" />
+                <DollarSign className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Dépenses & Frais Magasin</span>
                 <span className="text-[10px] text-pos-muted block truncate">Charges, loyer, salaires & sorties de caisse</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
         </div>
 
@@ -740,14 +737,16 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
-                <Settings className="w-4 h-4" />
+                <Settings className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Paramètres Généraux (F12)</span>
+                <span className="font-bold text-xs block text-pos-text truncate">
+                  Paramètres Généraux <span className="hidden sm:inline font-mono font-medium">(F12)</span>
+                </span>
                 <span className="text-[10px] text-pos-muted block truncate">Périphériques, tickets, base & synchronisation</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -757,14 +756,14 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-pos-bg text-pos-muted flex items-center justify-center shrink-0">
-                <Sliders className="w-4 h-4" />
+                <Sliders className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Modèle de Ticket de Caisse</span>
                 <span className="text-[10px] text-pos-muted block truncate">Entête, logo, mentions légales & pied de ticket</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           {/* FT-01: hidden for cashiers (UX only — modal gate is authoritative). */}
@@ -776,14 +775,14 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-500 flex items-center justify-center shrink-0">
-                <ShieldAlert className="w-4 h-4" />
+                <ShieldAlert className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Journal d'Audit Sécurité</span>
                 <span className="text-[10px] text-pos-muted block truncate">Traçabilité des dérogations et codes PIN</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
           )}
 
@@ -794,14 +793,14 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-cyan-500/15 text-cyan-400 flex items-center justify-center shrink-0">
-                <Database className="w-4 h-4" />
+                <Database className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Maintenance Base SQLite WAL</span>
                 <span className="text-[10px] text-pos-muted block truncate">Nettoyage, vacuum, checkpoint et intégrité</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           <button
@@ -811,14 +810,35 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
-                <Key className="w-4 h-4" />
+                <Key className="w-4 h-4" aria-hidden="true" />
               </div>
               <div className="text-left min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">Licence & Activation</span>
                 <span className="text-[10px] text-pos-muted block truncate">Clé de licence et statut d'enregistrement</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsPrinterModalOpen(true)}
+            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-8 h-8 rounded-xl bg-indigo-500/15 text-indigo-400 flex items-center justify-center shrink-0">
+                <Printer className="w-4 h-4" aria-hidden="true" />
+              </div>
+              <div className="text-left min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">Imprimante Ticket Mobile</span>
+                <span className="text-[10px] text-pos-muted block truncate">
+                  {loadMobilePrinter().enabled
+                    ? `${loadMobilePrinter().connection.toUpperCase()} • ${loadMobilePrinter().connection === 'wifi' ? loadMobilePrinter().wifiHost : loadMobilePrinter().bluetoothName || 'Associé'}`
+                    : 'Désactivée • Configurer Bluetooth / Wi-Fi'}
+                </span>
+              </div>
+            </div>
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
           </button>
 
           {/* Cloud Pairing / QR Scan Shortcut */}
@@ -826,7 +846,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
             <div className="flex items-center justify-between p-3 rounded-2xl bg-pos-panel border border-pos-border">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-8 h-8 rounded-xl bg-cyan-500/15 text-cyan-400 flex items-center justify-center shrink-0">
-                  <QrCode className="w-4 h-4" />
+                  <QrCode className="w-4 h-4" aria-hidden="true" />
                 </div>
                 <div className="text-left min-w-0">
                   <span className="font-bold text-xs block text-pos-text truncate">Lier une Caisse</span>
@@ -838,7 +858,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 onClick={onOpenPairingWizard}
                 className="min-h-[44px] px-3 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-slate-950 font-bold text-xs active:scale-95 transition cursor-pointer flex items-center gap-1.5 shadow-sm shadow-emerald-500/20 shrink-0"
               >
-                <Camera className="w-3.5 h-3.5" />
+                <Camera className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Scanner</span>
               </button>
             </div>
@@ -855,9 +875,9 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           <div className="flex items-center justify-between py-1 border-b border-pos-border/40">
             <span className="font-bold text-pos-text flex items-center gap-2.5">
               {themeMode === 'dark' ? (
-                <Moon className="w-4 h-4 text-indigo-400" />
+                <Moon className="w-4 h-4 text-indigo-400" aria-hidden="true" />
               ) : (
-                <Sun className="w-4 h-4 text-amber-400" />
+                <Sun className="w-4 h-4 text-amber-400" aria-hidden="true" />
               )}
               <span>Thème visuel</span>
             </span>
@@ -874,9 +894,9 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           <div className="flex items-center justify-between py-1 border-b border-pos-border/40">
             <span className="font-bold text-pos-text flex items-center gap-2.5">
               {isAudioMuted ? (
-                <VolumeX className="w-4 h-4 text-rose-400" />
+                <VolumeX className="w-4 h-4 text-rose-400" aria-hidden="true" />
               ) : (
-                <Volume2 className="w-4 h-4 text-emerald-400" />
+                <Volume2 className="w-4 h-4 text-emerald-400" aria-hidden="true" />
               )}
               <span>Bips sonores</span>
             </span>
@@ -894,9 +914,9 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 {syncStatus.online ? (
-                  <Wifi className="w-4 h-4 text-emerald-400" />
+                  <Wifi className="w-4 h-4 text-emerald-400" aria-hidden="true" />
                 ) : (
-                  <WifiOff className="w-4 h-4 text-rose-400" />
+                  <WifiOff className="w-4 h-4 text-rose-400" aria-hidden="true" />
                 )}
                 <span className="font-bold text-pos-text text-xs">
                   {syncStatus.online ? 'Synchronisation Cloud Active' : 'Mode Hors-Ligne'}
@@ -914,6 +934,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               className="w-full min-h-[44px] px-3 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border active:scale-98 font-bold text-xs text-pos-text flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
             >
               <RefreshCw
+                aria-hidden="true"
                 className={`w-4 h-4 text-cyan-400 ${
                   isManualSyncing || syncStatus.pushing || syncStatus.pulling ? 'animate-spin' : ''
                 }`}
@@ -940,7 +961,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
-                <Sparkles className="w-4 h-4" />
+                <Sparkles className="w-4 h-4" aria-hidden="true" />
               </div>
               <div>
                 <span className="font-bold text-pos-text text-xs block">Mise à Jour MobiPOS</span>
@@ -959,7 +980,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               onClick={handleCheckUpdatesMobile}
               className="flex-1 min-h-[44px] px-3 rounded-xl bg-purple-600 hover:bg-purple-500 active:scale-98 font-bold text-xs text-white flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-purple-600/20 disabled:opacity-50"
             >
-              <RefreshCw className={`w-3.5 h-3.5 text-white ${updater.isChecking ? 'animate-spin' : ''}`} />
+              <RefreshCw aria-hidden="true" className={`w-3.5 h-3.5 text-white ${updater.isChecking ? 'animate-spin' : ''}`} />
               <span>{updater.isChecking ? 'Vérification...' : 'Vérifier Mises à Jour'}</span>
             </button>
 
@@ -975,7 +996,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               className="min-h-[44px] px-3 rounded-xl bg-emerald-500/15 border border-emerald-500/40 hover:bg-emerald-500/25 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-98 no-underline shrink-0 cursor-pointer"
               title="Télécharger directement le fichier APK"
             >
-              <Download className="w-3.5 h-3.5 text-emerald-400" />
+              <Download className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
               <span>APK Direct</span>
             </a>
           </div>
@@ -990,7 +1011,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
         {/* 7. Switch to PC View Banner */}
         <div className="bg-gradient-to-br from-indigo-500/15 via-purple-500/10 to-cyan-500/10 border border-indigo-500/30 rounded-3xl p-4 text-center space-y-2.5">
           <div className="flex items-center justify-center gap-1.5 text-indigo-300 font-black text-xs">
-            <Sparkles className="w-4 h-4 text-cyan-400" />
+            <Sparkles className="w-4 h-4 text-cyan-400" aria-hidden="true" />
             <span>Transformation en Caisse Complète</span>
           </div>
           <p className="text-[11px] text-pos-muted leading-relaxed max-w-sm mx-auto">
@@ -1001,7 +1022,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
             onClick={handleSwitchToDesktop}
             className="w-full min-h-[46px] rounded-2xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 active:scale-98 transition cursor-pointer"
           >
-            <Monitor className="w-4 h-4" />
+            <Monitor className="w-4 h-4" aria-hidden="true" />
             <span>Basculer vers le Mode Bureau (PC)</span>
           </button>
         </div>
@@ -1013,6 +1034,12 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           description="Saisissez le code PIN Manager pour ouvrir le tiroir-caisse sans vente."
           onSuccess={handlePinSuccess}
           onCancel={() => setIsPinOpen(false)}
+        />
+
+        {/* Mobile ESC/POS Thermal Printer Settings Modal */}
+        <MobilePrinterModal
+          isOpen={isPrinterModalOpen}
+          onClose={() => setIsPrinterModalOpen(false)}
         />
       </div>
     </AppTabContent>

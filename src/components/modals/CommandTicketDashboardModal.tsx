@@ -478,22 +478,25 @@ export const CommandTicketDashboardModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/50 backdrop-blur-sm select-none">
-      <div className="w-full max-w-5xl max-h-[90vh] flex flex-col rounded-2xl bg-pos-panel border border-pos-border overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95">
+    <div role="dialog" aria-modal="true" aria-label="Commandes et file d'attente" className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-6 bg-slate-900/50 backdrop-blur-sm select-none">
+      <div className="w-full sm:max-w-5xl max-h-[94dvh] sm:h-auto sm:max-h-[90vh] flex flex-col rounded-t-[28px] sm:rounded-2xl bg-pos-panel border-0 sm:border border-pos-border overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(1rem,var(--safe-bottom))] sm:pb-0">
+        {/* Mobile drag handle */}
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
+
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* MODAL HEADER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="px-6 py-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
-          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+        <div className="px-3.5 sm:px-6 py-3 sm:py-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 shadow-lg shadow-emerald-500/20 shrink-0">
               <Clock className="w-5 h-5 sm:w-6 sm:h-6 stroke-[2.5]" />
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h2 className="text-xs sm:text-base font-black text-pos-text uppercase tracking-wider truncate">
+              <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5 sm:gap-2">
+                <h2 className="text-xs sm:text-base font-black text-pos-text uppercase tracking-wider">
                   Commandes & File d'Attente
                 </h2>
-                <span className="px-2 py-0.2 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-[10px] sm:text-xs shrink-0">
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-[10px] sm:text-xs shrink-0">
                   {waitingPOs.length} En Attente
                 </span>
               </div>
@@ -1060,7 +1063,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
         {/* RECEPTION VERIFICATION SUB-MODAL */}
         {/* ══════════════════════════════════════════════════════════════ */}
         {receivingPO && (
-          <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4">
+          <div role="dialog" aria-modal="true" aria-label="Réception et contrôle marchandises" className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4">
             <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[90dvh]">
               <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
                 <div className="flex items-center gap-2.5">
@@ -1242,17 +1245,15 @@ export const CommandTicketDashboardModal: React.FC = () => {
         )}
 
         {/* ══════════════════════════════════════════════════════════════ */}
-        {/* MODAL FOOTER */}
-        {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="px-6 py-3.5 bg-pos-card/80 border-t border-pos-border flex items-center justify-between shrink-0">
-          <span className="text-xs text-pos-muted">
-            • Tous les tickets et bons de commande sont synchronisés en temps réel avec la base SQLite WAL.
+        <div className="px-4 sm:px-6 py-3 sm:py-3.5 bg-pos-card/80 border-t border-pos-border flex items-center justify-between shrink-0 gap-2">
+          <span className="text-[11px] sm:text-xs text-pos-muted line-clamp-1">
+            • Synchronisé en temps réel avec SQLite WAL.
           </span>
           <button
             onClick={closeModal}
             className="min-h-[44px] px-5 py-2 rounded-lg text-xs font-bold bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-text transition cursor-pointer shrink-0"
           >
-            Fermer (Échap)
+            Fermer <span className="hidden sm:inline opacity-70">(Échap)</span>
           </button>
         </div>
       </div>
@@ -1261,7 +1262,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
       {/* INTERACTIVE A4 DOCUMENT PREVIEW MODAL */}
       {/* ══════════════════════════════════════════════════════════════ */}
       {previewingPO && (
-        <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-md flex flex-col items-center justify-center p-3 sm:p-6 animate-in fade-in">
+        <div role="dialog" aria-modal="true" aria-label="Aperçu bon de commande" className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-md flex flex-col items-center justify-center p-3 sm:p-6 animate-in fade-in">
           <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-4xl max-h-[92dvh] flex flex-col shadow-2xl overflow-hidden">
             {/* Header bar */}
             <div className="p-4 border-b border-pos-border bg-pos-card flex flex-wrap items-center justify-between gap-3 shrink-0">

@@ -287,7 +287,7 @@ export const ShiftCloseModal: React.FC = () => {
   // view below is mounted — print first, then dismiss (channel cleanup rides
   // printCoordinator's afterprint + fallback timers).
   useEffect(() => {
-    if (!zSnapshot || activeModal !== 'shift_close') return;
+    if (!zSnapshot) return;
     const t1 = setTimeout(() => {
       printCoordinator.printChannelDirect('z_report', 120);
     }, 250);
@@ -300,13 +300,13 @@ export const ShiftCloseModal: React.FC = () => {
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, [zSnapshot, activeModal, closeModal]);
+  }, [zSnapshot, closeModal]);
 
   // Print-only view: mounted (via reopen below) with the frozen snapshot so
   // the desktop Z print can never fire on an empty target (blank page).
   if (zSnapshot) {
     return (
-      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
+      <div role="dialog" aria-modal="true" aria-label="Impression du rapport Z" data-testid="shift-z-dialog" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none">
         <div className="flex flex-col items-center gap-3">
           <div className="bg-slate-950 p-6 flex justify-center max-h-[70vh] overflow-y-auto">
             <ZReportPaper snapshot={zSnapshot} />
@@ -441,6 +441,7 @@ export const ShiftCloseModal: React.FC = () => {
             ok ? 'Session caisse clôturée avec succès. Rapport Z envoyé à l’impression.' : 'Session clôturée. Impression indisponible sur cet appareil.',
             ok ? 'success' : 'warning'
           );
+          closeModal();
         } else {
           // Desktop: arm the frozen snapshot and remount in print-only mode
           // BEFORE firing the channel — the target is therefore mounted when
@@ -513,10 +514,10 @@ export const ShiftCloseModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94dvh] sm:max-h-[92dvh] flex flex-col">
+    <div role="dialog" aria-modal="true" aria-label="Clôture de caisse et audit de réconciliation" data-testid="shift-close-dialog" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94dvh] sm:max-h-[92dvh] flex flex-col">
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* Header */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
@@ -563,6 +564,7 @@ export const ShiftCloseModal: React.FC = () => {
                 <div className="flex bg-pos-bg p-1 rounded-lg border border-pos-border">
                   <button
                     type="button"
+                    data-testid="shift-blind-direct"
                     onClick={() => setUseDenom(false)}
                     className={`px-3 py-1 text-xs font-bold rounded transition ${
                       !useDenom ? 'bg-emerald-500 text-slate-950 shadow-sm' : 'text-pos-muted hover:text-pos-text'
@@ -589,6 +591,8 @@ export const ShiftCloseModal: React.FC = () => {
                   </label>
                   <MoneyInput
                     label="Total Espèces Comptées Physiquement (DA)"
+                    data-testid="shift-blind-input"
+                    selectOnFocus={true}
                     valueMinor={dinarsToMinor(directPhysicalCount || 0)}
                     onChangeMinor={(minor) => setDirectPhysicalCount(toLegacyReal(minor))}
                     placeholder="Ex: 48 500 DA"
@@ -699,14 +703,14 @@ export const ShiftCloseModal: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="bg-pos-bg border border-pos-border p-3 rounded-xl">
                     <span className="text-[10px] text-pos-muted uppercase font-bold">Espèces Attendues</span>
-                    <p className="text-base font-black text-pos-text font-mono mt-0.5">
+                    <p data-testid="shift-expected" className="text-base font-black text-pos-text font-mono mt-0.5">
                       {formatDZD(expectedCash)}
                     </p>
                   </div>
 
                   <div className="bg-pos-bg border border-pos-border p-3 rounded-xl">
                     <span className="text-[10px] text-pos-muted uppercase font-bold">Espèces Comptées</span>
-                    <p className="text-base font-black text-emerald-400 font-mono mt-0.5">
+                    <p data-testid="shift-counted" className="text-base font-black text-emerald-400 font-mono mt-0.5">
                       {formatDZD(physicalCount)}
                     </p>
                   </div>
@@ -724,6 +728,7 @@ export const ShiftCloseModal: React.FC = () => {
                       Écart de Caisse (Variance)
                     </span>
                     <p
+                      data-testid="shift-variance"
                       className={`text-base font-black font-mono mt-0.5 ${
                         variance === 0
                           ? 'text-emerald-400'
@@ -766,6 +771,7 @@ export const ShiftCloseModal: React.FC = () => {
                   </p>
                   <input
                     type="text"
+                    data-testid="shift-note-variance"
                     value={closingNote}
                     onChange={(e) => setClosingNote(e.target.value)}
                     placeholder="Ex: Erreur rendu de monnaie ticket REC-124, pourboire..."
@@ -793,6 +799,7 @@ export const ShiftCloseModal: React.FC = () => {
                     </label>
                     <input
                       type="text"
+                      data-testid="shift-note-close"
                       value={closingNote}
                       onChange={(e) => setClosingNote(e.target.value)}
                       placeholder="Ex: RAS, fin de shift normale..."
@@ -817,6 +824,7 @@ export const ShiftCloseModal: React.FC = () => {
                   </p>
                   <input
                     type="password"
+                    data-testid="shift-close-pin"
                     inputMode="numeric"
                     pattern="[0-9]*"
                     autoComplete="current-password"
@@ -858,7 +866,7 @@ export const ShiftCloseModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 shrink-0">
+        <div className="p-3.5 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 shrink-0">
           {step === 'BLIND_COUNT' ? (
             <>
               <div className="flex items-center gap-2">
@@ -888,6 +896,7 @@ export const ShiftCloseModal: React.FC = () => {
               </div>
               <button
                 type="button"
+                data-testid="shift-blind-next"
                 onClick={handleRevealReconciliation}
                 className="w-full sm:w-auto min-h-[44px] px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98] cursor-pointer"
               >
@@ -990,6 +999,7 @@ export const ShiftCloseModal: React.FC = () => {
                 </button>
                 <button
                   type="button"
+                  data-testid="shift-close-confirm"
                   onClick={handleFinalizeClosure}
                   disabled={isSubmitting || (variance !== 0 && !closingNote.trim())}
                   className={`flex-2 sm:flex-none min-h-[44px] px-5 py-2.5 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-lg transition active:scale-[0.98] cursor-pointer ${

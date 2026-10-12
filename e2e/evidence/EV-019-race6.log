@@ -1,0 +1,30 @@
+[wdio] binary : C:\Users\<user>\Desktop\phone3-sync-lab\target-e2e\debug\mobi-pos.exe
+[wdio] profile: debug
+[wdio] driver : embedded
+[wdio] logs   : C:\Users\<user>\Desktop\phone3-sync-lab\test-logs
+[wdio] provenance OK (overlay=com.mobi.pos.e2e, binary=C:\Users\<user>\Desktop\phone3-sync-lab\target-e2e\debug\mobi-pos.exe)
+[wdio] wiped .e2e container: C:\Users\<user>\AppData\Roaming\com.mobi.pos.e2e
+[wdio] wiped .e2e WebView profile: C:\Users\<user>\AppData\Local\com.mobi.pos.e2e
+[wdio] e2e data dir: C:\Users\<user>\AppData\Roaming\com.mobi.pos.e2e
+[wdio] manifest: gitSha=f25d5b9f93e52c228bd44245f5d6e29b6db884af dirty=true
+
+Execution of 1 workers started at 2026-10-12T17:00:01.904Z
+
+[0-0] RUNNING in undefined - file:///C:/Users/<user>/Desktop/phone3-sync-lab/test/specs/stress/phase4-race.e2e.ts
+[0-0] [stress] T-BR codes: OK | {"detail":"REFUND_EXCEEDS:E2E-STR-A:requested=2:remaining=0","gate_code":"NONE","kind":"OperationFailed","message_key":" | {"detail":"REFUND_EXCEEDS:E2E-STR-A:requested=2:remaining=0","gate_code":"NONE","kind":"OperationFailed","message_key":" | {"detail":"REFUND_EXCEEDS:E2E-STR-A:requested=2:remaining=0","gate_code":"NONE","kind":"OperationFailed","message_key":" | {"detail":"REFUND_EXCEEDS:E2E-STR-A:requested=2:remaining=0","gate_code":"NONE","kind":"OperationFailed","message_key":" | {"detail":"REFUND_EXCEEDS:E2E-STR-A:requested=2:remaining=0","gate_code":"NONE","kind":"OperationFailed","message_key":"
+[0-0] PASSED in undefined - file:///C:/Users/<user>/Desktop/phone3-sync-lab/test/specs/stress/phase4-race.e2e.ts
+
+ "spec" Reporter:
+------------------------------------------------------------------
+[msedge 154.0.0.0 windows #0-0] Running: msedge (v154.0.0.0) on windows
+[msedge 154.0.0.0 windows #0-0] Session ID: 315d408f-de2d-454b-8852-683c4b315003
+[msedge 154.0.0.0 windows #0-0]
+[msedge 154.0.0.0 windows #0-0] » test\specs\stress\phase4-race.e2e.ts
+[msedge 154.0.0.0 windows #0-0] STRESS race probe (Phase 4, isolated)
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-BR] 6 parallel refunds: exactly-once or documented stall
+[msedge 154.0.0.0 windows #0-0]
+[msedge 154.0.0.0 windows #0-0] 1 passing (3.7s)
+
+
+Spec Files:	 1 passed, 1 total (100% completed) in 00:00:06  
+

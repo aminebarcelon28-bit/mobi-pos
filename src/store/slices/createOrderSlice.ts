@@ -27,6 +27,8 @@ async function getCustomerRepo() {
   return customerRepository;
 }
   import { newId, newReceiptNumber, deterministicId } from '../../utils/ids';
+  import { refundIdentity, refundSaleNative } from '../../db/adapters/refundNative';
+  import type { NativeRefundRequest } from '../../db/adapters/refundNative';
   import { sortedTransactions } from '../transactionOrder';
   import { saveCheckoutRecoveryIntent, clearCheckoutRecoveryIntent, cartFingerprintOfPayload, clearSiblingRecoveryIntents } from '../../db/checkoutRecovery';
   import { tryAcquireCheckoutFlight, releaseCheckoutFlight } from '../../db/checkoutFlight';
@@ -54,7 +56,7 @@ import {
   getEffectiveCostPrice,
   calculateProfit,
 } from '../../utils/pricingEngine';
-import { computeCartTotals, computeRefundFundingSplit, computeTradeInSettlement, computeTradeRestoreQuota } from '../../utils/receiptMath';
+import { computeCartTotals, computeRefundFundingSplit, computeTradeInSettlement, computeTradeRestoreQuota, refundableValueOf } from '../../utils/receiptMath';
 import {
   cashSalesFromTxns,
   cashRefundsFromTxns,
@@ -63,6 +65,9 @@ import {
   standaloneExpensesFromMovements,
   savDepositsFromRepairs,
   estimateDrawerCash,
+  physicalCashTendered,
+  cashDisbursedOf,
+  clampCashRefund,
 } from '../../utils/cashTerms';
 import { isTxInCloseScope } from '../../db/adapters/shiftAdapter';
 import { formatDZD } from '../../types/pos';
@@ -1930,6 +1935,8 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
 
   processRefund: async (payload) => {
     const { originalTransaction, refundItems, refundMethod, refundReason, cashierName } = payload;
+    const supervisorPinVerifiedAt = (payload as { supervisorPinVerifiedAt?: string }).supervisorPinVerifiedAt;
+    const supervisorUserId = (payload as { supervisorUserId?: string }).supervisorUserId;
     const { transactions, products, customers, logSecurityAction } = get();
 
     if (refundItems.length === 0) {
@@ -1943,6 +1950,38 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       transactions.find((t) => t.id === originalTransaction.id) ?? originalTransaction;
     if (liveOriginal.status === 'VOIDED') {
       return { success: false, reason: 'ORIGINAL_VOIDED' };
+    }
+
+    // Fix 4: every refund anchors to an accounting period. Without an open
+    // shift the refund would land in the original (possibly CERTIFIED) shift
+    // and rewrite its books — fail closed instead.
+    const refundShiftGate = get().activeShift;
+    if (!refundShiftGate || !refundShiftGate.id) {
+      return { success: false, reason: 'NO_OPEN_SHIFT' };
+    }
+
+    // Fix 1: zero-value/exhausted tickets never reach the write path. Same
+    // money-truth basis as the modal list filter (refundableValueOf) — the
+    // list can never offer what submit refuses.
+    if (refundableValueOf(liveOriginal, transactions) <= 0) {
+      return { success: false, reason: 'ZERO_REFUNDABLE' };
+    }
+
+    // Fix 3: offline inputs for the fail-closed verdict (enforced at claim
+    // time below). Probe + device identity are resolved once, up front.
+    let refundOnline = false;
+    try {
+      const { probeOnline } = await import('../../sync/tursoClient');
+      refundOnline = await probeOnline(2500);
+    } catch {
+      refundOnline = false;
+    }
+    let refundLocalDevice = '';
+    try {
+      const { getStableDeviceId } = await import('../../sync/device');
+      refundLocalDevice = await getStableDeviceId().catch(() => '');
+    } catch {
+      refundLocalDevice = '';
     }
 
     // Physical returns kept out of stock (rebut/defective) move value off the
@@ -2006,12 +2045,74 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       .reduce((acc, t) => acc + (Number(t.total) || 0), 0);
     const funding = computeRefundFundingSplit(originalTransaction, refundTotal, priorRecovery);
     const netRefund = funding.netRefund;
+    // Fix 2: strict tender clamp (anti cash-extraction). Cumulative drawer
+    // cash out can never exceed the net physical cash tendered on the original
+    // ticket. Prior payouts union store + Dexie (pulled peer refunds) — the
+    // same coverage as the over-refund guard above. Excess locks to Avoir.
+    const clampWarnings: string[] = [];
+    let priorCashOut = 0;
+    let shiftCashOut = 0;
+    try {
+      const { db: dexieCashDb } = await import('../../db/database');
+      const dexieCashRefunds = await dexieCashDb.transactions
+        .filter((t) => Boolean(t.isRefund) && t.originalTransactionId === originalTransaction.id)
+        .toArray()
+        .catch(() => []);
+      // Offline shift bucket basis (Module B pre-check): same union, drawer
+      // cash disbursed by refunds of the CURRENT shift (any ticket).
+      for (const t of transactions) {
+        if (t.isRefund && t.originalTransactionId === originalTransaction.id) priorCashOut += cashDisbursedOf(t);
+        if (t.isRefund && (t.shiftId || '') === (refundShiftGate.id || '')) shiftCashOut += cashDisbursedOf(t);
+      }
+      const seenCashIds = new Set(transactions.filter((t) => t.isRefund).map((t) => t.id));
+      for (const t of dexieCashRefunds || []) {
+        if (t.id && seenCashIds.has(t.id)) continue;
+        priorCashOut += cashDisbursedOf(t);
+        if ((t.shiftId || '') === (refundShiftGate.id || '')) shiftCashOut += cashDisbursedOf(t);
+      }
+    } catch {
+      // Dexie unavailable — store coverage still applies (fail-closed: the
+      // adapter re-verifies the cap against durable rows below).
+    }
+    const cashTenderedNet = physicalCashTendered(originalTransaction);
+    const clamped = clampCashRefund({ cashShare: funding.cashShare, cashTenderedNet, priorCashOut });
+    let effectiveRefundMethod = refundMethod;
+    let walletFromCashOverflow = 0;
+    if (refundMethod === 'Espèces' && clamped.avoirOverflow > 0) {
+      if (clamped.cashOut === 0) {
+        effectiveRefundMethod = 'Avoir Client';
+        clampWarnings.push(
+          `Plafond espèces ${cashTenderedNet} DA atteint — ${clamped.avoirOverflow} DA reverrouillé en avoir (jamais en espèces).`
+        );
+        clampWarnings.push('Aucune espèce disponible à reverser — méthode basculée automatiquement en Avoir Client.');
+      } else {
+        walletFromCashOverflow = clamped.avoirOverflow;
+        clampWarnings.push(
+          `Plafond espèces ${cashTenderedNet} DA atteint — ${clamped.avoirOverflow} DA reverrouillé en avoir (jamais en espèces).`
+        );
+      }
+    }
     // Cash disbursed through THIS refund by method. Non-cash methods never
     // touch the drawer; avoir value always returns to the wallet (never
     // cashed out), voucher/debt via their own lanes below.
-    const cashOut = refundMethod === 'Espèces' ? funding.cashShare : 0;
+    const cashOut = effectiveRefundMethod === 'Espèces' ? clamped.cashOut : 0;
+    // Module B pre-check (best-effort mirror — authoritative enforcement is
+    // in-txn): while offline, drawer cash disbursed this shift is bounded.
+    // Fail here with the same reason the native gate returns, so the modal
+    // can offer the voucher fallback before any row is written.
+    if (!refundOnline && effectiveRefundMethod === 'Espèces' && cashOut > 0) {
+      try {
+        const { readOfflinePolicy } = await import('../../db/adapters/refundNative');
+        const shiftCap = await readOfflinePolicy('policy.offline_cash_refund_limit');
+        if (shiftCashOut + cashOut > shiftCap) {
+          return { success: false, reason: 'OFFLINE_CASH_CAP_EXCEEDED' };
+        }
+      } catch {
+        // Policy read unavailable — the native gate still enforces in-txn.
+      }
+    }
     const walletAddBase =
-      funding.avoirShare + (refundMethod === 'Avoir Client' ? funding.cashShare : 0);
+      funding.avoirShare + walletFromCashOverflow + (effectiveRefundMethod === 'Avoir Client' ? funding.cashShare : 0);
 
     // Chaos S5 — exchange reversal: the funding split caps cash at net paid,
     // so the trade-in value can never leak into cashOut — but without
@@ -2180,29 +2281,72 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     const canonicalKey = canonicalRefundItems
       .map((i) => `${i.productId}:${i.quantity}:${Math.round(i.unitPrice ?? 0)}:${i.restock ? 1 : 0}`)
       .join(',');
-    const refundReceiptNumber = newReceiptNumber('AVOIR');
-    const refundTxnId = deterministicId('REF', originalTransaction.id, canonicalKey, refundMethod, Math.round(refundTotal));
+    // MOBI-DEFECT-F: basis-aware deterministic identity. `basis` counts the
+    // refunds for this ticket the caller already knew about (store + Dexie
+    // union), so two tabs with the same stale view derive the SAME id and
+    // the loser fails on the native dedup gate — while a deliberate later
+    // partial refund hashes differently and is decided by the quota check.
+    // The display receipt derives from the id (no per-tab entropy).
+    const refundBasis = seenRefundIds.size;
+    const {
+      itemsHash: refundItemsHash,
+      refundId: refundTxnId,
+      receiptNumber: refundReceiptNumber,
+    } = refundIdentity({
+      ticketId: originalTransaction.id,
+      canonicalKey,
+      method: effectiveRefundMethod,
+      netRefund,
+      basis: refundBasis,
+    });
 
     // Online compensation claim (ad.md §10): when reachable, claim the
-    // deterministic refund id in the cloud BEFORE paying out. A peer till
-    // refunding the same items holds the same claim id — the loser aborts
-    // here instead of double-paying. Offline (or claim-table trouble) the
-    // payout proceeds: offline-first is inviolable and deterministic ids
-    // guarantee the books still converge.
+    // deterministic refund id in the cloud BEFORE paying out (90 s TTL —
+    // abandoned locks self-sweep). A peer till refunding the same items holds
+    // the same claim id — the loser aborts here instead of double-paying.
+    // Fix 3: OFFLINE or claim-table trouble no longer proceeds blindly.
+    // Offline-first survives ONLY for own-ledger current-shift tickets; a
+    // remote or past-shift ticket without a live server claim is denied
+    // fail-closed (split-brain double-refund can otherwise not be excluded).
     try {
       const { tryClaimCompensation } = await import('../../sync/claims');
-      const claim = await tryClaimCompensation('REFUND', `CLAIM-${refundTxnId}`, originalTransaction.id);
+      const { REFUND_CLAIM_TTL_SEC, offlineRefundVerdict } = await import('../../sync/refundLockPolicy');
+      const claim = await tryClaimCompensation('REFUND', `CLAIM-${refundTxnId}`, originalTransaction.id, REFUND_CLAIM_TTL_SEC);
       if (!claim.claimed && claim.reason === 'HELD_BY_PEER') {
         return { success: false, reason: 'REFUND_ALREADY_IN_PROGRESS' };
       }
+      if (!claim.claimed) {
+        const verdict = offlineRefundVerdict(originalTransaction, {
+          localDeviceId: refundLocalDevice,
+          activeShiftId: refundShiftGate.id,
+        });
+        if (!verdict.allow) {
+          return { success: false, reason: verdict.reason };
+        }
+      }
     } catch (claimErr) {
-      console.warn('[refund:claim] claim skipped, proceeding offline-first:', claimErr);
+      console.warn('[refund:claim] claim skipped, applying offline verdict:', claimErr);
+      try {
+        const { offlineRefundVerdict } = await import('../../sync/refundLockPolicy');
+        const verdict = offlineRefundVerdict(originalTransaction, {
+          localDeviceId: refundLocalDevice,
+          activeShiftId: refundShiftGate.id,
+        });
+        if (!verdict.allow) {
+          return { success: false, reason: verdict.reason };
+        }
+      } catch {
+        return { success: false, reason: 'OFFLINE_REMOTE_TICKET' };
+      }
     }
 
     // Part 1 seller rule (refunds too): snapshot the live shift opener so the
     // avoir slip prints the drawer-responsible cashier, not a blank fallback.
     // The performing manager stays on the audit entry (user field below).
-    const refundShift = get().activeShift;
+    // Fix 4: the shift gate above guarantees an open shift — the refund row
+    // always anchors to the CURRENT shift (contra-revenue to this period),
+    // never to the original (possibly certified) one.
+    const refundShift = refundShiftGate;
     const refundShiftOpener =
       (refundShift?.openedBy || '').trim() ||
       (refundShift?.cashierName || '').trim() ||
@@ -2213,12 +2357,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       status: 'COMPLETED',
       isRefund: true,
       cashierName: (cashierName || '').trim() || refundShiftOpener || 'Manager',
-      shiftId: refundShift?.id ?? originalTransaction.shiftId ?? undefined,
+      shiftId: refundShift.id,
       ...(refundShiftOpener ? { shiftOpenedByName: refundShiftOpener } : {}),
       originalReceiptNumber: originalTransaction.receiptNumber,
       originalTransactionId: originalTransaction.id,
       refundReason,
-      refundMethod,
+      refundMethod: effectiveRefundMethod,
       refundedItems: canonicalRefundItems,
       customer: updatedCustomer || originalTransaction.customer,
       items: canonicalRefundItems.map((ri) => {
@@ -2254,7 +2398,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       profit: 0,
       profitMargin: 0,
       pricingTier: originalTransaction.pricingTier,
-      paymentMethod: refundMethod,
+      paymentMethod: effectiveRefundMethod,
       cashTendered: cashOut,
       changeDue: 0,
       createdAt: new Date().toISOString(),
@@ -2281,7 +2425,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       timestamp: new Date().toISOString(),
       user: cashierName || 'Manager',
       action: 'Remboursement / Avoir Émis',
-      details: `Avoir #${refundReceiptNumber} (net ${netRefund} DA, brut ${refundTotal} DA, espèces ${cashOut} DA en ${refundMethod}${
+      details: `Avoir #${refundReceiptNumber} (net ${netRefund} DA, brut ${refundTotal} DA, espèces ${cashOut} DA en ${effectiveRefundMethod}${
         tradeRestoreNow > 0 && !tradeValueUnclaimed
           ? `, reprise ${tradeRestoreNow} DA restaurée en avoir`
           : tradeValueUnclaimed
@@ -2295,6 +2439,360 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       requiresPin: true,
     };
 
+    // MOBI-DEFECT-F native barrier (Tauri only): every money effect of this
+    // refund — ticket CAS, refund row + lines, inventory deltas, batch
+    // restitution, debt ledger, voucher CAS, drawer trail, outbox, audit —
+    // commits in ONE native BEGIN IMMEDIATE transaction. A concurrent tab
+    // blocks on the journal lock, then rolls back with ALREADY_REFUNDED and
+    // performs no side effects. The legacy Dexie/SQLite-split flow below runs
+    // ONLY outside Tauri (web preview / Node tests).
+    if ((await import('../../db/adapters/base')).isTauriEnv()) {
+      const batchSeed = `ref-${refundTxnId}`;
+      const restitutionAllocations: Array<{ batchId?: string; productId: string; quantity: number; unitCost: number }> = [];
+      {
+        const origLines = originalTransaction.items || [];
+        const findOrigLine = (ri: { productId: string; saleItemId?: string }) => {
+          if (ri.saleItemId) {
+            const m = String(ri.saleItemId).match(/-item-(\d+)$/);
+            const idx = m ? Number(m[1]) : -1;
+            const byIdx = idx >= 0 ? origLines[idx] : undefined;
+            if (byIdx && byIdx.product?.id === ri.productId) return byIdx;
+          }
+          return origLines.find((i) => i.product?.id === ri.productId);
+        };
+        const restocked = refundItems.filter((i) => i.restock && i.quantity > 0 && !isUnstockedProduct(i.productId, products));
+        for (const ri of restocked) {
+          const origItem = findOrigLine(ri);
+          const origAllocations = origItem?.fifoAllocations || [];
+          let remainingQty = ri.quantity;
+          if (origAllocations.length > 0) {
+            const reversedAllocations = [...origAllocations].reverse();
+            for (const alloc of reversedAllocations) {
+              if (remainingQty <= 0) break;
+              const restoreCount = Math.min(alloc.quantity, remainingQty);
+              restitutionAllocations.push({
+                batchId: alloc.batchId,
+                productId: ri.productId,
+                quantity: restoreCount,
+                unitCost: alloc.unitCost,
+              });
+              remainingQty -= restoreCount;
+            }
+          }
+          if (remainingQty > 0) {
+            const fallbackUnitCost = origItem?.unitCostAtSale ?? origItem?.unitCostPrice ?? origItem?.product?.costPrice ?? ri.unitPrice;
+            restitutionAllocations.push({
+              batchId: undefined,
+              productId: ri.productId,
+              quantity: remainingQty,
+              unitCost: fallbackUnitCost,
+            });
+          }
+        }
+      }
+      const liveCustForRelief = origCust ? (customers.find((c) => c.id === origCust.id) || origCust) : undefined;
+      const debtReliefForNative = funding.debtShare > 0 && liveCustForRelief
+        ? (() => {
+            const reliefAmt = Math.max(0, Math.min(Math.round(funding.debtShare), Math.round(liveCustForRelief.currentDebt ?? 0)));
+            if (reliefAmt <= 0) return null;
+            return {
+              entry: {
+                entryId: deterministicId('PAYREL', refundTxnId, liveCustForRelief.id, reliefAmt),
+                customerId: liveCustForRelief.id,
+                customerName: liveCustForRelief.name,
+                amount: reliefAmt,
+                receiptNumber: `VERS-${refundTxnId.replace(/^REF-/, '')}`,
+                paymentMethod: 'Crédit Client',
+                notes:
+                  `Remboursement Ticket #${originalTransaction.receiptNumber} — réduction de créance ` +
+                  `(part dette ${reliefAmt} DA sur net remboursé ${netRefund} DA)`,
+                recordedBy: cashierName || 'Manager',
+              },
+              relief: reliefAmt,
+              newDebt: Math.max(0, Math.round(liveCustForRelief.currentDebt ?? 0) - reliefAmt),
+            };
+          })()
+        : null;
+      const voucherForNative = originalTransaction.voucherCode && funding.voucherShare > 0
+        ? { code: originalTransaction.voucherCode, amount: Math.round(funding.voucherShare) }
+        : null;
+      const cashMoveForNative = cashOut > 0
+        ? {
+            id: `MOV-REF-${refundTxnId.replace(/^REF-/, '')}`,
+            sessionId: refundShift.id,
+            amount: Math.round(cashOut),
+            reason:
+              `${DRAWER_REASON_PREFIXES.REFUND_ALLOCATION} [${refundReceiptNumber}] ` +
+              `tiroir=${refundShift.id} periode=${refundShift.id} ` +
+              `net=${netRefund} especes=${Math.round(cashOut)} avoir=${walletAddBase + tradeRestoreNow} ` +
+              `origine=${originalTransaction.receiptNumber} ticket=${originalTransaction.id} ` +
+              `shift_origine=${(originalTransaction.shiftId || '').trim() || 'inconnue'}`,
+            cashierName: cashierName || 'Manager',
+          }
+        : null;
+      const nativeAuditId = `AUD-${refundTxnId}`;
+      // Machine-readable payout tag for the both-offline convergence
+      // detector (payoutWatch scans audit details). Computed BEFORE the
+      // commit so the native audit row carries it, like the legacy
+      // logSecurityAction row did.
+      let nativePayoutTag = '';
+      try {
+        const { getStableDeviceId } = await import('../../sync/device');
+        const { payoutTag } = await import('../../sync/payoutWatch');
+        const devId = await getStableDeviceId().catch(() => 'default');
+        nativePayoutTag = ` ${payoutTag(`REF:${refundTxnId}`, effectiveRefundMethod, Math.round(cashOut), devId)}`;
+      } catch {
+        // Tag best-effort — the refund itself must never fail over a marker.
+      }
+      const nativeReq: NativeRefundRequest = {
+        ticketId: originalTransaction.id,
+        refundId: refundTxnId,
+        itemsHash: refundItemsHash,
+        receiptNumber: refundReceiptNumber,
+        method: effectiveRefundMethod,
+        online: refundOnline,
+        localDeviceId: refundLocalDevice || '',
+        activeShiftId: refundShiftGate.id || '',
+        supervisor:
+          supervisorPinVerifiedAt && supervisorUserId
+            ? { userId: supervisorUserId, verifiedAt: supervisorPinVerifiedAt }
+            : null,
+        customerId: updatedCustomer?.id ?? originalTransaction.customer?.id ?? null,
+        subtotal: Math.round(refundTotal),
+        discountTotal: 0,
+        totalNet: Math.round(netRefund),
+        costTotal: Math.round(costRefundTotal),
+        pricingTier: originalTransaction.pricingTier,
+        paymentMethod: effectiveRefundMethod,
+        cashTendered: Math.round(cashOut),
+        changeDue: 0,
+        cashTenderedNet: Math.round(cashTenderedNet),
+        createdAt: refundTransaction.createdAt,
+        refundPayload: JSON.stringify(refundTransaction),
+        originalOutboxPayload: JSON.stringify({
+          ...updatedOriginalTransaction,
+          receipt_number: originalTransaction.receiptNumber,
+          created_at: originalTransaction.createdAt,
+        }),
+        deviceId: refundLocalDevice || 'local',
+        lines: canonicalRefundItems.map((ri, idx) => ({
+          id: `${refundTxnId}-item-${idx}`,
+          productId: ri.productId,
+          quantity: ri.quantity,
+          appliedPrice: Math.round(ri.unitPrice ?? 0),
+          unitPriceCharged: Math.round(ri.unitPrice ?? 0),
+          unitCostAtSale: 0,
+          discountAmount: 0,
+          lineProfit: 0,
+          imeiNumber: ri.imeiNumber ?? null,
+          itemKey: `${refundTxnId}-itemkey-${idx}`,
+          itemPayload: JSON.stringify({
+            id: `${refundTxnId}-item-${idx}`,
+            transactionId: refundTxnId,
+            productId: ri.productId,
+            quantity: ri.quantity,
+            appliedPrice: Math.round(ri.unitPrice ?? 0),
+            imeiNumber: ri.imeiNumber ?? null,
+          }),
+        })),
+        deltas: refundItems
+          .filter((i) => i.restock && i.quantity > 0 && !isUnstockedProduct(i.productId, products))
+          .map((i) => ({
+            id: deterministicId('LED-REF', refundTxnId, i.productId, i.quantity),
+            key: deterministicId('LED-REF', refundTxnId, i.productId, i.quantity),
+            productId: i.productId,
+            delta: i.quantity,
+          })),
+        batches: restitutionAllocations.map((a, allocIdx) => {
+          const fallbackBatchId = `batch-return-${batchSeed}-${a.productId}-${Math.max(0, Math.round(a.unitCost))}-${allocIdx}`;
+          return {
+            batchId: a.batchId ?? null,
+            productId: a.productId,
+            quantity: a.quantity,
+            unitCost: a.unitCost,
+            fallbackBatchId,
+            fallbackKey: `sb-${fallbackBatchId}`,
+          };
+        }),
+        imeis: restoredImeis,
+        debt: debtReliefForNative?.entry ?? null,
+        voucher: voucherForNative,
+        cashMove: cashMoveForNative,
+        audit: {
+          action: auditEntry.action,
+          details: `${auditEntry.details}${nativePayoutTag}`,
+          user: auditEntry.user,
+          requiresPin: true,
+          deviceId: refundLocalDevice || null,
+          ipAddress: null,
+        },
+      };
+      const updatedCustomerProjected = updatedCustomer
+        ? debtReliefForNative
+          ? { ...updatedCustomer, currentDebt: debtReliefForNative.newDebt }
+          : updatedCustomer
+        : undefined;
+      const auditMirror: SecurityAuditLogEntry = {
+        ...auditEntry,
+        id: nativeAuditId,
+        details: `${auditEntry.details}${nativePayoutTag}`,
+      };
+      const nativeRes = await refundSaleNative(nativeReq, {
+        refund: refundTransaction,
+        updatedOriginal: updatedOriginalTransaction,
+        products: restockedProducts,
+        customer: updatedCustomerProjected,
+        audit: auditMirror,
+      });
+      if (!nativeRes.success) {
+        const r = nativeRes.reason;
+        if (r === 'ALREADY_REFUNDED') return { success: false, reason: 'ALREADY_REFUNDED', refundId: nativeRes.refundId };
+        if (r === 'ORIGINAL_VOIDED') return { success: false, reason: 'ORIGINAL_VOIDED' };
+        if (r === 'REFUND_EXCEEDS_PURCHASED') return { success: false, reason: 'REFUND_EXCEEDS_PURCHASED' };
+        if (r === 'CASH_CAP_EXCEEDED') return { success: false, reason: 'CASH_CAP_EXCEEDED' };
+        if (r === 'NO_OPEN_SHIFT') return { success: false, reason: 'NO_OPEN_SHIFT' };
+        if (r === 'ZERO_REFUNDABLE') return { success: false, reason: 'ZERO_REFUNDABLE' };
+        if (r === 'VOUCHER_CHANGED' || r === 'VOUCHER_MISSING') return { success: false, reason: 'VOUCHER_RESTORE_FAILED' };
+        if (r === 'OFFLINE_FOREIGN_TICKET') return { success: false, reason: 'OFFLINE_FOREIGN_TICKET' };
+        if (r === 'OFFLINE_CASH_CAP_EXCEEDED') return { success: false, reason: 'OFFLINE_CASH_CAP_EXCEEDED' };
+        if (r === 'SUPERVISOR_PIN_REQUIRED') return { success: false, reason: 'SUPERVISOR_PIN_REQUIRED' };
+        if (r === 'SUPERVISOR_AUTH_EXPIRED') return { success: false, reason: 'SUPERVISOR_AUTH_EXPIRED' };
+        if (r === 'SYSTEM_CLOCK_REGRESSION') return { success: false, reason: 'SYSTEM_CLOCK_REGRESSION' };
+        if (r === 'DEVICE_IDENTITY_SPOOFED') return { success: false, reason: 'DEVICE_IDENTITY_SPOOFED' };
+        return { success: false, reason: 'PERSISTENCE_FAILED' };
+      }
+      const nativeWarnings: string[] = [...clampWarnings, ...nativeRes.warnings];
+      if (tradeValueUnclaimed) {
+        nativeWarnings.push(
+          `Valeur reprise ${formatDZD(tradeRestoreNow)} non réclamable (ticket anonyme) — régularisation manager requise.`
+        );
+      }
+      const debtMirror: CustomerDebtEntry | undefined = debtReliefForNative && liveCustForRelief
+        ? {
+            id: debtReliefForNative.entry.entryId,
+            customerId: liveCustForRelief.id,
+            customerName: liveCustForRelief.name,
+            type: 'PAYMENT_SETTLED',
+            amount: debtReliefForNative.relief,
+            balanceAfter: debtReliefForNative.newDebt,
+            receiptNumber: debtReliefForNative.entry.receiptNumber,
+            paymentMethod: 'Crédit Client',
+            notes: debtReliefForNative.entry.notes,
+            createdAt: new Date().toISOString(),
+            recordedBy: cashierName || 'Manager',
+          }
+        : undefined;
+      // Post-commit sync notifications + Dexie mirrors (best-effort: the money
+      // is durable; failures warn instead of failing the refund).
+      try {
+        const [{ fireSync }, sql] = await Promise.all([
+          import('../../db/adapters/base'),
+          import('../../db/sqlPluginAdapter'),
+        ]);
+        if (updatedCustomerProjected) {
+          await sql
+            .enqueueGenericSync('customer', updatedCustomerProjected.id, updatedCustomerProjected as unknown as Record<string, unknown>)
+            .catch((e: unknown) => {
+              nativeWarnings.push('Dette client : mise en file de synchronisation différée — le remboursement reste valide.');
+              console.warn('[refund:sync] customer enqueue deferred:', e);
+            });
+          void fireSync('customer', updatedCustomerProjected.id, updatedCustomerProjected);
+        }
+        if (debtMirror) {
+          try {
+            const { db } = await import('../../db/database');
+            await db.customerDebts.put(debtMirror);
+          } catch (e) {
+            console.warn('[refund] Dexie debt mirror skipped:', e);
+          }
+          void fireSync('customer_debt', debtMirror.id, debtMirror);
+        }
+        void fireSync('audit_log', nativeAuditId, auditMirror);
+        for (const imei of restoredImeis) {
+          try {
+            const { db } = await import('../../db/database');
+            const rec = await db.imeiRecords.get(imei);
+            if (rec) {
+              const released = { ...rec, saleTransactionId: undefined, soldAt: undefined };
+              await db.imeiRecords.put(released);
+              void fireSync('imei', imei, released);
+            }
+          } catch (e) {
+            console.warn('[refund] Dexie IMEI mirror skipped:', e);
+          }
+        }
+        if (voucherForNative) {
+          try {
+            const { db } = await import('../../db/database');
+            const rows = await db.creditVouchers.where('code').equals(voucherForNative.code).toArray().catch(() => []);
+            const row = rows?.[0];
+            if (row) {
+              const target = Math.min(row.initialAmount, row.remainingAmount + voucherForNative.amount);
+              if (target !== row.remainingAmount) {
+                const nowIso = new Date().toISOString();
+                await db.creditVouchers.put({ ...row, remainingAmount: target, status: target > 0 ? 'ACTIVE' : row.status, updatedAt: nowIso });
+                void fireSync('credit_voucher', row.id, { ...row, remainingAmount: target });
+              }
+            }
+          } catch (e) {
+            nativeWarnings.push(`Bon ${voucherForNative.code} : miroir local différé — solde vérifié côté autorité.`);
+            console.warn('[refund] Dexie voucher mirror skipped:', e);
+          }
+        }
+        if (cashMoveForNative) {
+          void fireSync('cash_movement', cashMoveForNative.id, cashMoveForNative);
+        }
+      } catch (e) {
+        console.warn('[refund:sync] post-commit notifications deferred:', e);
+        nativeWarnings.push('Journal de synchronisation : écriture différée — le ticket reste valide localement.');
+      }
+      try {
+        const { checkDuplicatePayouts } = await import('../../sync/payoutWatch');
+        const dups = await checkDuplicatePayouts();
+        for (const d of dups) {
+          nativeWarnings.push(
+            `Double encaissement suspecté sur le ticket ${d.payoutId.replace(/^(REF|VOID):/, '')} : ${d.amount} DA versés sur ${d.devices.length} appareils — contrôlez le fond de caisse.`
+          );
+        }
+      } catch {
+        // Detector best-effort only.
+      }
+      audioBus.emit('success');
+      if (effectiveRefundMethod === 'Espèces') {
+        audioBus.emit('cashDrawer');
+      }
+      const releasedImeiKeysNative = new Set(restoredImeis.map(normalizeDeviceKey));
+      const nextImeiRecordsNative = (get().imeiRecords || []).map((rr) =>
+        releasedImeiKeysNative.has(normalizeDeviceKey(rr.imei))
+          ? { ...rr, saleTransactionId: undefined, soldAt: undefined }
+          : rr
+      );
+      const nativeUpdatedTransactions = sortedTransactions([
+        refundTransaction,
+        ...transactions.map((t) => (t.id === originalTransaction.id
+          ? { ...updatedOriginalTransaction, status: nativeRes.ticketStatus as SaleTransaction['status'] }
+          : t)),
+      ]);
+      set({
+        products: updatedProducts,
+        transactions: nativeUpdatedTransactions,
+        customers: updatedCustomerProjected ? customers.map((c) => (c.id === updatedCustomerProjected.id ? updatedCustomerProjected : c)) : customers,
+        currentCustomer: updatedCustomerProjected || get().currentCustomer,
+        customerDebts: debtMirror ? [debtMirror, ...get().customerDebts] : get().customerDebts,
+        securityAuditLog: [auditMirror, ...get().securityAuditLog],
+        imeiRecords: nextImeiRecordsNative,
+        lastTransaction: refundTransaction,
+        activeModal: null,
+        hardwareStatus:
+          effectiveRefundMethod === 'Espèces' ? { ...get().hardwareStatus, cashDrawerOpen: true } : get().hardwareStatus,
+      });
+      const nativeSettings = get().receiptSettings;
+      if (nativeSettings?.autoPrintEnabled !== false) {
+        void printReceipt(refundTransaction, nativeSettings);
+      }
+      return { success: true, refundTransaction, warnings: nativeWarnings };
+    }
+
     try {
       await (await getSqlite()).processRefundAtomic(
         refundTransaction,
@@ -2302,20 +2800,29 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         restockedProducts,
         updatedCustomer,
         restoredImeis,
-        auditEntry
+        auditEntry,
+        {
+          localDeviceId: refundLocalDevice,
+          activeShiftId: refundShiftGate.id,
+          online: refundOnline,
+        }
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.startsWith('REFUND_EXCEEDS')) return { success: false, reason: 'REFUND_EXCEEDS_PURCHASED' };
       if (msg === 'ALREADY_PROCESSING') return { success: false, reason: 'ALREADY_PROCESSING' };
       if (msg === 'ORIGINAL_VOIDED') return { success: false, reason: 'ORIGINAL_VOIDED' };
+      if (msg === 'ZERO_REFUNDABLE') return { success: false, reason: 'ZERO_REFUNDABLE' };
+      if (msg === 'CASH_CAP_EXCEEDED') return { success: false, reason: 'CASH_CAP_EXCEEDED' };
+      if (msg === 'OFFLINE_REMOTE_TICKET') return { success: false, reason: 'OFFLINE_REMOTE_TICKET' };
+      if (msg === 'NO_OPEN_SHIFT') return { success: false, reason: 'NO_OPEN_SHIFT' };
       console.error('Failed to process refund atomically:', err);
       return { success: false, reason: 'PERSISTENCE_FAILED' };
     }
 
     // Sync-lane writes for the refund (ledger deltas, batch restitution,
     // outbox rows). Failures here warn explicitly instead of vanishing.
-    const refundWarnings: string[] = [];
+    const refundWarnings: string[] = [...clampWarnings];
     if (tradeValueUnclaimed) {
       refundWarnings.push(
         `Valeur reprise ${formatDZD(tradeRestoreNow)} non réclamable (ticket anonyme) — régularisation manager requise.`
@@ -2463,7 +2970,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           profit: 0,
           profit_margin: 0,
           pricing_tier: originalTransaction.pricingTier,
-          payment_method: refundMethod,
+          payment_method: effectiveRefundMethod,
           cash_tendered: cashOut,
           change_due: 0,
           status: 'COMPLETED',
@@ -2509,6 +3016,34 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       refundWarnings.push('Journal de synchronisation : écriture différée — le ticket reste valide localement.');
     }
 
+    // Fix 4: cross-shift allocation record (double-entry trail). The refund
+    // row above (shiftId = current shift) carries contra-revenue to THIS
+    // period while the original ticket stays untouched; this ALLOCATION
+    // movement records the physical drawer debit with the immutable original
+    // link. ALLOCATION is allowlisted out of every cash-math reader —
+    // informational only, never double-counted. Best-effort post-commit
+    // (money already durable): failures warn, never fail the refund.
+    if (cashOut > 0) {
+      try {
+        const { shiftAdapter } = await import('../../db/adapters/shiftAdapter');
+        const origShift = (originalTransaction.shiftId || '').trim() || 'inconnue';
+        await shiftAdapter.logExpense(
+          cashOut,
+          'ALLOCATION',
+          `${DRAWER_REASON_PREFIXES.REFUND_ALLOCATION} [${refundReceiptNumber}] ` +
+            `tiroir=${refundShift.id} periode=${refundShift.id} ` +
+            `net=${netRefund} especes=${cashOut} avoir=${walletAddBase + tradeRestoreNow} ` +
+            `origine=${originalTransaction.receiptNumber} ticket=${originalTransaction.id} ` +
+            `shift_origine=${origShift}`,
+          cashierName || 'Manager',
+          refundShift.id
+        );
+      } catch (allocErr) {
+        console.warn('[refund:allocation] allocation record deferred:', allocErr);
+        refundWarnings.push('Traçabilité inter-caisse : écriture différée — le remboursement reste valide.');
+      }
+    }
+
     // Machine-readable payout tag for the both-offline convergence detector
     // (payoutWatch) + immediate local check against already-pulled peer rows.
     let refundPayoutTag = '';
@@ -2516,13 +3051,13 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       const { getStableDeviceId } = await import('../../sync/device');
       const { payoutTag } = await import('../../sync/payoutWatch');
       const devId = await getStableDeviceId().catch(() => 'default');
-      refundPayoutTag = ` ${payoutTag(`REF:${refundTxnId}`, refundMethod, Math.round(cashOut), devId)}`;
+      refundPayoutTag = ` ${payoutTag(`REF:${refundTxnId}`, effectiveRefundMethod, Math.round(cashOut), devId)}`;
     } catch {
       // Tag best-effort — the refund itself must never fail over a marker.
     }
     logSecurityAction(
       'Remboursement / Avoir Émis',
-      `Avoir #${refundReceiptNumber} (net ${netRefund} DA, espèces ${cashOut} DA en ${refundMethod}) pour Ticket #${originalTransaction.receiptNumber}. Motif: ${refundReason}${refundPayoutTag}`,
+      `Avoir #${refundReceiptNumber} (net ${netRefund} DA, espèces ${cashOut} DA en ${effectiveRefundMethod}) pour Ticket #${originalTransaction.receiptNumber}. Motif: ${refundReason}${refundPayoutTag}`,
       cashierName || 'Manager',
       true
     );
@@ -2539,7 +3074,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     }
 
     audioBus.emit('success');
-    if (refundMethod === 'Espèces') {
+    if (effectiveRefundMethod === 'Espèces') {
       audioBus.emit('cashDrawer');
     }
 
@@ -2560,7 +3095,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       lastTransaction: refundTransaction,
       activeModal: null,
       hardwareStatus:
-        refundMethod === 'Espèces' ? { ...get().hardwareStatus, cashDrawerOpen: true } : get().hardwareStatus,
+        effectiveRefundMethod === 'Espèces' ? { ...get().hardwareStatus, cashDrawerOpen: true } : get().hardwareStatus,
     });
 
     // C4 debt-on-refund: relieve exactly the debt-funded share of the

@@ -80,6 +80,60 @@ function installCrashCapture(): void {
 
 installCrashCapture();
 
+// Tier-B stress hook (E2E FLAVOR builds ONLY): exposes the REAL checkout
+// path (store addToCart + processPayment) for seeded-volume runs. The e2e
+// flavor is built with VITE_E2E=1 (scripts/build-e2e.mjs); plain `npm run
+// build`/`dev` lack it, so esbuild dead-branch elimination erases this
+// block from production AND plain-dev bundles — same pattern as
+// devBenchMark (WP2c). Never referenced by app code; WDIO stress specs
+// drive it. Absence from prod dist is proven by grepping dist for
+// `__posStress` after a plain `npm run build`.
+if (import.meta.env.VITE_E2E === '1') {
+  (window as unknown as Record<string, unknown>).__posStress = {
+    version: 2,
+    probeFlight: async (): Promise<{ active: boolean; owner: string; idleMs: number; nowMs: number }> => {
+      const { isCheckoutFlightActive, checkoutFlightOwner, checkoutFlightIdleMs } = await import('./db/checkoutFlight');
+      return { active: isCheckoutFlightActive(), owner: checkoutFlightOwner(), idleMs: checkoutFlightIdleMs(), nowMs: Date.now() };
+    },
+    runBatch: async (
+      baskets: Array<{ lines: Array<{ id: string; qty: number }>; tenderedDa: number }>
+    ): Promise<Array<{ ok: boolean; ms: number; reason?: string }>> => {
+      const { usePosStore } = await import('./store/usePosStore');
+      const out: Array<{ ok: boolean; ms: number; reason?: string }> = [];
+      for (const b of baskets) {
+        const t0 = performance.now();
+        try {
+          const st = usePosStore.getState();
+          (st.clearCart as () => void)();
+          for (const line of b.lines) {
+            const p = (st.products as Array<{ id: string }>).find((x) => x.id === line.id);
+            if (!p) throw new Error(`UNKNOWN_PRODUCT:${line.id}`);
+            const r = (st.addToCart as (
+              p: unknown,
+              o: boolean,
+              q: number
+            ) => { success: boolean; reason?: string })(p, false, line.qty);
+            if (!r.success) throw new Error(r.reason ?? 'ADD_FAILED');
+          }
+          const res = (await (st.processPayment as (t: Array<{ method: string; amount: number }>) => Promise<{
+            success: boolean;
+            reason?: string;
+          }>)([{ method: 'Espèces', amount: b.tenderedDa }])) as {
+            success: boolean;
+            reason?: string;
+          };
+          if (!res.success) throw new Error(res.reason ?? 'PAY_FAILED');
+          out.push({ ok: true, ms: performance.now() - t0 });
+        } catch (e) {
+          try { (usePosStore.getState().clearCart as () => void)(); } catch { /* ignore */ }
+          out.push({ ok: false, ms: performance.now() - t0, reason: (e as Error)?.message ?? String(e) });
+        }
+      }
+      return out;
+    },
+  };
+}
+
 // Old-Android gate: an outdated system WebView would render a broken UI
 // (Tailwind v4 needs Chrome 111+). Intercept first, offer the Play Store fix.
 if (shouldBlockForWebViewUpdate()) {

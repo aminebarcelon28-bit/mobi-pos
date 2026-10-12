@@ -1,0 +1,342 @@
+import { expect, browser, $, $$ } from '@wdio/globals';
+import {
+  APP_PIN,
+  clearCrashReports,
+  assertZeroCrashes,
+  dismissAllModals,
+  handlePinGateIfPresent,
+  isLockScreenVisible,
+  isSetupGateVisible,
+  unlockScreen,
+} from '../helpers/common';
+
+/**
+ * Comprehensive E2E smoke suite for the MobiPOS Tauri v2 desktop app.
+ *
+ * Scope (maximum):
+ *   1. Authentication — unlock with PIN 202020, reach the dashboard.
+ *   2. Dashboard — header / catalog / cart / bottom bar render, no blank screen.
+ *   3. Catalog search + product → cart → quantity → remove (DB-driven, non-empty).
+ *   4. Theme toggle (dark/light) round-trip.
+ *   5. Top-level module traversal — every BottomBar/Header entry opens a
+ *      dialog and closes cleanly via Escape (POS, Clients, Remise, Stock,
+ *      Rapports, Remboursement, Paramètres, Dépenses, Dettes, Commandes,
+ *      Encaissement-cancel).
+ *   6. Lock / re-authentication cycle with PIN 202020.
+ *   7. Log verification — crash telemetry + frontend console.error buffer.
+ *
+ * Read-only by design: the suite never validates a sale, never holds a ticket,
+ * never writes settings — it opens modals and cancels them.
+ */
+
+async function installConsoleErrorTrap(): Promise<void> {
+  await browser.execute(() => {
+    const w = window as unknown as {
+      __smokeErrors?: string[];
+      __smokeConsoleWrapped?: boolean;
+    };
+    if (w.__smokeConsoleWrapped) {
+      w.__smokeErrors = [];
+      return;
+    }
+    w.__smokeErrors = [];
+    w.__smokeConsoleWrapped = true;
+    const orig = console.error.bind(console);
+    console.error = (...args: unknown[]) => {
+      try {
+        w.__smokeErrors?.push(
+          args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '),
+        );
+      } catch {
+        // never break the app from the trap
+      }
+      orig(...args);
+    };
+  });
+}
+
+async function drainConsoleErrors(): Promise<string[]> {
+  return (await browser.execute(() => {
+    const w = window as unknown as { __smokeErrors?: string[] };
+    const out = [...(w.__smokeErrors ?? [])];
+    w.__smokeErrors = [];
+    return out;
+  })) as string[];
+}
+
+/** Open a modal via a clickable element, assert its dialog, then Escape-close it. */
+async function openVerifyCloseModule(
+  opener: Awaited<ReturnType<typeof $>>,
+  dialogSelector: string,
+  label: string,
+): Promise<void> {
+  await opener.waitForClickable({ timeout: 10000 });
+  await opener.click();
+  const dialog = await $(dialogSelector);
+  await dialog.waitForDisplayed({
+    timeout: 15000,
+    timeoutMsg: `Expected dialog for ${label} (${dialogSelector}) to open`,
+  });
+  await expect(dialog).toBeDisplayed();
+  // Dialog must not be blank — it renders some text content.
+  const text = await dialog.getText();
+  expect(text.trim().length).toBeGreaterThan(0);
+  await dismissAllModals();
+  await browser.pause(300);
+  expect(await dialog.isDisplayed().catch(() => false)).toBe(false);
+}
+
+async function footerButton(partialText: string) {
+  const footer = await $('footer');
+  return footer.$(`button*=${partialText}`);
+}
+
+describe('MobiPOS smoke — auth, dashboard, modules, lock cycle', () => {
+  before(async () => {
+    const root = await $('#root');
+    await root.waitForExist({ timeout: 60000 });
+    const header = await $('header');
+    await header.waitForDisplayed({ timeout: 60000 });
+    await installConsoleErrorTrap();
+    await clearCrashReports();
+    await dismissAllModals();
+
+    if (await isSetupGateVisible()) {
+      throw new Error(
+        'First-boot team setup gate is showing (manager PIN unset) — ' +
+          'complete onboarding once manually, then re-run the suite.',
+      );
+    }
+    await handlePinGateIfPresent();
+    // If a lock screen is up, PIN 202020 must unlock it here.
+    if (await isLockScreenVisible()) {
+      const ok = await unlockScreen(APP_PIN);
+      expect(ok).toBe(true);
+    }
+  });
+
+  it('auth: unlocks with PIN 202020 and lands on the dashboard', async () => {
+    expect(await isLockScreenVisible()).toBe(false);
+    expect(await isSetupGateVisible()).toBe(false);
+    await expect(await $('header')).toBeDisplayed();
+    const title = await browser.getTitle();
+    expect(title).toMatch(/MobiPOS|MOBI/i);
+  });
+
+  it('dashboard: header, catalog, cart and bottom bar render (no blank screen)', async () => {
+    await expect(await $('#catalog-search')).toBeDisplayed();
+    await expect(await $('footer')).toBeDisplayed();
+
+    const tiles = await $$('.pos-tile');
+    expect(tiles.length).toBeGreaterThan(0);
+
+    // Cart panel + checkout affordance exist even when empty.
+    const checkout = await $('button[title*="F2 / Espace"]');
+    await checkout.waitForExist({ timeout: 10000 });
+    await expect(checkout).toExist();
+
+    // No blank-screen: body carries real text.
+    const bodyText = await browser.execute(() => document.body.innerText.length);
+    expect(Number(bodyText)).toBeGreaterThan(100);
+  });
+
+  it('catalog: search filters tiles and clearing restores them', async () => {
+    const search = await $('#catalog-search');
+    const before = (await $$('.pos-tile')).length;
+    expect(before).toBeGreaterThan(0);
+
+    await search.click();
+    await search.setValue('iPhone');
+    await browser.keys(['Enter']);
+    await browser.pause(600);
+    const filteredCount = (await $$('.pos-tile')).length;
+
+    // Clearing must restore the full (non-empty) catalog.
+    await search.setValue('');
+    await browser.keys(['Enter']);
+    await browser.pause(600);
+    const after = (await $$('.pos-tile')).length;
+    expect(after).toBeGreaterThan(0);
+    expect(after).toBeGreaterThanOrEqual(filteredCount);
+  });
+
+  it('cart: add product, adjust quantity, then remove (checkout gating)', async () => {
+    const tile = await $('.pos-tile:not([aria-label*="Rupture"])');
+    await tile.waitForClickable({ timeout: 10000 });
+    await tile.click();
+    await browser.pause(500);
+    await handlePinGateIfPresent();
+
+    const qtyInputs = await $$('input[aria-label*="Quantité"]');
+    expect(qtyInputs.length).toBeGreaterThan(0);
+
+    const checkout = await $('button[title*="F2 / Espace"]');
+    expect(await checkout.isEnabled()).toBe(true);
+
+    // Stepper smoke: + then − must not crash or empty the cart.
+    const plus = await $('button[aria-label*="Augmenter"]');
+    if (await plus.isDisplayed().catch(() => false)) {
+      await plus.click();
+      await browser.pause(200);
+    }
+    const minus = await $('button[aria-label*="Diminuer"]');
+    if (await minus.isDisplayed().catch(() => false)) {
+      await minus.click();
+      await browser.pause(200);
+    }
+
+    // Remove every line → checkout must gate again.
+    const trash = await $$('button[aria-label="Supprimer cet article"]');
+    for (const btn of trash) {
+      if (await btn.isDisplayed().catch(() => false)) {
+        await btn.click();
+        await browser.pause(200);
+      }
+    }
+    expect(await checkout.isEnabled()).toBe(false);
+  });
+
+  it('theme: light/dark toggle round-trips the root theme marker', async () => {
+    const toggle = await $('button[aria-label*="thème"]');
+    await toggle.waitForClickable({ timeout: 10000 });
+    const before = await browser.execute(
+      () => document.documentElement.getAttribute('data-theme') ?? document.documentElement.className,
+    );
+    await toggle.click();
+    await browser.pause(500);
+    const after = await browser.execute(
+      () => document.documentElement.getAttribute('data-theme') ?? document.documentElement.className,
+    );
+    // Toggle back to the original theme.
+    await toggle.click();
+    await browser.pause(500);
+    const restored = await browser.execute(
+      () => document.documentElement.getAttribute('data-theme') ?? document.documentElement.className,
+    );
+    expect(String(after)).not.toBe(String(before));
+    expect(String(restored)).toBe(String(before));
+  });
+
+  it('modules: Clients directory opens with rows', async () => {
+    await openVerifyCloseModule(
+      await footerButton('Clients'),
+      'div[role="dialog"][aria-label*="CRM"]',
+      'clients',
+    );
+  });
+
+  it('modules: Remise (discount) opens over a non-empty cart', async () => {
+    const tile = await $('.pos-tile:not([aria-label*="Rupture"])');
+    await tile.click();
+    await browser.pause(400);
+    await handlePinGateIfPresent();
+    await openVerifyCloseModule(
+      await footerButton('Remise'),
+      'div[role="dialog"][aria-label*="Remise"]',
+      'discount',
+    );
+    // Cleanup: empty the cart for the following tests.
+    const trash = await $$('button[aria-label="Supprimer cet article"]');
+    for (const btn of trash) {
+      if (await btn.isDisplayed().catch(() => false)) {
+        await btn.click();
+        await browser.pause(200);
+      }
+    }
+  });
+
+  it('modules: Stock / inventory manager opens', async () => {
+    await openVerifyCloseModule(
+      await footerButton('Stock'),
+      'div[role="dialog"][aria-label*="Gestionnaire de stock"]',
+      'inventory',
+    );
+  });
+
+  it('modules: Rapports financiers opens', async () => {
+    await openVerifyCloseModule(
+      await footerButton('Rapports'),
+      'div[role="dialog"][aria-label*="Rapports financiers"]',
+      'reports',
+    );
+  });
+
+  it('modules: Remboursement (refund) opens', async () => {
+    await openVerifyCloseModule(
+      await footerButton('Remboursement'),
+      'div[role="dialog"][aria-label*="Retours marchandise"]',
+      'refund',
+    );
+  });
+
+  it('modules: Paramètres opens', async () => {
+    await openVerifyCloseModule(
+      await footerButton('Paramètres'),
+      'div[role="dialog"][aria-label*="Paramètres"]',
+      'settings',
+    );
+  });
+
+  it('modules: header — Dépenses, Dettes, Commandes open', async () => {
+    await openVerifyCloseModule(
+      await $('button[title*="Dépenses"]'),
+      'div[role="dialog"][aria-label*="Dépenses"]',
+      'expenses',
+    );
+    await openVerifyCloseModule(
+      await $('button[title*="Dettes"]'),
+      'div[data-testid="kredy-modal"]',
+      'debt ledger',
+    );
+    await openVerifyCloseModule(
+      await $('button[title*="File d"]'),
+      'div[role="dialog"][aria-label*="Commandes"]',
+      'command tickets',
+    );
+  });
+
+  it('modules: Encaissement opens over a cart and cancels cleanly', async () => {
+    const tile = await $('.pos-tile:not([aria-label*="Rupture"])');
+    await tile.click();
+    await browser.pause(400);
+    await handlePinGateIfPresent();
+
+    const checkout = await $('button[title*="F2 / Espace"]');
+    expect(await checkout.isEnabled()).toBe(true);
+    await checkout.click();
+    const dialog = await $('div[role="dialog"][aria-label*="Encaissement"]');
+    await dialog.waitForDisplayed({ timeout: 15000 });
+    await expect(dialog).toBeDisplayed();
+    // Cancel — no sale is validated, the cart survives the cancel.
+    await dismissAllModals();
+    await browser.pause(300);
+    expect(await dialog.isDisplayed().catch(() => false)).toBe(false);
+
+    const trash = await $$('button[aria-label="Supprimer cet article"]');
+    for (const btn of trash) {
+      if (await btn.isDisplayed().catch(() => false)) {
+        await btn.click();
+        await browser.pause(200);
+      }
+    }
+  });
+
+  it('session: lock then re-authenticate with PIN 202020', async () => {
+    const lockBtn = await $('button[title*="Verrouiller"]');
+    await lockBtn.waitForClickable({ timeout: 10000 });
+    await lockBtn.click();
+    await browser.pause(600);
+    expect(await isLockScreenVisible()).toBe(true);
+
+    const ok = await unlockScreen(APP_PIN);
+    expect(ok).toBe(true);
+    await expect(await $('header')).toBeDisplayed();
+    expect((await $$('.pos-tile')).length).toBeGreaterThan(0);
+  });
+
+  it('logs: zero uncaught frontend errors and zero crash reports', async () => {
+    await assertZeroCrashes();
+    const errors = await drainConsoleErrors();
+    expect(errors).toEqual([]);
+  });
+});

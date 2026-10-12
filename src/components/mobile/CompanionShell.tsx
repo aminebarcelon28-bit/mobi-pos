@@ -14,6 +14,7 @@ const SyncDiagnosticsTab = React.lazy(() =>
 import { usePosStore } from '../../store/usePosStore';
 // P11.3: sync engine loads on demand (static import pulls ~267 kB into entry).
 import { useMobileBackNavigation } from '../../hooks/useMobileBackNavigation';
+import { useVirtualKeyboard } from '../../hooks/useVirtualKeyboard';
 import type { SaleTransaction } from '../../types/pos';
 import { M3CartProtectionModal } from './M3CartProtectionModal';
 import { useToast } from '../ui/Toast';
@@ -26,6 +27,7 @@ interface CompanionShellProps {
 
 export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWizard, fill = 'viewport' }) => {
   const [activeTab, setActiveTab] = useState<MobileTab>('activity');
+  const { isKeyboardVisible } = useVirtualKeyboard();
   const cart = usePosStore((state) => state.cart);
   const holdSale = usePosStore((state) => state.holdSale);
   const clearCart = usePosStore((state) => state.clearCart);
@@ -42,6 +44,11 @@ export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWiz
     activeTab,
     setActiveTab,
     isMobile: true,
+    isCartProtectionOpen,
+    onDismissCartProtection: () => {
+      setIsCartProtectionOpen(false);
+      setPendingTab(null);
+    },
     onRequestCartProtection: () => {
       setIsCartProtectionOpen(true);
       return true;
@@ -119,12 +126,14 @@ export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWiz
       fill={fill}
       header={<CompanionHeader />}
       footer={
-        <MobileBottomNav
-          activeTab={activeTab}
-          onTabChange={handleTabChange}
-          cartCount={cart.reduce((acc, i) => acc + i.quantity, 0)}
-          pendingSyncCount={pendingSyncCount}
-        />
+        !isKeyboardVisible ? (
+          <MobileBottomNav
+            activeTab={activeTab}
+            onTabChange={handleTabChange}
+            cartCount={cart.reduce((acc, i) => acc + i.quantity, 0)}
+            pendingSyncCount={pendingSyncCount}
+          />
+        ) : undefined
       }
     >
       {/* Main Tab Content View — tabs own their pinned/scroll regions via AppTabContent */}
@@ -137,11 +146,21 @@ export const CompanionShell: React.FC<CompanionShellProps> = ({ onOpenPairingWiz
       )}
       {activeTab === 'kredy' && <KredyTab />}
       {activeTab === 'management' && <ManagementTab onOpenPairingWizard={onOpenPairingWizard} />}
-      {activeTab === 'diagnostics' && (
-        <React.Suspense fallback={<div className="flex-1 flex items-center justify-center text-pos-muted text-sm">Chargement…</div>}>
-          <SyncDiagnosticsTab />
-        </React.Suspense>
-      )}
+        {activeTab === 'diagnostics' && (
+          <React.Suspense
+            fallback={
+              <div
+                role="status"
+                aria-live="polite"
+                className="flex-1 flex items-center justify-center text-pos-muted text-sm"
+              >
+                Chargement…
+              </div>
+            }
+          >
+            <SyncDiagnosticsTab />
+          </React.Suspense>
+        )}
 
       {/* Cart Back Navigation Protection Modal */}
       <M3CartProtectionModal

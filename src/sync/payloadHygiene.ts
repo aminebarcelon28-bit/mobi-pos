@@ -43,6 +43,10 @@ const SYNC_PROTECTED_KEYS = new Set([
   'cost_total', 'costTotal', 'profit', 'profitMargin', 'ledgerCogsTotal',
   'ledger_cogs_total', 'quantity', 'applied_price', 'status',
   'idempotency_key', 'device_id', 'version',
+  'sessionId', 'session_id', 'shiftId', 'shift_id', 'openingFloat', 'opening_float',
+  'actualCash', 'actual_cash', 'expectedCash', 'expected_cash', 'discrepancy',
+  'openingNote', 'closingNote', 'cashierName', 'openedBy', 'currentCashier',
+  'terminalName', 'type', 'amount', 'denominations',
 ]);
 
 function isBlobLikeString(value: string): boolean {

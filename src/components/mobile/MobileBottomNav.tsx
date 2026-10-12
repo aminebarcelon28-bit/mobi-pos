@@ -19,6 +19,13 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
 }) => {
   const handleSelect = (tab: MobileTab) => {
     soundEngine.playKeyBeep?.();
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try {
+        navigator.vibrate(8);
+      } catch {
+        // Ignore haptics failure on unsupported hardware
+      }
+    }
     onTabChange(tab);
   };
 
@@ -61,13 +68,15 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
 
   return (
     <nav
-      className="h-20 landscape:h-16 px-2 flex items-center justify-around select-none shrink-0"
+      className="h-20 landscape:h-14 sm:landscape:h-16 px-1.5 sm:px-2 landscape:px-4 flex items-center justify-around select-none shrink-0 touch-manipulation"
       role="tablist"
       aria-label="Navigation principale"
     >
       {navItems.map((item) => {
         const Icon = item.icon;
         const isActive = activeTab === item.id;
+        const badgeText = item.badge !== undefined ? (item.badge > 99 ? '99+' : String(item.badge)) : '';
+        const accessibleName = item.badge !== undefined ? `${item.label} — ${badgeText}` : item.label;
 
         return (
           <button
@@ -75,9 +84,9 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
             type="button"
             role="tab"
             aria-selected={isActive}
-            aria-label={item.badge !== undefined ? `${item.label}, ${item.badge}` : item.label}
+            aria-label={accessibleName}
             onClick={() => handleSelect(item.id)}
-            className={`flex-1 flex flex-col items-center justify-center py-1.5 transition-all duration-200 relative cursor-pointer min-h-[56px] landscape:min-h-[44px] min-w-[48px] active-press ${
+            className={`flex-1 flex flex-col items-center justify-center py-1 sm:py-1.5 transition-all duration-200 relative cursor-pointer min-h-[56px] landscape:min-h-[48px] min-w-[48px] active-press touch-manipulation focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none ${
               isActive
                 ? 'text-emerald-400 font-bold'
                 : 'text-pos-muted hover:text-pos-text font-medium'
@@ -86,14 +95,15 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
             {/* M3 64x32dp Pill Indicator Container */}
             <div className="relative flex items-center justify-center">
               <div
-                className={`w-16 h-8 rounded-full flex items-center justify-center transition-all duration-300 ease-out will-change-transform ${
+                className={`w-16 h-8 rounded-full flex items-center justify-center transition-all duration-200 ease-out will-change-transform ${
                   isActive
                     ? 'bg-emerald-500/15 text-emerald-400 shadow-xs scale-100 ring-1 ring-emerald-500/30'
                     : 'bg-transparent text-pos-muted hover:bg-pos-hover/60 scale-95'
                 }`}
               >
                 <Icon
-                  className={`w-5 h-5 transition-transform duration-200 ${
+                  aria-hidden="true"
+                  className={`w-5 h-5 transition-transform duration-200 ease-out ${
                     isActive ? 'scale-110 stroke-[2.4]' : 'stroke-[1.8] opacity-85'
                   }`}
                 />
@@ -102,10 +112,11 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
               {/* M3 Floating Badge Counter — plafonné à 99+ */}
               {item.badge !== undefined && (
                 <span
+                  aria-hidden="true"
                   title={String(item.badge)}
-                  className={`absolute -top-1 right-1 min-w-[22px] justify-center px-1.5 py-0.5 rounded-full text-[10px] font-black tracking-tight shadow-md ring-2 ring-pos-panel tabular-nums animate-in zoom-in-75 flex ${item.badgeColor}`}
+                  className={`absolute -top-1.5 right-1 min-w-[22px] justify-center px-1.5 py-0.5 rounded-full text-[10px] font-black tracking-tight shadow-md ring-2 ring-pos-panel tabular-nums animate-in zoom-in-75 flex ${item.badgeColor}`}
                 >
-                  {item.badge > 99 ? '99+' : item.badge}
+                  {badgeText}
                 </span>
               )}
             </div>

@@ -452,10 +452,10 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
   });
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col">
+    <div role="dialog" aria-modal="true" aria-label="Reprise et trade-in occasion" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col">
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* Header */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
@@ -850,7 +850,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
 
               {/* Final Submit & Stock Injection Card — sticky so the CTA stays
                   above the mobile virtual keyboard (Phase 2 responsive). */}
-              <div className="sticky bottom-0 z-10 bg-pos-panel border border-emerald-500/30 p-3.5 sm:p-4 pb-[max(0.875rem,env(safe-area-inset-bottom))] rounded-2xl flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mt-4">
+              <div className="sticky bottom-0 z-10 bg-pos-panel border border-emerald-500/30 p-3.5 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 rounded-2xl flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mt-4">
                 <div className="flex items-baseline justify-between sm:block gap-2">
                   <span className="text-[10px] text-pos-muted uppercase font-extrabold block">{isExchange ? 'Valeur Reprise Déduite du Panier' : 'Prix de Revente Estimé en Magasin'}</span>
                   <span className="text-2xl font-black text-amber-400 whitespace-nowrap">{formatDZD(isExchange ? Math.round(buybackValue) : suggestedSellingPrice)}</span>
@@ -920,21 +920,25 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                       </div>
                     </div>
 
-                    <div className="flex sm:flex-row items-center gap-3 sm:gap-4 border-t sm:border-t-0 border-pos-border/60 pt-2.5 sm:pt-0">
-                      <div className="flex sm:block items-baseline gap-3 sm:gap-0 text-left sm:text-right flex-1">
-                        <div className="text-[10px] text-pos-muted uppercase font-bold">Prix Rachat</div>
-                        <div className="font-black text-emerald-400 text-base">{formatDZD(trade.buybackValue)}</div>
-                        <div className="text-[10px] text-pos-muted mt-0 sm:mt-1 uppercase font-bold">Revente Prévue</div>
-                        <div className="font-black text-amber-400">{formatDZD(trade.resalePrice)}</div>
+                    <div className="flex flex-row items-center justify-between gap-3 sm:gap-4 border-t sm:border-t-0 border-pos-border/60 pt-2.5 sm:pt-0 shrink-0">
+                      <div className="grid grid-cols-2 sm:block gap-3 sm:gap-0 text-left sm:text-right">
+                        <div>
+                          <div className="text-[10px] text-pos-muted uppercase font-bold">Prix Rachat</div>
+                          <div className="font-black text-emerald-400 text-sm sm:text-base">{formatDZD(trade.buybackValue)}</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-pos-muted mt-0 sm:mt-1 uppercase font-bold">Revente Prévue</div>
+                          <div className="font-black text-amber-400 text-xs sm:text-sm">{formatDZD(trade.resalePrice)}</div>
+                        </div>
                       </div>
 
                       <button
                         onClick={() => handlePrintContract(trade)}
-                        className="min-h-[48px] min-w-[48px] sm:min-w-0 px-3 rounded-xl bg-pos-bg hover:bg-emerald-500/20 text-pos-muted hover:text-emerald-400 border border-pos-border transition flex items-center justify-center gap-2 active:scale-95"
+                        className="min-h-[44px] px-3.5 py-2 rounded-xl bg-pos-bg hover:bg-emerald-500/20 text-pos-text hover:text-emerald-400 border border-pos-border transition flex items-center justify-center gap-2 active:scale-95 shrink-0"
                         title="Imprimer l'attestation de cession"
                       >
-                        <Printer className="w-4 h-4" />
-                        <span className="sm:hidden text-xs font-bold">Imprimer</span>
+                        <Printer className="w-4 h-4 shrink-0" />
+                        <span className="text-xs font-bold whitespace-nowrap">Imprimer</span>
                       </button>
                     </div>
                   </div>

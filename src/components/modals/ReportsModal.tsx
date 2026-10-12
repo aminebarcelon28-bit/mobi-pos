@@ -65,6 +65,7 @@ export const ReportsModal: React.FC = () => {
     customers,
     customerDebts,
     activeShift,
+    activeCashier,
     allShifts,
     repairOrders,
     tradeIns,
@@ -154,10 +155,11 @@ export const ReportsModal: React.FC = () => {
     const gate = await verifyManagerGate(pinInput);
     if (gate.ok) {
       setPinVerified(true);
+      const actor = activeCashier?.name?.trim() || 'Admin';
       logSecurityAction(
         'Accès Rapports Financiers Autorisé',
         'Consultation des rapports par PIN Administrateur',
-        'Yacine (Admin)',
+        actor,
         true
       );
     } else {
@@ -407,7 +409,7 @@ export const ReportsModal: React.FC = () => {
       paymentMethod: expensePaymentMethod,
       paidTo: expensePaidTo.trim() || undefined,
       notes: expenseNotes.trim() || undefined,
-      recordedBy: 'Yacine (Admin)',
+      recordedBy: activeCashier?.name?.trim() || 'Admin',
     });
 
     showToast('Charge d\'exploitation enregistrée avec succès !', 'success');
@@ -674,16 +676,16 @@ export const ReportsModal: React.FC = () => {
   if (activeModal !== 'reports') return null;
 
   return (
-    <div
+    <div role="dialog" aria-modal="true" aria-label="Rapports financiers"
       onClick={closeModal}
-      className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none cursor-pointer"
+      className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none cursor-pointer"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col relative cursor-default"
+        className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col relative cursor-default"
       >
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
         
         {/* Modal Header */}
         <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
@@ -2158,7 +2160,7 @@ export const ReportsModal: React.FC = () => {
 
         {/* ═══ New Expense Modal Dialog ═══ */}
         {showNewExpenseModal && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div role="dialog" aria-modal="true" aria-label="Enregistrer une charge d'exploitation" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
             <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl animate-in zoom-in-95 max-h-[90dvh] overflow-y-auto overscroll-contain">
               <div className="flex items-center justify-between border-b border-pos-border pb-3">
                 <div className="flex items-center gap-2 text-amber-400">

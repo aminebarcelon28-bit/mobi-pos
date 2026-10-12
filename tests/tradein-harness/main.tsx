@@ -32,13 +32,23 @@ declare global {
     __harnessOpenPayment: () => void;
     __harnessStageTradeIn: (buybackValue: number) => void;
     __harnessSetShift: (openingFloat: number) => void;
-    __harnessSeedCartLines: (lines: Array<{ price: number; discount?: number; title?: string }>) => void;
+    __harnessSeedCartLines: (lines: Array<{ price: number; discount?: number; title?: string; stock?: number }>) => void;
     __harnessSetAvoirAndVoucher: (storeCredit: number, voucherCredit: number) => void;
     __harnessDexie: (table: string) => Promise<Array<Record<string, unknown>>>;
     __harnessBlastPayment: (n: number) => Promise<Array<string>>;
     __harnessOpenRefund: (txn: Record<string, unknown>) => void;
     __harnessProcessRefund: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
     __harnessOpenMatrix: () => void;
+    /** Drop the modal overlay so CartPanel rows are clickable (input specs). */
+    __harnessCloseModals: () => void;
+    /** Store-level cart state — quantity/price assertions without DOM text. */
+    __harnessCartSnapshot: () => Array<{
+      id: string;
+      title: string;
+      quantity: number;
+      appliedPrice: number;
+      unitPriceCharged: number | undefined;
+    }>;
   }
 }
 
@@ -72,7 +82,7 @@ window.__harnessOpenTradeIn = () => {
 };
 type W = Window & {
   __harnessSetShift: (openingFloat: number) => void;
-  __harnessSeedCartLines: (lines: Array<{ price: number; discount?: number; title?: string }>) => void;
+  __harnessSeedCartLines: (lines: Array<{ price: number; discount?: number; title?: string; stock?: number }>) => void;
   __harnessSetAvoirAndVoucher: (storeCredit: number, voucherCredit: number) => void;
   __harnessDexie: (table: string) => Promise<Array<Record<string, unknown>>>;
   __harnessBlastPayment: (n: number) => Promise<Array<string>>;
@@ -98,7 +108,12 @@ W.__harnessSetShift = (openingFloat: number) => {
 W.__harnessSeedCartLines = (lines) => {
   usePosStore.setState({
     cart: lines.map((l, i) => ({
-      product: { ...SEED_PRODUCT(l.price), id: `harness-prod-${i}`, title: l.title || `Article ${i + 1}` },
+      product: {
+        ...SEED_PRODUCT(l.price),
+        id: `harness-prod-${i}`,
+        title: l.title || `Article ${i + 1}`,
+        stock: l.stock ?? SEED_PRODUCT(l.price).stock,
+      },
       quantity: 1,
       appliedPrice: l.price,
       discount: l.discount || 0,
@@ -222,6 +237,17 @@ window.__harnessSeedCart = (unitPrice: number) => {
 window.__harnessOpenPayment = () => {
   usePosStore.getState().openModal('payment');
 };
+window.__harnessCloseModals = () => {
+  usePosStore.getState().closeModal();
+};
+window.__harnessCartSnapshot = () =>
+  usePosStore.getState().cart.map((i) => ({
+    id: i.product.id,
+    title: i.product.title,
+    quantity: i.quantity,
+    appliedPrice: i.appliedPrice,
+    unitPriceCharged: i.unitPriceCharged,
+  }));
 window.__harnessStageTradeIn = (buybackValue: number) => {
   usePosStore.getState().setStagedTradeIn({
     stagedId: 'harness-staged-1',

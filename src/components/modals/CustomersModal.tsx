@@ -74,6 +74,14 @@ export const CustomersModal: React.FC = () => {
   const [debtPaymentAmount, setDebtPaymentAmount] = useState<number>(0);
   const [debtPaymentMethod, setDebtPaymentMethod] = useState<PaymentMethodType>('Espèces');
   const [debtPaymentNotes, setDebtPaymentNotes] = useState<string>('');
+  // Synchronous reentrancy latch (double-submit race guard — same rationale
+  // as DebtLedgerModal.submittingRef): state-only guards flip after the next
+  // render, so burst clicks all proceed. This ref flips synchronously.
+  const debtPayLatch = useRef(false);
+  // Per-open idempotency key (KREDY-02 pattern): repeats of one intent share
+  // the ledger row id AND the deterministic drawer id (MOV-DEBT-<entry>),
+  // collapsing via upsert instead of doubling.
+  const debtPayEntryId = useRef('');
   const [whatsappDebtCustomer, setWhatsappDebtCustomer] = useState<Customer | null>(null);
   const [whatsappCopied, setWhatsappCopied] = useState(false);
 
@@ -322,17 +330,21 @@ export const CustomersModal: React.FC = () => {
   const handleRecordDebtPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!debtPaymentCustomer) return;
+    if (debtPayLatch.current) return;
     const amount = debtPaymentAmount;
     if (!Number.isFinite(amount) || amount <= 0) {
       alert('Veuillez saisir un montant valide.');
       return;
     }
-    const debtPaymentResult = await recordCustomerDebtPayment(
-      debtPaymentCustomer.id,
-      amount,
-      debtPaymentMethod,
-      debtPaymentNotes
-    );
+    debtPayLatch.current = true;
+    try {
+      const debtPaymentResult = await recordCustomerDebtPayment(
+        debtPaymentCustomer.id,
+        amount,
+        debtPaymentMethod,
+        debtPaymentNotes,
+        { entryId: debtPayEntryId.current || undefined }
+      );
     if (debtPaymentResult.success) {
       const { appliedAmount, changeDue } = debtPaymentResult as typeof debtPaymentResult & {
         appliedAmount?: number;
@@ -346,6 +358,9 @@ export const CustomersModal: React.FC = () => {
       setDebtPaymentCustomer(null);
       setDebtPaymentAmount(0);
       setDebtPaymentNotes('');
+    }
+    } finally {
+      debtPayLatch.current = false;
     }
   };
 
@@ -490,14 +505,18 @@ export const CustomersModal: React.FC = () => {
   return (
     <div
       onClick={closeModal}
-      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none cursor-pointer"
+      role="dialog"
+      data-testid="customers-dialog"
+      aria-modal="true"
+      aria-label="CRM et fichier clients"
+      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none cursor-pointer"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col cursor-default"
+        className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col cursor-default"
       >
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* ═══ Header ═══ */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
@@ -520,6 +539,7 @@ export const CustomersModal: React.FC = () => {
                 <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
                 <input
                   ref={searchInputRef}
+                  data-testid="customer-search"
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
@@ -555,53 +575,53 @@ export const CustomersModal: React.FC = () => {
         </div>
 
         {/* ═══ KPI Summary Bar ═══ */}
-        <div className="grid grid-cols-5 gap-2.5 px-4 py-3 border-b border-pos-border bg-pos-card/50 shrink-0">
-          <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border shadow-sm flex items-center gap-2.5">
+        <div className="flex sm:grid sm:grid-cols-5 overflow-x-auto no-scrollbar gap-2 sm:gap-2.5 px-3 sm:px-4 py-2.5 sm:py-3 border-b border-pos-border bg-pos-card/50 shrink-0">
+          <div className="min-w-[140px] sm:min-w-0 flex-1 bg-pos-card p-2 sm:p-2.5 rounded-xl border border-pos-border shadow-sm flex items-center gap-2 sm:gap-2.5 shrink-0 sm:shrink">
             <div className="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
               <User className="w-4 h-4 stroke-[2.5]" />
             </div>
-            <div>
-              <span className="text-[9px] text-pos-muted uppercase font-bold block">Total Clients</span>
+            <div className="min-w-0">
+              <span className="text-[9px] text-pos-muted uppercase font-bold block truncate">Total Clients</span>
               <span className="text-sm font-black text-pos-text">{(customers || []).length}</span>
             </div>
           </div>
 
-          <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border shadow-sm flex items-center gap-2.5">
+          <div className="min-w-[140px] sm:min-w-0 flex-1 bg-pos-card p-2 sm:p-2.5 rounded-xl border border-pos-border shadow-sm flex items-center gap-2.5 shrink-0 sm:shrink">
             <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
               <Star className="w-4 h-4 stroke-[2.5] fill-amber-400" />
             </div>
-            <div>
-              <span className="text-[9px] text-pos-muted uppercase font-bold block">Points Fidélité</span>
+            <div className="min-w-0">
+              <span className="text-[9px] text-pos-muted uppercase font-bold block truncate">Points Fidélité</span>
               <span className="text-sm font-black text-amber-400">{totalLoyaltyPoints.toLocaleString('fr-DZ')}</span>
             </div>
           </div>
 
-          <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border shadow-sm flex items-center gap-2.5">
+          <div className="min-w-[140px] sm:min-w-0 flex-1 bg-pos-card p-2 sm:p-2.5 rounded-xl border border-pos-border shadow-sm flex items-center gap-2.5 shrink-0 sm:shrink">
             <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
               <CreditCard className="w-4 h-4 stroke-[2.5]" />
             </div>
-            <div>
-              <span className="text-[9px] text-pos-muted uppercase font-bold block">Avoirs en Cours</span>
+            <div className="min-w-0">
+              <span className="text-[9px] text-pos-muted uppercase font-bold block truncate">Avoirs en Cours</span>
               <span className="text-sm font-black text-emerald-400">{formatDZD(totalCreditOutstanding)}</span>
             </div>
           </div>
 
-          <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border shadow-sm flex items-center gap-2.5">
+          <div className="min-w-[140px] sm:min-w-0 flex-1 bg-pos-card p-2 sm:p-2.5 rounded-xl border border-pos-border shadow-sm flex items-center gap-2.5 shrink-0 sm:shrink">
             <div className="w-8 h-8 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0">
               <ShoppingBag className="w-4 h-4 stroke-[2.5]" />
             </div>
-            <div>
-              <span className="text-[9px] text-pos-muted uppercase font-bold block">Grossistes</span>
+            <div className="min-w-0">
+              <span className="text-[9px] text-pos-muted uppercase font-bold block truncate">Grossistes</span>
               <span className="text-sm font-black text-purple-400">{wholesaleCount}</span>
             </div>
           </div>
 
-          <div className="bg-pos-card p-2.5 rounded-xl border border-pos-border shadow-sm flex items-center gap-2.5">
+          <div className="min-w-[140px] sm:min-w-0 flex-1 bg-pos-card p-2 sm:p-2.5 rounded-xl border border-pos-border shadow-sm flex items-center gap-2.5 shrink-0 sm:shrink">
             <div className="w-8 h-8 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0">
               <Crown className="w-4 h-4 stroke-[2.5]" />
             </div>
-            <div>
-              <span className="text-[9px] text-pos-muted uppercase font-bold block">VIP</span>
+            <div className="min-w-0">
+              <span className="text-[9px] text-pos-muted uppercase font-bold block truncate">VIP</span>
               <span className="text-sm font-black text-rose-400">{vipCount}</span>
             </div>
           </div>
@@ -1207,6 +1227,7 @@ export const CustomersModal: React.FC = () => {
                                 setDebtPaymentAmount(debt);
                                 setDebtPaymentMethod('Espèces');
                                 setDebtPaymentNotes('');
+                                debtPayEntryId.current = `debt-pay-${customer.id}-${Date.now()}`;
                               }}
                               className="flex-1 px-3 py-2 min-h-[44px] rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black flex items-center justify-center gap-1.5 transition shadow-md shadow-emerald-500/20 cursor-pointer"
                             >
@@ -1597,7 +1618,7 @@ export const CustomersModal: React.FC = () => {
         )}
 
         {/* ═══ Footer ═══ */}
-        <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 text-xs text-pos-muted shrink-0">
+        <div className="p-3 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 text-xs text-pos-muted shrink-0">
           <span className="truncate max-w-[280px] sm:max-w-none">
             CRM Clientèle • {(customers || []).length} profils • {formatDZD(totalCreditOutstanding)} avoirs • {formatDZD(totalDebtOutstanding)} dettes
           </span>

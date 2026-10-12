@@ -297,16 +297,16 @@ export const HotkeyGuideModal: React.FC = () => {
   ];
 
   return (
-    <div
+    <div role="dialog" aria-modal="true" aria-label="Guide des raccourcis clavier"
       onClick={closeModal}
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-0 sm:p-4 select-none cursor-pointer animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/75 backdrop-blur-sm p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none cursor-pointer animate-in fade-in duration-150"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-4xl bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[94dvh] sm:max-h-[90dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0 cursor-default animate-in zoom-in-95 duration-150"
+        className="w-full max-w-4xl bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[94dvh] sm:max-h-[90dvh] pt-[max(0.5rem,var(--safe-top))] sm:py-0 cursor-default animate-in zoom-in-95 duration-150"
       >
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* ═══ Header ═══ */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border bg-pos-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
@@ -453,7 +453,7 @@ export const HotkeyGuideModal: React.FC = () => {
         </div>
 
         {/* ═══ Pro-Cashier Tip Banner & Footer ═══ */}
-        <div className="p-3 sm:p-4 bg-pos-card border-t border-pos-border flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 text-xs shrink-0">
+        <div className="p-3 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 bg-pos-card border-t border-pos-border flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 text-xs shrink-0">
           <div className="flex items-center gap-2 text-pos-muted">
             <span className="text-amber-400 text-sm shrink-0">💡</span>
             <span className="text-[11px] truncate">

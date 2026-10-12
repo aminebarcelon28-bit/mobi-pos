@@ -26,10 +26,10 @@ export const UpdateModal: React.FC = () => {
   if (!isUpdateAvailable) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none animate-in fade-in">
-      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 flex flex-col">
+    <div role="dialog" aria-modal="true" aria-label="Mise à jour disponible" className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none animate-in fade-in">
+      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 flex flex-col">
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* Header */}
         <div className="p-5 border-b border-pos-border bg-gradient-to-r from-blue-950/40 via-pos-card to-purple-950/40 flex items-center justify-between">
@@ -131,7 +131,7 @@ export const UpdateModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card/80 flex flex-wrap sm:flex-nowrap items-center justify-end gap-2 sm:gap-2.5">
+        <div className="p-3.5 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card/80 flex flex-wrap sm:flex-nowrap items-center justify-end gap-2 sm:gap-2.5">
           {!readyToRelaunch && !downloading && (
             <>
               <button

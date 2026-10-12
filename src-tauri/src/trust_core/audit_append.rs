@@ -39,6 +39,10 @@ use std::path::PathBuf;
 pub const MAX_ACTION_LEN: usize = 128;
 pub const MAX_DETAILS_LEN: usize = 8192;
 pub const MAX_USER_LEN: usize = 64;
+/// Idempotency keys are caller-derived operation ids (`DEBT-SETTLE-<entry>`):
+/// same key + same body replays the original receipt instead of appending a
+/// second row. Bounded like actions so a key can ride as `event_id`.
+pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 128;
 
 /// Chain domain label (see module docs).
 pub const AUDIT_SUBKEY_LABEL: &[u8] = b"MOBI-AUDIT-V1";
@@ -53,6 +57,12 @@ pub struct AuditAppendRequest {
     pub requires_pin: Option<bool>,
     pub device_id: Option<String>,
     pub ip_address: Option<String>,
+    /// Optional caller-derived idempotency key. When present it IS the
+    /// `event_id`: a repeat with identical body returns the original receipt
+    /// (replay) instead of appending a second row + link. A repeat with a
+    /// different body is a caller keying bug and fails typed (the funnel
+    /// swallows + counts it per policy — the chain is never forked).
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,6 +90,13 @@ fn validate(req: &AuditAppendRequest) -> Result<(), TrustError> {
         return Err(TrustError::IPCProtocolError {
             reason: "audit user exceeds 64 chars",
         });
+    }
+    if let Some(k) = req.idempotency_key.as_deref() {
+        if k.trim().is_empty() || k.len() > MAX_IDEMPOTENCY_KEY_LEN {
+            return Err(TrustError::IPCProtocolError {
+                reason: "audit idempotency key must be 1..128 chars",
+            });
+        }
     }
     Ok(())
 }
@@ -156,6 +173,13 @@ fn chain_head(conn: &Connection) -> Result<String, TrustError> {
 /// Append one audit row + chain link in a single native transaction.
 /// `mac_key`: `Some` seals the link; `None` writes the row unchained
 /// (receipt says so). Never throws for missing keys — audit is telemetry.
+///
+/// Idempotency: the caller passes its operation key as `event_id` (see the
+/// `audit_append` command). The log insert targets the id PK with
+/// `ON CONFLICT(id) DO NOTHING`: a repeat with an identical body returns the
+/// ORIGINAL receipt (replay — no second row, no second link, chain
+/// untouched). A repeat with a different body is a caller keying bug and
+/// fails typed (the funnel swallows + counts it per policy).
 pub fn append_audit_event(
     conn: &mut Connection,
     mac_key: Option<&[u8]>,
@@ -207,14 +231,14 @@ pub fn append_audit_event(
         }
         let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
-            "INSERT INTO security_audit_logs ({}) VALUES ({})",
+            "INSERT INTO security_audit_logs ({}) VALUES ({}) ON CONFLICT(id) DO NOTHING",
             names.join(","),
             placeholders
         );
         // Head BEFORE the insert: otherwise the just-written row masquerades
         // as a pre-chain legacy row (LEGACY-BOUNDARY:self).
         let prev = chain_head(&tx)?;
-        {
+        let inserted: bool = {
             let mut stmt = tx
                 .prepare(&sql)
                 .map_err(|e| TrustError::op_failed(format!("audit insert prepare: {e}")))?;
@@ -222,6 +246,45 @@ pub fn append_audit_event(
                 values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
             stmt.execute(params.as_slice())
                 .map_err(|e| TrustError::op_failed(format!("audit insert: {e}")))?;
+            tx.changes() != 0
+        };
+        // Idempotent replay: the id PK already held an identical row, so
+        // NOTHING was written — return the original receipt without touching
+        // the chain (no second link) or the head.
+        if !inserted {
+            let existing: Option<(String, String, String)> = tx
+                .query_row(
+                    "SELECT action, details, user FROM security_audit_logs WHERE id = ?1",
+                    [event_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .ok();
+            match existing {
+                Some((a, d, u))
+                    if a == req.action.trim()
+                        && d == req.details
+                        && u == user =>
+                {
+                    let entry_hash: Option<String> = tx
+                        .query_row(
+                            "SELECT entry_hash FROM audit_chain WHERE event_id = ?1",
+                            [event_id],
+                            |r| r.get(0),
+                        )
+                        .ok()
+                        .flatten();
+                    drop(tx);
+                    return Ok(AuditAppendReceipt {
+                        event_id: event_id.to_string(),
+                        entry_hash,
+                    });
+                }
+                _ => {
+                    return Err(TrustError::IPCProtocolError {
+                        reason: "audit idempotency conflict: key reused with different body",
+                    })
+                }
+            }
         }
 
         // Canonical pin flag mirrors what is actually stored: installs
@@ -268,6 +331,149 @@ pub fn append_audit_event(
             entry_hash,
         })
     }
+}
+
+/// Append one audit row + chain link inside the CALLER's transaction.
+///
+/// Same semantics as [`append_audit_event`] but borrows `&Transaction`:
+/// no nested transaction, no commit — the caller owns atomicity. Used by
+/// the native refund barrier so the audit link commits if and only if the
+/// money does (MOBI-DEFECT-F: no branched/forked chain under races).
+/// `&Transaction` derefs to `&Connection`, so the column-tolerant probes
+/// below read through it unchanged.
+pub fn append_in_tx(
+    tx: &rusqlite::Transaction,
+    mac_key: Option<&[u8]>,
+    req: &AuditAppendRequest,
+    event_id: &str,
+    timestamp: &str,
+) -> Result<AuditAppendReceipt, TrustError> {
+    validate(req)?;
+    let user = req.user.clone().unwrap_or_else(|| "unknown".into());
+    let device_id = req.device_id.clone().unwrap_or_default();
+    let requires_pin = req.requires_pin.unwrap_or(false);
+
+    let cols = table_columns(tx)?;
+    for required in ["id", "timestamp", "user", "action", "details"] {
+        if !cols.contains(required) {
+            return Err(TrustError::op_failed(format!(
+                "audit table missing column: {required}"
+            )));
+        }
+    }
+    let mut names: Vec<&str> = vec!["id", "timestamp", "user", "action", "details"];
+    let mut values: Vec<String> = vec![
+        event_id.to_string(),
+        timestamp.to_string(),
+        user.clone(),
+        req.action.trim().to_string(),
+        req.details.clone(),
+    ];
+    if cols.contains("requires_pin") {
+        names.push("requires_pin");
+        values.push(if requires_pin { "1".into() } else { "0".into() });
+    }
+    if cols.contains("device_id") {
+        names.push("device_id");
+        values.push(device_id.clone());
+    }
+    if cols.contains("ip_address") {
+        names.push("ip_address");
+        values.push(req.ip_address.clone().unwrap_or_default());
+    }
+    if cols.contains("version") {
+        names.push("version");
+        values.push("1".into());
+    }
+    let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "INSERT INTO security_audit_logs ({}) VALUES ({}) ON CONFLICT(id) DO NOTHING",
+        names.join(","),
+        placeholders
+    );
+    // Head BEFORE the insert: otherwise the just-written row masquerades
+    // as a pre-chain legacy row (LEGACY-BOUNDARY:self).
+    let prev = chain_head(tx)?;
+    let inserted: bool = {
+        let mut stmt = tx
+            .prepare(&sql)
+            .map_err(|e| TrustError::op_failed(format!("audit insert prepare: {e}")))?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+        stmt.execute(params.as_slice())
+            .map_err(|e| TrustError::op_failed(format!("audit insert: {e}")))?;
+        tx.changes() != 0
+    };
+    if !inserted {
+        let existing: Option<(String, String, String)> = tx
+            .query_row(
+                "SELECT action, details, user FROM security_audit_logs WHERE id = ?1",
+                [event_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .ok();
+        match existing {
+            Some((a, d, u))
+                if a == req.action.trim() && d == req.details && u == user =>
+            {
+                let entry_hash: Option<String> = tx
+                    .query_row(
+                        "SELECT entry_hash FROM audit_chain WHERE event_id = ?1",
+                        [event_id],
+                        |r| r.get(0),
+                    )
+                    .ok()
+                    .flatten();
+                return Ok(AuditAppendReceipt {
+                    event_id: event_id.to_string(),
+                    entry_hash,
+                });
+            }
+            _ => {
+                return Err(TrustError::IPCProtocolError {
+                    reason: "audit idempotency conflict: key reused with different body",
+                })
+            }
+        }
+    }
+
+    let pin_stored = cols.contains("requires_pin") && requires_pin;
+    let dev_stored = if cols.contains("device_id") {
+        device_id.clone()
+    } else {
+        String::new()
+    };
+    let entry_hash = mac_key.map(|k| {
+        hex(&hmac_sha256_raw(
+            &domain_subkey(k, AUDIT_SUBKEY_LABEL),
+            &[
+                prev.as_bytes(),
+                &canonical_bytes(
+                    event_id,
+                    timestamp,
+                    &user,
+                    req.action.trim(),
+                    &req.details,
+                    pin_stored,
+                    &dev_stored,
+                ),
+            ]
+            .concat(),
+        ))
+    });
+    tx.execute(
+        "INSERT OR REPLACE INTO audit_chain (event_id, prev_hash, entry_hash) VALUES (?1, ?2, ?3)",
+        rusqlite::params![
+            event_id,
+            prev,
+            entry_hash.clone().unwrap_or_else(|| "NO-KEY".into())
+        ],
+    )
+    .map_err(|e| TrustError::op_failed(format!("audit chain insert: {e}")))?;
+    Ok(AuditAppendReceipt {
+        event_id: event_id.to_string(),
+        entry_hash,
+    })
 }
 
 /// Verify the full chain: every link recomputed and compared, in rowid
@@ -681,7 +887,7 @@ fn db_path_for(app: &tauri::AppHandle) -> Result<PathBuf, TrustError> {
         .path()
         .app_data_dir()
         .map_err(|e| TrustError::op_failed(format!("app dir: {e}")))?;
-    let p = dir.join("mobi_pos.db");
+    let p = crate::e2e::live_db_path(&dir);
     if !p.exists() {
         return Err(TrustError::op_failed("live database missing".to_string()));
     }
@@ -720,14 +926,25 @@ pub fn audit_append(
             .map_err(|e| TrustError::op_failed(format!("audit open: {e}")))?;
             conn.busy_timeout(std::time::Duration::from_secs(5))
                 .map_err(|e| TrustError::op_failed(format!("audit busy_timeout: {e}")))?;
-            let event_id = format!(
-                "AUD-{}-{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis())
-                    .unwrap_or(0),
-                &uuid::Uuid::new_v4().to_string()[..8]
-            );
+            // Idempotency: a caller-supplied key IS the event id, so repeats
+            // converge on one row + link (see append_audit_event). Minted ids
+            // keep the previous shape for keyless callers.
+            let event_id = match request
+                .idempotency_key
+                .as_deref()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+            {
+                Some(k) => k.to_string(),
+                None => format!(
+                    "AUD-{}-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0),
+                    &uuid::Uuid::new_v4().to_string()[..8]
+                ),
+            };
             let timestamp = chrono_iso8601_utc();
             let receipt =
                 append_audit_event(&mut conn, mac_key.as_deref(), &request, &event_id, &timestamp)?;
@@ -752,7 +969,7 @@ pub(crate) fn append_kernel_row(
     req: &AuditAppendRequest,
 ) -> Result<AuditAppendReceipt, TrustError> {
     use super::export_snapshot::{resolve_manifest_mac_key, ManifestMac};
-    let path = app_data_dir.join("mobi_pos.db");
+    let path = crate::e2e::live_db_path(app_data_dir);
     if !path.exists() {
         return Err(TrustError::op_failed("live database missing".to_string()));
     }
@@ -937,7 +1154,7 @@ fn record_boot_audit_status(outcome: String) {
 }
 
 pub fn boot_audit_check(app_data_dir: &std::path::Path) {
-    let db_path = app_data_dir.join("mobi_pos.db");
+    let db_path = crate::e2e::live_db_path(app_data_dir);
     if !db_path.exists() {
         return;
     }
@@ -1062,6 +1279,7 @@ mod tests {
             requires_pin: Some(false),
             device_id: Some("dev1".into()),
             ip_address: None,
+            idempotency_key: None,
         }
     }
 
@@ -1145,6 +1363,80 @@ mod tests {
         // Unkeyed links are skipped by verification, not failed.
         let key = b"audit-test-key-32bytes!!!!!!!!".to_vec();
         assert_eq!(verify_audit_chain(&conn, &key).unwrap(), 0);
+    }
+
+    /// Idempotent replay: same key + same body returns the ORIGINAL receipt
+    /// with no second row and no second link; the chain still verifies.
+    #[test]
+    fn idempotent_replay_returns_original_without_second_row() {
+        let _g = serial_test_lock();
+        let mut conn = fixture_conn();
+        let key = b"audit-test-key-32bytes!!!!!!!!".to_vec();
+        let mut keyed = req("settle");
+        keyed.details = "debt DEBT-1 settled".into();
+        let first =
+            append_audit_event(&mut conn, Some(&key), &keyed, "DEBT-SETTLE-DEBT-1", "2026-01-01T00:00:00Z")
+                .unwrap();
+        let second =
+            append_audit_event(&mut conn, Some(&key), &keyed, "DEBT-SETTLE-DEBT-1", "2026-01-01T00:00:01Z")
+                .unwrap();
+        assert_eq!(first.event_id, second.event_id);
+        assert_eq!(first.entry_hash, second.entry_hash);
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM security_audit_logs WHERE id = 'DEBT-SETTLE-DEBT-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1, "replay must not append a second row");
+        let links: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_chain WHERE event_id = 'DEBT-SETTLE-DEBT-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(links, 1, "replay must not append a second link");
+        assert_eq!(verify_audit_chain(&conn, &key).unwrap(), 1);
+    }
+
+    /// Same key with a DIFFERENT body is a caller keying bug: fail typed
+    /// (the funnel swallows + counts it) instead of forking the chain.
+    #[test]
+    fn idempotency_conflict_on_different_body_fails_typed() {
+        let _g = serial_test_lock();
+        let mut conn = fixture_conn();
+        let key = b"audit-test-key-32bytes!!!!!!!!".to_vec();
+        let mut keyed = req("settle");
+        keyed.details = "debt DEBT-1 settled".into();
+        append_audit_event(&mut conn, Some(&key), &keyed, "K-1", "2026-01-01T00:00:00Z").unwrap();
+        let mut other = req("settle");
+        other.details = "something else entirely".into();
+        let err = append_audit_event(&mut conn, Some(&key), &other, "K-1", "2026-01-01T00:00:01Z")
+            .expect_err("body mismatch under one key must fail");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("idempotency conflict"),
+            "typed conflict error, got: {msg}"
+        );
+        // Chain untouched by the rejected repeat.
+        assert_eq!(verify_audit_chain(&conn, &key).unwrap(), 1);
+    }
+
+    /// Oversized keys are rejected at validation (never truncated: truncation
+    /// would silently merge distinct operations onto one key).
+    #[test]
+    fn idempotency_key_length_validated() {
+        let _g = serial_test_lock();
+        let mut conn = fixture_conn();
+        let key = b"k".to_vec();
+        let mut bad = req("ok");
+        bad.idempotency_key = Some("k".repeat(MAX_IDEMPOTENCY_KEY_LEN + 1));
+        assert!(append_audit_event(&mut conn, Some(&key), &bad, "E1", "t").is_err());
+        let mut empty = req("ok");
+        empty.idempotency_key = Some("   ".into());
+        assert!(append_audit_event(&mut conn, Some(&key), &empty, "E2", "t").is_err());
     }
 
     #[test]

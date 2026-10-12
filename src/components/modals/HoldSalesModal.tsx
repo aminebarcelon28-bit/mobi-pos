@@ -111,10 +111,10 @@ export const HoldSalesModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 max-h-[90dvh] flex flex-col">
+    <div role="dialog" aria-modal="true" aria-label="Ventes en attente" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 max-h-[94dvh] sm:max-h-[90dvh] flex flex-col">
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
           <div className="min-w-0">
@@ -137,7 +137,7 @@ export const HoldSalesModal: React.FC = () => {
           </button>
         </div>
 
-        <div className="p-4 sm:p-5 space-y-3 max-h-[60vh] overflow-y-auto overscroll-contain">
+        <div className="p-4 sm:p-5 pb-[max(1rem,var(--safe-bottom))] sm:pb-5 space-y-3 flex-1 overflow-y-auto overscroll-contain">
           {(heldSales || []).length === 0 ? (
             <div className="text-center py-8 text-pos-muted space-y-2">
               <Clock className="w-10 h-10 mx-auto opacity-40 text-emerald-400" />

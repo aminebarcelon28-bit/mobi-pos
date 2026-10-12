@@ -60,9 +60,9 @@ export const CustomerDisplayModal: React.FC = () => {
   const total = Math.max(0, subtotal - totalDiscount);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-0 sm:p-4 select-none">
-      <div className="w-full max-w-5xl bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[94dvh] sm:h-[80dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+    <div role="dialog" aria-modal="true" aria-label="Affichage client" className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="w-full max-w-5xl bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[94dvh] sm:h-[80dvh] pt-[max(0.5rem,var(--safe-top))] sm:py-0">
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
         
         {/* Header */}
         <div className="flex items-center justify-between p-3.5 sm:p-6 border-b border-pos-border shrink-0">
@@ -134,7 +134,7 @@ export const CustomerDisplayModal: React.FC = () => {
               )}
             </div>
 
-            <div className="p-6 bg-pos-bg border-t border-pos-border space-y-3 text-xs">
+            <div className="p-4 sm:p-6 pb-[max(1rem,var(--safe-bottom))] sm:pb-6 bg-pos-bg border-t border-pos-border space-y-3 text-xs">
               <div className="flex justify-between text-pos-muted">
                 <span>Sous-total</span>
                 <span>{formatDZD(subtotal)}</span>

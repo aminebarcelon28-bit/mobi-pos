@@ -65,6 +65,12 @@ export function printBootSummary(): void {
 export function observeLcpOnce(): void {
   try {
     if (typeof PerformanceObserver === 'undefined') return;
+    // Idempotent: HMR re-evaluation and multi-entry imports must not pile
+    // up observers — each extra observer restarts the 30 s window and keeps
+    // reporting late candidates (the runaway 80 s+ "LCP FINAL" readings).
+    const w = window as unknown as Record<string, unknown>;
+    if (w.__mobipos_lcp_observing) return;
+    w.__mobipos_lcp_observing = true;
     let settleTimer: number | undefined;
     const report = (ms: number, desc: string, final: boolean): void => {
       try {

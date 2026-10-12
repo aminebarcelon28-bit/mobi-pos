@@ -44,6 +44,10 @@ subtle = "2.6"
 # (12-byte random nonce per file, never reused under one key).
 chacha20poly1305 = "0.10"
 ed25519-dalek = "3"
+# Direct OS-randomness for device key material (already in the lockfile via
+# password-hash/uuid; declared explicitly because device_identity.rs uses it
+# directly — same rule as zeroize/subtle above).
+getrandom = "0.3"
 base64 = "0.22"
 rusqlite = { version = "0.31", features = ["bundled", "backup"] }
 sqlite-vec = "0.1"
@@ -57,6 +61,8 @@ thiserror = "1.0"
 # deterministic 384-dim hashed embeddings (same vec0 schema + Tier
 # thresholds); enable with `--features po-embed` for true BGE semantics.
 fastembed = { version = "3.9", optional = true }
+# Embedded W3C WebDriver server — test surface, enabled ONLY by `e2e`.
+tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
@@ -74,5 +80,15 @@ libc = "0.2"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+# E2E test harness (Phase 1): test-only IPC (`e2e_*`) and the embedded
+# WebDriver server, plus the e2e identifier overlay (own data dir for the
+# live mobi_pos.db — the filename itself never changes: the patched sql
+# plugin confines `load` to exactly mobi_pos.db). Staging/CI builds use
+# `--features e2e`; consumer production builds never set it, so no test
+# surface ships (Gate 1.3 proves this via binary string search).
+# The WebDriver plugin is an OPTIONAL dependency pulled in only here —
+# Cargo ignores `debug_assertions`/`feature` inside `[target.'cfg()']`
+# tables, which previously linked it into every build.
+e2e = ["dep:tauri-plugin-wdio-webdriver"]
 # True ONNX BGE-Small-EN semantics via fastembed (see note above).
 po-embed = ["fastembed"]

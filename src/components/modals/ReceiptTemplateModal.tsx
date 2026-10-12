@@ -120,9 +120,9 @@ export const ReceiptTemplateModal: React.FC = () => {
   const previewFooter: string[] = footerText ? fold42(footerText) : fold42(STORE_RETURN_POLICY);
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col max-h-[92dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+    <div role="dialog" aria-modal="true" aria-label="Personnalisation du ticket" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col max-h-[94dvh] sm:max-h-[92dvh] pt-[max(0.5rem,var(--safe-top))] sm:py-0">
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
           <div className="flex items-center gap-2 text-emerald-400 min-w-0">
@@ -334,7 +334,7 @@ export const ReceiptTemplateModal: React.FC = () => {
             </div>
           </div>
 
-          <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-end gap-2 -mx-4 sm:-mx-5 -mb-4 mt-4 shrink-0">
+          <div className="p-3 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-end gap-2 -mx-4 sm:-mx-5 -mb-4 mt-4 shrink-0">
             <button
               type="button"
               onClick={closeModal}

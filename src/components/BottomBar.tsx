@@ -65,6 +65,9 @@ export const BottomBar: React.FC = () => {
   // SyncStatus exposes failedCount (quarantined outbox rows); no separate
   // quarantined field exists — failedCount IS the quarantine count.
   const failedCount = sync.failedCount ?? 0;
+  // Signed-lane backlog (drain worker telemetry): non-intrusive drawer
+  // warning past the threshold; transactions stay buffered locally.
+  const outboxPendingCount = usePosStore((s) => s.outboxPendingCount);
   // Horizontal action strip: translate a vertical mouse wheel into a
   // horizontal scroll so the buttons are reachable without Shift+wheel
   // or a trackpad gesture. Attached non-passively so preventDefault works.
@@ -149,6 +152,7 @@ export const BottomBar: React.FC = () => {
 
           {/* Customer Directory (F3) */}
           <button
+            data-testid="clients-button"
             onClick={() => openModal('customers')}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
             title="Fichier Clients & Dettes Kredy (F3)"
@@ -160,6 +164,7 @@ export const BottomBar: React.FC = () => {
 
           {/* Discount (F4) */}
           <button
+            data-testid="discount-button"
             onClick={() => openModal('discount')}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
             title="Appliquer une Remise Panier (F4)"
@@ -237,6 +242,7 @@ export const BottomBar: React.FC = () => {
 
           {/* Refund (F11) */}
           <button
+            data-testid="refund-button"
             onClick={() => openModal('refund')}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
             title="Retours Marchandise & Remboursements (F11)"
@@ -318,6 +324,14 @@ export const BottomBar: React.FC = () => {
               }`}
             />
           </button>
+          {outboxPendingCount > 500 && (
+            <span
+              className="text-[10px] font-bold text-amber-400 whitespace-nowrap"
+              title={`File d’envoi signée : ${outboxPendingCount} mutations en attente de passerelle`}
+            >
+              Sync backlog accumulating. Transactions remain safely buffered locally.
+            </span>
+          )}
 
           <button
             onClick={() => openModal('db_maintenance')}

@@ -761,8 +761,10 @@ export const SettingsModal: React.FC = () => {
         const primaryAdminId = cashierUsers.find((u) => u.role === 'admin')?.id;
         if (existing.id === primaryAdminId) {
           // Phase 4a: master rotation mints natively under Tauri (Argon2id);
-          // the store refreshes memory + mirror from the authority.
-          await usePosStore.getState().rotatePinCredential('manager', cleanNew, true);
+          // the store refreshes memory + mirror from the authority. The old
+          // PIN verified above is the step-up proof native pin_set requires
+          // before re-keying a manager credential.
+          await usePosStore.getState().rotatePinCredential('manager', cleanNew, true, { supervisorPin: cleanPrev });
           targetPin = usePosStore.getState().managerPin;
           if (!targetPin) {
             showToast("Échec de l'enregistrement du nouveau PIN. Réessayez.", 'error');
@@ -1019,7 +1021,7 @@ export const SettingsModal: React.FC = () => {
     setIsUpdatingPin(true);
     try {
       // Phase 4a: master rotation mints natively under Tauri (Argon2id v2).
-      await usePosStore.getState().rotatePinCredential('manager', newPinInput, true);
+      await usePosStore.getState().rotatePinCredential('manager', newPinInput, true, { supervisorPin: currentPinInput });
       setCurrentPinInput('');
       setNewPinInput('');
       setConfirmPinInput('');
@@ -1405,14 +1407,16 @@ export const SettingsModal: React.FC = () => {
   ];
 
   return (
-    <div
+    <div role="dialog" aria-modal="true" aria-label="Paramètres du système"
       onClick={closeModal}
-      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-0 sm:p-4 select-none cursor-pointer"
+      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none cursor-pointer"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-dvh-shell sm:h-[90dvh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(0.5rem,var(--safe-bottom))] sm:pb-0"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 max-h-[94dvh] sm:h-[90dvh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0"
       >
+        {/* Mobile drag handle */}
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* ═══ Header ═══ */}
         <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
@@ -3683,7 +3687,7 @@ export const SettingsModal: React.FC = () => {
         </div>
 
         {/* ═══ Footer ═══ */}
-        <div className="p-2.5 sm:p-3 border-t border-pos-border bg-pos-card flex justify-between items-center text-xs text-pos-muted shrink-0">
+        <div className="p-2.5 sm:p-3 pb-[max(1rem,var(--safe-bottom))] sm:pb-3 border-t border-pos-border bg-pos-card flex justify-between items-center text-xs text-pos-muted shrink-0">
           <span className="text-[11px] truncate hidden sm:block">
             Centre de Commande Matériel • {connectedCount}/{devices.length} prêts • Plug & Play Auto-Reconnaissance actif
           </span>

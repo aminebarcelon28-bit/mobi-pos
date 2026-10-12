@@ -87,6 +87,11 @@ export const DebtLedgerModal: React.FC = () => {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType>('Espèces');
   const [paymentNotes, setPaymentNotes] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  // Synchronous reentrancy latch (double-submit race guard): useState only
+  // flips after the next React render, so N clicks inside one frame all see
+  // `false`. This ref flips synchronously in the event loop — only the first
+  // submit proceeds; the rest return before touching the ledger.
+  const submittingRef = useRef(false);
 
   // Credit Limit Adjustment State
   const [adjustingCustomer, setAdjustingCustomer] = useState<Customer | null>(null);
@@ -234,23 +239,25 @@ export const DebtLedgerModal: React.FC = () => {
   const handleConfirmRepayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!payingCustomer) return;
+    if (submittingRef.current) return;
     const amount = Math.round(parseLocalizedAmount(paymentAmount));
     if (!Number.isFinite(amount) || amount <= 0) {
       showToast('Veuillez saisir un montant de versement valide.', 'warning');
       return;
     }
 
+    submittingRef.current = true;
     setIsProcessing(true);
-    const debtPaymentResult = await recordCustomerDebtPayment(
-      payingCustomer.id,
-      amount,
-      paymentMethod,
-      paymentNotes,
-      // KREDY-02: convergent retries of one intent collapse on this key
-      // instead of doubling (slice uses it as the ledger row id).
-      { entryId: paymentEntryId.current || undefined }
-    );
-    setIsProcessing(false);
+    try {
+      const debtPaymentResult = await recordCustomerDebtPayment(
+        payingCustomer.id,
+        amount,
+        paymentMethod,
+        paymentNotes,
+        // KREDY-02: convergent retries of one intent collapse on this key
+        // instead of doubling (slice uses it as the ledger row id).
+        { entryId: paymentEntryId.current || undefined }
+      );
 
     if (debtPaymentResult.success) {
       soundEngine.playSuccess();
@@ -270,6 +277,10 @@ export const DebtLedgerModal: React.FC = () => {
     } else {
       soundEngine.playError();
       showToast('Erreur lors de l\'enregistrement du versement.', 'error');
+    }
+    } finally {
+      submittingRef.current = false;
+      setIsProcessing(false);
     }
   };
 
@@ -376,9 +387,12 @@ export const DebtLedgerModal: React.FC = () => {
       aria-modal="true"
       aria-labelledby="kredy-modal-title"
       data-testid="kredy-modal"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/50 backdrop-blur-sm select-none"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-6 bg-slate-900/50 backdrop-blur-sm select-none"
     >
-      <div className="w-full max-w-5xl max-h-[90vh] flex flex-col rounded-2xl bg-pos-panel border border-pos-border shadow-2xl overflow-hidden animate-in zoom-in-95">
+      <div className="w-full max-w-5xl max-h-[94dvh] sm:max-h-[90vh] flex flex-col rounded-t-[28px] sm:rounded-2xl bg-pos-panel border border-pos-border shadow-2xl overflow-hidden animate-in slide-in-from-bottom-5 sm:zoom-in-95">
+        {/* Mobile drag handle */}
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
+
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* HEADER */}
         {/* ══════════════════════════════════════════════════════════════ */}
@@ -533,7 +547,8 @@ export const DebtLedgerModal: React.FC = () => {
             filteredDebtors.map((customer) => {
               const debt = customer.currentDebt || 0;
               const limit = customer.debtLimit ?? DEFAULT_CREDIT_LIMIT;
-              const ratio = Math.min(100, Math.round((debt / limit) * 100));
+              // Guarded: limit 0 with debt > 0 stays 100% (over-limit), 0/0 is 0% (never NaN).
+              const ratio = limit > 0 ? Math.min(100, Math.round((debt / limit) * 100)) : (debt > 0 ? 100 : 0);
               const isOver = debt >= limit;
               const isExpanded = expandedCustomerId === customer.id;
 
@@ -875,21 +890,26 @@ export const DebtLedgerModal: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                  <label htmlFor="kredy-plafond-pin" className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
                     Code PIN Manager Requis :
                   </label>
                   <input
+                    id="kredy-plafond-pin"
                     type="password"
                     inputMode="numeric"
                     pattern="[0-9]*"
                     autoComplete="current-password"
-                    maxLength={4}
+                    maxLength={8}
+                    aria-describedby="kredy-plafond-pin-hint"
                     value={managerPin}
-                    onChange={(e) => setManagerPin(e.target.value)}
-                    placeholder="••••"
+                    onChange={(e) => setManagerPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 8))}
+                    placeholder="••••••"
                     className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-center text-lg font-mono tracking-widest text-pos-text focus:outline-none focus:border-cyan-500"
                     required
                   />
+                  <span id="kredy-plafond-pin-hint" className="sr-only">
+                    PIN manager à 6 à 8 chiffres
+                  </span>
                 </div>
 
                 <div className="p-4 border-t border-pos-border bg-pos-card flex items-center justify-between -mx-4 -mb-4 mt-4">
@@ -915,7 +935,7 @@ export const DebtLedgerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* FOOTER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="px-6 py-3.5 bg-pos-card border-t border-pos-border flex items-center justify-between shrink-0 print:hidden">
+        <div className="px-4 sm:px-6 py-3.5 pb-[max(1rem,var(--safe-bottom))] sm:pb-3.5 bg-pos-card border-t border-pos-border flex items-center justify-between shrink-0 print:hidden">
           <span className="text-xs text-pos-muted">
             • Tous les versements mettent à jour automatiquement le journal comptable et la balance client.
           </span>

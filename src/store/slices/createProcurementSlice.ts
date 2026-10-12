@@ -857,7 +857,8 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
   },
 
   directRestockVendor: async (vendorName, items) => {
-    const { products, logSecurityAction } = get();
+    const { products, logSecurityAction, activeCashier } = get();
+    const actor = activeCashier?.name?.trim() || 'Admin';
     if (!items || items.length === 0) return { success: false, count: 0 };
 
     const itemsMap = new Map(items.map((i) => [i.productId, i.qty]));
@@ -936,7 +937,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
       logSecurityAction(
         'Réception Directe Fournisseur (JIT Restock)',
         `Entrée en stock rapide pour ${vendorName} : ${items.length} références (+${restockedUnits} unités)`,
-        'Yacine (Admin)',
+        actor,
         false
       );
       set({ products: updatedProducts });

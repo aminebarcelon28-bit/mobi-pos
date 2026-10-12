@@ -493,8 +493,11 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
           </button>
         </div>
         <p className="text-[10px] text-pos-muted flex items-center gap-1">
-          <Keyboard className="w-3 h-3 shrink-0" aria-hidden="true" />
-          Ctrl + Entrée pour vérifier · Luhn appliqué uniquement en mode IMEI
+          <span className="hidden sm:inline-flex items-center gap-1">
+            <Keyboard className="w-3 h-3 shrink-0" aria-hidden="true" />
+            Ctrl + Entrée pour vérifier ·
+          </span>
+          <span>Algorithme de Luhn vérifié en mode IMEI</span>
         </p>
       </form>
 

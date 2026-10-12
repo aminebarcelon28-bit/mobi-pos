@@ -196,20 +196,24 @@ export const ExpenseManagerModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-sm select-none">
-      <div className="w-full max-w-5xl max-h-[90vh] sm:max-h-[90dvh] flex flex-col rounded-2xl bg-pos-panel border border-pos-border shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 font-sans">
+    <div role="dialog" aria-modal="true" aria-label="Dépenses et charges" className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 bg-black/60 backdrop-blur-sm select-none">
+      <div className="w-full max-w-5xl max-h-[94dvh] sm:max-h-[90dvh] flex flex-col rounded-t-[28px] sm:rounded-2xl bg-pos-panel border border-pos-border shadow-2xl overflow-hidden animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 font-sans">
+        {/* Mobile drag handle */}
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
+
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* HEADER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="px-6 py-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+        <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               type="button"
               onClick={closeModal}
-              className="sm:hidden p-1.5 rounded-lg bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text active:scale-95 transition"
+              className="sm:hidden min-h-[44px] min-w-[44px] flex items-center justify-center p-1.5 rounded-xl bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text active:scale-95 transition"
+              aria-label="Retour"
               title="Retour"
             >
-              <ChevronLeft className="w-5 h-5" />
+              <ChevronLeft className="w-5 h-5" aria-hidden="true" />
             </button>
 
             <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-amber-500 to-yellow-600 flex items-center justify-center text-slate-950 font-black shadow-md shrink-0">
@@ -232,21 +236,22 @@ export const ExpenseManagerModal: React.FC = () => {
           <button
             type="button"
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer active:scale-95 shrink-0"
+            aria-label="Fermer"
             title="Fermer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* BODY — single scroll container */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="overflow-y-auto p-6 space-y-6 flex-1 overscroll-contain bg-pos-bg">
+        <div className="overflow-y-auto p-3.5 sm:p-6 space-y-4 sm:space-y-6 flex-1 overscroll-contain bg-pos-bg">
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* TOP KPI SUMMARY CARDS */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
           <div className="bg-pos-card border border-pos-border rounded-xl p-2 sm:p-3 flex items-center justify-between">
             <div className="min-w-0">
               <span className="text-[8px] sm:text-[10px] uppercase font-bold text-pos-muted tracking-wider block truncate">
@@ -435,7 +440,7 @@ export const ExpenseManagerModal: React.FC = () => {
         {/* ADD EXPENSE SUB-MODAL */}
         {/* ══════════════════════════════════════════════════════════════ */}
         {showAddForm && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-md">
+          <div role="dialog" aria-modal="true" aria-label="Nouvelle dépense" className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-md">
             <div className="w-full max-w-lg max-h-[90vh] sm:max-h-[90dvh] flex flex-col rounded-2xl bg-pos-panel border border-pos-border shadow-2xl overflow-hidden animate-in zoom-in-95 font-sans">
               <div className="px-6 py-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
                 <div className="flex items-center gap-2">
@@ -569,7 +574,7 @@ export const ExpenseManagerModal: React.FC = () => {
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* FOOTER */}
         {/* ══════════════════════════════════════════════════════════════ */}
-        <div className="px-6 py-3.5 bg-pos-card border-t border-pos-border flex items-center justify-between shrink-0">
+        <div className="px-4 sm:px-6 py-3.5 pb-[max(1rem,var(--safe-bottom))] sm:pb-3.5 bg-pos-card border-t border-pos-border flex items-center justify-between shrink-0">
           <span className="text-xs text-pos-muted">
             • Toutes les dépenses sont synchronisées en temps réel avec la comptabilité générale SQLite WAL.
           </span>

@@ -108,15 +108,16 @@ export const customerAdapter = {
       guarded: boolean,
       rowJson: string,
     ): Promise<void> => {
-      const predicate = guarded ? ' AND customers.version = $14' : '';
+      const predicate = guarded ? ' WHERE customers.version = $13' : '';
       await db.execute(
-        `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12)
+        `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $10)
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, email=excluded.email,
            loyalty_points=excluded.loyalty_points, store_credit=excluded.store_credit,
            pricing_tier=excluded.pricing_tier, total_spent=excluded.total_spent,
            json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
-         version = excluded.version${predicate}`,
+         version = excluded.version,
+         created_at = CASE WHEN COALESCE(customers.created_at, '') = '' THEN excluded.created_at ELSE customers.created_at END${predicate}`,
         [
           ...baseArgs,
           rowJson,
@@ -335,8 +336,8 @@ export const customerAdapter = {
       // for an unknown customer must not strand the write: insert the parent
       // stub first (idempotent), then the debt row.
       await db.execute(
-        `INSERT INTO customers (id, name, phone, json_payload, updated_at, idempotency_key)
-         VALUES ($1, $2, $3, $4, $5, 'stub-cust-' || $1)
+        `INSERT INTO customers (id, name, phone, json_payload, updated_at, idempotency_key, created_at)
+         VALUES ($1, $2, $3, $4, $5, 'stub-cust-' || $1, $5)
          ON CONFLICT(id) DO NOTHING`,
         [debt.customerId, debt.customerName || 'Client', '', JSON.stringify({ id: debt.customerId, name: debt.customerName || 'Client' }), utcNowIso()],
       );

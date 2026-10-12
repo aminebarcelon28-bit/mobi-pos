@@ -115,7 +115,7 @@ export const operationsAdapter = {
     const safeEntry: SecurityAuditLogEntry = {
       id: entry.id || newId('audit'),
       timestamp: entry.timestamp || new Date().toISOString(),
-      user: entry.user || 'Yacine (Admin)',
+      user: entry.user || 'Admin',
       action: entry.action || 'ACTION',
       details: entry.details || '',
       requiresPin: Boolean(entry.requiresPin),

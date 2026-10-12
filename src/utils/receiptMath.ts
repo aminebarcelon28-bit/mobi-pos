@@ -548,3 +548,135 @@ export function computeRefundFundingSplit(
     capped,
   };
 }
+
+/**
+ * Refund eligibility (zero-value ticket pollution guard). Structural inputs
+ * only — the modal memo, the slice pre-check, and unit tests share these, so
+ * the list filter can never disagree with the execution gate. Integer DA out.
+ */
+export interface RefundEligibilityItem {
+  product?: { id?: string; price?: number } | null;
+  quantity?: number;
+  appliedPrice?: number;
+  discount?: number;
+}
+
+export interface RefundEligibilityTxn {
+  id?: string;
+  status?: string;
+  isRefund?: boolean;
+  total?: number;
+  subtotal?: number;
+  paymentMethod?: string;
+  tenders?: Array<{ method?: string; amount?: number }> | null;
+  tradeInId?: string | null;
+  tradeInDeduction?: number;
+  tradeInRestored?: number;
+  customer?: { id?: string } | null;
+  items?: RefundEligibilityItem[] | null;
+  refundedItems?: Array<{ productId?: string; quantity?: number }> | null;
+  originalTransactionId?: string;
+}
+
+/** Already-refunded quantities per product for one original ticket. */
+export function refundedQtyByProduct(
+  all: RefundEligibilityTxn[] | undefined | null,
+  originalId: string
+): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const t of all || []) {
+    if (!t || !t.isRefund || t.originalTransactionId !== originalId) continue;
+    for (const ri of t.refundedItems || []) {
+      if (!ri || !ri.productId) continue;
+      m.set(ri.productId, (m.get(ri.productId) || 0) + Math.max(0, Number(ri.quantity) || 0));
+    }
+  }
+  return m;
+}
+
+function netUnitOf(item: RefundEligibilityItem): number {
+  const qty = Math.max(0, Number(item.quantity) || 0);
+  const unit = Number(item.appliedPrice) || Number(item.product?.price) || 0;
+  const discountPerUnit =
+    Number(item.discount) > 0 && qty > 0 ? Number(item.discount) / qty : 0;
+  return Math.max(0, unit - discountPerUnit);
+}
+
+/**
+ * Still-refundable value of a ticket (integer DA): remaining quantities at
+ * net unit prices, rounded once at the sum — the same basis the slice commits.
+ */
+export function refundableBalanceOf(
+  txn: RefundEligibilityTxn | undefined | null,
+  refundedQty: Map<string, number>
+): number {
+  if (!txn) return 0;
+  let sum = 0;
+  for (const item of txn.items || []) {
+    if (!item) continue;
+    const pid = item.product?.id || '';
+    if (!pid) continue;
+    const remaining = Math.max(0, (Number(item.quantity) || 0) - (refundedQty.get(pid) || 0));
+    sum += netUnitOf(item) * remaining;
+  }
+  return Math.max(0, Math.round(sum));
+}
+
+/** List + submit gate: live ticket, not a refund row, with value left. */
+export function isRefundEligible(
+  txn: RefundEligibilityTxn | undefined | null,
+  refundedQty: Map<string, number>
+): boolean {
+  if (!txn || txn.isRefund) return false;
+  if (txn.status === 'VOIDED' || txn.status === 'REFUNDED') return false;
+  return refundableBalanceOf(txn, refundedQty) > 0;
+}
+
+/**
+ * Convenience: remaining refundable value of one ticket against the full
+ * ledger (builds the per-ticket refunded map internally). The modal list
+ * filter and the slice pre-check share this — one basis, never two.
+ */
+export function refundableBalanceOfTxn(
+  txn: RefundEligibilityTxn | undefined | null,
+  allTxns: RefundEligibilityTxn[] | undefined | null
+): number {
+  if (!txn || txn.isRefund) return 0;
+  if (txn.status === 'VOIDED' || txn.status === 'REFUNDED') return 0;
+  return refundableBalanceOf(txn, refundedQtyByProduct(allTxns, txn.id || ''));
+}
+
+/**
+ * Money-truth refundable value (Fix 1 basis): the funding-split net for the
+ * remaining lines plus the claimable trade-restore quota — i.e. value that
+ * would actually move on submit. Line value alone overstates tickets whose
+ * value came from a trade-in device (Reprise, total 0): with no customer the
+ * trade value is unclaimable by policy, so the ticket carries 0 and must not
+ * list. Integer DA.
+ */
+export function refundableValueOf(
+  txn: RefundEligibilityTxn | undefined | null,
+  allTxns: RefundEligibilityTxn[] | undefined | null
+): number {
+  if (!txn || txn.isRefund) return 0;
+  if (txn.status === 'VOIDED' || txn.status === 'REFUNDED') return 0;
+  const gross = refundableBalanceOf(txn, refundedQtyByProduct(allTxns, txn.id || ''));
+  if (gross <= 0) return 0;
+  let priorGross = 0;
+  let priorTrade = 0;
+  for (const t of allTxns || []) {
+    if (!t || !t.isRefund || t.originalTransactionId !== txn.id) continue;
+    priorGross += Math.max(0, Math.round(Number(t.total) || 0));
+    priorTrade += Math.max(0, Math.round(Number(t.tradeInRestored) || 0));
+  }
+  const funding = computeRefundFundingSplit(txn, gross, priorGross);
+  let value = funding.netRefund;
+  const deduction = Math.max(0, Math.round(Number(txn.tradeInDeduction) || 0));
+  const hasTradeLeg = Boolean(txn.tradeInId) && deduction > 0;
+  // Unclaimed trade value (anonymous ticket) restores nothing by policy —
+  // it must not keep the ticket listable.
+  if (hasTradeLeg && txn.customer) {
+    value += computeTradeRestoreQuota(deduction, funding.netRefund, Number(txn.total) || 0, priorTrade);
+  }
+  return Math.max(0, Math.round(value));
+}

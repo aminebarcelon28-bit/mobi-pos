@@ -559,10 +559,10 @@ export const ProductEditorModal: React.FC = () => {
   const totalExpectedGain = Math.max(0, totalRetailValuation - totalCostInvestment);
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-3 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[90dvh] overflow-hidden animate-in slide-in-from-bottom-5 sm:zoom-in-95">
+    <div role="dialog" aria-modal="true" aria-label="Fiche produit" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-3 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-3 select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[94dvh] sm:max-h-[90dvh] overflow-hidden animate-in slide-in-from-bottom-5 sm:zoom-in-95">
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
         
         {/* ========================================================================= */}
         {/* 1. STICKY HEADER (Top Bar)                                               */}
@@ -845,6 +845,10 @@ export const ProductEditorModal: React.FC = () => {
                   {/* Inline Barcode Input */}
                   <input
                     type="text"
+                    // Sanctioned wedge destination: the scan fills this field.
+                    // Not "search" — the component owns the value, the decoder
+                    // must never clear it.
+                    data-barcode-scan-target="field"
                     value={formData.barcode}
                     onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
                     placeholder="ex: 6138318449885"
@@ -1428,7 +1432,7 @@ export const ProductEditorModal: React.FC = () => {
           {/* ======================================================================= */}
           {/* 4. PINNED ACTION FOOTER (Bottom Bar)                                    */}
           {/* ======================================================================= */}
-          <div className="px-5 py-3 border-t border-pos-border bg-pos-card flex items-center justify-between shrink-0 gap-3">
+          <div className="px-5 py-3 pb-[max(1rem,var(--safe-bottom))] sm:pb-3 border-t border-pos-border bg-pos-card flex items-center justify-between shrink-0 gap-3">
             
             {/* Footer Left: Keyboard Shortcut Hints (Hidden on mobile) */}
             <div className="hidden sm:flex items-center gap-3 text-[11px] text-pos-muted font-medium">

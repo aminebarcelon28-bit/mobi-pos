@@ -34,27 +34,17 @@ function markDeferred(id, coverage) {
   console.log(`  🖥️  [DEFERRED:TAURI] ${id} — ${coverage}`);
 }
 
-// ── Load transpiled TS modules (same trick as test_receipt_math.mjs) ──
-const ts = await import('typescript');
+// ── Load TS modules under plain node ─────────────────────────────────────────
+// See scripts/ts-module-loader.mjs for why a plain transpile + data: URL cannot
+// work here (`receiptMath` → `../types/pos`, `savValidation` → `./deviceIdCodec`,
+// `tradeInExchange` → `./savValidation` all had no base to resolve against) and
+// why bundling the graph up front is the fix.
 const fs = await import('node:fs');
-const toDataUrl = (js) => 'data:text/javascript;base64,' + Buffer.from(js).toString('base64');
-const transpileFile = (p) => {
-  const source = fs.readFileSync(p, 'utf8');
-  return ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
-    fileName: p,
-  }).outputText;
-};
-const pricingUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/pricingEngine.ts`));
-let rmSrc = fs.readFileSync(`${ROOT}/src/utils/receiptMath.ts`, 'utf8');
-rmSrc = rmSrc.replace(/from\s+(['"])\.\.\/types\/pos\1/g, `from '${toDataUrl('export {};')}'`);
-rmSrc = rmSrc.replace(/from\s+(['"])\.\/pricingEngine\1/g, `from '${pricingUrl}'`);
-const rm = await import(toDataUrl(ts.transpileModule(rmSrc, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
-  fileName: 'receiptMath.ts',
-}).outputText));
-const bc = await import(toDataUrl(transpileFile(`${ROOT}/src/utils/barcodeGenerator.ts`)));
-const sav = await import(toDataUrl(transpileFile(`${ROOT}/src/utils/savValidation.ts`)));
+const { importModule } = await import('./ts-module-loader.mjs');
+
+const rm = await importModule('src/utils/receiptMath.ts', ROOT);
+const bc = await importModule('src/utils/barcodeGenerator.ts', ROOT);
+const sav = await importModule('src/utils/savValidation.ts', ROOT);
 const sliceSrc = fs.readFileSync(`${ROOT}/src/store/slices/createUISlice.ts`, 'utf8');
 const modalSrc = fs.readFileSync(`${ROOT}/src/components/modals/TradeInBuybackModal.tsx`, 'utf8');
 
@@ -119,10 +109,13 @@ console.log('\n--- 4. NO-TVA: subtotal 100 000, -10% = 90 000, trade-in 40 000 -
 {
   const base = rm.computeCartTotals([line(100000)], { vatRate: 19, cartDiscountPercent: 10 });
   check('discounted base 90 000', base.subtotalAfterDiscount === 90000, String(base.subtotalAfterDiscount));
-  check('no-TVA: vatRate ignored (tva 0, total = base)', base.tva === 0 && base.tax === 0 && base.total === 90000, JSON.stringify({ tva: base.tva, total: base.total }));
+  // Post-drop (Phase 1b-i) the tax fields are ABSENT, not zeroed — receiptMath
+  // deletes `tax`/`tva` outright, so `=== undefined` is the real contract and
+  // is strictly stronger than a `=== 0` check (a reintroduced zero fails it).
+  check('no-TVA: vatRate ignored (no tax field, total = base)', base.tva === undefined && base.tax === undefined && base.total === 90000, JSON.stringify({ tva: base.tva, tax: base.tax, total: base.total }));
   const withTrade = rm.computeCartTotals([line(100000)], { vatRate: 19, cartDiscountPercent: 10, tradeInCredit: 40000 });
   check('trade-in applies after discount: net 50 000', withTrade.net === 50000, String(withTrade.net));
-  check('no-TVA: ht 90 000 unreduced by trade-in, tva 0', withTrade.ht === 90000 && withTrade.tva === 0 && withTrade.ht === base.ht, JSON.stringify({ ht: withTrade.ht, tva: withTrade.tva }));
+  check('no-TVA: ht 90 000 unreduced by trade-in, no tax field', withTrade.ht === 90000 && withTrade.tva === undefined && withTrade.ht === base.ht, JSON.stringify({ ht: withTrade.ht, tva: withTrade.tva }));
   check('gross subtotal untouched (100 000)', withTrade.grossSubtotal === 100000);
 }
 
@@ -304,18 +297,9 @@ console.log('===================================================================
 console.log('\n========================================================================');
 console.log('SUITE 9 — CHAOS & EDGE-CASE BATTERY (S1–S6)');
 console.log('========================================================================');
-const ct = await import(toDataUrl(transpileFile(`${ROOT}/src/utils/cashTerms.ts`)));
-const fl = await import(toDataUrl(transpileFile(`${ROOT}/src/db/checkoutFlight.ts`)));
-// tradeInExchange.ts imports ./savValidation (value import) — data: URLs
-// cannot resolve relative specifiers, so transpile the dependency first
-// (same trick as the receiptMath loader above).
-const savUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/savValidation.ts`));
-let txSrc = fs.readFileSync(`${ROOT}/src/utils/tradeInExchange.ts`, 'utf8');
-txSrc = txSrc.replace(/from\s+(['"])\.\/savValidation\1/g, `from '${savUrl}'`);
-const tx = await import(toDataUrl(ts.transpileModule(txSrc, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
-  fileName: 'tradeInExchange.ts',
-}).outputText));
+const ct = await importModule('src/utils/cashTerms.ts', ROOT);
+const fl = await importModule('src/db/checkoutFlight.ts', ROOT);
+const tx = await importModule('src/utils/tradeInExchange.ts', ROOT);
 const orderSliceSrc = fs.readFileSync(`${ROOT}/src/store/slices/createOrderSlice.ts`, 'utf8');
 
 // ── S1: self-referential paradox ──
@@ -340,7 +324,7 @@ console.log('\n--- S2: cable 500 DA vs iPhone 130 000 DA (soulte 129 500) ---');
   check('soulte 129 500 SOULTE_SHOP_PAYS', s.netBalance === -129500 && s.shopOwes === 129500, JSON.stringify(s));
   const t = rm.computeCartTotals([line(500)], { vatRate: 0, tradeInCredit: 130000 });
   check('totals clamp: applied 500, net 0 (no negative sale)', t.tradeInCreditApplied === 500 && t.net === 0 && t.total === 0);
-  check('no negative gross/VAT/total/refundDue', t.grossSubtotal >= 0 && t.ht >= 0 && t.tva >= 0 && t.total >= 0 && t.refundDue >= 0);
+  check('no negative gross/ht/total/refundDue, no tax field', t.grossSubtotal >= 0 && t.ht >= 0 && t.tva === undefined && t.total >= 0 && t.refundDue >= 0);
   const poor = ct.estimateDrawerCash({ openingFloat: 10000, cashSales: 0, debtSettled: 0, deposits: 0, manualIn: 0, refunds: 0, drops: 0, payouts: 0, cashExpenses: 0, tradeInCashOut: 0, exchangeOut: 0, manualOut: 0 });
   check('drawer estimate 10 000 DA on fresh float', poor === 10000, String(poor));
   check('129 500 > 10 000 → overdraft BLOCKS cash soulte', 129500 > poor);
@@ -362,11 +346,11 @@ console.log('\n--- S3: 100k −5k line −10k lines ⇒ base 85k, avoir 30k, tra
   const base = rm.computeCartTotals(cart, { vatRate: 19 });
   check('payable base exactly 85 000', base.subtotalAfterDiscount === 85000, String(base.subtotalAfterDiscount));
   // NO-TVA: vatRate ignored — ht equals the base exactly, tva 0, no remainder.
-  check('no-TVA: ht 85k, tva 0, total 85k', base.ht === 85000 && base.tva === 0 && base.total === 85000, JSON.stringify(base));
+  check('no-TVA: ht 85k, no tax field, total 85k', base.ht === 85000 && base.tva === undefined && base.total === 85000, JSON.stringify(base));
   const withTrade = rm.computeCartTotals(cart, { vatRate: 0, storeCreditApplied: 30000, tradeInCredit: 55000 });
   check('55k trade + 30k avoir ⇒ net 0, refundDue 0', withTrade.net === 0 && withTrade.total === 0 && withTrade.refundDue === 0, JSON.stringify({ net: withTrade.net, rd: withTrade.refundDue }));
   const withTradeVat = rm.computeCartTotals(cart, { vatRate: 19, storeCreditApplied: 30000, tradeInCredit: 55000 });
-  check('no-TVA: ht strictly 85k (untouched by tenders), tva 0', withTradeVat.ht === 85000 && withTradeVat.tva === 0, JSON.stringify({ ht: withTradeVat.ht }));
+  check('no-TVA: ht strictly 85k (untouched by tenders), no tax field', withTradeVat.ht === 85000 && withTradeVat.tva === undefined, JSON.stringify({ ht: withTradeVat.ht }));
   check('no-TVA path never manufactures a refund (refundDue 0)', withTradeVat.refundDue === 0);
   const over = rm.computeCartTotals(cart, { vatRate: 0, storeCreditApplied: 30000, tradeInCredit: 60000 });
   check('60k trade clamps to 55k remainder (no phantom refund)', over.tradeInCreditApplied === 55000 && over.net === 0 && over.refundDue === 0, JSON.stringify(over));
@@ -483,7 +467,7 @@ console.log('===================================================================
     [{ product: { price: 100000 }, appliedPrice: 100000, quantity: 1, discount: 7000 }],
     { vatRate: 19, cartDiscountPercent: 5 }
   );
-  check('T3 no-TVA on 88 350 (ht 88 350, tva 0, total 88 350)', hydraVat.ht === 88350 && hydraVat.tva === 0 && hydraVat.total === 88350, JSON.stringify({ ht: hydraVat.ht, tva: hydraVat.tva }));
+  check('T3 no-TVA on 88 350 (ht 88 350, no tax field, total 88 350)', hydraVat.ht === 88350 && hydraVat.tva === undefined && hydraVat.total === 88350, JSON.stringify({ ht: hydraVat.ht, tva: hydraVat.tva }));
   // T6 invisibles: bidi overrides + zero-width stripped before Luhn.
   check('U+202E stripped', sav.sanitizeImeiInput('‮490154203237518') === '490154203237518');
   check('U+200B stripped', sav.sanitizeImeiInput('4901542032375​18') === '490154203237518');

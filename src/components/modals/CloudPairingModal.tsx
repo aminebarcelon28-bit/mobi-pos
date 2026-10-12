@@ -7,6 +7,7 @@ import { usePosStore } from '../../store/usePosStore';
 import { getCloudCredentials } from '../../sync/keychain';
 import { useToast } from '../ui/Toast';
 import { QRCodeImage } from '../ui/QRCodeImage';
+import { pairingMinutesLeft, usePairingPayload } from '../../utils/pairingPayload';
 
 const ANDROID_APK_URL = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-Android.apk';
 const IOS_IPA_URL = 'https://github.com/aminebarcelon28-bit/mobi-pos/releases/latest/download/MobiPOS-iOS.ipa';
@@ -39,13 +40,14 @@ export const CloudPairingModal: React.FC = () => {
     })();
   }, []);
 
-  const pairingPayload = creds ? JSON.stringify({
-    v: 1,
-    type: 'mobipos-pair',
-    url: creds.url,
-    token: creds.token,
-    ts: Date.now(),
-  }) : '';
+  // Stable-per-mount payload via the shared builder (single normalization,
+  // copied text always equals the displayed QR). Re-entry mints fresh.
+  const {
+    payload: pairingPayload,
+    mintedAt: pairingMintedAt,
+    refresh: refreshPairing,
+  } = usePairingPayload(creds?.url ?? '', creds?.token ?? '', Boolean(creds));
+  const pairingMinutes = pairingMintedAt === null ? null : pairingMinutesLeft(pairingMintedAt);
 
   const handleCopy = () => {
     if (!pairingPayload) return;
@@ -64,9 +66,9 @@ export const CloudPairingModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-card border-t sm:border border-pos-border w-full max-w-lg rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 max-h-[92dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+    <div role="dialog" aria-modal="true" aria-label="Application mobile et sync" className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-card border-t sm:border border-pos-border w-full max-w-lg rounded-t-[28px] sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94dvh] sm:max-h-[92dvh] pt-0 pb-0 sm:py-0">
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* Header */}
         <div className="flex items-center justify-between p-3.5 sm:p-4 border-b border-pos-border bg-pos-panel shrink-0">
@@ -268,6 +270,25 @@ export const CloudPairingModal: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* Pairing-code validity (mirrors the mobile 15-min freshness gate).
+                      Visible text doubles as the Playwright locator. */}
+                  {pairingMinutes !== null && (
+                    <p className={`text-[11px] font-bold ${pairingMinutes > 0 ? 'text-pos-muted' : 'text-red-400'}`}>
+                      {pairingMinutes > 0
+                        ? `Code valide encore ~${pairingMinutes} min — scannez avant expiration.`
+                        : 'Code expiré — rafraîchissez pour générer un nouveau code.'}{' '}
+                      {pairingMinutes <= 0 && (
+                        <button
+                          type="button"
+                          onClick={refreshPairing}
+                          className="underline text-cyan-400 hover:text-cyan-300 cursor-pointer"
+                        >
+                          Rafraîchir le code
+                        </button>
+                      )}
+                    </p>
+                  )}
+
                   {/* Pairing Code Card */}
                   <div className="bg-pos-panel border border-pos-border rounded-xl p-3 space-y-2">
                     <div className="flex items-center justify-between">
@@ -331,7 +352,7 @@ export const CloudPairingModal: React.FC = () => {
         </div>
 
         {/* Footer */}
-        <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-panel flex justify-end shrink-0">
+        <div className="p-3 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-panel flex justify-end shrink-0">
           <button
             onClick={closeModal}
             className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-pos-card border border-pos-border hover:bg-pos-hover text-xs font-bold text-pos-text transition cursor-pointer min-h-[44px] flex items-center justify-center active-press"

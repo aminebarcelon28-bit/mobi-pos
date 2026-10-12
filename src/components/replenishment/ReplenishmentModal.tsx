@@ -105,7 +105,7 @@ export const ReplenishmentModal: React.FC<ReplenishmentModalProps> = ({
 
   const modalContent = (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-sm animate-in fade-in isolate"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none bg-slate-900/60 dark:bg-slate-950/75 backdrop-blur-sm animate-in fade-in isolate"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) {
           onClose();
@@ -119,8 +119,11 @@ export const ReplenishmentModal: React.FC<ReplenishmentModalProps> = ({
         aria-modal="true"
         aria-labelledby="replenishment-modal-title"
         aria-describedby="replenishment-modal-subtitle"
-        className="w-full sm:max-w-5xl mx-auto max-h-[100dvh] sm:max-h-[90dvh] flex flex-col bg-white dark:bg-slate-950 border border-gray-200 dark:border-slate-800 rounded-t-2xl sm:rounded-2xl overflow-hidden shadow-2xl will-change-transform animate-in slide-in-from-bottom-5 sm:zoom-in-95"
+        className="w-full sm:max-w-5xl mx-auto max-h-[94dvh] sm:max-h-[90dvh] flex flex-col bg-white dark:bg-slate-950 border-t sm:border border-gray-200 dark:border-slate-800 rounded-t-[28px] sm:rounded-2xl overflow-hidden shadow-2xl will-change-transform animate-in slide-in-from-bottom-5 sm:zoom-in-95"
       >
+        {/* M3 Standard Drag Handle */}
+        <div className="w-12 h-1.5 rounded-full bg-slate-300 dark:bg-slate-700/60 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
+
         <ReplenishmentHeader
           title="Réapprovisionnement Fournisseurs"
           subtitle="Gestion des commandes fournisseurs et réapprovisionnement JIT"
@@ -144,7 +147,7 @@ export const ReplenishmentModal: React.FC<ReplenishmentModalProps> = ({
 
         <main
           id="replenishment-modal-content"
-          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain p-3 sm:p-5 space-y-3 bg-gray-50 dark:bg-slate-900"
+          className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain p-3 sm:p-5 space-y-3 pb-[max(1.5rem,var(--safe-bottom))] sm:pb-5 bg-gray-50 dark:bg-slate-900"
           aria-label="Liste des fournisseurs"
         >
           <div id="supplier-count-announcer" className="sr-only" aria-live="polite" aria-atomic="true">

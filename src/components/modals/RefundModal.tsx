@@ -22,6 +22,9 @@ import { sortTransactionsNewestFirst } from '../../utils/dateUtils';
 import type { SaleTransaction, PaymentMethodType, RefundItem } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { computeRefundFundingSplit } from '../../utils/receiptMath';
+import { refundableValueOf } from '../../utils/receiptMath';
+import { clampCashRefund, physicalCashTendered, cashDisbursedOf } from '../../utils/cashTerms';
+import { isOwnShiftTicket } from '../../sync/refundLockPolicy';
 import { verifyManagerGate } from '../../utils/pinGate';
 
 export const RefundModal: React.FC = () => {
@@ -32,6 +35,7 @@ export const RefundModal: React.FC = () => {
     selectedTransactionForRefund,
     setSelectedTransactionForRefund,
     processRefund,
+    activeShift,
     // Phase 1: manager checks route through the native gate (no local
     // verifyManagerPin reads here — see utils/pinGate).
   } = usePosStore();
@@ -49,6 +53,57 @@ export const RefundModal: React.FC = () => {
   const [managerPin, setManagerPin] = useState('');
   const [pinRequired, setPinRequired] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Fix 3 (UI hint — the slice + adapter enforce): offline status and device
+  // identity, loaded when the modal opens. Remote/past-shift tickets show a
+  // lock badge and cannot be selected while offline.
+  const [onlineNow, setOnlineNow] = useState<boolean | null>(null);
+  const [deviceIdNow, setDeviceIdNow] = useState('');
+  // Offline containment policy knobs (Module B/C hints — enforcement is
+  // native; these only drive messaging, with the same defaults).
+  const [offlinePinThreshold, setOfflinePinThreshold] = useState(5_000);
+  useEffect(() => {
+    if (activeModal !== 'refund') return;
+    let alive = true;
+    const updateNet = () => {
+      try {
+        setOnlineNow(typeof navigator !== 'undefined' ? navigator.onLine : true);
+      } catch {
+        /* ignore */
+      }
+    };
+    updateNet();
+    window.addEventListener('online', updateNet);
+    window.addEventListener('offline', updateNet);
+    (async () => {
+      try {
+        const { probeOnline } = await import('../../sync/tursoClient');
+        const ok = await probeOnline(2500).catch(() => false);
+        if (alive) setOnlineNow(ok);
+      } catch {
+        if (alive) setOnlineNow(true);
+      }
+      try {
+        const { getStableDeviceId } = await import('../../sync/device');
+        const id = await getStableDeviceId().catch(() => '');
+        if (alive) setDeviceIdNow(id);
+      } catch {
+        /* unknown device locks everything offline (fail-closed) */
+      }
+      try {
+        const { readOfflinePolicy } = await import('../../db/adapters/refundNative');
+        const t = await readOfflinePolicy('policy.offline_pin_threshold').catch(() => 5_000);
+        if (alive) setOfflinePinThreshold(t);
+      } catch {
+        /* policy read unavailable — default hint stands, native enforces */
+      }
+    })();
+    return () => {
+      alive = false;
+      window.removeEventListener('online', updateNet);
+      window.removeEventListener('offline', updateNet);
+    };
+  }, [activeModal]);
 
   // Debounced search: instant input, filtered scan 200ms after last keystroke.
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -70,11 +125,19 @@ export const RefundModal: React.FC = () => {
   // Hooks must stay above the early return below.
   // Newest-first (canonical comparator — defensive: the store is sorted at
   // every writer, but the panel must never depend on producer order).
+  // Zero-value guard (Fix 1): tickets with no remaining refundable value
+  // (0 DA comps, unclaimable trade-ins, fully-exhausted tickets) never reach
+  // the list. Same money-truth basis as the slice/adapter submit gates
+  // (refundableValueOf) — the list can never offer what submit refuses.
   const eligibleTransactionsMemo = useMemo(
     () =>
       sortTransactionsNewestFirst(
         (transactions || []).filter(
-          (t) => t.status !== 'VOIDED' && t.status !== 'REFUNDED' && !t.isRefund
+          (t) =>
+            t.status !== 'VOIDED' &&
+            t.status !== 'REFUNDED' &&
+            !t.isRefund &&
+            refundableValueOf(t, transactions) > 0
         )
       ),
     [transactions]
@@ -194,6 +257,15 @@ export const RefundModal: React.FC = () => {
 
   const totalRefundAmount = activeRefundItems.reduce((acc, i) => acc + i.totalRefundAmount, 0);
 
+  // Module A submit gate (defense in depth — the list already locks foreign
+  // tickets, but selection can predate a network drop): offline, only the
+  // originating terminal's tickets stay submittable.
+  const submitForeignLocked =
+    onlineNow === false &&
+    selectedTxn != null &&
+    (selectedTxn.deviceId || selectedTxn.device_id || '') !== deviceIdNow;
+
+
   // Funding preview (anti-arbitrage): the till only ever disburses the
   // cash-funded share — voucher/avoir/debt shares return to their origins.
   // Same helper as processRefund, so the preview can never disagree. Plain
@@ -206,6 +278,28 @@ export const RefundModal: React.FC = () => {
     return computeRefundFundingSplit(selectedTxn, totalRefundAmount, priorRecovery);
   })();
   const previewCashOut = refundMethod === 'Espèces' ? fundingPreview?.cashShare ?? 0 : 0;
+
+  // Fix 2 (UI mirror of the slice tender clamp): cumulative drawer cash out
+  // can never exceed the net physical cash tendered on the ticket. Same
+  // helpers as execution (cashTerms) — the preview can never promise what
+  // the write path refuses. Store-only basis here; the slice unions Dexie.
+  const previewClamp = (() => {
+    if (!selectedTxn || !fundingPreview) return null;
+    let prior = 0;
+    for (const t of transactions || []) {
+      if (t.isRefund && t.originalTransactionId === selectedTxn.id) prior += cashDisbursedOf(t);
+    }
+    return clampCashRefund({
+      cashShare: fundingPreview.cashShare,
+      cashTenderedNet: physicalCashTendered(selectedTxn),
+      priorCashOut: prior,
+    });
+  })();
+  // Module C hint: large offline cash carries a recorded supervisor
+  // authorization (the mandatory manager PIN below is verified natively and
+  // its timestamp rides the in-txn audit row).
+  const offlineCashNeedsSupervisor =
+    onlineNow === false && refundMethod === 'Espèces' && previewCashOut > offlinePinThreshold;
 
   const handleQuantityChange = (productId: string, newQty: number, maxQty: number) => {
     const validQty = Math.max(1, Math.min(maxQty, newQty));
@@ -224,6 +318,20 @@ export const RefundModal: React.FC = () => {
     e.preventDefault();
     if (!selectedTxn) {
       showToast('Veuillez d\'abord sélectionner un ticket de caisse.', 'warning');
+      return;
+    }
+
+    // Fix 4: accounting-period gate (mirrors the slice + adapter gates).
+    if (!activeShift || !activeShift.id) {
+      showToast('Ouvrez la caisse avant tout remboursement (traçabilité de période).', 'error');
+      return;
+    }
+
+    // Module A submit gate (defense in depth — the button is already
+    // disabled, but selection can predate a network drop or devtools can
+    // re-enable it; the native gate decides regardless).
+    if (submitForeignLocked) {
+      showToast('Offline Terminal Lock: Cross-terminal refunds require an active sync connection.', 'error');
       return;
     }
 
@@ -254,6 +362,10 @@ export const RefundModal: React.FC = () => {
       );
       return;
     }
+    // Module C: supervisor authorization instant, captured immediately after
+    // the native gate pass. Rides the refund request into the atomic commit,
+    // where large offline cash requires it and records it in-txn.
+    const supervisorPinVerifiedAt = new Date().toISOString();
 
     setIsSubmitting(true);
     try {
@@ -271,6 +383,8 @@ export const RefundModal: React.FC = () => {
         refundMethod,
         refundReason: finalReason,
         cashierName: 'Manager',
+        supervisorPinVerifiedAt,
+        supervisorUserId: 'manager',
       })) as unknown as { success: boolean; reason?: string; warnings?: string[]; refundTransaction?: { total?: number; cashDisbursed?: number } };
 
       if (refundResult.success) {
@@ -293,6 +407,37 @@ export const RefundModal: React.FC = () => {
           showToast('Sans remise en stock, un motif de rebut est obligatoire.', 'error');
         } else if (refundResult.reason === 'REFUND_ALREADY_IN_PROGRESS') {
           showToast('Ce remboursement est déjà en cours sur un autre appareil — synchronisez puis vérifiez avant de réessayer.', 'warning');
+        } else if (refundResult.reason === 'ALREADY_REFUNDED') {
+          showToast('Ce retour a déjà été remboursé (même onglet ou autre caisse) — aucun second versement effectué. Vérifiez le ticket d\u2019avoir.', 'warning');
+        } else if (refundResult.reason === 'VOUCHER_RESTORE_FAILED') {
+          showToast('Remboursement enregistré, mais le bon d\u2019avoir n\u2019a pas pu être recrédité (solde modifié entre-temps) — réémission manuelle requise.', 'warning');
+        } else if (refundResult.reason === 'ZERO_REFUNDABLE') {
+          showToast('Ticket sans solde remboursable (0 DA ou déjà intégralement retourné).', 'error');
+        } else if (refundResult.reason === 'CASH_CAP_EXCEEDED') {
+          showToast('Plafond espèces dépassé — le décaissement demandé excède les espèces encaissées sur ce ticket.', 'error');
+        } else if (refundResult.reason === 'OFFLINE_REMOTE_TICKET') {
+          showToast('Hors ligne : seuls les tickets de cette caisse et de la session en cours sont remboursables.', 'error');
+        } else if (refundResult.reason === 'OFFLINE_FOREIGN_TICKET') {
+          showToast('Offline Terminal Lock: Cross-terminal refunds require an active sync connection.', 'error');
+        } else if (refundResult.reason === 'OFFLINE_CASH_CAP_EXCEEDED') {
+          if (refundMethod === 'Espèces') {
+            // Fallback path (Module B): value that cannot leave the drawer
+            // offline returns as a non-cashable store voucher instead.
+            setRefundMethod('Avoir Client');
+            showToast('Plafond espèces hors-ligne atteint — méthode basculée en Avoir Client : vérifiez puis validez à nouveau.', 'warning', 6000);
+          } else {
+            showToast('Plafond espèces hors-ligne atteint — resynchronisez avant tout nouveau décaissement.', 'error');
+          }
+        } else if (refundResult.reason === 'SUPERVISOR_PIN_REQUIRED') {
+          showToast('Remboursement espèces hors-ligne élevé : autorisation superviseur requise et non reconnue — ressaisissez le PIN Manager.', 'error');
+        } else if (refundResult.reason === 'SUPERVISOR_AUTH_EXPIRED') {
+          showToast('Autorisation superviseur expirée (plus de 2 minutes) — ressaisissez le PIN Manager et validez à nouveau.', 'error');
+        } else if (refundResult.reason === 'SYSTEM_CLOCK_REGRESSION') {
+          showToast('Horloge appareil incohérente — vérification requise avant tout remboursement.', 'error');
+        } else if (refundResult.reason === 'DEVICE_IDENTITY_SPOOFED') {
+          showToast('Identité terminal refusée par le noyau — redémarrez l’application et resynchronisez.', 'error');
+        } else if (refundResult.reason === 'NO_OPEN_SHIFT') {
+          showToast('Ouvrez la caisse avant tout remboursement (traçabilité de période).', 'error');
       } else {
         showToast(`Erreur lors du remboursement: ${refundResult.reason}`, 'error');
       }
@@ -305,10 +450,10 @@ export const RefundModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col relative">
+    <div role="dialog" aria-modal="true" aria-label="Retours marchandise et avoirs" data-testid="refund-dialog" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col relative">
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
         
         {/* Header */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
@@ -318,8 +463,8 @@ export const RefundModal: React.FC = () => {
             </div>
             <div className="min-w-0">
               <h2 className="text-xs sm:text-base font-extrabold text-pos-text tracking-wide flex items-center gap-2 truncate">
-                <span>RETOURS MARCHANDISE & AVOIRS</span>
-                <span className="text-[9px] sm:text-[10px] px-1.5 sm:px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/30 uppercase font-black shrink-0">
+                <span>RETOURS & AVOIRS</span>
+                <span className="hidden sm:inline-block text-[10px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/30 uppercase font-black shrink-0">
                   F11
                 </span>
               </h2>
@@ -349,6 +494,7 @@ export const RefundModal: React.FC = () => {
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
                 <input
                   type="text"
+                  data-testid="refund-search"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Rechercher N° Ticket, Client..."
@@ -369,15 +515,27 @@ export const RefundModal: React.FC = () => {
               ) : (
                 (filteredTransactions || []).slice(0, visibleCount).map((t) => {
                   const isSelected = selectedTxn?.id === t.id;
+                  // Fix 3 (UI hint — slice + adapter enforce): offline, only
+                  // own-shift tickets are selectable. Unknown device locks
+                  // everything (fail-closed); online shows no badge.
+                  const offlineLocked =
+                    onlineNow === false &&
+                    !isOwnShiftTicket(t, {
+                      localDeviceId: deviceIdNow,
+                      activeShiftId: activeShift?.id ?? null,
+                    });
                   return (
                     <button
                       key={t.id}
+                      data-testid="refund-sale-row"
                       onClick={() => handleSelectTransaction(t)}
+                      disabled={offlineLocked}
+                      title={offlineLocked ? 'Hors ligne : ticket distant ou hors session — verrouillé' : undefined}
                       className={`w-full text-left p-3 rounded-xl transition cursor-pointer flex flex-col gap-1 ${
                         isSelected
                           ? 'bg-purple-500/20 border border-purple-500/40 text-purple-300'
                           : 'hover:bg-pos-hover/50 text-pos-text'
-                      }`}
+                      } ${offlineLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <div className="flex justify-between items-center">
                         <span className="font-mono font-bold text-xs text-purple-400">{t.receiptNumber}</span>
@@ -389,6 +547,9 @@ export const RefundModal: React.FC = () => {
                       </div>
                       {t.status === 'PARTIALLY_REFUNDED' && (
                         <span className="text-[9px] text-amber-400 font-bold">Partiellement Remboursé</span>
+                      )}
+                      {offlineLocked && (
+                        <span className="text-[9px] text-red-400 font-bold">Hors ligne — verrouillé</span>
                       )}
                     </button>
                   );
@@ -458,7 +619,104 @@ export const RefundModal: React.FC = () => {
                       <span className="text-[10px] text-pos-muted">Cochez les articles et ajustez les quantités</span>
                     </div>
 
-                    <table className="w-full text-left text-xs">
+                    {/* Mobile Card List View (<sm) */}
+                    <div className="sm:hidden divide-y divide-pos-border/40">
+                      {(selectedTxn.items || []).map((item) => {
+                        const isChecked = Boolean(selectedItemIds[item.product.id]);
+                        const isRestocked = Boolean(restockMap[item.product.id]);
+                        const qty = refundQuantities[item.product.id] || item.quantity;
+                        const unitPrice = item.appliedPrice || item.product.price;
+                        const discountPerUnit = item.discount > 0 && item.quantity > 0 ? item.discount / item.quantity : 0;
+                        const netUnitPrice = Math.max(0, unitPrice - discountPerUnit);
+                        const lineRefundTotal = netUnitPrice * qty;
+
+                        return (
+                          <div
+                            key={item.product.id}
+                            className={`p-3.5 space-y-3 transition ${
+                              isChecked ? 'bg-purple-500/5' : 'opacity-60 bg-pos-bg/40'
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <input
+                                type="checkbox"
+                                data-testid={`refund-check-${item.product.id}`}
+                                checked={isChecked}
+                                onChange={() => handleToggleItem(item.product.id)}
+                                aria-label={`Sélectionner ${item.product.title}`}
+                                className="w-5 h-5 mt-0.5 rounded border-pos-border text-purple-500 focus:ring-purple-400 cursor-pointer shrink-0"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <p className="font-bold text-xs text-pos-text leading-snug">{item.product.title}</p>
+                                <div className="flex items-center gap-2 text-[10px] text-pos-muted mt-0.5">
+                                  <span>SKU: {item.product.sku}</span>
+                                  {item.imeiNumber && (
+                                    <span className="font-mono text-emerald-400">IMEI: {item.imeiNumber}</span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="text-right shrink-0">
+                                <span className="text-xs font-black text-purple-400 block">{formatDZD(lineRefundTotal)}</span>
+                                <span className="text-[10px] text-pos-muted">{formatDZD(netUnitPrice)} /u</span>
+                              </div>
+                            </div>
+
+                            {/* Stepper + Restock Controls */}
+                            <div className="flex items-center justify-between gap-2 pt-2 border-t border-pos-border/30">
+                              <div className="flex items-center gap-1.5 bg-pos-bg border border-pos-border rounded-xl p-1 shrink-0">
+                                <button
+                                  type="button"
+                                  data-testid={`refund-dec-${item.product.id}`}
+                                  disabled={!isChecked || qty <= 1}
+                                  onClick={() => handleQuantityChange(item.product.id, qty - 1, item.quantity)}
+                                  className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-pos-card border border-pos-border text-pos-text font-bold disabled:opacity-30 cursor-pointer active:scale-95"
+                                  aria-label={`Diminuer quantité ${item.product.title}`}
+                                >
+                                  <span aria-hidden="true">-</span>
+                                </button>
+                                <span className="w-8 text-center text-xs font-black text-pos-text tabular-nums">{qty}</span>
+                                <button
+                                  type="button"
+                                  disabled={!isChecked || qty >= item.quantity}
+                                  onClick={() => handleQuantityChange(item.product.id, qty + 1, item.quantity)}
+                                  className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-pos-card border border-pos-border text-pos-text font-bold disabled:opacity-30 cursor-pointer active:scale-95"
+                                  aria-label={`Augmenter quantité ${item.product.title}`}
+                                >
+                                  <span aria-hidden="true">+</span>
+                                </button>
+                                <span className="text-[10px] text-pos-muted pr-1.5">(max {item.quantity})</span>
+                              </div>
+
+                              <button
+                                type="button"
+                                disabled={!isChecked}
+                                onClick={() => handleToggleRestock(item.product.id)}
+                                className={`min-h-[40px] px-3 py-1.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer shrink-0 ${
+                                  isRestocked
+                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                                    : 'bg-red-500/20 text-red-400 border border-red-500/40'
+                                }`}
+                              >
+                                {isRestocked ? (
+                                  <>
+                                    <PackageCheck className="w-3.5 h-3.5" aria-hidden="true" />
+                                    <span>Remettre Stock (+{qty})</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <PackageX className="w-3.5 h-3.5" aria-hidden="true" />
+                                    <span>Rebut / Défectueux</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Desktop Table View (>=sm) */}
+                    <table className="hidden sm:table w-full text-left text-xs">
                       <thead className="bg-pos-bg text-pos-muted text-[10px] uppercase font-bold border-b border-pos-border">
                         <tr>
                           <th className="p-3 w-10 text-center">Sélection</th>
@@ -489,8 +747,10 @@ export const RefundModal: React.FC = () => {
                               <td className="p-3 text-center">
                                 <input
                                   type="checkbox"
+                                  data-testid={`refund-check-${item.product.id}`}
                                   checked={isChecked}
                                   onChange={() => handleToggleItem(item.product.id)}
+                                  aria-label={`Sélectionner ${item.product.title}`}
                                   className="w-4 h-4 rounded border-pos-border text-purple-500 focus:ring-purple-400 cursor-pointer"
                                 />
                               </td>
@@ -507,6 +767,7 @@ export const RefundModal: React.FC = () => {
                                 <div className="flex items-center justify-center gap-1">
                                   <button
                                     type="button"
+                                    data-testid={`refund-dec-${item.product.id}`}
                                     disabled={!isChecked || qty <= 1}
                                     onClick={() => handleQuantityChange(item.product.id, qty - 1, item.quantity)}
                                     className="w-6 h-6 rounded-lg bg-pos-bg border border-pos-border text-pos-text font-bold disabled:opacity-30"
@@ -649,12 +910,18 @@ export const RefundModal: React.FC = () => {
                         />
                       )}
 
+                      {offlineCashNeedsSupervisor && (
+                        <div className="text-[10px] text-amber-400 font-bold bg-amber-500/10 border border-amber-500/30 rounded-xl px-2.5 py-1.5">
+                          Hors ligne : remboursement espèces de {formatDZD(previewCashOut)} — l’autorisation superviseur (PIN ci-dessous) sera enregistrée dans l’audit du ticket.
+                        </div>
+                      )}
                       <div className="pt-1">
                         <label className="text-[10px] text-pos-muted font-bold block mb-1">PIN Manager d'Autorisation :</label>
                         <div className="relative">
                           <Key className="w-3.5 h-3.5 text-pos-muted absolute left-3 top-1/2 -translate-y-1/2" />
                           <input
                             type="password"
+                            data-testid="refund-pin"
                             inputMode="numeric"
                             pattern="[0-9]*"
                             autoComplete="current-password"
@@ -676,14 +943,19 @@ export const RefundModal: React.FC = () => {
                 </div>
 
                 {/* Footer Action Bar */}
-                <div className="pt-3 border-t border-pos-border flex items-center justify-between bg-pos-card p-4 rounded-2xl shadow-xl">
+                <div className="pt-3 border-t border-pos-border flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-pos-card p-3.5 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 rounded-t-2xl sm:rounded-2xl shadow-xl shrink-0">
                   <div>
                     <span className="text-[10px] text-pos-muted uppercase font-bold block">Montant Total à Rembourser</span>
-                    <span className="text-xl font-black text-purple-400">{formatDZD(totalRefundAmount)}</span>
+                    <span data-testid="refund-total" className="text-lg sm:text-xl font-black text-purple-400">{formatDZD(totalRefundAmount)}</span>
                     {fundingPreview && fundingPreview.netRefund !== Math.round(totalRefundAmount) && (
                       <span className="text-[10px] text-pos-muted block">
                         Net reversé : {formatDZD(fundingPreview.netRefund)}
-                        {refundMethod === 'Espèces' && ` • Espèces décaissées : ${formatDZD(previewCashOut)}`}
+                        {refundMethod === 'Espèces' && !(previewClamp && previewClamp.avoirOverflow > 0) && ` • Espèces décaissées : ${formatDZD(previewCashOut)}`}
+                        {refundMethod === 'Espèces' && previewClamp && previewClamp.avoirOverflow > 0 && (
+                          <span className="text-amber-300 block">
+                            Plafond espèces : {formatDZD(previewClamp.cashOut)} décaissés • {formatDZD(previewClamp.avoirOverflow)} reverrouillé en avoir
+                          </span>
+                        )}
                         {fundingPreview.voucherShare > 0 && ` • Bon recrédité : ${formatDZD(fundingPreview.voucherShare)}`}
                         {fundingPreview.avoirShare > 0 && ` • Avoir recrédité : ${formatDZD(fundingPreview.avoirShare)}`}
                         {fundingPreview.debtShare > 0 && ` • Dette réduite : ${formatDZD(fundingPreview.debtShare)}`}
@@ -692,7 +964,12 @@ export const RefundModal: React.FC = () => {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto">
+                    {!activeShift || !activeShift.id ? (
+                      <span className="text-[10px] text-red-400 font-bold max-w-[220px]">
+                        Caisse fermée — ouvrez la caisse pour rembourser (traçabilité de période).
+                      </span>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => {
@@ -700,18 +977,20 @@ export const RefundModal: React.FC = () => {
                         setSelectedTransactionForRefund(null);
                         closeModal();
                       }}
-                      className="px-4 py-2.5 rounded-xl border border-pos-border bg-pos-bg hover:bg-pos-hover text-pos-muted hover:text-pos-text text-xs font-bold transition cursor-pointer"
+                      className="min-h-[44px] px-4 py-2.5 rounded-xl border border-pos-border bg-pos-bg hover:bg-pos-hover text-pos-muted hover:text-pos-text text-xs font-bold transition cursor-pointer active:scale-95 shrink-0"
                     >
                       Annuler
                     </button>
 
                     <button
                       type="submit"
-                      disabled={isSubmitting || activeRefundItems.length === 0 || totalRefundAmount <= 0}
-                      className="px-6 py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 font-black text-xs flex items-center gap-2 shadow-lg shadow-purple-500/20 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                      data-testid="refund-submit"
+                      disabled={isSubmitting || activeRefundItems.length === 0 || totalRefundAmount <= 0 || submitForeignLocked}
+                      title={submitForeignLocked ? 'Offline Terminal Lock: Cross-terminal refunds require an active sync connection.' : undefined}
+                      className="flex-1 sm:flex-initial min-h-[48px] px-5 sm:px-6 py-2.5 rounded-xl bg-purple-500 hover:bg-purple-400 text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-purple-500/20 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.98]"
                     >
-                      <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
-                      Valider le Remboursement & Imprimer l'Avoir
+                      <CheckCircle2 className="w-4 h-4 stroke-[2.5]" aria-hidden="true" />
+                      <span>Valider le Remboursement</span>
                     </button>
                   </div>
                 </div>

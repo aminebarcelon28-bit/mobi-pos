@@ -482,14 +482,16 @@ export const PurchaseOrderModal: React.FC = () => {
   const totalDraftCostAmount = newPoItems.reduce((acc, i) => acc + i.qty * i.unitCost, 0);
 
   return (
-    <div
+    <div role="dialog" aria-modal="true" aria-label="Approvisionnement et réceptions"
       onClick={closeModal}
-      className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-0 sm:p-4 select-none cursor-pointer pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:pt-0 sm:pb-0"
+      className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none cursor-pointer"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-dvh-shell sm:h-[90dvh] flex flex-col cursor-default"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-5xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 max-h-[94dvh] sm:h-[90dvh] flex flex-col cursor-default"
       >
+        {/* Mobile drag handle */}
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
         
         {/* Header */}
         <div className="p-3 sm:p-4 border-b border-pos-border bg-pos-card shrink-0 flex flex-col gap-2.5">
@@ -602,7 +604,7 @@ export const PurchaseOrderModal: React.FC = () => {
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto overscroll-contain p-5 bg-pos-bg">
+        <div className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5 pb-[max(1.5rem,var(--safe-bottom))] sm:pb-5 bg-pos-bg">
           {activeTab === 'waiting_list' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
@@ -1144,7 +1146,180 @@ export const PurchaseOrderModal: React.FC = () => {
                   </span>
                 </div>
 
-                <div className="overflow-x-auto">
+                {/* Mobile Reception Cards (sm:hidden) */}
+                <div className="sm:hidden p-3 space-y-3">
+                  {(selectedPO?.items || []).map((item) => {
+                    const verifiedQty =
+                      verifiedQtyMap[item.productId] !== undefined
+                        ? verifiedQtyMap[item.productId]
+                        : Math.max(0, item.suggestedQty - (item.receivedQty || 0));
+                    const verifiedCost =
+                      verifiedCostMap[item.productId] !== undefined
+                        ? verifiedCostMap[item.productId]
+                        : item.actualUnitCost || item.unitCost;
+                    const lineTotal = verifiedQty * verifiedCost;
+                    const hasDiscrepancy = verifiedQty < item.suggestedQty;
+                    const priceChanged = verifiedCost !== item.unitCost;
+
+                    return (
+                      <div
+                        key={item.productId}
+                        className="bg-pos-card border border-pos-border rounded-xl p-3 shadow-sm space-y-3"
+                      >
+                        {/* Title & SKU */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="font-bold text-xs text-pos-text leading-snug">{item.title}</p>
+                            <span className="font-mono text-[10px] text-pos-muted bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border mt-1 inline-block">
+                              SKU: {item.sku}
+                            </span>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span className="text-[10px] text-pos-muted uppercase font-bold block">Total Validé</span>
+                            <span className="font-mono font-black text-emerald-400 text-xs">
+                              {formatDZD(lineTotal)}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Order & Stock Specs */}
+                        <div className="grid grid-cols-2 gap-2 bg-pos-bg p-2 rounded-lg border border-pos-border text-xs">
+                          <div>
+                            <span className="text-[9px] uppercase font-bold text-pos-muted block">Commandé</span>
+                            <span className="font-mono font-bold text-pos-text">
+                              {item.suggestedQty} un.
+                              {item.receivedQty ? (
+                                <span className="text-[9px] text-emerald-400 block font-normal">
+                                  ({item.receivedQty} reçus)
+                                </span>
+                              ) : null}
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[9px] uppercase font-bold text-pos-muted block">Stock Actuel</span>
+                            <span className="font-mono font-bold text-pos-muted">{item.currentStock} un.</span>
+                          </div>
+                        </div>
+
+                        {/* Controls: Stepper & Unit Cost */}
+                        <div className="grid grid-cols-2 gap-2 items-center">
+                          <div>
+                            <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                              Qté Conforme Reçue
+                            </label>
+                            <div className="flex items-center gap-1 bg-pos-bg border border-pos-border rounded-lg p-0.5">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setVerifiedQtyMap({
+                                    ...verifiedQtyMap,
+                                    [item.productId]: Math.max(0, verifiedQty - 1),
+                                  })
+                                }
+                                className="w-8 h-8 flex items-center justify-center hover:bg-pos-hover rounded text-pos-text transition cursor-pointer active:scale-95 shrink-0"
+                                aria-label={`Diminuer la quantité reçue pour ${item.title}`}
+                              >
+                                <Minus className="w-3.5 h-3.5" aria-hidden="true" />
+                              </button>
+                              <input
+                                type="number"
+                                min="0"
+                                max={item.suggestedQty * 2}
+                                value={verifiedQty}
+                                onChange={(e) =>
+                                  setVerifiedQtyMap({
+                                    ...verifiedQtyMap,
+                                    [item.productId]: Math.max(0, parseInt(e.target.value) || 0),
+                                  })
+                                }
+                                className="w-full text-center bg-transparent text-emerald-400 font-bold font-mono text-xs focus:outline-none"
+                                aria-label={`Quantité reçue pour ${item.title}`}
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setVerifiedQtyMap({
+                                    ...verifiedQtyMap,
+                                    [item.productId]: verifiedQty + 1,
+                                  })
+                                }
+                                className="w-8 h-8 flex items-center justify-center hover:bg-pos-hover rounded text-pos-text transition cursor-pointer active:scale-95 shrink-0"
+                                aria-label={`Augmenter la quantité reçue pour ${item.title}`}
+                              >
+                                <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                              Prix Achat Facturé
+                            </label>
+                            <div className="flex items-center bg-pos-bg border border-pos-border rounded-lg px-2 py-1">
+                              <MoneyInput
+                                label={`Prix Achat Facturé pour ${item.title}`}
+                                valueMinor={dinarsToMinor(verifiedCost || 0)}
+                                onChangeMinor={(minor) =>
+                                  setVerifiedCostMap({
+                                    ...verifiedCostMap,
+                                    [item.productId]: toLegacyReal(minor),
+                                  })
+                                }
+                                className="w-full text-right bg-transparent text-pos-text font-bold font-mono text-xs focus:outline-none"
+                              />
+                              <span className="text-[10px] text-pos-muted ml-1">DA</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Price change / discrepancy warnings */}
+                        {priceChanged && (
+                          <div className="text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded-lg">
+                            Écart prix : {verifiedCost > item.unitCost ? '+' : ''}
+                            {verifiedCost - item.unitCost} DA/u
+                          </div>
+                        )}
+
+                        {hasDiscrepancy && (
+                          <div className="space-y-1">
+                            <span className="text-[10px] bg-rose-500/15 text-rose-400 border border-rose-500/30 px-2 py-0.5 rounded font-bold flex items-center gap-1 w-fit">
+                              <AlertTriangle className="w-3 h-3" /> Écart : -{item.suggestedQty - verifiedQty} un.
+                            </span>
+                            <input
+                              type="text"
+                              placeholder="Motif écart (ex: Rupture grossiste)..."
+                              value={discrepancyReasons[item.productId] || ''}
+                              onChange={(e) =>
+                                setDiscrepancyReasons({ ...discrepancyReasons, [item.productId]: e.target.value })
+                              }
+                              className="w-full bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1.5 text-[11px] text-pos-text placeholder-pos-muted/50 focus:border-emerald-400 focus:outline-none"
+                            />
+                          </div>
+                        )}
+
+                        {/* Serials / IMEI */}
+                        <div>
+                          <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                            Numéros de Série / IMEI
+                          </label>
+                          <div className="flex items-center gap-1.5 bg-pos-bg border border-pos-border rounded-lg px-2 py-1.5">
+                            <Smartphone className="w-3.5 h-3.5 text-pos-muted shrink-0" />
+                            <input
+                              type="text"
+                              placeholder="IMEIs séparés par virgule..."
+                              value={imeisMap[item.productId] || ''}
+                              onChange={(e) => setImeisMap({ ...imeisMap, [item.productId]: e.target.value })}
+                              className="bg-transparent border-none outline-none text-[11px] text-pos-text w-full placeholder-pos-muted/50"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop Reception Table */}
+                <div className="hidden sm:block overflow-x-auto">
                   <table className="w-full text-left text-xs border-collapse">
                     <thead className="bg-pos-bg/50 text-pos-muted text-[10px] uppercase font-bold border-b border-pos-border">
                       <tr>

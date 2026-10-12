@@ -57,13 +57,13 @@ pub const PRODUCTION_TIME_PUBKEY_B64URL: &str = "UNCONFIGURED";
 #[cfg(debug_assertions)]
 const TEST_TIME_SEED: [u8; 32] = [9u8; 32];
 
-#[derive(Debug, Deserialize)]
-struct TimeAssertionPayload {
-    nonce: String,
-    server_time_ms: u64,
-    expires_at_ms: u64,
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct TimeAssertionPayload {
+    pub(crate) nonce: String,
+    pub(crate) server_time_ms: u64,
+    pub(crate) expires_at_ms: u64,
     #[serde(default)]
-    seq: Option<u64>,
+    pub(crate) seq: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,8 +98,10 @@ fn test_pubkey_b64url() -> String {
 
 /// Resolve the active verification key: production pin, or the test key in
 /// debug builds with a loud warning. Release without a production key
-/// refuses — this is what makes unshipped enforcement fail closed.
-fn active_time_pubkey_b64url() -> Result<String, TrustError> {
+/// refuses — this is what makes unshipped enforcement fail closed. Shared
+/// with the server-time ingestion path (one key policy, distinct envelope
+/// prefixes so the protocols cannot cross-verify).
+pub(crate) fn active_time_pubkey_b64url() -> Result<String, TrustError> {
     if PRODUCTION_TIME_PUBKEY_B64URL != "UNCONFIGURED" {
         return Ok(PRODUCTION_TIME_PUBKEY_B64URL.to_string());
     }
@@ -122,6 +124,19 @@ fn verify_assertion(
     pubkey_b64url: &str,
     now_ms: u64,
 ) -> Result<TimeAssertionPayload, TrustError> {
+    verify_time_assertion_with_prefix(assertion, ASSERTION_PREFIX, pubkey_b64url, now_ms)
+}
+
+/// Prefix-parametrized assertion verifier shared with the server-time
+/// ingestion path (`SERVERTIME_V1`): identical structure/base64/signature
+/// rules, only the expected envelope prefix differs — the two protocols
+/// cannot cross-verify even under a shared key.
+pub(crate) fn verify_time_assertion_with_prefix(
+    assertion: &str,
+    expected_prefix: &str,
+    pubkey_b64url: &str,
+    now_ms: u64,
+) -> Result<TimeAssertionPayload, TrustError> {
     let assertion = assertion.trim();
     if assertion.is_empty() {
         return Err(TrustError::IPCProtocolError {
@@ -137,7 +152,7 @@ fn verify_assertion(
             })
         }
     };
-    if prefix != ASSERTION_PREFIX {
+    if prefix != expected_prefix {
         return Err(TrustError::IPCProtocolError {
             reason: "unknown time assertion prefix",
         });

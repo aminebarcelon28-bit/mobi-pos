@@ -18,6 +18,7 @@ import { newId } from '../utils/ids';
 import { withWriteLock } from '../db/writeMutex';
 import { withBusyRetry, isRetryableDbError } from '../db/busyRetry';
 import { tiedVersionGuardSql, transactionPullGuardSql } from './causalVersion';
+import { coerceIsoInstant } from '../utils/isoInstant';
 
 /**
  * Additive sync-visibility extension (SyncStatus itself lives in
@@ -1664,6 +1665,50 @@ class SyncManager {
    */
   private async markGuardStale(op: OutboxRow): Promise<void> {
     const detail = `[GUARD-STALE] ${op.entity_type}/${op.entity_id}: remote is newer (local v${payloadVersionOf(op)} rejected). Pulled latest — review in Sync Diagnostics.`;
+    // Self-heal (version-less batch tombstone class): payloads enqueued without
+    // a version push as v1 and lose to ANY previously-synced remote row, burning
+    // 10 strikes into quarantine. If the local authority row carries a higher
+    // version, the PAYLOAD understates the truth (not the intent): refresh it to
+    // the local clock strikeless and retry. Never inflates (the version comes
+    // from the local row); a genuinely-superseded payload still counts strikes
+    // on the next miss. Scoped to stock_batches — the only proven producer of
+    // version-less payloads (product/customer lanes stamp versions at enqueue).
+    if (op.entity_type === 'stock_batches') {
+      try {
+        const pushed = Number(
+          (JSON.parse(op.payload_json as string) as { version?: unknown })?.version ?? 1
+        );
+        const db = await getLocalDb();
+        const rows = (await db
+          .select('SELECT version FROM stock_batches WHERE batch_id=$1', [op.entity_id])
+          .catch(() => [])) as Array<{ version?: unknown }>;
+        const localV = Number(rows?.[0]?.version ?? NaN);
+        if (Number.isFinite(localV) && localV > pushed) {
+          const healed = {
+            ...((JSON.parse(op.payload_json as string) as Record<string, unknown>) ?? {}),
+            version: localV,
+          };
+          await db.execute(
+            `UPDATE sync_outbox SET payload_json=$1, status='pending', next_retry_at=NULL, last_error=$2, updated_at=$3 WHERE idempotency_key=$4`,
+            [
+              JSON.stringify(healed),
+              `[SELF-HEAL] tombstone understated v${pushed} -> local v${localV}; retrying without strike`,
+              utcNowIso(),
+              op.idempotency_key,
+            ]
+          );
+          this.logEvent(
+            'push',
+            `Version auto-réparée [stock_batches/${op.entity_id}]: v${pushed} -> v${localV}`,
+            'warn'
+          );
+          void this.observePushGuardRejection(op).catch(() => {});
+          return;
+        }
+      } catch {
+        // Read-back or rewrite failed — fall through to normal strike counting.
+      }
+    }
     const nextRetry = (op.retry_count ?? 0) + 1;
     if (nextRetry >= 10) {
       await markOutbox(op.idempotency_key, {
@@ -1940,7 +1985,9 @@ class SyncManager {
           v(payload.product_id ?? payload.productId ?? 'unknown'),
           v(Number(payload.quantity_remaining ?? payload.quantityRemaining ?? 0)),
           v(Number(payload.unit_cost ?? payload.unitCost ?? 0)),
-          v(payload.received_at ?? payload.receivedAt ?? now),
+          // Canonicalized on ingest: a peer's space-separated or local-time
+          // spelling must never land verbatim in the FIFO clock.
+          v(coerceIsoInstant(payload.received_at ?? payload.receivedAt) ?? now),
           v(payload.purchase_order_id ?? payload.purchaseOrderId ?? null),
           v(payload.device_id ?? this.deviceId ?? 'default'),
           v(op.idempotency_key ?? payload.idempotency_key ?? payload.idempotencyKey ?? `idem-${batchId}`),

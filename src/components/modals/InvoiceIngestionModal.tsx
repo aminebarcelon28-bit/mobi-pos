@@ -483,8 +483,10 @@ export const InvoiceIngestionModal: React.FC = () => {
   // If scan data is ready, render the full interactive Review Screen
   if (scanResponse) {
     return (
-      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-0 sm:p-4 select-none">
-        <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-6xl xl:max-w-7xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-full max-h-[96dvh] sm:max-h-[92dvh]">
+      <div role="dialog" aria-modal="true" aria-label="Réception et ingestion de facture fournisseur" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+        <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-6xl xl:max-w-7xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col h-full max-h-[94dvh] sm:max-h-[92dvh]">
+          {/* Mobile drag handle */}
+          <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
           <PoReviewScreen
             supplierName={supplierName}
             reportedFreight={reportedFreight}
@@ -507,9 +509,9 @@ export const InvoiceIngestionModal: React.FC = () => {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[94dvh] sm:h-auto max-h-[94dvh] sm:max-h-[90dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.75rem,var(--safe-bottom))] sm:py-0">
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+    <div role="dialog" aria-modal="true" aria-label="Réception et ingestion de facture fournisseur" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col h-[94dvh] sm:h-auto max-h-[94dvh] sm:max-h-[90dvh] pt-0 pb-[max(1rem,var(--safe-bottom))] sm:py-0">
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* Header */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">

@@ -77,10 +77,10 @@ export const ShiftMovementModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94dvh] sm:max-h-[92dvh] flex flex-col">
+    <div role="dialog" aria-modal="true" aria-label="Mouvement de caisse en shift" data-testid="shift-move-dialog" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94dvh] sm:max-h-[92dvh] flex flex-col">
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* Header */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
@@ -114,6 +114,7 @@ export const ShiftMovementModal: React.FC = () => {
           <div className="grid grid-cols-2 gap-1.5 bg-pos-bg p-1 rounded-xl border border-pos-border">
             <button
               type="button"
+              data-testid="shift-move-expense"
               onClick={() => setType('EXPENSE')}
               className={`py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition ${
                 type === 'EXPENSE'
@@ -125,6 +126,7 @@ export const ShiftMovementModal: React.FC = () => {
             </button>
             <button
               type="button"
+              data-testid="shift-move-deposit"
               onClick={() => setType('MANUAL_DEPOSIT')}
               className={`py-2 text-xs font-bold rounded-lg flex items-center justify-center gap-1.5 transition ${
                 type === 'MANUAL_DEPOSIT'
@@ -143,6 +145,7 @@ export const ShiftMovementModal: React.FC = () => {
             </label>
             <MoneyInput
               label="Montant du Mouvement (DA)"
+              data-testid="shift-move-amount"
               valueMinor={dinarsToMinor(amount || 0)}
               onChangeMinor={(minor) => setAmount(toLegacyReal(minor))}
               placeholder="0 DA"
@@ -172,6 +175,7 @@ export const ShiftMovementModal: React.FC = () => {
               </label>
               <input
                 type="text"
+                data-testid="shift-move-reason"
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 placeholder={type === 'EXPENSE' ? 'Ex: Achat café, fournitures...' : 'Ex: Apport monnaie...'}
@@ -191,7 +195,7 @@ export const ShiftMovementModal: React.FC = () => {
         </div>
 
         {/* Footer */}
-        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex items-center justify-end gap-2 shrink-0">
+        <div className="p-3.5 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex items-center justify-end gap-2 shrink-0">
           <button
             type="button"
             onClick={closeModal}
@@ -201,11 +205,12 @@ export const ShiftMovementModal: React.FC = () => {
           </button>
           <button
             type="button"
+            data-testid="shift-move-save"
             onClick={handleSaveMovement}
             disabled={isSubmitting}
             className={`flex-2 sm:flex-none min-h-[44px] px-5 py-2.5 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-lg transition active:scale-[0.98] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
               type === 'EXPENSE'
-                ? 'bg-red-500 hover:bg-red-400 text-white shadow-red-500/20'
+                ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/20'
                 : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20'
             }`}
           >

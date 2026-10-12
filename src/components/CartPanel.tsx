@@ -13,6 +13,171 @@ import { MoneyInput } from './ui/MoneyInput';
 import { useFifoPreviewCosts } from '../hooks/useFifoPreviewCosts';
 import { verifyManagerGate } from '../utils/pinGate';
 
+/** A cart line is never 0 units: the committed fallback for a pending field. */
+const QTY_FALLBACK = 1;
+/** Typed-digit ceiling. 9 digits is already 999 999 999 units — a mistype rail. */
+const QTY_MAX_DIGITS = 9;
+/** Ceiling for a line the store does not stock-bound (returns, stock 0). */
+const QTY_UNTRACKED_MAX = 9999;
+
+/**
+ * Quantity masking: digits only, leading zeros stripped ("0005" → 5). An
+ * all-zero string collapses to "" — "nothing typed yet", NOT a zero quantity,
+ * so it must never be committed as one.
+ */
+function qtyDigitsOf(raw: string): string {
+  if (/[.,]/.test(raw)) return '';
+  return raw.replace(/[^0-9]/g, '').replace(/^0+/, '');
+}
+
+/**
+ * The upper bound `setCartItemQty` enforces on this line, mirrored so the
+ * field can never SHOW a quantity the cart does not hold (createCartSlice
+ * clamps silently — the field used to keep the typed digits on screen).
+ */
+function qtyCapOf(item: { product: { isSerialized?: boolean; stock: number }; isReturn?: boolean }): number {
+  if (item.product.isSerialized) return 1;
+  if (item.isReturn) return QTY_UNTRACKED_MAX;
+  return item.product.stock > 0 ? item.product.stock : QTY_UNTRACKED_MAX;
+}
+
+/**
+ * CartQtyInput — the cart line quantity field.
+ *
+ * BUG-CART-QTY-01: this used to be a controlled `type="number"` bound straight
+ * to `item.quantity`. Every keystroke the store refused (anything < 1) was
+ * written back by React on the next render, so select-all + "0005" walked
+ * "1" → "10" → "100" → "1005": 1005 units instead of 5, a phantom
+ * 1 809 000 DA subtotal on a 1 800 DA line.
+ *
+ * The field now owns its text and treats a pending value as pending:
+ *  - digits only, leading zeros stripped on parse;
+ *  - "" / "0" / "00" are NOT rejected — the cashier keeps typing, the last
+ *    committed quantity stays untouched;
+ *  - a value above `maxQty` is clamped to it, the same bound the store
+ *    applies, so the field and the cart can never disagree;
+ *  - the pending state resolves to QTY_FALLBACK on blur / Enter (and Escape
+ *    abandons the edit), never mid-keystroke;
+ *  - store-driven changes (stepper, scan multiplier) still resync the text,
+ *    because our own commits leave `quantity === committedRef`.
+ */
+interface CartQtyInputProps {
+  productId: string;
+  quantity: number;
+  maxQty: number;
+  disabled: boolean;
+  label: string;
+  title: string;
+  onCommit: (productId: string, quantity: number) => void;
+}
+
+const CartQtyInput: React.FC<CartQtyInputProps> = ({
+  productId,
+  quantity,
+  maxQty,
+  disabled,
+  label,
+  title,
+  onCommit,
+}) => {
+  const [text, setText] = useState<string>(() => String(quantity));
+  const committedRef = useRef<number>(quantity);
+
+  useEffect(() => {
+    if (quantity === committedRef.current) return;
+    committedRef.current = quantity;
+    setText(String(quantity));
+  }, [quantity]);
+
+  const commit = (next: number) => {
+    if (next === committedRef.current) return;
+    committedRef.current = next;
+    onCommit(productId, next);
+  };
+
+  /** Blur / Enter: resolve a pending field instead of leaving it half-typed. */
+  const settle = () => {
+    if (/[.,]/.test(text)) {
+      setText(String(committedRef.current));
+      return;
+    }
+    const digits = qtyDigitsOf(text);
+    const next = digits ? parseInt(digits, 10) : QTY_FALLBACK;
+    if (!Number.isSafeInteger(next) || next < 1) return;
+    commit(next);
+    setText(String(next));
+  };
+
+  return (
+    <input
+      type="text"
+      data-testid="cart-qty-input"
+      inputMode="numeric"
+      autoComplete="off"
+      id={`cart-qty-${productId}`}
+      name={`cart-qty-${productId}`}
+      maxLength={QTY_MAX_DIGITS}
+      value={text}
+      disabled={disabled}
+      // Bare-digit field (glyph-only): descriptive name only, no visible label
+      // text to shadow, so WCAG 2.5.3 does not apply.
+      aria-label={label}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => {
+        if (/[.,]/.test(e.target.value)) {
+          setText(e.target.value);
+          return;
+        }
+        const digits = qtyDigitsOf(e.target.value);
+        // Pending (empty / all zeros): keep typing, commit nothing yet.
+        if (!digits) {
+          setText(e.target.value.replace(/[^0-9]/g, ''));
+          return;
+        }
+        const next = parseInt(digits, 10);
+        if (!Number.isSafeInteger(next)) return;
+        if (next > maxQty) {
+          // Same bound the store clamps to — display and model stay in step.
+          setText(String(maxQty));
+          commit(maxQty);
+          return;
+        }
+        setText(String(next));
+        commit(next);
+      }}
+      onBlur={settle}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          settle();
+          (e.target as HTMLInputElement).blur();
+          return;
+        }
+        if (e.key === 'Escape') {
+          setText(String(committedRef.current));
+          return;
+        }
+        // The old `type="number"` field stepped on ArrowUp/ArrowDown via the
+        // native spinner; a text field has none, and the cart key-nav handler
+        // bails out while an input holds focus (CartPanel:368). Without this,
+        // arrow keys on the quantity field would go dead — restore the step,
+        // clamped to the same bounds (1 … maxQty) the field already enforces.
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          const digits = qtyDigitsOf(text);
+          const from = digits ? parseInt(digits, 10) : committedRef.current;
+          if (!Number.isSafeInteger(from)) return;
+          const next = Math.min(Math.max(from + (e.key === 'ArrowUp' ? 1 : -1), 1), maxQty);
+          commit(next);
+          setText(String(next));
+        }
+      }}
+      className="w-10 text-center text-xs font-black text-pos-text bg-transparent focus:bg-pos-card rounded-md border-none focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono py-0.5"
+      title={title}
+    />
+  );
+};
+
 export const CartPanel: React.FC = () => {
   // Selective subscriptions: whole-store spread re-rendered the cart on every
   // unrelated slice change (sync ticks, catalog edits) — visible input lag.
@@ -44,6 +209,7 @@ export const CartPanel: React.FC = () => {
   const openTradeInExchange = usePosStore((s) => s.openTradeInExchange);
 
   const [isDiscountOpen, setIsDiscountOpen] = useState(false);
+  const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
   const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
   const [selectedCartIndex, setSelectedCartIndex] = useState<number | null>(null);
   // Explicit-focus guard for cart keyboard shortcuts (Delete/Backspace/arrows):
@@ -373,8 +539,19 @@ export const CartPanel: React.FC = () => {
 
   const lastAddedItem = lastAddedId !== null ? cart.find((i) => i.product.id === lastAddedId) ?? null : null;
 
-  // Realistic Algerian Cash Denominations (no 10,000 DA bill exists)
-  const quickBills = [500, 1000, 2000, 3000, 4000, 5000];
+  // Smart Algerian Cash Denominations (only tenders >= total; round tenders for high totals)
+  const applicableQuickBills = useMemo(() => {
+    if (total <= 0) return [];
+    if (total <= 5000) {
+      const standard = [500, 1000, 2000, 3000, 4000, 5000].filter((b) => b >= total);
+      return standard.length > 0 ? standard : [5000];
+    }
+    const next1k = Math.ceil(total / 1000) * 1000;
+    const next2k = Math.ceil(total / 2000) * 2000;
+    const next5k = Math.ceil(total / 5000) * 5000;
+    const candidates = [next1k, next2k, next5k].filter((b) => b >= total);
+    return Array.from(new Set(candidates)).slice(0, 3);
+  }, [total]);
 
   const handleClearCart = () => {
     if (cart.length === 0) return;
@@ -511,18 +688,31 @@ export const CartPanel: React.FC = () => {
   };
 
   return (
-    <div className="w-[340px] sm:w-[380px] md:w-[390px] max-w-[48vw] shrink-0 bg-pos-panel border-r border-pos-border flex flex-col h-full select-none transition-colors duration-200">
+    <div data-testid="cart-panel" className="w-[340px] sm:w-[380px] md:w-[390px] max-w-[48vw] shrink-0 bg-pos-panel border-r border-pos-border flex flex-col h-full select-none transition-colors duration-200">
       {/* Cart Header & Pricing Tier Selector */}
-      <div className="p-3 border-b border-pos-border space-y-2 shrink-0">
+      <div className="p-2 sm:p-2.5 border-b border-pos-border space-y-1.5 shrink-0">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h2 className="font-bold text-sm text-pos-text tracking-wider uppercase">Vente en Cours</h2>
-            <span className="bg-pos-card border border-pos-border text-emerald-500 text-xs font-bold px-2 py-0.5 rounded-full">
-              {cart.reduce((acc, i) => acc + i.quantity, 0)} Articles
+          <div className="flex items-center gap-1.5 min-w-0">
+            <h2 className="font-bold text-sm text-pos-text tracking-wider uppercase truncate">Vente en Cours</h2>
+            <span className="bg-pos-card border border-pos-border text-emerald-500 text-xs font-bold px-2 py-0.5 rounded-full shrink-0">
+              {cart.reduce((acc, i) => acc + i.quantity, 0)} {cart.reduce((acc, i) => acc + i.quantity, 0) > 1 ? 'Articles' : 'Article'}
             </span>
+            <button
+              type="button"
+              onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
+              className="p-1 rounded-lg bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text border border-pos-border transition cursor-pointer shrink-0"
+              title={isHeaderCollapsed ? "Afficher les détails de la vente (Client, Reprise, Tarif)" : "Masquer les détails pour afficher plus d'articles"}
+              aria-label={isHeaderCollapsed ? "Afficher les détails" : "Masquer les détails"}
+            >
+              {isHeaderCollapsed ? (
+                <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" />
+              ) : (
+                <ChevronUp className="w-3.5 h-3.5" aria-hidden="true" />
+              )}
+            </button>
           </div>
           {cart.length > 0 && (
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 shrink-0">
               <button
                 onClick={() => setIsDiscountOpen(!isDiscountOpen)}
                 className={`p-1.5 rounded-lg border transition text-xs font-bold flex items-center gap-1 cursor-pointer ${
@@ -533,6 +723,7 @@ export const CartPanel: React.FC = () => {
                 <Percent className="w-3.5 h-3.5" />
               </button>
               <button
+                data-testid="cart-clear"
                 onClick={handleClearCart}
                 className="p-1.5 hover:bg-red-500/10 text-pos-muted hover:text-red-400 rounded-lg transition cursor-pointer"
                 title="Vider le panier (Confirmation requise)"
@@ -622,173 +813,227 @@ export const CartPanel: React.FC = () => {
           </div>
         )}
 
-        {/* Two-Way Exchange trigger / staged chip (Phase 2) */}
-        {!stagedTradeIn ? (
-          <button
-            type="button"
-            onClick={() => openTradeInExchange()}
-            className="w-full min-h-[44px] px-3 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer active:scale-[0.99]"
-          >
-            <RefreshCw className="w-4 h-4 shrink-0" />
-            Échanger un appareil (Trade-In)
-          </button>
-        ) : (
-          <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-xl p-2.5 space-y-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[10px] font-extrabold uppercase tracking-wide text-emerald-300 flex items-center gap-1.5 min-w-0">
-                <RefreshCw className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">Reprise : {stagedTradeIn.deviceModel}</span>
-              </span>
-              <span className="text-xs font-black text-emerald-300 whitespace-nowrap">−{formatDZD(tradeInCredit)}</span>
-            </div>
-            <p className="text-[10px] text-pos-muted font-mono truncate">IMEI/SN : {stagedTradeIn.imei}</p>
-            {tradeInSettlement.direction === 'SOULTE_SHOP_PAYS' ? (
-              <p className="text-[10px] font-bold text-amber-300">Soulte boutique : {formatDZD(tradeInSettlement.shopOwes)} à verser au client</p>
-            ) : (
-              // True totals net (all credits) — the trade-only delta would
-              // disagree under stacked avoir/bon (same rule as PaymentModal).
-              <p className="text-[10px] text-pos-muted">Reste à payer : {formatDZD(total)}</p>
-            )}
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => openTradeInExchange({ ...stagedTradeIn })}
-                className="flex-1 min-h-[36px] px-2 rounded-lg bg-pos-card border border-pos-border text-pos-text text-[11px] font-bold flex items-center justify-center gap-1 hover:border-emerald-500/50 transition cursor-pointer"
-              >
-                <Pencil className="w-3 h-3" /> Modifier l’évaluation
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  clearStagedTradeIn();
-                  showToast('Reprise retirée du panier.', 'info');
-                }}
-                className="flex-1 min-h-[36px] px-2 rounded-lg bg-pos-card border border-pos-border text-pos-muted hover:text-red-400 text-[11px] font-bold flex items-center justify-center gap-1 transition cursor-pointer"
-              >
-                <X className="w-3 h-3" /> Retirer
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Customer Badge & Loyalty Points Widget */}
-        {currentCustomer ? (
-          <div className="bg-pos-card border border-pos-border rounded-xl p-2.5 space-y-2 text-xs shadow-sm">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 min-w-0">
-                {currentCustomer.avatarUrl ? (
-                  <img
-                    src={currentCustomer.avatarUrl}
-                    alt={currentCustomer.name}
-                    className="w-7 h-7 rounded-full object-cover border border-emerald-500/40 shrink-0"
-                  />
-                ) : (
-                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-slate-950 font-black text-xs flex items-center justify-center shrink-0">
-                    {currentCustomer.name.slice(0, 2).toUpperCase()}
-                  </div>
-                )}
-                <div className="min-w-0">
-                  <p className="font-black text-pos-text truncate text-xs">{currentCustomer.name}</p>
-                  <p className="text-[10px] text-pos-muted truncate">
-                    {currentCustomer.phone || currentCustomer.registeredDevice || 'Client Enregistré'}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1 shrink-0">
+        {/* Collapsible details vs compact summary bar */}
+        {isHeaderCollapsed ? (
+          <div className="flex items-center justify-between gap-1.5 bg-pos-card border border-pos-border rounded-lg px-2 py-1 text-xs shadow-sm">
+            <div className="flex items-center gap-1.5 min-w-0 flex-1 text-[11px] font-medium text-pos-muted truncate">
+              {currentCustomer ? (
+                <span className="text-pos-text font-bold truncate flex items-center gap-1">
+                  <User className="w-3 h-3 text-emerald-400 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{currentCustomer.name}</span>
+                </span>
+              ) : (
                 <button
                   type="button"
                   onClick={() => openModal('customers')}
-                  className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-md transition cursor-pointer"
-                  title="Changer de Client (F3)"
+                  className="text-emerald-400 hover:underline flex items-center gap-1 shrink-0 cursor-pointer"
                 >
-                  <User className="w-3.5 h-3.5 text-cyan-400" />
+                  <UserCheck className="w-3 h-3" aria-hidden="true" />
+                  <span>+ Client (F3)</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setCurrentCustomer(null)}
-                  className="p-1 hover:bg-red-500/10 text-pos-muted hover:text-red-400 rounded-md transition cursor-pointer"
-                  title="Détacher le client du panier"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
+              )}
+
+              {stagedTradeIn && (
+                <span className="text-emerald-400 font-bold truncate flex items-center gap-1 shrink-0 border-l border-pos-border/60 pl-1.5">
+                  <RefreshCw className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                  <span>−{formatDZD(tradeInCredit)}</span>
+                </span>
+              )}
+
+              <span className="text-[10px] px-1.5 py-0.2 rounded bg-pos-bg border border-pos-border font-bold text-pos-text shrink-0 ml-auto">
+                {pricingTier === 'Retail' ? 'Détail' : pricingTier === 'VIP' ? 'Demi-Gros' : 'Gros B2B'}
+              </span>
             </div>
 
-            {/* Financial & Loyalty Pills (hidden when the program is fully off) */}
-            <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
-              {loyaltyVisible && (
-                <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold flex items-center gap-1">
-                  <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-                  {currentCustomer.loyaltyPoints} pts
-                </span>
-              )}
-
-              {(currentCustomer.storeCredit || 0) > 0 && (
-                <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold font-mono">
-                  Avoir: {formatDZD(currentCustomer.storeCredit)}
-                </span>
-              )}
-
-              {(currentCustomer.storeCredit || 0) < 0 && (
-                <span className="px-2 py-0.5 rounded-md bg-orange-500/15 border border-orange-500/30 text-orange-300 font-bold font-mono" title="Avoir consommé puis annulé — les prochains remboursements le comblent avant tout versement">
-                  Solde à récupérer: {formatDZD(currentCustomer.storeCredit)}
-                </span>
-              )}
-
-              {(currentCustomer.currentDebt || 0) > 0 && (
-                <span className="px-2 py-0.5 rounded-md bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold font-mono">
-                  Dette: {formatDZD(currentCustomer.currentDebt || 0)}
-                </span>
-              )}
-            </div>
-
-            {/* Point Conversion Button (hidden when redeem is off or points are cut) */}
-            {loyaltyRedeemAllowed && loyaltyCfg.pointsEnabled !== false && currentCustomer.loyaltyPoints >= 10 && (
-              <button
-                type="button"
-                onClick={() => void handleConvertPresetPoints()}
-                className="w-full py-1 bg-gradient-to-r from-amber-500/20 to-yellow-500/20 hover:from-amber-500/30 hover:to-yellow-500/30 border border-amber-500/50 text-amber-300 font-black text-[11px] rounded-lg transition flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>Convertir {pointConvertPreset} pts (+{formatDZD(pointConvertCredit)} d'Avoir)</span>
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setIsHeaderCollapsed(false)}
+              className="p-1 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded transition shrink-0 cursor-pointer"
+              title="Afficher les détails de la vente"
+              aria-label="Afficher les détails"
+            >
+              <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
           </div>
         ) : (
-          <button
-            type="button"
-            onClick={() => openModal('customers')}
-            className="w-full py-2 bg-pos-card hover:bg-pos-hover border border-dashed border-pos-border hover:border-emerald-500/50 rounded-xl text-xs font-bold text-pos-muted hover:text-pos-text flex items-center justify-center gap-2 transition cursor-pointer"
-          >
-            <UserCheck className="w-4 h-4 text-emerald-400" />
-            <span>+ Assigner un Client (F3)</span>
-          </button>
-        )}
+          <>
+            {/* Two-Way Exchange trigger / staged chip (Phase 2) */}
+            {!stagedTradeIn ? (
+              <button
+                type="button"
+                onClick={() => openTradeInExchange()}
+                className="w-full py-1.5 px-2.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer active:scale-[0.99]"
+              >
+                <RefreshCw className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <span>Échanger un appareil (Trade-In)</span>
+              </button>
+            ) : (
+              <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-lg p-2 space-y-1 text-xs">
+                <div className="flex items-center justify-between gap-1.5">
+                  <span className="text-[10.5px] font-extrabold uppercase tracking-wide text-emerald-300 flex items-center gap-1.5 min-w-0">
+                    <RefreshCw className="w-3 h-3 shrink-0" aria-hidden="true" />
+                    <span className="truncate">Reprise : {stagedTradeIn.deviceModel}</span>
+                  </span>
+                  <span className="text-xs font-black text-emerald-300 whitespace-nowrap font-mono">−{formatDZD(tradeInCredit)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-1.5 pt-0.5">
+                  <span className="text-[9.5px] text-pos-muted font-mono truncate">IMEI: {stagedTradeIn.imei}</span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => openTradeInExchange({ ...stagedTradeIn })}
+                      className="px-2 py-0.5 rounded bg-pos-card border border-pos-border text-pos-text text-[10px] font-bold flex items-center gap-1 hover:border-emerald-500/50 transition cursor-pointer"
+                      title="Modifier l’évaluation de reprise"
+                      aria-label="Modifier l’évaluation"
+                    >
+                      <Pencil className="w-2.5 h-2.5 text-emerald-400" aria-hidden="true" />
+                      <span>Modifier</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearStagedTradeIn();
+                        showToast('Reprise retirée du panier.', 'info');
+                      }}
+                      className="px-2 py-0.5 rounded bg-pos-card border border-pos-border text-pos-muted hover:text-red-400 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
+                      title="Retirer la reprise"
+                      aria-label="Retirer"
+                    >
+                      <X className="w-2.5 h-2.5" aria-hidden="true" />
+                      <span>Retirer</span>
+                    </button>
+                  </div>
+                </div>
+                {tradeInSettlement.direction === 'SOULTE_SHOP_PAYS' && (
+                  <p className="text-[9.5px] font-bold text-amber-300">
+                    Soulte boutique : {formatDZD(tradeInSettlement.shopOwes)} à verser au client
+                  </p>
+                )}
+              </div>
+            )}
 
-        {/* Pricing Tier Selector (Retail / Demi-Gros / Wholesale) */}
-        <div className="flex items-center gap-1.5 bg-pos-bg p-1 rounded-xl border border-pos-border">
-          <Tag className="w-3.5 h-3.5 text-emerald-500 ml-1.5 shrink-0" />
-          <span className="text-[10px] font-bold text-pos-muted uppercase">Tarif:</span>
-          {(['Retail', 'VIP', 'Wholesale'] as PricingTier[]).map((tier) => (
-            <button
-              key={tier}
-              type="button"
-              onClick={() => setPricingTier(tier)}
-              className={`flex-1 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
-                pricingTier === tier
-                  ? tier === 'VIP'
-                    ? 'bg-cyan-500 text-slate-950 font-black shadow-sm'
-                    : tier === 'Wholesale'
-                    ? 'bg-amber-500 text-slate-950 font-black shadow-sm'
-                    : 'bg-emerald-500 text-slate-950 font-black shadow-sm'
-                  : 'text-pos-muted hover:text-pos-text'
-              }`}
-            >
-              {tier === 'Retail' ? 'Détail' : tier === 'VIP' ? 'Demi-Gros' : 'Gros B2B'}
-            </button>
-          ))}
-        </div>
+            {/* Customer Badge & Loyalty Points Widget */}
+            {currentCustomer ? (
+              <div className="bg-pos-card border border-pos-border rounded-lg p-2 space-y-1 text-xs shadow-sm">
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                    {currentCustomer.avatarUrl ? (
+                      <img
+                        src={currentCustomer.avatarUrl}
+                        alt={currentCustomer.name}
+                        className="w-5 h-5 rounded-full object-cover border border-emerald-500/40 shrink-0"
+                      />
+                    ) : (
+                      <div className="w-5 h-5 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-slate-950 font-black text-[10px] flex items-center justify-center shrink-0">
+                        {currentCustomer.name.slice(0, 2).toUpperCase()}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-pos-text truncate text-xs leading-tight">{currentCustomer.name}</p>
+                      <p className="text-[9.5px] text-pos-muted truncate font-mono">
+                        {currentCustomer.phone || currentCustomer.registeredDevice || 'Client Enregistré'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => openModal('customers')}
+                      className="p-1 hover:bg-pos-hover text-pos-muted hover:text-cyan-400 rounded transition cursor-pointer"
+                      title="Changer de Client (F3)"
+                      aria-label="Changer de Client"
+                    >
+                      <User className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentCustomer(null)}
+                      className="p-1 hover:bg-red-500/10 text-pos-muted hover:text-red-400 rounded transition cursor-pointer"
+                      title="Détacher le client du panier"
+                      aria-label="Détacher le client du panier"
+                    >
+                      <X className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Financial & Loyalty Pills */}
+                <div className="flex items-center gap-1 flex-wrap text-[9.5px]">
+                  {loyaltyVisible && (
+                    <span className="px-1.5 py-0.2 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold flex items-center gap-0.5">
+                      <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" aria-hidden="true" />
+                      {currentCustomer.loyaltyPoints} pts
+                    </span>
+                  )}
+
+                  {(currentCustomer.storeCredit || 0) > 0 && (
+                    <span className="px-1.5 py-0.2 rounded bg-purple-500/15 border border-purple-500/30 text-purple-300 font-bold font-mono">
+                      Avoir: {formatDZD(currentCustomer.storeCredit)}
+                    </span>
+                  )}
+
+                  {(currentCustomer.storeCredit || 0) < 0 && (
+                    <span className="px-1.5 py-0.2 rounded bg-orange-500/15 border border-orange-500/30 text-orange-300 font-bold font-mono" title="Avoir consommé puis annulé — les prochains remboursements le comblent avant tout versement">
+                      Solde: {formatDZD(currentCustomer.storeCredit)}
+                    </span>
+                  )}
+
+                  {(currentCustomer.currentDebt || 0) > 0 && (
+                    <span className="px-1.5 py-0.2 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 font-bold font-mono">
+                      Dette: {formatDZD(currentCustomer.currentDebt || 0)}
+                    </span>
+                  )}
+                </div>
+
+                {/* Point Conversion Button (compact) */}
+                {loyaltyRedeemAllowed && loyaltyCfg.pointsEnabled !== false && currentCustomer.loyaltyPoints >= 10 && (
+                  <button
+                    type="button"
+                    onClick={() => void handleConvertPresetPoints()}
+                    className="w-full py-0.5 bg-gradient-to-r from-amber-500/20 to-yellow-500/20 hover:from-amber-500/30 hover:to-yellow-500/30 border border-amber-500/40 text-amber-300 font-bold text-[10px] rounded transition flex items-center justify-center gap-1 shadow-sm cursor-pointer"
+                  >
+                    <Sparkles className="w-3 h-3 text-amber-400" aria-hidden="true" />
+                    <span>Convertir {pointConvertPreset} pts (+{formatDZD(pointConvertCredit)} d'Avoir)</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => openModal('customers')}
+                className="w-full py-1.5 bg-pos-card hover:bg-pos-hover border border-dashed border-pos-border hover:border-emerald-500/50 rounded-lg text-xs font-bold text-pos-muted hover:text-pos-text flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <UserCheck className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
+                <span>+ Assigner un Client (F3)</span>
+              </button>
+            )}
+
+            {/* Pricing Tier Selector (Retail / Demi-Gros / Wholesale) */}
+            <div className="flex items-center gap-1 bg-pos-bg p-0.5 rounded-lg border border-pos-border">
+              <Tag className="w-3 h-3 text-emerald-500 ml-1 shrink-0" aria-hidden="true" />
+              <span className="text-[9.5px] font-bold text-pos-muted uppercase mr-0.5 shrink-0">Tarif:</span>
+              {(['Retail', 'VIP', 'Wholesale'] as PricingTier[]).map((tier) => (
+                <button
+                  key={tier}
+                  type="button"
+                  onClick={() => setPricingTier(tier)}
+                  className={`flex-1 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
+                    pricingTier === tier
+                      ? tier === 'VIP'
+                        ? 'bg-cyan-500 text-slate-950 font-black shadow-sm'
+                        : tier === 'Wholesale'
+                        ? 'bg-amber-500 text-slate-950 font-black shadow-sm'
+                        : 'bg-emerald-500 text-slate-950 font-black shadow-sm'
+                      : 'text-pos-muted hover:text-pos-text'
+                  }`}
+                >
+                  {tier === 'Retail' ? 'Détail' : tier === 'VIP' ? 'Demi-Gros' : 'Gros B2B'}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Cart Items List */}
@@ -796,7 +1041,7 @@ export const CartPanel: React.FC = () => {
         ref={cartListRef}
         role="listbox"
         aria-label="Lignes du panier — les raccourcis clavier agissent ici uniquement"
-        className="flex-1 overflow-y-auto p-2.5 space-y-2 [&_button]:focus-visible:outline-none [&_button]:focus-visible:ring-2 [&_button]:focus-visible:ring-emerald-500"
+        className="flex-1 min-h-[180px] sm:min-h-[220px] overflow-y-auto p-1.5 sm:p-2 space-y-1 sm:space-y-1.5 overscroll-contain [&_button]:focus-visible:outline-none [&_button]:focus-visible:ring-2 [&_button]:focus-visible:ring-emerald-500"
       >
         {/* Undo-removal: a misclicked line comes back in one tap. The removal
             audit row stands — restoration is an addition, never an edit. */}
@@ -879,6 +1124,7 @@ export const CartPanel: React.FC = () => {
             return (
               <div
                 key={item.product.id}
+                data-testid="cart-line"
                 role="option"
                 aria-selected={isSelected}
                 tabIndex={0}
@@ -887,7 +1133,7 @@ export const CartPanel: React.FC = () => {
                   e.currentTarget.focus({ preventScroll: true });
                 }}
                 onFocus={() => setSelectedCartIndex(idx)}
-                className={`bg-pos-card border rounded-xl p-2.5 flex items-start gap-2.5 transition motion-reduce:transition-none group cursor-pointer animate-in fade-in slide-in-from-top-2 motion-reduce:animate-none ${
+                className={`bg-pos-card border rounded-lg p-1.5 sm:p-2 flex flex-col gap-1 transition motion-reduce:transition-none group cursor-pointer animate-in fade-in slide-in-from-top-2 motion-reduce:animate-none ${
                   isSelected
                     ? 'border-emerald-500 ring-2 ring-emerald-500/40 bg-emerald-500/[0.04]'
                     : item.isReturn
@@ -896,152 +1142,142 @@ export const CartPanel: React.FC = () => {
                 }`}
               >
                 <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-start gap-1">
-                    <h3 className="text-xs font-semibold text-pos-text truncate leading-tight min-h-[1rem]" title={item.product.title}>
-                      {item.product.title}
-                    </h3>
-                    <div className="text-right shrink-0">
+                  {/* Row 1: Title, Badges, and Total Price */}
+                  <div className="flex items-center justify-between gap-1.5 min-w-0">
+                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                      <h3
+                        className="text-xs font-bold text-pos-text truncate leading-tight"
+                        title={`${item.product.title}${item.product.brand ? ` • ${item.product.brand}` : ''} (Réf: ${item.product.sku})`}
+                      >
+                        {item.product.title}
+                      </h3>
+                      {item.isReturn && (
+                        <span className="text-[9px] bg-rose-500/20 text-rose-300 font-black px-1 rounded border border-rose-500/40 shrink-0 animate-pulse">
+                          RETOUR
+                        </span>
+                      )}
+                      {item.volumeTierApplied && (
+                        <span className="text-[9px] bg-cyan-500/20 text-cyan-300 font-bold px-1 rounded border border-cyan-500/40 shrink-0 flex items-center gap-0.5">
+                          <Layers className="w-2.5 h-2.5" aria-hidden="true" />
+                          <span>Lot</span>
+                        </span>
+                      )}
+                      {item.discountAmount !== undefined && item.discountAmount > 0 && !item.volumeTierApplied && (
+                        <span className="text-[9px] bg-purple-500/15 text-purple-300 font-bold px-1 rounded border border-purple-500/30 shrink-0">
+                          -{formatDZD(item.discountAmount)}/u
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="text-right shrink-0 flex items-baseline gap-1">
                       {item.defaultPrice && item.unitPriceCharged !== undefined && item.unitPriceCharged < item.defaultPrice && (
-                        <span className="text-[10px] text-pos-muted line-through mr-1 font-mono">
+                        <span className="text-[10px] text-pos-muted line-through font-mono">
                           {formatDZD(item.defaultPrice * item.quantity)}
                         </span>
                       )}
-                      <span className={`text-xs font-black pl-1 font-mono ${item.isReturn ? 'text-rose-400 font-bold' : 'text-pos-text'}`}>
+                      <span className={`text-xs font-black font-mono pl-0.5 ${item.isReturn ? 'text-rose-400' : 'text-pos-text'}`}>
                         {item.isReturn ? '-' : ''}{formatDZD(unitPrice * item.quantity - item.discount)}
                       </span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                    {item.isReturn && (
-                      <span className="text-[9px] bg-rose-500/20 text-rose-300 font-black px-1.5 py-0.5 rounded border border-rose-500/40 shrink-0 animate-pulse">
-                        RETOUR / ÉCHANGE
+
+                  {/* Row 2: Stepper, Unit Price, Margin, Actions */}
+                  <div className="flex items-center justify-between gap-1 mt-0.5">
+                    {/* Left: Stepper + Unit Price + Margin */}
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <div className="flex items-center bg-pos-bg border border-pos-border rounded-lg p-0.5 shadow-inner shrink-0">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            soundEngine.playScan();
+                            // Stepper-to-zero removes the line: same audit row as
+                            // every other removal vector.
+                            if (item.quantity <= 1) {
+                              logSecurityAction(
+                                'Suppression Article Panier',
+                                `Article: ${item.product.title} (${item.quantity} unités)`,
+                                operatorName(),
+                                false
+                              );
+                              rememberRemoved(item);
+                            }
+                            updateCartQty(item.product.id, -1);
+                          }}
+                          className="w-5 h-5 rounded bg-pos-card hover:bg-pos-hover active:scale-95 text-pos-muted hover:text-pos-text border border-pos-border/60 flex items-center justify-center transition cursor-pointer"
+                          title="Diminuer quantité (-1)"
+                          aria-label="Diminuer quantité"
+                        >
+                          <Minus className="w-3 h-3 stroke-[2.5]" aria-hidden="true" />
+                        </button>
+                        <CartQtyInput
+                          productId={item.product.id}
+                          quantity={item.quantity}
+                          maxQty={qtyCapOf(item)}
+                          disabled={!!item.product.isSerialized}
+                          label={`Quantité ${item.product.title}`}
+                          title={item.product.isSerialized ? '1 appareil par IMEI' : `Saisir quantité directement (Stock dispo: ${item.product.stock})`}
+                          onCommit={setCartItemQty}
+                        />
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            soundEngine.playScan();
+                            updateCartQty(item.product.id, 1);
+                          }}
+                          disabled={item.product.isSerialized}
+                          className="w-5 h-5 rounded bg-pos-card hover:bg-emerald-500/20 active:scale-95 text-pos-muted hover:text-emerald-400 border border-pos-border/60 flex items-center justify-center transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Augmenter quantité (+1)"
+                          aria-label="Augmenter quantité"
+                        >
+                          <Plus className="w-3 h-3 stroke-[2.5]" aria-hidden="true" />
+                        </button>
+                      </div>
+
+                      <span className="text-[10px] font-mono text-pos-muted shrink-0" title={`Prix unitaire: ${formatDZD(unitPrice)}`}>
+                        × {formatDZD(unitPrice)}
                       </span>
-                    )}
-                    <span className="text-[10px] text-pos-muted truncate font-bold">{item.product.brand}</span>
-                    {pricingTier === 'VIP' && (
-                      <span className="text-[9px] bg-cyan-500/10 text-cyan-400 font-bold px-1 rounded border border-cyan-500/30 shrink-0">
-                        Demi-Gros
-                      </span>
-                    )}
-                    {pricingTier === 'Wholesale' && (
-                      <span className="text-[9px] bg-amber-500/10 text-amber-500 font-bold px-1 rounded border border-amber-500/30 shrink-0">
-                        Gros
-                      </span>
-                    )}
-                    <span className="text-[9.5px] text-pos-muted font-mono truncate">Réf: {item.product.sku}</span>
-                    {item.volumeTierApplied && (
-                      <span className="text-[9px] bg-cyan-500/20 text-cyan-300 font-bold px-1.5 py-0.5 rounded border border-cyan-500/40 shrink-0 flex items-center gap-1 animate-in fade-in">
-                        <Layers className="w-2.5 h-2.5" />
-                        Offre Lot ({formatDZD(item.unitPriceCharged ?? unitPrice)}/u)
-                      </span>
-                    )}
-                    {item.discountAmount !== undefined && item.discountAmount > 0 && !item.volumeTierApplied && (
-                      <span className="text-[9px] bg-purple-500/15 text-purple-300 font-bold px-1 rounded border border-purple-500/30">
-                        -{formatDZD(item.discountAmount)}/u
-                      </span>
-                    )}
-                    {(() => {
-                      // STRICT LEDGER: fresh lines show the FIFO preview only.
-                      // A costPrice-derived badge printed 6,000/6,200 for a
-                      // 6,100 cart — render pending (…) while unresolved.
-                      // Lines with frozen checkout costs stay exact.
-                      const previewCost = fifoPreviewCosts[idx];
-                      const frozenCost = item.isReturn ? (item.unitCostAtSale ?? item.unitCostPrice) : undefined;
-                      if (previewCost === undefined && frozenCost === undefined) {
+
+                      {(() => {
+                        // STRICT LEDGER: fresh lines show the FIFO preview only.
+                        const previewCost = fifoPreviewCosts[idx];
+                        const frozenCost = item.isReturn ? (item.unitCostAtSale ?? item.unitCostPrice) : undefined;
+                        if (previewCost === undefined && frozenCost === undefined) {
+                          return null;
+                        }
+                        const cost = previewCost ?? frozenCost ?? 0;
+                        const profit = (unitPrice - cost) * item.quantity;
+                        const isLoss = profit < 0;
                         return (
-                          <span className="text-[9px] font-mono px-1 rounded border font-bold bg-pos-card text-pos-muted border-pos-border/60">
-                            Marge: …
+                          <span
+                            className={`text-[9px] font-mono px-1 py-0.2 rounded border font-bold shrink-0 hidden sm:inline-block ${
+                              isLoss
+                                ? 'bg-red-500/15 text-red-400 border-red-500/30'
+                                : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                            }`}
+                            title={`Marge: ${isLoss ? '' : '+'}${formatDZD(profit)}`}
+                          >
+                            {isLoss ? '' : '+'}{formatDZD(profit)}
                           </span>
                         );
-                      }
-                      const cost = previewCost ?? frozenCost ?? 0;
-                      const profit = (unitPrice - cost) * item.quantity;
-                      const isLoss = profit < 0;
-                      return (
-                        <span
-                          className={`text-[9px] font-mono px-1 rounded border font-bold ${
-                            isLoss
-                              ? 'bg-red-500/15 text-red-400 border-red-500/30'
-                              : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                          }`}
-                        >
-                          Marge: {isLoss ? '' : '+'}{formatDZD(profit)}
-                        </span>
-                      );
-                    })()}
-                  </div>
-
-                  {/* Quantity Stepper & Actions */}
-                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-pos-border/40 gap-2">
-                    <div className="flex items-center gap-1 bg-pos-bg border border-pos-border rounded-xl p-1 shadow-inner">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          soundEngine.playScan();
-                          // Stepper-to-zero removes the line: same audit row as
-                          // every other removal vector.
-                          if (item.quantity <= 1) {
-                            logSecurityAction(
-                              'Suppression Article Panier',
-                              `Article: ${item.product.title} (${item.quantity} unités)`,
-                              operatorName(),
-                              false
-                            );
-                            rememberRemoved(item);
-                          }
-                          updateCartQty(item.product.id, -1);
-                        }}
-                        className="w-7 h-7 rounded-lg bg-pos-card hover:bg-pos-hover active:scale-95 text-pos-muted hover:text-pos-text border border-pos-border/60 flex items-center justify-center transition cursor-pointer"
-                        title="Diminuer quantité (-1)"
-                      >
-                        <Minus className="w-3.5 h-3.5 stroke-[2.5]" />
-                      </button>
-                      <input
-                        type="number"
-                        id={`cart-qty-${item.product.id}`}
-                        name={`cart-qty-${item.product.id}`}
-                        min="1"
-                        max={item.product.stock > 0 ? item.product.stock : 9999}
-                        value={item.quantity}
-                        disabled={item.product.isSerialized}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => {
-                          const val = parseInt(e.target.value, 10);
-                          if (!isNaN(val) && val >= 1) {
-                            setCartItemQty(item.product.id, val);
-                          }
-                        }}
-                        className="w-10 text-center text-xs font-black text-pos-text bg-transparent focus:bg-pos-card rounded-md border-none focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono py-0.5"
-                        title={item.product.isSerialized ? '1 appareil par IMEI' : `Saisir quantité directement (Stock dispo: ${item.product.stock})`}
-                      />
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          soundEngine.playScan();
-                          updateCartQty(item.product.id, 1);
-                        }}
-                        disabled={item.product.isSerialized}
-                        className="w-7 h-7 rounded-lg bg-pos-card hover:bg-emerald-500/20 active:scale-95 text-pos-muted hover:text-emerald-400 border border-pos-border/60 flex items-center justify-center transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                        title="Augmenter quantité (+1)"
-                      >
-                        <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                      </button>
+                      })()}
                     </div>
 
-                    <div className="flex items-center gap-1.5">
+                    {/* Right: Actions (Prix, Échange, Supprimer) */}
+                    <div className="flex items-center gap-1 shrink-0">
                       <button
                         type="button"
+                        data-testid="price-override-open"
                         onClick={(e) => handleOpenPriceOverride(item, e)}
-                        className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold transition cursor-pointer border ${
                           item.discountAmount && item.discountAmount > 0
                             ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
                             : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 border-amber-500/30'
                         }`}
                         title="Modifier le prix de la ligne (Dérogation / Remise manuelle)"
                       >
-                        <Tag className="w-3 h-3" />
+                        <Tag className="w-2.5 h-2.5" aria-hidden="true" />
                         <span>Prix</span>
                       </button>
 
@@ -1051,14 +1287,14 @@ export const CartPanel: React.FC = () => {
                           e.stopPropagation();
                           toggleCartItemReturn(item.product.id);
                         }}
-                        className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold transition cursor-pointer border ${
                           item.isReturn
                             ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
                             : 'bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text border-pos-border/60'
                         }`}
                         title={item.isReturn ? 'Annuler le mode retour' : 'Passer cet article en retour / échange client'}
                       >
-                        <ArrowLeftRight className="w-3 h-3" />
+                        <ArrowLeftRight className="w-2.5 h-2.5" aria-hidden="true" />
                         <span>{item.isReturn ? 'Retour' : 'Échange'}</span>
                       </button>
 
@@ -1077,11 +1313,12 @@ export const CartPanel: React.FC = () => {
                           removeFromCart(item.product.id);
                           setSelectedCartIndex(null);
                         }}
-                        className="flex items-center justify-center p-1.5 rounded-lg text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 transition cursor-pointer shrink-0 active:scale-95"
+                        className="flex items-center justify-center p-1 rounded text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/40 transition cursor-pointer shrink-0 active:scale-95"
+                        data-testid="cart-line-remove"
                         title="Supprimer cet article de la vente"
                         aria-label="Supprimer cet article"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash2 className="w-3 h-3" aria-hidden="true" />
                       </button>
                     </div>
                   </div>
@@ -1113,6 +1350,7 @@ export const CartPanel: React.FC = () => {
                         <MoneyInput
                           label="Nouveau Prix Vendu (DA/unité)"
                           id={`price-override-${item.product.id}`}
+                          data-testid="price-override-input"
                           valueMinor={dinarsToMinor(overridePriceInput || 0)}
                           onChangeMinor={(minor) => setOverridePriceInput(toLegacyReal(minor))}
                           className="w-full bg-pos-card border border-pos-border rounded-lg px-2.5 py-1.5 font-mono font-bold text-pos-text text-xs focus:outline-none focus:border-amber-400"
@@ -1155,6 +1393,7 @@ export const CartPanel: React.FC = () => {
                                 </div>
                                 <input
                                   type="password"
+                                  data-testid="price-override-pin"
                                   inputMode="numeric"
                                   pattern="[0-9]*"
                                   autoComplete="current-password"
@@ -1183,6 +1422,7 @@ export const CartPanel: React.FC = () => {
                         </button>
                         <button
                           type="button"
+                          data-testid="price-override-apply"
                           onClick={(e) => handleApplyPriceOverride(item, e)}
                           className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] rounded-lg transition cursor-pointer"
                         >
@@ -1200,10 +1440,10 @@ export const CartPanel: React.FC = () => {
 
       {/* Dernier ajout — annulation rapide locale (Ctrl+Z), réutilise removeFromCart */}
       {lastAddedItem && (
-        <div className="px-3 pt-2 shrink-0" role="status" aria-live="polite">
-          <div className="flex items-center justify-between gap-2 bg-cyan-500/10 border border-cyan-500/30 rounded-xl px-2.5 py-1.5 text-xs animate-in fade-in motion-reduce:animate-none">
+        <div className="px-2 pt-1 shrink-0" role="status" aria-live="polite">
+          <div className="flex items-center justify-between gap-1.5 bg-cyan-500/10 border border-cyan-500/30 rounded-lg px-2.5 py-1 text-[11px] animate-in fade-in motion-reduce:animate-none">
             <span className="min-w-0 truncate text-cyan-200">
-              <span className="font-bold">Dernier ajout : </span>
+              <span className="font-bold">Ajouté : </span>
               <span className="truncate" title={lastAddedItem.product.title}>
                 {lastAddedItem.product.title} × {lastAddedItem.quantity}
               </span>
@@ -1212,21 +1452,21 @@ export const CartPanel: React.FC = () => {
               type="button"
               onClick={handleUndoLastAdded}
               title="Retirer le dernier article ajouté (Ctrl+Z)"
-              className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 active:scale-95 text-cyan-200 text-[11px] font-bold border border-cyan-500/40 transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+              className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-cyan-500/20 hover:bg-cyan-500/30 active:scale-95 text-cyan-200 text-[10px] font-bold border border-cyan-500/40 transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
             >
-              <RotateCcw className="w-3 h-3" />
+              <RotateCcw className="w-2.5 h-2.5" />
               <span>Annuler</span>
-              <kbd className="hidden sm:inline font-mono text-[9px] bg-black/40 px-1 py-0.2 rounded border border-cyan-500/30">Ctrl+Z</kbd>
+              <kbd className="hidden sm:inline font-mono text-[8.5px] bg-black/40 px-1 py-0.2 rounded border border-cyan-500/30">Ctrl+Z</kbd>
             </button>
           </div>
         </div>
       )}
 
       {/* Totals Summary & Compact Payment Controls — pied sticky : total toujours visible */}
-      <div className="p-3 border-t border-pos-border bg-pos-panel space-y-2 shrink-0 sticky bottom-0 z-10 shadow-[0_-8px_24px_-12px_rgba(0,0,0,0.45)] [&_button]:focus-visible:outline-none [&_button]:focus-visible:ring-2 [&_button]:focus-visible:ring-emerald-500">
+      <div className="p-2 border-t border-pos-border bg-pos-panel space-y-1 shrink-0 sticky bottom-0 z-10 shadow-[0_-8px_24px_-12px_rgba(0,0,0,0.45)] [&_button]:focus-visible:outline-none [&_button]:focus-visible:ring-2 [&_button]:focus-visible:ring-emerald-500">
         {/* Customer Available Store Credit Quick Bar */}
-        {currentCustomer && (currentCustomer.storeCredit || 0) > 0 && storeCreditApplied === 0 && (
-          <div className="bg-purple-950/40 border border-purple-500/40 rounded-xl px-2.5 py-1.5 flex items-center justify-between text-xs animate-in fade-in">
+        {currentCustomer && (currentCustomer.storeCredit || 0) > 0 && storeCreditApplied === 0 && total > 0 && !isRefundDue && (
+          <div className="bg-purple-950/40 border border-purple-500/40 rounded-lg px-2 py-1 flex items-center justify-between text-xs animate-in fade-in">
             <div className="flex items-center gap-1.5 text-purple-200">
               <Gift className="w-3.5 h-3.5 text-purple-300 shrink-0" />
               <span className="text-[10px] font-bold">Avoir Dispo : <span className="font-mono text-purple-300 font-extrabold">{formatDZD(currentCustomer.storeCredit)}</span></span>
@@ -1241,7 +1481,7 @@ export const CartPanel: React.FC = () => {
                 setStoreCreditApplied(maxCredit);
                 soundEngine.playSuccess();
               }}
-              className="px-2 py-0.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[9.5px] font-extrabold transition cursor-pointer"
+              className="px-2 py-0.5 bg-purple-600 hover:bg-purple-500 text-white rounded-md text-[9.5px] font-extrabold transition cursor-pointer"
             >
               Appliquer Avoir
             </button>
@@ -1250,14 +1490,14 @@ export const CartPanel: React.FC = () => {
 
         {/* Breakdown of Subtotal, Discounts and Store Credit if active */}
         {(totalDiscount > 0 || (storeCreditApplied || 0) > 0 || voucherCreditApplied > 0 || tradeInCreditApplied > 0) && (
-          <div className="space-y-1 pb-1.5 border-b border-pos-border/40 text-xs font-mono">
+          <div className="space-y-0.5 pb-1 border-b border-pos-border/40 text-[11px] font-mono">
             <div className="flex justify-between items-center text-pos-muted">
-              <span className="text-[11px] font-sans font-semibold">Sous-Total Brut :</span>
+              <span className="text-[10.5px] font-sans font-semibold">Sous-Total Brut :</span>
               <span className="font-bold">{formatDZD(grossTotal)}</span>
             </div>
             {totalDiscount > 0 && (
               <div className="flex justify-between items-center text-purple-400 font-bold">
-                <span className="text-[11px] font-sans flex items-center gap-1">
+                <span className="text-[10.5px] font-sans flex items-center gap-1">
                   <Percent className="w-3 h-3" /> Remise Accordée :
                 </span>
                 <span>-{formatDZD(totalDiscount)}</span>
@@ -1265,7 +1505,7 @@ export const CartPanel: React.FC = () => {
             )}
             {(storeCreditApplied || 0) > 0 && (
               <div className="flex justify-between items-center text-emerald-400 font-bold">
-                <span className="text-[11px] font-sans flex items-center gap-1">
+                <span className="text-[10.5px] font-sans flex items-center gap-1">
                   <Gift className="w-3 h-3 text-purple-300" /> Avoir Client Déduit :
                 </span>
                 <span className="text-purple-300">-{formatDZD(storeCreditApplied)}</span>
@@ -1273,7 +1513,7 @@ export const CartPanel: React.FC = () => {
             )}
             {voucherCreditApplied > 0 && (
               <div className="flex justify-between items-center text-emerald-400 font-bold">
-                <span className="text-[11px] font-sans flex items-center gap-1">
+                <span className="text-[10.5px] font-sans flex items-center gap-1">
                   <Gift className="w-3 h-3 text-purple-300" /> Bon d&apos;Avoir{voucherCode ? ` (${voucherCode})` : ''} :
                 </span>
                 <span className="text-purple-300">-{formatDZD(voucherCreditApplied)}</span>
@@ -1281,7 +1521,7 @@ export const CartPanel: React.FC = () => {
             )}
             {tradeInCreditApplied > 0 && (
               <div className="flex justify-between items-center text-emerald-400 font-bold">
-                <span className="text-[11px] font-sans flex items-center gap-1">
+                <span className="text-[10.5px] font-sans flex items-center gap-1">
                   <RefreshCw className="w-3 h-3 text-emerald-300" /> Reprise Déduite :
                 </span>
                 <span className="text-emerald-300">-{formatDZD(tradeInCreditApplied)}</span>
@@ -1290,86 +1530,86 @@ export const CartPanel: React.FC = () => {
           </div>
         )}
 
-        {/* Total Net Header - 1-Second Glance Dominance */}
-        <div className="flex justify-between items-baseline pt-0.5">
-          <div>
-            <span className={`text-xs font-black tracking-wider uppercase block ${isRefundDue ? 'text-rose-400' : 'text-pos-text'}`}>
+        {/* Total Net Header — compact, prominent & single-line aligned */}
+        <div className="flex justify-between items-center py-0.5">
+          <div className="min-w-0 flex items-baseline gap-1.5">
+            <span className={`text-xs font-black tracking-wider uppercase truncate ${isRefundDue ? 'text-rose-400' : 'text-pos-text'}`}>
               {isRefundDue
-                ? 'Remboursement Dû au Client'
+                ? 'Remboursement Dû'
                 : (storeCreditApplied || 0) > 0 || tradeInCreditApplied > 0
-                ? 'Net Restant à Payer'
-                : 'Total Net à Payer'}
+                ? 'Net Restant'
+                : 'Total Net'}
             </span>
-            <span className="text-[10px] text-pos-muted font-medium">
-              {isRefundDue ? 'Échange d\'articles • Espèces à rendre' : 'TTC • Rendu auto'}
+            <span className="text-[9px] text-pos-muted font-mono shrink-0">
+              {isRefundDue ? '(Espèces)' : '(TTC)'}
             </span>
           </div>
-          <span aria-live="polite" aria-atomic="true" title={`Total net : ${isRefundDue ? `-${formatDZD(refundDue)}` : formatDZD(total)}`} className={`text-2xl md:text-3xl font-black tracking-tight font-mono ${isRefundDue ? 'text-rose-400' : 'text-emerald-400'}`}>
+          <span
+            data-testid="cart-total"
+            aria-live="polite"
+            aria-atomic="true"
+            title={`Total net : ${isRefundDue ? `-${formatDZD(refundDue)}` : formatDZD(total)}`}
+            className={`text-xl sm:text-2xl font-black tracking-tight font-mono shrink-0 ${isRefundDue ? 'text-rose-400' : 'text-emerald-400'}`}
+          >
             {isRefundDue ? `-${formatDZD(refundDue)}` : formatDZD(total)}
           </span>
         </div>
 
-        {/* Compact Quick Cash Denominations (1-Click Change Calculator) */}
-        {cart.length > 0 && total > 0 && !isRefundDue && (
-          <div className="space-y-1">
-            <span className="text-[9px] text-pos-muted uppercase font-bold tracking-wider block">
-              Coupures Rapides (Espèces) :
+        {/* Compact Quick Cash Denominations (Only active / relevant tenders) */}
+        {cart.length > 0 && total > 0 && !isRefundDue && applicableQuickBills.length > 0 && (
+          <div className="flex items-center gap-1.5 pt-0.5">
+            <span className="text-[8.5px] text-pos-muted uppercase font-bold tracking-wider shrink-0">
+              Espèces :
             </span>
-            <div className="grid grid-cols-6 gap-1">
-              {quickBills.map((bill) => {
-                const isUnder = bill < total;
-                return (
-                  <button
-                    key={bill}
-                    disabled={isUnder || isProcessing}
-                    onClick={() => handleQuickCashWithBill(bill)}
-                    className={`py-1.5 px-1 rounded-lg text-[9.5px] font-extrabold border transition active:scale-95 cursor-pointer flex flex-col items-center justify-center font-mono ${
-                      isUnder
-                        ? 'opacity-30 bg-pos-bg border-pos-border text-pos-muted cursor-not-allowed'
-                        : 'bg-pos-card hover:bg-emerald-500/20 border-pos-border hover:border-emerald-500/50 text-pos-text hover:text-emerald-300'
-                    }`}
-                    title={isUnder ? 'Montant inférieur au total' : `Encaisser ${bill} DA (Rendu: ${bill - total} DA)`}
-                  >
-                    <span>{bill.toLocaleString('fr-DZ')}</span>
-                    {!isUnder && bill > total && (
-                      <span className="text-[8px] text-emerald-400 font-bold leading-none" title={`Rendu : ${bill - total} DA`}>+{bill - total}</span>
-                    )}
-                  </button>
-                );
-              })}
+            <div className="flex items-center gap-1 flex-1 overflow-x-auto hide-scrollbar">
+              {applicableQuickBills.map((bill) => (
+                <button
+                  key={bill}
+                  disabled={isProcessing}
+                  onClick={() => handleQuickCashWithBill(bill)}
+                  className="flex-1 py-0.5 px-1 rounded bg-pos-card hover:bg-emerald-500/20 border border-pos-border hover:border-emerald-500/50 text-pos-text hover:text-emerald-300 font-mono text-[9px] font-extrabold transition active:scale-95 cursor-pointer flex items-center justify-center gap-1"
+                  title={`Encaisser ${bill} DA (Rendu: ${bill - total} DA)`}
+                >
+                  <span>{bill.toLocaleString('fr-DZ')}</span>
+                  {bill > total && (
+                    <span className="text-[7.5px] text-emerald-400 font-bold leading-none">+{bill - total}</span>
+                  )}
+                </button>
+              ))}
             </div>
           </div>
         )}
 
-        {/* Primary Cash Payment Button */}
+        {/* Primary Cash Payment Button — compact, sleek enterprise UI */}
         <div className="pt-0.5">
           <button
+            data-testid="checkout-button"
             onClick={() => openModal('payment')}
             disabled={cart.length === 0 || isProcessing}
-            className={`w-full glow-btn disabled:opacity-40 text-white rounded-xl py-3 px-3 flex items-center justify-between shadow-md group cursor-pointer transition active:scale-[0.98] ${
+            className={`w-full glow-btn disabled:opacity-40 text-white rounded-lg py-2 px-2.5 flex items-center justify-between shadow-sm group cursor-pointer transition active:scale-[0.98] ${
               isRefundDue
-                ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 shadow-rose-600/25'
-                : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-emerald-600/25'
+                ? 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 shadow-rose-600/20'
+                : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-emerald-600/20'
             }`}
-            title="Encaisser ou Rembourser en Espèces - F2 / Espace"
+            title="Encaisser ou Rembourser en Espèces — F2 / Espace"
           >
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center gap-1.5 min-w-0">
               {isRefundDue ? (
-                <RotateCcw className="w-5 h-5 text-rose-200 shrink-0 animate-spin-reverse" />
+                <RotateCcw className="w-4 h-4 text-rose-200 shrink-0 animate-spin-reverse" />
               ) : (
-                <Banknote className="w-5 h-5 text-emerald-200 shrink-0" />
+                <Banknote className="w-4 h-4 text-emerald-200 shrink-0" />
               )}
-              <span className="text-xs font-black tracking-wide truncate">
+              <span className="text-xs font-bold tracking-wide truncate">
                 {isRefundDue ? `Rembourser Espèces (${formatDZD(refundDue)})` : 'Encaisser en Espèces'}
               </span>
             </div>
-            <div className="flex items-center gap-1.5">
-              <span className={`text-[9px] font-bold uppercase tracking-wider bg-black/30 px-1.5 py-0.5 rounded border border-white/10 ${isRefundDue ? 'text-rose-200' : 'text-emerald-200'}`}>
-                {isRefundDue ? 'Rendu Espèces' : 'Cash Only'}
+            <div className="flex items-center gap-1 shrink-0">
+              <span className={`text-[8.5px] font-bold uppercase tracking-wider bg-black/25 px-1.5 py-0.5 rounded border border-white/10 ${isRefundDue ? 'text-rose-200' : 'text-emerald-200'}`}>
+                {isRefundDue ? 'Rendu' : 'Cash Only'}
               </span>
-              <span className="hotkey-badge bg-black/50 text-white border-white/20 px-2 py-0.5 text-[10px] font-black shrink-0">
+              <kbd className="font-mono text-[9px] bg-black/40 text-white border border-white/20 px-1.5 py-0.5 rounded font-black shrink-0">
                 F2
-              </span>
+              </kbd>
             </div>
           </button>
         </div>

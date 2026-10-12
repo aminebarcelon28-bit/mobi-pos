@@ -22,6 +22,7 @@ use crate::gate::{evaluate_invoice_invariants, InvariantReport};
 use crate::geometry::{ExtractedDocumentSummary, OcrBoundingBox, SpatialLayoutParser};
 use crate::resolver::{InventoryResolver, ResolvedPoLine};
 use crate::trust_core::{
+    audit_append::chrono_iso8601_utc,
     capability_policy::Capability,
     ipc_authorizer::{authorize_and_execute, global_kernel, TrustError},
 };
@@ -43,7 +44,7 @@ fn parser() -> &'static SpatialLayoutParser {
 fn open_live_db(app: &tauri::AppHandle) -> Result<Connection, String> {
     register_vec_extension();
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let db_path = dir.join("mobi_pos.db");
+    let db_path = crate::e2e::live_db_path(&dir);
     let conn = Connection::open(&db_path).map_err(|e| e.to_string())?;
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| e.to_string())?;
@@ -202,6 +203,11 @@ fn commit_batch_inner(
 
     let group_id = uuid::Uuid::new_v4().to_string();
     let ts = now_iso();
+    // ISO-8601 UTC stamp for human/audit `created_at` columns. The table
+    // DEFAULTs are the legacy space-separated `datetime('now','utc')` form
+    // (kept byte-identical: migration bodies are checksummed), so every
+    // native write stamps explicitly instead of relying on the default.
+    let created_iso = chrono_iso8601_utc();
 
     let tx = conn.transaction().map_err(|e| e.to_string())?;
 
@@ -244,8 +250,8 @@ fn commit_batch_inner(
         let mut insert_alias = tx
             .prepare(
                 r#"
-                INSERT OR REPLACE INTO vendor_aliases (supplier_name, raw_vendor_name, product_id)
-                VALUES (?1, ?2, ?3)
+                INSERT OR REPLACE INTO vendor_aliases (supplier_name, raw_vendor_name, product_id, created_at)
+                VALUES (?1, ?2, ?3, ?4)
                 "#,
             )
             .map_err(|e| e.to_string())?;
@@ -309,13 +315,14 @@ fn commit_batch_inner(
             }
 
             if item.save_as_alias {
-                insert_alias
-                    .execute(params![
-                        payload.supplier_name,
-                        item.raw_supplier_name,
-                        item.product_id
-                    ])
-                    .map_err(|e| e.to_string())?;
+            insert_alias
+                .execute(params![
+                    payload.supplier_name,
+                    item.raw_supplier_name,
+                    item.product_id,
+                    created_iso
+                ])
+                .map_err(|e| e.to_string())?;
             }
         }
 
@@ -329,8 +336,8 @@ fn commit_batch_inner(
         tx.execute(
             r#"
             INSERT INTO scan_audit_log
-              (trace_id, user_id, supplier_name, items_count, grand_total, delta, is_balanced)
-            VALUES (?1, ?2, ?3, ?4, ?5, 0.0, 1)
+              (trace_id, user_id, supplier_name, items_count, grand_total, delta, is_balanced, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, 0.0, 1, ?6)
             "#,
             params![
                 group_id,
@@ -338,6 +345,7 @@ fn commit_batch_inner(
                 payload.supplier_name,
                 items_count,
                 total_cost,
+                created_iso,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -535,5 +543,27 @@ mod tests {
         assert!(!audit_trace.is_empty());
         assert!((audit_cost - 1000.0).abs() < 1e-9);
         assert_eq!(audit_user.as_deref(), Some("user_agent_42"));
+        // created_at must be ISO-8601 UTC (T…Z), never the legacy
+        // space-separated `datetime('now','utc')` default form.
+        let (audit_created, alias_created): (String, String) = conn
+            .query_row(
+                "SELECT created_at FROM scan_audit_log WHERE supplier_name = 'ACME'",
+                [],
+                |r| r.get(0),
+            )
+            .and_then(|audit_created| {
+                conn.query_row(
+                    "SELECT created_at FROM vendor_aliases LIMIT 1",
+                    [],
+                    |r| r.get(0).map(|alias_created| (audit_created, alias_created)),
+                )
+            })
+            .unwrap();
+        for stamped in [&audit_created, &alias_created] {
+            assert!(
+                stamped.contains('T') && stamped.ends_with('Z'),
+                "expected ISO-8601 UTC, got {stamped}"
+            );
+        }
     }
 }

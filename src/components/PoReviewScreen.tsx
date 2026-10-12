@@ -949,38 +949,42 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
             )}
 
             {/* Quick Export & Print Actions */}
-            <div className="flex items-center gap-1 border-l border-slate-800 pl-2">
+            <div className="flex items-center gap-1.5 border-l border-slate-800 pl-2">
               <button
                 type="button"
                 onClick={() => setShowBarcodeModal(true)}
-                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                className="min-h-[44px] min-w-[44px] p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white transition flex items-center justify-center cursor-pointer"
                 title="File d'attente étiquettes thermiques"
+                aria-label="File d'attente étiquettes thermiques"
               >
-                <Tag className="w-3.5 h-3.5 text-indigo-400" />
+                <Tag className="w-4 h-4 text-indigo-400" aria-hidden="true" />
               </button>
               <button
                 type="button"
                 onClick={handlePrintReview}
-                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                className="min-h-[44px] min-w-[44px] p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white transition flex items-center justify-center cursor-pointer"
                 title="Imprimer le bon de réception"
+                aria-label="Imprimer le bon de réception"
               >
-                <Printer className="w-3.5 h-3.5" />
+                <Printer className="w-4 h-4" aria-hidden="true" />
               </button>
               <button
                 type="button"
                 onClick={handleExportCsv}
-                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                className="min-h-[44px] min-w-[44px] p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white transition flex items-center justify-center cursor-pointer"
                 title="Exporter en CSV (Excel)"
+                aria-label="Exporter en CSV"
               >
-                <Download className="w-3.5 h-3.5" />
+                <Download className="w-4 h-4" aria-hidden="true" />
               </button>
               <button
                 type="button"
                 onClick={handleExportJson}
-                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                className="min-h-[44px] min-w-[44px] p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white transition flex items-center justify-center cursor-pointer"
                 title="Exporter en JSON (ERP / API)"
+                aria-label="Exporter en JSON"
               >
-                <FileJson className="w-3.5 h-3.5" />
+                <FileJson className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
           </div>

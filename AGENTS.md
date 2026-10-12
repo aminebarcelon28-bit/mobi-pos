@@ -67,6 +67,44 @@ TypeScript outbox sync).
   native-only in any gateway design.
 - **Per-device sync credentials:** required before Tier B unlocks. Shared
   merchant token must not authorize peer writes.
+- **Per-device refund keys (TIER-B, landed):** each terminal enrolls a
+  native Ed25519 keypair bound to its adopted `sync.device_id`
+  (`trust_core/device_identity.rs`; seed sealed by OS-keyring/vault wrap
+  key, never crosses IPC). `refund_sale_atomic` injects the id natively
+  (client claims that mismatch abort `DEVICE_IDENTITY_SPOOFED`), enforces
+  120 s supervisor freshness against the monotonic anchor
+  (`SUPERVISOR_AUTH_EXPIRED`, future-dated past 30 s fail
+  `SUPERVISOR_AUTH_FUTURE_DATED`), and stamps `device_id` +
+  signature + monotonic `seq_no` on refund outbox rows (v110/v111
+  columns). The server does NOT verify signatures yet — backend
+  verification + data-plane gateway still gate full Tier B unlock above.
+- **Signed-lane sync drain (TIER-B transport, landed, loopback-proven):**
+  native `fetch_next_outbox_batch` / `mark_outbox_synced` /
+  `reap_stale_in_flight` (`sync_outbox.rs`) move signed rows
+  (`seq_no IS NOT NULL`) under a per-device contiguity cursor
+  (`device_identity.last_acked_seq`); the TS drain worker
+  (`syncDrainWorker.ts`) POSTs strictly in order to the merchant gateway
+  (`sync.gateway_url`; idles honestly when unconfigured) and piggybacks
+  `SERVERTIME_V1` tokens into native ingestion. The loopback verifier
+  (`proxy/gateway.mjs` + `tests/fixtures/mockGatewayServer.mjs`) proves
+  signature verification, gap arbitration, replay dedupe, and verbatim
+  time-token issuance end to end. The legacy Turso lane yields signed rows
+  only while the drain is armed (`getPendingOutbox` filter); unarmed, it
+  carries everything as before — no strand risk. Money-path time comes
+  from the durable monotonic anchor (`time_anchor.rs`); wall behind the
+  high-water fails `SYSTEM_CLOCK_REGRESSION`. Outbox rows carry the
+  verbatim signed envelope (v112) so the gateway verifies covered bytes,
+  never reconstructions.
+- **Gateway loopback verifier (TIER-B proof, test-only):**
+  `proxy/gateway.mjs` (zero-dep node:http ingest + `SERVERTIME_V1`
+  issuer) with `tests/fixtures/mockGatewayServer.mjs` proves signature
+  verification, gap arbitration (`409 expectedSeq/receivedSeq`), replay
+  dedupe, revocation/not-enrolled 403s, and verbatim time-token issuance
+  end to end (`test:sync-e2e` 18/18). Test keys are fixed public seeds
+  gated behind `ALLOW_TEST_KEY=1`, never defaults — production needs a
+  real merchant gateway with enrolled device pubkeys. Tier B is NOT
+  unlocked: backend verification + data-plane gateway remain open ship
+  gates above.
 - **PIN keys:** device-local, native verify; Argon2id + per-user salt +
   keystore pepper; lockout; 6-digit manager minimum; migrate on login; old
   synced hashes treated as exposed. Per-device PINs (no provisioned

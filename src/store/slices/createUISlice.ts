@@ -245,6 +245,10 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       } else {
         document.documentElement.classList.remove('dark');
       }
+      const metaTheme = document.querySelector('meta[name="theme-color"]');
+      if (metaTheme) {
+        metaTheme.setAttribute('content', nextTheme === 'dark' ? '#0b0f19' : '#f8fafc');
+      }
     }
     set({ themeMode: nextTheme });
   },
@@ -401,7 +405,12 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       // and NEVER falls back to a local mint (fail closed, AGENTS.md §5).
       // recoveryReset passes straight through (pepper-dead tech-recovery).
       const { pinSet } = await import('../../api/pin');
-      const res = await pinSet({ userId, newPin, recoveryReset: opts?.recoveryReset });
+      const res = await pinSet({
+        userId,
+        newPin,
+        recoveryReset: opts?.recoveryReset,
+        supervisorPin: opts?.supervisorPin,
+      });
       await get().refreshCredentialsFromAuthority();
       return { format: res.format };
     }
@@ -420,7 +429,8 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     return { format: 'v1' };
   },
 
-  logSecurityAction: async (action, details, user = 'Yacine (Admin)', requiresPin = false) => {
+  logSecurityAction: async (action, details, user, requiresPin = false, idempotencyKey?: string) => {
+    const effectiveUser = (user && user.trim()) || get().activeCashier?.name?.trim() || 'Admin';
     const { securityAuditLog } = get();
     // Enterprise audit telemetry: every entry carries an ISO-8601 creation
     // timestamp (sortable + range-filterable) plus the originating
@@ -441,9 +451,13 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       // deviceInfo unavailable (tests/SSR) — persistence layer backfills.
     }
     const newEntry: SecurityAuditLogEntry = {
-      id: newId('audit'),
+      // Deterministic id when the caller passes an idempotency key: repeats
+      // converge here (ring dedupe below), in the Dexie/SQLite fallback
+      // mirror (upserts), and natively (key-as-event-id replay) — one intent,
+      // one row everywhere.
+      id: idempotencyKey && idempotencyKey.trim() ? idempotencyKey.trim() : newId('audit'),
       timestamp: new Date().toISOString(),
-      user,
+      user: effectiveUser,
       action,
       details,
       requiresPin,
@@ -487,10 +501,11 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           await auditAppend({
             action,
             details,
-            user,
+            user: effectiveUser,
             requiresPin,
             deviceId,
             ipAddress,
+            ...(idempotencyKey && idempotencyKey.trim() ? { idempotencyKey: idempotencyKey.trim() } : {}),
           });
         } catch (nativeErr) {
           noteSwallowedAuditFailure(
@@ -506,7 +521,9 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       return;
     }
     // Cap the in-memory ring at the last 200 entries; the DB remains the archive.
-    set({ securityAuditLog: [newEntry, ...securityAuditLog].slice(0, 200) });
+    // Idempotent prepend: a repeat (same key-derived id) replaces in place
+    // instead of stacking a duplicate row in the ring.
+    set({ securityAuditLog: [newEntry, ...securityAuditLog.filter((e) => e.id !== newEntry.id)].slice(0, 200) });
   },
 
   verifyManagerPin: (pin) => {
@@ -1177,7 +1194,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       await get().logSecurityAction(
         'Complément pièce d\'identité reprise',
         detailParts.join(' — '),
-        get().activeCashier?.name || 'Yacine (Admin)',
+        get().activeCashier?.name?.trim() || 'Admin',
         true
       );
     } catch (err) {
@@ -1532,7 +1549,23 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           // paint. Components already tolerate empty arrays (the catch path
           // below boots that way), and every set() re-renders subscribers.
           // P3.3: loads within a wave are independent — one parallel wave
-          // (latency = max, not sum).
+          // If in Tauri, reconcile Dexie products mirror from authoritative SQLite
+          // before wave 1 load so ghosts never appear on initial paint.
+          if (isTauriEnv()) {
+            try {
+              const { syncProductsFromSqlToDexie } = await import('../../db/sqlPluginAdapter');
+              await syncProductsFromSqlToDexie();
+            } catch (syncErr) {
+              console.warn('[initDatabase] Product mirror sync error:', syncErr);
+            }
+            try {
+              const { runShiftBootAdoption } = await import('../../db/shiftBootAdoption');
+              await runShiftBootAdoption();
+            } catch (shiftErr) {
+              console.warn('[initDatabase] Shift boot adoption error:', shiftErr);
+            }
+          }
+
           const [products, activeShift] = await Promise.all([
             sqlite.getAllProducts(),
             sqlite.getActiveShift(),
@@ -1761,6 +1794,14 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
 
   refreshAfterPull: async () => {
     try {
+      if (isTauriEnv()) {
+        try {
+          const { syncProductsFromSqlToDexie } = await import('../../db/sqlPluginAdapter');
+          await syncProductsFromSqlToDexie();
+        } catch (syncErr) {
+          console.warn('[refreshAfterPull] Product mirror sync error:', syncErr);
+        }
+      }
       const [
         products,
         customers,

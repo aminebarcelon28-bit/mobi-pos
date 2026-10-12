@@ -75,11 +75,18 @@ export function useFifoPreviewCosts(cart: CartItem[]): Array<number | undefined>
           const rows = await dexieDb.stockBatches.where('productId').equals(pid).toArray().catch(() => []);
           const live = (rows ?? [])
             .filter((r) => Number(r.quantityRemaining ?? 0) > 0 && Number(r.deleted ?? 0) !== 1 && r.purchaseOrderId !== 'SHADOW')
-            .sort((a, b) =>
-              String(a.receivedAt ?? '') < String(b.receivedAt ?? '') ? -1
-              : String(a.receivedAt ?? '') > String(b.receivedAt ?? '') ? 1
-              : String(a.batchId ?? '') < String(b.batchId ?? '') ? -1 : 1,
-            )
+            // Oldest-first by INSTANT, never by spelling: lexicographic
+            // `String()<String()` mis-orders mixed formats (' ' < 'T' at the
+            // byte level), consuming the wrong batch first. Unparseable rows
+            // sort last (never silently first), batchId breaks residual ties.
+            .sort((a, b) => {
+              const ta = new Date(String(a.receivedAt ?? '')).getTime();
+              const tb = new Date(String(b.receivedAt ?? '')).getTime();
+              const oa = Number.isNaN(ta) ? Number.POSITIVE_INFINITY : ta;
+              const ob = Number.isNaN(tb) ? Number.POSITIVE_INFINITY : tb;
+              if (oa !== ob) return oa < ob ? -1 : 1;
+              return String(a.batchId ?? '') < String(b.batchId ?? '') ? -1 : 1;
+            })
             .map((r) => ({
               batchId: String(r.batchId),
               quantityRemaining: Number(r.quantityRemaining ?? 0),

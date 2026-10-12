@@ -14,11 +14,19 @@ pub mod money;
 pub mod db;
 pub mod resolver;
 pub mod commands;
+pub mod refund;
+pub mod sync_outbox;
 pub mod emergency_export;
 pub mod snapshot_prune;
 pub mod snapshot_crypto;
 pub mod sav_attachments;
 pub mod trust_core;
+// E2E test hooks: the module itself is always compiled so `run()` and the
+// oracle share one `db_filename()` source of truth, but the `e2e_*`
+// *commands* (the IPC surface) exist only under
+// `any(debug_assertions, feature = "e2e")` and are registered in the handler
+// only on the same cfg — production binaries expose no `e2e_*` IPC.
+pub mod e2e;
 
 use crate::trust_core::{
     capability_policy::Capability,
@@ -85,12 +93,17 @@ impl std::fmt::Debug for CloudCredentials {
     }
 }
 
+// Vault-file fallback for cloud credentials (legacy migration path). Unused
+// under `feature = "e2e"` (cloud commands are sealed there) — gated out so
+// the e2e build stays warning-free.
+#[cfg(not(feature = "e2e"))]
 fn get_vault_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.join(".cloud_credentials.vault"))
 }
 
+#[cfg(not(feature = "e2e"))]
 fn read_vault_file(app: &tauri::AppHandle) -> Result<Option<CloudCredentials>, String> {
     let vault_path = get_vault_path(app)?;
     if !vault_path.exists() {
@@ -112,6 +125,7 @@ fn save_vault_file(app: &tauri::AppHandle, creds: &CloudCredentials) -> Result<(
     Ok(())
 }
 
+#[cfg(not(feature = "e2e"))]
 fn delete_vault_file(app: &tauri::AppHandle) -> Result<(), String> {
     let vault_path = get_vault_path(app)?;
     if vault_path.exists() {
@@ -124,6 +138,20 @@ fn delete_vault_file(app: &tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn get_cloud_credentials(app_handle: tauri::AppHandle) -> Result<Option<CloudCredentials>, TrustError> {
+    // E2E seal (feature = "e2e" ONLY — zero prod impact): the OS
+    // keyring entry is GLOBAL across app identifiers, so the e2e
+    // flavor would inherit the merchant's live Turso token — pulling
+    // real sales into the test DB mid-run (proven: 80 real rows
+    // landed during a Phase 1 harness run) and risking test pushes
+    // to the merchant cloud. Sealed reads keep SyncManager inert
+    // (it returns before arming push/pull timers when creds are
+    // absent). Writes are denied outright (see set/delete below).
+    #[cfg(feature = "e2e")]
+    {
+        let _ = &app_handle;
+        return Ok(None);
+    }
+    #[cfg(not(feature = "e2e"))]
     authorize_and_execute(
         "get_cloud_credentials",
         Capability::LicenseManagement,
@@ -177,6 +205,16 @@ fn get_cloud_credentials(app_handle: tauri::AppHandle) -> Result<Option<CloudCre
 
 #[tauri::command]
 fn set_cloud_credentials(app_handle: tauri::AppHandle, url: String, token: String) -> Result<(), TrustError> {
+    // E2E seal: writing here would mint/replace the SHARED keyring
+    // credential (all identifiers, including production). Deny.
+    #[cfg(feature = "e2e")]
+    {
+        let _ = (&app_handle, &url, &token);
+        return Err(TrustError::op_failed(
+            "e2e sealed: cloud credentials live in the shared OS keyring; tests must never write them".to_string(),
+        ));
+    }
+    #[cfg(not(feature = "e2e"))]
     authorize_and_execute(
         "set_cloud_credentials",
         Capability::LicenseManagement,
@@ -217,6 +255,16 @@ fn set_cloud_credentials(app_handle: tauri::AppHandle, url: String, token: Strin
 
 #[tauri::command]
 fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustError> {
+    // E2E seal: deleting here would wipe the SHARED keyring
+    // credential, breaking production sync. Deny.
+    #[cfg(feature = "e2e")]
+    {
+        let _ = &app_handle;
+        return Err(TrustError::op_failed(
+            "e2e sealed: cloud credentials live in the shared OS keyring; tests must never delete them".to_string(),
+        ));
+    }
+    #[cfg(not(feature = "e2e"))]
     authorize_and_execute(
         "delete_cloud_credentials",
         Capability::LicenseManagement,
@@ -242,7 +290,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 106;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 112;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -314,7 +362,7 @@ fn backup_current_db_before_swap(
     backups_dir: &std::path::Path,
     timestamp: u64,
 ) -> Result<Option<String>, String> {
-    let db_path = app_dir.join("mobi_pos.db");
+    let db_path = crate::e2e::live_db_path(app_dir);
     if !db_path.exists() {
         return Ok(None); // Fresh install — nothing to preserve.
     }
@@ -325,7 +373,7 @@ fn backup_current_db_before_swap(
     verify_copy_integrity(&db_path, &dst)?;
     // Companion WAL/journal: best-effort, never fatal.
     for suffix in ["-wal", "-journal"] {
-        let src = app_dir.join(format!("mobi_pos.db{}", suffix));
+        let src = std::path::PathBuf::from(format!("{}{}", db_path.display(), suffix));
         if src.exists() {
             let _ = std::fs::copy(&src, backups_dir.join(format!("{}{}", name, suffix)));
         }
@@ -343,7 +391,7 @@ fn create_database_backup(
         Capability::ReadOperationalData,
         |_| {
             let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-            let db_path = app_dir.join("mobi_pos.db");
+            let db_path = crate::e2e::live_db_path(&app_dir);
             if !db_path.exists() {
                 return Err("Fichier mobi_pos.db introuvable".into());
             }
@@ -816,6 +864,7 @@ fn decrypt_snapshot_for_recovery(
                 requires_pin: Some(true),
                 device_id: None,
                 ip_address: None,
+                idempotency_key: None,
             };
             if let Err(e) = crate::trust_core::audit_append::append_kernel_row(&app_dir, &row) {
                 eprintln!("[snapshot-crypto] recovery audit row dropped: {e:?}");
@@ -840,7 +889,7 @@ fn sqlite_db_maintenance() -> Result<String, String> {
 #[tauri::command]
 fn sqlite_check_db_version(app_handle: tauri::AppHandle) -> Result<String, String> {
     let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    let db_path = app_dir.join("mobi_pos.db");
+    let db_path = crate::e2e::live_db_path(&app_dir);
     if !db_path.exists() {
         return Ok(format!(
             "absent (fresh install, max supported user_version={})",
@@ -1572,8 +1621,135 @@ fn base_schema_migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            // v109 — MOBI-DEFECT-F two-tab refund race barrier.
+            //
+            // The refund quota check used to scan `json_payload LIKE
+            // '%originalTransactionId%'` with no index and no constraint, so
+            // two tabs refunding the same ticket both passed and both paid.
+            // This version promotes refund identity to indexed columns,
+            // backfills them from the canonical receipt JSON (the same
+            // payload `writeCheckoutAtomicInner` persists), adds the
+            // exact-replay gate table (`refund_dedup`, written FIRST inside
+            // the native refund transaction), and installs a guardrail
+            // trigger so legacy write paths cannot bypass the native
+            // command. ADDITIVE ONLY: no row is deleted or re-keyed.
+            // Same sqlx-checksum rule as v4/v8/v102: never append DDL to an
+            // old migration body — this NEW version owns these objects.
+            version: 109,
+            description: "Refund barrier: indexed refund identity, dedup gate, bypass trigger",
+            sql: r#"
+            ALTER TABLE transactions ADD COLUMN original_transaction_id TEXT;
+            ALTER TABLE transactions ADD COLUMN is_refund INTEGER NOT NULL DEFAULT 0;
+            CREATE TABLE IF NOT EXISTS refund_dedup (
+                ticket_id TEXT NOT NULL,
+                items_hash TEXT NOT NULL,
+                refund_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                PRIMARY KEY (ticket_id, items_hash)
+            );
+            UPDATE transactions
+               SET original_transaction_id = json_extract(json_payload, '$.originalTransactionId')
+             WHERE original_transaction_id IS NULL
+               AND json_valid(json_payload)
+               AND json_extract(json_payload, '$.originalTransactionId') IS NOT NULL;
+            UPDATE transactions
+               SET is_refund = 1
+             WHERE is_refund = 0
+               AND json_valid(json_payload)
+               AND json_extract(json_payload, '$.isRefund') = 1;
+            CREATE INDEX IF NOT EXISTS idx_txn_orig
+              ON transactions(original_transaction_id) WHERE original_transaction_id IS NOT NULL;
+            CREATE TRIGGER IF NOT EXISTS trg_refund_requires_dedup
+            BEFORE INSERT ON transactions
+            WHEN NEW.is_refund = 1
+             AND COALESCE(NEW.sync_status, '') <> 'synced'
+             AND NOT EXISTS (SELECT 1 FROM refund_dedup WHERE refund_id = NEW.id)
+            BEGIN
+              SELECT RAISE(ABORT, 'REFUND_BYPASS: refunds must go through refund_sale_atomic');
+            END;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v110 — TIER-B device-bound payout proof. Adds the envelope
+            // columns to the sync table (NOT the core ledger): the native
+            // refund command stamps the enrolled device id + Ed25519
+            // signature on refund order rows so the backend proves the
+            // physical terminal behind each payout. Nullable + probed, never
+            // assumed: legacy rows and pre-migration writers keep working.
+            // Same sqlx-checksum rule: never append DDL to an old body.
+            version: 110,
+            description: "Tier-B device proof columns on sync_outbox (device_id, device_signature)",
+            sql: r#"
+            ALTER TABLE sync_outbox ADD COLUMN device_id TEXT;
+            ALTER TABLE sync_outbox ADD COLUMN device_signature TEXT;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v111 — TIER-B+ monotonic outbox sequence. Per-device counter
+            // for signed payout envelopes: the gateway rejects reordered or
+            // replayed mutations by demanding strictly increasing `seq_no`
+            // covered by the device signature. Nullable + probed, never
+            // assumed (same discipline as v110).
+            version: 111,
+            description: "Tier-B monotonic outbox sequence (sync_outbox.seq_no)",
+            sql: r#"
+            ALTER TABLE sync_outbox ADD COLUMN seq_no INTEGER;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v112 — TIER-B signed envelope verbatim column. The gateway
+            // verifies the signature over these exact bytes; reconstructing
+            // them from other fields (or re-serializing JSON) would break
+            // the covered-bytes contract. Nullable + probed, never assumed.
+            version: 112,
+            description: "Tier-B signed envelope verbatim column (sync_outbox.envelope)",
+            sql: r#"
+            ALTER TABLE sync_outbox ADD COLUMN envelope TEXT;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v113 — Unified Shift & Cash Ledger Invariant.
+            // Enforces at most one live shift per device, and adds sync_parked_movements
+            // for non-blocking out-of-order sync child ingestion.
+            version: 113,
+            description: "One live shift per device invariant and parked movements table",
+            sql: r#"
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_one_live_shift_per_device
+                ON cash_sessions(device_id)
+                WHERE status IN ('OPEN', 'CLOSING');
+
+            CREATE TABLE IF NOT EXISTS sync_parked_movements (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                row_version INTEGER NOT NULL DEFAULT 1,
+                parked_at TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_parked_session ON sync_parked_movements(session_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
+
+/// Live DB URL for `tauri-plugin-sql`.
+///
+/// Stays `sqlite:mobi_pos.db` on EVERY build flavor: the workspace-patched
+/// plugin confines `load` to exactly that filename (4.4 traversal hardening,
+/// `validate_db_name` in `patches/tauri-plugin-sql/src/wrapper.rs`, pinned by
+/// `load_confined_to_exact_db_name`). A different test filename is rejected
+/// at `load` and the app boots degraded on fallback stores (Phase 1 finding).
+/// Per owner direction the e2e flavor runs on the REAL app + REAL data, so
+/// no separate identifier/file exists either. Single source of truth
+/// with `e2e::db_filename()` and the TS loader (`sqlPluginAdapter.ts`).
+const DB_URL: &str = "sqlite:mobi_pos.db";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -1585,7 +1761,7 @@ pub fn run() {
         .plugin(scanner::plugin())
         .plugin(
             tauri_plugin_sql::Builder::default()
-                .add_migrations("sqlite:mobi_pos.db", migrations)
+                .add_migrations(DB_URL, migrations)
                 .build(),
         );
 
@@ -1595,6 +1771,13 @@ pub fn run() {
             .plugin(tauri_plugin_updater::Builder::new().build())
             .plugin(tauri_plugin_process::init());
     }
+
+    // Embedded WebDriver server: e2e builds only (`--features e2e`, which
+    // is what `npm run build:e2e` passes). The crate is an optional dep of
+    // that feature, so plain debug and production builds don't even link it.
+    // Gate 1.3 proves the absence via binary string search.
+    #[cfg(feature = "e2e")]
+    let mut builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
 
     builder = builder
         .setup(|app| {
@@ -1607,7 +1790,7 @@ pub fn run() {
             // opening it here would silently skip migrations it depends on.
             // Missing/unreadable dir or absent DB = fresh install, proceed.
             if let Ok(app_dir) = app.path().app_data_dir() {
-                let db_path = app_dir.join("mobi_pos.db");
+                let db_path = crate::e2e::live_db_path(&app_dir);
                 if db_path.exists() {
                     match sqlite_user_version(&db_path) {
                         Ok(v) if v > EXPECTED_MAX_DB_USER_VERSION => {
@@ -1655,7 +1838,7 @@ pub fn run() {
                     let Ok(backups) = backups_dir(&janitor_app) else {
                         return;
                     };
-                    let live_db = app_dir.join("mobi_pos.db");
+                    let live_db = crate::e2e::live_db_path(&app_dir);
                     // Phase 4d: seal legacy plaintext snapshots BEFORE the sweep
                     // (one-way migration; filenames unchanged so audit
                     // snapshotId references survive). Key failure skips the
@@ -1677,8 +1860,14 @@ pub fn run() {
                 });
             }
             Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
+        });
+
+    // Tauri has ONE invoke_handler (a second call replaces the first), so the
+    // two cfg branches below each carry the FULL production list verbatim —
+    // the test branch appends the `e2e_*` hooks. Keep both lists in
+    // sync when adding commands.
+    #[cfg(any(debug_assertions, feature = "e2e"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
             sqlite_print_raw_escpos,
             sqlite_open_cash_drawer,
             get_cloud_credentials,
@@ -1725,6 +1914,81 @@ pub fn run() {
             commands::po_commit_stock_batch,
             commands::process_raw_scan,
             commands::commit_stock_batch,
+            refund::refund_sale_atomic,
+            trust_core::device_identity::get_device_identity_info,
+            sync_outbox::fetch_next_outbox_batch,
+            sync_outbox::mark_outbox_synced,
+            sync_outbox::reap_stale_in_flight,
+            trust_core::time_anchor::ingest_signed_server_time,
+            scanner::mobile_scan_document,
+            e2e::e2e_reset_db,
+            e2e::e2e_seed_state,
+            e2e::e2e_reset_and_seed,
+            e2e::e2e_ledger_snapshot,
+            e2e::e2e_run_invariants,
+            e2e::e2e_get_printed,
+            e2e::e2e_build_info,
+            e2e::e2e_get_db_state,
+            e2e::e2e_get_sale,
+            e2e::e2e_get_product_stock,
+            e2e::e2e_get_customer_ledger,
+            e2e::e2e_get_shift,
+            e2e::e2e_mirror_shift_open
+        ]);
+    #[cfg(not(any(debug_assertions, feature = "e2e")))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+            sqlite_print_raw_escpos,
+            sqlite_open_cash_drawer,
+            get_cloud_credentials,
+            set_cloud_credentials,
+            delete_cloud_credentials,
+            create_database_backup,
+            list_database_backups,
+            decrypt_snapshot_for_recovery,
+            sqlite_check_db_version,
+            sqlite_db_maintenance,
+            emergency_export::emergency_export_ledger,
+            sav_attachments::sav_attachment_write,
+            sav_attachments::sav_attachment_read,
+            sav_attachments::sav_attachment_purge,
+            sav_attachments::sav_attachment_sweep_stale_drafts,
+            trust_core::ipc_authorizer::get_gate_state,
+            trust_core::ipc_authorizer::trust_sync_license,
+            trust_core::ipc_authorizer::trust_report_revocation,
+            trust_core::reanchor::trust_reanchor_challenge,
+            trust_core::reanchor::trust_reanchor_time,
+            trust_core::audit_append::audit_append,
+            trust_core::audit_append::audit_note_swallowed,
+            trust_core::audit_append::audit_verify,
+            trust_core::pin::pin_verify,
+            trust_core::pin::pin_lockout_remaining,
+            trust_core::pin::pin_set,
+            snapshot_prune::prune_snapshots,
+            intents::launch_dialer,
+            intents::launch_call,
+            intents::launch_whatsapp,
+            intents::launch_print,
+            intents::launch_print_label,
+            intents::mobile_wifi_print,
+            intents::mobile_bluetooth_print,
+            intents::mobile_bluetooth_printers,
+            intents::launch_url,
+            hardware::hardware_scan_devices,
+            hardware::hardware_update_vfd,
+            hardware::get_hardware_fingerprint,
+            hardware::get_license_token,
+            hardware::set_license_token,
+            hardware::delete_license_token,
+            commands::po_process_raw_scan,
+            commands::po_commit_stock_batch,
+            commands::process_raw_scan,
+            commands::commit_stock_batch,
+            refund::refund_sale_atomic,
+            trust_core::device_identity::get_device_identity_info,
+            sync_outbox::fetch_next_outbox_batch,
+            sync_outbox::mark_outbox_synced,
+            sync_outbox::reap_stale_in_flight,
+            trust_core::time_anchor::ingest_signed_server_time,
             scanner::mobile_scan_document
         ]);
 

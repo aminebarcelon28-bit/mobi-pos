@@ -219,7 +219,9 @@ pub fn execute_prune(backups_dir: &Path, plan: &PrunePlan) -> Result<Vec<String>
 #[serde(rename_all = "camelCase")]
 pub struct PruneRequest {
     pub pin: String,
+    #[serde(alias = "keep_last")]
     pub keep_last: Option<u32>,
+    #[serde(alias = "older_than_secs")]
     pub older_than_secs: Option<u64>,
 }
 
@@ -409,10 +411,10 @@ pub fn prune_snapshots(
         let backups_dir = crate::backups_dir(&app)?;
         let live_db = {
             use tauri::Manager;
-            app.path()
+            let dir = app.path()
                 .app_data_dir()
-                .map_err(|e| TrustError::op_failed(format!("app dir: {e}")))?
-                .join("mobi_pos.db")
+                .map_err(|e| TrustError::op_failed(format!("app dir: {e}")))?;
+            crate::e2e::live_db_path(&dir)
         };
         let candidates = collect_candidates(&backups_dir);
         let rows = read_snapshot_ref_rows(&live_db);

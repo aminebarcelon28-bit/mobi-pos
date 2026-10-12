@@ -225,10 +225,10 @@ export const ShiftZReportModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94dvh] sm:max-h-[90dvh] flex flex-col">
+    <div role="dialog" aria-modal="true" aria-label="Clôture de caisse et rapport Z" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 max-h-[94dvh] sm:max-h-[90dvh] flex flex-col">
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0 print:hidden" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0 print:hidden" aria-hidden="true" />
 
         {/* Header */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2 print:hidden">
@@ -351,7 +351,7 @@ export const ShiftZReportModal: React.FC = () => {
               Le caissier doit saisir le montant physique exact compté dans le tiroir-caisse avant que le logiciel ne révèle le solde théorique calculé.
             </p>
 
-            <div className="grid grid-cols-2 gap-3 items-center">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
               <div>
                 <label className="text-xs text-pos-muted block mb-1 font-semibold">Montant Physique Compté (DA)</label>
                 <MoneyInput
@@ -462,22 +462,23 @@ export const ShiftZReportModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-3.5 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2.5 shrink-0 print:hidden">
+        <div className="p-3.5 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2.5 shrink-0 print:hidden">
           <span className="text-[11px] text-pos-muted text-center sm:text-left">Z-TICKET N°: {zNumber} • Caissier: {lockScreenCashier}</span>
           <div className="flex items-center gap-2">
             <button
               onClick={closeModal}
-              className="flex-1 sm:flex-none min-h-[42px] px-4 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text bg-pos-hover/50 sm:bg-transparent transition cursor-pointer"
+              className="flex-1 sm:flex-none min-h-[44px] px-4 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text bg-pos-hover/50 sm:bg-transparent transition cursor-pointer active:scale-95"
             >
               Annuler
             </button>
             <button
               onClick={handlePrintZReport}
               aria-label="Imprimer Rapport Z (F9) — imprimer le ticket de clôture 80mm"
-              className="flex-2 sm:flex-none min-h-[42px] px-4 sm:px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 active:scale-95 transition cursor-pointer"
+              className="flex-2 sm:flex-none min-h-[44px] px-4 sm:px-5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20 active:scale-95 transition cursor-pointer"
             >
               <Printer className="w-4 h-4" aria-hidden="true" />
-              <span>Imprimer Rapport Z (F9)</span>
+              <span>Imprimer Rapport Z</span>
+              <span className="hidden sm:inline"> (F9)</span>
             </button>
           </div>
         </div>

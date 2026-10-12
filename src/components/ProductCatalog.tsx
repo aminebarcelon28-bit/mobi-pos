@@ -69,6 +69,7 @@ const ProductTile = React.memo(({
   return (
     <div
       onClick={() => onAddToCart(product)}
+      data-testid="product-tile"
       role="button"
       tabIndex={0}
       title={isOutOfStock ? `Rupture de stock — « ${product.title} » : ajout possible avec PIN manager (vente forcée)` : `« ${product.title} » — ${formatDZD(activePrice)} (${product.stock} en stock)`}
@@ -393,12 +394,36 @@ export const ProductCatalog: React.FC = () => {
     return () => window.removeEventListener('mobi:quicktouches-change', handleStorageChange);
   }, []);
 
-  // Category counts map
+  // Reconcile catalog divergence between authoritative storage and store state
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const { productAdapter } = await import('../db/adapters/productAdapter');
+        const reconciled = await productAdapter.getAllProducts();
+        const currentCount = usePosStore.getState().products.length;
+        if (active && reconciled.length > 0 && reconciled.length !== currentCount) {
+          console.info(`[Catalog] Divergence detected: store has ${currentCount}, authoritative has ${reconciled.length}. Reconciling...`);
+          usePosStore.setState({ products: reconciled });
+        }
+      } catch (err) {
+        console.warn('[Catalog] Auto-reconcile check failed:', err);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [products.length]);
+
+  // Category counts map (strictly avoid double-counting items whose category is 'Tous les produits')
   const categoryCounts = useMemo(() => {
-    const counts: Record<string, number> = { 'Tous les produits': products.length };
+    const counts: Record<string, number> = {};
     products.forEach((p) => {
-      counts[p.category] = (counts[p.category] || 0) + 1;
+      if (p.category && p.category !== 'Tous les produits') {
+        counts[p.category] = (counts[p.category] || 0) + 1;
+      }
     });
+    counts['Tous les produits'] = products.length;
     return counts;
   }, [products]);
 

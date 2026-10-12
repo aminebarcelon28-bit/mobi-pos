@@ -28,7 +28,7 @@ const BACKFILL_SCHEMA_ERA = 2;
 // Era 3: remirror now reconciles deletes (evicts Dexie ghosts for rows
 // deleted in SQLite). Bumping forces a one-time re-run so existing
 // divergences (UI 1960 vs SQLite 1010) converge on next boot.
-const REMIRROR_SCHEMA_ERA = 3;
+const REMIRROR_SCHEMA_ERA = 5;
 const BACKFILL_FLAG = `sync.backfill_v${BACKFILL_SCHEMA_ERA}`;
 const REMIRROR_FLAG = `sync.remirror_v${REMIRROR_SCHEMA_ERA}`;
 // Era-independent one-shot: projects the SQLite batches ledger into Dexie so

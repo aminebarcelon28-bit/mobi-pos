@@ -1,0 +1,337 @@
+/**
+ * Native refund barrier client (MOBI-DEFECT-F).
+ *
+ * All money effects of a refund commit in ONE native `BEGIN IMMEDIATE`
+ * transaction (`refund_sale_atomic` in `src-tauri/src/refund.rs`). This
+ * module is the only Tauri-path caller: it derives the deterministic refund
+ * identity, invokes the command through the platform boundary, parses the
+ * typed conflict codes, and projects the committed rows into Dexie
+ * (projection only — SQLite is the authority, Dexie is a cache).
+ *
+ * Retry rule: ONLY `BUSY` retries (the transaction never began, or a replay
+ * converges on the dedup gate and cannot pay twice). Every other code —
+ * including `ALREADY_REFUNDED` — never retries and performs NO side effects
+ * (no print, no drawer, no toast of a payout).
+ */
+import { invokeCommand } from '../../platform/invoke';
+import { deterministicId } from '../../utils/ids';
+import { db as dexieDb } from '../database';
+import type { Customer, Product, SaleTransaction, SecurityAuditLogEntry } from '../../types/pos';
+
+// ---------------------------------------------------------------------------
+// Deterministic identity
+// ---------------------------------------------------------------------------
+
+/**
+ * `basis` = number of refunds for this ticket the caller's snapshot already
+ * knew about (store + Dexie union). Two tabs with the same stale view derive
+ * the SAME hash, so the loser gets `ALREADY_REFUNDED`. A deliberate later
+ * partial refund sees a higher basis, hashes differently, and is decided by
+ * the in-transaction quota check. Without `basis`, two legitimate identical
+ * partial refunds (1 of qty 2, twice) would collide.
+ *
+ * The display receipt derives from the id: no per-tab entropy, no counter —
+ * the winner's receipt is the only receipt.
+ */
+export function refundIdentity(p: {
+  ticketId: string;
+  canonicalKey: string;
+  method: string;
+  netRefund: number;
+  basis: number;
+}): { itemsHash: string; refundId: string; receiptNumber: string } {
+  const itemsHash = deterministicId(
+    'REF',
+    p.ticketId,
+    p.canonicalKey,
+    p.method,
+    Math.round(p.netRefund),
+    p.basis,
+  );
+  return {
+    itemsHash,
+    refundId: itemsHash,
+    receiptNumber: `AVOIR-${itemsHash.replace(/^REF-/, '')}`,
+  };
+}
+
+export function knownRefundCount(
+  ticketId: string,
+  txns: Array<{ originalTransactionId?: string; isRefund?: boolean }>,
+): number {
+  const seen = new Set<string>();
+  for (const t of txns) {
+    if (t.isRefund && t.originalTransactionId === ticketId && (t as { id?: string }).id) {
+      seen.add(String((t as { id?: string }).id));
+    }
+  }
+  return seen.size;
+}
+
+// ---------------------------------------------------------------------------
+// Wire types (mirror src-tauri/src/refund.rs)
+// ---------------------------------------------------------------------------
+
+export interface NativeRefundLine {
+  id: string;
+  productId: string;
+  quantity: number;
+  appliedPrice: number;
+  unitPriceCharged: number;
+  unitCostAtSale: number;
+  discountAmount: number;
+  lineProfit: number;
+  imeiNumber?: string | null;
+  itemKey: string;
+  itemPayload: string;
+}
+
+/**
+ * Offline containment policy (MOBI-OFFLINE-REFUND-CONTAINMENT). Mirrors the
+ * native defaults in `src-tauri/src/refund.rs::read_policy_i64`: the native
+ * side is authoritative (reads `app_settings` in-txn); these constants drive
+ * the UI pre-flight hints only, so the modal can never promise what the
+ * command refuses. Tune per merchant via `app_settings` keys
+ * `policy.offline_cash_refund_limit` / `policy.offline_pin_threshold`
+ * (JSON numbers, integer DZD).
+ */
+export const DEFAULT_OFFLINE_CASH_REFUND_LIMIT = 10_000;
+export const DEFAULT_OFFLINE_PIN_THRESHOLD = 5_000;
+
+/** Best-effort read of an offline policy knob (defaults on any failure). */
+export async function readOfflinePolicy(
+  key: 'policy.offline_cash_refund_limit' | 'policy.offline_pin_threshold',
+): Promise<number> {
+  const fallback =
+    key === 'policy.offline_cash_refund_limit'
+      ? DEFAULT_OFFLINE_CASH_REFUND_LIMIT
+      : DEFAULT_OFFLINE_PIN_THRESHOLD;
+  try {
+    const { getLocalDb } = await import('../sqlPluginAdapter');
+    const db = await getLocalDb();
+    const rows = (await db.select('SELECT value_json FROM app_settings WHERE key = $1', [key]).catch(() => [])) as Array<{
+      value_json?: string | null;
+    }>;
+    const raw = rows?.[0]?.value_json;
+    if (raw == null) return fallback;
+    let parsed: number = NaN;
+    try {
+      const v: unknown = JSON.parse(String(raw));
+      parsed = typeof v === 'number' ? v : Number.NaN;
+    } catch {
+      parsed = Number(String(raw).trim());
+    }
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export interface NativeRefundRequest {
+  ticketId: string;
+  refundId: string;
+  itemsHash: string;
+  receiptNumber: string;
+  method: string;
+  /** Connectivity at submit time (TS probeOnline). Selects containment gates. */
+  online: boolean;
+  /** Asserted local context (getStableDeviceId + open shift). */
+  localDeviceId: string;
+  activeShiftId: string;
+  /**
+   * Supervisor authorization (Module C). Present only after a real
+   * `verifyManagerGate` pass immediately pre-submit; native requires it for
+   * large offline cash and records it in the in-txn audit row.
+   */
+  supervisor?: { userId: string; verifiedAt: string } | null;
+  customerId?: string | null;
+  subtotal: number;
+  discountTotal: number;
+  totalNet: number;
+  costTotal: number;
+  pricingTier: string;
+  paymentMethod: string;
+  cashTendered: number;
+  changeDue: number;
+  /** Net physical cash tendered on the original ticket (cap basis). */
+  cashTenderedNet: number;
+  createdAt: string;
+  refundPayload: string;
+  originalOutboxPayload: string;
+  deviceId: string;
+  lines: NativeRefundLine[];
+  deltas: Array<{ id: string; key: string; productId: string; delta: number }>;
+  batches: Array<{
+    batchId?: string | null;
+    productId: string;
+    quantity: number;
+    unitCost: number;
+    fallbackBatchId: string;
+    fallbackKey: string;
+  }>;
+  imeis: string[];
+  debt?: {
+    entryId: string;
+    customerId: string;
+    customerName: string;
+    amount: number;
+    receiptNumber: string;
+    paymentMethod: string;
+    notes: string;
+    recordedBy: string;
+  } | null;
+  voucher?: { code: string; amount: number } | null;
+  cashMove?: {
+    id: string;
+    sessionId: string;
+    amount: number;
+    reason: string;
+    cashierName: string;
+  } | null;
+  audit: {
+    action: string;
+    details: string;
+    user: string;
+    requiresPin: boolean;
+    deviceId?: string | null;
+    ipAddress?: string | null;
+  };
+}
+
+export interface NativeRefundOk {
+  refundId: string;
+  receiptNumber: string;
+  ticketStatus: string;
+  ticketVersion: number;
+  warnings: string[];
+}
+
+export type RefundNativeResult =
+  | { success: true; refundId: string; receiptNumber: string; ticketStatus: string; ticketVersion: number; warnings: string[] }
+  | { success: false; reason: string; refundId?: string; retryable: boolean; detail: string };
+
+// ---------------------------------------------------------------------------
+// Error parsing — native conflicts arrive as OperationFailed "CODE[:detail]"
+// (gate NONE), surfaced by invokeCommand as ApiError.message.
+// ---------------------------------------------------------------------------
+
+const RETRYABLE_CODES = new Set(['BUSY']);
+const RESUBMITTABLE_CODES = new Set(['BUSY', 'DEBT_CHANGED']);
+
+function parseRefundError(err: unknown): { reason: string; refundId?: string; retryable: boolean; detail: string } {
+  const raw =
+    (err as { originalError?: { detail?: unknown } })?.originalError?.detail ??
+    (err instanceof Error ? err.message : String(err));
+  const detail = String(raw ?? '');
+  const head = detail.split('\n')[0];
+  const m = head.match(
+    /^(ALREADY_REFUNDED|ORIGINAL_VOIDED|TICKET_NOT_FOUND|REFUND_EXCEEDS|VOUCHER_CHANGED|VOUCHER_MISSING|NO_OPEN_SHIFT|BUSY|INVALID|DEBT_CHANGED|INTERNAL|OFFLINE_FOREIGN_TICKET|OFFLINE_CASH_CAP_EXCEEDED|SUPERVISOR_PIN_REQUIRED|SCHEMA_UNHEALED|DEVICE_IDENTITY_SPOOFED|SUPERVISOR_AUTH_EXPIRED|SYSTEM_CLOCK_REGRESSION|DEVICE_NOT_INITIALIZED|DEVICE_SIGNATURE_FAILED)(?::(.*))?$/,
+  );
+  if (!m) return { reason: 'PERSISTENCE_FAILED', retryable: false, detail };
+  const code = m[1];
+  const rest = (m[2] ?? '').trim();
+  if (code === 'ALREADY_REFUNDED') {
+    return { reason: 'ALREADY_REFUNDED', refundId: rest || undefined, retryable: false, detail };
+  }
+  if (code === 'REFUND_EXCEEDS') return { reason: 'REFUND_EXCEEDS_PURCHASED', retryable: false, detail };
+  if (code === 'INVALID') return { reason: 'INVALID_REQUEST', retryable: false, detail };
+  if (code === 'INTERNAL' || code === 'SCHEMA_UNHEALED') {
+    return { reason: 'PERSISTENCE_FAILED', retryable: false, detail };
+  }
+  if (code === 'OFFLINE_CASH_CAP_EXCEEDED') {
+    // detail carries current:cap:attempted for the voucher-fallback prompt.
+    return { reason: 'OFFLINE_CASH_CAP_EXCEEDED', retryable: false, detail };
+  }
+  if (code === 'SUPERVISOR_PIN_REQUIRED') {
+    return { reason: 'SUPERVISOR_PIN_REQUIRED', retryable: false, detail };
+  }
+  if (code === 'DEVICE_IDENTITY_SPOOFED') {
+    return { reason: 'DEVICE_IDENTITY_SPOOFED', retryable: false, detail };
+  }
+  if (code === 'SUPERVISOR_AUTH_EXPIRED') {
+    return { reason: 'SUPERVISOR_AUTH_EXPIRED', retryable: false, detail };
+  }
+  if (code === 'SYSTEM_CLOCK_REGRESSION') {
+    return { reason: 'SYSTEM_CLOCK_REGRESSION', retryable: false, detail };
+  }
+  if (code === 'DEVICE_NOT_INITIALIZED' || code === 'DEVICE_SIGNATURE_FAILED') {
+    return { reason: 'PERSISTENCE_FAILED', retryable: false, detail };
+  }
+  return { reason: code, retryable: RETRYABLE_CODES.has(code) || RESUBMITTABLE_CODES.has(code), detail };
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------------
+// Invoke + Dexie projection
+// ---------------------------------------------------------------------------
+
+export interface RefundProjection {
+  refund: SaleTransaction;
+  updatedOriginal: SaleTransaction;
+  products: Product[];
+  customer?: Customer | null;
+  audit: SecurityAuditLogEntry;
+}
+
+/**
+ * Best-effort Dexie projection of an already-committed native refund.
+ * Idempotent puts by id. A failure here is logged, never thrown: SQLite is
+ * durable and the next sync/pull reconciles the cache.
+ */
+async function projectToDexie(p: RefundProjection): Promise<void> {
+  try {
+    await dexieDb.transaction(
+      'rw',
+      [dexieDb.transactions, dexieDb.products, dexieDb.customers, dexieDb.securityAuditLogs],
+      async () => {
+        await dexieDb.transactions.put(p.refund);
+        await dexieDb.transactions.put(p.updatedOriginal);
+        if (p.products.length > 0) await dexieDb.products.bulkPut(p.products);
+        if (p.customer) await dexieDb.customers.put(p.customer);
+        await dexieDb.securityAuditLogs.put(p.audit);
+      },
+    );
+  } catch (e) {
+    console.warn('[refund] Dexie projection failed; SQLite remains authoritative:', e);
+  }
+}
+
+export async function refundSaleNative(
+  req: NativeRefundRequest,
+  projection: RefundProjection,
+): Promise<RefundNativeResult> {
+  if (req.cashMove?.sessionId) {
+    try {
+      const { assertShiftVisibleToKernel } = await import('./shiftSqlite');
+      await assertShiftVisibleToKernel(req.cashMove.sessionId);
+    } catch (e) {
+      console.warn('[refundSaleNative] assertShiftVisibleToKernel preflight warning:', e);
+    }
+  }
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const ok = await invokeCommand<NativeRefundOk, { req: NativeRefundRequest }>(
+        'refund_sale_atomic',
+        { req },
+        'SYNC_CONFLICT',
+      );
+      // Status/version are authoritative from the receipt, not the
+      // pre-computed guess: stamp the projection before caching it.
+      projection.updatedOriginal = {
+        ...projection.updatedOriginal,
+        status: (ok.ticketStatus as SaleTransaction['status']) ?? projection.updatedOriginal.status,
+      };
+      await projectToDexie(projection);
+      return { success: true, ...ok };
+    } catch (err) {
+      const parsed = parseRefundError(err);
+      if (parsed.reason === 'BUSY' && attempt < 2) {
+        await sleep(250 * (attempt + 1));
+        continue;
+      }
+      return { success: false, ...parsed };
+    }
+  }
+}

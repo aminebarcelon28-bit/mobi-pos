@@ -306,14 +306,16 @@ export const ProductMatrixModal: React.FC = () => {
   };
 
   return (
-    <div
+    <div role="dialog" aria-modal="true" aria-label="Générateur de matrice et variantes"
       onClick={closeModal}
-      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-0 sm:p-4 select-none cursor-pointer"
+      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none cursor-pointer"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-dvh-shell sm:h-[88dvh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(0.5rem,var(--safe-bottom))] sm:pb-0"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full sm:max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 max-h-[94dvh] sm:h-[88dvh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0"
       >
+        {/* Mobile drag handle */}
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
         {/* Header */}
         <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
@@ -648,7 +650,7 @@ export const ProductMatrixModal: React.FC = () => {
         </div>
 
         {/* Footer with Submit Button */}
-        <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-card flex items-center justify-between gap-3 shrink-0">
+        <div className="p-3 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex items-center justify-between gap-3 shrink-0">
           <div className="text-xs text-pos-muted">
             <span className="font-bold text-pos-text">{totalVariantsCount}</span> références prêtes à être injectées dans le catalogue.
           </div>

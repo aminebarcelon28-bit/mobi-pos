@@ -53,6 +53,19 @@ export const LockScreenOverlay: React.FC = () => {
   // polled (never attempting) so the user is not silently stuck. Null =
   // unknown/unavailable — never shown as unlocked.
   const [nativeLockRemainingMs, setNativeLockRemainingMs] = useState<number | null>(null);
+  // Active lockout countdown (in seconds) for real-time visualization
+  const [lockoutRemainingSec, setLockoutRemainingSec] = useState<number | null>(null);
+  const isLockedOut = Boolean(lockoutRemainingSec && lockoutRemainingSec > 0);
+
+  const triggerKeyHaptic = (duration = 12) => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try {
+        navigator.vibrate(duration);
+      } catch {
+        // ignore Vibration API errors
+      }
+    }
+  };
 
   const isManagerProfile = Boolean(
     selectedUser?.role === 'admin' ||
@@ -89,6 +102,34 @@ export const LockScreenOverlay: React.FC = () => {
     const interval = setInterval(updateTime, 1000);
     return () => clearInterval(interval);
   }, [isScreenLocked]);
+
+  // Real-time lockout countdown visualization: decrements every 1s until clear.
+  useEffect(() => {
+    if (lockoutRemainingSec === null || lockoutRemainingSec <= 0) return;
+    const interval = window.setInterval(() => {
+      setLockoutRemainingSec((prev) => {
+        if (prev === null || prev <= 1) {
+          setErrorMsg('');
+          setTimeout(() => inputRef.current?.focus(), 50);
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [lockoutRemainingSec]);
+
+  // Initial lockout check when screen locks or profile changes.
+  useEffect(() => {
+    if (!isScreenLocked) {
+      setLockoutRemainingSec(null);
+      return;
+    }
+    const lock = checkPinLockout();
+    if (lock.isLocked && lock.remainingSeconds > 0) {
+      setLockoutRemainingSec(lock.remainingSeconds);
+    }
+  }, [isScreenLocked, selectedUser]);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -194,6 +235,7 @@ export const LockScreenOverlay: React.FC = () => {
       const lock = checkPinLockout();
       if (lock.isLocked) {
         soundEngine.playError();
+        setLockoutRemainingSec(lock.remainingSeconds);
         setErrorMsg(`Trop de tentatives — réessayez dans ${lock.remainingSeconds}s`);
         setPinInput('');
         return;
@@ -406,7 +448,12 @@ export const LockScreenOverlay: React.FC = () => {
       // (`pin_set` → Argon2id v2, hash never enters the WebView). The legacy
       // TS mint survives only outside Tauri (web preview) inside
       // rotatePinCredential — never as a fallback here.
-      const rotated = await st.rotatePinCredential(rotationFor.userId, cleanNew, rotationFor.isManager);
+      const rotated = await st.rotatePinCredential(
+        rotationFor.userId,
+        cleanNew,
+        rotationFor.isManager,
+        { supervisorPin: rotationFor.isManager ? pinInput.trim() : undefined }
+      );
       const refreshed = usePosStore.getState();
       const loggedInUser =
         refreshed.cashierUsers.find((u) => u.id === rotationFor.userId) ||
@@ -638,12 +685,19 @@ export const LockScreenOverlay: React.FC = () => {
   const greeting = hourNow >= 18 || hourNow < 5 ? 'Bonsoir' : 'Bonjour';
 
   return (
-    <div className="fixed inset-0 z-[100] bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-between p-6 select-none animate-in fade-in duration-200">
+    <div
+      data-testid="lock-screen"
+      className="fixed inset-0 z-[100] bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-between p-4 sm:p-6 select-none animate-in fade-in duration-200"
+      style={{
+        paddingTop: 'max(var(--safe-top, 24px), 1.5rem)',
+        paddingBottom: 'max(var(--safe-bottom, 24px), 1.5rem)',
+      }}
+    >
       {/* Top Bar: Store Brand & Live Clock */}
       <div className="w-full max-w-4xl flex items-center justify-between text-slate-400 pt-2">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-black text-sm">
-            <Lock className="w-4 h-4" />
+            <Lock className="w-4 h-4" aria-hidden="true" />
           </div>
           <div>
             <h1 className="text-sm font-black text-white tracking-wide uppercase">
@@ -673,6 +727,7 @@ export const LockScreenOverlay: React.FC = () => {
                 <button
                   key={u.id}
                   type="button"
+                  data-testid={`lock-profile-${u.id}`}
                   onClick={() => {
                     setSelectedUser(u);
                     setPinInput('');
@@ -690,7 +745,11 @@ export const LockScreenOverlay: React.FC = () => {
                     className="w-10 h-10 rounded-full flex items-center justify-center font-black text-sm text-slate-950 shadow"
                     style={{ backgroundColor: u.avatarColor || '#3b82f6' }}
                   >
-                    {u.role === 'admin' ? <Shield className="w-5 h-5 text-white" /> : <User className="w-5 h-5 text-white" />}
+                    {u.role === 'admin' ? (
+                      <Shield className="w-5 h-5 text-white" aria-hidden="true" />
+                    ) : (
+                      <User className="w-5 h-5 text-white" aria-hidden="true" />
+                    )}
                   </div>
                   <div className="text-center truncate w-full">
                     <span className="text-xs font-bold block truncate">{u.name}</span>
@@ -737,6 +796,7 @@ export const LockScreenOverlay: React.FC = () => {
               pattern="[0-9]*"
               autoComplete="new-password"
               aria-label="Nouveau code PIN"
+              data-testid="rotation-new"
               maxLength={8}
               value={rotationNew}
               onChange={(e) => {
@@ -753,6 +813,7 @@ export const LockScreenOverlay: React.FC = () => {
               pattern="[0-9]*"
               autoComplete="new-password"
               aria-label="Confirmer le nouveau code PIN"
+              data-testid="rotation-confirm"
               maxLength={8}
               value={rotationConfirm}
               onChange={(e) => {
@@ -769,6 +830,7 @@ export const LockScreenOverlay: React.FC = () => {
             )}
             <button
               type="button"
+              data-testid="rotation-submit"
               onClick={() => void handleSubmitRotation()}
               className="mt-3 w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm transition active:scale-95 min-h-[48px]"
             >
@@ -779,13 +841,17 @@ export const LockScreenOverlay: React.FC = () => {
           <div className="w-full flex flex-col items-center">
             {/* Dynamic Slot PIN Input UI */}
             <div
-              className={`relative flex items-center justify-center gap-2 sm:gap-3 cursor-pointer py-3 px-2 touch-manipulation ${
+              data-testid="login-pin-pad"
+              className={`relative flex items-center justify-center ${
+                maxPinLength > 6 ? 'gap-1.5 sm:gap-2.5' : 'gap-2 sm:gap-3'
+              } cursor-pointer py-3 px-2 touch-manipulation ${
                 isShaking ? 'animate-lock-shake' : ''
               }`}
               onClick={() => inputRef.current?.focus()}
             >
               <input
                 ref={inputRef}
+                data-testid="login-pin-input"
                 type="password"
                 inputMode="numeric"
                 pattern="[0-9]*"
@@ -793,15 +859,17 @@ export const LockScreenOverlay: React.FC = () => {
                 autoCapitalize="off"
                 autoCorrect="off"
                 spellCheck={false}
+                disabled={isLockedOut}
                 aria-label={`Code PIN de connexion (${isManagerProfile ? '6 à 8' : '4'} chiffres)`}
                 maxLength={maxPinLength}
                 value={pinInput}
                 onChange={(e) => {
-                  if (submittingRef.current) return;
+                  if (submittingRef.current || isLockedOut) return;
                   const val = e.target.value.replace(/[^0-9]/g, '').slice(0, maxPinLength);
                   if (val === pinInput) return;
                   setErrorMsg('');
                   soundEngine.playKeyBeep?.();
+                  triggerKeyHaptic();
                   setPinInput(val);
                   if (!isManagerProfile && val.length === targetPinLength) {
                     void handleSubmitPin(val);
@@ -815,11 +883,16 @@ export const LockScreenOverlay: React.FC = () => {
                 const isFilled = pinInput.length > idx;
                 const isActive = pinInput.length === idx;
                 const hasError = Boolean(errorMsg);
+                const isCompact = maxPinLength > 6;
 
                 return (
                   <div
                     key={idx}
-                    className={`w-11 h-14 sm:w-14 sm:h-16 rounded-xl sm:rounded-2xl border-2 flex items-center justify-center transition-all duration-150 select-none ${
+                    className={`${
+                      isCompact
+                        ? 'w-8 h-12 sm:w-12 sm:h-16 rounded-lg sm:rounded-2xl'
+                        : 'w-11 h-14 sm:w-14 sm:h-16 rounded-xl sm:rounded-2xl'
+                    } border-2 flex items-center justify-center transition-all duration-150 select-none ${
                       hasError
                         ? 'border-rose-500/80 bg-rose-950/30 text-rose-400 shadow-lg shadow-rose-950/30'
                         : isFilled
@@ -830,11 +903,19 @@ export const LockScreenOverlay: React.FC = () => {
                     }`}
                   >
                     {isFilled ? (
-                      <div className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-amber-400 shadow-md shadow-amber-400/60" />
+                      <div
+                        className={`${
+                          isCompact ? 'w-2.5 h-2.5 sm:w-4 sm:h-4' : 'w-3.5 h-3.5 sm:w-4 sm:h-4'
+                        } rounded-full bg-amber-400 shadow-md shadow-amber-400/60`}
+                      />
                     ) : isActive ? (
                       <div className="w-0.5 h-6 bg-amber-400 rounded-full animate-pulse" />
                     ) : (
-                      <div className="w-2 h-2 rounded-full bg-slate-700/60" />
+                      <div
+                        className={`${
+                          isCompact ? 'w-1.5 h-1.5 sm:w-2 sm:h-2' : 'w-2 h-2'
+                        } rounded-full bg-slate-700/60`}
+                      />
                     )}
                   </div>
                 );
@@ -847,7 +928,7 @@ export const LockScreenOverlay: React.FC = () => {
                 role="alert"
                 className="mt-3 px-3.5 py-1.5 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-semibold flex items-center justify-center gap-1.5 animate-in fade-in duration-150 min-h-[28px]"
               >
-                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                 <span>{errorMsg}</span>
               </div>
             ) : (
@@ -865,6 +946,7 @@ export const LockScreenOverlay: React.FC = () => {
             {showManualSubmit && (
               <button
                 type="button"
+                data-testid="login-submit"
                 onClick={() => void handleSubmitPin()}
                 className="mt-3 px-6 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold transition active:scale-95 cursor-pointer"
               >
@@ -878,7 +960,7 @@ export const LockScreenOverlay: React.FC = () => {
               onClick={() => void handleOpenTechRecovery()}
               className="mt-4 text-xs text-slate-400 hover:text-amber-400 transition underline underline-offset-4 cursor-pointer flex items-center gap-1.5"
             >
-              <Wrench className="w-3.5 h-3.5" />
+              <Wrench className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Code PIN oublié ? Assistance technicien</span>
             </button>
           </div>

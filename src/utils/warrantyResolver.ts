@@ -456,6 +456,9 @@ export function warrantyAnchorFor(args: {
   soldAt: string;
   warrantyMonths: number;
 }): string {
+  // Fail-closed: an unparseable sale instant yields '' (no anchor) instead of
+  // throwing out of the checkout/sale path. Readers treat '' as unknown.
+  if (Number.isNaN(new Date(args.soldAt).getTime())) return '';
   const months = Math.max(0, Math.floor(Number(args.warrantyMonths) || 0));
   return months > 0 ? addMonthsClamped(args.soldAt, months) : new Date(args.soldAt).toISOString();
 }
@@ -674,9 +677,15 @@ export function getRepairWarrantyStatus(
   const now = new Date(nowIso || device.nowIso || new Date().toISOString());
   const anchoredMs = r.expiresAtIso ? new Date(r.expiresAtIso).getTime() : NaN;
   const useAnchor = !Number.isNaN(anchoredMs);
+  // Producer-tolerant: date-only (YYYY-MM-DD) gets the UTC-midnight suffix;
+  // a full ISO from a future producer shape is used as-is (blindly appending
+  // the suffix would forge an unparseable instant).
+  const computedDay = computeWarrantyExpiryISO(new Date(startMs).toISOString(), r.tier);
   const endMs = useAnchor
     ? anchoredMs
-    : new Date(computeWarrantyExpiryISO(new Date(startMs).toISOString(), r.tier) + 'T00:00:00.000Z').getTime();
+    : computedDay
+      ? new Date(computedDay.includes('T') ? computedDay : computedDay + 'T00:00:00.000Z').getTime()
+      : NaN;
   if (Number.isNaN(endMs)) return null;
 
   const daysLeft = daysBetween(endMs, now.getTime());
@@ -892,13 +901,24 @@ export function warrantyCertificateDates(input: {
 }): { startIso: string; expiryIso: string; start: string; expiry: string; anchored: boolean } {
   const anchor = input.anchoredExpiresAt ? new Date(input.anchoredExpiresAt) : null;
   const useAnchor = anchor !== null && !Number.isNaN(anchor.getTime());
+  const start = new Date(input.startIso);
+  // Fail-closed: an unparseable sale instant renders dashes instead of
+  // throwing RangeError out of the print path — but a frozen anchor is still
+  // the promised expiry, so it is preserved when present.
+  if (Number.isNaN(start.getTime())) {
+    if (useAnchor) {
+      const anchoredIso = (anchor as Date).toISOString();
+      return { startIso: '', expiryIso: anchoredIso, start: '—', expiry: formatWarrantyDate(anchoredIso), anchored: true };
+    }
+    return { startIso: '', expiryIso: '', start: '—', expiry: '—', anchored: false };
+  }
   const expiryIso = useAnchor
     ? (anchor as Date).toISOString()
     : addMonthsClamped(input.startIso, Math.max(0, Math.floor(Number(input.months) || 0)));
   return {
-    startIso: new Date(input.startIso).toISOString(),
+    startIso: start.toISOString(),
     expiryIso,
-    start: formatWarrantyDate(new Date(input.startIso).toISOString()),
+    start: formatWarrantyDate(start.toISOString()),
     expiry: formatWarrantyDate(expiryIso),
     anchored: useAnchor,
   };

@@ -14,7 +14,7 @@ import React from 'react';
  *
  * Header content contract (enforced by callers, not CSS):
  * - Text headers must use `truncate min-w-0` so long titles never push actions out.
- * - Interactive header buttons must be at least 44x44px (min-h-[44px] min-w-[44px]).
+ * - Interactive controls must be at least 48x48dp (min-h-[48px] min-w-[48px]) for thumb ergonomics.
  */
 interface AppScreenLayoutProps {
   /** Rigid header content (already min-h-[48px]; shell adds safe-top padding). */
@@ -43,7 +43,7 @@ export const AppScreenLayout: React.FC<AppScreenLayoutProps> = ({
       // min-h-[100vh] : repli pour les webviews anciennes (plancher Android 7)
       // sans prise en charge de dvh — propriété distincte de height, donc sans
       // conflit de cascade quand dvh est supporté.
-      className={`${fill === 'viewport' ? 'h-[100dvh] min-h-[100vh]' : 'h-full'} w-full flex flex-col overflow-hidden bg-pos-bg text-pos-text select-none font-sans ${className}`}
+      className={`${fill === 'viewport' ? 'h-[100dvh] min-h-[100vh]' : 'h-full'} w-full flex flex-col overflow-hidden bg-pos-bg text-pos-text select-none font-sans touch-manipulation overscroll-none ${className}`}
     >
       {header && (
         <div
@@ -54,7 +54,7 @@ export const AppScreenLayout: React.FC<AppScreenLayoutProps> = ({
             paddingRight: 'var(--safe-right, 0px)',
           }}
         >
-          <div className="min-h-[48px] flex flex-col justify-center">{header}</div>
+          <div className="min-h-[48px] landscape:min-h-[44px] flex flex-col justify-center">{header}</div>
         </div>
       )}
 
@@ -115,7 +115,7 @@ export const AppTabContent: React.FC<AppTabContentProps> = ({
     <div className={`flex-1 min-h-0 flex flex-col overflow-hidden ${className}`}>
       {pinnedTop && <div className="shrink-0 z-10">{pinnedTop}</div>}
 
-      <div className={`flex-1 min-h-0 overflow-y-auto overscroll-contain ${contentClassName}`}>
+      <div className={`flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y ${contentClassName}`}>
         {children}
       </div>
 

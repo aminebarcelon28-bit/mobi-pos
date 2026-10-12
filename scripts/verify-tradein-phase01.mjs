@@ -11,24 +11,14 @@ function check(name, cond, detail) {
 }
 
 console.log('=== Phase 0: computeTradeInSettlement ===');
-const ts = await import('typescript');
+// Bundled loader: a data: URL of the transpiled source cannot resolve the
+// module's own relative specifiers (savValidation → ./deviceIdCodec), which is
+// exactly the ERR_UNSUPPORTED_RESOLVE_REQUEST this script used to die with.
+// See scripts/ts-module-loader.mjs.
 const fs = await import('node:fs');
-const toDataUrl = (js) => 'data:text/javascript;base64,' + Buffer.from(js).toString('base64');
-const transpileFile = (p) => {
-  const source = fs.readFileSync(p, 'utf8');
-  return ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
-    fileName: p,
-  }).outputText;
-};
-const pricingUrl = toDataUrl(transpileFile(`${ROOT}/src/utils/pricingEngine.ts`));
-let rmSrc = fs.readFileSync(`${ROOT}/src/utils/receiptMath.ts`, 'utf8');
-rmSrc = rmSrc.replace(/from\s+(['"])\.\/pricingEngine\1/g, `from '${pricingUrl}'`);
-const rmOut = ts.transpileModule(rmSrc, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
-  fileName: 'receiptMath.ts',
-});
-const rm = await import(toDataUrl(rmOut.outputText));
+const { importModule } = await import('./ts-module-loader.mjs');
+
+const rm = await importModule('src/utils/receiptMath.ts', ROOT);
 
 // Scenario A: customer owes
 const a = rm.computeTradeInSettlement(120000, 50000);
@@ -61,16 +51,14 @@ check('stacked credits: 120k-10k-5k-50k = 55k', t3.net === 55000, JSON.stringify
 // tradeIn is payment, not discount: ht unchanged, credit reduces ttc.
 const v0 = rm.computeCartTotals([line(100000)], { vatRate: 19 });
 const v1 = rm.computeCartTotals([line(100000)], { vatRate: 19, tradeInCredit: 40000 });
-check('no-TVA: vatRate 19 ignored (tva 0, ht 100k)', v0.tva === 0 && v0.ht === 100000 && v0.ttc === 100000, JSON.stringify({ v0 }));
-check('no-TVA: ht unchanged by tradeIn, ttc reduced by credit', v1.ht === v0.ht && v1.tva === 0 && v1.ttc === 60000, JSON.stringify(v1));
+// Post-drop (Phase 1b-i) the tax fields are ABSENT, not zeroed — receiptMath
+// deletes `tax`/`tva` outright, so `=== undefined` is the real contract and is
+// strictly stronger than a `=== 0` check (a reintroduced zero fails it).
+check('no-TVA: vatRate 19 ignored (no tax field, ht 100k)', v0.tva === undefined && v0.ht === 100000 && v0.ttc === 100000, JSON.stringify({ v0 }));
+check('no-TVA: ht unchanged by tradeIn, ttc reduced by credit', v1.ht === v0.ht && v1.tva === undefined && v1.ttc === 60000, JSON.stringify(v1));
 
 console.log('=== Phase 1: generateUniqueSku OCC ===');
-const bcSrc = fs.readFileSync(`${ROOT}/src/utils/barcodeGenerator.ts`, 'utf8');
-const bcOut = ts.transpileModule(bcSrc, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
-  fileName: 'barcodeGenerator.ts',
-});
-const bc = await import(toDataUrl(bcOut.outputText));
+const bc = await importModule('src/utils/barcodeGenerator.ts', ROOT);
 const sku1 = bc.generateUniqueSku([], "Téléphones d'Occasion (Reprise)", 'Apple');
 check("OCC prefix for reprise/Apple", sku1.startsWith('OCC-APP-'), sku1);
 const sku2 = bc.generateUniqueSku([{ sku: sku1 }], "Téléphones d'Occasion (Reprise)", 'Apple');
@@ -79,12 +67,7 @@ const sku3 = bc.generateUniqueSku([], "Téléphones d'Occasion (Reprise)", 'Sams
 check('Samsung maps OCC-SAM', sku3.startsWith('OCC-SAM-'), sku3);
 
 console.log('=== Phase 1: luhnCheckImei ===');
-const savSrc = fs.readFileSync(`${ROOT}/src/utils/savValidation.ts`, 'utf8');
-const savOut = ts.transpileModule(savSrc, {
-  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
-  fileName: 'savValidation.ts',
-});
-const sav = await import(toDataUrl(savOut.outputText));
+const sav = await importModule('src/utils/savValidation.ts', ROOT);
 // Known-good IMEI (passes Luhn): 490154203237518 is the canonical example
 check('valid IMEI passes', sav.luhnCheckImei('490154203237518') === true);
 check('bad checksum fails', sav.luhnCheckImei('490154203237519') === false);

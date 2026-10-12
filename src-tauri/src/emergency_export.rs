@@ -335,7 +335,7 @@ fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
         .path()
         .app_data_dir()
         .map_err(|e| format!("Chemin applicatif introuvable: {e}"))?;
-    let p = dir.join("mobi_pos.db");
+    let p = crate::e2e::live_db_path(&dir);
     if !p.exists() {
         return Err("Base de données locale introuvable — rien à exporter.".into());
     }

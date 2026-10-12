@@ -24,6 +24,7 @@ import { db as dexieDb } from '../db/database';
 import type { CreditVoucher, Customer, LoyaltyLedgerEntry } from '../types/pos';
 import { sanitizeSyncPayload, utcNowIso, isDeviceLocalSettingKey, RECEIPT_SETTINGS_KEY, isRetryableDbError } from '../db/sqlPluginAdapter';
 import { imeiAnchorColumnsPresent as probeImeiAnchorColumns } from '../db/imeiAnchorSchema';
+import { coerceIsoInstant } from '../utils/isoInstant';
 
 /** Singular push entity_type -> plural remote KV table. */
 export const GENERIC_TABLES: Record<string, string> = {
@@ -117,12 +118,12 @@ function coerceAnchorMonths(value: unknown): number | null {
   return Math.floor(n);
 }
 
-/** A peer's frozen warranty expiry, or NULL. An unparseable instant is dropped. */
+/** A peer's frozen warranty expiry, or NULL. Unparseable instants are dropped;
+ * parseable ones are canonicalized to ISO-8601 UTC (never stored verbatim:
+ * a space-separated peer spelling would shift every `new Date()` reader
+ * into local TZ and mis-order byte-wise comparisons). */
 function coerceAnchorInstant(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed || Number.isNaN(new Date(trimmed).getTime())) return null;
-  return trimmed;
+  return coerceIsoInstant(value);
 }
 
 /**
@@ -503,8 +504,10 @@ async function mirrorGenericToSqlite(
       imei,
       String((m.product_id as string) ?? (m.productId as string) ?? ''),
       ((m.sale_transaction_id ?? m.saleTransactionId ?? null) as string | null),
-      ((m.sold_at ?? m.soldAt ?? null) as string | null),
-      String((m.received_at ?? m.receivedAt ?? now)),
+      // Canonicalized on ingest: a peer's space-separated or local-time
+      // spelling must never land verbatim (FIFO ORDER BY + warranty clocks).
+      coerceIsoInstant(m.sold_at ?? m.soldAt),
+      coerceIsoInstant(m.received_at ?? m.receivedAt) ?? now,
       version,
     ];
     if (anchorCols.has('warranty_expires_at')) {
@@ -637,6 +640,12 @@ async function mirrorGenericToSqlite(
     ).catch((err: unknown) => {
       console.warn(`[sync:generic] Failed to mirror app_settings.${id}:`, err);
     });
+  } else if (table === 'cash_sessions') {
+    const { mirrorCashSession } = await import('./cashMirror');
+    await mirrorCashSession(db, { id, data_json: JSON.stringify(payload), version }, payload);
+  } else if (table === 'cash_movements') {
+    const { mirrorCashMovement } = await import('./cashMirror');
+    await mirrorCashMovement(db, { id, data_json: JSON.stringify(payload), version }, payload);
   }
 }
 

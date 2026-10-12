@@ -114,9 +114,11 @@ export async function withBusyRetry<T>(fn: () => Promise<T>, opts: BusyRetryOpti
   let lastError: unknown = null;
   let exhausted: BusyRetryOptions<T>['onExhausted'] | undefined;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    // B-063: keep an active checkout flight's heartbeat fresh while this
-    // retry loop is still working — otherwise the idle watchdog force-releases
-    // mid-retry and a second busy-retry:checkout starts on the same pool.
+    // B-063 (Gate 4 revision): heartbeat is best-effort AND owner-scoped —
+    // renewCheckoutFlight() with no owner is a no-op against a live holder,
+    // so background lanes can never extend a dead holder past the 60 s idle
+    // watchdog (that failure mode wedged every later sale indefinitely).
+    // A live sale's own invocations each complete well inside the window.
     try {
       const { renewCheckoutFlight } = await import('./checkoutFlight');
       renewCheckoutFlight();

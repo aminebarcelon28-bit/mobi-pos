@@ -35,8 +35,17 @@ export const DRAWER_REASON_PREFIXES = {
   EXCHANGE_CASHOUT: 'Remboursement espèces échange',
   /** Soulte boutique: shop owes the exchange difference, paid from drawer.
    * Written by the checkout slice post-commit (single net EXPENSE tagged
-   * with the trade id); read by the exchange term below. */
+   * with the trade id); read by the exchange lane for expected-cash
+   * math but display on their own Z line (no double-show). */
   SOULTE_CASHOUT: 'Soulte échange (Reprise)',
+  /**
+   * Cross-shift refund allocation record (Fix 4). Written by processRefund
+   * post-commit as an ALLOCATION movement (math-invisible by type
+   * allowlisting). Format:
+   * `Remboursement allocation [AVOIR-<receipt>] drawer=<shiftId> periode=<shiftId> net=<n> especes=<n> avoir=<n> origine=<origReceipt>`
+   * No cash-math reader matches this prefix — it exists for the audit trail.
+   */
+  REFUND_ALLOCATION: 'Remboursement allocation',
 } as const;
 
 /** Tag appended to standalone (twin-less) manual movements at write time by
@@ -307,4 +316,75 @@ export function zTicketNumber(closedShiftCount: number, at?: Date | string): str
   const day = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
   const seq = String(Math.max(1, Math.floor(closedShiftCount || 0) + 1)).padStart(3, '0');
   return `${day}-${seq}`;
+}
+
+/**
+ * Refund tender-clamp primitives (anti cash-extraction). Single owner of the
+ * "what physical cash may leave the drawer on a refund" predicate — the modal
+ * preview, the slice execution path, and the adapter verification path must
+ * all import these, never reimplement them.
+ *
+ * All amounts integer DA; corrupt rows read as 0, never NaN.
+ */
+export interface RefundTenderLike {
+  tenders?: Array<{ method?: string; amount?: number }> | null;
+  paymentMethod?: string;
+  total?: number;
+  changeDue?: number;
+}
+
+/**
+ * Net physical cash the customer put into the drawer on the ORIGINAL ticket:
+ * Espèces tender legs minus change handed back. Legacy rows without tenders
+ * fall back to paymentMethod === 'Espèces' ? total : 0 (same convention as
+ * cashSalesFromTxns — one number, never two).
+ */
+export function physicalCashTendered(t: RefundTenderLike | undefined | null): number {
+  if (!t) return 0;
+  if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
+    const legs = t.tenders
+      .filter((leg) => leg && leg.method === 'Espèces')
+      .reduce((sum, leg) => sum + (Number(leg.amount) || 0), 0);
+    return Math.max(0, Math.round(legs) - Math.max(0, Math.round(Number(t.changeDue) || 0)));
+  }
+  return t.paymentMethod === 'Espèces' ? toCashAmount(t.total) : 0;
+}
+
+/** Exact cash already disbursed by ONE prior refund row. */
+export function cashDisbursedOf(t: CashTxnLike | undefined | null): number {
+  if (!t) return 0;
+  if (!(t.refundMethod === 'Espèces' || t.paymentMethod === 'Espèces')) return 0;
+  const d = t.cashDisbursed;
+  return d === undefined || d === null ? toCashAmount(t.total) : toCashAmount(d);
+}
+
+export interface CashClampInput {
+  /** Funding-split cash share requested for THIS refund (integer DA). */
+  cashShare: number;
+  /** Net physical cash tendered on the original ticket (integer DA). */
+  cashTenderedNet: number;
+  /** Cumulative cash already disbursed by prior refunds (integer DA). */
+  priorCashOut: number;
+}
+
+export interface CashClampResult {
+  /** Drawer-may-pay amount for this refund. */
+  cashOut: number;
+  /** Excess that must lock to Avoir (never cash). */
+  avoirOverflow: number;
+}
+
+/**
+ * Strict tender clamp: cumulative cash out can never exceed the net physical
+ * cash originally tendered. Any excess locks to Avoir. Pure + integer-only.
+ */
+export function clampCashRefund(i: CashClampInput): CashClampResult {
+  const want = Math.max(0, Math.round(Number(i.cashShare) || 0));
+  const cap = Math.max(
+    0,
+    Math.max(0, Math.round(Number(i.cashTenderedNet) || 0)) -
+      Math.max(0, Math.round(Number(i.priorCashOut) || 0))
+  );
+  const cashOut = Math.min(want, cap);
+  return { cashOut, avoirOverflow: want - cashOut };
 }

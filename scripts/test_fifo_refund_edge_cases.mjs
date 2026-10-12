@@ -160,8 +160,8 @@ function part2() {
   check('reconcileShadowBatches job exists + hooked to receipt', adapter.includes('reconcileShadowBatches') && adapter.includes('await reconcileShadowBatches(batch.productId)'));
   check('pull of new batches triggers reconcile (both clients)', sync.includes('reconcileShadowBatches'));
   check('pull-apply persists shadow linkage, skips Dexie for SHADOW', gen.includes('shadow_sale_id') && gen.includes(`=== 'SHADOW'`));
-  check('remote schema v12 + shadow columns + CHECK', /LATEST_REMOTE_VERSION = 12/.test(remote) && remote.includes('quantity_remaining >= 0'));
-  check('remote schema v12 frozen allocation ledger + shift attribution', remote.includes('sale_batch_allocations') && remote.includes('LATEST_REMOTE_VERSION = 12') && remote.includes('shift_id'));
+  check('remote schema v13 + shadow columns + CHECK', /LATEST_REMOTE_VERSION = 13/.test(remote) && remote.includes('quantity_remaining >= 0'));
+  check('remote schema v13 frozen allocation ledger + shift attribution', remote.includes('sale_batch_allocations') && remote.includes('LATEST_REMOTE_VERSION = 13') && remote.includes('shift_id'));
   check('restitution skips shadow batches', adapter.includes(`startsWith('shadow-')`));
   check('Edge C: mobile + desktop share computeCartTotals', cart.includes('computeCartTotals') && paym.includes('computeCartTotals'));
   check('restitution restores newest-first (LIFO)', slice.includes('reversedAllocations'));

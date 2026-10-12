@@ -363,6 +363,20 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("process_raw_scan", Capability::OperationalWrites),
     ("po_commit_stock_batch", Capability::OperationalWrites),
     ("commit_stock_batch", Capability::OperationalWrites),
+    // MOBI-DEFECT-F: native atomic refund barrier (single Immediate txn).
+    ("refund_sale_atomic", Capability::OperationalWrites),
+    // TIER-B: public device credentials for the boot handshake (id + pubkey
+    // only — the seed never crosses IPC). Same plane as the refund it arms.
+    ("get_device_identity_info", Capability::OperationalWrites),
+    // SYNC-DRAIN: signed-lane outbox transitions (fetch/ack/reap). Same
+    // plane as the refund that mints the rows; short transactions only,
+    // never held across network I/O.
+    ("fetch_next_outbox_batch", Capability::OperationalWrites),
+    ("mark_outbox_synced", Capability::OperationalWrites),
+    ("reap_stale_in_flight", Capability::OperationalWrites),
+    // TIER-B+: gateway-signed time ingestion (skew calibration plane, same
+    // as re-anchor so quarantined terminals stay able to observe it).
+    ("ingest_signed_server_time", Capability::LicenseManagement),
     // Read-only operational data.
     ("create_database_backup", Capability::ReadOperationalData),
     ("list_database_backups", Capability::ReadOperationalData),
@@ -875,6 +889,7 @@ fn clock_anomaly_request(kind: &str, wall_now_ms: u64, anchor_ms: Option<u64>) -
         requires_pin: Some(false),
         device_id: None,
         ip_address: None,
+        idempotency_key: None,
     }
 }
 fn emit_clock_anomaly_row(kind: &str, wall_now_ms: u64, anchor_ms: Option<u64>) {
@@ -1110,6 +1125,12 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "po_commit_stock_batch",
     "process_raw_scan",
     "commit_stock_batch",
+    "refund_sale_atomic",
+    "get_device_identity_info",
+    "ingest_signed_server_time",
+    "fetch_next_outbox_batch",
+    "mark_outbox_synced",
+    "reap_stale_in_flight",
     "mobile_scan_document",
     "get_gate_state",
     "trust_sync_license",
@@ -1415,6 +1436,14 @@ mod tests {
         let mut files: Vec<std::path::PathBuf> = Vec::new();
         collect_rs(&src, &mut files);
         for f in &files {
+            // E2E harness module: test-only `e2e_*` commands, compiled out of
+            // production builds and proven absent from the release binary
+            // (Gate 1.3). Intentionally unauthenticated (gate-independent
+            // setup/oracle); the prod registry/wrapper invariants do not
+            // apply. Never place production commands in e2e.rs.
+            if f.ends_with("src/e2e.rs") || f.ends_with("src\\e2e.rs") {
+                continue;
+            }
             let text = std::fs::read_to_string(f).unwrap();
             for name in parse_tauri_commands(&text) {
                 found.insert(name, f.display().to_string());
@@ -1467,6 +1496,11 @@ mod tests {
         for f in &files {
             // Trust-core's own commands are the mechanism, not consumers.
             if f.ends_with("trust_core/ipc_authorizer.rs") {
+                continue;
+            }
+            // E2E harness module: see the carve-out documented in
+            // `registry_covers_every_tauri_command` above.
+            if f.ends_with("src/e2e.rs") || f.ends_with("src\\e2e.rs") {
                 continue;
             }
             let text = std::fs::read_to_string(f).unwrap();

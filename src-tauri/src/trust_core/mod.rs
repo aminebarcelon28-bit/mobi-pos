@@ -50,6 +50,7 @@
 pub mod capability_policy;
 pub mod audit_append;
 pub mod clocks;
+pub mod device_identity;
 pub mod export_snapshot;
 pub mod ipc_authorizer;
 pub mod license_state;
@@ -58,6 +59,7 @@ pub mod pin;
 pub mod reanchor;
 pub mod secure_storage;
 pub mod session;
+pub mod time_anchor;
 pub mod time_config;
 pub mod time_engine;
 pub mod trusted_time;

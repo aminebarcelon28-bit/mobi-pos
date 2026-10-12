@@ -640,13 +640,13 @@ export const SecurityAuditModal: React.FC = () => {
   if (!isOpen) return null;
 
   return (
-    <div
-      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none"
+    <div role="dialog" aria-modal="true" aria-label="Journal d'audit de sécurité"
+      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none"
       onPointerDown={handleGateActivity}
       onKeyDown={handleGateActivity}
     >
-      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-7xl overflow-hidden shadow-2xl max-h-[94dvh] sm:h-[88dvh] flex flex-col pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-7xl overflow-hidden shadow-2xl max-h-[94dvh] sm:h-[88dvh] flex flex-col pt-[max(0.5rem,var(--safe-top))] sm:py-0">
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
@@ -1290,7 +1290,7 @@ export const SecurityAuditModal: React.FC = () => {
         </div>
 
         {/* ── Footer ────────────────────────────────────────────────────── */}
-        <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 text-xs text-pos-muted shrink-0">
+        <div className="p-3 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 text-xs text-pos-muted shrink-0">
           <div className="flex flex-wrap items-center gap-2.5">
             <span className="flex items-center gap-2">
               <span className="pos-status-dot bg-pos-ok" aria-hidden="true" />

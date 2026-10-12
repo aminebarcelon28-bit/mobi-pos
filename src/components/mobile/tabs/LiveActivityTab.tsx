@@ -12,6 +12,8 @@ import {
   RotateCcw,
   FileSpreadsheet,
   CalendarDays,
+  CreditCard,
+  ChevronRight,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
 import { AppTabContent } from '../AppScreenLayout';
@@ -19,6 +21,7 @@ import type { SaleTransaction } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
 import { computeSalesMetrics, isExchangeSaleTx } from '../../../utils/receiptMath';
 import { useAllocationCogs } from '../../../hooks/useAllocationCogs';
+import { soundEngine } from '../../../utils/audioFeedback';
 
 interface LiveActivityTabProps {
   onSelectSale?: (sale: SaleTransaction) => void;
@@ -48,13 +51,127 @@ const formatRelativeFr = (createdAt: string | number | Date): string => {
   return '';
 };
 
-// Squelette du flux : mêmes dimensions que les cartes de vente (p-3, avatar
-// 10x10, deux lignes de texte, montant) pour éviter tout saut de mise en page
-// quand les données arrivent.
+// Configuration tonale des badges et icônes par mode de paiement et statut
+interface TransactionPresentation {
+  label: string;
+  badgeClass: string;
+  borderLeftClass: string;
+  iconBgClass: string;
+  iconColorClass: string;
+  Icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean | 'true' | 'false' }>;
+}
+
+const getTransactionPresentation = (tx: SaleTransaction): TransactionPresentation => {
+  const isVoided = tx.status === 'VOIDED';
+  if (isVoided) {
+    return {
+      label: 'ANNULÉ',
+      badgeClass: 'bg-rose-500/20 text-rose-300 border border-rose-500/30',
+      borderLeftClass: 'border-l-rose-500/80',
+      iconBgClass: 'bg-rose-500/15 border-rose-500/30',
+      iconColorClass: 'text-rose-400',
+      Icon: RotateCcw,
+    };
+  }
+
+  const isRefund = Boolean(tx.isRefund || tx.status === 'REFUNDED');
+  if (isRefund) {
+    return {
+      label: 'AVOIR',
+      badgeClass: 'bg-purple-500/20 text-purple-300 border border-purple-500/30',
+      borderLeftClass: 'border-l-purple-500/80',
+      iconBgClass: 'bg-purple-500/15 border-purple-500/30',
+      iconColorClass: 'text-purple-400',
+      Icon: RotateCcw,
+    };
+  }
+
+  // Règlement mixte / multi-lignes
+  if (tx.tenders && Array.isArray(tx.tenders) && tx.tenders.length > 1) {
+    return {
+      label: 'SPLIT',
+      badgeClass: 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30',
+      borderLeftClass: 'border-l-indigo-500/80',
+      iconBgClass: 'bg-indigo-500/15 border-indigo-500/30',
+      iconColorClass: 'text-indigo-400',
+      Icon: Receipt,
+    };
+  }
+
+  const method = tx.paymentMethod || 'Espèces';
+  if (method === 'Crédit Client') {
+    return {
+      label: 'CRÉDIT',
+      badgeClass: 'bg-amber-500/20 text-amber-300 border border-amber-500/30',
+      borderLeftClass: 'border-l-amber-500/80',
+      iconBgClass: 'bg-amber-500/15 border-amber-500/30',
+      iconColorClass: 'text-amber-400',
+      Icon: Coins,
+    };
+  }
+
+  if (method === 'BaridiMob') {
+    return {
+      label: 'BARIDIMOB',
+      badgeClass: 'bg-sky-500/20 text-sky-300 border border-sky-500/30',
+      borderLeftClass: 'border-l-sky-500/80',
+      iconBgClass: 'bg-sky-500/15 border-sky-500/30',
+      iconColorClass: 'text-sky-400',
+      Icon: CreditCard,
+    };
+  }
+
+  if (method === 'Chèque') {
+    return {
+      label: 'CHÈQUE',
+      badgeClass: 'bg-blue-500/20 text-blue-300 border border-blue-500/30',
+      borderLeftClass: 'border-l-blue-500/80',
+      iconBgClass: 'bg-blue-500/15 border-blue-500/30',
+      iconColorClass: 'text-blue-400',
+      Icon: CreditCard,
+    };
+  }
+
+  if (method === 'Reprise') {
+    return {
+      label: 'REPRISE',
+      badgeClass: 'bg-teal-500/20 text-teal-300 border border-teal-500/30',
+      borderLeftClass: 'border-l-teal-500/80',
+      iconBgClass: 'bg-teal-500/15 border-teal-500/30',
+      iconColorClass: 'text-teal-400',
+      Icon: Coins,
+    };
+  }
+
+  if (method === 'Autre') {
+    return {
+      label: 'TPE / CARTE',
+      badgeClass: 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30',
+      borderLeftClass: 'border-l-cyan-500/80',
+      iconBgClass: 'bg-cyan-500/15 border-cyan-500/30',
+      iconColorClass: 'text-cyan-400',
+      Icon: CreditCard,
+    };
+  }
+
+  // Règlement espèces standard
+  return {
+    label: 'ESPÈCES',
+    badgeClass: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25',
+    borderLeftClass: 'border-l-emerald-500/80',
+    iconBgClass: 'bg-emerald-500/15 border-emerald-500/30',
+    iconColorClass: 'text-emerald-400',
+    Icon: Receipt,
+  };
+};
+
+// Squelette du flux : mêmes dimensions que les cartes de vente (p-3 sm:p-3.5,
+// border-l-4, avatar 10x10, deux lignes de texte, montant) pour éviter tout
+// saut de mise en page quand les données arrivent.
 const FeedSkeletonRow: React.FC = () => (
   <div
     aria-hidden="true"
-    className="bg-pos-card border border-pos-border rounded-2xl p-3 flex items-center justify-between animate-pulse"
+    className="bg-pos-card border border-pos-border border-l-4 border-l-pos-border rounded-2xl p-3 sm:p-3.5 flex items-center justify-between animate-pulse shadow-xs"
   >
     <div className="flex items-center gap-3 min-w-0">
       <div className="w-10 h-10 rounded-2xl bg-pos-panel border border-pos-border shrink-0" />
@@ -63,7 +180,10 @@ const FeedSkeletonRow: React.FC = () => (
         <div className="h-2.5 w-36 rounded-md bg-pos-panel border border-pos-border" />
       </div>
     </div>
-    <div className="h-4 w-16 rounded-md bg-pos-panel border border-pos-border shrink-0" />
+    <div className="flex items-center gap-2">
+      <div className="h-4 w-16 rounded-md bg-pos-panel border border-pos-border shrink-0" />
+      <div className="w-4 h-4 rounded bg-pos-panel shrink-0" />
+    </div>
   </div>
 );
 
@@ -116,13 +236,13 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // Tirer-pour-actualiser tactile (aucune dépendance) : actif uniquement quand
-  // le défilement est en haut. Écouteurs nettoyés au démontage.
+  // Tirer-pour-actualiser tactile avec courbe élastique & haptique
   const feedWrapRef = useRef<HTMLDivElement | null>(null);
   const ptrStartYRef = useRef<number | null>(null);
   const ptrDistRef = useRef(0);
   const [ptrDistance, setPtrDistance] = useState(0);
   const [ptrLiveRefreshing, setPtrLiveRefreshing] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   const handleManualRefresh = async () => {
     setIsSyncing(true);
@@ -199,6 +319,7 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
   const {
     totalProfit,
     netRevenue,
+    refundTotal,
     estimatedCashInDrawer,
     averageBasket,
   } = useMemo(() => {
@@ -280,6 +401,7 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
       }
       return null;
     };
+    let thresholdCrossed = false;
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) {
         ptrStartYRef.current = null;
@@ -291,6 +413,7 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
         ptrStartYRef.current = null;
         return;
       }
+      thresholdCrossed = false;
       ptrStartYRef.current = e.touches[0]?.clientY ?? null;
       ptrDistRef.current = 0;
     };
@@ -299,22 +422,59 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
       const y = e.touches[0]?.clientY ?? ptrStartYRef.current;
       const dy = y - ptrStartYRef.current;
       if (dy <= 0) {
-        ptrDistRef.current = 0;
-        setPtrDistance(0);
+        if (ptrDistRef.current !== 0) {
+          ptrDistRef.current = 0;
+          setPtrDistance(0);
+          setIsDragging(false);
+        }
         return;
       }
-      ptrDistRef.current = Math.min(dy, PTR_MAX_PX);
-      setPtrDistance(ptrDistRef.current);
+
+      // Amortissement élastique progressif (sensations natives iOS / Android) :
+      // Réponse linéaire sensible (ratio 0.5x) jusqu'au seuil, puis amortissement
+      // asymptotique sans à-coup jusqu'au plafond maximal.
+      let currentDist: number;
+      if (dy * 0.5 <= PTR_THRESHOLD_PX) {
+        currentDist = Math.round(dy * 0.5);
+      } else {
+        const excess = dy - PTR_THRESHOLD_PX / 0.5;
+        currentDist = Math.round(
+          PTR_THRESHOLD_PX + (PTR_MAX_PX - PTR_THRESHOLD_PX) * (1 - Math.exp(-excess / 70))
+        );
+      }
+
+      if (currentDist >= PTR_THRESHOLD_PX && !thresholdCrossed) {
+        soundEngine.triggerHaptic('medium');
+        thresholdCrossed = true;
+      } else if (currentDist < PTR_THRESHOLD_PX && thresholdCrossed) {
+        soundEngine.triggerHaptic('light');
+        thresholdCrossed = false;
+      }
+
+      setIsDragging(true);
+      ptrDistRef.current = currentDist;
+      setPtrDistance(currentDist);
     };
     const onTouchEnd = () => {
       if (ptrStartYRef.current == null) return;
       const pulled = ptrDistRef.current;
       ptrStartYRef.current = null;
       ptrDistRef.current = 0;
+      setIsDragging(false);
+
       if (pulled >= PTR_THRESHOLD_PX && !ptrLiveRefreshing) {
+        soundEngine.triggerHaptic('medium');
         setPtrLiveRefreshing(true);
         setPtrDistance(0);
-        void refreshRef.current().finally(() => setPtrLiveRefreshing(false));
+        void refreshRef
+          .current()
+          .then(() => {
+            soundEngine.triggerHaptic('success');
+          })
+          .catch(() => {
+            soundEngine.triggerHaptic('warning');
+          })
+          .finally(() => setPtrLiveRefreshing(false));
       } else {
         setPtrDistance(0);
       }
@@ -332,33 +492,39 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
   }, [ptrLiveRefreshing]);
 
   const showFeedSkeleton = !hydrated || (isSyncing && recentFeed.length === 0);
+  const pullProgress = Math.min(ptrDistance / PTR_THRESHOLD_PX, 1);
+  const isThresholdMet = ptrDistance >= PTR_THRESHOLD_PX;
 
   return (
     <AppTabContent
       pinnedTop={
         <div className="px-3.5 pt-3 pb-2 bg-pos-bg">
           {/* Shift Snapshot Header Banner */}
-          <div className="bg-gradient-to-br from-pos-card via-pos-panel to-pos-card border border-pos-border rounded-3xl p-4 shadow-md relative overflow-hidden">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]" />
+          <div className="bg-gradient-to-br from-pos-card via-pos-panel to-pos-card border border-pos-border/90 rounded-3xl p-4 shadow-md relative overflow-hidden">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399] shrink-0"
+                  aria-hidden="true"
+                />
                 <span className="text-[11px] font-black uppercase tracking-wider text-emerald-400 truncate max-w-[200px]">
                   {activeShift ? `Session : ${activeShift.cashierName}` : 'Caisse Principale (En Ligne)'}
                 </span>
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 shrink-0">
                 <button
+                  type="button"
                   onClick={handleManualRefresh}
                   disabled={isSyncing}
-                  className="px-2.5 py-1 rounded-xl bg-pos-panel hover:bg-pos-hover text-pos-muted hover:text-cyan-400 border border-pos-border transition cursor-pointer flex items-center gap-1.5 text-[10px] font-bold active-press shadow-xs min-h-[38px]"
+                  className="px-2.5 py-1.5 rounded-xl bg-pos-panel hover:bg-pos-hover text-pos-muted hover:text-cyan-400 border border-pos-border transition cursor-pointer flex items-center gap-1.5 text-[10px] font-bold active-press shadow-xs min-h-[44px]"
                   title="Synchroniser immédiatement avec la caisse"
                   aria-label="Sync — Actualiser les données"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncing ? 'animate-spin' : ''}`} />
-                  <span className="text-[10px] font-mono text-cyan-300">Sync</span>
+                  <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  <span className="text-[10px] font-mono font-bold text-cyan-300">Sync</span>
                 </button>
                 <span
-                  className="text-[10px] font-mono font-bold text-pos-muted bg-pos-panel/80 px-2 py-1 rounded-xl border border-pos-border shrink-0"
+                  className="text-[10px] font-mono font-bold text-pos-muted bg-pos-panel/80 px-2.5 py-1.5 rounded-xl border border-pos-border shrink-0 min-h-[44px] flex items-center justify-center tabular-nums"
                   title={rangeKey === 'today' ? todayDateStr : `${activeRange.label} • ${todayDateStr}`}
                 >
                   {rangeKey === 'today' ? todayDateStr : activeRange.label}
@@ -372,7 +538,7 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
               role="group"
               aria-label="Filtrer l'activité par période"
             >
-              <CalendarDays className="w-4 h-4 text-pos-muted self-center shrink-0 ml-1" aria-hidden="true" />
+              <CalendarDays className="w-4 h-4 text-pos-muted self-center shrink-0 ml-1 mr-0.5" aria-hidden="true" />
               {ACTIVITY_RANGES.map((r) => {
                 const isActive = rangeKey === r.key;
                 return (
@@ -380,10 +546,13 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
                     key={r.key}
                     type="button"
                     aria-pressed={isActive}
-                    onClick={() => setRangeKey(r.key)}
+                    onClick={() => {
+                      soundEngine.playKeyBeep?.();
+                      setRangeKey(r.key);
+                    }}
                     className={`shrink-0 min-h-[44px] px-3.5 rounded-full text-[11px] font-black border transition active-press cursor-pointer ${
                       isActive
-                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-xs'
                         : 'bg-pos-panel border-pos-border text-pos-muted hover:text-pos-text'
                     }`}
                   >
@@ -394,50 +563,65 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
             </div>
 
             {/* Big Revenue Hero — suit la période sélectionnée */}
-            <div className="mt-3 min-w-0 overflow-hidden">
+            <div className="mt-3.5 min-w-0 overflow-hidden">
               <span className="text-xs font-bold text-pos-muted uppercase tracking-wider block">
                 Chiffre d'Affaires Net ({activeRange.label})
               </span>
-              <div className="flex items-baseline gap-2 mt-1 min-w-0">
-                <span className="text-3xl sm:text-4xl font-black text-pos-text tracking-tight font-mono tabular-nums max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal">
+              <div className="flex items-baseline gap-2 mt-1 min-w-0 flex-wrap">
+                <span className="text-3xl sm:text-4xl font-black text-pos-text tracking-tight font-mono tabular-nums leading-tight break-words [overflow-wrap:anywhere] whitespace-normal">
                   {formatDZD(netRevenue)}
                 </span>
+                {refundTotal > 0 && (
+                  <span
+                    className="text-[11px] font-bold text-purple-300 bg-purple-500/15 border border-purple-500/30 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 font-mono tabular-nums shrink-0"
+                    title={`Avoirs déduits : ${formatDZD(refundTotal)} (${periodRefunds.length} retour${periodRefunds.length > 1 ? 's' : ''})`}
+                  >
+                    <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                    <span>-{formatDZD(refundTotal)} ({periodRefunds.length} avoir{periodRefunds.length > 1 ? 's' : ''})</span>
+                  </span>
+                )}
               </div>
             </div>
 
-            {/* Key Metrics Grid */}
+            {/* Key Metrics Grid — cartes contrastées avec chiffres tabulaires */}
             <div className="grid grid-cols-3 gap-1.5 sm:gap-2 mt-4 pt-3 border-t border-pos-border/60 min-w-0">
-              <div className="bg-pos-panel/70 p-2 sm:p-2.5 rounded-2xl border border-pos-border/50 text-center shadow-xs min-w-0 overflow-hidden flex flex-col items-center justify-start">
+              <div className="bg-pos-panel/85 p-2 sm:p-2.5 rounded-2xl border border-pos-border/70 hover:border-cyan-500/30 transition-colors text-center shadow-xs min-w-0 overflow-hidden flex flex-col items-center justify-between min-h-[66px]">
                 <div className="flex items-center justify-center gap-1 text-pos-muted text-[10px] font-bold uppercase max-w-full min-w-0">
-                  <Receipt className="w-3 h-3 text-cyan-400 shrink-0" />
+                  <div className="w-4 h-4 rounded bg-cyan-500/10 flex items-center justify-center shrink-0">
+                    <Receipt className="w-3 h-3 text-cyan-400 shrink-0" aria-hidden="true" />
+                  </div>
                   <span className="truncate">Tickets</span>
                 </div>
-                <span className="text-[13px] sm:text-base font-black text-pos-text block mt-1 font-mono tabular-nums max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal">
+                <span className="text-sm sm:text-base font-black text-pos-text block mt-1 font-mono tabular-nums max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal">
                   {periodSales.length}
                 </span>
               </div>
 
-              <div className="bg-pos-panel/70 p-2 sm:p-2.5 rounded-2xl border border-pos-border/50 text-center shadow-xs min-w-0 overflow-hidden flex flex-col items-center justify-start">
+              <div className="bg-pos-panel/85 p-2 sm:p-2.5 rounded-2xl border border-pos-border/70 hover:border-emerald-500/30 transition-colors text-center shadow-xs min-w-0 overflow-hidden flex flex-col items-center justify-between min-h-[66px]">
                 <div className="flex items-center justify-center gap-1 text-pos-muted text-[10px] font-bold uppercase max-w-full min-w-0">
-                  <TrendingUp className="w-3 h-3 text-emerald-400 shrink-0" />
+                  <div className="w-4 h-4 rounded bg-emerald-500/10 flex items-center justify-center shrink-0">
+                    <TrendingUp className="w-3 h-3 text-emerald-400 shrink-0" aria-hidden="true" />
+                  </div>
                   <span className="truncate">Bénéfice</span>
                 </div>
                 <span
                   title={formatDZD(totalProfit)}
-                  className="text-[13px] sm:text-base font-black text-emerald-400 block mt-1 font-mono tabular-nums max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal"
+                  className="text-sm sm:text-base font-black text-emerald-400 block mt-1 font-mono tabular-nums max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal"
                 >
                   {formatDZD(totalProfit)}
                 </span>
               </div>
 
-              <div className="bg-pos-panel/70 p-2 sm:p-2.5 rounded-2xl border border-pos-border/50 text-center shadow-xs min-w-0 overflow-hidden flex flex-col items-center justify-start">
+              <div className="bg-pos-panel/85 p-2 sm:p-2.5 rounded-2xl border border-pos-border/70 hover:border-amber-500/30 transition-colors text-center shadow-xs min-w-0 overflow-hidden flex flex-col items-center justify-between min-h-[66px]">
                 <div className="flex items-center justify-center gap-1 text-pos-muted text-[10px] font-bold uppercase max-w-full min-w-0">
-                  <Coins className="w-3 h-3 text-amber-400 shrink-0" />
+                  <div className="w-4 h-4 rounded bg-amber-500/10 flex items-center justify-center shrink-0">
+                    <Coins className="w-3 h-3 text-amber-400 shrink-0" aria-hidden="true" />
+                  </div>
                   <span className="truncate">Panier</span>
                 </div>
                 <span
                   title={formatDZD(averageBasket)}
-                  className="text-[13px] sm:text-base font-black text-pos-text block mt-1 font-mono tabular-nums max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal"
+                  className="text-sm sm:text-base font-black text-amber-300 block mt-1 font-mono tabular-nums max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal"
                 >
                   {formatDZD(averageBasket)}
                 </span>
@@ -446,39 +630,47 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
 
             {/* Drawer Cash Indicator — instantané du tiroir : "Aujourd'hui" uniquement */}
             {rangeKey === 'today' && (
-            <div className="mt-3 bg-pos-panel/80 p-2.5 rounded-2xl border border-pos-border flex items-center justify-between gap-2 text-xs shadow-xs min-w-0 overflow-hidden">
-              <span className="text-pos-muted flex items-center gap-1.5 font-bold min-w-0 flex-1">
-                <DollarSign className="w-4 h-4 text-amber-400 shrink-0" />
-                <span className="truncate">Espèces Estimées en Tiroir :</span>
-              </span>
-              <span
-                title={formatDZD(estimatedCashInDrawer)}
-                className="font-mono font-black text-amber-400 text-sm tabular-nums min-w-0 max-w-[55%] text-right leading-tight break-words [overflow-wrap:anywhere] whitespace-normal shrink-0"
-              >
-                {formatDZD(estimatedCashInDrawer)}
-              </span>
-            </div>
+              <div className="mt-3 bg-pos-panel/90 p-2.5 sm:p-3 rounded-2xl border border-pos-border flex items-center justify-between gap-2 shadow-xs min-w-0 overflow-hidden">
+                <span className="text-pos-muted flex items-center gap-2 font-bold min-w-0 flex-1 text-xs">
+                  <div className="w-6 h-6 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0">
+                    <DollarSign className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
+                  </div>
+                  <span className="truncate">Espèces Estimées en Tiroir :</span>
+                </span>
+                <span
+                  title={formatDZD(estimatedCashInDrawer)}
+                  className="font-mono font-black text-amber-400 text-sm sm:text-base tabular-nums min-w-0 max-w-[55%] text-right leading-tight break-words [overflow-wrap:anywhere] whitespace-normal shrink-0"
+                >
+                  {formatDZD(estimatedCashInDrawer)}
+                </span>
+              </div>
             )}
 
             {/* Quick Operational Actions: Remboursement & Rapport Z */}
             <div className="grid grid-cols-2 gap-2 mt-3">
               <button
                 type="button"
-                onClick={() => openModal('refund')}
-                className="min-h-[42px] px-3 rounded-xl bg-pos-panel border border-pos-border hover:border-rose-500/40 text-rose-400 font-bold text-xs flex items-center justify-center gap-1.5 transition active-press cursor-pointer shadow-xs"
-                title="Effectuer un retour d'article ou un remboursement client (F11)"
+                onClick={() => {
+                  soundEngine.playKeyBeep?.();
+                  openModal('refund');
+                }}
+                className="min-h-[44px] px-3.5 rounded-xl bg-pos-panel border border-pos-border hover:border-rose-500/40 hover:bg-rose-500/5 text-rose-400 font-bold text-xs flex items-center justify-center gap-2 transition active-press cursor-pointer shadow-xs"
+                title="Effectuer un retour d'article ou un remboursement client"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
+                <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Remboursement</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => openModal('shift_zreport')}
-                className="min-h-[42px] px-3 rounded-xl bg-pos-panel border border-pos-border hover:border-cyan-400/50 text-cyan-400 font-bold text-xs flex items-center justify-center gap-1.5 transition active-press cursor-pointer shadow-xs"
+                onClick={() => {
+                  soundEngine.playKeyBeep?.();
+                  openModal('shift_zreport');
+                }}
+                className="min-h-[44px] px-3.5 rounded-xl bg-pos-panel border border-pos-border hover:border-cyan-400/50 hover:bg-cyan-500/5 text-cyan-400 font-bold text-xs flex items-center justify-center gap-2 transition active-press cursor-pointer shadow-xs"
                 title="Clôture de caisse et Rapport Z de session"
               >
-                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" />
                 <span>Rapport Z</span>
               </button>
             </div>
@@ -490,32 +682,51 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
       {/* Sales Stream Header — suit la période sélectionnée */}
       <div className="flex items-center justify-between py-2 sticky top-0 z-10 bg-pos-bg">
         <h3 className="text-xs font-black uppercase tracking-wider text-pos-muted flex items-center gap-1.5 min-w-0">
-          <Clock className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+          <Clock className="w-3.5 h-3.5 text-cyan-400 shrink-0" aria-hidden="true" />
           <span className="truncate">
             {rangeKey === 'today' ? `Flux des Ventes en Direct (${recentFeed.length})` : `Ventes • ${activeRange.label} (${recentFeed.length})`}
           </span>
         </h3>
-        <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-bold bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-          <ShieldCheck className="w-3 h-3" /> Sync ≤ 1.5s
+        <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-bold bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 tabular-nums">
+          <ShieldCheck className="w-3 h-3" aria-hidden="true" /> Sync ≤ 1.5s
         </span>
       </div>
 
       {/* Transaction Cards Feed — le geste tirer-pour-actualiser est capté ici */}
       <div ref={feedWrapRef} className="space-y-2 pt-1">
-        {/* Indicateur tirer-pour-actualiser : hauteur 0 au repos, aucun saut */}
+        {/* Indicateur tirer-pour-actualiser élastique : sans lag de drag & animation fluide au relâchement */}
         <div
           aria-live="polite"
-          className="overflow-hidden transition-all duration-150"
-          style={{ height: ptrLiveRefreshing ? 44 : ptrDistance }}
+          className="overflow-hidden"
+          style={{
+            height: ptrLiveRefreshing ? 44 : ptrDistance,
+            transition: isDragging ? 'none' : 'height 240ms cubic-bezier(0.16, 1, 0.3, 1)',
+          }}
         >
-          <div className="h-11 flex items-center justify-center gap-2 text-[11px] font-bold text-cyan-400">
+          <div className="h-11 flex items-center justify-center gap-2 text-[11px] font-bold">
             <RefreshCw
-              className={`w-4 h-4 ${ptrLiveRefreshing || ptrDistance > 0 ? 'animate-spin' : ''}`}
+              className={`w-4 h-4 text-cyan-400 ${ptrLiveRefreshing || isSyncing ? 'animate-spin' : ''}`}
+              style={
+                !ptrLiveRefreshing && !isSyncing
+                  ? {
+                      transform: `rotate(${pullProgress * 180}deg) scale(${0.8 + pullProgress * 0.25})`,
+                      opacity: 0.5 + pullProgress * 0.5,
+                      transition: isDragging ? 'none' : 'transform 200ms ease-out',
+                    }
+                  : undefined
+              }
+              aria-hidden="true"
             />
-            <span>
+            <span
+              className={
+                isThresholdMet || ptrLiveRefreshing || isSyncing
+                  ? 'text-cyan-300 font-extrabold'
+                  : 'text-pos-muted'
+              }
+            >
               {ptrLiveRefreshing || isSyncing
-                ? 'Actualisation…'
-                : ptrDistance >= PTR_THRESHOLD_PX
+                ? 'Actualisation en cours…'
+                : isThresholdMet
                   ? 'Relâchez pour actualiser'
                   : 'Tirez pour actualiser'}
             </span>
@@ -530,26 +741,51 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
           </div>
         ) : recentFeed.length === 0 ? (
           <div className="p-6 text-center bg-pos-panel/60 border border-dashed border-pos-border rounded-2xl my-2 flex flex-col items-center gap-3">
-            <Receipt className="w-8 h-8 text-pos-muted opacity-50" />
-            <p className="text-xs font-bold text-pos-muted">
-              {rangeKey === 'today'
-                ? "Aucune vente aujourd'hui — la première vente apparaîtra ici."
-                : `Aucune vente sur ${activeRange.label.toLowerCase()} — essayez une autre période.`}
-            </p>
-            <button
-              type="button"
-              onClick={() => void handleManualRefresh()}
-              disabled={isSyncing}
-              className="min-h-[44px] px-4 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-400 font-bold text-xs flex items-center gap-1.5 active-press transition cursor-pointer disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Actualisation…' : 'Actualiser'}</span>
-            </button>
+            <div className="w-12 h-12 rounded-2xl bg-pos-card border border-pos-border flex items-center justify-center text-pos-muted">
+              <Receipt className="w-6 h-6 opacity-60" aria-hidden="true" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-pos-text">
+                {rangeKey === 'today'
+                  ? "Aucune vente enregistrée aujourd'hui"
+                  : `Aucune vente trouvée sur ${activeRange.label.toLowerCase()}`}
+              </p>
+              <p className="text-[11px] text-pos-muted mt-0.5">
+                {rangeKey === 'today'
+                  ? 'Les nouvelles transactions apparaîtront automatiquement en temps réel.'
+                  : 'Modifiez la période sélectionnée ou lancez une synchronisation.'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-1 flex-wrap justify-center">
+              {rangeKey !== 'today' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playKeyBeep?.();
+                    setRangeKey('today');
+                  }}
+                  className="min-h-[44px] px-4 rounded-xl bg-pos-card border border-pos-border hover:border-pos-text text-pos-text font-bold text-xs flex items-center gap-1.5 active-press transition cursor-pointer"
+                >
+                  <CalendarDays className="w-3.5 h-3.5 text-pos-muted" aria-hidden="true" />
+                  <span>Voir Aujourd'hui</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => void handleManualRefresh()}
+                disabled={isSyncing}
+                className="min-h-[44px] px-4 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-400 font-bold text-xs flex items-center gap-1.5 active-press transition cursor-pointer disabled:opacity-50 shadow-xs"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+                <span>{isSyncing ? 'Actualisation…' : 'Actualiser'}</span>
+              </button>
+            </div>
           </div>
         ) : (
           recentFeed.map((tx) => {
-            const isRefund = tx.isRefund || tx.status === 'REFUNDED';
+            const isRefund = Boolean(tx.isRefund || tx.status === 'REFUNDED');
             const isVoided = tx.status === 'VOIDED';
+            const presentation = getTransactionPresentation(tx);
             const timeStr = new Date(tx.createdAt).toLocaleTimeString('fr-FR', {
               hour: '2-digit',
               minute: '2-digit',
@@ -562,104 +798,99 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
             });
             const relativeFr = formatRelativeFr(tx.createdAt);
 
+            // Same unified basis as the hero KPIs above (alloc →
+            // materialized row → stored) so the badge can never
+            // contradict them; exchanges use signed row cost.
+            let basis: number | undefined;
+            if (isExchangeSaleTx(tx)) {
+              const row = Number(tx.costTotal);
+              if (Number.isFinite(row)) basis = Math.round(row);
+            }
+            if (basis === undefined) {
+              const raw = allocCogsBySaleId[tx.id];
+              const alloc = Number(raw);
+              if (Number.isFinite(alloc) && alloc >= 0) basis = Math.round(alloc);
+            }
+            if (basis === undefined) {
+              const ledger = Number(tx.ledgerCogsTotal);
+              if (Number.isFinite(ledger) && ledger >= 0) basis = Math.round(ledger);
+            }
+            const badgeProfit = basis !== undefined ? Number(tx.total ?? 0) - basis : tx.profit;
+
             return (
-              <div
+              <button
                 key={tx.id}
-                onClick={() => onSelectSale?.(tx)}
-                className={`bg-pos-card border border-pos-border border-l-4 rounded-2xl p-3 flex items-center justify-between hover:border-cyan-500/40 transition active-press cursor-pointer shadow-xs ${
-                  isVoided
-                    ? 'border-l-rose-500/70'
-                    : isRefund
-                      ? 'border-l-purple-500/70'
-                      : 'border-l-emerald-500/70'
-                }`}
+                type="button"
+                onClick={() => {
+                  soundEngine.playKeyBeep?.();
+                  onSelectSale?.(tx);
+                }}
+                className={`w-full text-left bg-pos-card border border-pos-border border-l-4 rounded-2xl p-3 sm:p-3.5 flex items-center justify-between hover:border-cyan-500/40 focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:outline-none transition active-press cursor-pointer shadow-xs group ${presentation.borderLeftClass}`}
+                title="Voir le ticket de caisse et les détails de la transaction"
               >
-                <div className="flex items-center gap-3 min-w-0">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
                   <div
-                    className={`w-10 h-10 rounded-2xl flex items-center justify-center font-bold text-xs shrink-0 ${
-                      isVoided
-                        ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
-                        : isRefund
-                        ? 'bg-purple-500/15 text-purple-400 border border-purple-500/30'
-                        : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                    }`}
+                    className={`w-10 h-10 rounded-2xl flex items-center justify-center font-bold text-xs shrink-0 border ${presentation.iconBgClass}`}
                   >
-                    <Receipt className="w-4 h-4" />
+                    <presentation.Icon className={`w-4 h-4 ${presentation.iconColorClass}`} aria-hidden="true" />
                   </div>
 
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="font-mono text-xs font-black text-pos-text truncate">
                         #{tx.receiptNumber || tx.id.slice(0, 8)}
                       </span>
                       <span
-                        className={`text-[9px] font-black px-1.5 py-0.5 rounded-md uppercase shrink-0 ${
-                          isVoided
-                            ? 'bg-rose-500/20 text-rose-300'
-                            : isRefund
-                            ? 'bg-purple-500/20 text-purple-300'
-                            : 'bg-pos-panel text-pos-muted border border-pos-border'
-                        }`}
+                        className={`text-[9px] font-black px-1.5 py-0.5 rounded-md uppercase shrink-0 ${presentation.badgeClass}`}
                       >
-                        {isVoided ? 'ANNULÉ' : isRefund ? 'AVOIR' : tx.paymentMethod}
+                        {presentation.label}
                       </span>
                     </div>
 
                     <div className="flex items-center gap-1.5 text-[10px] text-pos-muted mt-0.5 truncate">
                       <span className="flex items-center gap-1 font-medium truncate">
-                        <User className="w-3 h-3 shrink-0" />
+                        <User className="w-3 h-3 shrink-0" aria-hidden="true" />
                         <span className="truncate">{tx.customer?.name || 'Client Comptoir'}</span>
                       </span>
-                      <span>•</span>
-                      <span className="shrink-0">{tx.items?.length || 1} art.</span>
-                      <span>•</span>
-                      <span className="shrink-0 font-mono" title={fullStr}>
+                      <span aria-hidden="true">•</span>
+                      <span className="shrink-0 font-mono tabular-nums">{tx.items?.length || 1} art.</span>
+                      <span aria-hidden="true">•</span>
+                      <span className="shrink-0 font-mono tabular-nums" title={fullStr}>
                         {relativeFr ? `${relativeFr} • ${timeStr}` : timeStr}
                       </span>
                     </div>
                   </div>
                 </div>
 
-                <div className="text-right shrink-0 pl-2">
-                  <span
-                    className={`font-mono text-sm font-black block ${
-                      isVoided
-                        ? 'line-through text-pos-muted'
-                        : isRefund
-                        ? 'text-purple-400'
-                        : 'text-emerald-400'
-                    }`}
-                  >
-                    {isRefund ? `-${formatDZD(tx.total)}` : formatDZD(tx.total)}
-                  </span>
-                  {!isVoided && !isRefund && (() => {
-                    // Same unified basis as the hero KPIs above (alloc →
-                    // materialized row → stored) so the badge can never
-                    // contradict them; exchanges use signed row cost.
-                    // Legacy rows without any frozen basis keep stored profit.
-                    let basis: number | undefined;
-                    if (isExchangeSaleTx(tx)) {
-                      const row = Number(tx.costTotal);
-                      if (Number.isFinite(row)) basis = Math.round(row);
-                    }
-                    if (basis === undefined) {
-                      const raw = allocCogsBySaleId[tx.id];
-                      const alloc = Number(raw);
-                      if (Number.isFinite(alloc) && alloc >= 0) basis = Math.round(alloc);
-                    }
-                    if (basis === undefined) {
-                      const ledger = Number(tx.ledgerCogsTotal);
-                      if (Number.isFinite(ledger) && ledger >= 0) basis = Math.round(ledger);
-                    }
-                    const badge = basis !== undefined ? Number(tx.total ?? 0) - basis : tx.profit;
-                    return badge > 0 ? (
-                      <span className="text-[10px] font-bold text-pos-muted/80 font-mono">
-                        +{formatDZD(badge)} net
+                <div className="flex items-center gap-1.5 pl-2 shrink-0">
+                  <div className="text-right">
+                    <span
+                      className={`font-mono text-sm font-black tabular-nums block ${
+                        isVoided
+                          ? 'line-through text-pos-muted'
+                          : isRefund
+                          ? 'text-purple-400'
+                          : 'text-emerald-400'
+                      }`}
+                    >
+                      {isRefund ? `-${formatDZD(tx.total)}` : formatDZD(tx.total)}
+                    </span>
+                    {!isVoided && !isRefund && badgeProfit !== undefined && badgeProfit > 0 && (
+                      <span className="text-[10px] font-bold text-pos-muted/80 font-mono tabular-nums block">
+                        +{formatDZD(badgeProfit)} net
                       </span>
-                    ) : null;
-                  })()}
+                    )}
+                  </div>
+
+                  <ChevronRight
+                    className="w-4 h-4 text-pos-muted/40 group-hover:text-cyan-400 group-hover:translate-x-0.5 transition-all shrink-0 ml-0.5"
+                    aria-hidden="true"
+                  />
                 </div>
-              </div>
+                <span className="sr-only">
+                  Ouvrir le ticket #{tx.receiptNumber || tx.id.slice(0, 8)}
+                </span>
+              </button>
             );
           })
         )}

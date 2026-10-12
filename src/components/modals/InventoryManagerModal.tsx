@@ -226,14 +226,16 @@ export const InventoryManagerModal: React.FC = () => {
   };
 
   return (
-    <div
+    <div role="dialog" aria-modal="true" aria-label="Gestionnaire de stock"
       onClick={closeModal}
-      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-0 sm:p-4 select-none cursor-pointer"
+      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none cursor-pointer"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border-0 sm:border border-pos-border rounded-none sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 h-dvh-shell sm:h-[88dvh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0 pb-[max(0.5rem,var(--safe-bottom))] sm:pb-0"
+        className="bg-pos-panel border-0 sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full sm:max-w-5xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 max-h-[94dvh] sm:h-[88dvh] flex flex-col cursor-default font-sans pt-[max(0.5rem,var(--safe-top))] sm:pt-0"
       >
+        {/* Mobile drag handle */}
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
         {/* Header */}
         <div className="p-3 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
@@ -291,7 +293,7 @@ export const InventoryManagerModal: React.FC = () => {
                 }`}
               >
                 <BarcodeIcon className="w-3.5 h-3.5" />
-                <span>Mode Inventaire</span>
+                <span><span className="hidden sm:inline">Mode </span>Inventaire</span>
                 {auditedProductIds.length > 0 && (
                   <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
                 )}
@@ -392,9 +394,87 @@ export const InventoryManagerModal: React.FC = () => {
               </span>
             </div>
 
-            {/* Desktop Table View */}
+            {/* Catalog List: Mobile Cards + Desktop Table */}
             <div className="flex-1 overflow-y-auto overscroll-contain">
-              <table className="w-full text-left text-xs border-collapse">
+              {/* Mobile Card List */}
+              <div className="sm:hidden p-2.5 space-y-2">
+                {filteredCatalog.map((product) => (
+                  <div
+                    key={product.id}
+                    className="bg-pos-card border border-pos-border rounded-xl p-3 shadow-sm hover:border-emerald-500/40 transition flex flex-col gap-2"
+                  >
+                    <div className="flex items-start justify-between gap-2.5">
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        <div className="w-10 h-10 rounded-lg bg-pos-bg border border-pos-border flex items-center justify-center shrink-0 text-emerald-400 mt-0.5">
+                          <Package className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-bold text-xs text-pos-text line-clamp-2 leading-snug">{product.title}</p>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px]">
+                            <span className="font-mono text-pos-muted bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">
+                              {product.sku}
+                            </span>
+                            {product.brand && (
+                              <span className="text-pos-text font-semibold bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">
+                                {product.brand}
+                              </span>
+                            )}
+                            {product.compatibleModel && (
+                              <span className="text-pos-muted truncate max-w-[120px]">
+                                {product.compatibleModel}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                          product.stock <= 5
+                            ? 'bg-red-950 text-red-300 border border-red-800'
+                            : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                        }`}
+                      >
+                        {product.stock} un.
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-pos-border/50">
+                      <div>
+                        <span className="text-[10px] text-pos-muted uppercase font-bold block">Prix Vente</span>
+                        <span className="font-mono font-black text-emerald-400 text-sm">
+                          {formatDZD(product.price)}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setEditingProduct(product)}
+                          className="min-h-[40px] px-3 py-1.5 rounded-lg bg-pos-bg hover:bg-emerald-500/20 border border-pos-border text-pos-text hover:text-emerald-400 font-bold text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+                          title="Modifier Produit"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                          <span>Modifier</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (confirm(`Supprimer ${product.title} ?`)) deleteProduct(product.id);
+                          }}
+                          className="min-h-[40px] min-w-[40px] p-2 rounded-lg bg-pos-bg hover:bg-red-500/20 border border-pos-border text-pos-muted hover:text-red-400 flex items-center justify-center transition active:scale-95 cursor-pointer"
+                          title="Supprimer Produit"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop Table View */}
+              <table className="hidden sm:table w-full text-left text-xs border-collapse">
                 <thead className="bg-pos-card border-b border-pos-border text-pos-muted sticky top-0 uppercase tracking-wider text-[10px]">
                   <tr>
                     <th className="p-3">Produit</th>
@@ -586,9 +666,134 @@ export const InventoryManagerModal: React.FC = () => {
               </div>
             )}
 
-            {/* Stocktake Comparison Table */}
+            {/* Stocktake Comparison: Mobile Cards + Desktop Table */}
             <div className="flex-1 overflow-y-auto overscroll-contain">
-              <table className="w-full text-left text-xs border-collapse">
+              {/* Mobile Audit Card List */}
+              <div className="sm:hidden p-2.5 space-y-2.5">
+                {filteredStocktake.map((product) => {
+                  const counted = auditCounts[product.id];
+                  const isCounted = counted !== undefined;
+                  const variance = isCounted ? counted - product.stock : 0;
+                  const financialDiff = variance * (product.costPrice || 0);
+
+                  return (
+                    <div
+                      key={product.id}
+                      className={`p-3 rounded-xl border transition flex flex-col gap-2.5 ${
+                        !isCounted
+                          ? 'bg-pos-card border-pos-border'
+                          : variance === 0
+                          ? 'bg-emerald-500/[0.04] border-emerald-500/30'
+                          : variance < 0
+                          ? 'bg-rose-500/[0.05] border-rose-500/30'
+                          : 'bg-cyan-500/[0.05] border-cyan-500/30'
+                      }`}
+                    >
+                      {/* Product Header */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-bold text-xs text-pos-text leading-snug line-clamp-2">{product.title}</p>
+                          <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-pos-muted font-mono mt-0.5">
+                            <span className="bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">SKU: {product.sku}</span>
+                            {product.barcode && (
+                              <span className="bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">EAN: {product.barcode}</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Variance badge */}
+                        <div className="shrink-0">
+                          {!isCounted ? (
+                            <span className="text-[10px] text-pos-muted italic bg-pos-bg px-2 py-0.5 rounded-full border border-pos-border">
+                              Non vérifié
+                            </span>
+                          ) : variance === 0 ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                              <Check className="w-3 h-3" /> Conforme (0)
+                            </span>
+                          ) : variance < 0 ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-950 text-rose-300 border border-rose-800">
+                              {variance} un.
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-950 text-cyan-300 border border-cyan-800">
+                              +{variance} un.
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Stock Comparison Grid */}
+                      <div className="grid grid-cols-2 gap-2 bg-pos-bg/80 p-2 rounded-lg border border-pos-border/60 text-xs">
+                        <div>
+                          <span className="text-[9px] uppercase font-bold text-pos-muted block">Stock Théorique</span>
+                          <span className="font-mono font-bold text-pos-muted">{product.stock} un.</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[9px] uppercase font-bold text-pos-muted block">Impact Coût</span>
+                          <span className={`font-mono font-bold ${
+                            !isCounted || variance === 0
+                              ? 'text-pos-muted'
+                              : financialDiff < 0
+                              ? 'text-rose-400'
+                              : 'text-cyan-400'
+                          }`}>
+                            {!isCounted || variance === 0
+                              ? '0 DA'
+                              : financialDiff < 0
+                              ? formatDZD(financialDiff)
+                              : `+${formatDZD(financialDiff)}`}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Touch Controls: Big Stepper & Quick Action */}
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <div className="inline-flex items-center bg-pos-bg border border-pos-border rounded-xl p-1 gap-1">
+                          <button
+                            type="button"
+                            onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) - 1)}
+                            className="w-10 h-10 rounded-lg bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition active:scale-95"
+                            aria-label={`Diminuer le comptage de ${product.title}`}
+                          >
+                            <Minus className="w-4 h-4" aria-hidden="true" />
+                          </button>
+                          <input
+                            type="number"
+                            min="0"
+                            value={isCounted ? counted : ''}
+                            placeholder={String(product.stock)}
+                            onChange={(e) => updateCount(product.id, parseInt(e.target.value) || 0)}
+                            className="w-14 h-10 text-center text-sm font-black font-mono bg-transparent text-pos-text focus:outline-none"
+                            aria-label={`Comptage pour ${product.title}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) + 1)}
+                            className="w-10 h-10 rounded-lg bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition active:scale-95"
+                            aria-label={`Augmenter le comptage de ${product.title}`}
+                          >
+                            <Plus className="w-4 h-4" aria-hidden="true" />
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => updateCount(product.id, product.stock)}
+                          className="min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-bold bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer active:scale-95 flex items-center gap-1.5"
+                          title="Marquer comme conforme au stock théorique"
+                        >
+                          <Check className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
+                          <span>= Conforme</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Desktop Table View */}
+              <table className="hidden sm:table w-full text-left text-xs border-collapse">
                 <thead className="bg-pos-card border-b border-pos-border text-pos-muted sticky top-0 uppercase tracking-wider text-[10px]">
                   <tr>
                     <th className="p-3">Article & Code-barres</th>
@@ -710,7 +915,7 @@ export const InventoryManagerModal: React.FC = () => {
             </div>
 
             {/* Audit Bottom Action Bar */}
-            <div className="p-3 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-center gap-2 shrink-0">
+            <div className="p-3 pb-[max(1rem,var(--safe-bottom))] sm:pb-3 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-center gap-2 shrink-0">
               <div className="text-xs text-pos-muted flex items-center gap-3">
                 <span>
                   <strong>{auditedProductIds.length}</strong> articles comptés
@@ -751,7 +956,7 @@ export const InventoryManagerModal: React.FC = () => {
 
         {/* Footer (Common) */}
         {mode === 'catalog' && (
-          <div className="p-2.5 sm:p-3 border-t border-pos-border bg-pos-card flex justify-between items-center text-xs text-pos-muted shrink-0">
+          <div className="p-2.5 sm:p-3 pb-[max(1rem,var(--safe-bottom))] sm:pb-3 border-t border-pos-border bg-pos-card flex justify-between items-center text-xs text-pos-muted shrink-0">
             <span className="text-[11px]">MobiPOS Stock • {products.length} articles au catalogue</span>
             <button
               type="button"

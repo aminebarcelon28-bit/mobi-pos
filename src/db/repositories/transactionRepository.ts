@@ -64,7 +64,8 @@ export const transactionRepository = {
     restockedProducts: Product[] = [],
     updatedCustomer?: Customer,
     restoredImeis: string[] = [],
-    auditEntry?: SecurityAuditLogEntry
+    auditEntry?: SecurityAuditLogEntry,
+    policy?: { localDeviceId: string; activeShiftId: string | null; online: boolean }
   ): Promise<void> {
     await (await getSqlite()).processRefundAtomic(
       refundTransaction,
@@ -72,7 +73,8 @@ export const transactionRepository = {
       restockedProducts,
       updatedCustomer,
       restoredImeis,
-      auditEntry
+      auditEntry,
+      policy
     );
   },
 

@@ -1,10 +1,69 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { usePosStore } from '../store/usePosStore';
 import { soundEngine } from '../utils/audioFeedback';
+import {
+  createWedgeBurst,
+  pushWedgeKey,
+  resetWedgeBurst,
+  takeWedgeBurst,
+  WEDGE_GAP_LOOSE_MS,
+  WEDGE_GAP_TEXT_MS,
+  WEDGE_IDLE_MS,
+  type ScanTarget,
+  type WedgeBurstState,
+} from '../utils/wedgeBurst';
 import type { Product, Customer, ProductBundle } from '../types/pos';
 
 const lowerKey = (s: string | undefined | null): string => (s || '').trim().toLowerCase();
 const alnumUpper = (s: string): string => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+/** Input types that never receive typed text (buttons, pickers, …). */
+const NON_TEXT_INPUT_TYPES = new Set([
+  'button', 'submit', 'reset', 'checkbox', 'radio', 'file', 'image', 'range', 'color', 'hidden',
+]);
+
+/** True when keystrokes land as editable text in `el` (readOnly/disabled excluded). */
+function isEditableTarget(el: Element | null): boolean {
+  if (!el) return false;
+  if (el instanceof HTMLTextAreaElement) return true;
+  if (el instanceof HTMLInputElement) {
+    if (NON_TEXT_INPUT_TYPES.has(el.type)) return false;
+    return !el.disabled && !el.readOnly;
+  }
+  return el instanceof HTMLElement && el.isContentEditable;
+}
+
+/** Explicit scan destination of `el`, or null when it is a manual-entry field. */
+function scanTargetOf(el: Element | null): ScanTarget {
+  if (!el) return null;
+  const value = el.closest('[data-barcode-scan-target]')?.getAttribute('data-barcode-scan-target');
+  return value === 'search' || value === 'field' ? value : null;
+}
+
+/**
+ * Clear a controlled React input from outside React: the native value setter
+ * bypasses React's value tracker, and the synthetic `input` event feeds the
+ * field's own onChange so its state follows.
+ *
+ * Why both halves are load-bearing (measured in Chromium on a controlled
+ * input — value → React state → what onChange saw):
+ *   `el.value = ''`            → DOM "", React state STALE (onChange silent)
+ *   native setter only         → DOM "", React state STALE
+ *   native setter + `input`    → DOM "", React state ""  ✅ onChange saw ""
+ * React patches `value` with a tracker-aware setter that updates its record,
+ * so a plain assignment looks like a real edit to the next event. Never mix
+ * the two styles: one plain assignment poisons the record and the following
+ * native-setter + event is then deduped away.
+ */
+function clearInputValue(el: HTMLInputElement): void {
+  try {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    setter?.call(el, '');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  } catch {
+    el.value = '';
+  }
+}
 
 interface CustomerScanEntry {
   customer: Customer;
@@ -69,12 +128,16 @@ function buildCustomerIndex(list: Customer[]): { exact: Map<string, Customer>; e
  * - Le délai entre deux touches est très court (< 30ms).
  * - La saisie se termine toujours par la touche Entrée (keyCode 13).
  * - On ignore les saisies lentes humaines (> 50ms) pour ne pas interférer avec la saisie normale au clavier.
+ * - La frappe manuelle dans un champ de saisie n'est JAMAIS décodée, et un
+ *   envoi vers un champ de texte exige une cadence machine continue : voir
+ *   src/utils/wedgeBurst.ts (« Wedge-burst guard »), seule façon de distinguer
+ *   « chargeur » d'un code-barres.
  */
 export function useBarcodeScanner(): { lastScannedCode: string | null; scannerActive: boolean } {
   const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
   const [scannerActive, setScannerActive] = useState<boolean>(false);
   
-  const buffer = useRef<string>('');
+  const burstRef = useRef<WedgeBurstState>(createWedgeBurst());
   const lastKeyTime = useRef<number>(0);
   const lastScanTimestamp = useRef<number>(0);
   const lastScanCode = useRef<string>('');
@@ -231,54 +294,59 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const now = Date.now();
-      const timeDiff = now - lastKeyTime.current;
-      
+      const burst = burstRef.current;
       const activeElement = document.activeElement;
-      const isInputFocused = activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement;
-      
+      const target = scanTargetOf(activeElement);
+
+      // (1) TARGET GUARD — manual-entry field (input / textarea /
+      // contenteditable that is not a sanctioned scan destination): the
+      // decoder stands down and drops any in-flight run, so nothing typed here
+      // can be mistaken for a barcode and nothing here is ever cleared by one.
+      // Enter is left to the field's own handler.
+      if (isEditableTarget(activeElement) && target === null) {
+        resetWedgeBurst(burst);
+        lastKeyTime.current = now;
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
+        return;
+      }
+
+      const maxGap = target !== null ? WEDGE_GAP_TEXT_MS : WEDGE_GAP_LOOSE_MS;
+      const timeDiff = now - lastKeyTime.current;
+
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
 
       if (e.key === 'Enter') {
-        if (buffer.current.length >= 3) {
-          // Code-barres valide détecté (3+ caractères)
-          processScan(buffer.current);
-          
-          // If the user was focused on the search input, clean it up and blur so the grid is not filtered
-          if (isInputFocused && activeElement instanceof HTMLInputElement) {
-            const isSearchBar = 
-              activeElement.placeholder?.toLowerCase().includes('scanner') ||
-              activeElement.placeholder?.toLowerCase().includes('rechercher') ||
-              activeElement.type === 'search';
+        // (2) Only an unbroken machine-grade run decodes (see utils/wedgeBurst).
+        const code = takeWedgeBurst(burst);
+        if (code) {
+          processScan(code);
 
-            if (isSearchBar) {
-              activeElement.value = '';
-              activeElement.blur();
-              usePosStore.getState().setSearchQuery('');
-            }
+          // Sanctioned search target: drop the scanned code from the field and
+          // the catalog filter so the grid is not left filtered by a barcode.
+          // ("field" targets keep their value — the component owns it.)
+          if (target === 'search' && activeElement instanceof HTMLInputElement) {
+            clearInputValue(activeElement);
+            activeElement.blur();
+            usePosStore.getState().setSearchQuery('');
           }
-          
+
           e.preventDefault();
         }
-        buffer.current = '';
       } else if (e.key.length === 1) { // Touche de caractère imprimable
-        // Si le délai est long (> 50ms), c'est une frappe humaine lente ou la toute première touche.
-        // On réinitialise le buffer avec la touche actuelle si le buffer n'est pas vide
-        // pour ne pas accumuler des frappes manuelles.
-        if (timeDiff > 50 && buffer.current.length > 0) {
-          buffer.current = e.key;
-        } else {
-          buffer.current += e.key;
-        }
+        pushWedgeKey(burst, e.key, timeDiff, maxGap);
       }
-      
+
       lastKeyTime.current = now;
-      
+
       // Réinitialiser le buffer si aucun caractère n'est reçu pendant 200ms
       timeoutRef.current = setTimeout(() => {
-        buffer.current = '';
-      }, 200);
+        resetWedgeBurst(burst);
+      }, WEDGE_IDLE_MS);
     };
 
     window.addEventListener('keydown', handleKeyDown);

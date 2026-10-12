@@ -63,4 +63,29 @@ __pycache__/
 # Worker provisioning
 workers/licensing/.dev.vars
 
+# E2E / test build target dirs (custom echoes of `src-tauri/target`; ~5 GB
+# of Rust artifacts from scripts/build-e2e.mjs and the test profile).
+target-e2e/
+target-test/
+src-tauri/target-e2e/
+src-tauri/target-test/
+
+# WDIO run logs + generated manifests (test-logs/ is wiped every run).
+test-logs/
+# Playwright / WebDriver report output.
+test-results/
+
+# Scratch DBs the regression suites create/leave at the repo root.
+test_*.db
+
+# Ad-hoc screenshots dropped at the repo root.
+/*.png
+
+# Local agent/tool caches and captured evidence trees (large binaries,
+# DB backups, screenshot dumps — prior-session scratch, not source).
+.kilo/
+.playwright-mcp/
+artifacts/
+
+
 

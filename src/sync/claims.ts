@@ -34,7 +34,6 @@ export const CLAIM_TTL_MIN = 10;
 export type ClaimOutcome =
   | { claimed: true }
   | { claimed: false; reason: 'OFFLINE' | 'HELD_BY_PEER' | 'ERROR'; holder?: string };
-
 /** Best-effort sweep so crashed claims cannot wedge a ticket past their TTL. */
 async function sweepExpired(remote: { execute: (stmt: unknown) => Promise<unknown> }): Promise<void> {
   try {
@@ -51,6 +50,7 @@ export async function tryClaimCompensation(
   kind: 'REFUND' | 'VOID' | 'RECONCILE',
   claimId: string,
   ticketId: string,
+  ttlSec: number = CLAIM_TTL_MIN * 60
 ): Promise<ClaimOutcome> {
   let online = false;
   try {
@@ -72,7 +72,8 @@ export async function tryClaimCompensation(
     const remote = await getTursoClient();
     await sweepExpired(remote as unknown as { execute: (stmt: unknown) => Promise<unknown> });
     const now = new Date().toISOString();
-    const expires = new Date(Date.now() + CLAIM_TTL_MIN * 60_000).toISOString();
+    const ttlMs = Math.max(1000, Math.round(Number(ttlSec) || 0) * 1000);
+    const expires = new Date(Date.now() + ttlMs).toISOString();
     const res = (await remote.execute({
       sql: `INSERT INTO refund_claims (id, ticket_id, kind, device_id, created_at, expires_at)
             VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,

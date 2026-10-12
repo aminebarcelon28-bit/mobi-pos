@@ -136,13 +136,19 @@ export const VoucherModal: React.FC = () => {
 
   return (
     <div
-      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 select-none"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Bons d'avoir et crédits d'échange"
+      className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none"
       onClick={closeModal}
     >
       <div
-        className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col max-h-[85vh]"
+        className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 flex flex-col max-h-[94dvh] sm:max-h-[85vh]"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Mobile Pull Handle */}
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
+
         {/* Header */}
         <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card">
           <div className="flex items-center gap-2.5">
@@ -515,6 +521,17 @@ export const VoucherModal: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Footer Actions */}
+        <div className="p-3 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex justify-end shrink-0">
+          <button
+            type="button"
+            onClick={closeModal}
+            className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-pos-hover hover:bg-pos-border text-pos-text font-bold text-xs min-h-[44px] flex items-center justify-center active-press cursor-pointer"
+          >
+            Fermer
+          </button>
         </div>
 
         {/* Dedicated 80mm Voucher Ticket Print Template */}

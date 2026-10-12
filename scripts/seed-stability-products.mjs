@@ -150,6 +150,7 @@ function main() {
       try {
         const out = db.prepare("DELETE FROM sync_outbox WHERE entity_type = 'product' AND entity_id LIKE 'prod-test-%'").run();
         const del = db.prepare('DELETE FROM products WHERE device_id = ?').run(DEVICE_TAG);
+        db.prepare("DELETE FROM app_settings WHERE key LIKE 'sync.remirror_%'").run();
         db.exec('COMMIT');
         console.log(`Removed ${del.changes} products (+FTS via trigger) and ${out.changes} outbox rows.`);
         console.log('NOTE: Dexie UI ghosts remain until site data is cleared; restart the app.');
@@ -230,7 +231,7 @@ function main() {
         insO.run(r.key, r.id, payload);
       }
       // Force next boot to mirror SQLite -> Dexie (flag-gated, runs once per era).
-      db.prepare("DELETE FROM app_settings WHERE key IN ('sync.remirror_v2', 'sync.remirror_v3')").run();
+      db.prepare("DELETE FROM app_settings WHERE key LIKE 'sync.remirror_%'").run();
       db.exec('COMMIT');
     } catch (e) { db.exec('ROLLBACK'); throw e; }
 

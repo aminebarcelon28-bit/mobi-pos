@@ -121,3 +121,15 @@ export function newReceiptNumber(prefix: string): string {
   const msOfDay = ms - new Date(y, d.getMonth(), d.getDate()).getTime();
   return `${prefix}-${y}${m}${day}-${msOfDay.toString(36).toUpperCase()}-${String(seq).padStart(2, '0')}-${randomSuffix(5)}`;
 }
+
+/**
+ * Deterministic drawer-movement id for a debt settlement (`MOV-DEBT-<entry>`).
+ * Double-submit races pass the SAME debt entry id, so deriving the movement
+ * id from it (instead of minting entropy) makes repeats collapse via
+ * put-upsert + stable outbox key instead of minting duplicate drawer rows.
+ * Pure — unit-tested.
+ */
+export function debtDepositMovementId(debtEntryId: string): string {
+  const safe = String(debtEntryId || '').trim() || 'unknown';
+  return `MOV-DEBT-${safe}`;
+}

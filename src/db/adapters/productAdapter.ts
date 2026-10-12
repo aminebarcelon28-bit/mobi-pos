@@ -13,6 +13,36 @@ const getSyncManager = () => {
   if (!syncManagerPromise) syncManagerPromise = import('../../sync/SyncManager');
   return syncManagerPromise;
 };
+function mapSqlRowToProduct(r: Record<string, unknown>): Product {
+  let base: Record<string, unknown> = {};
+  try {
+    base = JSON.parse(String(r.json_payload ?? '{}')) as Record<string, unknown>;
+  } catch {
+    // keep base empty
+  }
+  return {
+    ...base,
+    id: String(r.id),
+    sku: String(r.sku ?? base.sku ?? ''),
+    barcode: String(r.barcode ?? base.barcode ?? ''),
+    title: String(r.title ?? base.title ?? r.id),
+    brand: (r.brand as Product['brand']) ?? (base.brand as Product['brand']) ?? 'Autre',
+    category: (r.category as Product['category']) ?? (base.category as Product['category']) ?? 'Tous les produits',
+    price: Number(r.price ?? base.price ?? 0),
+    wholesalePrice: Number(r.wholesale_price ?? base.wholesalePrice ?? 0),
+    semiWholesalePrice: typeof base.semiWholesalePrice === 'number' ? base.semiWholesalePrice : undefined,
+    costPrice: Number(r.cost_price ?? base.costPrice ?? 0),
+    stock: Number(r.stock ?? base.stock ?? 0),
+    imageUrl: String(r.image_url ?? base.imageUrl ?? ''),
+    isSerialized: Boolean(r.is_serialized ?? base.isSerialized),
+    imeiNumber: (r.imei_number as string | undefined) ?? (base.imeiNumber as string | undefined),
+    vendorName: String(r.vendor_name ?? base.vendorName ?? 'Fournisseur Général'),
+    leadTimeDays: Number(r.lead_time_days ?? base.leadTimeDays ?? 7),
+    dailySalesVelocity: Number(r.daily_sales_velocity ?? base.dailySalesVelocity ?? 0),
+    reorderPoint: Number(r.reorder_point ?? base.reorderPoint ?? 5),
+    compatibleModel: String(r.compatible_model ?? base.compatibleModel ?? ''),
+  } as Product;
+}
 
 export const productAdapter = {
   async saveProduct(product: Product): Promise<void> {
@@ -87,13 +117,66 @@ export const productAdapter = {
   },
 
   async getAllProducts(): Promise<Product[]> {
-    return await dexieDb.products.toArray();
+    const { isTauriEnv } = await import('./base');
+    if (isTauriEnv()) {
+      try {
+        const [{ getLocalDb }] = await Promise.all([getSqlAdapter()]);
+        const db = await getLocalDb();
+        const rows = (await db.select('SELECT * FROM products WHERE deleted = 0')) as Array<Record<string, unknown>>;
+        if (rows && rows.length > 0) {
+          const products = rows.map(mapSqlRowToProduct);
+          // Keep Dexie mirror in sync and purge any stale ghost records asynchronously
+          void (async () => {
+            try {
+              const liveIds = new Set(products.map((p) => p.id));
+              const allDexie = await dexieDb.products.toArray();
+              const ghosts = allDexie.filter((p) => !liveIds.has(p.id)).map((p) => p.id);
+              if (ghosts.length > 0) {
+                await dexieDb.products.bulkDelete(ghosts);
+              }
+              await dexieDb.products.bulkPut(products);
+            } catch (mirrorErr) {
+              console.warn('[getAllProducts] Background Dexie mirror failed:', mirrorErr);
+            }
+          })();
+          return products;
+        }
+      } catch (err) {
+        console.warn('[getAllProducts] SQLite authority read failed, falling back to Dexie:', err);
+      }
+    }
+
+    // Web / non-Tauri or SQLite fallback path: purge test ghosts or blank title records
+    const all = await dexieDb.products.toArray();
+    const ghosts = all.filter((p) => p.id.startsWith('prod-test-') || (!p.title?.trim() && !p.price));
+    if (ghosts.length > 0) {
+      void dexieDb.products.bulkDelete(ghosts.map((g) => g.id)).catch(() => {});
+      return all.filter((p) => !p.id.startsWith('prod-test-') && (p.title?.trim() || p.price > 0));
+    }
+    return all;
   },
 
   /** Targeted post-pull refresh: fetch only touched product ids (P1). */
   async getProductsByIds(ids: string[]): Promise<Product[]> {
     const unique = [...new Set((ids ?? []).map((id) => String(id || '')).filter(Boolean))];
     if (unique.length === 0) return [];
+    const { isTauriEnv } = await import('./base');
+    if (isTauriEnv()) {
+      try {
+        const [{ getLocalDb }] = await Promise.all([getSqlAdapter()]);
+        const db = await getLocalDb();
+        const placeholders = unique.map(() => '?').join(',');
+        const rows = (await db.select(
+          `SELECT * FROM products WHERE deleted = 0 AND id IN (${placeholders})`,
+          unique
+        )) as Array<Record<string, unknown>>;
+        if (rows && rows.length > 0) {
+          return rows.map(mapSqlRowToProduct);
+        }
+      } catch (err) {
+        console.warn('[getProductsByIds] SQLite read failed, falling back to Dexie:', err);
+      }
+    }
     return await dexieDb.products.where('id').anyOf(unique).toArray();
   },
 
@@ -101,9 +184,27 @@ export const productAdapter = {
     const trimmed = query.trim();
     if (!trimmed) return undefined;
     const lower = trimmed.toLowerCase();
+    const { isTauriEnv } = await import('./base');
+    if (isTauriEnv()) {
+      try {
+        const [{ getLocalDb }] = await Promise.all([getSqlAdapter()]);
+        const db = await getLocalDb();
+        const rows = (await db.select(
+          'SELECT * FROM products WHERE (barcode = $1 OR LOWER(sku) = $2 OR id = $1) AND deleted = 0 LIMIT 1',
+          [trimmed, lower]
+        )) as Array<Record<string, unknown>>;
+        if (rows && rows.length > 0) {
+          return mapSqlRowToProduct(rows[0]);
+        }
+      } catch (err) {
+        console.warn('[findProductByBarcodeOrSku] SQLite read failed, falling back to Dexie:', err);
+      }
+    }
     const byBarcode = await dexieDb.products.where('barcode').equalsIgnoreCase(trimmed).first();
-    if (byBarcode) return byBarcode;
-    return await dexieDb.products.where('sku').equalsIgnoreCase(lower).first();
+    if (byBarcode && !byBarcode.id.startsWith('prod-test-')) return byBarcode;
+    const bySku = await dexieDb.products.where('sku').equalsIgnoreCase(lower).first();
+    if (bySku && !bySku.id.startsWith('prod-test-')) return bySku;
+    return undefined;
   },
 
   async deleteProduct(id: string): Promise<void> {

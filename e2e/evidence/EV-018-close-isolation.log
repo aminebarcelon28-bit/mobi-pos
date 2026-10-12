@@ -1,0 +1,31 @@
+[wdio] binary : C:\Users\<user>\Desktop\phone3-sync-lab\target-e2e\debug\mobi-pos.exe
+[wdio] profile: debug
+[wdio] driver : embedded
+[wdio] logs   : C:\Users\<user>\Desktop\phone3-sync-lab\test-logs
+[wdio] provenance OK (overlay=com.mobi.pos.e2e, binary=C:\Users\<user>\Desktop\phone3-sync-lab\target-e2e\debug\mobi-pos.exe)
+[wdio] wiped .e2e container: C:\Users\<user>\AppData\Roaming\com.mobi.pos.e2e
+[wdio] wiped .e2e WebView profile: C:\Users\<user>\AppData\Local\com.mobi.pos.e2e
+[wdio] e2e data dir: C:\Users\<user>\AppData\Roaming\com.mobi.pos.e2e
+[wdio] manifest: gitSha=f25d5b9f93e52c228bd44245f5d6e29b6db884af dirty=true
+
+Execution of 1 workers started at 2026-10-12T16:57:19.707Z
+
+[0-0] RUNNING in undefined - file:///C:/Users/<user>/Desktop/phone3-sync-lab/test/specs/stress/phase4-close.e2e.ts
+[0-0] [stress] T-B4s close duration: 124ms
+[0-0] [stress] T-B4s post-close sale: ok=false reason=NO_ACTIVE_SHIFT
+[0-0] PASSED in undefined - file:///C:/Users/<user>/Desktop/phone3-sync-lab/test/specs/stress/phase4-close.e2e.ts
+
+ "spec" Reporter:
+------------------------------------------------------------------
+[msedge 154.0.0.0 windows #0-0] Running: msedge (v154.0.0.0) on windows
+[msedge 154.0.0.0 windows #0-0] Session ID: 77d5e47d-300a-401a-b068-aca28587efe7
+[msedge 154.0.0.0 windows #0-0]
+[msedge 154.0.0.0 windows #0-0] » test\specs\stress\phase4-close.e2e.ts
+[msedge 154.0.0.0 windows #0-0] STRESS close isolation (Phase 4)
+[msedge 154.0.0.0 windows #0-0]    ✓ [T-B4s] close books exact after burst, post-close sale refused
+[msedge 154.0.0.0 windows #0-0]
+[msedge 154.0.0.0 windows #0-0] 1 passing (33.4s)
+
+
+Spec Files:	 1 passed, 1 total (100% completed) in 00:00:43  
+

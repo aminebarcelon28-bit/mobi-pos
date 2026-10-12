@@ -218,10 +218,11 @@ export const Header: React.FC = () => {
 
   const handlePinSuccess = () => {
     soundEngine.playCashDrawer();
+    const actor = activeCashier?.name?.trim() || 'Admin';
     logSecurityAction(
       'Ouverture Manuelle Tiroir ("No Sale")',
       'Tiroir-caisse ouvert sans vente par Administrateur',
-      'Yacine (Admin)',
+      actor,
       true
     );
     showToast(
@@ -267,8 +268,13 @@ export const Header: React.FC = () => {
           <input
             ref={searchInputRef}
             id="catalog-search"
+            data-testid="catalog-search"
             name="catalog-search"
             type="text"
+            // Sanctioned wedge destination (cleared after a successful decode).
+            // Manual typing here is never decoded as a barcode — see
+            // src/utils/wedgeBurst.ts (« Wedge-burst guard »).
+            data-barcode-scan-target="search"
             value={localSearch}
             aria-label="Recherche catalogue (F1)"
             onChange={(e) => setLocalSearch(e.target.value)}
@@ -399,6 +405,7 @@ export const Header: React.FC = () => {
           <div className="relative shrink-0" ref={toolsAnchorRef}>
             <button
               ref={toolsButtonRef}
+              data-testid="tools-menu-button"
               onClick={() => setIsToolsDropdownOpen(!isToolsDropdownOpen)}
               aria-haspopup="menu"
               aria-expanded={isToolsDropdownOpen}
@@ -549,6 +556,7 @@ export const Header: React.FC = () => {
                 </button>
 
                 <button
+                  data-testid="shift-move-open"
                   onClick={() => {
                     openModal('shift_movement');
                     setIsToolsDropdownOpen(false);
@@ -620,6 +628,7 @@ export const Header: React.FC = () => {
           {/* Cash Register Session Status */}
           {activeShift ? (
             <button
+              data-testid="shift-pill"
               onClick={() => openModal('shift_close')}
               className="px-2.5 py-1 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0"
               title="Session Caisse Ouverte • Cliquez pour Clôturer / Rapport Z"
@@ -629,6 +638,7 @@ export const Header: React.FC = () => {
             </button>
           ) : (
             <button
+              data-testid="shift-pill"
               onClick={() => openModal('shift_open')}
               className="px-2 py-1 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer animate-pulse shrink-0"
               title="Caisse Fermée • Cliquez pour Ouvrir"
@@ -641,6 +651,7 @@ export const Header: React.FC = () => {
           {/* Cashier Lock & Switch Button */}
           <button
             type="button"
+            data-testid="lock-button"
             onClick={lockScreen}
             className="px-2.5 py-1 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-text text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 group"
             title="Verrouiller l'écran (Ctrl+L) • Changer de caissier"

@@ -101,10 +101,10 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
     }
   },
 
-  logCashMovement: async (amount, type, reason, cashierName) => {
+  logCashMovement: async (amount, type, reason, cashierName, movementId) => {
     const { activeShift, logSecurityAction } = get();
     try {
-      const movement = await (await getSqlite()).logExpense(amount, type, reason, cashierName, activeShift?.id);
+      const movement = await (await getSqlite()).logExpense(amount, type, reason, cashierName, activeShift?.id, movementId);
       const refreshedActive = await (await getSqlite()).getActiveShift();
       logSecurityAction(
         type === 'EXPENSE' ? 'Décaissement / Dépense Caisse' : 'Apport de Caisse / Dépôt Manuel',
@@ -153,7 +153,6 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
         activeShift: null,
         allShifts,
         inventoryValuation,
-        activeModal: null,
       });
       return { success: true, session: closedSession };
     } catch (e: unknown) {

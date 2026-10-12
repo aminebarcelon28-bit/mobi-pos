@@ -25,6 +25,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { QRCodeImage } from '../ui/QRCodeImage';
+import { pairingMinutesLeft, usePairingPayload } from '../../utils/pairingPayload';
 import { getCloudCredentials, setCloudCredentials, deleteCloudCredentials } from '../../sync/keychain';
 import { testTursoConnection, type ConnectionTestResult } from '../../sync/tursoClient';
 import { MigrationManager, type MigrationSummary } from '../../sync/migrationManager';
@@ -46,6 +47,16 @@ export const CloudSyncPanel: React.FC = () => {
   const [showToken, setShowToken] = useState(false);
   const [hasStoredCreds, setHasStoredCreds] = useState(false);
   const [copiedPairing, setCopiedPairing] = useState(false);
+
+  // Stable-per-mount pairing payload via the shared builder (single
+  // normalization; the copied text always equals the displayed QR).
+  const pairingReady = Boolean(dbUrl && authToken);
+  const {
+    payload: pairingPayload,
+    mintedAt: pairingMintedAt,
+    refresh: refreshPairing,
+  } = usePairingPayload(dbUrl, authToken, pairingReady);
+  const pairingMinutes = pairingMintedAt === null ? null : pairingMinutesLeft(pairingMintedAt);
 
   // Testing & Migration State
   const [isTesting, setIsTesting] = useState(false);
@@ -554,13 +565,7 @@ export const CloudSyncPanel: React.FC = () => {
           <div className="mt-3 p-4 rounded-xl bg-cyan-950/20 border border-cyan-500/30 flex flex-col md:flex-row items-center gap-4 animate-in fade-in">
             <div className="shrink-0 bg-white p-2.5 rounded-xl border border-cyan-700/50 shadow-md flex items-center justify-center">
               <QRCodeImage
-                value={JSON.stringify({
-                  v: 1,
-                  type: 'mobipos-pair',
-                  url: dbUrl.trim(),
-                  token: authToken.trim(),
-                  ts: Date.now(),
-                })}
+                value={pairingPayload}
                 size={140}
                 margin={3}
                 errorCorrectionLevel="L"
@@ -587,14 +592,8 @@ export const CloudSyncPanel: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    const payload = JSON.stringify({
-                      v: 1,
-                      type: 'mobipos-pair',
-                      url: dbUrl.trim(),
-                      token: authToken.trim(),
-                      ts: Date.now(),
-                    });
-                    navigator.clipboard.writeText(payload);
+                    if (!pairingPayload) return;
+                    navigator.clipboard.writeText(pairingPayload);
                     setCopiedPairing(true);
                     showToast('Code d\'appairage copié dans le presse-papier !', 'success');
                     setTimeout(() => setCopiedPairing(false), 2500);
@@ -613,6 +612,23 @@ export const CloudSyncPanel: React.FC = () => {
                   <span>Afficher en grand / Télécharger l'App</span>
                 </button>
               </div>
+              {/* Pairing-code validity (mirrors the mobile 15-min freshness gate). */}
+              {pairingMinutes !== null && (
+                <p className={`text-[11px] font-bold ${pairingMinutes > 0 ? 'text-pos-muted' : 'text-red-400'}`}>
+                  {pairingMinutes > 0
+                    ? `Code valide encore ~${pairingMinutes} min — scannez avant expiration.`
+                    : 'Code expiré — rafraîchissez pour générer un nouveau code.'}{' '}
+                  {pairingMinutes <= 0 && (
+                    <button
+                      type="button"
+                      onClick={refreshPairing}
+                      className="underline text-cyan-400 hover:text-cyan-300 cursor-pointer"
+                    >
+                      Rafraîchir le code
+                    </button>
+                  )}
+                </p>
+              )}
             </div>
           </div>
         )}

@@ -237,23 +237,25 @@ export const LabelPrinterModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 select-none">
-      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[94dvh] sm:max-h-[90dvh] pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] sm:py-0">
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+    <div role="dialog" aria-modal="true" aria-label="Studio d'impression d'étiquettes" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 flex flex-col h-[94dvh] sm:max-h-[90dvh] pt-[max(0.5rem,var(--safe-top))] sm:py-0">
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 
         {/* Header */}
-        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0">
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
           <div className="flex items-center gap-2 text-emerald-400 min-w-0">
             <Barcode className="w-5 h-5 shrink-0" />
-            <h2 className="text-sm sm:text-base font-bold text-pos-text truncate">
-              Studio d'Impression d'Étiquettes Code-Barres & Prix
+            <h2 className="text-sm sm:text-base font-extrabold text-pos-text truncate">
+              Studio d'Étiquettes <span className="hidden sm:inline">Code-Barres & Prix</span>
             </h2>
           </div>
           <button
+            type="button"
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0 cursor-pointer active:scale-95"
+            aria-label="Fermer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -406,16 +408,16 @@ export const LabelPrinterModal: React.FC = () => {
               </div>
 
               {/* Preset Quantity Buttons */}
-              <div className="flex items-center gap-1.5 pt-1">
-                <span className="text-[10px] text-pos-muted font-semibold">Presets:</span>
+              <div className="flex items-center gap-1.5 pt-1 overflow-x-auto no-scrollbar">
+                <span className="text-[10px] text-pos-muted font-semibold shrink-0">Presets:</span>
                 {[1, 5, 10, 20, 50, 100].map((qty) => (
                   <button
                     key={qty}
                     type="button"
                     onClick={() => setLabelQuantity(qty)}
-                    className={`min-h-[40px] px-2.5 py-1.5 rounded text-[10px] font-bold border transition active:scale-95 ${
+                    className={`min-h-[44px] min-w-[42px] px-2.5 py-1.5 rounded-lg text-xs font-bold border transition active:scale-95 shrink-0 cursor-pointer ${
                       labelQuantity === qty
-                        ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                        ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-black shadow-sm'
                         : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
                     }`}
                   >
@@ -521,7 +523,7 @@ export const LabelPrinterModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-3 sm:p-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 shrink-0">
+        <div className="p-3 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 shrink-0">
           <div className="text-xs text-pos-muted flex items-center gap-2 truncate">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
             <span className="truncate">

@@ -203,10 +203,10 @@ export const KittingBundleModal: React.FC = () => {
   const filteredBundles = filteredBundlesMemo;
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-[max(0.5rem,var(--safe-bottom))] select-none">
-      <div className="bg-pos-panel border border-pos-border rounded-t-2xl sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col">
+    <div role="dialog" aria-modal="true" aria-label="Packs et bundles" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
+      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 h-[94dvh] sm:h-[90dvh] flex flex-col">
         {/* Mobile drag handle */}
-        <div className="w-8 h-1 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" />
+        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
         
         {/* Header */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
@@ -287,7 +287,7 @@ export const KittingBundleModal: React.FC = () => {
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto overscroll-contain p-5 relative bg-pos-bg">
+        <div className="flex-1 overflow-y-auto overscroll-contain p-5 pb-[max(1.5rem,var(--safe-bottom))] relative bg-pos-bg">
           {activeTab === 'Existants' ? (
             <div className="space-y-4 max-w-4xl mx-auto">
               
@@ -335,10 +335,10 @@ export const KittingBundleModal: React.FC = () => {
                   return (
                     <div
                       key={bundle.id}
-                      className="bg-pos-card border border-pos-border p-4.5 rounded-2xl flex justify-between items-center shadow-sm hover:border-emerald-500/40 transition"
+                      className="bg-pos-card border border-pos-border p-4 sm:p-4.5 rounded-2xl flex flex-col sm:flex-row justify-between sm:items-center gap-3.5 shadow-sm hover:border-emerald-500/40 transition"
                     >
-                      <div className="flex-1 mr-4">
-                        <div className="flex items-center gap-2.5 mb-1">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2.5 mb-1.5 flex-wrap">
                           <h3 className="text-sm font-extrabold text-pos-text">{bundle.bundleTitle}</h3>
                           {hasOutOfStock ? (
                             <span className="bg-rose-500/10 text-rose-400 text-[10px] px-2 py-0.5 rounded-full font-bold border border-rose-500/30 flex items-center gap-1">
@@ -373,27 +373,29 @@ export const KittingBundleModal: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="text-right flex flex-col items-end gap-2.5 shrink-0">
-                        <div>
-                          <span className="text-xl font-black text-emerald-400 block">{formatDZD(bundle.bundlePrice)}</span>
+                      <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2.5 shrink-0 pt-2.5 sm:pt-0 border-t sm:border-t-0 border-pos-border/40">
+                        <div className="text-left sm:text-right">
+                          <span className="text-lg sm:text-xl font-black text-emerald-400 block">{formatDZD(bundle.bundlePrice)}</span>
                           {savings > 0 && (
                             <span className="text-[10px] text-amber-400 font-bold block">Économie: {formatDZD(savings)}</span>
                           )}
                         </div>
 
-                        <div className="flex gap-2">
+                        <div className="flex items-center gap-2">
                           <button
+                            type="button"
                             onClick={() => {
                               deleteBundle(bundle.id);
                               showSuccess('Pack supprimé avec succès !');
                             }}
-                            className="p-2 bg-pos-bg hover:bg-rose-500/20 text-pos-muted hover:text-rose-400 rounded-xl border border-pos-border transition"
-                            title="Supprimer ce pack"
+                            className="min-h-[44px] min-w-[44px] p-2 bg-pos-bg hover:bg-rose-500/20 text-pos-muted hover:text-rose-400 rounded-xl border border-pos-border transition flex items-center justify-center cursor-pointer active:scale-95"
+                            aria-label={`Supprimer ce pack — ${bundle.bundleTitle}`}
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Trash2 className="w-4 h-4" aria-hidden="true" />
                           </button>
 
                           <button
+                            type="button"
                             onClick={() => {
                               const bundleAddResult = addBundleToCart(bundle.id);
                               if (bundleAddResult.success) {
@@ -403,13 +405,13 @@ export const KittingBundleModal: React.FC = () => {
                               }
                             }}
                             disabled={hasOutOfStock}
-                            className={`px-4 py-2 text-slate-950 font-bold text-xs rounded-xl transition flex items-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer ${
+                            className={`min-h-[44px] px-4 py-2.5 text-slate-950 font-bold text-xs rounded-xl transition flex items-center gap-1.5 shadow-md shadow-emerald-500/20 cursor-pointer active:scale-95 ${
                               hasOutOfStock
                                 ? 'bg-pos-muted opacity-50 cursor-not-allowed text-pos-text'
                                 : 'bg-emerald-500 hover:bg-emerald-400'
                             }`}
                           >
-                            <ShoppingBag className="w-4 h-4" /> Scanner (Panier)
+                            <ShoppingBag className="w-4 h-4" aria-hidden="true" /> Ajouter au panier
                           </button>
                         </div>
                       </div>

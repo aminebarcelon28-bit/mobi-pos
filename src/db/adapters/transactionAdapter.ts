@@ -10,6 +10,22 @@ import { fireSync, isTauriEnv } from './base';
 import { getLocalDb, beginImmediate } from '../sqlPluginAdapter';
 import { withWriteLock } from '../writeMutex';
 import { withBusyRetry, isBusyError } from '../busyRetry';
+import { physicalCashTendered, cashDisbursedOf, clampCashRefund } from '../../utils/cashTerms';
+import { refundableValueOf } from '../../utils/receiptMath';
+import { offlineRefundVerdict } from '../../sync/refundLockPolicy';
+
+/**
+ * Independent execution policy for processRefundAtomic (defense in depth).
+ * The slice computes and enforces these from store state; the adapter
+ * re-verifies from DURABLE rows (Dexie authority + SQLite mirror) so a
+ * stale/compromised caller can never force a payout past them.
+ */
+export interface RefundExecutionPolicy {
+  localDeviceId: string;
+  activeShiftId: string | null;
+  /** Online at submit time (slice probe). False = offline verdict applies. */
+  online: boolean;
+}
 
 /**
  * Same-window double-submit guards. A double-tap on "Annuler" / "Rembourser"
@@ -275,15 +291,78 @@ export const transactionAdapter = {
     restockedProducts: Product[] = [],
     updatedCustomer?: Customer,
     restoredImeis: string[] = [],
-    auditEntry?: SecurityAuditLogEntry
+    auditEntry?: SecurityAuditLogEntry,
+    policy?: RefundExecutionPolicy
   ): Promise<ImeiReleaseResult> {
     const warnings: string[] = [];
     const flightKey = refundFlightKey(refundTransaction);
     if (refundInFlight.has(flightKey)) {
       throw new Error('ALREADY_PROCESSING');
     }
-    refundInFlight.add(flightKey);
     const enrichedRefundAudit = await enrichAuditTelemetry(auditEntry);
+    // Pre-lock durable gates (reads only — the in-flight key is claimed
+    // after them so a denied refund never holds the lock; concurrent
+    // duplicates still converge via the in-transaction re-reads below).
+    // Fix 4: accounting-period gate, verified against the durable session
+    // table (not the caller's store snapshot). No open shift = no refund.
+      const openSession = await dexieDb.cashSessions
+        .where('status').equals('OPEN').first().catch(() => undefined);
+      if (!openSession || !openSession.id) {
+        throw new Error('NO_OPEN_SHIFT');
+      }
+      // Durable original for the independent checks below. A missing mirror
+      // row skips value checks (cannot prove staleness) but never the shift
+      // gate above.
+      const durableOriginalId = refundTransaction.originalTransactionId;
+      const durableOriginal = (durableOriginalId
+        ? await dexieDb.transactions.get(durableOriginalId).catch(() => undefined)
+        : undefined) as unknown as SaleTransaction | undefined;
+      const durablePriorRefunds = (await dexieDb.transactions
+        .filter((t) => {
+          const rt = t as unknown as { isRefund?: boolean; originalTransactionId?: string };
+          return Boolean(rt.isRefund) && rt.originalTransactionId === durableOriginalId;
+        })
+        .toArray()
+        .catch(() => [])) as unknown as SaleTransaction[];
+      // Fix 3: offline fail-closed re-verified from the durable row's own
+      // device/shift stamps (not the payload's claims about origin).
+      if (policy && !policy.online && durableOriginal) {
+        const verdict = offlineRefundVerdict(durableOriginal, {
+          localDeviceId: policy.localDeviceId,
+          activeShiftId: policy.activeShiftId,
+        });
+        if (!verdict.allow) {
+          throw new Error(verdict.reason);
+        }
+      }
+      // Fix 1: zero-value/exhausted tickets refused from durable rows, on the
+      // same money-truth basis as list + slice (refundableValueOf).
+      if (durableOriginal) {
+        if (refundableValueOf(durableOriginal, [durableOriginal, ...(durablePriorRefunds || [])]) <= 0) {
+          throw new Error('ZERO_REFUNDABLE');
+        }
+      }
+      // Fix 2: tender-cap re-verification from durable rows. Any caller-side
+      // clamp bypass (stale snapshot, compromised UI) dies here before a
+      // single dinar moves — fail-closed, never silently corrected.
+      {
+        const durableCashTendered = physicalCashTendered(durableOriginal);
+        const durablePriorCash = (durablePriorRefunds || []).reduce(
+          (acc, t) => acc + cashDisbursedOf(t), 0
+        );
+        const requestedCash = cashDisbursedOf(refundTransaction);
+        const cap = clampCashRefund({
+          cashShare: requestedCash,
+          cashTenderedNet: durableCashTendered,
+          priorCashOut: durablePriorCash,
+        });
+        if (requestedCash > cap.cashOut) {
+          throw new Error('CASH_CAP_EXCEEDED');
+        }
+      }
+      // Claim the in-flight key only after the pre-lock gates pass, so a
+      // denied refund never wedges the ticket (finally below always clears).
+      refundInFlight.add(flightKey);
     try {
     // In-transaction re-read of the over-refund bound (both mirrors): the
     // pre-write check in the slice races a second refund, so the bound is
@@ -422,7 +501,7 @@ export const transactionAdapter = {
           throw txnErr;
         }
       } catch (err) {
-        if (err instanceof Error && (err.message === 'ALREADY_PROCESSING' || err.message.startsWith('REFUND_EXCEEDS') || err.message === 'ORIGINAL_VOIDED')) {
+        if (err instanceof Error && (err.message === 'ALREADY_PROCESSING' || err.message.startsWith('REFUND_EXCEEDS') || err.message === 'ORIGINAL_VOIDED' || err.message === 'ZERO_REFUNDABLE' || err.message === 'CASH_CAP_EXCEEDED' || err.message === 'OFFLINE_REMOTE_TICKET' || err.message === 'NO_OPEN_SHIFT')) {
           throw err;
         }
         if (isBusyError(err)) throw err;

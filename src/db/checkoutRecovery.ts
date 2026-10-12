@@ -94,7 +94,12 @@ function classifyReplayError(error: unknown): 'fatal' | 'transient' {
 
 /** True when the intent has exceeded its TTL. */
 function isIntentExpired(createdAt: string): boolean {
-  return Date.now() - new Date(createdAt).getTime() > INTENT_TTL_MS;
+  const t = new Date(createdAt).getTime();
+  // An unparseable stamp ('' legacy default) must NOT live forever: `NaN`
+  // makes the comparison false and a stuck intent would replay a stale sale
+  // on every boot. Treat it as expired so it is evicted immediately.
+  if (Number.isNaN(t)) return true;
+  return Date.now() - t > INTENT_TTL_MS;
 }
 
 /** Emit a toast from a non-React context via the window event bridge ToastProvider subscribes to. */
@@ -386,6 +391,26 @@ export async function replayCheckoutRecoveryIntents(): Promise<{
     const { writeCheckoutAtomic } = await import('./sqlPluginAdapter');
     for (const intent of toReplay) {
       try {
+        // MOBI-DEFECT-F: intents minted by the legacy refund flow predate the
+        // native barrier. Their refund row carries no refund_dedup entry, so
+        // the v109 guardrail trigger aborts the replay loudly (REFUND_BYPASS)
+        // instead of double-applying outside the atomic path. Evict with a
+        // review toast — the Dexie/SQLite-mirror legs of the old flow already
+        // committed before the intent was written, so the money is not lost,
+        // but the order row needs a cashier check.
+        const isLegacyRefundIntent =
+          Boolean((intent.payload?.fullTx as { isRefund?: unknown } | undefined)?.isRefund) ||
+          String(intent.transactionId || '').startsWith('REF-');
+        if (isLegacyRefundIntent) {
+          await evictRecoveryIntent(
+            intent.transactionId,
+            'Legacy refund intent superseded by the native refund barrier',
+            true,
+            `Avoir #${intent.receiptNumber} — écriture antérieure au verrou natif : vérifiez le ticket en caisse avant tout nouveau remboursement.`,
+          );
+          evicted += 1;
+          continue;
+        }
         await writeCheckoutAtomic(intent.payload);
 
         // Order row is durable — apply the customer mutation snapshot if present

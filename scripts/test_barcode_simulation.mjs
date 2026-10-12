@@ -16,6 +16,13 @@
 let passedCount = 0;
 let failedCount = 0;
 
+// Production guard constants (src/utils/wedgeBurst.ts) — the simulation must
+// not drift from them, so they are re-pinned (not duplicated) by the dedicated
+// suite: node --experimental-strip-types scripts/test_wedge_guards.mts
+const WEDGE_GAP_TEXT_MS = 25;
+const WEDGE_GAP_LOOSE_MS = 50;
+const WEDGE_MIN_CHARS = 3;
+
 function assert(condition, message) {
   if (condition) {
     console.log(`[PASS] ${message}`);
@@ -32,6 +39,7 @@ function assert(condition, message) {
 class MockBarcodeScannerEngine {
   constructor(initialState = {}) {
     this.buffer = '';
+    this.humanPaced = false;
     this.lastKeyTime = 0;
     this.lastScanTimestamp = 0;
     this.lastScanCode = '';
@@ -160,29 +168,47 @@ class MockBarcodeScannerEngine {
   }
 
   /**
-   * Simulate a physical keystroke arrival from USB keyboard or Human typist
+   * Simulate a physical keystroke arrival from USB keyboard or Human typist.
+   * Mirrors the production guard (src/utils/wedgeBurst.ts): a run that is not
+   * machine-paced end to end is RETIRED (never revived by a faster tail), and
+   * keystrokes landing in a manual-entry field stand the decoder down entirely.
    */
   simulateKeyPress(key, timestamp, isInputFocused = false, inputElement = null) {
     const timeDiff = timestamp - this.lastKeyTime;
+    const isSanctionedTarget = !!inputElement?.isSearchBar;
+
+    // TARGET GUARD: manual-entry field (not a sanctioned scan destination) →
+    // no buffering at all, and the field is never cleared by this handler.
+    if (isInputFocused && !isSanctionedTarget) {
+      this.buffer = '';
+      this.humanPaced = false;
+      this.lastKeyTime = timestamp;
+      return;
+    }
+
+    const maxGap = isSanctionedTarget ? WEDGE_GAP_TEXT_MS : WEDGE_GAP_LOOSE_MS;
 
     if (key === 'Enter') {
-      if (this.buffer.length >= 3) {
+      const isMachineBurst = !this.humanPaced && this.buffer.length >= WEDGE_MIN_CHARS;
+      if (isMachineBurst) {
         this.processScan(this.buffer, timestamp);
 
-        if (isInputFocused && inputElement) {
-          if (inputElement.isSearchBar) {
-            inputElement.value = '';
-            this.searchQuery = '';
-          }
+        if (isSanctionedTarget && inputElement) {
+          inputElement.value = '';
+          this.searchQuery = '';
         }
       }
       this.buffer = '';
+      this.humanPaced = false;
     } else if (key.length === 1) {
-      // If timeDiff > 50ms, human typing resets buffer
-      if (timeDiff > 50 && this.buffer.length > 0) {
+      if (this.buffer === '') {
         this.buffer = key;
-      } else {
+        this.humanPaced = false;
+      } else if (!this.humanPaced && timeDiff <= maxGap) {
         this.buffer += key;
+      } else {
+        this.buffer = key;
+        this.humanPaced = true;
       }
     }
 
@@ -368,6 +394,45 @@ const testCustomers = [
   const sim = new MockBarcodeScannerEngine({ products: testCatalog });
   sim.simulateScannerBurst('  coq-ip15-blk  ');
   assert(sim.cart.length === 1 && sim.cart[0].product.id === 'prod_1', 'Case-insensitive & whitespace trimmed SKU scan: Successfully added');
+}
+
+// TEST 17: rapid MANUAL typing into a search field (the reported defect)
+// Typing "chargeur" fast (< 60ms/key) used to decode as a barcode, wipe the
+// field and reset the catalog query. Human-paced runs are now retired.
+{
+  const sim = new MockBarcodeScannerEngine({ products: testCatalog, searchQuery: 'old_text' });
+  // The browser owns the field text; the mock only models the decoder's
+  // reaction to those keystrokes.
+  const searchInputMock = { isSearchBar: true, value: 'chargeur' };
+  sim.simulateHumanTyping('chargeur', Date.now(), 40, true, searchInputMock);
+  assert(sim.cart.length === 0, 'Manual typing in search (40ms/key): cart NOT modified');
+  assert(sim.lastScannedCode === null, 'Manual typing in search (40ms/key): nothing read as a barcode');
+  assert(searchInputMock.value === 'chargeur', 'Manual typing in search (40ms/key): field content PRESERVED');
+  assert(sim.searchQuery === 'old_text', 'Manual typing in search (40ms/key): catalog query NOT reset');
+}
+{
+  // Slow start, fast tail — "reset to the last key" decoded "rgeur" here.
+  const sim = new MockBarcodeScannerEngine({ products: testCatalog, searchQuery: 'keep' });
+  const searchInputMock = { isSearchBar: true, value: 'chargeur' };
+  let t = Date.now();
+  for (const [key, gap] of [['c', 0], ['h', 60], ['a', 60], ['r', 60], ['g', 5], ['e', 5], ['u', 5], ['r', 5]]) {
+    sim.simulateKeyPress(key, t + gap, true, searchInputMock);
+  }
+  t += 60;
+  sim.simulateKeyPress('Enter', t, true, searchInputMock);
+  assert(sim.cart.length === 0, 'Slow start + fast tail in search: cart NOT modified');
+  assert(searchInputMock.value === 'chargeur', 'Slow start + fast tail in search: field content PRESERVED');
+  assert(sim.searchQuery === 'keep', 'Slow start + fast tail in search: catalog query NOT reset');
+}
+
+// TEST 18: any keystroke inside a manual-entry field (qty, price, PIN)
+// stands the decoder down completely — no buffering, no field clearing.
+{
+  const sim = new MockBarcodeScannerEngine({ products: testCatalog });
+  const qtyMock = { isSearchBar: false, value: '6138318449885' };
+  sim.simulateScannerBurst('6138318449885', Date.now(), 10, true, qtyMock);
+  assert(sim.cart.length === 0, 'Machine burst into a manual-entry field: cart NOT modified');
+  assert(qtyMock.value === '6138318449885', 'Machine burst into a manual-entry field: field NOT cleared by the decoder');
 }
 
 console.log('\n====================================================');

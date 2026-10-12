@@ -7,6 +7,12 @@ export interface NativeAuditAppendRequest {
   requiresPin?: boolean;
   deviceId?: string;
   ipAddress?: string;
+  /**
+   * Optional caller-derived idempotency key (becomes the native event id).
+   * Repeats with identical body replay the original receipt instead of
+   * appending a second row + link; repeats with different body fail typed.
+   */
+  idempotencyKey?: string;
 }
 
 export interface NativeAuditAppendReceipt {

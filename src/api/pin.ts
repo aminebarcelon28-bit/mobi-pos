@@ -33,6 +33,7 @@ export interface NativePinSetRequest {
    * plain rotation fails with a pepper-absent error — never preemptively.
    */
   recoveryReset?: boolean;
+  supervisorPin?: string;
 }
 
 /**

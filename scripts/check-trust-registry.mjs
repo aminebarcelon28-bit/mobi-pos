@@ -36,6 +36,13 @@ const DELEGATES = {
 function collectRs(dir, out = []) {
   for (const name of readdirSync(dir)) {
     if (name === 'target' || name === 'gen' || name === 'target-test') continue;
+    // E2E harness module: test-only commands (`e2e_*`, compiled out of
+    // production builds behind `any(debug_assertions, feature = "e2e")` and
+    // proven absent from the release binary — Gate 1.3). They intentionally
+    // bypass the authorizer (gate-independent setup/oracle), so the
+    // prod-oriented registry/wrapper checks do not apply. Do NOT add
+    // production commands to this file to dodge coverage.
+    if (name === 'e2e.rs') continue;
     const p = join(dir, name);
     if (statSync(p).isDirectory()) {
       if (dir === SRC) collectRs(p, out); // one level (trust_core/) is enough

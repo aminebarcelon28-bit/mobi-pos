@@ -11,7 +11,7 @@ import {
   STORE_CREDIT_PIN_THRESHOLD_DZD,
 } from '../../utils/loyaltyEngine';
 import { audioBus } from '../../utils/audioEvents';
-import { newId, newReceiptNumber } from '../../utils/ids';
+import { newId, newReceiptNumber, debtDepositMovementId } from '../../utils/ids';
 import { verifyManagerGate } from '../../utils/pinGate';
 
 // ══════════════════════════════════════════════════════════════
@@ -364,8 +364,11 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
   },
 
   recordCustomerDebtPayment: async (customerId, amount, method, notes, opts?: { allowOverpayToCredit?: boolean; entryId?: string }) => {
-    const { customers, customerDebts, currentCustomer, logSecurityAction } = get();
+    const { customers, customerDebts, currentCustomer, logSecurityAction, activeCashier } = get();
     const customer = customers.find((c) => c.id === customerId);
+    // Session identity binding (no hardcoded cashier): the performing
+    // cashier owns the debt row, the drawer deposit, and the audit entry.
+    const settlerName = activeCashier?.name || 'Caissier';
     // Integer DZD only.
     const tendered = Math.max(0, isNaN(amount) ? 0 : Math.round(amount));
     if (!customer) return { success: false, reason: 'CUSTOMER_NOT_FOUND' };
@@ -420,7 +423,7 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
                 : ` (monnaie rendue ${changeDue} DA)`
               : ''),
         createdAt: new Date().toISOString(),
-        recordedBy: 'Caisse 1 (Yacine)',
+        recordedBy: settlerName,
       };
 
       let newLedger = base.ledger || [];
@@ -523,10 +526,15 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
       // with no signal. Surface it to the caller via the result so the
       // cashier can re-record the deposit instead of discovering the gap at
       // shift close.
+      // Idempotency: the movement id derives from the debt entry id, so a
+      // double-submit race collapses via Dexie put-upsert + stable outbox key
+      // instead of minting duplicate drawer rows (double-submit guard).
       const deposit = await get().logCashMovement(
         appliedAmount,
         'MANUAL_DEPOSIT',
-        `Versement Règlement Dette: ${customer.name} (Ticket ${receiptNo})`
+        `Versement Règlement Dette: ${customer.name} (Ticket ${receiptNo})`,
+        settlerName,
+        debtDepositMovementId(debtEntry.id)
       );
       if (!deposit.success) {
         console.error('[debt] Drawer deposit failed after debt settlement:', deposit.reason);
@@ -541,6 +549,9 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
     // payments are legitimate), so same-debt double-payment across tills
     // stays a known limitation — this tag makes every settlement traceable
     // and catches same-entry double-processing instead.
+    // Audit idempotency (double-submit guard): same-entryId repeats are
+    // replays — the native chain must never receive a second row for one
+    // intent. Chain-safe: dedupe happens before append, chain bytes untouched.
     let debtPayoutTag = '';
     try {
       const { getStableDeviceId } = await import('../../sync/device');
@@ -550,14 +561,18 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
     } catch {
       // Tag best-effort — the settlement must never fail over a marker.
     }
-    await logSecurityAction(
-      'Règlement Dette Client Enregistré',
-      `Client: ${customer.name} - Versement: ${appliedAmount} DA appliqués (${method})` +
-        (changeDue > 0 ? ` - Monnaie rendue: ${changeDue} DA` : '') +
-        ` - Dette restante: ${newDebt} DA${debtPayoutTag}`,
-      'Caissier (Yacine)',
-      false
-    );
+    const { claimAuditKey } = await import('../../utils/auditIdempotency');
+    if (claimAuditKey(`DEBT-SETTLE-${debtEntry.id}`)) {
+      await logSecurityAction(
+        'Règlement Dette Client Enregistré',
+        `Client: ${customer.name} - Versement: ${appliedAmount} DA appliqués (${method})` +
+          (changeDue > 0 ? ` - Monnaie rendue: ${changeDue} DA` : '') +
+          ` - Dette restante: ${newDebt} DA${debtPayoutTag}`,
+        settlerName,
+        false,
+        `DEBT-SETTLE-${debtEntry.id}`
+      );
+    }
 
     audioBus.emit('success');
     audioBus.emit('cashDrawer');

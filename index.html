@@ -11,18 +11,21 @@
     <meta name="apple-mobile-web-app-title" content="MobiPOS" />
     <title>MobiPOS - Terminal Caisse & Gestion</title>
     <script>
-      // Prevent theme flash on initial load
+      // Prevent theme flash on initial load and align system status bar
       try {
         const theme = localStorage.getItem('mobi_pos_theme') || 'dark';
+        const metaTheme = document.querySelector('meta[name="theme-color"]');
         if (theme === 'dark') {
           document.documentElement.classList.add('dark');
+          if (metaTheme) metaTheme.setAttribute('content', '#0b0f19');
         } else {
           document.documentElement.classList.remove('dark');
+          if (metaTheme) metaTheme.setAttribute('content', '#f8fafc');
         }
       } catch (e) {}
     </script>
   </head>
-  <body>
+  <body ontouchstart="">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

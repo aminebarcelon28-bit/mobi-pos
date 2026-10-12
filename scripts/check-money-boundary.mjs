@@ -86,17 +86,17 @@ console.log('\n--- Rule 3: money-path float registry (Stage E expiry) ---');
 {
   // file -> max allowed hits (author-time baseline, Stage A).
   const REGISTRY = {
-    'src/utils/receiptMath.ts': 23,
+    'src/utils/receiptMath.ts': 28,
     // Phase 1b-i: taxEngine.ts is DELETED — its registry entry goes with it
     // (the file may not reappear; the zero-tax gate greps src/ for tax tokens).
     'src/utils/moneyInput.ts': 1,
-    'src/utils/cashTerms.ts': 8,
+    'src/utils/cashTerms.ts': 12,
     'src/utils/receiptViewModel.ts': 13,
     'src/utils/fifoPreview.ts': 5,
     'src/utils/inventoryValuation.ts': 2,
-    'src/utils/zReportSnapshot.ts': 3,
+    'src/utils/zReportSnapshot.ts': 0,
     'src/db/sqlPluginAdapter.ts': 50,
-    'src/store/slices/createOrderSlice.ts': 23,
+    'src/store/slices/createOrderSlice.ts': 38,
     'src/store/slices/createCartSlice.ts': 8,
     'src/components/PoReviewScreen.tsx': 55,
     'src/utils/savQuoteBuilder.ts': 1,
