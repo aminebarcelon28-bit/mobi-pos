@@ -85,21 +85,21 @@ export const LabelPrinterModal: React.FC = () => {
   }, [products, debouncedSearch, categoryFilter, brandFilter]);
 
   // Auto-select target product or first matching product
-  useEffect(() => {
+  const [prevModalSync, setPrevModalSync] = useState<string | null>(null);
+  if (activeModal !== prevModalSync) {
+    setPrevModalSync(activeModal);
     if (activeModal === 'label_printer') {
       const targetId = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('label_printer_target_id') : null;
       if (targetId) {
         sessionStorage.removeItem('label_printer_target_id');
         if (products.some((p) => p.id === targetId)) {
           setSelectedProductId(targetId);
-          return;
         }
-      }
-      if (!selectedProductId && products.length > 0) {
+      } else if (!selectedProductId && products.length > 0) {
         setSelectedProductId(products[0].id);
       }
     }
-  }, [activeModal, products, selectedProductId]);
+  }
 
   const selectedProduct = products.find((p) => p.id === selectedProductId) || filteredProducts[0] || products[0];
 

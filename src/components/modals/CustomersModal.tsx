@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { createPortal } from 'react-dom';
 import {
   X, User, Star, Phone, Mail, Check, Plus, Edit2, Trash2, Search,
@@ -371,6 +372,24 @@ export const CustomersModal: React.FC = () => {
     return results;
   }, [customers, debouncedSearch, tierFilter, sortField, sortDir, customerMetricsMap]);
 
+  // Virtualization: chunk filtered customers into rows of 2 for grid rendering
+  const customerRows = useMemo(() => {
+    const chunks: Customer[][] = [];
+    for (let i = 0; i < filteredCustomers.length; i += 2) {
+      chunks.push(filteredCustomers.slice(i, i + 2));
+    }
+    return chunks;
+  }, [filteredCustomers]);
+
+  const contentBodyRef = useRef<HTMLDivElement>(null);
+
+  const customerRowVirtualizer = useVirtualizer({
+    count: customerRows.length,
+    getScrollElement: () => contentBodyRef.current,
+    estimateSize: () => 180,
+    overscan: 6,
+  });
+
   const showSuccess = (msg: string) => {
     setSuccessMsg(msg);
     setTimeout(() => setSuccessMsg(''), 3000);
@@ -739,7 +758,7 @@ export const CustomersModal: React.FC = () => {
         </div>
 
         {/* ═══ Content Body ═══ */}
-        <div className="flex-1 overflow-y-auto p-4 relative flex flex-col gap-4">
+        <div ref={contentBodyRef} className="flex-1 overflow-y-auto p-4 relative flex flex-col gap-4">
           {successMsg && (
             <div className="sticky top-2 z-20 mx-auto w-fit bg-emerald-500 text-slate-950 px-4 py-2 rounded-full text-xs font-black flex items-center gap-2 shadow-xl animate-in fade-in slide-in-from-top-4">
               <CheckCircle2 className="w-4 h-4" /> {successMsg}
@@ -1401,146 +1420,172 @@ export const CustomersModal: React.FC = () => {
               </div>
 
               {/* Customer Cards Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {(filteredCustomers || []).map(customer => {
-                  const metrics = getCustomerMetrics(customer.id);
-                  const isSelected = currentCustomer?.id === customer.id;
-                  const hasDebt = (customer.currentDebt || 0) > 0;
+              {filteredCustomers.length === 0 ? (
+                <div className="text-center py-16">
+                  <User className="w-10 h-10 text-pos-muted/30 mx-auto mb-3" />
+                  <p className="text-sm font-bold text-pos-muted">Aucun client trouvé</p>
+                  <p className="text-xs text-pos-muted/60 mt-1">Ajustez votre recherche ou ajoutez un nouveau client.</p>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    height: `${customerRowVirtualizer.getTotalSize()}px`,
+                    width: '100%',
+                    position: 'relative',
+                  }}
+                >
+                  {customerRowVirtualizer.getVirtualItems().map((virtualRow) => {
+                    const rowPair = customerRows[virtualRow.index] || [];
+                    return (
+                      <div
+                        key={virtualRow.key}
+                        data-index={virtualRow.index}
+                        ref={customerRowVirtualizer.measureElement}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                        className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-3"
+                      >
+                        {rowPair.map((customer) => {
+                          const metrics = getCustomerMetrics(customer.id);
+                          const isSelected = currentCustomer?.id === customer.id;
+                          const hasDebt = (customer.currentDebt || 0) > 0;
 
-                  return (
-                    <div key={customer.id}
-                      className={`bg-pos-card border rounded-xl p-4 flex flex-col gap-3 relative transition-all shadow-sm hover:shadow-md cursor-pointer ${
-                        isSelected ? 'border-emerald-500 shadow-sm shadow-emerald-500/20 ring-1 ring-emerald-500/30' : 'border-pos-border hover:border-pos-text/20'
-                      }`}
-                      onClick={() => openProfile(customer)}
-                    >
-                      {/* Selected Indicator */}
-                      {isSelected && (
-                        <div className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center shadow-md shadow-emerald-500/40 z-10">
-                          <Check className="w-3.5 h-3.5 text-slate-950 stroke-[3]" />
-                        </div>
-                      )}
-
-                      {/* Customer Info Row */}
-                      <div className="flex items-start">
-                        <div className="flex items-center gap-3">
-                          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-emerald-500/20 to-sky-500/20 border border-pos-border flex items-center justify-center overflow-hidden shrink-0">
-                            {customer.avatarUrl
-                              ? <img src={customer.avatarUrl} alt={customer.name} className="w-full h-full object-cover" />
-                              : <User className="w-5 h-5 text-sky-400" />}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h3 className="text-sm font-bold text-pos-text truncate">{customer.name}</h3>
-                              {tierBadge(customer.pricingTier)}
-                              {hasDebt && (
-                                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[9px] font-black animate-pulse shrink-0">
-                                  Dette: {formatDZD(customer.currentDebt || 0)}
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2 text-[10px] text-pos-muted mt-0.5">
-                              <span className="flex items-center gap-0.5"><Phone className="w-3 h-3" /> {customer.phone}</span>
-                              {customer.email && <span className="flex items-center gap-0.5 truncate max-w-[150px]"><Mail className="w-3 h-3" /> {customer.email}</span>}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Metrics Strip */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-pos-bg rounded-lg p-2 border border-pos-border text-xs">
-                        <div className="flex flex-col items-center">
-                          <span className="text-[8px] text-pos-muted uppercase font-bold">Points</span>
-                          <span className="font-bold text-amber-400 flex items-center gap-0.5 text-[11px]">
-                            <Star className="w-3 h-3 fill-amber-400" /> {(customer.loyaltyPoints || 0).toLocaleString('fr-DZ')}
-                          </span>
-                        </div>
-                        <div className="flex flex-col items-center">
-                          <span className="text-[8px] text-pos-muted uppercase font-bold">
-                            {hasDebt ? 'Dette' : 'Avoir'}
-                          </span>
-                          <span className={`font-bold text-[11px] ${hasDebt ? 'text-amber-400' : 'text-emerald-400'}`}>
-                            {hasDebt ? formatDZD(customer.currentDebt || 0) : formatDZD(customer.storeCredit || 0)}
-                          </span>
-                        </div>
-                        <div className="flex flex-col items-center">
-                          <span className="text-[8px] text-pos-muted uppercase font-bold">Achats</span>
-                          <span className="font-bold text-sky-400 text-[11px]">{metrics.totalOrders}</span>
-                        </div>
-                        <div className="flex flex-col items-center">
-                          <span className="text-[8px] text-pos-muted uppercase font-bold">CA</span>
-                          <span className="font-bold text-sky-400 text-[11px]">{formatDZD(metrics.totalSpent)}</span>
-                        </div>
-                      </div>
-
-                      {/* Footer Row — single action row */}
-                      <div className="flex justify-between items-center gap-2 pt-1">
-                        <span className="text-[10px] text-pos-muted truncate min-w-0 hidden xs:block">
-                          {customer.registeredDevice ? `📱 ${customer.registeredDevice}` : 'Appareil non renseigné'}
-                        </span>
-                        <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-                          {customer.storeCredit > 0 && (
-                            <button
-                              onClick={() => {
-                                setCurrentCustomer(customer);
-                                showSuccess(`Avoir de ${formatDZD(customer.storeCredit)} activé pour ${customer.name}. Choisissez un produit dans le catalogue.`);
-                                closeModal();
-                              }}
-                              aria-label={`Utiliser Avoir — l'avoir de ${customer.name} (${formatDZD(customer.storeCredit)})`}
-                              title="Activer l'avoir client et choisir un produit dans le catalogue"
-                              className="px-2.5 min-h-[44px] rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/40 text-xs font-extrabold flex items-center gap-1 transition cursor-pointer shadow-sm shadow-emerald-500/10"
+                          return (
+                            <div
+                              key={customer.id}
+                              className={`bg-pos-card border rounded-xl p-4 flex flex-col gap-3 relative transition-all shadow-sm hover:shadow-md cursor-pointer ${
+                                isSelected ? 'border-emerald-500 shadow-sm shadow-emerald-500/20 ring-1 ring-emerald-500/30' : 'border-pos-border hover:border-pos-text/20'
+                              }`}
+                              onClick={() => openProfile(customer)}
                             >
-                              <CreditCard className="w-3.5 h-3.5" /> Utiliser Avoir
-                            </button>
-                          )}
-                          <button
-                            onClick={() => {
-                              if (isSelected) {
-                                setCurrentCustomer(null);
-                                showSuccess('Client détaché de la vente.');
-                              } else {
-                                setCurrentCustomer(customer);
-                                showSuccess(`${customer.name} sélectionné pour la vente.`);
-                                closeModal();
-                              }
-                            }}
-                            aria-label={isSelected ? `Actif — Désélectionner ${customer.name}` : `Sélectionner ${customer.name} pour la vente`}
-                            className={`px-3 min-h-[44px] rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
-                              isSelected
-                                ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
-                                : 'bg-pos-hover text-pos-text hover:bg-pos-border'
-                            }`}
-                          >
-                            {isSelected ? (
-                              <><Check className="w-3.5 h-3.5" /> Actif</>
-                            ) : (
-                              'Sélectionner'
-                            )}
-                          </button>
-                          <button
-                            ref={(el) => { if (el) cardMenuAnchors.current.set(customer.id, el); else cardMenuAnchors.current.delete(customer.id); }}
-                            onClick={() => setCardMenuId(cardMenuId === customer.id ? null : customer.id)}
-                            aria-haspopup="menu"
-                            aria-expanded={cardMenuId === customer.id}
-                            aria-label={`Plus d'actions pour ${customer.name}`}
-                            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-pos-hover text-pos-text hover:bg-pos-border transition cursor-pointer"
-                          >
-                            <MoreHorizontal className="w-5 h-5" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                              {/* Selected Indicator */}
+                              {isSelected && (
+                                <div className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-emerald-500 flex items-center justify-center shadow-md shadow-emerald-500/40 z-10">
+                                  <Check className="w-3.5 h-3.5 text-slate-950 stroke-[3]" />
+                                </div>
+                              )}
 
-                {filteredCustomers.length === 0 && (
-                  <div className="col-span-2 text-center py-16">
-                    <User className="w-10 h-10 text-pos-muted/30 mx-auto mb-3" />
-                    <p className="text-sm font-bold text-pos-muted">Aucun client trouvé</p>
-                    <p className="text-xs text-pos-muted/60 mt-1">Ajustez votre recherche ou ajoutez un nouveau client.</p>
-                  </div>
-                )}
-              </div>
+                              {/* Customer Info Row */}
+                              <div className="flex items-start">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-emerald-500/20 to-sky-500/20 border border-pos-border flex items-center justify-center overflow-hidden shrink-0">
+                                    {customer.avatarUrl
+                                      ? <img src={customer.avatarUrl} alt={customer.name} className="w-full h-full object-cover" />
+                                      : <User className="w-5 h-5 text-sky-400" />}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <h3 className="text-sm font-bold text-pos-text truncate">{customer.name}</h3>
+                                      {tierBadge(customer.pricingTier)}
+                                      {hasDebt && (
+                                        <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[9px] font-black animate-pulse shrink-0">
+                                          Dette: {formatDZD(customer.currentDebt || 0)}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2 text-[10px] text-pos-muted mt-0.5">
+                                      <span className="flex items-center gap-0.5"><Phone className="w-3 h-3" /> {customer.phone}</span>
+                                      {customer.email && <span className="flex items-center gap-0.5 truncate max-w-[150px]"><Mail className="w-3 h-3" /> {customer.email}</span>}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Metrics Strip */}
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-pos-bg rounded-lg p-2 border border-pos-border text-xs">
+                                <div className="flex flex-col items-center">
+                                  <span className="text-[8px] text-pos-muted uppercase font-bold">Points</span>
+                                  <span className="font-bold text-amber-400 flex items-center gap-0.5 text-[11px]">
+                                    <Star className="w-3 h-3 fill-amber-400" /> {(customer.loyaltyPoints || 0).toLocaleString('fr-DZ')}
+                                  </span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                  <span className="text-[8px] text-pos-muted uppercase font-bold">
+                                    {hasDebt ? 'Dette' : 'Avoir'}
+                                  </span>
+                                  <span className={`font-bold text-[11px] ${hasDebt ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                    {hasDebt ? formatDZD(customer.currentDebt || 0) : formatDZD(customer.storeCredit || 0)}
+                                  </span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                  <span className="text-[8px] text-pos-muted uppercase font-bold">Achats</span>
+                                  <span className="font-bold text-sky-400 text-[11px]">{metrics.totalOrders}</span>
+                                </div>
+                                <div className="flex flex-col items-center">
+                                  <span className="text-[8px] text-pos-muted uppercase font-bold">CA</span>
+                                  <span className="font-bold text-sky-400 text-[11px]">{formatDZD(metrics.totalSpent)}</span>
+                                </div>
+                              </div>
+
+                              {/* Footer Row — single action row */}
+                              <div className="flex justify-between items-center gap-2 pt-1">
+                                <span className="text-[10px] text-pos-muted truncate min-w-0 hidden xs:block">
+                                  {customer.registeredDevice ? `📱 ${customer.registeredDevice}` : 'Appareil non renseigné'}
+                                </span>
+                                <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                                  {customer.storeCredit > 0 && (
+                                    <button
+                                      onClick={() => {
+                                        setCurrentCustomer(customer);
+                                        showSuccess(`Avoir de ${formatDZD(customer.storeCredit)} activé pour ${customer.name}. Choisissez un produit dans le catalogue.`);
+                                        closeModal();
+                                      }}
+                                      aria-label={`Utiliser Avoir — l'avoir de ${customer.name} (${formatDZD(customer.storeCredit)})`}
+                                      title="Activer l'avoir client et choisir un produit dans le catalogue"
+                                      className="px-2.5 min-h-[44px] rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/40 text-xs font-extrabold flex items-center gap-1 transition cursor-pointer shadow-sm shadow-emerald-500/10"
+                                    >
+                                      <CreditCard className="w-3.5 h-3.5" /> Utiliser Avoir
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => {
+                                      if (isSelected) {
+                                        setCurrentCustomer(null);
+                                        showSuccess('Client détaché de la vente.');
+                                      } else {
+                                        setCurrentCustomer(customer);
+                                        showSuccess(`${customer.name} sélectionné pour la vente.`);
+                                        closeModal();
+                                      }
+                                    }}
+                                    aria-label={isSelected ? `Actif — Désélectionner ${customer.name}` : `Sélectionner ${customer.name} pour la vente`}
+                                    className={`px-3 min-h-[44px] rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                                      isSelected
+                                        ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
+                                        : 'bg-pos-hover text-pos-text hover:bg-pos-border'
+                                    }`}
+                                  >
+                                    {isSelected ? (
+                                      <><Check className="w-3.5 h-3.5" /> Actif</>
+                                    ) : (
+                                      'Sélectionner'
+                                    )}
+                                  </button>
+                                  <button
+                                    ref={(el) => { if (el) cardMenuAnchors.current.set(customer.id, el); else cardMenuAnchors.current.delete(customer.id); }}
+                                    onClick={() => setCardMenuId(cardMenuId === customer.id ? null : customer.id)}
+                                    aria-haspopup="menu"
+                                    aria-expanded={cardMenuId === customer.id}
+                                    aria-label={`Plus d'actions pour ${customer.name}`}
+                                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-pos-hover text-pos-text hover:bg-pos-border transition cursor-pointer"
+                                  >
+                                    <MoreHorizontal className="w-5 h-5" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </>
           )}
 

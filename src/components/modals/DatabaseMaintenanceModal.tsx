@@ -39,7 +39,6 @@ export const DatabaseMaintenanceModal: React.FC = () => {
     customerDebts,
     storeExpenses,
     imeiRecords,
-    activeShift,
     activeCashier,
     logSecurityAction,
   } = usePosStore();
@@ -88,13 +87,15 @@ export const DatabaseMaintenanceModal: React.FC = () => {
     }
   };
 
-  useEffect(() => {
+  const [prevModalSync, setPrevModalSync] = useState<string | null>(null);
+  if (activeModal !== prevModalSync) {
+    setPrevModalSync(activeModal);
     if (activeModal === 'db_maintenance') {
       setMaintUnlocked(false);
       setMaintPin('');
       setMaintError(null);
     }
-  }, [activeModal]);
+  }
 
   const handleMaintUnlock = async () => {
     const clean = maintPin.trim();
@@ -125,9 +126,21 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   };
 
   useEffect(() => {
+    let cancelled = false;
     if (activeModal === 'db_maintenance' && maintUnlocked) {
-      loadStats();
+      void (async () => {
+        if (!cancelled) {
+          try {
+            await loadStats();
+          } catch (e) {
+            console.error('Failed to load DB stats:', e);
+          }
+        }
+      })();
     }
+    return () => {
+      cancelled = true;
+    };
   }, [activeModal, maintUnlocked]);
 
   useEffect(() => { if (activeModal !== 'db_maintenance') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);

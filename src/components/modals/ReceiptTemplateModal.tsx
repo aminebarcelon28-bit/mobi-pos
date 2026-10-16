@@ -34,16 +34,18 @@ export const ReceiptTemplateModal: React.FC = () => {
   const { activeModal, closeModal, receiptSettings, setReceiptSettings } = usePosStore();
   const [formData, setFormData] = useState<ReceiptSettings>(receiptSettings);
 
-  useEffect(() => {
+  // Migrate legacy customFooterMsg into the primary footerMessage field
+  // once (never blank the merchant's existing policy text).
+  const [prevModalSync, setPrevModalSync] = useState<string | null>(null);
+  if (activeModal !== prevModalSync) {
+    setPrevModalSync(activeModal);
     if (activeModal === 'receipt_template') {
-      // Migrate legacy customFooterMsg into the primary footerMessage field
-      // once (never blank the merchant's existing policy text).
       setFormData({
         ...receiptSettings,
         footerMessage: receiptSettings.footerMessage || receiptSettings.customFooterMsg || '',
       });
     }
-  }, [activeModal, receiptSettings]);
+  }
 
   useEffect(() => { if (activeModal !== 'receipt_template') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 

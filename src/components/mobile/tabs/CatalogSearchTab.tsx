@@ -83,11 +83,16 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
   // Debounced scan input: instant field, list scan follows 200ms after typing.
   // Instant reset on empty query to prevent UI lag on search clear.
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  useEffect(() => {
+  const [prevSearchTerm, setPrevSearchTerm] = useState(searchTerm);
+  if (prevSearchTerm !== searchTerm) {
+    setPrevSearchTerm(searchTerm);
     if (!searchTerm.trim()) {
       setDebouncedSearch('');
-      return;
     }
+  }
+
+  useEffect(() => {
+    if (!searchTerm.trim()) return;
     const timer = setTimeout(() => setDebouncedSearch(searchTerm), 200);
     return () => clearTimeout(timer);
   }, [searchTerm]);
@@ -100,16 +105,19 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
   useEffect(() => {
     const term = debouncedSearch.trim();
     if (term.length < 2) return;
-    setRecentSearches((prev) => {
-      if (prev.some((s) => s.toLowerCase() === term.toLowerCase())) return prev;
-      const next = [term, ...prev].slice(0, MAX_RECENT_SEARCHES);
-      try {
-        localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next));
-      } catch {
-        // Stockage indisponible (navigation privée) : les puces vivent en mémoire.
-      }
-      return next;
-    });
+    const timer = setTimeout(() => {
+      setRecentSearches((prev) => {
+        if (prev.some((s) => s.toLowerCase() === term.toLowerCase())) return prev;
+        const next = [term, ...prev].slice(0, MAX_RECENT_SEARCHES);
+        try {
+          localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next));
+        } catch {
+          // Stockage indisponible (navigation privée) : les puces vivent en mémoire.
+        }
+        return next;
+      });
+    }, 0);
+    return () => clearTimeout(timer);
   }, [debouncedSearch]);
 
   const handleClearRecentSearches = () => {

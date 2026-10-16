@@ -119,9 +119,6 @@ export const RefundModal: React.FC = () => {
   // fixed slice (which previously severed the latest receipts past 30).
   const REFUND_PAGE_SIZE = 30;
   const [visibleCount, setVisibleCount] = useState(REFUND_PAGE_SIZE);
-  useEffect(() => {
-    setVisibleCount(REFUND_PAGE_SIZE);
-  }, [debouncedSearch]);
 
   // Memoized on debounced input so fast typing does not rescan per keystroke.
   // Hooks must stay above the early return below.
@@ -159,8 +156,40 @@ export const RefundModal: React.FC = () => {
     });
   }, [eligibleTransactionsMemo, debouncedSearch]);
 
+  const initializeRefundState = useCallback((txn: SaleTransaction) => {
+    const initialSelected: Record<string, boolean> = {};
+    const initialQty: Record<string, number> = {};
+    const initialRestock: Record<string, boolean> = {};
+
+    // Quantities must be bounded by what is STILL refundable: a ticket that was
+    // already partially refunded would otherwise offer the original purchased
+    // quantity again and the write path would have to refuse it at submit time.
+    const alreadyRefunded = new Map<string, number>();
+    for (const t of transactions) {
+      if (t.isRefund && t.originalTransactionId === txn.id) {
+        for (const ri of t.refundedItems || []) {
+          alreadyRefunded.set(ri.productId, (alreadyRefunded.get(ri.productId) || 0) + ri.quantity);
+        }
+      }
+    }
+    txn.items.forEach((item, idx) => {
+      const itemKey = item.id || `${item.product.id}_${idx}`;
+      const remaining = Math.max(0, item.quantity - (alreadyRefunded.get(item.product.id) || 0));
+      initialSelected[itemKey] = remaining > 0;
+      initialQty[itemKey] = remaining;
+      initialRestock[itemKey] = true;
+    });
+
+    setSelectedItemIds(initialSelected);
+    setRefundQuantities(initialQty);
+    setRestockMap(initialRestock);
+  }, [transactions]);
+
   // Sync with selectedTransactionForRefund when opening from ReportsModal
-  useEffect(() => {
+  const [prevRefundSyncKey, setPrevRefundSyncKey] = useState<string | null>(null);
+  const refundSyncKey = activeModal === 'refund' ? `${activeModal}_${selectedTransactionForRefund?.id ?? 'none'}` : null;
+  if (refundSyncKey !== prevRefundSyncKey) {
+    setPrevRefundSyncKey(refundSyncKey);
     if (activeModal === 'refund') {
       if (selectedTransactionForRefund) {
         setSelectedTxn(selectedTransactionForRefund);
@@ -175,36 +204,7 @@ export const RefundModal: React.FC = () => {
       setPinRequired(false);
       setVisibleCount(REFUND_PAGE_SIZE);
     }
-  }, [activeModal, selectedTransactionForRefund]);
-
-  const initializeRefundState = (txn: SaleTransaction) => {
-    const initialSelected: Record<string, boolean> = {};
-    const initialQty: Record<string, number> = {};
-    const initialRestock: Record<string, boolean> = {};
-
-      // Quantities must be bounded by what is STILL refundable: a ticket that was
-      // already partially refunded would otherwise offer the original purchased
-      // quantity again and the write path would have to refuse it at submit time.
-      const alreadyRefunded = new Map<string, number>();
-      for (const t of transactions) {
-        if (t.isRefund && t.originalTransactionId === txn.id) {
-          for (const ri of t.refundedItems || []) {
-            alreadyRefunded.set(ri.productId, (alreadyRefunded.get(ri.productId) || 0) + ri.quantity);
-          }
-        }
-      }
-    txn.items.forEach((item, idx) => {
-      const itemKey = item.id || `${item.product.id}_${idx}`;
-      const remaining = Math.max(0, item.quantity - (alreadyRefunded.get(item.product.id) || 0));
-      initialSelected[itemKey] = remaining > 0;
-      initialQty[itemKey] = remaining;
-      initialRestock[itemKey] = true;
-    });
-
-    setSelectedItemIds(initialSelected);
-    setRefundQuantities(initialQty);
-    setRestockMap(initialRestock);
-  };
+  }
 
   useEffect(() => { if (activeModal !== 'refund') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
@@ -240,7 +240,7 @@ export const RefundModal: React.FC = () => {
 
     window.addEventListener('pos:refund-barcode-scanned', handleRefundBarcodeScanned);
     return () => window.removeEventListener('pos:refund-barcode-scanned', handleRefundBarcodeScanned);
-  }, [activeModal, transactions, setSelectedTransactionForRefund, showToast]);
+  }, [activeModal, transactions, setSelectedTransactionForRefund, showToast, initializeRefundState]);
 
   if (activeModal !== 'refund') return null;
 

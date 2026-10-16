@@ -7,6 +7,8 @@ import { verifyPin, checkPinLockout, recordPinFailure, resetPinLockout, needsPin
 import { getDeviceRole, isCompanionTrusted, markCompanionTrusted, isEditableKeyTarget } from '../utils/platform';
 import { generateTechnicianChallenge, verifyTechnicianRecoveryCode, getActiveChallenge } from '../utils/technicianRecovery';
 
+const ROTATION_PARK_TTL_MS = 5 * 60_000;
+
 export const LockScreenOverlay: React.FC = () => {
   // Selective subscriptions: whole-store spread re-rendered the lock screen
   // on every cart/sync tick even while unlocked (lag behind the overlay).
@@ -54,7 +56,24 @@ export const LockScreenOverlay: React.FC = () => {
   // unknown/unavailable — never shown as unlocked.
   const [nativeLockRemainingMs, setNativeLockRemainingMs] = useState<number | null>(null);
   // Active lockout countdown (in seconds) for real-time visualization
-  const [lockoutRemainingSec, setLockoutRemainingSec] = useState<number | null>(null);
+  const [lockoutRemainingSec, setLockoutRemainingSec] = useState<number | null>(() => {
+    const lock = checkPinLockout();
+    return lock.isLocked && lock.remainingSeconds > 0 ? lock.remainingSeconds : null;
+  });
+  const [prevIsScreenLocked, setPrevIsScreenLocked] = useState(isScreenLocked);
+  const [prevSelectedUser, setPrevSelectedUser] = useState(selectedUser);
+  if (prevIsScreenLocked !== isScreenLocked || prevSelectedUser !== selectedUser) {
+    setPrevIsScreenLocked(isScreenLocked);
+    setPrevSelectedUser(selectedUser);
+    if (!isScreenLocked) {
+      setLockoutRemainingSec(null);
+    } else {
+      const lock = checkPinLockout();
+      if (lock.isLocked && lock.remainingSeconds > 0) {
+        setLockoutRemainingSec(lock.remainingSeconds);
+      }
+    }
+  }
   const isLockedOut = Boolean(lockoutRemainingSec && lockoutRemainingSec > 0);
 
   const triggerKeyHaptic = (duration = 12) => {
@@ -119,42 +138,23 @@ export const LockScreenOverlay: React.FC = () => {
     return () => window.clearInterval(interval);
   }, [lockoutRemainingSec]);
 
-  // Initial lockout check when screen locks or profile changes.
-  useEffect(() => {
-    if (!isScreenLocked) {
-      setLockoutRemainingSec(null);
-      return;
-    }
-    const lock = checkPinLockout();
-    if (lock.isLocked && lock.remainingSeconds > 0) {
-      setLockoutRemainingSec(lock.remainingSeconds);
-    }
-  }, [isScreenLocked, selectedUser]);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Rotation-park expiry: the parked legacy verify is a live re-auth proof
   // for 5 minutes only. Past that the user re-enters their PIN (fresh
   // verify → fresh park) instead of minting on a stale proof.
-  const ROTATION_PARK_TTL_MS = 5 * 60_000;
   useEffect(() => {
     if (!rotationFor) return;
     const remaining = rotationFor.parkedAt + ROTATION_PARK_TTL_MS - Date.now();
-    if (remaining <= 0) {
-      setRotationFor(null);
-      setRotationNew('');
-      setRotationConfirm('');
-      setRotationError('Session expirée — ressaisissez votre code PIN.');
-      setPinInput('');
-      return;
-    }
+    const delay = Math.max(0, remaining);
     const timer = window.setTimeout(() => {
       setRotationFor(null);
       setRotationNew('');
       setRotationConfirm('');
       setRotationError('Session expirée — ressaisissez votre code PIN.');
       setPinInput('');
-    }, remaining);
+    }, delay);
     return () => window.clearTimeout(timer);
   }, [rotationFor]);
 
@@ -486,9 +486,11 @@ export const LockScreenOverlay: React.FC = () => {
   // submittingRef serializes native verifies (see handleSubmitPin).
   const submittingRef = useRef(false);
   const submitRef = useRef<() => void>(() => undefined);
-  useEffect(() => {
-    submitRef.current = handleSubmitPin;
-  });
+  const handleDigitRef = useRef<(d: string) => void>(() => undefined);
+  const handleBackspaceRef = useRef<() => void>(() => undefined);
+  const handleClearRef = useRef<() => void>(() => undefined);
+  submitRef.current = () => { void handleSubmitPin(); };
+
   const handleDigit = (d: string) => {
     if (submittingRef.current) return;
     setErrorMsg('');
@@ -517,6 +519,12 @@ export const LockScreenOverlay: React.FC = () => {
     soundEngine.playKeyBeep?.();
     setPinInput('');
   };
+
+  useEffect(() => {
+    handleDigitRef.current = handleDigit;
+    handleBackspaceRef.current = handleBackspace;
+    handleClearRef.current = handleClear;
+  });
 
   const handleOpenTechRecovery = async () => {
     setErrorMsg('');
@@ -642,24 +650,22 @@ export const LockScreenOverlay: React.FC = () => {
       if (isEditableKeyTarget(e) && e.target !== inputRef.current) return;
       if (e.key >= '0' && e.key <= '9') {
         e.preventDefault();
-        handleDigit(e.key);
+        handleDigitRef.current(e.key);
       } else if (e.key === 'Backspace') {
         e.preventDefault();
-        handleBackspace();
+        handleBackspaceRef.current();
       } else if (e.key === 'Escape') {
         e.preventDefault();
-        handleClear();
+        handleClearRef.current();
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        if (pinInput.length > 0) {
-          void handleSubmitPin();
-        }
+        submitRef.current();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isScreenLocked, pinInput, showTechRecovery]);
+  }, [isScreenLocked, showTechRecovery]);
 
   useEffect(() => {
     if (isScreenLocked && !rotationFor && !showTechRecovery) {

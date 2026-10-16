@@ -46,8 +46,16 @@ export const CommandFilter: React.FC<CommandFilterProps> = ({
   className = '',
 }) => {
   const [open, setOpen] = useState(false);
+  const [prevOpen, setPrevOpen] = useState(open);
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
+
+  if (prevOpen !== open) {
+    setPrevOpen(open);
+    if (!open) {
+      setQuery('');
+    }
+  }
 
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -130,7 +138,6 @@ export const CommandFilter: React.FC<CommandFilterProps> = ({
       const id = window.setTimeout(() => inputRef.current?.focus(), 0);
       return () => window.clearTimeout(id);
     }
-    setQuery('');
     return undefined;
   }, [open]);
 

@@ -298,18 +298,16 @@ export const ReportsModal: React.FC = () => {
   // B-047: EVERY inflow and outflow uses the SAME dateRangeFilter window as
   // cashSales — mixing date-filtered inflows with all-time outflows made the
   // expected-cash figure wrong whenever a filter other than 'all' was active.
-  const dateInRange = useMemo(() => {
-    if (dateRangeFilter === 'all') return () => true;
-    const now = new Date();
-    return (iso: string | undefined) => {
-      if (!iso) return true;
-      const d = new Date(iso);
-      if (isNaN(d.getTime())) return true;
-      if (dateRangeFilter === 'today') return toLocalDayKey(d) === todayLocalKey();
-      if (dateRangeFilter === '7days') return d >= new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      if (dateRangeFilter === '30days') return d >= new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      return true;
-    };
+  const dateInRange = useCallback((iso: string | undefined) => {
+    if (dateRangeFilter === 'all') return true;
+    if (!iso) return true;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return true;
+    if (dateRangeFilter === 'today') return toLocalDayKey(d) === todayLocalKey();
+    const nowTime = Date.now();
+    if (dateRangeFilter === '7days') return d.getTime() >= nowTime - 7 * 24 * 60 * 60 * 1000;
+    if (dateRangeFilter === '30days') return d.getTime() >= nowTime - 30 * 24 * 60 * 60 * 1000;
+    return true;
   }, [dateRangeFilter]);
 
   const actualCountedCash = useMemo(() => {
@@ -455,9 +453,12 @@ export const ReportsModal: React.FC = () => {
   }, [dateFilteredTransactions, paymentFilter, statusFilter, historySearch]);
 
   // Reset to first page whenever a history filter changes
-  useEffect(() => {
+  const [prevFilterKey, setPrevFilterKey] = useState('');
+  const filterKey = `${historySearch}|${paymentFilter}|${statusFilter}|${dateRangeFilter}`;
+  if (filterKey !== prevFilterKey) {
+    setPrevFilterKey(filterKey);
     setCurrentPage(1);
-  }, [historySearch, paymentFilter, statusFilter, dateRangeFilter]);
+  }
 
   const totalPages = Math.max(1, Math.ceil((filteredTransactions || []).length / PAGE_SIZE));
   const safeCurrentPage = Math.min(currentPage, totalPages);

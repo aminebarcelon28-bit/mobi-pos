@@ -112,7 +112,10 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({
 
   const [isPinOpen, setIsPinOpen] = useState(false);
   const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
-  const mobilePrinter = useMemo(() => loadMobilePrinter(), [isPrinterModalOpen]);
+  const mobilePrinter = useMemo(() => {
+    void isPrinterModalOpen;
+    return loadMobilePrinter();
+  }, [isPrinterModalOpen]);
 
   const handleNoSaleDrawerOpen = () => {
     soundEngine.playKeyBeep?.();

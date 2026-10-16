@@ -47,7 +47,23 @@ interface CommandPaletteProps {
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose }) => {
   const [query, setQuery] = useState('');
+  const [prevQuery, setPrevQuery] = useState(query);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
+
+  if (prevQuery !== query) {
+    setPrevQuery(query);
+    setSelectedIndex(0);
+  }
+
+  if (prevIsOpen !== isOpen) {
+    setPrevIsOpen(isOpen);
+    if (isOpen) {
+      setQuery('');
+      setSelectedIndex(0);
+    }
+  }
+
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -302,18 +318,13 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
     );
   }, [commands, query]);
 
-  // Reset selectedIndex on query change
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [query]);
-
   // Focus input on mount
   useEffect(() => {
     if (isOpen) {
-      setQuery('');
-      setSelectedIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 20);
+      const id = setTimeout(() => inputRef.current?.focus(), 20);
+      return () => clearTimeout(id);
     }
+    return undefined;
   }, [isOpen]);
 
   // Scroll active item into view

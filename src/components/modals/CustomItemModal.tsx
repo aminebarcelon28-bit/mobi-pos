@@ -52,8 +52,10 @@ export const CustomItemModal: React.FC = () => {
   const [touchColor, setTouchColor] = useState(AVAILABLE_COLORS[0].value);
   const [touchError, setTouchError] = useState('');
 
-  // Reload quick touches on modal open or storage event
-  useEffect(() => {
+  // Reload quick touches and reset inputs on modal open
+  const [prevModalSync, setPrevModalSync] = useState<string | null>(null);
+  if (activeModal !== prevModalSync) {
+    setPrevModalSync(activeModal);
     if (activeModal === 'custom_item') {
       setQuickTouches(getQuickTouches());
       setTitle('');
@@ -65,9 +67,15 @@ export const CustomItemModal: React.FC = () => {
       setIsEditingTouch(false);
       setEditingTouchId(null);
       setTouchError('');
-      setTimeout(() => {
+    }
+  }
+
+  useEffect(() => {
+    if (activeModal === 'custom_item') {
+      const t = setTimeout(() => {
         titleInputRef.current?.focus();
       }, 60);
+      return () => clearTimeout(t);
     }
   }, [activeModal]);
 

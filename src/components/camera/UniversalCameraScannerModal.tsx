@@ -32,46 +32,57 @@ export const UniversalCameraScannerModal: React.FC<UniversalCameraScannerModalPr
   const [isEnhanceFilterActive, setIsEnhanceFilterActive] = useState<boolean>(true);
 
   // Initialize WebRTC Camera Stream
-  const startCamera = useCallback(async () => {
-    try {
-      setCameraError(null);
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
-
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Votre navigateur ou système ne prend pas en charge la caméra en direct.');
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode,
-          width: { ideal: 1920, min: 1280 },
-          height: { ideal: 1080, min: 720 },
-        },
-      });
-
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        setIsCameraActive(true);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Impossible d'accéder à la caméra";
-      setCameraError(msg);
-      setIsCameraActive(false);
-    }
-  }, [facingMode]);
-
   useEffect(() => {
-    startCamera();
+    let cancelled = false;
+    const run = async () => {
+      try {
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((track) => track.stop());
+        }
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('Votre navigateur ou système ne prend pas en charge la caméra en direct.');
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode,
+            width: { ideal: 1920, min: 1280 },
+            height: { ideal: 1080, min: 720 },
+          },
+        });
+
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+          if (!cancelled) {
+            setIsCameraActive(true);
+          }
+        }
+      } catch (err: unknown) {
+        if (!cancelled) {
+          const msg = err instanceof Error ? err.message : "Impossible d'accéder à la caméra";
+          setCameraError(msg);
+          setIsCameraActive(false);
+        }
+      }
+    };
+
+    void run();
+
     return () => {
+      cancelled = true;
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
       }
     };
-  }, [startCamera]);
+  }, [facingMode]);
 
   // Background Barcode Scanning Loop via ZXing
   useEffect(() => {

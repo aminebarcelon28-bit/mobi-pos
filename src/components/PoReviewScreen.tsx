@@ -816,7 +816,7 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
     } finally {
       setIsSubmitting(false);
     }
-  }, [mathState.isBalanced, invalidQtyCount, unassignedCount, supplierName, activeShift?.cashierName, lines, onCommitSuccess, products]);
+  }, [mathState.isBalanced, invalidQtyCount, unassignedCount, supplierName, activeShift, lines, onCommitSuccess, products]);
 
   // Keyboard Shortcuts (Ctrl+Enter to Commit, Ctrl+B to Auto-Balance)
   useEffect(() => {

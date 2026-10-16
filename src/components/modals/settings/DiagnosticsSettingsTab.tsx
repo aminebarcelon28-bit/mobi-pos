@@ -264,7 +264,16 @@ export const DiagnosticsSettingsTab: React.FC<DiagnosticsSettingsTabProps> = ({ 
 
   // Run on mount
   useEffect(() => {
-    void runAllDiagnostics();
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (!cancelled) {
+        void runAllDiagnostics();
+      }
+    }, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [runAllDiagnostics]);
 
   const handleStartScannerTest = () => {

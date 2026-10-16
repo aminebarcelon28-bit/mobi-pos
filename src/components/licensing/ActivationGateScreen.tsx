@@ -71,16 +71,20 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
   onActivated,
   initialError,
 }) => {
-  const [licenseKey, setLicenseKey] = useState('');
+  const [licenseKey, setLicenseKey] = useState<string>(() => {
+    const lastKey = getLastActiveLicenseKey();
+    return lastKey ? formatLicenseKeyForDisplay(lastKey) : '';
+  });
   const [friendlyName, setFriendlyName] = useState('');
   const [loading, setLoading] = useState(false);
   const [rechecking, setRechecking] = useState(false);
   const [error, setError] = useState<string | null>(initialError || null);
+  const [prevInitialError, setPrevInitialError] = useState(initialError);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const [hwid, setHwid] = useState<HardwareFingerprintResult | null>(null);
-  const [deviceType, setDeviceType] = useState<'desktop' | 'mobile'>('desktop');
-  const [platformInfo, setPlatformInfo] = useState<DevicePlatformDetails>(getDetailedPlatform());
+  const [deviceType] = useState<'desktop' | 'mobile'>(() => getDetailedPlatform().roleHint);
+  const [platformInfo] = useState<DevicePlatformDetails>(() => getDetailedPlatform());
   const [copiedHwid, setCopiedHwid] = useState(false);
   const [copiedPasteSuccess, setCopiedPasteSuccess] = useState(false);
 
@@ -89,7 +93,35 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
   const [showScanner, setShowScanner] = useState(false);
 
   // Suspension detection
-  const [suspension, setSuspension] = useState<LicenseSuspensionState | null>(null);
+  const [suspension, setSuspension] = useState<LicenseSuspensionState | null>(() => {
+    const current = loadSuspensionState();
+    if (current?.suspended) return current;
+    if (initialError && (initialError.toLowerCase().includes('suspend') || initialError.toLowerCase().includes('révoqu'))) {
+      return {
+        suspended: true,
+        reason: initialError,
+        suspendedAt: Date.now(),
+        licenseKey: getLastActiveLicenseKey() || undefined,
+      };
+    }
+    return null;
+  });
+
+  if (prevInitialError !== initialError) {
+    setPrevInitialError(initialError);
+    if (initialError) {
+      setError(initialError);
+      if (initialError.toLowerCase().includes('suspend') || initialError.toLowerCase().includes('révoqu')) {
+        setSuspension({
+          suspended: true,
+          reason: initialError,
+          suspendedAt: Date.now(),
+          licenseKey: getLastActiveLicenseKey() || undefined,
+        });
+      }
+    }
+  }
+
   const [forcedNewKey, setForcedNewKey] = useState(false);
 
   // ── Scoped emergency compliance export ─────────────────────────────────────
@@ -155,39 +187,21 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
   const [serverUrl, setServerUrl] = useState(DEFAULT_LICENSING_ENDPOINT);
 
   useEffect(() => {
-    // 1. Detect platform details
-    const p = getDetailedPlatform();
-    setPlatformInfo(p);
-    setDeviceType(p.roleHint);
-
-    // 2. Check persistent suspension state
-    const currentSuspension = loadSuspensionState();
-    if (currentSuspension && currentSuspension.suspended) {
-      setSuspension(currentSuspension);
-    } else if (initialError && (initialError.toLowerCase().includes('suspend') || initialError.toLowerCase().includes('révoqu'))) {
-      setSuspension({
-        suspended: true,
-        reason: initialError,
-        suspendedAt: Date.now(),
-        licenseKey: getLastActiveLicenseKey() || undefined,
-      });
-    }
-
-    // 3. Resolve hardware fingerprint
+    let cancelled = false;
+    // Resolve hardware fingerprint
     resolveDeviceFingerprint()
       .then((res) => {
-        setHwid(res);
-        const isMob = p.category === 'mobile' || p.category === 'tablet';
-        setFriendlyName(isMob ? 'Mobile Vendeur' : 'Caisse Principale');
+        if (!cancelled) {
+          setHwid(res);
+          const isMob = platformInfo.category === 'mobile' || platformInfo.category === 'tablet';
+          setFriendlyName(isMob ? 'Mobile Vendeur' : 'Caisse Principale');
+        }
       })
       .catch(console.warn);
-
-    // 4. Prepopulate last known key if available
-    const lastKey = getLastActiveLicenseKey();
-    if (lastKey && !licenseKey) {
-      setLicenseKey(formatLicenseKeyForDisplay(lastKey));
-    }
-  }, [initialError]);
+    return () => {
+      cancelled = true;
+    };
+  }, [platformInfo.category]);
 
   // Live Formula Detection from Key Tag
   const formulaInfo = useMemo(() => {

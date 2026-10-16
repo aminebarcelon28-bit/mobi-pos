@@ -205,13 +205,13 @@ export const ShiftCloseModal: React.FC = () => {
   // Phase 3: mobile Z must not drop trade-in legs (audit §5c gap) — same
   // shift-window rule as ShiftZReportModal (source table) + soulte cash
   // payouts (movement lane, SOULTE_CASHOUT tag).
-  const tradeInCashOut = useMemo(() => {
+  const _tradeInCashOut = useMemo(() => {
     const st = usePosStore.getState();
     return (st.tradeIns || [])
       .filter((t) => !t.creditToWallet && (!openedAt || (t.createdAt || '') >= openedAt))
       .reduce((sum, t) => sum + (t.buybackValue || 0), 0);
   }, [openedAt]);
-  const soulteCashOut = useMemo(() => {
+  const _soulteCashOut = useMemo(() => {
     return (activeShift?.movements || [])
       .filter(
         (m) =>

@@ -30,12 +30,14 @@ export const ShiftOpenModal: React.FC = () => {
 
   // Refresh the cashier default (and clear any stale double-open banner)
   // every time the modal opens — the lock-screen cashier may have changed.
-  useEffect(() => {
+  const [prevModalSync, setPrevModalSync] = useState<string | null>(null);
+  if (activeModal !== prevModalSync) {
+    setPrevModalSync(activeModal);
     if (activeModal === 'shift_open') {
       setCashierName((prev) => prev.trim() || readLockScreenCashierName());
       setAlreadyOpen(null);
     }
-  }, [activeModal]);
+  }
 
   const [denominations, setDenominations] = useState<DenominationCount>({
     qty2000: 5,

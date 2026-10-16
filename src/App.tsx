@@ -157,16 +157,15 @@ const FirstBootPinSetup: React.FC = () => {
 
   // Seed the form once the team list has loaded: existing names are kept as
   // editable suggestions, every PIN field starts empty and must be set.
-  useEffect(() => {
-    if (!isDbInitialized || seeded) return;
+  if (isDbInitialized && !seeded) {
+    setSeeded(true);
     const users = cashierUsers || [];
     const admin = users.find((u) => u.role === 'admin') || users[0];
     setManagerName(admin?.name || '');
     setRows(
       users.filter((u) => u !== admin).map((u) => ({ key: u.id, name: u.name, pin: '' }))
     );
-    setSeeded(true);
-  }, [isDbInitialized, cashierUsers, seeded]);
+  }
 
   // ── Pavé PIN tactile ──
   // Touch/mouse PIN entry that never touches the OS keyboard: immune to

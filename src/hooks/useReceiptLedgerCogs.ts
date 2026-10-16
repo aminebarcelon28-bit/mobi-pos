@@ -36,10 +36,7 @@ export function useReceiptLedgerCogs(saleId: string | undefined): {
   const key = String(saleId ?? '');
 
   useEffect(() => {
-    if (!key) {
-      setState({ key: '', cogs: null, loaded: true });
-      return;
-    }
+    if (!key) return;
     let cancelled = false;
     const sumMirrorRows = (rows: Array<{
       qtyConsumed?: unknown;
@@ -97,6 +94,7 @@ export function useReceiptLedgerCogs(saleId: string | undefined): {
     };
   }, [key]);
 
+  if (!key) return { ledgerCogs: null, ledgerLoaded: true };
   if (state.key !== key) return { ledgerCogs: null, ledgerLoaded: false };
   return { ledgerCogs: state.cogs, ledgerLoaded: state.loaded };
 }

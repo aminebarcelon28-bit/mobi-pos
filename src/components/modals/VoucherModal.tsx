@@ -45,15 +45,22 @@ export const VoucherModal: React.FC = () => {
   const voucherBarcodeRef = useRef<HTMLCanvasElement>(null);
   const { showToast } = useToast();
 
-  useEffect(() => {
+  const [prevModalSync, setPrevModalSync] = useState<string | null>(null);
+  if (activeModal !== prevModalSync) {
+    setPrevModalSync(activeModal);
     if (activeModal === 'credit_voucher') {
-      fetchCreditVouchers();
       setAmountInput(0);
       setCustomerName('');
       setCustomerPhone('');
       setNotes('');
       setIssuedVoucher(null);
       setSearchQuery('');
+    }
+  }
+
+  useEffect(() => {
+    if (activeModal === 'credit_voucher') {
+      fetchCreditVouchers();
     }
   }, [activeModal, fetchCreditVouchers]);
 

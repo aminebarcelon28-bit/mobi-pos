@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   Printer,
   Wifi,
@@ -38,11 +38,13 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
   useRegisterMobileBackHandler(isOpen, onClose, 'mobile-printer');
 
   // Reload config whenever modal opens
-  useEffect(() => {
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
+  if (isOpen !== prevIsOpen) {
+    setPrevIsOpen(isOpen);
     if (isOpen) {
       setConfig(loadMobilePrinter());
     }
-  }, [isOpen]);
+  }
 
 
   const handleScanBluetooth = useCallback(async () => {

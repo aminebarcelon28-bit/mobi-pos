@@ -156,9 +156,12 @@ export function MoneyInput({
   // caret. Display normalization happens exclusively here.
   useEffect(() => {
     if (focused) return;
-    baselineRef.current = valueMinor;
-    committedRef.current = valueMinor;
-    setBuffer(editableEcho(valueMinor, units));
+    const handle = requestAnimationFrame(() => {
+      baselineRef.current = valueMinor;
+      committedRef.current = valueMinor;
+      setBuffer(editableEcho(valueMinor, units));
+    });
+    return () => cancelAnimationFrame(handle);
   }, [valueMinor, focused, units]);
 
   /** preParse + the frozen parser. null ⇒ uncommittable. Never throws. */

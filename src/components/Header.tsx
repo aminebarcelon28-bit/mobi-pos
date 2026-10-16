@@ -77,6 +77,11 @@ export const Header: React.FC = () => {
   const { showToast } = useToast();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [localSearch, setLocalSearch] = useState(searchQuery);
+  const [prevSearchQuery, setPrevSearchQuery] = useState(searchQuery);
+  if (prevSearchQuery !== searchQuery) {
+    setPrevSearchQuery(searchQuery);
+    setLocalSearch(searchQuery);
+  }
 
   // ── Center-toolbar overflow affordance: the action strip scrolls on narrow
   // windows — track whether hidden actions exist on either side so fade edges
@@ -106,9 +111,6 @@ export const Header: React.FC = () => {
     // resize listener per render — the visible system lag on the toolbar.
   }, []);
 
-  useEffect(() => {
-    setLocalSearch(searchQuery);
-  }, [searchQuery]);
 
   useEffect(() => {
     const timer = setTimeout(() => {

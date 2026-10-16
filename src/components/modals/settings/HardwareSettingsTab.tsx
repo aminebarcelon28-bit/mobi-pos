@@ -76,10 +76,27 @@ export const HardwareSettingsTab: React.FC<HardwareSettingsTabProps> = ({
   };
 
   useEffect(() => {
-    void handleScanHardware();
+    let cancelled = false;
+    const runScan = async () => {
+      try {
+        const list = await scanHardwareDevices<DiscoveredDevice>();
+        if (!cancelled) {
+          setDiscoveredDevices(list || []);
+          setLastScanTime(new Date().toLocaleTimeString('fr-FR'));
+        }
+      } catch (err) {
+        console.error('[Hardware Scan Failed]', err);
+      }
+    };
+    void runScan();
     import('../../../utils/mobilePrinter')
-      .then((m) => setMobileConfig(m.loadMobilePrinter()))
+      .then((m) => {
+        if (!cancelled) setMobileConfig(m.loadMobilePrinter());
+      })
       .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleTestCashDrawer = async () => {

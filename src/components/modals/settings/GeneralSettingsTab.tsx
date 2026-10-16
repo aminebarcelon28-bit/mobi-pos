@@ -377,3 +377,4 @@ export const GeneralSettingsTab: React.FC<GeneralSettingsTabProps> = ({
     </div>
   );
 };
+

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 const foldForSearch = (s: string | undefined | null): string =>
   (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -97,6 +98,23 @@ export const InventoryManagerModal: React.FC = () => {
       return true;
     });
   }, [products, debouncedManagerSearch, auditCounts, stocktakeFilter]);
+
+  const catalogScrollRef = useRef<HTMLDivElement>(null);
+  const catalogVirtualizer = useVirtualizer({
+    count: filteredCatalogMemo.length,
+    getScrollElement: () => catalogScrollRef.current,
+    estimateSize: () => 56,
+    overscan: 10,
+  });
+
+  const stocktakeScrollRef = useRef<HTMLDivElement>(null);
+  const stocktakeVirtualizer = useVirtualizer({
+    count: filteredStocktakeMemo.length,
+    getScrollElement: () => stocktakeScrollRef.current,
+    estimateSize: () => 56,
+    overscan: 10,
+  });
+
   useEffect(() => { if (activeModal !== 'inventory_manager') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
   if (activeModal !== 'inventory_manager') return null;
@@ -402,82 +420,103 @@ export const InventoryManagerModal: React.FC = () => {
             </div>
 
             {/* Catalog List: Mobile Cards + Desktop Table */}
-            <div className="flex-1 overflow-y-auto overscroll-contain">
+            <div ref={catalogScrollRef} className="flex-1 overflow-y-auto overscroll-contain">
               {/* Mobile Card List */}
-              <div className="sm:hidden p-2.5 space-y-2">
-                {filteredCatalog.map((product) => (
-                  <div
-                    key={product.id}
-                    className="bg-pos-card border border-pos-border rounded-xl p-3 shadow-sm hover:border-emerald-500/40 transition flex flex-col gap-2"
-                  >
-                    <div className="flex items-start justify-between gap-2.5">
-                      <div className="flex items-start gap-2.5 min-w-0">
-                        <div className="w-10 h-10 rounded-lg bg-pos-bg border border-pos-border flex items-center justify-center shrink-0 text-emerald-400 mt-0.5">
-                          <Package className="w-5 h-5" />
+              <div
+                className="sm:hidden p-2.5"
+                style={{
+                  height: `${catalogVirtualizer.getTotalSize()}px`,
+                  width: '100%',
+                  position: 'relative',
+                }}
+              >
+                {catalogVirtualizer.getVirtualItems().map((virtualRow) => {
+                  const product = filteredCatalog[virtualRow.index];
+                  return (
+                    <div
+                      key={product.id}
+                      data-index={virtualRow.index}
+                      ref={catalogVirtualizer.measureElement}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                      className="pb-2"
+                    >
+                      <div className="bg-pos-card border border-pos-border rounded-xl p-3 shadow-sm hover:border-emerald-500/40 transition flex flex-col gap-2">
+                        <div className="flex items-start justify-between gap-2.5">
+                          <div className="flex items-start gap-2.5 min-w-0">
+                            <div className="w-10 h-10 rounded-lg bg-pos-bg border border-pos-border flex items-center justify-center shrink-0 text-emerald-400 mt-0.5">
+                              <Package className="w-5 h-5" />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-bold text-xs text-pos-text line-clamp-2 leading-snug">{product.title}</p>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px]">
+                                <span className="font-mono text-pos-muted bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">
+                                  {product.sku}
+                                </span>
+                                {product.brand && (
+                                  <span className="text-pos-text font-semibold bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">
+                                    {product.brand}
+                                  </span>
+                                )}
+                                {product.compatibleModel && (
+                                  <span className="text-pos-muted truncate max-w-[120px]">
+                                    {product.compatibleModel}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                              product.stock <= 5
+                                ? 'bg-red-950 text-red-300 border border-red-800'
+                                : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                            }`}
+                          >
+                            {product.stock} un.
+                          </span>
                         </div>
-                        <div className="min-w-0">
-                          <p className="font-bold text-xs text-pos-text line-clamp-2 leading-snug">{product.title}</p>
-                          <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px]">
-                            <span className="font-mono text-pos-muted bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">
-                              {product.sku}
+
+                        <div className="flex items-center justify-between pt-2 border-t border-pos-border/50">
+                          <div>
+                            <span className="text-[10px] text-pos-muted uppercase font-bold block">Prix Vente</span>
+                            <span className="font-mono font-black text-emerald-400 text-sm">
+                              {formatDZD(product.price)}
                             </span>
-                            {product.brand && (
-                              <span className="text-pos-text font-semibold bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">
-                                {product.brand}
-                              </span>
-                            )}
-                            {product.compatibleModel && (
-                              <span className="text-pos-muted truncate max-w-[120px]">
-                                {product.compatibleModel}
-                              </span>
-                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setEditingProduct(product)}
+                              className="min-h-[40px] px-3 py-1.5 rounded-lg bg-pos-bg hover:bg-emerald-500/20 border border-pos-border text-pos-text hover:text-emerald-400 font-bold text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+                              title="Modifier Produit"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                              <span>Modifier</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm(`Supprimer ${product.title} ?`)) deleteProduct(product.id);
+                              }}
+                              className="min-h-[40px] min-w-[40px] p-2 rounded-lg bg-pos-bg hover:bg-red-500/20 border border-pos-border text-pos-muted hover:text-red-400 flex items-center justify-center transition active:scale-95 cursor-pointer"
+                              title="Supprimer Produit"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           </div>
                         </div>
                       </div>
-
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
-                          product.stock <= 5
-                            ? 'bg-red-950 text-red-300 border border-red-800'
-                            : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                        }`}
-                      >
-                        {product.stock} un.
-                      </span>
                     </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t border-pos-border/50">
-                      <div>
-                        <span className="text-[10px] text-pos-muted uppercase font-bold block">Prix Vente</span>
-                        <span className="font-mono font-black text-emerald-400 text-sm">
-                          {formatDZD(product.price)}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setEditingProduct(product)}
-                          className="min-h-[40px] px-3 py-1.5 rounded-lg bg-pos-bg hover:bg-emerald-500/20 border border-pos-border text-pos-text hover:text-emerald-400 font-bold text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
-                          title="Modifier Produit"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                          <span>Modifier</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (confirm(`Supprimer ${product.title} ?`)) deleteProduct(product.id);
-                          }}
-                          className="min-h-[40px] min-w-[40px] p-2 rounded-lg bg-pos-bg hover:bg-red-500/20 border border-pos-border text-pos-muted hover:text-red-400 flex items-center justify-center transition active:scale-95 cursor-pointer"
-                          title="Supprimer Produit"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               {/* Desktop Table View */}
@@ -494,56 +533,81 @@ export const InventoryManagerModal: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-pos-border/40">
-                  {filteredCatalog.map((product) => (
-                    <tr key={product.id} className="hover:bg-pos-hover/50 transition group">
-                      <td className="p-3 flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-pos-card border border-pos-border flex items-center justify-center shrink-0 text-emerald-400">
-                          <Package className="w-5 h-5" />
-                        </div>
-                        <div>
-                          <p className="font-bold text-pos-text line-clamp-1">{product.title}</p>
-                          <span className="text-[10px] text-pos-muted">{product.category}</span>
-                        </div>
-                      </td>
-                      <td className="p-3 font-mono text-[11px] text-pos-muted">{product.sku}</td>
-                      <td className="p-3">
-                        <span className="font-semibold text-pos-text">{product.brand}</span>
-                      </td>
-                      <td className="p-3 text-pos-muted">{product.compatibleModel}</td>
-                      <td className="p-3 text-right font-bold text-emerald-400">{formatDZD(product.price)}</td>
-                      <td className="p-3 text-center">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            product.stock <= 5
-                              ? 'bg-red-950 text-red-300 border border-red-800'
-                              : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                          }`}
-                        >
-                          {product.stock} un.
-                        </span>
-                      </td>
-                      <td className="p-3 text-right space-x-1">
-                        <button
-                          type="button"
-                          onClick={() => setEditingProduct(product)}
-                          className="p-1.5 hover:bg-emerald-500/20 text-pos-muted hover:text-emerald-400 rounded-lg transition cursor-pointer"
-                          title="Modifier Produit"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (confirm(`Supprimer ${product.title} ?`)) deleteProduct(product.id);
-                          }}
-                          className="p-1.5 hover:bg-red-500/20 text-pos-muted hover:text-red-400 rounded-lg transition cursor-pointer"
-                          title="Supprimer Produit"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {(() => {
+                    const virtualItems = catalogVirtualizer.getVirtualItems();
+                    const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0;
+                    const paddingBottom = virtualItems.length > 0
+                      ? catalogVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end
+                      : 0;
+
+                    return (
+                      <>
+                        {paddingTop > 0 && (
+                          <tr>
+                            <td style={{ height: `${paddingTop}px` }} colSpan={7} />
+                          </tr>
+                        )}
+                        {virtualItems.map((virtualRow) => {
+                          const product = filteredCatalog[virtualRow.index];
+                          return (
+                            <tr key={product.id} className="hover:bg-pos-hover/50 transition group">
+                              <td className="p-3 flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-lg bg-pos-card border border-pos-border flex items-center justify-center shrink-0 text-emerald-400">
+                                  <Package className="w-5 h-5" />
+                                </div>
+                                <div>
+                                  <p className="font-bold text-pos-text line-clamp-1">{product.title}</p>
+                                  <span className="text-[10px] text-pos-muted">{product.category}</span>
+                                </div>
+                              </td>
+                              <td className="p-3 font-mono text-[11px] text-pos-muted">{product.sku}</td>
+                              <td className="p-3">
+                                <span className="font-semibold text-pos-text">{product.brand}</span>
+                              </td>
+                              <td className="p-3 text-pos-muted">{product.compatibleModel}</td>
+                              <td className="p-3 text-right font-bold text-emerald-400">{formatDZD(product.price)}</td>
+                              <td className="p-3 text-center">
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                    product.stock <= 5
+                                      ? 'bg-red-950 text-red-300 border border-red-800'
+                                      : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                                  }`}
+                                >
+                                  {product.stock} un.
+                                </span>
+                              </td>
+                              <td className="p-3 text-right space-x-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingProduct(product)}
+                                  className="p-1.5 hover:bg-emerald-500/20 text-pos-muted hover:text-emerald-400 rounded-lg transition cursor-pointer"
+                                  title="Modifier Produit"
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (confirm(`Supprimer ${product.title} ?`)) deleteProduct(product.id);
+                                  }}
+                                  className="p-1.5 hover:bg-red-500/20 text-pos-muted hover:text-red-400 rounded-lg transition cursor-pointer"
+                                  title="Supprimer Produit"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {paddingBottom > 0 && (
+                          <tr>
+                            <td style={{ height: `${paddingBottom}px` }} colSpan={7} />
+                          </tr>
+                        )}
+                      </>
+                    );
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -674,10 +738,18 @@ export const InventoryManagerModal: React.FC = () => {
             )}
 
             {/* Stocktake Comparison: Mobile Cards + Desktop Table */}
-            <div className="flex-1 overflow-y-auto overscroll-contain">
+            <div ref={stocktakeScrollRef} className="flex-1 overflow-y-auto overscroll-contain">
               {/* Mobile Audit Card List */}
-              <div className="sm:hidden p-2.5 space-y-2.5">
-                {filteredStocktake.map((product) => {
+              <div
+                className="sm:hidden p-2.5"
+                style={{
+                  height: `${stocktakeVirtualizer.getTotalSize()}px`,
+                  width: '100%',
+                  position: 'relative',
+                }}
+              >
+                {stocktakeVirtualizer.getVirtualItems().map((virtualRow) => {
+                  const product = filteredStocktake[virtualRow.index];
                   const counted = auditCounts[product.id];
                   const isCounted = counted !== undefined;
                   const variance = isCounted ? counted - product.stock : 0;
@@ -686,113 +758,126 @@ export const InventoryManagerModal: React.FC = () => {
                   return (
                     <div
                       key={product.id}
-                      className={`p-3 rounded-xl border transition flex flex-col gap-2.5 ${
-                        !isCounted
-                          ? 'bg-pos-card border-pos-border'
-                          : variance === 0
-                          ? 'bg-emerald-500/[0.04] border-emerald-500/30'
-                          : variance < 0
-                          ? 'bg-rose-500/[0.05] border-rose-500/30'
-                          : 'bg-cyan-500/[0.05] border-cyan-500/30'
-                      }`}
+                      data-index={virtualRow.index}
+                      ref={stocktakeVirtualizer.measureElement}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                      className="pb-2.5"
                     >
-                      {/* Product Header */}
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="font-bold text-xs text-pos-text leading-snug line-clamp-2">{product.title}</p>
-                          <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-pos-muted font-mono mt-0.5">
-                            <span className="bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">SKU: {product.sku}</span>
-                            {product.barcode && (
-                              <span className="bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">EAN: {product.barcode}</span>
+                      <div
+                        className={`p-3 rounded-xl border transition flex flex-col gap-2.5 ${
+                          !isCounted
+                            ? 'bg-pos-card border-pos-border'
+                            : variance === 0
+                            ? 'bg-emerald-500/[0.04] border-emerald-500/30'
+                            : variance < 0
+                            ? 'bg-rose-500/[0.05] border-rose-500/30'
+                            : 'bg-cyan-500/[0.05] border-cyan-500/30'
+                        }`}
+                      >
+                        {/* Product Header */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="font-bold text-xs text-pos-text leading-snug line-clamp-2">{product.title}</p>
+                            <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-pos-muted font-mono mt-0.5">
+                              <span className="bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">SKU: {product.sku}</span>
+                              {product.barcode && (
+                                <span className="bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">EAN: {product.barcode}</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Variance badge */}
+                          <div className="shrink-0">
+                            {!isCounted ? (
+                              <span className="text-[10px] text-pos-muted italic bg-pos-bg px-2 py-0.5 rounded-full border border-pos-border">
+                                Non vérifié
+                              </span>
+                            ) : variance === 0 ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                                <Check className="w-3 h-3" /> Conforme (0)
+                              </span>
+                            ) : variance < 0 ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-950 text-rose-300 border border-rose-800">
+                                {variance} un.
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-950 text-cyan-300 border border-cyan-800">
+                                +{variance} un.
+                              </span>
                             )}
                           </div>
                         </div>
 
-                        {/* Variance badge */}
-                        <div className="shrink-0">
-                          {!isCounted ? (
-                            <span className="text-[10px] text-pos-muted italic bg-pos-bg px-2 py-0.5 rounded-full border border-pos-border">
-                              Non vérifié
+                        {/* Stock Comparison Grid */}
+                        <div className="grid grid-cols-2 gap-2 bg-pos-bg/80 p-2 rounded-lg border border-pos-border/60 text-xs">
+                          <div>
+                            <span className="text-[9px] uppercase font-bold text-pos-muted block">Stock Théorique</span>
+                            <span className="font-mono font-bold text-pos-muted">{product.stock} un.</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[9px] uppercase font-bold text-pos-muted block">Impact Coût</span>
+                            <span className={`font-mono font-bold ${
+                              !isCounted || variance === 0
+                                ? 'text-pos-muted'
+                                : financialDiff < 0
+                                ? 'text-rose-400'
+                                : 'text-cyan-400'
+                            }`}>
+                              {!isCounted || variance === 0
+                                ? '0 DA'
+                                : financialDiff < 0
+                                ? formatDZD(financialDiff)
+                                : `+${formatDZD(financialDiff)}`}
                             </span>
-                          ) : variance === 0 ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
-                              <Check className="w-3 h-3" /> Conforme (0)
-                            </span>
-                          ) : variance < 0 ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-950 text-rose-300 border border-rose-800">
-                              {variance} un.
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-950 text-cyan-300 border border-cyan-800">
-                              +{variance} un.
-                            </span>
-                          )}
+                          </div>
                         </div>
-                      </div>
 
-                      {/* Stock Comparison Grid */}
-                      <div className="grid grid-cols-2 gap-2 bg-pos-bg/80 p-2 rounded-lg border border-pos-border/60 text-xs">
-                        <div>
-                          <span className="text-[9px] uppercase font-bold text-pos-muted block">Stock Théorique</span>
-                          <span className="font-mono font-bold text-pos-muted">{product.stock} un.</span>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-[9px] uppercase font-bold text-pos-muted block">Impact Coût</span>
-                          <span className={`font-mono font-bold ${
-                            !isCounted || variance === 0
-                              ? 'text-pos-muted'
-                              : financialDiff < 0
-                              ? 'text-rose-400'
-                              : 'text-cyan-400'
-                          }`}>
-                            {!isCounted || variance === 0
-                              ? '0 DA'
-                              : financialDiff < 0
-                              ? formatDZD(financialDiff)
-                              : `+${formatDZD(financialDiff)}`}
-                          </span>
-                        </div>
-                      </div>
+                        {/* Touch Controls: Big Stepper & Quick Action */}
+                        <div className="flex items-center justify-between gap-2 pt-1">
+                          <div className="inline-flex items-center bg-pos-bg border border-pos-border rounded-xl p-1 gap-1">
+                            <button
+                              type="button"
+                              onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) - 1)}
+                              className="w-10 h-10 rounded-lg bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition active:scale-95"
+                              aria-label={`Diminuer le comptage de ${product.title}`}
+                            >
+                              <Minus className="w-4 h-4" aria-hidden="true" />
+                            </button>
+                            <input
+                              type="number"
+                              min="0"
+                              value={isCounted ? counted : ''}
+                              placeholder={String(product.stock)}
+                              onChange={(e) => updateCount(product.id, parseInt(e.target.value) || 0)}
+                              className="w-14 h-10 text-center text-sm font-black font-mono bg-transparent text-pos-text focus:outline-none"
+                              aria-label={`Comptage pour ${product.title}`}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) + 1)}
+                              className="w-10 h-10 rounded-lg bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition active:scale-95"
+                              aria-label={`Augmenter le comptage de ${product.title}`}
+                            >
+                              <Plus className="w-4 h-4" aria-hidden="true" />
+                            </button>
+                          </div>
 
-                      {/* Touch Controls: Big Stepper & Quick Action */}
-                      <div className="flex items-center justify-between gap-2 pt-1">
-                        <div className="inline-flex items-center bg-pos-bg border border-pos-border rounded-xl p-1 gap-1">
                           <button
                             type="button"
-                            onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) - 1)}
-                            className="w-10 h-10 rounded-lg bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition active:scale-95"
-                            aria-label={`Diminuer le comptage de ${product.title}`}
+                            onClick={() => updateCount(product.id, product.stock)}
+                            className="min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-bold bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer active:scale-95 flex items-center gap-1.5"
+                            title="Marquer comme conforme au stock théorique"
                           >
-                            <Minus className="w-4 h-4" aria-hidden="true" />
-                          </button>
-                          <input
-                            type="number"
-                            min="0"
-                            value={isCounted ? counted : ''}
-                            placeholder={String(product.stock)}
-                            onChange={(e) => updateCount(product.id, parseInt(e.target.value) || 0)}
-                            className="w-14 h-10 text-center text-sm font-black font-mono bg-transparent text-pos-text focus:outline-none"
-                            aria-label={`Comptage pour ${product.title}`}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) + 1)}
-                            className="w-10 h-10 rounded-lg bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition active:scale-95"
-                            aria-label={`Augmenter le comptage de ${product.title}`}
-                          >
-                            <Plus className="w-4 h-4" aria-hidden="true" />
+                            <Check className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
+                            <span>= Conforme</span>
                           </button>
                         </div>
-
-                        <button
-                          type="button"
-                          onClick={() => updateCount(product.id, product.stock)}
-                          className="min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-bold bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer active:scale-95 flex items-center gap-1.5"
-                          title="Marquer comme conforme au stock théorique"
-                        >
-                          <Check className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
-                          <span>= Conforme</span>
-                        </button>
                       </div>
                     </div>
                   );
@@ -812,111 +897,134 @@ export const InventoryManagerModal: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-pos-border/40">
-                  {filteredStocktake.map((product) => {
-                    const counted = auditCounts[product.id];
-                    const isCounted = counted !== undefined;
-                    const variance = isCounted ? counted - product.stock : 0;
-                    const financialDiff = variance * (product.costPrice || 0);
+                  {(() => {
+                    const virtualItems = stocktakeVirtualizer.getVirtualItems();
+                    const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0;
+                    const paddingBottom = virtualItems.length > 0
+                      ? stocktakeVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end
+                      : 0;
 
                     return (
-                      <tr
-                        key={product.id}
-                        className={`transition group ${
-                          !isCounted
-                            ? 'hover:bg-pos-hover/40'
-                            : variance === 0
-                            ? 'bg-emerald-500/[0.02] hover:bg-emerald-500/[0.05]'
-                            : variance < 0
-                            ? 'bg-rose-500/[0.04] hover:bg-rose-500/[0.08]'
-                            : 'bg-cyan-500/[0.04] hover:bg-cyan-500/[0.08]'
-                        }`}
-                      >
-                        {/* Title & Barcode */}
-                        <td className="p-3">
-                          <p className="font-bold text-pos-text leading-tight">{product.title}</p>
-                          <div className="flex items-center gap-2 text-[10px] text-pos-muted font-mono mt-0.5">
-                            <span>SKU: {product.sku}</span>
-                            {product.barcode && <span>• EAN: {product.barcode}</span>}
-                          </div>
-                        </td>
+                      <>
+                        {paddingTop > 0 && (
+                          <tr>
+                            <td style={{ height: `${paddingTop}px` }} colSpan={6} />
+                          </tr>
+                        )}
+                        {virtualItems.map((virtualRow) => {
+                          const product = filteredStocktake[virtualRow.index];
+                          const counted = auditCounts[product.id];
+                          const isCounted = counted !== undefined;
+                          const variance = isCounted ? counted - product.stock : 0;
+                          const financialDiff = variance * (product.costPrice || 0);
 
-                        {/* Theoretical Stock */}
-                        <td className="p-3 text-center font-mono font-bold text-pos-muted">
-                          {product.stock} un.
-                        </td>
-
-                        {/* Counted Quantity with Stepper */}
-                        <td className="p-3 text-center">
-                          <div className="inline-flex items-center gap-1 bg-pos-bg border border-pos-border rounded-lg p-0.5">
-                            <button
-                              type="button"
-                              onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) - 1)}
-                              className="w-6 h-6 rounded bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition"
+                          return (
+                            <tr
+                              key={product.id}
+                              className={`transition group ${
+                                !isCounted
+                                  ? 'hover:bg-pos-hover/40'
+                                  : variance === 0
+                                  ? 'bg-emerald-500/[0.02] hover:bg-emerald-500/[0.05]'
+                                  : variance < 0
+                                  ? 'bg-rose-500/[0.04] hover:bg-rose-500/[0.08]'
+                                  : 'bg-cyan-500/[0.04] hover:bg-cyan-500/[0.08]'
+                              }`}
                             >
-                              <Minus className="w-3 h-3" />
-                            </button>
-                            <input
-                              type="number"
-                              min="0"
-                              value={isCounted ? counted : ''}
-                              placeholder={String(product.stock)}
-                              onChange={(e) => updateCount(product.id, parseInt(e.target.value) || 0)}
-                              className="w-12 h-6 text-center text-xs font-black font-mono bg-transparent text-pos-text focus:outline-none"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) + 1)}
-                              className="w-6 h-6 rounded bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition"
-                            >
-                              <Plus className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </td>
+                              {/* Title & Barcode */}
+                              <td className="p-3">
+                                <p className="font-bold text-pos-text leading-tight">{product.title}</p>
+                                <div className="flex items-center gap-2 text-[10px] text-pos-muted font-mono mt-0.5">
+                                  <span>SKU: {product.sku}</span>
+                                  {product.barcode && <span>• EAN: {product.barcode}</span>}
+                                </div>
+                              </td>
 
-                        {/* Variance Display */}
-                        <td className="p-3 text-center">
-                          {!isCounted ? (
-                            <span className="text-[10px] text-pos-muted font-italic">Non vérifié</span>
-                          ) : variance === 0 ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
-                              <Check className="w-3 h-3" /> Conforme (0)
-                            </span>
-                          ) : variance < 0 ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-950 text-rose-300 border border-rose-800">
-                              {variance} un. (Manquant)
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-950 text-cyan-300 border border-cyan-800">
-                              +{variance} un. (Surplus)
-                            </span>
-                          )}
-                        </td>
+                              {/* Theoretical Stock */}
+                              <td className="p-3 text-center font-mono font-bold text-pos-muted">
+                                {product.stock} un.
+                              </td>
 
-                        {/* Financial Impact */}
-                        <td className="p-3 text-right font-mono font-bold">
-                          {!isCounted || variance === 0 ? (
-                            <span className="text-pos-muted">0 DA</span>
-                          ) : financialDiff < 0 ? (
-                            <span className="text-rose-400">{formatDZD(financialDiff)}</span>
-                          ) : (
-                            <span className="text-cyan-400">+{formatDZD(financialDiff)}</span>
-                          )}
-                        </td>
+                              {/* Counted Quantity with Stepper */}
+                              <td className="p-3 text-center">
+                                <div className="inline-flex items-center gap-1 bg-pos-bg border border-pos-border rounded-lg p-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) - 1)}
+                                    className="w-6 h-6 rounded bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition"
+                                  >
+                                    <Minus className="w-3 h-3" />
+                                  </button>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={isCounted ? counted : ''}
+                                    placeholder={String(product.stock)}
+                                    onChange={(e) => updateCount(product.id, parseInt(e.target.value) || 0)}
+                                    className="w-12 h-6 text-center text-xs font-black font-mono bg-transparent text-pos-text focus:outline-none"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) + 1)}
+                                    className="w-6 h-6 rounded bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition"
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              </td>
 
-                        {/* Match Theoretical Action */}
-                        <td className="p-3 text-center">
-                          <button
-                            type="button"
-                            onClick={() => updateCount(product.id, product.stock)}
-                            className="px-2 py-1 rounded text-[10px] font-bold bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-                            title="Marquer comme conforme au stock théorique"
-                          >
-                            = Conforme
-                          </button>
-                        </td>
-                      </tr>
+                              {/* Variance Display */}
+                              <td className="p-3 text-center">
+                                {!isCounted ? (
+                                  <span className="text-[10px] text-pos-muted font-italic">Non vérifié</span>
+                                ) : variance === 0 ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                                    <Check className="w-3 h-3" /> Conforme (0)
+                                  </span>
+                                ) : variance < 0 ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-950 text-rose-300 border border-rose-800">
+                                    {variance} un. (Manquant)
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-950 text-cyan-300 border border-cyan-800">
+                                    +{variance} un. (Surplus)
+                                  </span>
+                                )}
+                              </td>
+
+                              {/* Financial Impact */}
+                              <td className="p-3 text-right font-mono font-bold">
+                                {!isCounted || variance === 0 ? (
+                                  <span className="text-pos-muted">0 DA</span>
+                                ) : financialDiff < 0 ? (
+                                  <span className="text-rose-400">{formatDZD(financialDiff)}</span>
+                                ) : (
+                                  <span className="text-cyan-400">+{formatDZD(financialDiff)}</span>
+                                )}
+                              </td>
+
+                              {/* Match Theoretical Action */}
+                              <td className="p-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => updateCount(product.id, product.stock)}
+                                  className="px-2 py-1 rounded text-[10px] font-bold bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
+                                  title="Marquer comme conforme au stock théorique"
+                                >
+                                  = Conforme
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {paddingBottom > 0 && (
+                          <tr>
+                            <td style={{ height: `${paddingBottom}px` }} colSpan={6} />
+                          </tr>
+                        )}
+                      </>
                     );
-                  })}
+                  })()}
                 </tbody>
               </table>
             </div>

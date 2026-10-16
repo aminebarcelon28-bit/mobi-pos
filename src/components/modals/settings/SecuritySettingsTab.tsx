@@ -742,3 +742,4 @@ export const SecuritySettingsTab: React.FC<SecuritySettingsTabProps> = ({ manage
     </div>
   );
 };
+

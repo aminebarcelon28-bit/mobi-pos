@@ -319,7 +319,10 @@ export const ProductEditorModal: React.FC = () => {
   }, [activeModal, showToast]);
 
   // Sync state on modal open
-  useEffect(() => {
+  const [prevModalSync, setPrevModalSync] = useState<string | null>(null);
+  const modalSyncKey = activeModal === 'product_editor' ? `${activeModal}_${editingProduct?.id ?? 'new'}` : null;
+  if (modalSyncKey !== prevModalSync) {
+    setPrevModalSync(modalSyncKey);
     if (activeModal === 'product_editor') {
       if (editingProduct) {
         const fallbackSemi = Math.round(
@@ -376,9 +379,17 @@ export const ProductEditorModal: React.FC = () => {
           volumeDiscounts: [],
         });
       }
-      setTimeout(() => titleInputRef.current?.focus(), 80);
+      setCategoryDiscounts({});
+      setValidationErrors({});
     }
-  }, [editingProduct, activeModal, products]);
+  }
+
+  useEffect(() => {
+    if (activeModal === 'product_editor') {
+      const t = setTimeout(() => titleInputRef.current?.focus(), 80);
+      return () => clearTimeout(t);
+    }
+  }, [activeModal, editingProduct]);
 
   // Live Barcode Canvas Rendering
   useEffect(() => {

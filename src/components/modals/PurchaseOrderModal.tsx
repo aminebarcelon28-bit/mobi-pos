@@ -369,8 +369,11 @@ export const PurchaseOrderModal: React.FC = () => {
   useEffect(() => {
     if (!poDraftBuilderRequested) return;
     consumePoDraftBuilder();
-    setInspectingPO(null);
-    setActiveTab('new_po');
+    const handle = requestAnimationFrame(() => {
+      setInspectingPO(null);
+      setActiveTab('new_po');
+    });
+    return () => cancelAnimationFrame(handle);
   }, [poDraftBuilderRequested, consumePoDraftBuilder]);
 
   const setOverflowAnchor = (key: string) => (el: HTMLButtonElement | null) => {

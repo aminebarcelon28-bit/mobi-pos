@@ -107,21 +107,15 @@ export const PaymentModal: React.FC = () => {
   const refundDue = totals.refundDue;
   const isRefundDue = refundDue > 0;
 
-  useEffect(() => {
-    if (activeModal === 'payment') {
-      if (cart.length === 0) {
-        closeModal();
-        showToast('Panier vide — Ajoutez des articles au panier avant d\'encaisser.', 'warning');
-        return;
-      }
+  // Render-time state synchronization when modal opens
+  const [prevPaymentModalSync, setPrevPaymentModalSync] = useState<string | null>(null);
+  const paymentModalSyncKey = activeModal === 'payment' ? `${activeModal}_${cart.length}_${currentCustomer?.id ?? 'none'}` : null;
+  if (paymentModalSyncKey !== prevPaymentModalSync) {
+    setPrevPaymentModalSync(paymentModalSyncKey);
+    if (activeModal === 'payment' && cart.length > 0) {
       setSelectedMethod('Espèces');
       setIsProcessing(false);
       setIsCustomCreditOpen(false);
-
-      // Auto-populate initial store credit if available (honours guardrail
-      // + staged voucher via maxAvailableCredit computed below when modal
-      // is open — here we clamp against balance and net only for the effect
-      // deps; the render-time maxAvailableCredit is the real ceiling).
       setExchangeSoultePayout(null);
       const initialCredit = Math.min(
         currentCustomer?.storeCredit || 0,
@@ -129,17 +123,27 @@ export const PaymentModal: React.FC = () => {
         netSubtotal
       );
       setAppliedCredit(initialCredit);
-
-        const initialNet = Math.max(0, netToPay - initialCredit);
+      const initialNet = Math.max(0, netToPay - initialCredit);
       setCashTenderAmount(initialNet > 0 ? initialNet : 0);
+    }
+  }
 
-      setTimeout(() => {
+  // External side-effects: empty cart guardrail and input autofocus
+  useEffect(() => {
+    if (activeModal === 'payment') {
+      if (cart.length === 0) {
+        closeModal();
+        showToast('Panier vide — Ajoutez des articles au panier avant d\'encaisser.', 'warning');
+        return;
+      }
+      const t = setTimeout(() => {
         const el = document.getElementById('payment-cash-input') as HTMLInputElement | null;
         el?.focus();
         el?.select();
       }, 50);
+      return () => clearTimeout(t);
     }
-  }, [activeModal, cart.length, grossSubtotal, netSubtotal, netToPay, tradeInCredit, currentCustomer, storeCreditApplied, closeModal, showToast, setExchangeSoultePayout]);
+  }, [activeModal, cart.length, closeModal, showToast]);
 
   useEffect(() => { if (activeModal !== 'payment') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 

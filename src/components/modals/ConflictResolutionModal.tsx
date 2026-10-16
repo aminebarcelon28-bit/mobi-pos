@@ -1,14 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   X,
-  AlertTriangle,
   CheckCircle2,
   GitCompare,
   RefreshCw,
   Server,
   Layers,
-  ArrowRight,
-  ShieldAlert,
   Check,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
@@ -35,7 +32,6 @@ export const ConflictResolutionModal: React.FC = () => {
   const [resolvingId, setResolvingId] = useState<string | null>(null);
 
   const fetchConflicts = useCallback(async () => {
-    setIsLoading(true);
     try {
       if (isTauriEnv()) {
         const db = await getLocalDb();
@@ -53,10 +49,29 @@ export const ConflictResolutionModal: React.FC = () => {
   }, [includeResolved, showToast]);
 
   useEffect(() => {
+    let cancelled = false;
     if (activeModal === 'conflict_resolution') {
-      void fetchConflicts();
+      (async () => {
+        try {
+          if (isTauriEnv()) {
+            const db = await getLocalDb();
+            const list = await listSyncConflicts(db, includeResolved);
+            if (!cancelled) setConflicts(list);
+          } else {
+            if (!cancelled) setConflicts([]);
+          }
+        } catch (err) {
+          console.warn('[ConflictResolutionModal] fetch failed:', err);
+          if (!cancelled) showToast('Erreur lors du chargement des conflits de synchronisation.', 'error');
+        } finally {
+          if (!cancelled) setIsLoading(false);
+        }
+      })();
     }
-  }, [activeModal, fetchConflicts]);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeModal, includeResolved, showToast]);
 
   // Stacked Escape dismissal
   useEffect(() => {
@@ -171,7 +186,7 @@ export const ConflictResolutionModal: React.FC = () => {
 
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => void fetchConflicts()}
+              onClick={() => { setIsLoading(true); void fetchConflicts(); }}
               disabled={isLoading}
               aria-label="Actualiser la liste des conflits"
               className="min-h-[44px] px-3 py-2 rounded-lg bg-pos-hover hover:bg-pos-border text-pos-text font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"

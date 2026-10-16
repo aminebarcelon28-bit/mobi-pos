@@ -108,9 +108,21 @@ export function useAuditLiveFeed(options: UseAuditLiveFeedOptions): AuditLiveFee
     : '';
   const [activeRange, setActiveRange] = useState<AuditQueryBounds | undefined>(range);
   const [activeRangeKey, setActiveRangeKey] = useState(rangeKey);
+  const [prevEnabled, setPrevEnabled] = useState(enabled);
+
   if (activeRangeKey !== rangeKey) {
     setActiveRangeKey(rangeKey);
     setActiveRange(range);
+    setPollRows([]);
+    seenRef.current = new Set();
+  }
+
+  if (prevEnabled !== enabled) {
+    setPrevEnabled(enabled);
+    if (!enabled) {
+      setStatus('idle');
+      setFreshIds(new Set());
+    }
   }
 
   useEffect(() => {
@@ -163,8 +175,6 @@ export function useAuditLiveFeed(options: UseAuditLiveFeedOptions): AuditLiveFee
   // exists to prevent.
   useEffect(() => {
     if (!enabled) return;
-    setPollRows([]);
-    seenRef.current = new Set();
     void refresh();
   }, [enabled, rangeKey, refresh]);
 
@@ -226,7 +236,10 @@ export function useAuditLiveFeed(options: UseAuditLiveFeedOptions): AuditLiveFee
     if (arrived.size > 0) {
       // Prepend semantics: the list is newest-first, so a new arrival is
       // already at index 0 — no splice needed, just the highlight.
-      setFreshIds(arrived);
+      const timer = window.setTimeout(() => {
+        setFreshIds(arrived);
+      }, 0);
+      return () => window.clearTimeout(timer);
     }
   }, [entries, enabled]);
 
@@ -263,14 +276,6 @@ export function useAuditLiveFeed(options: UseAuditLiveFeedOptions): AuditLiveFee
       abortRef.current = null;
     };
   }, [enabled, intervalMs, refresh]);
-
-  // Leaving live mode should not strand a "degraded" badge on screen.
-  useEffect(() => {
-    if (!enabled) {
-      setStatus('idle');
-      setFreshIds(new Set());
-    }
-  }, [enabled]);
 
   const markSeen = useCallback(() => setFreshIds(new Set()), []);
 

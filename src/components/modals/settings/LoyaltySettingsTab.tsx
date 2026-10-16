@@ -9,7 +9,6 @@ import {
   Calendar,
   Eye,
   Plus,
-  Percent,
 } from 'lucide-react';
 import { MoneyInput } from '../../ui/MoneyInput';
 import { dinarsToMinor, toLegacyReal, formatDZD } from '../../../utils/currency';
@@ -29,6 +28,11 @@ interface LoyaltySettingsTabProps {
   onSave: (updated: ReceiptSettings) => void;
   showToast: (msg: string, type?: 'success' | 'error' | 'info' | 'warning') => void;
 }
+
+const freshId = (prefix: string) =>
+  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? (crypto as Crypto).randomUUID()
+    : `${prefix}-${Date.now().toString(36)}`;
 
 export const LoyaltySettingsTab: React.FC<LoyaltySettingsTabProps> = ({
   receiptSettings,
@@ -51,10 +55,6 @@ export const LoyaltySettingsTab: React.FC<LoyaltySettingsTabProps> = ({
     onSave(updated);
   };
 
-  const freshId = (prefix: string) =>
-    typeof crypto !== 'undefined' && 'randomUUID' in crypto
-      ? (crypto as Crypto).randomUUID()
-      : `${prefix}-${Date.now().toString(36)}`;
 
   const numField = (raw: string, fallback: number): number => {
     const n = Number(raw);

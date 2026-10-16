@@ -294,3 +294,4 @@ export const UpdatesSettingsTab: React.FC<UpdatesSettingsTabProps> = ({ showToas
     </div>
   );
 };
+

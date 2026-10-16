@@ -96,8 +96,25 @@ export const BackupSettingsTab: React.FC<BackupSettingsTabProps> = ({
   };
 
   useEffect(() => {
-    void loadDbStats();
-    void loadSnapshotsList();
+    let cancelled = false;
+    const init = async () => {
+      try {
+        const [stats, list] = await Promise.all([
+          maintenanceService.getDatabaseStats().catch(() => null),
+          listDatabaseBackups().catch(() => []),
+        ]);
+        if (!cancelled) {
+          if (stats) setDbStats(stats);
+          setSnapshots(list || []);
+        }
+      } catch (err) {
+        console.error('Failed to init backup tab:', err);
+      }
+    };
+    void init();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleRunIntegrityCheck = async () => {

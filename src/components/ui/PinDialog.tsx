@@ -42,6 +42,8 @@ export const PinDialog: React.FC<PinDialogProps> = ({
 }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [lockMsg, setLockMsg] = useState<string | null>(null);
   // Focus trap-lite: remember the invoker to return focus on close.
   const previouslyFocusedRef = useRef<Element | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -60,12 +62,9 @@ export const PinDialog: React.FC<PinDialogProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      resetState();
-      // Store the invoker; move focus into the native PIN field so the OS
-      // (and the mobile soft keyboard) owns entry — digits, Backspace and
-      // Enter all behave natively.
       previouslyFocusedRef.current = document.activeElement;
       const raf = requestAnimationFrame(() => {
+        resetState();
         pinInputRef.current?.focus();
       });
       return () => cancelAnimationFrame(raf);
@@ -78,9 +77,6 @@ export const PinDialog: React.FC<PinDialogProps> = ({
   }, [isOpen, resetState]);
 
   const minLength = PIN_DIALOG_MIN_LENGTH;
-
-  const [verifying, setVerifying] = useState(false);
-  const [lockMsg, setLockMsg] = useState<string | null>(null);
 
   const handleVerify = useCallback(async (currentPin: string) => {
     // 4–12 digits, explicit submit only (no auto-submit). Verification is

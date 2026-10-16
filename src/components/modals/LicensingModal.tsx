@@ -46,10 +46,16 @@ export const LicensingModal: React.FC = () => {
   const [upgradeKey, setUpgradeKey] = useState('');
   const [upgrading, setUpgrading] = useState(false);
 
+  const [prevModalSync, setPrevModalSync] = useState<string | null>(null);
+  if (activeModal !== prevModalSync) {
+    setPrevModalSync(activeModal);
+    if (activeModal === 'licensing') {
+      setPlatformInfo(getDetailedPlatform());
+    }
+  }
+
   useEffect(() => {
     if (activeModal !== 'licensing') return;
-
-    setPlatformInfo(getDetailedPlatform());
 
     resolveDeviceFingerprint()
       .then(setHwid)

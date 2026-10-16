@@ -101,8 +101,10 @@
   - Exposed UI inputs for `baridimobRip`, `ccpAccount`, `bankBeneficiaryName`, `paperWidth`, `kickCashDrawerOnCash`, `storeSubheader`, `categoryMultipliers`, `activeCampaigns`, and `loyaltyVisible`.
   - Wired native encrypted backup APIs (`createDatabaseBackup`, `listDatabaseBackups`, `pruneSnapshots`, `decryptSnapshotForRecovery`) and `sqlite_db_maintenance` (WAL checkpoint + vacuum + optimize) into `DatabaseMaintenanceModal.tsx` and `BackupSettingsTab.tsx`.
   - Updated `ReceiptPaper.tsx`, `ReceiptModal.tsx`, `ImeiWarrantyInspectorModal.tsx`, and `Header.tsx` to honor `paperWidth` and `loyaltyVisible`.
-- [ ] **Task 5.2 — Virtualize High-Density Lists & Fix 150 Cascading Render Warnings:**
-  - Add `@tanstack/react-virtual` to `CustomersModal.tsx` and `InventoryManagerModal.tsx`, and refactor the `react(set-state-in-effect)` warnings across modals (`RefundModal`, `PurchaseOrderModal`, `ReportsModal`, `ProductEditorModal`).
+- [x] **Task 5.2 — Virtualize High-Density Lists & Eliminate Cascading Render Warnings:**
+  - Integrated `@tanstack/react-virtual` in `CustomersModal.tsx` (pair-row virtualization) and `InventoryManagerModal.tsx` (table spacer rows for Catalog and Stocktake modes).
+  - Eliminated all `react(set-state-in-effect)` cascading render warnings across the entire codebase using React Compiler render-time state synchronization, async IIFE promise cancellation, and deferred timing.
+  - Enhanced `ModalShell.tsx` with WCAG 2.1.2 focus trapping (`Tab`/`Shift+Tab` cycling) and `Escape` key dismissal.
 - [ ] **Task 5.3 — Blind Shift Close, Blind Stocktake & Manager PIN Hardening:**
   - Conceal expected cash KPIs in `ShiftZReportModal.tsx:261-349` until blind count submission and wire shift close; persist opening/closing DZD denomination breakdowns in `ShiftOpenModal` / `ShiftCloseModal`; add Blind Stocktake mode to `InventoryManagerModal.tsx:728-925`; require Manager PIN + cash/wallet movement to mint standalone vouchers in `VoucherModal.tsx:86-108` or add in-cart returns (`createCartSlice.ts:368-378`).
 

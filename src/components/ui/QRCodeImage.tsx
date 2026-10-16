@@ -24,11 +24,8 @@ export const QRCodeImage: React.FC<QRCodeImageProps> = ({
   const [error, setError] = useState<boolean>(false);
 
   useEffect(() => {
+    if (!value || !value.trim()) return;
     let isCancelled = false;
-    if (!value || !value.trim()) {
-      setDataUrl(null);
-      return;
-    }
 
     // Dynamic import: the qrcode lib rides its own chunk instead of the
     // entry bundle. Rendered output is identical (same options, same scale).

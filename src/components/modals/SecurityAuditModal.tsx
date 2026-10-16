@@ -214,6 +214,23 @@ export const SecurityAuditModal: React.FC = () => {
   const pinnedToTopRef = useRef(true);
 
   const isOpen = activeModal === 'security_audit';
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
+  if (prevIsOpen !== isOpen) {
+    setPrevIsOpen(isOpen);
+    if (isOpen) {
+      setGateUnlocked(isJournalUnlocked());
+    }
+  }
+
+  const [prevIsScreenLocked, setPrevIsScreenLocked] = useState(isScreenLocked);
+  if (prevIsScreenLocked !== isScreenLocked) {
+    setPrevIsScreenLocked(isScreenLocked);
+    if (isScreenLocked) {
+      notifyLocked();
+      setGateUnlocked(false);
+      setGatePin('');
+    }
+  }
 
   // ── effective window (pushed down to the repository) ───────────────────────
   // Resolved in one place so the SQL range scan and the in-memory narrowing can
@@ -232,19 +249,7 @@ export const SecurityAuditModal: React.FC = () => {
   // strip and the live counter stay coherent with the row timestamps.
   useSharedClock(isOpen && gateUnlocked);
 
-  // FT-01: re-evaluate the in-memory window whenever the journal opens;
-  // clear it when the till locks; relock after mobile background delay.
-  useEffect(() => {
-    if (!isOpen) return;
-    setGateUnlocked(isJournalUnlocked());
-  }, [isOpen]);
-  useEffect(() => {
-    if (isScreenLocked) {
-      notifyLocked();
-      setGateUnlocked(false);
-      setGatePin('');
-    }
-  }, [isScreenLocked]);
+  // FT-01: relock after mobile background delay.
   useEffect(() => {
     if (!isOpen) return;
     const onVis = () => {
