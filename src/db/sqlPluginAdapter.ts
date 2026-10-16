@@ -382,6 +382,170 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
   try { await backfillSaleAllocationsFromItemsWithDb(db).catch(() => 0); } catch {}
   try { await mirrorSaleAllocationsToDexie(db).catch(() => 0); } catch {}
   try { await healPoisonedInventoryBaselines(db).catch(() => {}); } catch {}
+  // UPGRADE-02: payload hygiene + bounded log growth. Both are best-effort
+  // by contract — a failure here must never block boot.
+  try { await healDoubleEncodedJsonPayloads(db).catch(() => {}); } catch {}
+  try { await pruneStaleEventLog(db).catch(() => {}); } catch {}
+}
+
+/**
+ * UPGRADE-02: normalize a payload that was encoded more than once.
+ *
+ * Push/pull copied DB rows verbatim into payload columns, producing two
+ * artifact shapes on the dual-store tables:
+ *  1. the whole column is a JSON string whose content is the real payload;
+ *  2. the column is an object carrying a nested `json_payload` string (the
+ *     runtime probes in this file had to unwrap `.json_payload` defensively).
+ *
+ * Decode until stable (depth-capped); row fields win over the nested copy
+ * (they are the fresher scalars); unknown shapes are returned untouched.
+ */
+function unwrapDoubleEncodedPayload(value: unknown): unknown {
+  let current: unknown = value;
+  for (let depth = 0; depth < 8; depth++) {
+    if (typeof current === 'string') {
+      try {
+        const inner: unknown = JSON.parse(current);
+        if (inner !== null && typeof inner === 'object') {
+          current = inner;
+          continue;
+        }
+      } catch {
+        /* not JSON — stop unwrapping */
+      }
+      break;
+    }
+    if (current !== null && typeof current === 'object' && !Array.isArray(current)) {
+      const rec = current as Record<string, unknown>;
+      if (typeof rec.json_payload !== 'string') break;
+      let inner: unknown;
+      try {
+        inner = JSON.parse(rec.json_payload);
+      } catch {
+        break;
+      }
+      if (inner === null || typeof inner !== 'object' || Array.isArray(inner)) break;
+      const outer = { ...rec };
+      delete outer.json_payload;
+      current = { ...(inner as Record<string, unknown>), ...outer };
+      continue;
+    }
+    break;
+  }
+  return current;
+}
+
+/** Dual-store tables carrying a `json_payload` column in the v1 schema family. */
+const JSON_PAYLOAD_TABLES = [
+  'products',
+  'customers',
+  'transactions',
+  'transaction_items',
+  'repair_orders',
+  'purchase_orders',
+  'trade_ins',
+  'product_bundles',
+  'cash_sessions',
+  'cash_movements',
+  'customer_debts',
+  'store_expenses',
+  'held_orders',
+  'vendor_disputes',
+] as const;
+
+/**
+ * UPGRADE-02 one-shot backfill: de-double-encode `json_payload` across the
+ * dual-store tables. Latch-gated (`schema.heal.json_dedouble.done`),
+ * rowid-paged (bounded memory on 100k+ histories), per-table best-effort —
+ * malformed legacy payloads are skipped, never fatal.
+ */
+async function healDoubleEncodedJsonPayloads(db: Database): Promise<void> {
+  const latch = (await db
+    .select("SELECT value_json FROM app_settings WHERE key='schema.heal.json_dedouble.done' LIMIT 1;")
+    .catch(() => [])) as Array<{ value_json?: unknown }>;
+  if (Array.isArray(latch) && latch.length > 0) return;
+
+  let failed = false;
+  for (const table of JSON_PAYLOAD_TABLES) {
+    try {
+      const cols = (await db
+        .select(`SELECT name FROM pragma_table_info('${table}')`)
+        .catch(() => [])) as Array<{ name?: unknown }>;
+      const names = new Set((cols ?? []).map((c) => String(c.name)));
+      if (!names.has('id') || !names.has('json_payload')) continue;
+
+      // Keyset page over rowid: one page in memory, stable under writes.
+      let cursor = 0;
+      for (;;) {
+        const rows = (await db.select(
+          `SELECT rowid AS _rid, id, json_payload FROM ${table} WHERE rowid > $1 ORDER BY rowid LIMIT 500`,
+          [cursor],
+        )) as Array<{ _rid?: unknown; id?: unknown; json_payload?: unknown }>;
+        if (!rows || rows.length === 0) break;
+        for (const row of rows) {
+          cursor = Number(row._rid ?? cursor);
+          const raw = String(row.json_payload ?? '');
+          if (!raw || !row.id) continue;
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            continue; // malformed payload: skipped, never fatal
+          }
+          const encoded = JSON.stringify(unwrapDoubleEncodedPayload(parsed));
+          if (encoded === raw) continue;
+          await db
+            .execute(`UPDATE ${table} SET json_payload = $1 WHERE id = $2`, [encoded, String(row.id)])
+            .catch(() => {});
+        }
+        if (rows.length < 500) break;
+      }
+    } catch (e) {
+      failed = true;
+      console.warn(`[heal] json_payload de-double-encode skipped for ${table}:`, e);
+    }
+  }
+  // A table-level failure must retry on the next boot — do not latch.
+  if (failed) return;
+
+  // Latch with the cross-shape fallback (Rust-created app_settings has no id
+  // column and no default id — see the v103 heal above).
+  await db
+    .execute(
+      "INSERT INTO app_settings (id, key, value_json, updated_at, version) VALUES ('schema.heal.json_dedouble', 'schema.heal.json_dedouble.done', 'true', $1, 1) ON CONFLICT(id) DO UPDATE SET value_json='true', updated_at=excluded.updated_at;",
+      [new Date().toISOString()],
+    )
+    .catch(async () => {
+      await db
+        .execute(
+          "INSERT INTO app_settings (key, value_json, updated_at, version) VALUES ('schema.heal.json_dedouble.done', 'true', $1, 1) ON CONFLICT(key) DO UPDATE SET value_json='true', updated_at=excluded.updated_at;",
+          [new Date().toISOString()],
+        )
+        .catch(() => {});
+    });
+}
+
+/**
+ * UPGRADE-02: cap local `event_log` growth — prune rows synced to cloud and
+ * older than 90 days. FAIL CLOSED: without a positive sync marker
+ * (`synced_to_cloud` column with value 1) nothing is ever deleted; the
+ * production v100 shape has no sync column, so its rows are left untouched
+ * rather than guessed about.
+ */
+async function pruneStaleEventLog(db: Database): Promise<void> {
+  try {
+    const cols = (await db
+      .select("SELECT name FROM pragma_table_info('event_log')")
+      .catch(() => [])) as Array<{ name?: unknown }>;
+    const names = new Set((cols ?? []).map((c) => String(c.name)));
+    if (names.size === 0 || !names.has('synced_to_cloud')) return;
+    const tsCol = names.has('created_at') ? 'created_at' : names.has('ts') ? 'ts' : null;
+    if (!tsCol) return;
+    const cutoff = new Date(Date.now() - 90 * 86400000).toISOString();
+    await db.execute(`DELETE FROM event_log WHERE synced_to_cloud = 1 AND ${tsCol} < $1`, [cutoff]);
+  } catch (e) {
+    console.warn('[event_log] 90-day prune skipped:', e);
+  }
 }
 
 /**
@@ -718,22 +882,11 @@ export async function healPoisonedInventoryBaselines(db: Database): Promise<{ he
         [pid, now],
       );
 
-      // Update json_payload to reflect the new positive stock
-      try {
-        const rows = (await db.select('SELECT stock, json_payload FROM products WHERE id=$1', [pid]).catch(() => [])) as Array<{ stock?: unknown; json_payload?: unknown }>;
-        if (rows?.[0]?.json_payload) {
-          let pj = JSON.parse(String(rows[0].json_payload));
-          pj.stock = Number(rows[0].stock ?? baselineStock);
-          if (pj.json_payload && typeof pj.json_payload === 'string') {
-            try {
-              let inner = JSON.parse(pj.json_payload);
-              inner.stock = pj.stock;
-              pj.json_payload = JSON.stringify(inner);
-            } catch {}
-          }
-          await db.execute('UPDATE products SET json_payload=$1 WHERE id=$2', [JSON.stringify(pj), pid]).catch(() => {});
-        }
-      } catch {}
+      // UPGRADE-02: no json_payload rewrite here anymore. The stock COLUMN
+      // (recomputed above) is the query truth; rewriting the payload on every
+      // heal was pure churn and mechanically reproduced the double-encode
+      // artifact. Payload normalization lives ONLY in the one-shot backfill
+      // (`healDoubleEncodedJsonPayloads`), never as a stock side effect.
 
       healedIds.push(pid);
     }
@@ -2313,21 +2466,8 @@ const imeiData = {
       const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pid]).catch(() => [])) as Array<Record<string, unknown>>;
       const prow = rows?.[0];
       if (!prow) continue;
-      if (prow.json_payload && prow.stock !== undefined) {
-        try {
-          let pj = JSON.parse(String(prow.json_payload));
-          pj.stock = Number(prow.stock);
-          if (pj.json_payload && typeof pj.json_payload === 'string') {
-            try {
-              let inner = JSON.parse(pj.json_payload);
-              inner.stock = pj.stock;
-              pj.json_payload = JSON.stringify(inner);
-            } catch {}
-          }
-          prow.json_payload = JSON.stringify(pj);
-          await db.execute('UPDATE products SET json_payload=$1 WHERE id=$2', [prow.json_payload, pid]).catch(() => {});
-        } catch {}
-      }
+      // UPGRADE-02: the stock column is already refreshed above; the payload
+      // is deliberately NOT rewritten here (churn + double-encode surface).
       const pkey = (prow.idempotency_key as string) || `stub-${pid}`;
       await db.execute(
         `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)

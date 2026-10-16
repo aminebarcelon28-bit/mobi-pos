@@ -105,6 +105,21 @@ pub fn ensure_po_recon_tables(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// UPGRADE-02: per-connection performance PRAGMAs for EVERY per-invoke native
+/// connection. WAL persists on the file, but `synchronous`, `cache_size` and
+/// `temp_store` are per-connection defaults — without this, each per-invoke
+/// open pays a FULL fsync per commit and keeps a tiny page cache. All pragmas
+/// here are connection-local; `mmap_size` is desktop-only (a no-op on some
+/// embedded targets). Safe on read-only opens too (nothing writes the file).
+pub fn tune(conn: &Connection) -> Result<()> {
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    conn.pragma_update(None, "cache_size", -16000i64)?;
+    conn.pragma_update(None, "temp_store", "MEMORY")?;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    conn.pragma_update(None, "mmap_size", 268435456i64)?;
+    Ok(())
+}
+
 pub fn initialize_database(db_path: &Path) -> Result<Connection> {
     register_vec_extension();
 
@@ -112,9 +127,9 @@ pub fn initialize_database(db_path: &Path) -> Result<Connection> {
 
     // High-concurrency WAL configuration (matches spec).
     conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "busy_timeout", 5000)?;
+    tune(&conn)?;
 
     ensure_po_recon_tables(&conn)?;
 

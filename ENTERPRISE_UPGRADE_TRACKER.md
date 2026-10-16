@@ -30,11 +30,16 @@ Fix any failure or boundary pin immediately → mark `[x]` → atomic commit `fe
   - **Audit lane:** verified already bounded (`LIMIT 300`, `operationsAdapter.ts:410`) — unchanged.
   - **Residuals (accepted):** RefundModal prior-refund preview stays store-scoped by documented design; submit re-verifies against durable rows (slice unions Dexie full mirror). Repair-intake lookup direct-merge landed (see above). Web preview falls back to Dexie readers (no SQLite).
   - No migration: all needed indexes pre-existed (118 reserved for UPGRADE-02). Zero-tax pin moved `createOrderSlice.ts:480 → :483` (3-line window-field insert, comment preserved).
-- [ ] **UPGRADE-02 — SQLite Engine & Payload Hygiene Pack** (M)
+- [x] **UPGRADE-02 — SQLite Engine & Payload Hygiene Pack** (M)
   - `tune(conn)` helper on every per-invoke connection (`synchronous=NORMAL`, `cache_size=-16000`, `temp_store=MEMORY`).
   - One-shot de-double-encode `json_payload`; stop `products.json_payload` rewrite in stock heal.
   - New migration ≥ 118: `repair_orders(created_at DESC)`, `purchase_orders(created_at DESC)`, `trade_ins(created_at DESC)`, `imei_records(received_at DESC)` indexes.
   - 90-day `event_log` compaction/prune (synced rows only).
+  - **Landed:** `db.rs::tune()` (synchronous NORMAL, 16 MiB cache, MEMORY temp, desktop-only 256 MiB mmap) called from all five per-invoke opens (`initialize_database`, `commands.rs`, `checkout.rs`, `refund.rs`, `sync_outbox.rs`); migration **v118** (4 ORDER BY indexes) with `EXPECTED_MAX_DB_USER_VERSION` 117→118; both stock-side `products.json_payload` rewrites removed (stock heal + post-sale stub refresh — the stock column is the query truth).
+  - **De-double-encode:** latched one-shot boot heal (`healDoubleEncodedJsonPayloads`, flag `schema.heal.json_dedouble.done`) instead of in-migration SQL — a malformed legacy payload must never abort a migration; rowid-paged 500/page over 14 dual-store tables; envelope unwrap = row fields win over the nested copy; table-level failure skips the latch (retries next boot).
+  - **event_log prune:** `pruneStaleEventLog` deletes only rows with a positive sync marker (`synced_to_cloud = 1`) older than 90 days. FAIL CLOSED — the production v100 shape has no sync column, so its rows are left untouched rather than guessed about.
+  - **Audit (decision):** bundled SQLite = 3.45.0 (`libsqlite3-sys 0.28.0` / rusqlite 0.31) < 3.51.3 → bump deferred (crosses 6 rusqlite minors: API migration + dependency approval; WAL-reset window needs crash-during-reset). Tracked as open. `transactions.tax` already dropped by v108 (v1 must keep the pre-drop shape for the frozen pin; plugin migrator is transactional) — verified-existing. WebView plugin pool pragmas remain sqlx defaults by design (patched plugin rejects pragma setters from JS).
+  - **Deferred (documented):** "json_payload holds non-scalars only" rule — a coordinated reader migration across 14 tables; the one-shot pass removes the corruption surface meanwhile.
 - [ ] **UPGRADE-03 — Activate sqlite-vec Semantic Matching** (M–L)
   - `index_product` wired on product save + PO receive; `vec_products` populated.
   - `checkout_suggest_accessories(seedProductId, k)` + non-intrusive UI suggestions.
@@ -61,7 +66,7 @@ Fix any failure or boundary pin immediately → mark `[x]` → atomic commit `fe
 | Upgrade | Status | Commit | tsc | oxlint | cargo | test:all | Notes |
 |---|---|---|---|---|---|---|---|
 | 01 | done | feat(upgrade-01) | ✓ | ✓ | ✓ | ✓ | 200-row keyset window + on-demand lanes; money-critical reads SQLite-direct by index; zero-tax pin :480→:483; no migration (indexes pre-existing) |
-| 02 | pending | — | — | — | — | — | |
+| 02 | done | feat(upgrade-02) | ✓ | ✓ | ✓ | ✓ | `tune()` on 5 per-invoke opens; migration v118 (4 ORDER BY indexes, max version 118); latched payload de-double-encode boot heal (14 tables); stock-heal JSON rewrites removed; event_log 90-day prune fail-closed on missing sync marker; SQLite 3.45.0 bump deferred |
 | 03 | pending | — | — | — | — | — | |
 | 04 | pending | — | — | — | — | — | |
 | 05 | pending | — | — | — | — | — | |

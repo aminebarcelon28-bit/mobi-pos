@@ -351,6 +351,7 @@ fn open_live_db(app: &tauri::AppHandle) -> Result<Connection, TrustError> {
         .map_err(|e| TrustError::op_failed(format!("outbox wal: {e}")))?;
     conn.busy_timeout(std::time::Duration::from_millis(5000))
         .map_err(|e| TrustError::op_failed(format!("outbox busy_timeout: {e}")))?;
+    crate::db::tune(&conn).map_err(|e| TrustError::op_failed(format!("outbox tune: {e}")))?;
     Ok(conn)
 }
 

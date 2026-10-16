@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 117;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 118;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -1845,7 +1845,19 @@ fn base_schema_migrations() -> Vec<Migration> {
             );
             CREATE INDEX IF NOT EXISTS idx_vendor_disputes_supplier ON vendor_disputes(supplier_name);
             CREATE INDEX IF NOT EXISTS idx_vendor_disputes_po ON vendor_disputes(po_id);
-            CREATE INDEX IF NOT EXISTS idx_vendor_disputes_created ON vendor_disputes(created_at DESC);
+        Migration {
+            // v118 — UPGRADE-02 (SQLite engine & payload hygiene):
+            // management-list ORDER BY indexes. The one-shot json_payload
+            // de-double-encode runs as a latched boot heal
+            // (`healDoubleEncodedJsonPayloads` in sqlPluginAdapter.ts) so a
+            // malformed legacy payload can never abort a migration.
+            version: 118,
+            description: "ORDER BY indexes for repair orders, purchase orders, trade-ins and IMEI records",
+            sql: r#"
+            CREATE INDEX IF NOT EXISTS idx_repair_orders_created ON repair_orders(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_purchase_orders_created ON purchase_orders(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_trade_ins_created ON trade_ins(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_imei_records_received ON imei_records(received_at DESC);
             "#,
             kind: MigrationKind::Up,
         },

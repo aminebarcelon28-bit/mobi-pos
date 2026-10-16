@@ -52,6 +52,7 @@ fn open_live_db(app: &tauri::AppHandle) -> Result<Connection, String> {
         .map_err(|e| e.to_string())?;
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(|e| e.to_string())?;
+    crate::db::tune(&conn).map_err(|e| e.to_string())?;
     ensure_po_recon_tables(&conn).map_err(|e| e.to_string())?;
     Ok(conn)
 }

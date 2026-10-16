@@ -245,6 +245,7 @@ fn open_live_db(app: &tauri::AppHandle) -> Result<Connection, TrustError> {
         .map_err(|e| TrustError::op_failed(format!("checkout busy_timeout: {e}")))?;
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(|e| TrustError::op_failed(format!("checkout fk: {e}")))?;
+    crate::db::tune(&conn).map_err(|e| TrustError::op_failed(format!("checkout tune: {e}")))?;
     Ok(conn)
 }
 
