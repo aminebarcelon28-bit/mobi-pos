@@ -403,7 +403,7 @@ console.log('\n[9] FIXED: the outbox payloads carry the bumped version');
     if (i === -1) continue;
     // search around the anchor for the payload object that carries a version key
     const window = lines.slice(Math.max(0, i - (s.before ?? 0)), i + (s.window ?? 60)).join('\n');
-    check(`the ${s.name} outbox payload stamps version`, /version:\s*(batchVersion|restituteVersion\d*|insertBatchVersion|1\s*,)/.test(window), s.name);
+    check(`the ${s.name} outbox payload stamps version`, /version:\s*(batchVersion|restituteVersion\d*|insertBatchVersion|newVersion|1\s*,)/.test(window), s.name);
   }
   // the local ON CONFLICT path must bump version, else the stamped payload
   // would claim a version the local row does not have
