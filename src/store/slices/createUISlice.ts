@@ -744,23 +744,39 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     const bundle = bundles.find((b) => b.id === bundleId);
     if (!bundle) return { success: false, reason: 'BUNDLE_NOT_FOUND' };
 
-    const outOfStock = bundle.childSkus.filter((sku) => {
+    // Tally required quantities per SKU in the bundle
+    const requiredPerSku = new Map<string, number>();
+    for (const sku of bundle.childSkus) {
+      requiredPerSku.set(sku, (requiredPerSku.get(sku) || 0) + 1);
+    }
+
+    const outOfStock: string[] = [];
+    for (const [sku, reqQty] of requiredPerSku.entries()) {
       const product = products.find((p) => p.sku === sku);
-      if (!product) return true;
-      const existingInCart = cart.find((item) => item.product.id === product.id);
-      const currentQty = existingInCart ? existingInCart.quantity : 0;
-      return currentQty + 1 > product.stock;
-    });
+      if (!product) {
+        outOfStock.push(sku);
+        continue;
+      }
+      const existingInCart = cart
+        .filter((item) => item.product.id === product.id && !item.isReturn)
+        .reduce((sum, item) => sum + item.quantity, 0);
+      if (existingInCart + reqQty > product.stock) {
+        outOfStock.push(sku);
+      }
+    }
 
     if (outOfStock.length > 0) {
       return { success: false, reason: `CHILD_OUT_OF_STOCK:${outOfStock.join(',')}` };
     }
 
-    const childProducts = bundle.childSkus
-      .map((sku) => products.find((p) => p.sku === sku))
-      .filter((p): p is Product => p !== undefined);
+    // Resolve all child items (supporting duplicate SKUs)
+    const childItems: Product[] = [];
+    for (const sku of bundle.childSkus) {
+      const product = products.find((p) => p.sku === sku);
+      if (product) childItems.push(product);
+    }
 
-    const regularSum = childProducts.reduce((sum, p) => sum + p.price, 0);
+    const regularSum = childItems.reduce((sum, p) => sum + p.price, 0);
     const bundleDiscountTotal = Math.max(0, regularSum - bundle.bundlePrice);
 
     const updatedCart = [...cart];
@@ -769,21 +785,26 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     // B-038: last line absorbs the rounding residue so the charged total
     // equals bundle.bundlePrice exactly (249 vs 250 class of drift).
     let assignedDiscount = 0;
-    childProducts.forEach((childProd, idx) => {
-      const isLast = idx === childProducts.length - 1;
-      const itemRatio = regularSum > 0 ? childProd.price / regularSum : 1 / childProducts.length;
+    childItems.forEach((childProd, idx) => {
+      const isLast = idx === childItems.length - 1;
+      const itemRatio = regularSum > 0 ? childProd.price / regularSum : 1 / childItems.length;
       const itemDiscount = isLast
         ? Math.max(0, bundleDiscountTotal - assignedDiscount)
         : Math.round(bundleDiscountTotal * itemRatio);
       if (!isLast) assignedDiscount += itemDiscount;
 
-      const existingIndex = updatedCart.findIndex((item) => item.product.id === childProd.id);
+      // Serialized devices CANNOT merge into multi-quantity lines
+      const existingIndex = !childProd.isSerialized
+        ? updatedCart.findIndex(
+            (item) => item.product.id === childProd.id && item.bundleGroupId === bundleGroupId
+          )
+        : -1;
+
       if (existingIndex >= 0) {
         updatedCart[existingIndex] = {
           ...updatedCart[existingIndex],
           quantity: updatedCart[existingIndex].quantity + 1,
           discount: updatedCart[existingIndex].discount + itemDiscount,
-          bundleGroupId,
         };
       } else {
         updatedCart.push({

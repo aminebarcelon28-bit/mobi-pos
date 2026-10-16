@@ -399,7 +399,12 @@ export const KittingBundleModal: React.FC = () => {
                               if (bundleAddResult.success) {
                                 showSuccess(`Pack "${bundle.bundleTitle}" ajouté au panier !`);
                               } else {
-                                showError(bundleAddResult.reason || "Erreur lors de l'ajout.");
+                                const r = bundleAddResult.reason || '';
+                                showError(
+                                  r.startsWith('CHILD_OUT_OF_STOCK:')
+                                    ? `Stock insuffisant pour le composant : ${r.slice('CHILD_OUT_OF_STOCK:'.length)}`
+                                    : r || "Erreur lors de l'ajout."
+                                );
                               }
                             }}
                             disabled={hasOutOfStock}

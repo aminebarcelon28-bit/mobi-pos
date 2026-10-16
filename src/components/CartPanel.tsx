@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X, ShoppingBag, AlertTriangle, ArrowLeftRight, RotateCcw, Layers, RefreshCw, Pencil, Barcode, ShieldAlert } from 'lucide-react';
+import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X, ShoppingBag, AlertTriangle, ArrowLeftRight, RotateCcw, Layers, RefreshCw, Pencil, Barcode, ShieldAlert, Package } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
@@ -1206,6 +1206,12 @@ export const CartPanel: React.FC = () => {
                       {item.isReturn && (
                         <span className="text-[9px] bg-rose-500/20 text-rose-300 font-black px-1 rounded border border-rose-500/40 shrink-0 animate-pulse">
                           RETOUR
+                        </span>
+                      )}
+                      {item.bundleGroupId && (
+                        <span className="text-[9px] bg-emerald-500/20 text-emerald-300 font-bold px-1 rounded border border-emerald-500/40 shrink-0 flex items-center gap-0.5" title="Article inclus dans un Pack Kitting">
+                          <Package className="w-2.5 h-2.5" aria-hidden="true" />
+                          <span>Pack</span>
                         </span>
                       )}
                       {item.volumeTierApplied && (
