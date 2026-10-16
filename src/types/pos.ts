@@ -1130,6 +1130,7 @@ export interface RepairOrder {
   schemaVersion?: number;
   customerName: string;
   customerPhone: string;
+  customerId?: string;
   deviceModel: string;
   imei: string;
   /** How `imei` was entered (IMEI / serial / none). v2 only. */

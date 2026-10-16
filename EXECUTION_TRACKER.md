@@ -86,7 +86,7 @@
   - Extend `RepairWorkOrderModal.tsx:1847-1853` and `createRepairSlice.ts` so technicians can select spare-part SKUs from `products`, deducting FIFO `stock_batches` and logging `inventory_ledger` entries on repair completion.
 - [x] **Task 4.4 — Stock-IMEI Picker at Checkout & Serialized PO Receiving:**
   - Add an unsold `imei_records` dropdown/autocomplete in `CartPanel.tsx:1218-1240` and `PaymentModal.tsx:1118-1140`, and add IMEI capture + `supplierInvoiceNo` / `discrepancyReasons` persistence in `CommandTicketDashboardModal.tsx:356-361, 1096-1158`.
-- [ ] **Task 4.5 — Unified Customer 360 View & Credit Limit (`debtLimit`) Controls:**
+- [x] **Task 4.5 — Unified Customer 360 View & Credit Limit (`debtLimit`) Controls:**
   - Link `RepairOrder` to `customerId`, add tabs in `CustomersModal.tsx:754-923` for Repairs, Trade-Ins, Vouchers, Debt Ledger, and Loyalty Ledger, expose `debtLimit` editing (`lines 1184-1219`), and wire UI buttons for `issueStoreCredit`, `redeemLoyaltyPoints`, and `adjustCustomerPoints`.
 - [ ] **Task 4.6 — Interactive Sync Conflict Resolution Modal & Bulk Label Queue:**
   - Build `src/components/modals/ConflictResolutionModal.tsx` wired to `sync_conflicts`, and upgrade `LabelPrinterModal.tsx` to support multi-SKU batch label printing queues.

@@ -4,12 +4,13 @@ import {
   X, User, Star, Phone, Mail, Check, Plus, Edit2, Trash2, Search,
   CheckCircle2, TrendingUp, ShoppingBag, CreditCard, Award,
   UserPlus, History, Crown, FileText, MessageSquare, DollarSign,
-  ArrowDownLeft, ArrowUpRight, Copy, ExternalLink, MoreHorizontal
+  ArrowDownLeft, ArrowUpRight, Copy, ExternalLink, MoreHorizontal,
+  Wrench, Smartphone, Ticket, AlertCircle, RefreshCw
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
-import type { Customer, PricingTier, SaleTransaction, PaymentMethodType } from '../../types/pos';
-import { calculateNextTierProgress, calculateCustomerTier, normalizeLoyaltyConfig } from '../../utils/loyaltyEngine';
+import type { Customer, PricingTier, SaleTransaction, PaymentMethodType, RepairOrder, TradeInItem, CreditVoucher, CustomerDebtEntry } from '../../types/pos';
+import { calculateNextTierProgress, calculateCustomerTier, normalizeLoyaltyConfig, STORE_CREDIT_PIN_THRESHOLD_DZD, convertPointsToCredit } from '../../utils/loyaltyEngine';
 import { normalizeAlgerianPhone, openWhatsApp } from '../../utils/phoneUtils';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { MoneyInput } from '../ui/MoneyInput';
@@ -24,16 +25,20 @@ type SortField = 'name' | 'loyaltyPoints' | 'storeCredit' | 'totalSpent';
 type SortDir = 'asc' | 'desc';
 type ViewMode = 'list' | 'form' | 'profile';
 type TierFilter = 'Tous' | PricingTier;
+type ProfileSubTab = 'purchases' | 'repairs' | 'tradeins' | 'vouchers' | 'debt' | 'loyalty';
 
 export const CustomersModal: React.FC = () => {
   const { showToast } = useToast();
   const {
     activeModal, closeModal, openModal, customers, currentCustomer, setCurrentCustomer,
     addCustomer, updateCustomer, deleteCustomer, transactions, receiptSettings,
-    customerDebts, recordCustomerDebtPayment
+    customerDebts, recordCustomerDebtPayment,
+    repairOrders, tradeIns, creditVouchers,
+    issueStoreCredit, redeemLoyaltyPoints, adjustCustomerPoints
   } = usePosStore();
 
   const [mainTab, setMainTab] = useState<'directory' | 'debts'>('directory');
+  const [profileTab, setProfileTab] = useState<ProfileSubTab>('purchases');
   const [searchQuery, setSearchQuery] = useState('');
   // Debounced scan input: the text field stays instant, list filtering follows 200ms later.
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -92,6 +97,19 @@ export const CustomersModal: React.FC = () => {
   const [email, setEmail] = useState('');
   const [registeredDevice, setRegisteredDevice] = useState('');
   const [pricingTier, setPricingTier] = useState<PricingTier>('Retail');
+  const [debtLimit, setDebtLimit] = useState<string>('');
+
+  // Customer 360 Action Dialogs State
+  const [creditModalOpen, setCreditModalOpen] = useState(false);
+  const [creditAmount, setCreditAmount] = useState<number>(0);
+  const [creditManagerPin, setCreditManagerPin] = useState<string>('');
+
+  const [redeemModalOpen, setRedeemModalOpen] = useState(false);
+  const [redeemPoints, setRedeemPoints] = useState<number>(0);
+
+  const [adjustModalOpen, setAdjustModalOpen] = useState(false);
+  const [adjustPoints, setAdjustPoints] = useState<number>(0);
+  const [adjustReason, setAdjustReason] = useState<string>('');
 
   // Input ref for auto-focusing search on F3
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -264,6 +282,58 @@ export const CustomersModal: React.FC = () => {
     return customerMetricsMap.get(customerId) || defaultMetrics;
   }, [customerMetricsMap, defaultMetrics]);
 
+  const activeProfile = useMemo(() => {
+    if (!profileCustomer) return null;
+    return (customers || []).find(c => c.id === profileCustomer.id) || profileCustomer;
+  }, [customers, profileCustomer]);
+
+  const customerPurchases = useMemo(() => {
+    if (!activeProfile) return [];
+    return (transactions || [])
+      .filter(
+        t => t.customer?.id === activeProfile.id || (activeProfile.phone && t.customer?.phone === activeProfile.phone)
+      )
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  }, [transactions, activeProfile]);
+
+  const customerRepairs = useMemo(() => {
+    if (!activeProfile) return [];
+    return (repairOrders || [])
+      .filter(
+        r => r.customerId === activeProfile.id ||
+             (activeProfile.phone && r.customerPhone === activeProfile.phone) ||
+             (activeProfile.name && r.customerName && r.customerName.toLowerCase() === activeProfile.name.toLowerCase())
+      )
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  }, [repairOrders, activeProfile]);
+
+  const customerTradeIns = useMemo(() => {
+    if (!activeProfile) return [];
+    return (tradeIns || [])
+      .filter(
+        t => (activeProfile.phone && t.customerPhone === activeProfile.phone) ||
+             (activeProfile.name && t.customerName && t.customerName.toLowerCase() === activeProfile.name.toLowerCase())
+      )
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  }, [tradeIns, activeProfile]);
+
+  const customerVouchers = useMemo(() => {
+    if (!activeProfile) return [];
+    return (creditVouchers || [])
+      .filter(
+        v => (activeProfile.phone && v.customerPhone === activeProfile.phone) ||
+             (activeProfile.name && v.customerName && v.customerName.toLowerCase() === activeProfile.name.toLowerCase())
+      )
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  }, [creditVouchers, activeProfile]);
+
+  const customerDebtsFiltered = useMemo(() => {
+    if (!activeProfile) return [];
+    return (customerDebts || [])
+      .filter(d => d.customerId === activeProfile.id)
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  }, [customerDebts, activeProfile]);
+
   // Filtered & Sorted Customers (hook must be above early return)
   const filteredCustomers = useMemo(() => {
     const lowerQ = foldForSearch(debouncedSearch.trim());
@@ -379,6 +449,7 @@ export const CustomersModal: React.FC = () => {
     setEmail('');
     setRegisteredDevice('');
     setPricingTier('Retail');
+    setDebtLimit('');
     dismissMenus();
     // Return to the origin view: editing from a profile goes back to that profile.
     if (formOrigin.view === 'profile' && formOrigin.profileId) {
@@ -403,20 +474,22 @@ export const CustomersModal: React.FC = () => {
     setEmail(c.email);
     setRegisteredDevice(c.registeredDevice);
     setPricingTier(c.pricingTier);
+    setDebtLimit(c.debtLimit !== undefined && c.debtLimit !== null ? String(c.debtLimit) : '');
     setViewMode('form');
   };
 
   const handleSaveCustomer = (e: React.FormEvent) => {
     e.preventDefault();
+    const parsedDebtLimit = debtLimit.trim() === '' ? undefined : Math.max(0, Number(debtLimit));
     if (editingId) {
       const editNorm = normalizeAlgerianPhone(phone);
       const cleanEditPhone = editNorm.isValid ? editNorm.local : (editNorm.digitsOnly || phone.trim());
-      updateCustomer(editingId, { name, phone: cleanEditPhone, email, registeredDevice, pricingTier });
+      updateCustomer(editingId, { name, phone: cleanEditPhone, email, registeredDevice, pricingTier, debtLimit: parsedDebtLimit });
       showSuccess('Profil client mis à jour avec succès !');
       // Sync the open profile snapshot so the return navigation shows fresh data.
       const target = (customers || []).find(c => c.id === editingId);
       const updated: Customer | undefined = target
-        ? { ...target, name, phone: cleanEditPhone, email, registeredDevice, pricingTier }
+        ? { ...target, name, phone: cleanEditPhone, email, registeredDevice, pricingTier, debtLimit: parsedDebtLimit }
         : undefined;
       if (updated) setProfileCustomer(prev => (prev?.id === updated.id ? updated : prev));
       resetForm(updated);
@@ -426,7 +499,7 @@ export const CustomersModal: React.FC = () => {
       const norm = normalizeAlgerianPhone(phone);
       const cleanPhone = norm.isValid ? norm.local : (norm.digitsOnly || phone.trim());
       addCustomer({
-        name, phone: cleanPhone, email, registeredDevice, pricingTier, loyaltyPoints: 0, storeCredit: 0
+        name, phone: cleanPhone, email, registeredDevice, pricingTier, debtLimit: parsedDebtLimit, loyaltyPoints: 0, storeCredit: 0
       });
       showSuccess('Nouveau client ajouté au CRM !');
       resetForm();
@@ -705,7 +778,7 @@ export const CustomersModal: React.FC = () => {
                     />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <label className="text-[10px] text-pos-muted uppercase font-bold block mb-1.5">Email</label>
                     <input type="email" value={email} onChange={e => setEmail(e.target.value)}
@@ -717,6 +790,12 @@ export const CustomersModal: React.FC = () => {
                     <input type="text" value={registeredDevice} onChange={e => setRegisteredDevice(e.target.value)}
                       placeholder="Ex: iPhone 15 Pro Max"
                       className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2.5 text-xs text-pos-text focus:border-emerald-400 focus:outline-none transition" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-pos-muted uppercase font-bold block mb-1.5">Plafond Dette (DA)</label>
+                    <input type="number" min="0" step="500" value={debtLimit} onChange={e => setDebtLimit(e.target.value)}
+                      placeholder="0 ou vide = illimité"
+                      className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2.5 text-xs text-pos-text font-mono focus:border-emerald-400 focus:outline-none transition" />
                   </div>
                 </div>
                 <div>
@@ -752,7 +831,8 @@ export const CustomersModal: React.FC = () => {
 
           {/* ═══ Customer Profile Detail View ═══ */}
           {mainTab === 'directory' && viewMode === 'profile' && profileCustomer && (() => {
-            const metrics = getCustomerMetrics(profileCustomer.id);
+            const customer = activeProfile || profileCustomer;
+            const metrics = getCustomerMetrics(customer.id);
             return (
               <div className="max-w-3xl mx-auto w-full space-y-4">
                 {/* Back Button */}
@@ -764,51 +844,56 @@ export const CustomersModal: React.FC = () => {
                 <div className="bg-pos-card border border-pos-border rounded-xl shadow-sm p-5 flex items-center justify-between gap-3 flex-wrap">
                   <div className="flex items-center gap-4">
                     <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-emerald-500/30 to-sky-500/30 border border-pos-border flex items-center justify-center overflow-hidden shadow-sm">
-                      {profileCustomer.avatarUrl
-                        ? <img src={profileCustomer.avatarUrl} alt={profileCustomer.name} className="w-full h-full object-cover" />
+                      {customer.avatarUrl
+                        ? <img src={customer.avatarUrl} alt={customer.name} className="w-full h-full object-cover" />
                         : <User className="w-8 h-8 text-sky-400" />}
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <h3 className="text-lg font-black text-pos-text">{profileCustomer.name}</h3>
-                        {tierBadge(profileCustomer.pricingTier)}
+                        <h3 className="text-lg font-black text-pos-text">{customer.name}</h3>
+                        {tierBadge(customer.pricingTier)}
                       </div>
                       <div className="flex items-center gap-3 text-xs text-pos-muted mt-1">
-                        <span className="flex items-center gap-1"><Phone className="w-3 h-3" /> {profileCustomer.phone}</span>
-                        {profileCustomer.email && <span className="flex items-center gap-1"><Mail className="w-3 h-3" /> {profileCustomer.email}</span>}
+                        <span className="flex items-center gap-1"><Phone className="w-3 h-3" /> {customer.phone}</span>
+                        {customer.email && <span className="flex items-center gap-1"><Mail className="w-3 h-3" /> {customer.email}</span>}
                       </div>
-                      {profileCustomer.registeredDevice && (
-                        <p className="text-[10px] text-pos-muted mt-1">Appareil : {profileCustomer.registeredDevice}</p>
-                      )}
+                      <div className="flex items-center gap-3 text-[10px] text-pos-muted mt-1">
+                        {customer.registeredDevice && (
+                          <span>Appareil : {customer.registeredDevice}</span>
+                        )}
+                        {customer.debtLimit ? (
+                          <span className="font-bold text-amber-400">Plafond Crédit : {formatDZD(customer.debtLimit)}</span>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <button
                       onClick={() => {
-                        if (currentCustomer?.id === profileCustomer.id) {
+                        if (currentCustomer?.id === customer.id) {
                           setCurrentCustomer(null);
                           showSuccess('Client détaché de la vente.');
                         } else {
-                          setCurrentCustomer(profileCustomer);
-                          showSuccess(`${profileCustomer.name} sélectionné pour la vente.`);
+                          setCurrentCustomer(customer);
+                          showSuccess(`${customer.name} sélectionné pour la vente.`);
                           closeModal();
                         }
                       }}
-                      aria-label={currentCustomer?.id === profileCustomer.id ? `Sélectionné — Désélectionner ${profileCustomer.name}` : `Sélectionner ${profileCustomer.name} pour la vente`}
+                      aria-label={currentCustomer?.id === customer.id ? `Sélectionné — Désélectionner ${customer.name}` : `Sélectionner ${customer.name} pour la vente`}
                       className={`px-4 py-2 min-h-[44px] rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
-                        currentCustomer?.id === profileCustomer.id
+                        currentCustomer?.id === customer.id
                           ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
                           : 'bg-sky-500 hover:bg-sky-400 text-white shadow-md shadow-sky-500/20'
                       }`}
                     >
-                      {currentCustomer?.id === profileCustomer.id ? <><Check className="w-3.5 h-3.5" /> Sélectionné</> : <><Check className="w-3.5 h-3.5" /> Sélectionner</>}
+                      {currentCustomer?.id === customer.id ? <><Check className="w-3.5 h-3.5" /> Sélectionné</> : <><Check className="w-3.5 h-3.5" /> Sélectionner</>}
                     </button>
                     <button
                       ref={profileMenuAnchorRef}
                       onClick={() => setProfileMenuOpen(v => !v)}
                       aria-haspopup="menu"
                       aria-expanded={profileMenuOpen}
-                      aria-label={`Plus d'actions pour ${profileCustomer.name}`}
+                      aria-label={`Plus d'actions pour ${customer.name}`}
                       className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg bg-pos-hover border border-pos-border text-pos-text hover:border-pos-text/30 transition cursor-pointer"
                     >
                       <MoreHorizontal className="w-5 h-5" />
@@ -831,31 +916,36 @@ export const CustomersModal: React.FC = () => {
                   <div className="bg-pos-card border border-pos-border shadow-sm p-3 rounded-xl text-center">
                     <Star className="w-5 h-5 text-amber-400 fill-amber-400 mx-auto mb-1" />
                     <span className="text-[9px] text-pos-muted uppercase font-bold block">Points</span>
-                    <span className="text-sm font-black text-amber-400">{(profileCustomer.loyaltyPoints || 0).toLocaleString('fr-DZ')}</span>
+                    <span className="text-sm font-black text-amber-400">{(customer.loyaltyPoints || 0).toLocaleString('fr-DZ')}</span>
                   </div>
                   <div className={`bg-pos-card border shadow-sm p-3 rounded-xl text-center ${
-                    (profileCustomer.currentDebt || 0) > 0 ? 'border-amber-500/50 bg-amber-500/5' : 'border-pos-border'
+                    (customer.currentDebt || 0) > 0 ? 'border-amber-500/50 bg-amber-500/5' : 'border-pos-border'
                   }`}>
                     <FileText className={`w-5 h-5 mx-auto mb-1 ${
-                      (profileCustomer.currentDebt || 0) > 0 ? 'text-amber-400' : 'text-sky-400'
+                      (customer.currentDebt || 0) > 0 ? 'text-amber-400' : 'text-sky-400'
                     }`} />
                     <span className="text-[9px] text-pos-muted uppercase font-bold block">
-                      {(profileCustomer.currentDebt || 0) > 0 ? 'Dette En Cours' : 'Avoir'}
+                      {(customer.currentDebt || 0) > 0 ? 'Dette En Cours' : 'Avoir'}
                     </span>
                     <span className={`text-sm font-black ${
-                      (profileCustomer.currentDebt || 0) > 0 ? 'text-amber-400 font-mono' : 'text-sky-400'
+                      (customer.currentDebt || 0) > 0 ? 'text-amber-400 font-mono' : 'text-sky-400'
                     }`}>
-                      {(profileCustomer.currentDebt || 0) > 0
-                        ? formatDZD(profileCustomer.currentDebt || 0)
-                        : formatDZD(profileCustomer.storeCredit || 0)}
+                      {(customer.currentDebt || 0) > 0
+                        ? formatDZD(customer.currentDebt || 0)
+                        : formatDZD(customer.storeCredit || 0)}
                     </span>
+                    {customer.debtLimit ? (
+                      <span className="text-[9px] text-pos-muted block mt-0.5 truncate font-mono">
+                        Max : {formatDZD(customer.debtLimit)}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
 
                 {/* Loyalty Tier Progress */}
                 <div className="bg-pos-card border border-pos-border shadow-sm rounded-xl p-4">
                   {(() => {
-                    const currentSpent = profileCustomer.totalSpent || 0;
+                    const currentSpent = customer.totalSpent || 0;
                     const loyaltyCfg = normalizeLoyaltyConfig(receiptSettings?.loyaltyConfig);
                     const currentTier = calculateCustomerTier(currentSpent, loyaltyCfg);
                     const progress = calculateNextTierProgress(currentSpent, loyaltyCfg);
@@ -893,28 +983,374 @@ export const CustomersModal: React.FC = () => {
                   })()}
                 </div>
 
-                {/* Recent Transactions */}
-                <div className="bg-pos-card border border-pos-border shadow-sm rounded-xl p-4">
-                  <h4 className="text-xs font-bold text-pos-text mb-3 flex items-center gap-1.5">
-                    <History className="w-4 h-4 text-sky-400" /> Historique d'Achats Récents
-                    <span className="ml-auto text-[10px] text-pos-muted font-normal">{(metrics?.transactions || []).length} transactions</span>
-                  </h4>
-                  {(metrics?.transactions || []).length === 0 ? (
-                    <p className="text-xs text-pos-muted text-center py-4">Aucune transaction enregistrée pour ce client.</p>
-                  ) : (
-                    <div className="space-y-1.5 max-h-40 overflow-y-auto overscroll-contain">
-                      {(metrics?.transactions || []).slice(0, 10).map((t: SaleTransaction) => (
-                        <div key={t.id} className="flex items-center justify-between bg-pos-bg p-2.5 rounded-lg border border-pos-border text-xs hover:border-pos-text/20 transition">
-                          <div className="flex items-center gap-2.5">
-                            <span className="font-mono text-[10px] text-pos-muted">{t.receiptNumber}</span>
-                            <span className="text-pos-muted">{formatDateTime(t.createdAt)}</span>
-                          </div>
-                          <div className="flex items-center gap-3">
-                            <span className="text-[10px] text-pos-muted">{(t.items || []).length} art.</span>
-                            <span className="font-bold text-emerald-400">{formatDZD(t.total)}</span>
-                          </div>
+                {/* ═══ Customer 360 Sub-Tabs ═══ */}
+                <div className="bg-pos-card border border-pos-border shadow-sm rounded-xl p-4 space-y-4">
+                  {/* Tab Navigation */}
+                  <div className="flex items-center gap-1.5 border-b border-pos-border pb-3 overflow-x-auto no-scrollbar" role="tablist">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={profileTab === 'purchases'}
+                      onClick={() => setProfileTab('purchases')}
+                      className={`px-3 py-1.5 min-h-[44px] rounded-lg text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap cursor-pointer ${
+                        profileTab === 'purchases'
+                          ? 'bg-sky-500 text-white shadow-sm shadow-sky-500/20'
+                          : 'bg-pos-bg text-pos-muted hover:text-pos-text border border-pos-border'
+                      }`}
+                    >
+                      <ShoppingBag className="w-3.5 h-3.5" /> Achats ({customerPurchases.length})
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={profileTab === 'repairs'}
+                      onClick={() => setProfileTab('repairs')}
+                      className={`px-3 py-1.5 min-h-[44px] rounded-lg text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap cursor-pointer ${
+                        profileTab === 'repairs'
+                          ? 'bg-amber-500 text-slate-950 shadow-sm shadow-amber-500/20'
+                          : 'bg-pos-bg text-pos-muted hover:text-pos-text border border-pos-border'
+                      }`}
+                    >
+                      <Wrench className="w-3.5 h-3.5" /> SAV ({customerRepairs.length})
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={profileTab === 'tradeins'}
+                      onClick={() => setProfileTab('tradeins')}
+                      className={`px-3 py-1.5 min-h-[44px] rounded-lg text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap cursor-pointer ${
+                        profileTab === 'tradeins'
+                          ? 'bg-emerald-500 text-slate-950 shadow-sm shadow-emerald-500/20'
+                          : 'bg-pos-bg text-pos-muted hover:text-pos-text border border-pos-border'
+                      }`}
+                    >
+                      <Smartphone className="w-3.5 h-3.5" /> Reprises ({customerTradeIns.length})
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={profileTab === 'vouchers'}
+                      onClick={() => setProfileTab('vouchers')}
+                      className={`px-3 py-1.5 min-h-[44px] rounded-lg text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap cursor-pointer ${
+                        profileTab === 'vouchers'
+                          ? 'bg-purple-500 text-white shadow-sm shadow-purple-500/20'
+                          : 'bg-pos-bg text-pos-muted hover:text-pos-text border border-pos-border'
+                      }`}
+                    >
+                      <Ticket className="w-3.5 h-3.5" /> Bons d'Avoir ({customerVouchers.length})
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={profileTab === 'debt'}
+                      onClick={() => setProfileTab('debt')}
+                      className={`px-3 py-1.5 min-h-[44px] rounded-lg text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap cursor-pointer ${
+                        profileTab === 'debt'
+                          ? 'bg-rose-500 text-white shadow-sm shadow-rose-500/20'
+                          : 'bg-pos-bg text-pos-muted hover:text-pos-text border border-pos-border'
+                      }`}
+                    >
+                      <FileText className="w-3.5 h-3.5" /> Grand Livre Dette ({customerDebtsFiltered.length})
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={profileTab === 'loyalty'}
+                      onClick={() => setProfileTab('loyalty')}
+                      className={`px-3 py-1.5 min-h-[44px] rounded-lg text-xs font-bold flex items-center gap-1.5 transition whitespace-nowrap cursor-pointer ${
+                        profileTab === 'loyalty'
+                          ? 'bg-amber-400 text-slate-950 shadow-sm shadow-amber-400/20'
+                          : 'bg-pos-bg text-pos-muted hover:text-pos-text border border-pos-border'
+                      }`}
+                    >
+                      <Star className="w-3.5 h-3.5" /> Fidélité & Actions ({(customer.ledger || []).length})
+                    </button>
+                  </div>
+
+                  {/* 1. Achats */}
+                  {profileTab === 'purchases' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-pos-text">Ventes en Caisse</span>
+                        <span className="text-pos-muted">{customerPurchases.length} transactions</span>
+                      </div>
+                      {customerPurchases.length === 0 ? (
+                        <p className="text-xs text-pos-muted text-center py-6">Aucun achat enregistré pour ce client.</p>
+                      ) : (
+                        <div className="space-y-2 max-h-60 overflow-y-auto overscroll-contain">
+                          {customerPurchases.map((t: SaleTransaction) => (
+                            <div key={t.id} className="flex items-center justify-between bg-pos-bg p-2.5 rounded-lg border border-pos-border text-xs hover:border-pos-text/20 transition">
+                              <div className="flex flex-col gap-0.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono text-[11px] font-bold text-sky-400">{t.receiptNumber}</span>
+                                  <span className="text-[10px] text-pos-muted">{formatDateTime(t.createdAt)}</span>
+                                </div>
+                                <span className="text-[10px] text-pos-muted">
+                                  {(t.items || []).length} article(s) • Règlement : {t.paymentMethod || 'Espèces'}
+                                </span>
+                              </div>
+                              <span className="font-mono font-bold text-sm text-emerald-400">{formatDZD(t.total)}</span>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
+                    </div>
+                  )}
+
+                  {/* 2. Réparations SAV */}
+                  {profileTab === 'repairs' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-pos-text">Dossiers Réparation SAV</span>
+                        <span className="text-pos-muted">{customerRepairs.length} dossiers</span>
+                      </div>
+                      {customerRepairs.length === 0 ? (
+                        <p className="text-xs text-pos-muted text-center py-6">Aucun dossier SAV enregistré pour ce client.</p>
+                      ) : (
+                        <div className="space-y-2 max-h-60 overflow-y-auto overscroll-contain">
+                          {customerRepairs.map((ro: RepairOrder) => (
+                            <div key={ro.id} className="flex items-center justify-between bg-pos-bg p-2.5 rounded-lg border border-pos-border text-xs hover:border-pos-text/20 transition">
+                              <div className="flex flex-col gap-0.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono text-[11px] font-bold text-amber-400">{ro.ticketNumber}</span>
+                                  <span className="font-semibold text-pos-text">{ro.deviceModel}</span>
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-pos-card border border-pos-border text-pos-muted font-bold">
+                                    {ro.status}
+                                  </span>
+                                </div>
+                                <span className="text-[10px] text-pos-muted truncate max-w-sm">
+                                  {ro.problemDescription || 'Aucune description'}
+                                </span>
+                                {ro.depositAmount ? (
+                                  <span className="text-[9.5px] text-emerald-400">
+                                    Acompte versé : {formatDZD(ro.depositAmount)}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="text-right">
+                                <span className="font-mono font-bold text-sm text-amber-400 block">{formatDZD(ro.totalCost)}</span>
+                                <span className="text-[9.5px] text-pos-muted">Main d'œuvre: {formatDZD(ro.laborCost)}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 3. Reprises Appareils */}
+                  {profileTab === 'tradeins' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-pos-text">Rachats & Reprises d'Appareils</span>
+                        <span className="text-pos-muted">{customerTradeIns.length} reprises</span>
+                      </div>
+                      {customerTradeIns.length === 0 ? (
+                        <p className="text-xs text-pos-muted text-center py-6">Aucune reprise d'appareil enregistrée pour ce client.</p>
+                      ) : (
+                        <div className="space-y-2 max-h-60 overflow-y-auto overscroll-contain">
+                          {customerTradeIns.map((ti: TradeInItem) => (
+                            <div key={ti.id} className="flex items-center justify-between bg-pos-bg p-2.5 rounded-lg border border-pos-border text-xs hover:border-pos-text/20 transition">
+                              <div className="flex flex-col gap-0.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-pos-text">{ti.brand} {ti.deviceModel}</span>
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold">
+                                    Grade {ti.conditionGrade}
+                                  </span>
+                                </div>
+                                <span className="font-mono text-[10px] text-pos-muted">
+                                  IMEI : {ti.imei} • {formatDateTime(ti.createdAt)}
+                                </span>
+                              </div>
+                              <div className="text-right">
+                                <span className="font-mono font-bold text-sm text-emerald-400 block">{formatDZD(ti.buybackValue)}</span>
+                                <span className="text-[9.5px] text-pos-muted">
+                                  {ti.creditToWallet ? 'Crédité Portefeuille' : 'Espèces Comptant'}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 4. Bons d'Avoir */}
+                  {profileTab === 'vouchers' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-pos-text">Bons d'Achat & Avoirs Disponibles</span>
+                        <span className="text-pos-muted">{customerVouchers.length} bons</span>
+                      </div>
+                      {customerVouchers.length === 0 ? (
+                        <p className="text-xs text-pos-muted text-center py-6">Aucun bon d'achat ou avoir pour ce client.</p>
+                      ) : (
+                        <div className="space-y-2 max-h-60 overflow-y-auto overscroll-contain">
+                          {customerVouchers.map((v: CreditVoucher) => (
+                            <div key={v.id} className="flex items-center justify-between bg-pos-bg p-2.5 rounded-lg border border-pos-border text-xs hover:border-pos-text/20 transition">
+                              <div className="flex flex-col gap-0.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-mono font-bold text-xs text-purple-400">{v.code}</span>
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                                    v.status === 'ACTIVE'
+                                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                      : 'bg-pos-card text-pos-muted border border-pos-border'
+                                  }`}>
+                                    {v.status}
+                                  </span>
+                                </div>
+                                <span className="text-[10px] text-pos-muted">
+                                  Émis le : {formatDateTime(v.createdAt)} {v.expiresAt ? `• Expire : ${formatDateTime(v.expiresAt)}` : ''}
+                                </span>
+                              </div>
+                              <div className="text-right">
+                                <span className="font-mono font-bold text-sm text-purple-400 block">{formatDZD(v.remainingAmount)}</span>
+                                <span className="text-[9.5px] text-pos-muted">Initial : {formatDZD(v.initialAmount)}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 5. Grand Livre Dette */}
+                  {profileTab === 'debt' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-xs">
+                        <div>
+                          <span className="font-bold text-pos-text">Grand Livre des Créances</span>
+                          <span className="text-pos-muted text-[10px] ml-2">
+                            Solde actuel : <strong className="text-amber-400 font-mono">{formatDZD(customer.currentDebt || 0)}</strong>
+                            {customer.debtLimit ? ` (Plafond : ${formatDZD(customer.debtLimit)})` : ''}
+                          </span>
+                        </div>
+                        {(customer.currentDebt || 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDebtPaymentCustomer(customer);
+                              setDebtPaymentAmount(customer.currentDebt || 0);
+                            }}
+                            className="px-3 py-1.5 min-h-[36px] bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-lg transition shadow-sm cursor-pointer flex items-center gap-1"
+                          >
+                            <DollarSign className="w-3.5 h-3.5" /> Encaisser Versement
+                          </button>
+                        )}
+                      </div>
+                      {customerDebtsFiltered.length === 0 ? (
+                        <p className="text-xs text-pos-muted text-center py-6">Aucune écriture de dette enregistrée pour ce client.</p>
+                      ) : (
+                        <div className="space-y-2 max-h-60 overflow-y-auto overscroll-contain">
+                          {customerDebtsFiltered.map((d: CustomerDebtEntry) => (
+                            <div key={d.id} className="flex items-center justify-between bg-pos-bg p-2.5 rounded-lg border border-pos-border text-xs hover:border-pos-text/20 transition">
+                              <div className="flex flex-col gap-0.5">
+                                <div className="flex items-center gap-2">
+                                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                                    d.type === 'DEBT_ACQUIRED'
+                                      ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                                      : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                                  }`}>
+                                    {d.type === 'DEBT_ACQUIRED' ? 'Créance Prise' : 'Règlement Encaissé'}
+                                  </span>
+                                  <span className="text-[10px] text-pos-muted">{formatDateTime(d.createdAt)}</span>
+                                  {d.receiptNumber && <span className="font-mono text-[10px] text-pos-muted">#{d.receiptNumber}</span>}
+                                </div>
+                                {d.notes && <span className="text-[10px] text-pos-muted">{d.notes}</span>}
+                              </div>
+                              <div className="text-right">
+                                <span className={`font-mono font-bold text-sm ${d.type === 'DEBT_ACQUIRED' ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                  {d.type === 'DEBT_ACQUIRED' ? '+' : '-'}{formatDZD(d.amount)}
+                                </span>
+                                <span className="text-[9.5px] text-pos-muted block">
+                                  Solde : {formatDZD(d.balanceAfter)}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* 6. Points & Fidélité */}
+                  {profileTab === 'loyalty' && (
+                    <div className="space-y-4">
+                      {/* Action Bar */}
+                      <div className="flex items-center justify-between flex-wrap gap-2 p-2.5 bg-pos-bg rounded-lg border border-pos-border">
+                        <div className="text-xs">
+                          <span className="text-pos-muted">Solde Points : </span>
+                          <strong className="text-amber-400 font-bold text-sm">{(customer.loyaltyPoints || 0).toLocaleString('fr-DZ')} pts</strong>
+                          <span className="text-pos-muted ml-2">Avoir : </span>
+                          <strong className="text-sky-400 font-bold text-sm">{formatDZD(customer.storeCredit || 0)}</strong>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCreditAmount(0);
+                              setCreditManagerPin('');
+                              setCreditModalOpen(true);
+                            }}
+                            className="px-2.5 py-1.5 min-h-[36px] bg-sky-500 hover:bg-sky-400 text-white font-bold text-[11px] rounded-lg transition flex items-center gap-1 cursor-pointer"
+                          >
+                            <CreditCard className="w-3 h-3" /> Émettre Avoir
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRedeemPoints(customer.loyaltyPoints || 0);
+                              setRedeemModalOpen(true);
+                            }}
+                            className="px-2.5 py-1.5 min-h-[36px] bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] rounded-lg transition flex items-center gap-1 cursor-pointer"
+                          >
+                            <RefreshCw className="w-3 h-3" /> Convertir Points
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAdjustPoints(0);
+                              setAdjustReason('');
+                              setAdjustModalOpen(true);
+                            }}
+                            className="px-2.5 py-1.5 min-h-[36px] bg-pos-hover hover:bg-pos-border text-pos-text font-bold text-[11px] rounded-lg border border-pos-border transition flex items-center gap-1 cursor-pointer"
+                          >
+                            <Edit2 className="w-3 h-3" /> Ajuster Points
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Loyalty Ledger Entries */}
+                      <div className="space-y-2">
+                        <span className="text-xs font-bold text-pos-text block">Historique du Grand Livre Fidélité</span>
+                        {(!customer.ledger || customer.ledger.length === 0) ? (
+                          <p className="text-xs text-pos-muted text-center py-6">Aucune opération fidélité pour ce client.</p>
+                        ) : (
+                          <div className="space-y-2 max-h-60 overflow-y-auto overscroll-contain">
+                            {customer.ledger.map((entry) => (
+                              <div key={entry.id} className="flex items-center justify-between bg-pos-bg p-2.5 rounded-lg border border-pos-border text-xs hover:border-pos-text/20 transition">
+                                <div className="flex flex-col gap-0.5">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 uppercase">
+                                      {entry.type}
+                                    </span>
+                                    <span className="text-[10px] text-pos-muted">{formatDateTime(entry.timestamp)}</span>
+                                  </div>
+                                  <span className="text-[10px] text-pos-muted">{entry.description}</span>
+                                </div>
+                                <div className="text-right">
+                                  <span className={`font-mono font-bold text-xs ${entry.points >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    {entry.points >= 0 ? '+' : ''}{entry.points} pts
+                                  </span>
+                                  <span className="text-[9.5px] text-pos-muted block">
+                                    Solde : {entry.balanceAfter} pts
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1579,48 +2015,428 @@ export const CustomersModal: React.FC = () => {
           );
         })()}
 
-        {/* ═══ Portaled profile ••• menu (Modifier, Carte PVC) ═══ */}
-        {profileMenuOpen && profileCustomer && createPortal(
-          <>
-            <div
-              className="fixed inset-0"
-              style={{ zIndex: 9998 }}
-              onClick={() => setProfileMenuOpen(false)}
-              aria-hidden="true"
-            />
-            <div
-              ref={profileMenuRef}
-              role="menu"
-              aria-label={`Plus d'actions pour ${profileCustomer.name}`}
-              style={{ position: 'fixed', top: profileMenuPos.top, left: profileMenuPos.left, zIndex: 9999 }}
-              className="w-[calc(100vw-16px)] sm:w-64 bg-pos-panel border border-pos-border rounded-lg shadow-md overflow-hidden animate-in fade-in zoom-in-95"
-              data-open-up={profileMenuPos.openUp ? 'true' : 'false'}
-            >
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => { setProfileMenuOpen(false); handleEditClick(profileCustomer); }}
-                className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left"
-                aria-label={`Modifier ${profileCustomer.name}`}
+        {/* ═══ Portaled profile ••• menu ═══ */}
+        {profileMenuOpen && profileCustomer && (() => {
+          const curCustomer = activeProfile || profileCustomer;
+          return createPortal(
+            <>
+              <div
+                className="fixed inset-0"
+                style={{ zIndex: 9998 }}
+                onClick={() => setProfileMenuOpen(false)}
+                aria-hidden="true"
+              />
+              <div
+                ref={profileMenuRef}
+                role="menu"
+                aria-label={`Plus d'actions pour ${curCustomer.name}`}
+                style={{ position: 'fixed', top: profileMenuPos.top, left: profileMenuPos.left, zIndex: 9999 }}
+                className="w-[calc(100vw-16px)] sm:w-64 bg-pos-panel border border-pos-border rounded-lg shadow-md overflow-hidden animate-in fade-in zoom-in-95 divide-y divide-pos-border/40"
+                data-open-up={profileMenuPos.openUp ? 'true' : 'false'}
               >
-                <Edit2 className="w-4 h-4 shrink-0" /> Modifier
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setProfileMenuOpen(false);
-                  setCurrentCustomer(profileCustomer);
-                  openModal('loyalty_card');
+                <div className="py-1">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => { setProfileMenuOpen(false); handleEditClick(curCustomer); }}
+                    className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left cursor-pointer"
+                    aria-label={`Modifier ${curCustomer.name}`}
+                  >
+                    <Edit2 className="w-4 h-4 shrink-0 text-sky-400" /> Modifier le Profil
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      setCurrentCustomer(curCustomer);
+                      openModal('loyalty_card');
+                    }}
+                    className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-amber-400 hover:bg-amber-500/10 transition text-left cursor-pointer"
+                    aria-label={`Carte PVC / Pass Digital — ${curCustomer.name}`}
+                  >
+                    <CreditCard className="w-4 h-4 shrink-0" /> Carte PVC / Pass Digital
+                  </button>
+                </div>
+
+                <div className="py-1">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      setCreditAmount(0);
+                      setCreditManagerPin('');
+                      setCreditModalOpen(true);
+                    }}
+                    className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-sky-400 hover:bg-sky-500/10 transition text-left cursor-pointer"
+                  >
+                    <CreditCard className="w-4 h-4 shrink-0" /> Émettre un Avoir
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      setRedeemPoints(curCustomer.loyaltyPoints || 0);
+                      setRedeemModalOpen(true);
+                    }}
+                    className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-amber-400 hover:bg-amber-500/10 transition text-left cursor-pointer"
+                  >
+                    <RefreshCw className="w-4 h-4 shrink-0" /> Convertir Points en Avoir
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      setAdjustPoints(0);
+                      setAdjustReason('');
+                      setAdjustModalOpen(true);
+                    }}
+                    className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left cursor-pointer"
+                  >
+                    <Edit2 className="w-4 h-4 shrink-0 text-pos-muted" /> Ajuster les Points
+                  </button>
+                  {(curCustomer.currentDebt || 0) > 0 && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        setDebtPaymentCustomer(curCustomer);
+                        setDebtPaymentAmount(curCustomer.currentDebt || 0);
+                      }}
+                      className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-emerald-400 hover:bg-emerald-500/10 transition text-left cursor-pointer"
+                    >
+                      <DollarSign className="w-4 h-4 shrink-0" /> Encaisser Dette ({formatDZD(curCustomer.currentDebt || 0)})
+                    </button>
+                  )}
+                </div>
+              </div>
+            </>,
+            document.body,
+          );
+        })()}
+
+        {/* ═══ Modal: Émettre un Avoir Client ═══ */}
+        {creditModalOpen && activeProfile && createPortal(
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => setCreditModalOpen(false)}>
+            <div role="dialog" aria-modal="true" aria-label="Émettre un Avoir Client" onClick={(e) => e.stopPropagation()} className="bg-pos-panel border border-pos-border rounded-xl w-full max-w-md p-6 space-y-4 shadow-2xl animate-in zoom-in-95">
+              <div className="flex items-center justify-between border-b border-pos-border pb-3">
+                <div className="flex items-center gap-2 text-sky-400">
+                  <CreditCard className="w-5 h-5" />
+                  <h3 className="text-sm font-black text-pos-text">Émettre un Avoir Client</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCreditModalOpen(false)}
+                  aria-label="Fermer"
+                  className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex justify-between items-center text-xs">
+                <div>
+                  <p className="font-bold text-pos-text">{activeProfile.name}</p>
+                  <p className="text-[10px] text-pos-muted">Tél : {activeProfile.phone}</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-pos-muted block uppercase font-bold">Avoir Actuel</span>
+                  <span className="font-mono font-bold text-sky-400 text-sm">{formatDZD(activeProfile.storeCredit || 0)}</span>
+                </div>
+              </div>
+
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (creditAmount <= 0) {
+                    showToast('Veuillez saisir un montant valide.', 'warning');
+                    return;
+                  }
+                  if (creditAmount > STORE_CREDIT_PIN_THRESHOLD_DZD && !creditManagerPin) {
+                    showToast('Code PIN Manager requis pour un montant supérieur à 5 000 DA.', 'warning');
+                    return;
+                  }
+                  const res = await issueStoreCredit(activeProfile.id, creditAmount, creditManagerPin || undefined);
+                  if (res.success) {
+                    showSuccess(`Avoir de ${formatDZD(creditAmount)} crédité avec succès !`);
+                    setCreditModalOpen(false);
+                    setCreditAmount(0);
+                    setCreditManagerPin('');
+                  } else {
+                    showToast(`Échec émission avoir : ${res.reason === 'INVALID_MANAGER_PIN' ? 'Code PIN Manager incorrect.' : res.reason}`, 'error');
+                  }
                 }}
-                className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-amber-400 hover:bg-amber-500/10 transition text-left"
-                aria-label={`Carte PVC / Pass Digital — ${profileCustomer.name}`}
+                className="space-y-4"
               >
-                <CreditCard className="w-4 h-4 shrink-0" /> Carte PVC / Pass Digital
-              </button>
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                    Montant de l'Avoir à Émettre (DA) *
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="100"
+                    required
+                    value={creditAmount || ''}
+                    onChange={(e) => setCreditAmount(Math.max(0, Number(e.target.value)))}
+                    placeholder="Ex: 2500"
+                    className="w-full bg-pos-bg border-2 border-pos-border focus:border-sky-400 rounded-lg px-4 py-2.5 text-xl font-black font-mono text-pos-text focus:outline-none"
+                  />
+                </div>
+
+                {creditAmount > STORE_CREDIT_PIN_THRESHOLD_DZD && (
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs text-amber-400 font-bold">
+                      <AlertCircle className="w-4 h-4 shrink-0" /> Validation Manager Requise (&gt; 5 000 DA)
+                    </div>
+                    <label className="text-[10px] uppercase font-bold text-pos-muted block">
+                      Code PIN Manager *
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={creditManagerPin}
+                      onChange={(e) => setCreditManagerPin(e.target.value)}
+                      placeholder="••••"
+                      className="w-full bg-pos-bg border border-pos-border focus:border-amber-400 rounded-lg px-3 py-2 text-xs font-mono text-pos-text focus:outline-none"
+                    />
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-3 border-t border-pos-border">
+                  <button
+                    type="button"
+                    onClick={() => setCreditModalOpen(false)}
+                    className="px-4 py-2 min-h-[44px] bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg text-xs font-bold"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 min-h-[44px] bg-sky-500 hover:bg-sky-400 text-white font-black text-xs rounded-lg shadow-lg shadow-sky-500/20 transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <CheckCircle2 className="w-4 h-4" /> Valider l'Avoir
+                  </button>
+                </div>
+              </form>
             </div>
-          </>,
-          document.body,
+          </div>,
+          document.body
+        )}
+
+        {/* ═══ Modal: Convertir Points en Avoir ═══ */}
+        {redeemModalOpen && activeProfile && (() => {
+          const maxPts = activeProfile.loyaltyPoints || 0;
+          const loyaltyCfg = normalizeLoyaltyConfig(receiptSettings?.loyaltyConfig);
+          const previewCredit = convertPointsToCredit(redeemPoints || 0, loyaltyCfg).creditAmount;
+          return createPortal(
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => setRedeemModalOpen(false)}>
+              <div role="dialog" aria-modal="true" aria-label="Convertir des Points en Avoir" onClick={(e) => e.stopPropagation()} className="bg-pos-panel border border-pos-border rounded-xl w-full max-w-md p-6 space-y-4 shadow-2xl animate-in zoom-in-95">
+                <div className="flex items-center justify-between border-b border-pos-border pb-3">
+                  <div className="flex items-center gap-2 text-amber-400">
+                    <RefreshCw className="w-5 h-5" />
+                    <h3 className="text-sm font-black text-pos-text">Convertir des Points en Avoir</h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRedeemModalOpen(false)}
+                    aria-label="Fermer"
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex justify-between items-center text-xs">
+                  <div>
+                    <p className="font-bold text-pos-text">{activeProfile.name}</p>
+                    <p className="text-[10px] text-pos-muted">Solde disponible : <strong className="text-amber-400 font-mono">{maxPts.toLocaleString('fr-DZ')} pts</strong></p>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] text-pos-muted block uppercase font-bold">Valeur Estimée</span>
+                    <span className="font-mono font-bold text-emerald-400 text-sm">+{formatDZD(previewCredit)}</span>
+                  </div>
+                </div>
+
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (redeemPoints <= 0 || redeemPoints > maxPts) {
+                      showToast(`Veuillez saisir un nombre de points entre 1 et ${maxPts}.`, 'warning');
+                      return;
+                    }
+                    const res = await redeemLoyaltyPoints(activeProfile.id, redeemPoints);
+                    if (res.success) {
+                      showSuccess(`${redeemPoints} points convertis en ${formatDZD(res.creditAdded || 0)} d'avoir !`);
+                      setRedeemModalOpen(false);
+                      setRedeemPoints(0);
+                    } else {
+                      showToast(`Échec conversion points : ${res.reason || 'Erreur'}`, 'error');
+                    }
+                  }}
+                  className="space-y-4"
+                >
+                  <div>
+                    <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                      Nombre de Points à Échanger *
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min="1"
+                        max={maxPts}
+                        required
+                        value={redeemPoints || ''}
+                        onChange={(e) => setRedeemPoints(Math.min(maxPts, Math.max(0, Number(e.target.value))))}
+                        placeholder="Ex: 500"
+                        className="w-full bg-pos-bg border-2 border-pos-border focus:border-amber-400 rounded-lg px-4 py-2 text-lg font-black font-mono text-pos-text focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setRedeemPoints(maxPts)}
+                        className="px-3 py-2 min-h-[44px] bg-pos-hover hover:bg-pos-border text-pos-text rounded-lg text-xs font-bold transition whitespace-nowrap cursor-pointer"
+                      >
+                        Max
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl flex items-center justify-between text-xs">
+                    <span className="text-pos-text font-bold">Crédit Avoir Généré :</span>
+                    <span className="font-mono font-black text-emerald-400 text-base">+{formatDZD(previewCredit)}</span>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-3 border-t border-pos-border">
+                    <button
+                      type="button"
+                      onClick={() => setRedeemModalOpen(false)}
+                      className="px-4 py-2 min-h-[44px] bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg text-xs font-bold"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={maxPts === 0 || redeemPoints <= 0}
+                      className="px-5 py-2 min-h-[44px] bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-black text-xs rounded-lg shadow-lg shadow-amber-500/20 transition cursor-pointer flex items-center gap-1.5"
+                    >
+                      <CheckCircle2 className="w-4 h-4" /> Convertir
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>,
+            document.body
+          );
+        })()}
+
+        {/* ═══ Modal: Ajuster les Points Client ═══ */}
+        {adjustModalOpen && activeProfile && createPortal(
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => setAdjustModalOpen(false)}>
+            <div role="dialog" aria-modal="true" aria-label="Ajustement Manuel des Points" onClick={(e) => e.stopPropagation()} className="bg-pos-panel border border-pos-border rounded-xl w-full max-w-md p-6 space-y-4 shadow-2xl animate-in zoom-in-95">
+              <div className="flex items-center justify-between border-b border-pos-border pb-3">
+                <div className="flex items-center gap-2 text-pos-text">
+                  <Edit2 className="w-5 h-5 text-amber-400" />
+                  <h3 className="text-sm font-black text-pos-text">Ajustement Manuel des Points</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAdjustModalOpen(false)}
+                  aria-label="Fermer"
+                  className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="bg-pos-card border border-pos-border rounded-xl p-3 flex justify-between items-center text-xs">
+                <div>
+                  <p className="font-bold text-pos-text">{activeProfile.name}</p>
+                  <p className="text-[10px] text-pos-muted">Tél : {activeProfile.phone}</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-pos-muted block uppercase font-bold">Solde Actuel</span>
+                  <span className="font-mono font-bold text-amber-400 text-sm">{(activeProfile.loyaltyPoints || 0).toLocaleString('fr-DZ')} pts</span>
+                </div>
+              </div>
+
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (adjustPoints === 0) {
+                    showToast('Veuillez saisir une variation de points différente de zéro.', 'warning');
+                    return;
+                  }
+                  if (!adjustReason.trim()) {
+                    showToast('Un motif d\'ajustement est obligatoire.', 'warning');
+                    return;
+                  }
+                  const res = await adjustCustomerPoints(activeProfile.id, adjustPoints, adjustReason.trim());
+                  if (res.success) {
+                    showSuccess(`Points ajustés (${adjustPoints > 0 ? '+' : ''}${adjustPoints} pts) avec succès !`);
+                    setAdjustModalOpen(false);
+                    setAdjustPoints(0);
+                    setAdjustReason('');
+                  } else {
+                    showToast(`Échec ajustement points : ${res.reason || 'Erreur'}`, 'error');
+                  }
+                }}
+                className="space-y-4"
+              >
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                    Variation de Points (+ pour ajouter, - pour déduire) *
+                  </label>
+                  <input
+                    type="number"
+                    step="10"
+                    required
+                    value={adjustPoints || ''}
+                    onChange={(e) => setAdjustPoints(Number(e.target.value))}
+                    placeholder="Ex: +100 ou -50"
+                    className="w-full bg-pos-bg border border-pos-border focus:border-amber-400 rounded-lg px-4 py-2 text-base font-bold font-mono text-pos-text focus:outline-none"
+                  />
+                  <p className="text-[10px] text-pos-muted mt-1">
+                    Nouveau solde prévu : <strong className="text-pos-text font-mono">{Math.max(0, (activeProfile.loyaltyPoints || 0) + (adjustPoints || 0))} pts</strong>
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                    Motif / Justification *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={adjustReason}
+                    onChange={(e) => setAdjustReason(e.target.value)}
+                    placeholder="Ex: Geste commercial retard SAV, correction saisie..."
+                    className="w-full bg-pos-bg border border-pos-border focus:border-amber-400 rounded-lg px-3 py-2 text-xs text-pos-text focus:outline-none"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-3 border-t border-pos-border">
+                  <button
+                    type="button"
+                    onClick={() => setAdjustModalOpen(false)}
+                    className="px-4 py-2 min-h-[44px] bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg text-xs font-bold"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 min-h-[44px] bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-lg shadow-lg shadow-emerald-500/20 transition cursor-pointer flex items-center gap-1.5"
+                  >
+                    <CheckCircle2 className="w-4 h-4" /> Appliquer l'Ajustement
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
         )}
 
         {/* ═══ Footer ═══ */}

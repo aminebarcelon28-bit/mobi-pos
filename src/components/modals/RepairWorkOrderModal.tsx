@@ -263,6 +263,7 @@ export const RepairWorkOrderModal: React.FC = () => {
 
   // Form State
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | undefined>(undefined);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [deviceModel, setDeviceModel] = useState('');
@@ -583,6 +584,7 @@ export const RepairWorkOrderModal: React.FC = () => {
 
   const resetForm = () => {
     setEditingId(null);
+    setSelectedCustomerId(undefined);
     setCustomerName('');
     setCustomerPhone('');
     setDeviceModel('');
@@ -663,6 +665,7 @@ export const RepairWorkOrderModal: React.FC = () => {
   };
 
   const handleSelectCustomer = (customerId: string) => {
+    setSelectedCustomerId(customerId);
     const found = customers.find(c => c.id === customerId);
     if (found) {
       setCustomerName(found.name);
@@ -846,6 +849,7 @@ export const RepairWorkOrderModal: React.FC = () => {
 
     // Phone stored sanitized E.164 (213...); identifier already sanitized.
     const cleanPhone = sanitizeDzPhone(customerPhone.trim()) || customerPhone.trim();
+    const candidateCustomerId = selectedCustomerId || customers.find(c => c.phone === cleanPhone || (c.phone && cleanPhone && sanitizeDzPhone(c.phone) === cleanPhone))?.id || undefined;
     // Projected once, and only PERSISTED when it is a well-formed envelope: a
     // dossier that cannot be projected is not evidence, so the key is omitted
     // entirely rather than written as an empty snapshot the reader must distrust.
@@ -855,6 +859,7 @@ export const RepairWorkOrderModal: React.FC = () => {
     const shared = {
       customerName: candidate.customerName,
       customerPhone: cleanPhone,
+      customerId: candidateCustomerId,
       deviceModel: candidate.deviceModel,
       imei: candidate.imei,
       imeiKind: storedKind,
@@ -956,6 +961,7 @@ export const RepairWorkOrderModal: React.FC = () => {
       return;
     }
     setEditingId(order.id);
+    setSelectedCustomerId(order.customerId || customers.find(c => c.phone === order.customerPhone || (c.phone && order.customerPhone && sanitizeDzPhone(c.phone) === sanitizeDzPhone(order.customerPhone)))?.id);
     setCustomerName(order.customerName);
     setCustomerPhone(formatDzPhoneDisplay(order.customerPhone) || order.customerPhone);
     setDeviceModel(order.deviceModel);
