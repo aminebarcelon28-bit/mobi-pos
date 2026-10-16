@@ -53,10 +53,12 @@ console.log('\n[3] TEMPORAL IMMUTABILITY — catalog edit cannot re-date a past 
 const anchoredRec = { imei: '352099001761481', productId: 'p1', receivedAt: SALE, soldAt: SALE,
                       saleTransactionId: 'tx-1', warrantyMonths: 12, warrantyExpiresAt: '2027-10-01T09:00:00.000Z' };
 const nowThreeMonths = { id: 'p1', sku: 'S', title: 'X', isSerialized: true, warrantyMonths: 3 };
+// Clock pinned 3 days after the sale (NOW): the countdown assertion must not
+// read the wall clock (the live-clock variant goes stale days after the sale).
 const d = lookupDeviceWarrantyByImei('352099001761481', {
   transactions: [tx(12, '352099001761481')], products: [nowThreeMonths],
   imeiRecords: [anchoredRec], repairOrders: [],
-});
+}, NOW);
 ok(d.warrantyExpiresAt === '2027-10-01T09:00:00.000Z', 'expiry still the SOLD-TIME value despite catalog 12→3', d.warrantyExpiresAt);
 ok(d.daysRemaining > 355, 'countdown reflects the 12 months actually sold', d.daysRemaining);
 ok(d.isWarrantyValid === true, 'coverage NOT retroactively shortened to 3 months');
@@ -94,7 +96,7 @@ const d4 = lookupDeviceWarrantyByImei('352099001761481', {
   transactions: [tx(12, '352099001761481')], products: [{ id: 'p1', sku: 'S', title: 'X', warrantyMonths: 12 }],
   imeiRecords: [{ imei: '352099001761481', productId: 'p1', receivedAt: SALE, soldAt: SALE, saleTransactionId: 'tx-1' }],
   repairOrders: [],
-});
+}, NOW);
 ok(d4.isWarrantyValid === true && d4.daysRemaining > 355, 'legacy unanchored row still counts down', d4.daysRemaining);
 ok(d4.warrantyExpiresAt === '2027-10-01T09:00:00.000Z', 'legacy expiry computed as before', d4.warrantyExpiresAt);
 

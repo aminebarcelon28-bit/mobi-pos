@@ -2386,16 +2386,15 @@ section('S34  BLIND COUNT reveal — audited once, with no concealed figure in t
   ok(detail({}).length > 0 && !/undefined|NaN/.test(detail({})),
      'S34a a missing z number / cashier degrades without leaking "undefined"', detail({}));
 
-  // The reveal itself: one line per reveal, not per keystroke, and never awaited
-  // (an awaited audit would stall the money input that triggered it).
+  // The reveal is the explicit Valider act (Task 5.3 hardening: the full count
+  // is typed before any figure is shown). One audit line per reveal — not per
+  // keystroke — and never awaited (an awaited write would stall the reveal).
   const zSrc = readFileSync(
     new URL('../src/components/modals/ShiftZReportModal.tsx', import.meta.url),
     'utf8'
   );
-  const handler = zSrc.slice(
-    zSrc.indexOf('onChangeMinor={(minor) => {'),
-    zSrc.indexOf('placeholder="ex: 31 305 DA"')
-  );
+  const revealStart = zSrc.indexOf('{!isBlindRevealed && (');
+  const handler = zSrc.slice(revealStart, zSrc.indexOf('</button>', revealStart));
   ok(handler.includes('logSecurityAction('),
      'S34b the blind-count reveal writes an audit event', handler.slice(0, 120));
   ok(handler.includes('blindRevealAuditedRef.current') &&

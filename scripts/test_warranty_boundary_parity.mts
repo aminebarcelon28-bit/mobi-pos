@@ -67,8 +67,10 @@ const txHyphen = {
 };
 const deps = { transactions: [txHyphen], products: [prod], imeiRecords: [], repairOrders: [] };
 
+// Clock pinned to the sale instant: the countdown assertions must not read
+// the wall clock (the live-clock variant goes stale days after the sale).
 for (const query of [IMEI, '35-209900-176148-1', '35 209900 176148 1', '*352099001761481*']) {
-  const d = lookupDeviceWarrantyByImei(query, deps);
+  const d = lookupDeviceWarrantyByImei(query, deps, SALE_ISO);
   ok(d.isSold === true, 'sold resolved for query ' + JSON.stringify(query), { title: d.productTitle });
   ok(d.originalReceiptNumber === 'F-0001', 'receipt found for query ' + JSON.stringify(query), d.originalReceiptNumber);
   ok(d.isWarrantyValid === true, 'warranty valid for query ' + JSON.stringify(query));

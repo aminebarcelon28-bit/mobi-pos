@@ -447,7 +447,6 @@ export const ShiftCloseModal: React.FC = () => {
             cashDrops: st.cashDrops || [],
             payouts: st.payouts || [],
             countedCash: physicalCount,
-            blindCountPerformed: true,
             closedAtISO: new Date().toISOString(),
             closedShiftCount: (st.allShifts || []).length,
             fallbackCashier: cashierName,
