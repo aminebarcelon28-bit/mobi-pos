@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace < with == in Money::format
+@@ -148,17 +148,17 @@
+     pub fn to_json_string(self) -> String {
+         self.0.to_string()
+     }
+ 
+     /// PD-23 display (+ C-2a grouping): dinars with ALWAYS two decimals,
+     /// integer div/rem + zero-pad, whole part grouped with ASCII spaces
+     /// (escpos-safe). 13050 → "130.50 DA", 4500000 → "45 000.00 DA".
+     pub fn format(self) -> String {
+-        let neg = self.0 < 0;
++        let neg = self.0 == /* ~ changed by cargo-mutants ~ */ 0;
+         let abs = self.0.unsigned_abs();
+         let whole = group_ascii(&(abs / MINOR_PER_UNIT as u64).to_string());
+         let frac = abs % MINOR_PER_UNIT as u64;
+         if neg {
+             format!("-{whole}.{frac:02} DA")
+         } else {
+             format!("{whole}.{frac:02} DA")
+         }

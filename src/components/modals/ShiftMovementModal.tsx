@@ -6,6 +6,7 @@ import { useToast } from '../ui/Toast';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { MANUAL_MOVEMENT_TAG } from '../../utils/cashTerms';
+import { Kbd } from '../../design-system/desktop/Kbd';
 
 // Lock-screen cashier fallback (createUISlice owns `activeCashier`; absent
 // from the shared PosState type, so read via structural cast).
@@ -99,13 +100,18 @@ export const ShiftMovementModal: React.FC = () => {
               </p>
             </div>
           </div>
-          <button
-            onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
-            aria-label="Fermer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="hidden sm:inline-flex">
+              <Kbd size="sm">Esc</Kbd>
+            </span>
+            <button
+              onClick={closeModal}
+              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+              aria-label="Fermer"
+            >
+              <X className="w-5 h-5" aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         {/* Body */}
@@ -149,7 +155,7 @@ export const ShiftMovementModal: React.FC = () => {
               valueMinor={dinarsToMinor(amount || 0)}
               onChangeMinor={(minor) => setAmount(toLegacyReal(minor))}
               placeholder="0 DA"
-              className={`w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-lg font-mono font-bold focus:outline-none ${
+              className={`w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-lg font-mono font-bold num focus:outline-none ${
                 type === 'EXPENSE' ? 'text-red-400 focus:border-red-400' : 'text-emerald-400 focus:border-emerald-400'
               }`}
             />

@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace <impl MonotonicSource for ManualClock>::source_name -> &'static str with "xyzzy"
+@@ -258,17 +258,17 @@
+         Some(self.ms)
+     }
+ 
+     fn boot_id(&self) -> Option<String> {
+         self.boot.map(|s| s.to_string())
+     }
+ 
+     fn source_name(&self) -> &'static str {
+-        "test:manual"
++        "xyzzy" /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
+     #[test]

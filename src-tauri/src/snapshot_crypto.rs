@@ -276,7 +276,7 @@ mod tests {
 
     fn sqlite_like(n: usize) -> Vec<u8> {
         let mut v = b"SQLite format 3\0".to_vec();
-        v.extend(std::iter::repeat(0xAB).take(n));
+        v.extend(std::iter::repeat_n(0xAB, n));
         v
     }
 

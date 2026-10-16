@@ -253,10 +253,10 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
   const imeiState = imeiCheckState(imeiTrimmed);
   const imeiHardError: string | null = !imeiTrimmed
     ? null
-    : imeiIs15Digit && !luhnCheckImei(imeiTrimmed)
-      ? 'IMEI invalide (checksum Luhn) — vérifiez la saisie.'
-      : imeiIs15Digit && imeiDuplicate
-        ? 'Cet IMEI existe déjà dans le système.'
+    : imeiDuplicate
+      ? (imeiIs15Digit ? 'Cet IMEI existe déjà dans le système.' : 'Ce numéro de série existe déjà dans le système.')
+      : imeiIs15Digit && !luhnCheckImei(imeiTrimmed)
+        ? 'IMEI invalide (checksum Luhn) — vérifiez la saisie.'
         : null;
   const imeiNeutralHint: string | null = !imeiTrimmed || imeiHardError || imeiIs15Digit
     ? null
@@ -315,6 +315,12 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
       return;
     }
 
+    // Hard validation check: duplicate IMEI/serial or invalid Luhn must not proceed
+    if (imeiHardError) {
+      showToast(imeiHardError, 'error');
+      return;
+    }
+
     // ── Exchange (staged) path: validate, stage in memory, ZERO DB writes.
     // The atomic checkout flight commits intake + purchase together; a
     // canceled exchange discards this payload with no orphaned rows.
@@ -359,7 +365,8 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
       barcode: barcode.trim() || undefined,
       brand,
       conditionGrade: grade,
-      buybackValue: finalBuybackValue,
+      buybackValue: Math.round(buybackValue),
+      walletCreditAmount: creditToWallet ? finalBuybackValue : undefined,
       resaleMarginPercent,
       creditToWallet
     });

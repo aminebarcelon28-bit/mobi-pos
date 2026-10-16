@@ -1,0 +1,28 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace TimeKernel::read_fields -> TimeFields with Default::default()
+@@ -241,24 +241,17 @@
+         g.last_trusted_wall_utc_ms = data.last_trusted_wall_utc_ms;
+         g.last_monotonic_ms = data.last_monotonic_ms;
+         g.last_server_time_utc_ms = data.last_server_time_utc_ms;
+         g.last_server_seq = data.last_server_seq;
+     }
+ 
+     /// Snapshot the current time fields for dual persist.
+     pub fn read_fields(&self) -> TimeFields {
+-        let g = self.inner.read();
+-        TimeFields {
+-            boot_session_id: g.boot_session_id.clone(),
+-            last_trusted_wall_utc_ms: g.last_trusted_wall_utc_ms,
+-            last_monotonic_ms: g.last_monotonic_ms,
+-            last_server_time_utc_ms: g.last_server_time_utc_ms,
+-            last_server_seq: g.last_server_seq,
+-        }
++        Default::default() /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Apply a checkpoint ratchet (Trusted verdicts only — enforced by the
+     /// caller passing only engine-approved updates).
+     pub fn apply_checkpoint(&self, upd: &CheckpointUpdate) {
+         let mut g = self.inner.write();
+         g.boot_session_id = upd.boot_session_id.clone();
+         g.last_trusted_wall_utc_ms = Some(upd.wall_utc_ms);

@@ -115,7 +115,6 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
       audioBus.emit('cashDrawer');
       set({
         activeShift: refreshedActive,
-        activeModal: null,
       });
       return { success: true, movement };
     } catch (e: unknown) {
@@ -222,50 +221,32 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
       return false;
     }
     try {
-      const openedAt = activeShift.openedAt;
-      const sessionTxns = transactions.filter(
-        (t) => (!openedAt || t.createdAt >= openedAt) && t.status !== 'VOIDED' && !t.isRefund
-      );
-      const sessionRefunds = transactions.filter(
-        (t) => (!openedAt || t.createdAt >= openedAt) && t.status !== 'VOIDED' && t.isRefund
-      );
+      const { buildZSnapshot } = await import('../../utils/zReportSnapshot');
+      const zSnap = buildZSnapshot({
+        settings: receiptSettings,
+        shift: activeShift,
+        shiftFloat: activeShift.openingFloat,
+        transactions,
+        customerDebts: get().customerDebts || [],
+        storeExpenses: get().storeExpenses || [],
+        repairOrders: repairOrders || [],
+        tradeIns: get().tradeIns || [],
+        cashDrops: get().cashDrops || [],
+        payouts: get().payouts || [],
+        countedCash: activeShift.actualCash ?? activeShift.openingFloat,
+        blindCountPerformed: false,
+        closedAtISO: new Date().toISOString(),
+        closedShiftCount: (get().allShifts || []).length,
+      });
 
-      const cashSales = sessionTxns.reduce((sum, t) => {
-        if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
-          const cashTenderTotal = t.tenders
-            .filter((tender) => tender.method === 'Espèces')
-            .reduce((acc, tender) => acc + tender.amount, 0);
-          return sum + Math.max(0, cashTenderTotal - (t.changeDue || 0));
-        }
-        return t.paymentMethod === 'Espèces' ? sum + Math.max(0, t.total) : sum;
-      }, 0);
-
-      const cashRefunds = sessionRefunds.reduce((sum, t) => {
-        return (t.refundMethod === 'Espèces' || t.paymentMethod === 'Espèces') ? sum + t.total : sum;
-      }, 0);
-
-      const deposits = (activeShift.movements || [])
-        .filter((m) => m.type === 'MANUAL_DEPOSIT')
-        .reduce((sum, m) => sum + m.amount, 0);
-      const expenses = (activeShift.movements || [])
-        .filter((m) => m.type === 'EXPENSE')
-        .reduce((sum, m) => sum + m.amount, 0);
-
-      const liveExpectedCash = activeShift.openingFloat + cashSales + deposits - expenses - cashRefunds;
-      // SAV atelier splits (informational only — never enter expected-cash math).
-      const { savDepositsFromRepairs, savSettledFromTxns } = await import('../../utils/cashTerms');
-      const xSavDeposits = savDepositsFromRepairs(
-        (repairOrders || []).filter((r) => !openedAt || !r.createdAt || r.createdAt >= openedAt)
-      );
-      const xSavSettled = savSettledFromTxns(sessionTxns);
       const enrichedShift = {
         ...activeShift,
-        expectedCash: liveExpectedCash,
-        totalSalesCount: sessionTxns.length,
-        totalSalesRevenue: sessionTxns.reduce((sum, t) => sum + t.total, 0),
-        totalProfits: sessionTxns.reduce((sum, t) => sum + (t.profit || 0), 0),
-        savDeposits: xSavDeposits,
-        savSettled: xSavSettled,
+        expectedCash: zSnap.expectedCash,
+        totalSalesCount: zSnap.salesCount,
+        totalSalesRevenue: zSnap.grossSales,
+        totalProfits: zSnap.marginTotal,
+        savDeposits: zSnap.savDeposits,
+        savSettled: zSnap.savSettled,
       };
 
       const { directPrintXReport } = await import('../../utils/escpos');

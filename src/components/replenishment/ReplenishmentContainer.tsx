@@ -118,6 +118,14 @@ export const ReplenishmentContainer: React.FC<ReplenishmentContainerProps> = ({
         byVendor.set(vendor, [alert]);
       }
     }
+    for (const po of purchaseOrders) {
+      if (OPEN_PO_STATUSES.includes(po.status)) {
+        const vendor = po.vendorName || 'Fournisseur Général';
+        if (!byVendor.has(vendor)) {
+          byVendor.set(vendor, []);
+        }
+      }
+    }
 
     return [...byVendor.entries()].map(([name, vendorAlerts]) => {
       const directory = vendorDirectory[name];

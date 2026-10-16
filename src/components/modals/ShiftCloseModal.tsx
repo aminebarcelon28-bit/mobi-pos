@@ -26,6 +26,7 @@ import { maintenanceService } from '../../services/maintenanceService';
 import { isMobileDevice } from '../../utils/platform';
 import { verifyManagerGate } from '../../utils/pinGate';
 import { useAllocationCogs } from '../../hooks/useAllocationCogs';
+import { Kbd } from '../../design-system/desktop/Kbd';
 import { isExchangeSaleTx } from '../../utils/receiptMath';
 import { DRAWER_REASON_PREFIXES } from '../../utils/cashTerms';
 
@@ -220,10 +221,23 @@ export const ShiftCloseModal: React.FC = () => {
       .reduce((sum, m) => sum + m.amount, 0);
   }, [activeShift?.movements]);
 
+  const operatingExpenses = useMemo(() => {
+    return (activeShift?.movements || [])
+      .filter(
+        (m) =>
+          m.type === 'EXPENSE' &&
+          !(m.reason || '').startsWith(DRAWER_REASON_PREFIXES.SOULTE_CASHOUT) &&
+          !(m.reason || '').startsWith(DRAWER_REASON_PREFIXES.EXCHANGE_CASHOUT) &&
+          !(m.reason || '').startsWith('Dépôt coffre') &&
+          !(m.reason || '').startsWith('DROP_SAFE')
+      )
+      .reduce((sum, m) => sum + m.amount, 0);
+  }, [activeShift?.movements]);
+
   // Formula: opening_float + cash_sales + manual_deposits - expenses - cash_refunds
   const expectedCash = openingFloat + totalCashSales + manualDeposits - expenses - totalCashRefunds;
   const variance = physicalCount - expectedCash;
-  const dailyNetProfit = totalSaleMargins - expenses;
+  const dailyNetProfit = totalSaleMargins - operatingExpenses;
 
   // Portaled recount-PIN popover: the trigger lives in a footer nested inside
   // an overflow-hidden modal shell, so an absolutely-positioned child would be
@@ -409,32 +423,42 @@ export const ShiftCloseModal: React.FC = () => {
           const st = usePosStore.getState();
           const { openNativePrint } = await import('../../utils/phoneUtils');
           const { zReportText } = await import('../../utils/mobileDocPrint');
-          const drops = (st.cashDrops || []).reduce((s, d) => s + (d.amount || 0), 0);
-          const payouts = (st.payouts || []).reduce((s, p) => s + (p.amount || 0), 0);
-          const debtSettlements = (st.customerDebts || [])
-            .filter((d) => d.type === 'PAYMENT_SETTLED' && d.paymentMethod === 'Espèces')
-            .reduce((s, d) => s + (d.amount || 0), 0);
-          const cashExpenses = (st.storeExpenses || [])
-            .filter((e) => e.paymentMethod === 'Espèces')
-            .reduce((s, e) => s + (e.amount || 0), 0);
+          const { buildZSnapshot } = await import('../../utils/zReportSnapshot');
+          const zSnap = buildZSnapshot({
+            settings: st.receiptSettings,
+            shift: activeShift,
+            shiftFloat: openingFloat,
+            transactions,
+            customerDebts: st.customerDebts || [],
+            storeExpenses: st.storeExpenses || [],
+            repairOrders: st.repairOrders || [],
+            tradeIns: st.tradeIns || [],
+            cashDrops: st.cashDrops || [],
+            payouts: st.payouts || [],
+            countedCash: physicalCount,
+            blindCountPerformed: true,
+            closedAtISO: new Date().toISOString(),
+            closedShiftCount: (st.allShifts || []).length,
+            fallbackCashier: cashierName,
+          });
           const ok = await openNativePrint(
             `Rapport Z ${cashierName.trim() || 'Caisse'}`,
             zReportText({
-              storeName: st.receiptSettings?.storeName,
-              cashierName: cashierName.trim() || 'Caissier',
+              storeName: zSnap.storeName,
+              cashierName: zSnap.cashierName,
               dateStr: new Date().toLocaleString('fr-DZ'),
-              openingFloat,
-              cashSales: totalCashSales,
-              debtSettlements,
-              refunds: totalCashRefunds,
-              expenses: cashExpenses,
-              tradeIns: tradeInCashOut,
-              soulteOut: soulteCashOut,
-              drops,
-              payouts,
-              expectedCash,
-              countedCash: physicalCount,
-              variance,
+              openingFloat: zSnap.openingFloat,
+              cashSales: zSnap.cashSales,
+              debtSettlements: zSnap.debtSettlements,
+              refunds: zSnap.refunds,
+              expenses: zSnap.expenses,
+              tradeIns: zSnap.tradeInCashOut,
+              soulteOut: zSnap.soulteOut,
+              drops: zSnap.drops,
+              payouts: zSnap.payouts,
+              expectedCash: zSnap.expectedCash,
+              countedCash: zSnap.countedCash,
+              variance: zSnap.variance,
             })
           );
           showToast(
@@ -532,13 +556,18 @@ export const ShiftCloseModal: React.FC = () => {
               </p>
             </div>
           </div>
-          <button
-            onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
-            aria-label="Fermer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="hidden sm:inline-flex">
+              <Kbd size="sm">Esc</Kbd>
+            </span>
+            <button
+              onClick={closeModal}
+              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+              aria-label="Fermer"
+            >
+              <X className="w-5 h-5" aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         {/* Body */}
@@ -703,14 +732,14 @@ export const ShiftCloseModal: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="bg-pos-bg border border-pos-border p-3 rounded-xl">
                     <span className="text-[10px] text-pos-muted uppercase font-bold">Espèces Attendues</span>
-                    <p data-testid="shift-expected" className="text-base font-black text-pos-text font-mono mt-0.5">
+                    <p data-testid="shift-expected" className="text-base font-black text-pos-text font-mono mt-0.5 num">
                       {formatDZD(expectedCash)}
                     </p>
                   </div>
 
                   <div className="bg-pos-bg border border-pos-border p-3 rounded-xl">
                     <span className="text-[10px] text-pos-muted uppercase font-bold">Espèces Comptées</span>
-                    <p data-testid="shift-counted" className="text-base font-black text-emerald-400 font-mono mt-0.5">
+                    <p data-testid="shift-counted" className="text-base font-black text-emerald-400 font-mono mt-0.5 num">
                       {formatDZD(physicalCount)}
                     </p>
                   </div>
@@ -729,7 +758,7 @@ export const ShiftCloseModal: React.FC = () => {
                     </span>
                     <p
                       data-testid="shift-variance"
-                      className={`text-base font-black font-mono mt-0.5 ${
+                      className={`text-base font-black font-mono mt-0.5 num ${
                         variance === 0
                           ? 'text-emerald-400'
                           : variance > 0
@@ -751,7 +780,7 @@ export const ShiftCloseModal: React.FC = () => {
                       <p className="text-[10px] text-pos-muted">Marges brutes des ventes − Dépenses d'exploitation</p>
                     </div>
                   </div>
-                  <span className="text-sm font-black text-emerald-400 font-mono">
+                  <span className="text-sm font-black text-emerald-400 font-mono num">
                     {formatDZD(dailyNetProfit)}
                   </span>
                 </div>

@@ -1,0 +1,73 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace verify_time_assertion_with_prefix -> Result<TimeAssertionPayload, TrustError> with Ok(Default::default())
+@@ -132,69 +132,17 @@
+ /// rules, only the expected envelope prefix differs — the two protocols
+ /// cannot cross-verify even under a shared key.
+ pub(crate) fn verify_time_assertion_with_prefix(
+     assertion: &str,
+     expected_prefix: &str,
+     pubkey_b64url: &str,
+     now_ms: u64,
+ ) -> Result<TimeAssertionPayload, TrustError> {
+-    let assertion = assertion.trim();
+-    if assertion.is_empty() {
+-        return Err(TrustError::IPCProtocolError {
+-            reason: "empty time assertion",
+-        });
+-    }
+-    let mut parts = assertion.split('.');
+-    let (prefix, payload_b64, sig_b64) = match (parts.next(), parts.next(), parts.next()) {
+-        (Some(a), Some(p), Some(s)) if parts.next().is_none() => (a, p, s),
+-        _ => {
+-            return Err(TrustError::IPCProtocolError {
+-                reason: "time assertion must have 3 parts",
+-            })
+-        }
+-    };
+-    if prefix != expected_prefix {
+-        return Err(TrustError::IPCProtocolError {
+-            reason: "unknown time assertion prefix",
+-        });
+-    }
+-    // Reuse the token verifier with the time domain: structure, base64,
+-    // signature rules are identical; only the signed bytes differ.
+-    let token_like = format!("{prefix}.{payload_b64}.{sig_b64}");
+-    // Header check inside the shared verifier expects alg EdDSA in a JSON
+-    // header — assertions use the envelope directly, so verify the signature
+-    // here with the same primitives instead of forcing JWS shape.
+-    let payload_bytes = URL_SAFE_NO_PAD.decode(payload_b64).map_err(|_| {
+-        TrustError::IPCProtocolError {
+-            reason: "malformed assertion encoding",
+-        }
+-    })?;
+-    let sig_bytes = URL_SAFE_NO_PAD.decode(sig_b64).map_err(|_| {
+-        TrustError::IPCProtocolError {
+-            reason: "malformed assertion signature",
+-        }
+-    })?;
+-    // Envelope shape documented above; signature verified below.
+-    verify_assertion_signature(&token_like, &sig_bytes, pubkey_b64url)?;
+-    let payload: TimeAssertionPayload =
+-        serde_json::from_slice(&payload_bytes).map_err(|_| TrustError::IPCProtocolError {
+-            reason: "unreadable assertion payload",
+-        })?;
+-    if payload.server_time_ms < MIN_PLAUSIBLE_UTC_MS {
+-        return Err(TrustError::SecurityPolicyFailure {
+-            reason: "asserted server time implausible",
+-        });
+-    }
+-    if now_ms > payload.expires_at_ms {
+-        return Err(TrustError::SecurityPolicyFailure {
+-            reason: "time assertion expired",
+-        });
+-    }
+-    Ok(payload)
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ fn verify_assertion_signature(
+     token_like: &str,
+     sig_bytes: &[u8],
+     pubkey_b64url: &str,
+ ) -> Result<(), TrustError> {
+     use ed25519_dalek::{Signature, Verifier, VerifyingKey};

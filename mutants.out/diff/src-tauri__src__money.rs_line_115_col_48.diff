@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace != with == in Money::from_user_input
+@@ -107,17 +107,17 @@
+             let no_groups: String = compact.chars().filter(|c| *c != '.').collect();
+             let i = no_groups.find(',').unwrap_or(no_groups.len());
+             (no_groups[..i].to_string(), no_groups[i + 1..].to_string())
+         } else if has_comma {
+             let i = compact.find(',').unwrap_or(compact.len());
+             (compact[..i].to_string(), compact[i + 1..].to_string())
+         } else if has_dot {
+             if is_fr_grouped_int(&compact) {
+-                (compact.chars().filter(|c| *c != '.').collect(), String::new())
++                (compact.chars().filter(|c| *c == /* ~ changed by cargo-mutants ~ */ '.').collect(), String::new())
+             } else {
+                 let i = compact.find('.').unwrap_or(compact.len());
+                 (compact[..i].to_string(), compact[i + 1..].to_string())
+             }
+         } else {
+             (compact, String::new())
+         };
+         let int_part = if int_part.is_empty() { "0".to_string() } else { int_part };

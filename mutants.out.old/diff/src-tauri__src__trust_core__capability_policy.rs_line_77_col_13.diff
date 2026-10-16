@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/capability_policy.rs
++++ delete match arm Capability::LicenseManagement in authorize
+@@ -69,17 +69,17 @@
+ 
+ /// The single source of truth. Exhaustive over all known states; the
+ /// `#[non_exhaustive]` enum forces a compile error (not silent permission)
+ /// if a variant is added without updating this table.
+ pub fn authorize(state: &LicenseState, capability: Capability) -> PolicyDecision {
+     match state {
+         LicenseState::Unknown => DENY,
+         LicenseState::Unactivated => match capability {
+-            Capability::LicenseManagement => ALLOW,
++             /* ~ changed by cargo-mutants ~ */
+             _ => DENY,
+         },
+         LicenseState::Operational => ALLOW,
+         LicenseState::Expired => match capability {
+             Capability::ReadOperationalData => ALLOW_OWNER,
+             Capability::EmergencyExport => ALLOW,
+             Capability::LicenseManagement => ALLOW,
+             _ => DENY,

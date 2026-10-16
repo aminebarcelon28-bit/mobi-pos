@@ -8,6 +8,7 @@
 //! this crate fails to compile BY DESIGN — the primitive must stay
 //! self-contained (serde/serde_json/std only).
 
+#[allow(clippy::should_implement_trait)]
 #[path = "../../../src-tauri/src/money.rs"]
 mod money;
 

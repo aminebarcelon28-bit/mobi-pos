@@ -120,7 +120,10 @@
     "test:money:e2e": "wdio run wdio.conf.ts --spec ./test/specs/money/phase3-money.e2e.ts --bail 1",
     "golden:generate": "node scripts/generate-golden.mjs",
     "test:oracle": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types e2e/lib/oracle.test.mts",
-    "test:golden": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_golden_parity.mts && python scripts/verify_golden_sample.py"
+    "test:golden": "node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_golden_parity.mts && python scripts/verify_golden_sample.py",
+    "test:visual": "playwright test tests/visual/mobile-visual-matrix.spec.ts",
+    "test:tokens": "node scripts/check-design-tokens.mjs",
+    "test:contrast": "node scripts/check-contrast.mjs"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",

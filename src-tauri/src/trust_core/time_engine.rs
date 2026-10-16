@@ -358,6 +358,8 @@ pub fn global_time_kernel() -> &'static TimeKernel {
 #[cfg(test)]
 mod tests {
     use super::super::clocks::ManualClock;
+    use super::super::license_state::LicenseState;
+    use super::super::secure_storage::SnapshotData;
     use super::super::time_config::WARN_AHEAD_MS;
     use super::*;
     use crate::trust_core::ipc_authorizer::serial_test_lock;
@@ -481,6 +483,90 @@ mod tests {
             Err(ChallengeError::NoChallenge),
             "reused nonce must be rejected"
         );
+        k.reset_for_tests();
+    }
+
+    fn snap(state: LicenseState) -> SnapshotData {
+        SnapshotData {
+            state,
+            generation: 1,
+            counter: 2,
+            boot_session_id: Some("BOOT".into()),
+            last_trusted_wall_utc_ms: Some(123_456),
+            last_monotonic_ms: Some(789),
+            last_server_time_utc_ms: Some(111),
+            last_server_seq: Some(9),
+        }
+    }
+
+    #[test]
+    fn from_snapshot_requires_all_time_fields() {
+        // Full snapshot yields a checkpoint; a mutation that returns `None`
+        // unconditionally breaks the first assertion, and the `?`-guarded
+        // partial cases pin the field-level requirements.
+        assert!(PersistedCheckpoint::from_snapshot(&snap(LicenseState::Operational)).is_some());
+
+        let mut no_mono = snap(LicenseState::Operational);
+        no_mono.last_monotonic_ms = None;
+        assert!(PersistedCheckpoint::from_snapshot(&no_mono).is_none());
+
+        let mut no_wall = snap(LicenseState::Operational);
+        no_wall.last_trusted_wall_utc_ms = None;
+        assert!(PersistedCheckpoint::from_snapshot(&no_wall).is_none());
+    }
+
+    #[test]
+    fn kernel_load_from_snapshot_populates_fields() {
+        // `load_from_snapshot` must copy every time field (a no-op mutant
+        // leaves them empty and fails here).
+        let k = TimeKernel::new();
+        k.load_from_snapshot(&snap(LicenseState::Operational));
+        let f = k.read_fields();
+        assert_eq!(f.boot_session_id.as_deref(), Some("BOOT"));
+        assert_eq!(f.last_trusted_wall_utc_ms, Some(123_456));
+        assert_eq!(f.last_monotonic_ms, Some(789));
+        assert_eq!(f.last_server_time_utc_ms, Some(111));
+        assert_eq!(f.last_server_seq, Some(9));
+    }
+
+    #[test]
+    fn kernel_apply_checkpoint_updates_fields() {
+        // A no-op `apply_checkpoint` (or `read_fields` returning default)
+        // fails these assertions.
+        let k = TimeKernel::new();
+        k.apply_checkpoint(&CheckpointUpdate {
+            boot_session_id: Some("NEW".into()),
+            wall_utc_ms: 5_000,
+            monotonic_ms: 6_000,
+        });
+        let f = k.read_fields();
+        assert_eq!(f.boot_session_id.as_deref(), Some("NEW"));
+        assert_eq!(f.last_trusted_wall_utc_ms, Some(5_000));
+        assert_eq!(f.last_monotonic_ms, Some(6_000));
+    }
+
+    #[test]
+    fn kernel_apply_reanchor_updates_fields() {
+        // A no-op `apply_reanchor` fails every assertion below.
+        let k = TimeKernel::new();
+        k.apply_reanchor(9_999, Some(7), Some(555), Some("Z".into()));
+        let f = k.read_fields();
+        assert_eq!(f.last_trusted_wall_utc_ms, Some(9_999));
+        assert_eq!(f.last_server_time_utc_ms, Some(9_999));
+        assert_eq!(f.last_server_seq, Some(7));
+        assert_eq!(f.last_monotonic_ms, Some(555));
+        assert_eq!(f.boot_session_id.as_deref(), Some("Z"));
+    }
+
+    #[test]
+    fn consume_challenge_at_exact_expiry_is_valid() {
+        // now_ms == expires_at_ms is still valid: the expiry guard is a strict
+        // `>` (a `>=` mutant would report Expired at exact equality).
+        let _g = serial_test_lock();
+        let k = global_time_kernel();
+        k.reset_for_tests();
+        k.issue_challenge("exp".into(), 10_000);
+        assert_eq!(k.consume_challenge("exp", 10_000), Ok(()));
         k.reset_for_tests();
     }
 }

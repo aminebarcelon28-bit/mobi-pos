@@ -241,8 +241,24 @@ fn commit_batch_inner(
                 UPDATE products
                 SET stock = stock + ?1,
                     cost_price = CASE WHEN COALESCE(cost_price, 0) > 0 THEN cost_price ELSE ?2 END,
+                    version = version + 1,
+                    sync_status = 'pending',
                     updated_at = ?3
                 WHERE id = ?4 AND COALESCE(deleted, 0) = 0
+                "#,
+            )
+            .map_err(|e| e.to_string())?;
+
+        let mut insert_outbox = tx
+            .prepare(
+                r#"
+                INSERT INTO sync_outbox
+                  (idempotency_key, entity_type, entity_id, operation, payload_json, status, created_at, updated_at)
+                VALUES (?1, ?2, ?3, 'UPSERT', ?4, 'pending', ?5, ?5)
+                ON CONFLICT(idempotency_key) DO UPDATE SET
+                  payload_json = excluded.payload_json,
+                  status = 'pending',
+                  updated_at = excluded.updated_at
                 "#,
             )
             .map_err(|e| e.to_string())?;
@@ -280,6 +296,8 @@ fn commit_batch_inner(
 
             let batch_id = uuid::Uuid::new_v4().to_string();
             let ledger_id = uuid::Uuid::new_v4().to_string();
+            let batch_key = format!("po-recon-{batch_id}");
+            let ledger_key = format!("po-recon-{ledger_id}");
 
             insert_batch
                 .execute(params![
@@ -289,7 +307,7 @@ fn commit_batch_inner(
                     item.unit_cost,
                     ts,
                     group_id,
-                    format!("po-recon-{batch_id}"),
+                    batch_key,
                 ])
                 .map_err(|e| e.to_string())?;
 
@@ -299,7 +317,7 @@ fn commit_batch_inner(
                     item.product_id,
                     whole,
                     group_id,
-                    format!("po-recon-{ledger_id}"),
+                    ledger_key,
                 ])
                 .map_err(|e| e.to_string())?;
 
@@ -313,6 +331,70 @@ fn commit_batch_inner(
                     item.product_id
                 )));
             }
+
+            // Sync outbox entries
+            let batch_payload = serde_json::json!({
+                "version": 1,
+                "batch_id": batch_id,
+                "product_id": item.product_id,
+                "quantity_remaining": item.quantity,
+                "unit_cost": item.unit_cost,
+                "received_at": ts,
+                "purchase_order_id": group_id,
+                "device_id": "local",
+                "idempotency_key": batch_key,
+            });
+            insert_outbox
+                .execute(params![
+                    batch_key,
+                    "stock_batches",
+                    batch_id,
+                    batch_payload.to_string(),
+                    created_iso,
+                ])
+                .map_err(|e| e.to_string())?;
+
+            let ledger_payload = serde_json::json!({
+                "id": ledger_id,
+                "product_id": item.product_id,
+                "delta": whole,
+                "reason": "RECEIVE",
+                "ref_type": "po_recon",
+                "ref_id": group_id,
+                "device_id": "local",
+                "idempotency_key": ledger_key,
+            });
+            insert_outbox
+                .execute(params![
+                    ledger_key,
+                    "ledger",
+                    ledger_id,
+                    ledger_payload.to_string(),
+                    created_iso,
+                ])
+                .map_err(|e| e.to_string())?;
+
+            let prod_version: i64 = tx
+                .query_row(
+                    "SELECT version FROM products WHERE id = ?1",
+                    params![item.product_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(1);
+            let prod_payload = serde_json::json!({
+                "id": item.product_id,
+                "version": prod_version,
+            });
+            let prod_key = format!("po-recon-prod-{}-{}", item.product_id, group_id);
+            insert_outbox
+                .execute(params![
+                    prod_key,
+                    "product",
+                    item.product_id,
+                    prod_payload.to_string(),
+                    created_iso,
+                ])
+                .map_err(|e| e.to_string())?;
 
             if item.save_as_alias {
             insert_alias

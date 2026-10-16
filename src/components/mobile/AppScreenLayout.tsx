@@ -19,8 +19,10 @@ import React from 'react';
 interface AppScreenLayoutProps {
   /** Rigid header content (already min-h-[48px]; shell adds safe-top padding). */
   header?: React.ReactNode;
-  /** Pinned bottom bar content (shell adds safe-bottom padding). */
+  /** Pinned bottom bar content on Compact (<600px; shell adds safe-bottom padding). */
   footer?: React.ReactNode;
+  /** Optional leading vertical Navigation Rail rendered on Medium/Expanded (>=768px / md:). */
+  navigationRail?: React.ReactNode;
   /** Main content — typically a tab view or AppTabContent. */
   children: React.ReactNode;
   /**
@@ -34,6 +36,7 @@ interface AppScreenLayoutProps {
 export const AppScreenLayout: React.FC<AppScreenLayoutProps> = ({
   header,
   footer,
+  navigationRail,
   children,
   fill = 'viewport',
   className = '',
@@ -43,43 +46,58 @@ export const AppScreenLayout: React.FC<AppScreenLayoutProps> = ({
       // min-h-[100vh] : repli pour les webviews anciennes (plancher Android 7)
       // sans prise en charge de dvh — propriété distincte de height, donc sans
       // conflit de cascade quand dvh est supporté.
-      className={`${fill === 'viewport' ? 'h-[100dvh] min-h-[100vh]' : 'h-full'} w-full flex flex-col overflow-hidden bg-pos-bg text-pos-text select-none font-sans touch-manipulation overscroll-none ${className}`}
+      className={`${fill === 'viewport' ? 'h-[100dvh] min-h-[100vh]' : 'h-full'} w-full flex flex-row overflow-hidden bg-pos-bg text-pos-text select-none font-sans touch-manipulation overscroll-none ${className}`}
     >
-      {header && (
-        <div
-          className="shrink-0 z-20 bg-pos-panel/95 backdrop-blur-md border-b border-pos-border shadow-xs"
+      {navigationRail && (
+        <aside
+          className="hidden md:flex shrink-0 z-20 platform-chrome-bottom border-t-0 border-e border-pos-border flex-col"
           style={{
             paddingTop: 'var(--safe-top)',
-            paddingLeft: 'var(--safe-left, 0px)',
-            paddingRight: 'var(--safe-right, 0px)',
-          }}
-        >
-          <div className="min-h-[48px] landscape:min-h-[44px] flex flex-col justify-center">{header}</div>
-        </div>
-      )}
-
-      <main
-        className="flex-1 min-h-0 overflow-hidden flex flex-col relative"
-        style={{
-          paddingLeft: 'var(--safe-left, 0px)',
-          paddingRight: 'var(--safe-right, 0px)',
-        }}
-      >
-        {children}
-      </main>
-
-      {footer && (
-        <div
-          className="shrink-0 z-20 bg-pos-panel/95 backdrop-blur-lg border-t border-pos-border shadow-lg"
-          style={{
             paddingBottom: 'var(--safe-bottom)',
-            paddingLeft: 'var(--safe-left, 0px)',
-            paddingRight: 'var(--safe-right, 0px)',
+            paddingInlineStart: 'var(--safe-left, 0px)',
           }}
         >
-          {footer}
-        </div>
+          {navigationRail}
+        </aside>
       )}
+
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+        {header && (
+          <div
+            className="shrink-0 z-20"
+            style={{
+              paddingTop: 'var(--safe-top)',
+              paddingInlineStart: navigationRail ? '0px' : 'var(--safe-left, 0px)',
+              paddingInlineEnd: 'var(--safe-right, 0px)',
+            }}
+          >
+            <div className="min-h-[48px] landscape:min-h-[44px] flex flex-col justify-center">{header}</div>
+          </div>
+        )}
+
+        <main
+          className="flex-1 min-h-0 overflow-hidden flex flex-col relative"
+          style={{
+            paddingInlineStart: navigationRail ? '0px' : 'var(--safe-left, 0px)',
+            paddingInlineEnd: 'var(--safe-right, 0px)',
+          }}
+        >
+          {children}
+        </main>
+
+        {footer && (
+          <div
+            className={`shrink-0 z-20 platform-chrome-bottom shadow-lg ${navigationRail ? 'md:hidden' : ''}`}
+            style={{
+              paddingBottom: 'var(--safe-bottom)',
+              paddingInlineStart: 'var(--safe-left, 0px)',
+              paddingInlineEnd: 'var(--safe-right, 0px)',
+            }}
+          >
+            {footer}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -112,14 +130,14 @@ export const AppTabContent: React.FC<AppTabContentProps> = ({
   className = '',
 }) => {
   return (
-    <div className={`flex-1 min-h-0 flex flex-col overflow-hidden ${className}`}>
+    <div className={`flex-1 min-h-0 flex flex-col overflow-hidden bg-pos-bg ${className}`}>
       {pinnedTop && <div className="shrink-0 z-10">{pinnedTop}</div>}
 
       <div className={`flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y ${contentClassName}`}>
         {children}
       </div>
 
-      {pinnedBottom && <div className="shrink-0 z-10">{pinnedBottom}</div>}
+      {pinnedBottom && <div className="shrink-0 z-10 max-h-[46dvh] overflow-y-auto">{pinnedBottom}</div>}
     </div>
   );
 };

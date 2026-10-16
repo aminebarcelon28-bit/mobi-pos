@@ -289,13 +289,14 @@ export const DzPhoneInput: React.FC<DzPhoneInputProps> = ({
             onBlur?.();
           }}
           onFocus={onFocus}
+          dir="ltr"
           style={{ ...style, boxShadow: ringShadow }}
-          className={`min-h-[44px] transition-shadow duration-150 ${showOpBadge ? 'pr-24' : ''} ${inputClassName}`}
+          className={`min-h-[48px] transition-shadow duration-150 tabular-nums ${showOpBadge ? 'pe-24' : ''} ${inputClassName}`}
         />
         {showOpBadge && operator && (
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-black uppercase tracking-wide transition-all duration-200 animate-in fade-in zoom-in-95"
+            className="pointer-events-none absolute end-2 top-1/2 -translate-y-1/2 inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-black uppercase tracking-wide transition-all duration-200 animate-in fade-in zoom-in-95"
             style={{
               color: operator.badgeText,
               backgroundColor: operator.badgeBg,

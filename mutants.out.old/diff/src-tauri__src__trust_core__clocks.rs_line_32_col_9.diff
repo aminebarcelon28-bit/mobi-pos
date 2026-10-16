@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace MonotonicSource::boot_id -> Option<String> with Some(String::new())
+@@ -24,17 +24,17 @@
+ 
+ /// Sleep-inclusive monotonic millisecond source.
+ pub trait MonotonicSource: Send + Sync {
+     /// Milliseconds on a clock that advances across device sleep.
+     /// Returns `None` when the source is unavailable (fail closed upstream).
+     fn now_ms(&self) -> Option<u64>;
+     /// Stable boot-session identifier, when the OS provides one cheaply.
+     fn boot_id(&self) -> Option<String> {
+-        None
++        Some(String::new()) /* ~ changed by cargo-mutants ~ */
+     }
+     /// Human-readable source name for diagnostics (never a trust input).
+     fn source_name(&self) -> &'static str;
+ }
+ 
+ // ---------------------------------------------------------------------------
+ // Production sources
+ // ---------------------------------------------------------------------------

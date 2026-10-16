@@ -1,0 +1,23 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace test_pubkey_b64url -> String with "xyzzy".into()
+@@ -86,19 +86,17 @@
+     for byte in a.as_bytes().iter().chain(b.as_bytes().iter()) {
+         s.push_str(&format!("{byte:02x}"));
+     }
+     s
+ }
+ 
+ #[cfg(debug_assertions)]
+ fn test_pubkey_b64url() -> String {
+-    use ed25519_dalek::SigningKey;
+-    let sk = SigningKey::from_bytes(&TEST_TIME_SEED);
+-    URL_SAFE_NO_PAD.encode(sk.verifying_key().to_bytes())
++    "xyzzy".into() /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Resolve the active verification key: production pin, or the test key in
+ /// debug builds with a loud warning. Release without a production key
+ /// refuses — this is what makes unshipped enforcement fail closed. Shared
+ /// with the server-time ingestion path (one key policy, distinct envelope
+ /// prefixes so the protocols cannot cross-verify).
+ pub(crate) fn active_time_pubkey_b64url() -> Result<String, TrustError> {

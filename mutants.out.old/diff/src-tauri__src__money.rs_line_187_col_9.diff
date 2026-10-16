@@ -1,0 +1,32 @@
+--- src-tauri/src/money.rs
++++ replace Money::mul_div_half_up -> Result<Money, MoneyError> with Ok(Default::default())
+@@ -179,28 +179,17 @@
+             return Err(MoneyError::Overflow);
+         }
+         Ok(Money(r as i64))
+     }
+ 
+     /// Exact proportional core (future §8 allocator):
+     /// roundHalfUp(self × mult / div), widened intermediate, no float.
+     pub fn mul_div_half_up(self, mult: i64, div: i64) -> Result<Money, MoneyError> {
+-        if div <= 0 {
+-            return Err(MoneyError::Overflow);
+-        }
+-        let num = (self.0 as i128) * (mult as i128);
+-        let d = div as i128;
+-        let q = num / d;
+-        let rem = num % d;
+-        let rounded = if rem * 2 >= d { q + 1 } else { q };
+-        if rounded > i64::MAX as i128 || rounded < i64::MIN as i128 {
+-            return Err(MoneyError::Overflow);
+-        }
+-        Ok(Money(rounded as i64))
++        Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     pub fn is_zero(self) -> bool {
+         self.0 == 0
+     }
+ 
+     pub fn is_negative(self) -> bool {
+         self.0 < 0

@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_anchor.rs
++++ replace || with && in ingest_server_time
+@@ -190,17 +190,17 @@
+     let payload = super::reanchor::verify_time_assertion_with_prefix(
+         assertion,
+         SERVERTIME_PREFIX,
+         &pubkey,
+         wall_now_ms,
+     )
+     .map_err(|e| {
+         let s = format!("{e:?}");
+-        let cause = if s.contains("signature invalid") || s.contains("invalid time key") {
++        let cause = if s.contains("signature invalid") && /* ~ changed by cargo-mutants ~ */ s.contains("invalid time key") {
+             "bad_sig"
+         } else if s.contains("expired") {
+             "expired"
+         } else if s.contains("implausible") {
+             "implausible"
+         } else {
+             "malformed"
+         };

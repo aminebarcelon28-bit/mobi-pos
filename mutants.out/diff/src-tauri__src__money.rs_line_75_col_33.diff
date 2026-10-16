@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace || with && in Money::from_user_input
+@@ -67,17 +67,17 @@
+     /// understands FR thousand-grouping dots ("45.000"→45000, "12.500,50").
+     /// REJECTS (Err, never silently rounded): 3+ decimals, signs,
+     /// empty/unparseable input, i64 overflow.
+     pub fn from_user_input(input: &str) -> Result<Self, MoneyError> {
+         let raw = input.trim();
+         if raw.is_empty() {
+             return Err(MoneyError::Empty);
+         }
+-        if raw.starts_with('-') || raw.starts_with('+') {
++        if raw.starts_with('-') && /* ~ changed by cargo-mutants ~ */ raw.starts_with('+') {
+             return Err(MoneyError::SignNotAllowed);
+         }
+         // BUG-MONEY-03 parity: normalize Arabic-script numerals (TS Test J
+         // pins the same vectors on both sides via shared sources).
+         let mut latinized = String::with_capacity(raw.len());
+         for c in raw.chars() {
+             if ('\u{0660}'..='\u{0669}').contains(&c) {
+                 latinized.push((c as u32 - 0x0660 + '0' as u32) as u8 as char);

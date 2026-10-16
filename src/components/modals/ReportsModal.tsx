@@ -45,6 +45,8 @@ import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { todayLocalKey, toLocalDayKey, sortTransactionsNewestFirst } from '../../utils/dateUtils';
 import { verifyManagerGate } from '../../utils/pinGate';
+import { Kbd } from '../../design-system/desktop/Kbd';
+import { buildZSnapshot } from '../../utils/zReportSnapshot';
 
 export const ReportsModal: React.FC = () => {
   const {
@@ -70,6 +72,8 @@ export const ReportsModal: React.FC = () => {
     repairOrders,
     tradeIns,
     cashDrops,
+    receiptSettings,
+    payouts,
   } = usePosStore();
 
   const { showToast } = useToast();
@@ -270,7 +274,9 @@ export const ReportsModal: React.FC = () => {
     });
   }, [storeExpenses, dateRangeFilter]);
 
-  const totalOperatingExpenses = (dateFilteredExpenses || []).reduce((acc, e) => acc + (e.amount || 0), 0);
+  const totalOperatingExpenses = (dateFilteredExpenses || [])
+    .filter((e) => e.category !== 'Achat Marchandises / Fournisseur' && e.category !== 'Perte Stock / SAV')
+    .reduce((acc, e) => acc + (e.amount || 0), 0);
   const trueEbitdaNetProfit = totalNetProfit - totalOperatingExpenses;
   const ebitdaMargin = totalRevenue > 0 ? ((trueEbitdaNetProfit / totalRevenue) * 100).toFixed(1) : '0';
 
@@ -306,57 +312,6 @@ export const ReportsModal: React.FC = () => {
     };
   }, [dateRangeFilter]);
 
-  const openingFloat = activeShift?.openingFloat ?? (allShifts && allShifts.length > 0 ? allShifts[0].openingFloat : 20000);
-  const cashSales = useMemo(() => {
-    return (dateFilteredTransactions || [])
-      .filter((t) => t.status !== 'VOIDED' && !t.isRefund)
-      .reduce((acc, t) => {
-        if (t.tenders && Array.isArray(t.tenders) && t.tenders.length > 0) {
-          const cashTenderTotal = t.tenders.filter((tender) => tender.method === 'Espèces').reduce((sum, tender) => sum + (tender.amount || 0), 0);
-          return acc + Math.max(0, cashTenderTotal - (t.changeDue || 0));
-        }
-        return t.paymentMethod === 'Espèces' ? acc + (t.total || 0) : acc;
-      }, 0);
-  }, [dateFilteredTransactions]);
-
-  const debtCashCollected = useMemo(() => {
-    return (customerDebts || [])
-      .filter((d) => d.type === 'PAYMENT_SETTLED' && d.paymentMethod === 'Espèces' && dateInRange(d.createdAt))
-      .reduce((acc, d) => acc + d.amount, 0);
-  }, [customerDebts, dateInRange]);
-
-  const savCashCollected = useMemo(() => {
-    return (repairOrders || [])
-      .filter((r) => dateInRange(r.createdAt))
-      .reduce(
-        (acc, r) =>
-          acc +
-          (r.depositAmount || 0) +
-          (r.status === 'Prêt / Terminé' ? Math.max(0, r.totalCost - (r.depositAmount || 0)) : 0),
-        0
-      );
-  }, [repairOrders, dateInRange]);
-
-  const cashExpensesOut = useMemo(() => {
-    return (dateFilteredExpenses || []).filter((e) => e.paymentMethod === 'Espèces').reduce((acc, e) => acc + (e.amount || 0), 0);
-  }, [dateFilteredExpenses]);
-
-  const tradeInPayoutsOut = useMemo(() => {
-    // B-048: wallet-credit buybacks never leave the drawer — only cash payouts.
-    return (tradeIns || [])
-      .filter((t) => !t.creditToWallet && dateInRange(t.createdAt))
-      .reduce((acc, t) => acc + (t.buybackValue || 0), 0);
-  }, [tradeIns, dateInRange]);
-
-  const cashDropsOut = useMemo(() => {
-    return (cashDrops || []).filter((d) => dateInRange(d.timestamp)).reduce((acc, d) => acc + d.amount, 0);
-  }, [cashDrops, dateInRange]);
-
-  const expectedCashInDrawer = Math.max(
-    0,
-    openingFloat + cashSales + debtCashCollected + savCashCollected - cashExpensesOut - tradeInPayoutsOut - cashDropsOut
-  );
-
   const actualCountedCash = useMemo(() => {
     if (activeShift?.actualCash !== undefined && activeShift?.actualCash !== null) {
       return activeShift.actualCash;
@@ -380,6 +335,49 @@ export const ReportsModal: React.FC = () => {
     }
     return null;
   }, [activeShift]);
+
+  const openingFloat = activeShift?.openingFloat ?? (allShifts && allShifts.length > 0 ? allShifts[0].openingFloat : 20000);
+
+  const zSnap = useMemo(() => {
+    return buildZSnapshot({
+      settings: receiptSettings,
+      shift: activeShift,
+      shiftFloat: openingFloat,
+      transactions: dateFilteredTransactions || [],
+      customerDebts: (customerDebts || []).filter((d) => dateInRange(d.createdAt)),
+      storeExpenses: (storeExpenses || []).filter((e) => dateInRange(e.createdAt)),
+      repairOrders: (repairOrders || []).filter((r) => dateInRange(r.createdAt)),
+      tradeIns: (tradeIns || []).filter((t) => dateInRange(t.createdAt)),
+      cashDrops: (cashDrops || []).filter((d) => dateInRange(d.timestamp)),
+      payouts: (payouts || []).filter((p) => dateInRange(p.timestamp)),
+      countedCash: actualCountedCash ?? 0,
+      blindCountPerformed: actualCountedCash !== null,
+      closedAtISO: new Date().toISOString(),
+      closedShiftCount: allShifts?.length || 0,
+    });
+  }, [
+    receiptSettings,
+    activeShift,
+    openingFloat,
+    dateFilteredTransactions,
+    customerDebts,
+    storeExpenses,
+    repairOrders,
+    tradeIns,
+    cashDrops,
+    payouts,
+    actualCountedCash,
+    allShifts?.length,
+    dateInRange,
+  ]);
+
+  const cashSales = zSnap.cashSales;
+  const debtCashCollected = zSnap.debtSettlements;
+  const savCashCollected = zSnap.savDeposits;
+  const cashExpensesOut = zSnap.expenses;
+  const tradeInPayoutsOut = zSnap.tradeInCashOut;
+  const cashDropsOut = zSnap.drops;
+  const expectedCashInDrawer = zSnap.expectedCash;
 
   const cashDiscrepancy = actualCountedCash !== null ? actualCountedCash - expectedCashInDrawer : 0;
 
@@ -720,18 +718,23 @@ export const ReportsModal: React.FC = () => {
               </p>
             </div>
           </div>
-          <button
-            onClick={() => {
-              setPinVerified(false);
-              setPinInput('');
-              closeModal();
-            }}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0 cursor-pointer"
-            title="Fermer (Échap)"
-            aria-label="Fermer les rapports"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="hidden sm:inline-flex">
+              <Kbd size="sm">Esc</Kbd>
+            </span>
+            <button
+              onClick={() => {
+                setPinVerified(false);
+                setPinInput('');
+                closeModal();
+              }}
+              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0 cursor-pointer"
+              title="Fermer (Échap)"
+              aria-label="Fermer les rapports"
+            >
+              <X className="w-5 h-5" aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         {/* Security PIN Gate */}
@@ -891,10 +894,10 @@ export const ReportsModal: React.FC = () => {
                           <ShoppingBag className="w-4 h-4" />
                         </div>
                       </div>
-                      <p className="text-2xl font-black font-mono text-emerald-400 mt-2">{formatDZD(totalRevenue)}</p>
+                      <p className="text-2xl font-black font-mono text-emerald-400 mt-2 num">{formatDZD(totalRevenue)}</p>
                       <div className="flex items-center justify-between text-[11px] text-pos-muted mt-2 pt-2 border-t border-pos-border/40 font-medium">
                         <span>{validSales.length} ventes validées</span>
-                        <span className="font-mono font-bold">Panier: {formatDZD(averageBasket)}</span>
+                        <span className="font-mono font-bold num">Panier: {formatDZD(averageBasket)}</span>
                       </div>
                     </div>
 
@@ -906,10 +909,10 @@ export const ReportsModal: React.FC = () => {
                           <TrendingUp className="w-4 h-4" />
                         </div>
                       </div>
-                      <p className="text-2xl font-black font-mono text-emerald-400 mt-2">{formatDZD(totalNetProfit)}</p>
+                      <p className="text-2xl font-black font-mono text-emerald-400 mt-2 num">{formatDZD(totalNetProfit)}</p>
                       <div className="flex items-center justify-between text-[11px] text-pos-muted mt-2 pt-2 border-t border-pos-border/40 font-medium">
                         <span>Taux de Marge Brute</span>
-                        <span className="font-mono font-bold text-emerald-400">{netProfitMargin}%</span>
+                        <span className="font-mono font-bold text-emerald-400 num">{netProfitMargin}%</span>
                       </div>
                     </div>
 
@@ -921,7 +924,7 @@ export const ReportsModal: React.FC = () => {
                           <DollarSign className="w-4 h-4" />
                         </div>
                       </div>
-                      <p className="text-2xl font-black font-mono text-emerald-400 mt-2">{formatDZD(totalOperatingExpenses)}</p>
+                      <p className="text-2xl font-black font-mono text-emerald-400 mt-2 num">{formatDZD(totalOperatingExpenses)}</p>
                       <div className="flex items-center justify-between text-[11px] text-pos-muted mt-2 pt-2 border-t border-pos-border/40 font-medium">
                         <span>{dateFilteredExpenses.length} charges enregistrées</span>
                         <span className="text-emerald-300 font-bold">Déduit du bénéfice</span>
@@ -936,12 +939,12 @@ export const ReportsModal: React.FC = () => {
                           <Sparkles className="w-4 h-4" />
                         </div>
                       </div>
-                      <p className={`text-2xl font-black font-mono mt-2 ${trueEbitdaNetProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      <p className={`text-2xl font-black font-mono mt-2 num ${trueEbitdaNetProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                         {formatDZD(trueEbitdaNetProfit)}
                       </p>
                       <div className="flex items-center justify-between text-[11px] text-pos-muted mt-2 pt-2 border-t border-pos-border/40 font-medium">
                         <span>Rentabilité Nette</span>
-                        <span className={`font-mono font-bold ${Number(ebitdaMargin) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        <span className={`font-mono font-bold num ${Number(ebitdaMargin) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                           {ebitdaMargin}%
                         </span>
                       </div>
@@ -1400,7 +1403,7 @@ export const ReportsModal: React.FC = () => {
                                     : 'hover:bg-pos-hover/60'
                                 }`}
                               >
-                                <td className="p-3 font-mono font-black">
+                                <td className="p-3 font-mono font-black num">
                                   <span
                                     className={
                                       isVoided
@@ -1440,12 +1443,12 @@ export const ReportsModal: React.FC = () => {
                                   {t.customer?.name || 'Client de passage'}
                                 </td>
                                 <td className="p-3 text-pos-muted font-medium">
-                                  <span className="bg-pos-bg border border-pos-border px-2 py-0.5 rounded text-[10px] font-bold text-pos-text">
+                                  <span className="bg-pos-bg border border-pos-border px-2 py-0.5 rounded text-[10px] font-bold text-pos-text num">
                                     {(t.items || []).reduce((acc, i) => acc + i.quantity, 0)} articles
                                   </span>
                                 </td>
                                 <td
-                                  className={`p-3 text-right font-black ${
+                                  className={`p-3 text-right font-black num ${
                                     isVoided
                                       ? 'text-red-400'
                                       : isRefund
@@ -1455,7 +1458,7 @@ export const ReportsModal: React.FC = () => {
                                 >
                                   {isRefund ? `-${formatDZD(t.total)}` : formatDZD(t.total)}
                                 </td>
-                                <td className="p-3 text-right font-bold text-emerald-400">
+                                <td className="p-3 text-right font-bold text-emerald-400 num">
                                   {isVoided || isRefund ? '0 DA' : formatDZD(listProfit)}
                                 </td>
                                 <td className="p-3 text-center">
@@ -1463,7 +1466,7 @@ export const ReportsModal: React.FC = () => {
                                     {t.paymentMethod}
                                   </span>
                                 </td>
-                                <td className="p-3 text-right text-pos-muted text-[11px] font-mono">{formatDateTime(t.createdAt)}</td>
+                                <td className="p-3 text-right text-pos-muted text-[11px] font-mono num">{formatDateTime(t.createdAt)}</td>
                                 <td className="p-3 text-center">
                                   <div className="flex items-center justify-center gap-1.5">
                                     <button
@@ -1642,10 +1645,18 @@ export const ReportsModal: React.FC = () => {
                                   <td className="py-2.5 px-3 text-center" onClick={(e) => e.stopPropagation()}>
                                     <button
                                       type="button"
-                                      onClick={() => {
+                                      onClick={async () => {
                                         if (window.confirm(`Supprimer cette dépense "${exp.title}" (${formatDZD(exp.amount)}) ?`)) {
-                                          deleteStoreExpense(exp.id);
-                                          showToast('Dépense supprimée', 'info');
+                                          const res = await deleteStoreExpense(exp.id);
+                                          if (res && !res.success) {
+                                            if (res.reason === 'CLOSED_SESSION_IMMUTABLE') {
+                                              showToast('Impossible : la session de caisse de cette dépense est déjà clôturée.', 'error');
+                                            } else {
+                                              showToast(`Échec de la suppression (${res.reason || 'Erreur'}).`, 'error');
+                                            }
+                                          } else {
+                                            showToast('Dépense supprimée avec succès.', 'info');
+                                          }
                                         }
                                       }}
                                       className="p-1 hover:bg-red-500/20 text-pos-muted hover:text-red-400 rounded transition cursor-pointer"

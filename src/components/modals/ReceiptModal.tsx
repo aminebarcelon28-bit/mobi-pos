@@ -168,11 +168,13 @@ export const ReceiptModal: React.FC = () => {
 
         {/* Footer Actions */}
         <div className="p-3.5 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex flex-col gap-2.5 shrink-0">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] text-emerald-400 flex items-center gap-1 font-medium">
-              <Zap className="w-3.5 h-3.5" aria-hidden="true" /> Signal Ouverture Tiroir-Caisse Envoyé
-            </span>
-          </div>
+          {(currentTx?.paymentMethod === 'Espèces' || (currentTx?.payments || []).some((p) => p.method === 'Espèces') || ((currentTx?.change ?? 0) > 0)) && (
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-emerald-400 flex items-center gap-1 font-medium">
+                <Zap className="w-3.5 h-3.5" aria-hidden="true" /> Signal Ouverture Tiroir-Caisse Envoyé
+              </span>
+            </div>
+          )}
           <div className="flex flex-col sm:flex-row gap-2 justify-end">
             <button
               type="button"

@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace global_time_kernel -> &'static TimeKernel with Box::leak(Box::new(Default::default()))
+@@ -347,17 +347,17 @@
+     NoChallenge,
+     Mismatch,
+     Expired,
+ }
+ 
+ static TIME_KERNEL: OnceLock<TimeKernel> = OnceLock::new();
+ 
+ pub fn global_time_kernel() -> &'static TimeKernel {
+-    TIME_KERNEL.get_or_init(TimeKernel::new)
++    Box::leak(Box::new(Default::default())) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::super::clocks::ManualClock;
+     use super::super::time_config::WARN_AHEAD_MS;
+     use super::*;
+     use crate::trust_core::ipc_authorizer::serial_test_lock;

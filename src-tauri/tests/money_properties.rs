@@ -12,7 +12,7 @@
 //! Run: `cargo test --release -p mobi-pos --test money_properties`
 //! Seed: STRESS_SEED env (default 20261010), printed by every run.
 
-use mobi_pos_lib::money::Money;
+use mobi_pos_lib::money::{Money, MoneyError};
 
 fn seed() -> u64 {
     std::env::var("STRESS_SEED")
@@ -151,4 +151,59 @@ fn q4_invoice_discipline() {
         let want_total = base.to_minor() as i128 - if base.to_minor() > 0 && bp > 0 { want } else { 0 };
         assert_eq!(total as i128, want_total);
     }
+}
+
+// Q5: boundary/validator pins on the public kernel surface (no internals).
+// These target the observable branch/limit mutants the property sweeps leave
+// alive: whole-fn predicate arms, the inclusive i64 overflow limits, and the
+// separator validators reached only through `from_user_input`.
+#[test]
+fn q5_kernel_boundaries_pin_overflow_and_validators() {
+    // Predicate arms (kill whole-fn `-> true/false` and `==`/`<` swaps).
+    assert!(Money::from_minor(0).is_zero());
+    assert!(!Money::from_minor(1).is_zero());
+    assert!(!Money::from_minor(-1).is_zero());
+
+    assert!(!Money::from_minor(0).is_negative());
+    assert!(!Money::from_minor(5).is_negative());
+    assert!(Money::from_minor(-5).is_negative());
+
+    // mul_int: the limits themselves are valid (inclusive), one past is not.
+    assert_eq!(Money::from_minor(i64::MAX).mul_int(1).unwrap().to_minor(), i64::MAX);
+    assert_eq!(Money::from_minor(i64::MIN).mul_int(1).unwrap().to_minor(), i64::MIN);
+    assert_eq!(Money::from_minor(i64::MAX).mul_int(-1).unwrap().to_minor(), -i64::MAX);
+    assert_eq!(Money::from_minor(i64::MAX).mul_int(2), Err(MoneyError::Overflow));
+    assert_eq!(Money::from_minor(i64::MIN).mul_int(2), Err(MoneyError::Overflow));
+    assert_eq!(Money::from_minor(i64::MIN).mul_int(-1), Err(MoneyError::Overflow));
+
+    // mul_div_half_up: half-up rounding, inclusive limits, div<=0 guard.
+    assert_eq!(Money::from_minor(5).mul_div_half_up(1, 2).unwrap().to_minor(), 3);
+    assert_eq!(Money::from_minor(1).mul_div_half_up(1, 3).unwrap().to_minor(), 0);
+    assert_eq!(Money::from_minor(2).mul_div_half_up(1, 3).unwrap().to_minor(), 1);
+    assert_eq!(Money::from_minor(i64::MAX).mul_div_half_up(1, 1).unwrap().to_minor(), i64::MAX);
+    assert_eq!(Money::from_minor(i64::MIN).mul_div_half_up(1, 1).unwrap().to_minor(), i64::MIN);
+    assert_eq!(Money::from_minor(i64::MAX).mul_div_half_up(2, 1), Err(MoneyError::Overflow));
+    assert_eq!(Money::from_minor(i64::MIN).mul_div_half_up(2, 1), Err(MoneyError::Overflow));
+    assert_eq!(Money::from_minor(1).mul_div_half_up(1, 0), Err(MoneyError::Overflow));
+    assert_eq!(Money::from_minor(1).mul_div_half_up(1, -1), Err(MoneyError::Overflow));
+
+    // from_user_input: discriminated errors (not just is_err) + FR validators.
+    assert_eq!(Money::from_user_input(""), Err(MoneyError::Empty));
+    assert_eq!(Money::from_user_input("   "), Err(MoneyError::Empty));
+    assert_eq!(Money::from_user_input("-5"), Err(MoneyError::SignNotAllowed));
+    assert_eq!(Money::from_user_input("+5"), Err(MoneyError::SignNotAllowed));
+    assert_eq!(Money::from_user_input("1,234"), Err(MoneyError::TooManyDecimals));
+    assert_eq!(Money::from_user_input("1.2,3"), Err(MoneyError::AmbiguousSeparators));
+    assert_eq!(Money::from_user_input("12.50,5"), Err(MoneyError::AmbiguousSeparators));
+
+    assert_eq!(Money::from_user_input("12.500,50").unwrap().to_minor(), 1_250_050);
+    assert_eq!(Money::from_user_input("1.234,5").unwrap().to_minor(), 123_450);
+    assert_eq!(Money::from_user_input("1.234").unwrap().to_minor(), 123_400);
+    assert_eq!(Money::from_user_input("1.23").unwrap().to_minor(), 123);
+    assert_eq!(Money::from_user_input("1 234").unwrap().to_minor(), 123_400);
+    assert_eq!(Money::from_user_input("12,5").unwrap().to_minor(), 1_250);
+
+    // Display arm coverage (kills the `fmt -> Ok(Default::default())` mutant).
+    assert_eq!(MoneyError::SignNotAllowed.to_string(), "[Money] sign not allowed for money entry");
+    assert_eq!(MoneyError::Overflow.to_string(), "[Money] amount exceeds i64");
 }

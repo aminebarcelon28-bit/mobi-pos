@@ -1022,7 +1022,7 @@ export const PurchaseOrderModal: React.FC = () => {
                                     valueMinor={dinarsToMinor(item.unitCost || 0)}
                                     onChangeMinor={(minor) =>
                                       // Entry-bridge: MoneyInput emits exact
-                                      // integer minor; state stays dinars.
+                                      // integer minor; state stays dinars (replaces parseLocalizedAmount(e.target.value)).
                                       handleUpdateDraftCost(item.productId, toLegacyReal(minor))
                                     }
                                     className="w-24 min-h-[44px] text-right bg-pos-bg border border-pos-border rounded-lg text-pos-text font-bold font-mono py-1 px-1.5 focus:outline-none focus:border-emerald-400"
@@ -1433,7 +1433,7 @@ export const PurchaseOrderModal: React.FC = () => {
                                     setVerifiedCostMap({
                                       ...verifiedCostMap,
                                       // Entry-bridge: exact integer minor in,
-                                      // dinars-number state kept.
+                                      // dinars-number state kept (replaces [item.productId]: Math.max(0, Math.round(parseLocalizedAmount(e.target.value) || 0))).
                                       [item.productId]: toLegacyReal(minor),
                                     })
                                   }

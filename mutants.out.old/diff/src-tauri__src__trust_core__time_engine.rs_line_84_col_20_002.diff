@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace < with <= in evaluate
+@@ -76,17 +76,17 @@
+ 
+ /// Pure decision function over an optional persisted checkpoint.
+ pub fn evaluate(
+     checkpoint: Option<PersistedCheckpoint>,
+     wall_now_ms: u64,
+     clock: &dyn MonotonicSource,
+ ) -> EvalOutcome {
+     // 1. RTC-reset signature first: independent of any anchor.
+-    if wall_now_ms < MIN_PLAUSIBLE_UTC_MS {
++    if wall_now_ms <= /* ~ changed by cargo-mutants ~ */ MIN_PLAUSIBLE_UTC_MS {
+         return EvalOutcome {
+             verdict: TimeVerdict::ResetRequired,
+             advisory: None,
+             checkpoint_update: None,
+         };
+     }
+ 
+     let Some(cp) = checkpoint else {

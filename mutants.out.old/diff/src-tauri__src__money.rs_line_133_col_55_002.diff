@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace > with >= in Money::from_user_input
+@@ -125,17 +125,17 @@
+             || !frac_part.chars().all(|c| c.is_ascii_digit())
+         {
+             return Err(MoneyError::NotDecimal);
+         }
+         if frac_part.len() > CURRENCY_EXPONENT as usize {
+             return Err(MoneyError::TooManyDecimals);
+         }
+         let mut padded = format!("{int_part}{:0<2}", frac_part);
+-        while padded.starts_with('0') && padded.len() > 1 {
++        while padded.starts_with('0') && padded.len() >= /* ~ changed by cargo-mutants ~ */ 1 {
+             padded.remove(0);
+         }
+         parse_exact_i64(&padded).map(Money)
+     }
+ 
+     /// PD-3: JSON carries integer minor units as STRINGS.
+     pub fn from_json_str(s: &str) -> Result<Self, MoneyError> {
+         if s.is_empty() || !s.chars().all(|c| c.is_ascii_digit()) {

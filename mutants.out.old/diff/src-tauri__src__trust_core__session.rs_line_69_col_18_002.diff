@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/session.rs
++++ replace < with <= in evaluate_continuity
+@@ -61,17 +61,17 @@
+     }
+ 
+     let current_m = match clock.now_ms() {
+         Some(m) => m,
+         None => return Continuity::NewSession,
+     };
+ 
+     // Signal 2: monotonic regression means the source restarted.
+-    if current_m < checkpoint.monotonic_ms {
++    if current_m <= /* ~ changed by cargo-mutants ~ */ checkpoint.monotonic_ms {
+         return Continuity::NewSession;
+     }
+     let delta_m = current_m - checkpoint.monotonic_ms;
+ 
+     // Signal 3: ΔM/ΔW consistency cross-check closes the off-for-days hole:
+     // a reboot followed by a long uptime can pass signal 2 while the wall
+     // advanced by days. Unsigned comparison via saturating arithmetic.
+     let delta_w = current_wall_utc_ms.saturating_sub(checkpoint.wall_utc_ms);

@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/license_state.rs
++++ replace LicenseState::coerce_from_untrusted -> Self with Default::default()
+@@ -78,17 +78,17 @@
+             _ => None,
+         }
+     }
+ 
+     /// Fail-closed coercion for any untrusted input (persisted snapshots,
+     /// IPC payloads, future variants): unrecognized values become
+     /// `CORRUPTED`, which grants only `LicenseManagement`.
+     pub fn coerce_from_untrusted(code: &str) -> Self {
+-        Self::from_code(code).unwrap_or(LicenseState::Corrupted)
++        Default::default() /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
+     #[test]

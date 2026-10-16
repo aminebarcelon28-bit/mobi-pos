@@ -1,0 +1,110 @@
+--- src-tauri/src/trust_core/time_anchor.rs
++++ replace ingest_server_time -> Result<ServerTimeIngest, TrustError> with Ok(Default::default())
+@@ -173,106 +173,17 @@
+ /// fails the signature. Uses the SAME production-key resolution as
+ /// re-anchor (placeholder refuses in release) — one key policy, no fork.
+ pub fn ingest_server_time(
+     tx: &Transaction,
+     clock: &dyn MonotonicSource,
+     assertion: &str,
+     wall_now_ms: u64,
+ ) -> Result<ServerTimeIngest, TrustError> {
+-    tx.execute_batch(ANCHOR_DDL)
+-        .map_err(|e| TrustError::op_failed(format!("anchor ddl: {e}")))?;
+-    // Same production-key resolution as re-anchor (placeholder refuses in
+-    // release): one key policy, distinct envelope prefix. All verification
+-    // failures normalize onto the gateway wire code with the specific cause
+-    // preserved after the colon (one taxonomy for this command's callers).
+-    let pubkey = super::reanchor::active_time_pubkey_b64url().map_err(|_| {
+-        TrustError::op_failed("GATEWAY_TIME_SIGNATURE_INVALID:no_time_key".to_string())
+-    })?;
+-    let payload = super::reanchor::verify_time_assertion_with_prefix(
+-        assertion,
+-        SERVERTIME_PREFIX,
+-        &pubkey,
+-        wall_now_ms,
+-    )
+-    .map_err(|e| {
+-        let s = format!("{e:?}");
+-        let cause = if s.contains("signature invalid") || s.contains("invalid time key") {
+-            "bad_sig"
+-        } else if s.contains("expired") {
+-            "expired"
+-        } else if s.contains("implausible") {
+-            "implausible"
+-        } else {
+-            "malformed"
+-        };
+-        TrustError::op_failed(format!("GATEWAY_TIME_SIGNATURE_INVALID:{cause}"))
+-    })?;
+-    let server_ms = i64::try_from(payload.server_time_ms).map_err(|_| {
+-        TrustError::op_failed("GATEWAY_TIME_SIGNATURE_INVALID:bad_time".to_string())
+-    })?;
+-    let (last_server, last_nonce): (i64, String) = tx
+-        .query_row(
+-            "SELECT last_server_ms, last_server_nonce FROM time_anchor WHERE id = 1",
+-            [],
+-            |r| Ok((r.get(0)?, r.get(1)?)),
+-        )
+-        .or_else(|e| match e {
+-            rusqlite::Error::QueryReturnedNoRows => Ok((0i64, String::new())),
+-            other => Err(TrustError::op_failed(format!("anchor read: {other}"))),
+-        })?;
+-    // Anti-replay: server observations must strictly advance; an exact
+-    // duplicate (captured token replayed) dies here even inside expiry.
+-    if server_ms <= last_server
+-        || (server_ms == last_server && payload.nonce == last_nonce)
+-    {
+-        return Err(TrustError::op_failed(
+-            "GATEWAY_TIME_SIGNATURE_INVALID:stale_or_replayed".to_string(),
+-        ));
+-    }
+-    if server_ms == last_server {
+-        return Err(TrustError::op_failed(
+-            "GATEWAY_TIME_SIGNATURE_INVALID:stale_or_replayed".to_string(),
+-        ));
+-    }
+-    let mono = clock.now_ms().ok_or_else(|| {
+-        TrustError::op_failed("SYSTEM_CLOCK_REGRESSION:monotonic_unavailable".to_string())
+-    })?;
+-    let mono_i = i64::try_from(mono).map_err(|_| {
+-        TrustError::op_failed("SYSTEM_CLOCK_REGRESSION:monotonic_unavailable".to_string())
+-    })?;
+-    let (hw, hw_mono): (i64, i64) = tx
+-        .query_row(
+-            "SELECT high_water_ms, high_water_mono_ms FROM time_anchor WHERE id = 1",
+-            [],
+-            |r| Ok((r.get(0)?, r.get(1)?)),
+-        )
+-        .or_else(|e| match e {
+-            rusqlite::Error::QueryReturnedNoRows => Ok((server_ms, mono_i)),
+-            other => Err(TrustError::op_failed(format!("anchor read: {other}"))),
+-        })?;
+-    let expected = hw.saturating_add(mono_i.saturating_sub(hw_mono));
+-    let skew = server_ms.saturating_sub(expected);
+-    let new_hw = hw.max(server_ms);
+-    let now_iso = iso_utc_ms(server_ms.max(expected));
+-    // Server time is trusted forward: adopt it (it passed signature +
+-    // expiry + plausibility inside verification).
+-    tx.execute(
+-        "INSERT INTO time_anchor (id, high_water_ms, high_water_mono_ms, last_server_ms, last_server_nonce, skew_ms, updated_at) \
+-         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6) \
+-         ON CONFLICT(id) DO UPDATE SET high_water_ms = excluded.high_water_ms, \
+-         high_water_mono_ms = excluded.high_water_mono_ms, last_server_ms = excluded.last_server_ms, \
+-         last_server_nonce = excluded.last_server_nonce, skew_ms = excluded.skew_ms, updated_at = excluded.updated_at",
+-        rusqlite::params![new_hw, mono_i, server_ms, payload.nonce, skew, now_iso],
+-    )
+-    .map_err(|e| TrustError::op_failed(format!("anchor ingest: {e}")))?;
+-    Ok(ServerTimeIngest {
+-        server_time_ms: server_ms,
+-        skew_ms: skew,
+-    })
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// `#[tauri::command]`: ingest gateway-signed time (LicenseManagement — the
+ /// skew-calibration plane, same as re-anchor; quarantined terminals stay
+ /// able to observe server time). Size-capped like `trust_reanchor_time`.
+ #[tauri::command]
+ pub fn ingest_signed_server_time(
+     app: tauri::AppHandle,

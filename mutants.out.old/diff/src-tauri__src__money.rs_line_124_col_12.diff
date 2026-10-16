@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ delete ! in Money::from_user_input
+@@ -116,17 +116,17 @@
+             } else {
+                 let i = compact.find('.').unwrap_or(compact.len());
+                 (compact[..i].to_string(), compact[i + 1..].to_string())
+             }
+         } else {
+             (compact, String::new())
+         };
+         let int_part = if int_part.is_empty() { "0".to_string() } else { int_part };
+-        if !int_part.chars().all(|c| c.is_ascii_digit())
++        if  /* ~ changed by cargo-mutants ~ */int_part.chars().all(|c| c.is_ascii_digit())
+             || !frac_part.chars().all(|c| c.is_ascii_digit())
+         {
+             return Err(MoneyError::NotDecimal);
+         }
+         if frac_part.len() > CURRENCY_EXPONENT as usize {
+             return Err(MoneyError::TooManyDecimals);
+         }
+         let mut padded = format!("{int_part}{:0<2}", frac_part);

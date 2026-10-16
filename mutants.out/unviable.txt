@@ -1,0 +1,7 @@
+src-tauri/src/money.rs:56:9: replace Money::from_minor -> Self with Default::default()
+src-tauri/src/money.rs:71:9: replace Money::from_user_input -> Result<Self, MoneyError> with Ok(Default::default())
+src-tauri/src/money.rs:141:9: replace Money::from_json_str -> Result<Self, MoneyError> with Ok(Default::default())
+src-tauri/src/money.rs:168:9: replace Money::add -> Result<Money, MoneyError> with Ok(Default::default())
+src-tauri/src/money.rs:172:9: replace Money::sub -> Result<Money, MoneyError> with Ok(Default::default())
+src-tauri/src/money.rs:177:9: replace Money::mul_int -> Result<Money, MoneyError> with Ok(Default::default())
+src-tauri/src/money.rs:187:9: replace Money::mul_div_half_up -> Result<Money, MoneyError> with Ok(Default::default())

@@ -1,9 +1,11 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { PauseCircle, Trash2, ArrowLeft, ShoppingBag } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { computeCartTotals } from '../../utils/receiptMath';
 import { soundEngine } from '../../utils/audioFeedback';
+import { useRegisterMobileBackHandler } from '../../hooks/useMobileBackNavigation';
+import { useTranslation, Bdi } from '../../i18n';
 
 interface M3CartProtectionModalProps {
   isOpen: boolean;
@@ -18,24 +20,14 @@ export const M3CartProtectionModal: React.FC<M3CartProtectionModalProps> = ({
   onHoldAndExit,
   onDiscardAndExit,
 }) => {
+  const { t } = useTranslation();
   const cart = usePosStore((state) => state.cart);
   const pricingTier = usePosStore((state) => state.pricingTier);
   const storeCreditApplied = usePosStore((state) => state.storeCreditApplied);
   const voucherCreditApplied =
     usePosStore((s) => (s as unknown as { voucherCreditApplied?: number }).voucherCreditApplied ?? 0) || 0;
 
-  // Escape key listener to gracefully dismiss and keep the sale safe
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        soundEngine.playKeyBeep?.();
-        onContinueSale();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onContinueSale]);
+  useRegisterMobileBackHandler(isOpen, onContinueSale, 'cart-protection');
 
   if (!isOpen) return null;
 
@@ -61,24 +53,55 @@ export const M3CartProtectionModal: React.FC<M3CartProtectionModalProps> = ({
         aria-labelledby="cart-protection-title"
         aria-describedby="cart-protection-description"
         onClick={(e) => e.stopPropagation()}
-        className="bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-3xl w-full max-w-md overflow-hidden flex flex-col shadow-2xl animate-in slide-in-from-bottom-5 p-5 sm:p-6 text-center space-y-4 pb-[max(1.25rem,var(--safe-bottom))]"
+        className="pos-bottom-sheet bg-pos-panel border-t sm:border border-pos-border sm:rounded-3xl w-full max-w-md max-h-[92dvh] overflow-y-auto overscroll-contain flex flex-col shadow-2xl p-5 sm:p-6 text-center space-y-4"
       >
-        {/* M3 Standard Drag Handle */}
-        <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto -mt-1 mb-2 sm:hidden shrink-0" aria-hidden="true" />
+        {/* M3 / iOS Standard Drag Handle */}
+        <div className="sheet-handle -mt-1 mb-2 sm:hidden" aria-hidden="true" />
 
         {/* Warning Icon Badge */}
-        <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto shadow-xs shrink-0">
+        <div className="w-14 h-14 rounded-2xl pos-status-warn border flex items-center justify-center mx-auto shadow-xs shrink-0">
           <ShoppingBag className="w-7 h-7" aria-hidden="true" />
         </div>
 
         {/* Dialog Header & Cart Summary */}
         <div className="space-y-1.5">
           <h2 id="cart-protection-title" className="text-base font-black text-pos-text tracking-tight">
-            Vente en cours non finalisée
+            {t.cartProtection.title}
           </h2>
           <p id="cart-protection-description" className="text-xs text-pos-muted max-w-xs mx-auto leading-relaxed">
-            Votre panier contient <strong className="text-pos-text">{totalItems} article{totalItems > 1 ? 's' : ''}</strong> pour un total de{' '}
-            <strong className="text-emerald-400 font-mono tabular-nums">{formatDZD(cartTotal)}</strong>.
+            {t.cartProtection.summaryTemplate
+              ? t.cartProtection.summaryTemplate
+                  .split(/\{count\}|\{total\}/)
+                  .reduce<React.ReactNode[]>((acc: React.ReactNode[], part: string, idx: number) => {
+                    acc.push(part);
+                    if (idx === 0) {
+                      acc.push(
+                        <strong key="count" className="text-pos-text">
+                          <Bdi>{totalItems}</Bdi>
+                        </strong>
+                      );
+                    } else if (idx === 1) {
+                      acc.push(
+                        <strong key="total" className="text-emerald-700 dark:text-emerald-400 font-mono tabular-nums">
+                          <Bdi mono>{formatDZD(cartTotal)}</Bdi>
+                        </strong>
+                      );
+                    }
+                    return acc;
+                  }, [])
+              : (
+                <>
+                  Votre panier contient{' '}
+                  <strong className="text-pos-text">
+                    <Bdi>{totalItems}</Bdi> article{totalItems > 1 ? 's' : ''}
+                  </strong>{' '}
+                  pour un total de{' '}
+                  <strong className="text-emerald-700 dark:text-emerald-400 font-mono tabular-nums">
+                    <Bdi mono>{formatDZD(cartTotal)}</Bdi>
+                  </strong>
+                  .
+                </>
+              )}
           </p>
         </div>
 
@@ -93,8 +116,8 @@ export const M3CartProtectionModal: React.FC<M3CartProtectionModalProps> = ({
             }}
             className="w-full min-h-[52px] rounded-2xl bg-emerald-500 hover:bg-emerald-400 active-press text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer"
           >
-            <ArrowLeft className="w-4 h-4 stroke-[2.5]" aria-hidden="true" />
-            <span>Conserver la vente</span>
+            <ArrowLeft className="w-4 h-4 stroke-[2.5] rtl:rotate-180" aria-hidden="true" />
+            <span>{t.cartProtection.keepSale}</span>
           </button>
 
           {/* 2. SECONDARY: Suspendre le ticket (Medium Emphasis - Tonal Amber) */}
@@ -104,10 +127,10 @@ export const M3CartProtectionModal: React.FC<M3CartProtectionModalProps> = ({
               soundEngine.playSuccess?.();
               onHoldAndExit();
             }}
-            className="w-full min-h-[50px] rounded-2xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 active-press text-amber-300 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer"
+            className="w-full min-h-[52px] rounded-2xl pos-status-warn border hover:bg-amber-500/25 active-press font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer"
           >
             <PauseCircle className="w-4 h-4" aria-hidden="true" />
-            <span>Suspendre le ticket</span>
+            <span>{t.cartProtection.holdTicket}</span>
           </button>
 
           {/* Separator before destructive action */}
@@ -120,10 +143,10 @@ export const M3CartProtectionModal: React.FC<M3CartProtectionModalProps> = ({
               soundEngine.playKeyBeep?.();
               onDiscardAndExit();
             }}
-            className="w-full min-h-[48px] rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 active-press text-rose-400 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+            className="w-full min-h-[52px] rounded-2xl pos-status-danger border hover:bg-rose-500/20 active-press font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
           >
             <Trash2 className="w-4 h-4" aria-hidden="true" />
-            <span>Vider le panier</span>
+            <span>{t.cartProtection.clearCart}</span>
           </button>
         </div>
       </div>

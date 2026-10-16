@@ -183,6 +183,10 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
        AND json_valid(json_payload)
        AND json_extract(json_payload, '$.isRefund') = 1;`,
     'CREATE INDEX IF NOT EXISTS idx_txn_orig ON transactions(original_transaction_id) WHERE original_transaction_id IS NOT NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_txn_cust_date ON transactions(customer_id, created_at DESC) WHERE customer_id IS NOT NULL AND status != \'VOIDED\';',
+    'CREATE INDEX IF NOT EXISTS idx_txn_shift_status ON transactions(shift_id, status) WHERE shift_id IS NOT NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_prod_stock_alert ON products(category, stock, reorder_point) WHERE deleted = 0;',
+    'CREATE INDEX IF NOT EXISTS idx_outbox_signed_drain ON sync_outbox(status, device_id, seq_no) WHERE seq_no IS NOT NULL;',
     `CREATE TRIGGER IF NOT EXISTS trg_refund_requires_dedup
     BEFORE INSERT ON transactions
     WHEN NEW.is_refund = 1
@@ -2965,6 +2969,27 @@ export async function syncProductUpsert(p: ProductSyncInput): Promise<void> {
       );
     }
 
+    if (wantStock > 0) {
+      try {
+        const batchRows = (await db.select(
+          'SELECT COUNT(*) as count FROM stock_batches WHERE product_id = $1 AND deleted = 0',
+          [pId],
+        ).catch(() => [{ count: 0 }])) as Array<{ count: number }>;
+        const batchCount = Number(batchRows[0]?.count ?? 0);
+        if (batchCount === 0) {
+          const cost = Number(p.costPrice ?? 0);
+          await insertStockBatch({
+            productId: pId,
+            quantityRemaining: wantStock,
+            unitCost: Math.max(0, cost),
+            purchaseOrderId: 'OPENING_STOCK',
+          });
+        }
+      } catch (sbErr) {
+        console.warn('[sqlPluginAdapter] Initial opening stock batch creation skipped:', sbErr);
+      }
+    }
+
     const productPayload = {
       id: pId,
       sku: p.sku ?? '',
@@ -3155,6 +3180,27 @@ export async function syncProductUpsertBulk(products: ProductSyncInput[]): Promi
               updated_at=$2, sync_status='pending' WHERE id=$1`,
             [pId, now],
           );
+        }
+
+        if (wantStock > 0) {
+          try {
+            const batchRows = (await db.select(
+              'SELECT COUNT(*) as count FROM stock_batches WHERE product_id = $1 AND deleted = 0',
+              [pId],
+            ).catch(() => [{ count: 0 }])) as Array<{ count: number }>;
+            const batchCount = Number(batchRows[0]?.count ?? 0);
+            if (batchCount === 0) {
+              const cost = Number(p.costPrice ?? 0);
+              await insertStockBatch({
+                productId: pId,
+                quantityRemaining: wantStock,
+                unitCost: Math.max(0, cost),
+                purchaseOrderId: 'MATRIX_OPENING',
+              });
+            }
+          } catch (sbErr) {
+            console.warn('[sqlPluginAdapter] Bulk matrix opening stock batch creation skipped:', sbErr);
+          }
         }
 
         const rows = (await db.select('SELECT * FROM products WHERE id=$1', [pId]).catch(() => [])) as Array<Record<string, unknown>>;
@@ -3788,6 +3834,20 @@ export async function insertStockBatch(batch: {
      ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, status='pending', updated_at=$4`,
     [idempotencyKey, batchId, JSON.stringify(payload), now]
   );
+
+  try {
+    const { dexieDb } = await import('./database');
+    await dexieDb.stockBatches.put({
+      batchId,
+      productId: batch.productId,
+      quantityRemaining: batch.quantityRemaining,
+      unitCost: batch.unitCost,
+      receivedAt,
+      purchaseOrderId: batch.purchaseOrderId || undefined,
+    });
+  } catch (dexErr) {
+    console.warn('[insertStockBatch] Dexie mirror put skipped:', dexErr);
+  }
 
   return batchId;
 }

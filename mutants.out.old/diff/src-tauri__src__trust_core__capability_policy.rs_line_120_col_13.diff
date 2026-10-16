@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/capability_policy.rs
++++ delete match arm Capability::EmergencyExport in authorize
+@@ -112,17 +112,17 @@
+             _ => DENY,
+         },
+         LicenseState::TamperSuspected => match capability {
+             // Owner-directed (Phase 3.1 Q2): quarantine no longer blocks
+             // emergency export. The export is read-only, changes no state,
+             // unlocks nothing, and carries a MAC-covered "tamper" flag, so
+             // a merchant with a wrong clock is never locked out of their
+             // own data. REVOKED stays denied.
+-            Capability::EmergencyExport => ALLOW_OWNER,
++             /* ~ changed by cargo-mutants ~ */
+             Capability::LicenseManagement => ALLOW,
+             _ => DENY,
+         },
+     }
+ }
+ 
+ /// Every state, for exhaustive tests.
+ pub const ALL_STATES: [LicenseState; 10] = [

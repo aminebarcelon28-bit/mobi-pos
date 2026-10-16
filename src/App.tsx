@@ -354,14 +354,14 @@ const FirstBootPinSetup: React.FC = () => {
   };
 
   const pinInputClass =
-    'w-full px-4 py-3 rounded-xl bg-pos-bg border border-pos-border text-pos-text text-center font-mono text-2xl tracking-[0.5em] outline-none focus:border-amber-500 transition';
+    'w-full min-h-[48px] px-4 py-3 rounded-xl bg-pos-bg border border-pos-border text-pos-text text-center font-mono text-2xl tracking-[0.5em] outline-none focus:border-amber-500 transition';
   const nameInputClass =
-    'w-full px-4 py-2.5 rounded-xl bg-pos-bg border border-pos-border text-pos-text text-base sm:text-sm font-semibold outline-none focus:border-amber-500 transition placeholder:text-pos-muted/60 placeholder:font-normal';
+    'w-full min-h-[48px] px-4 py-2.5 rounded-xl bg-pos-bg border border-pos-border text-pos-text text-base sm:text-sm font-semibold outline-none focus:border-amber-500 transition placeholder:text-pos-muted/60 placeholder:font-normal';
 
   return (
     <div
       data-testid="setup-pin-root"
-      className="fixed inset-0 z-[200] bg-slate-950/95 backdrop-blur-xl flex items-center justify-center p-4 select-none overflow-y-auto"
+      className="fixed inset-0 z-[200] bg-pos-bg/95 text-pos-text backdrop-blur-xl flex items-center justify-center p-4 select-none overflow-y-auto"
       style={{
         paddingTop: 'max(var(--safe-top, 16px), 1rem)',
         paddingBottom: 'max(var(--safe-bottom, 16px), 1rem)',
@@ -369,7 +369,7 @@ const FirstBootPinSetup: React.FC = () => {
     >
       <div className="w-full max-w-lg bg-pos-panel border border-amber-500/40 rounded-2xl shadow-2xl p-6 my-auto">
         <div className="flex flex-col items-center mb-5 text-center">
-          <div className="w-12 h-12 rounded-full bg-amber-500/20 flex items-center justify-center mb-3 text-amber-400">
+          <div className="w-12 h-12 rounded-full bg-amber-500/20 flex items-center justify-center mb-3 text-amber-600 dark:text-amber-400">
             <ShieldCheck size={28} aria-hidden="true" />
           </div>
           <h2 className="text-lg font-bold text-pos-text mb-1">
@@ -386,7 +386,7 @@ const FirstBootPinSetup: React.FC = () => {
         <div className="space-y-5">
           {/* ── Manager ── */}
           <div className="rounded-xl border border-pos-border bg-pos-bg/60 p-3.5 space-y-3">
-            <p className="text-[11px] font-bold text-amber-400 uppercase tracking-wider">
+            <p className="text-[11px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider">
               Gérant (administrateur)
             </p>
             <div>
@@ -411,6 +411,7 @@ const FirstBootPinSetup: React.FC = () => {
                 </label>
                 <input
                   type="password"
+                  dir="ltr"
                   data-testid="setup-manager-new"
                   inputMode="numeric"
                   pattern="[0-9]*"
@@ -432,6 +433,7 @@ const FirstBootPinSetup: React.FC = () => {
                 </label>
                 <input
                   type="password"
+                  dir="ltr"
                   data-testid="setup-manager-confirm"
                   inputMode="numeric"
                   pattern="[0-9]*"
@@ -459,7 +461,7 @@ const FirstBootPinSetup: React.FC = () => {
               <button
                 type="button"
                 onClick={addRow}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-xs font-bold transition active:scale-95 min-h-[40px]"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 text-xs font-bold transition active:scale-95 min-h-[48px]"
               >
                 <Plus className="w-4 h-4" aria-hidden="true" />
                 <span>Ajouter un caissier</span>
@@ -485,6 +487,7 @@ const FirstBootPinSetup: React.FC = () => {
                     />
                     <input
                       type="password"
+                      dir="ltr"
                       inputMode="numeric"
                       pattern="[0-9]*"
                       autoComplete="new-password"
@@ -494,14 +497,14 @@ const FirstBootPinSetup: React.FC = () => {
                       onFocus={() => setPinTarget({ kind: 'cashier', key: r.key })}
                       onClick={() => setPinTarget({ kind: 'cashier', key: r.key })}
                       onChange={(e) => updateRow(r.key, { pin: e.target.value.replace(/\D/g, '').slice(0, 4) })}
-                      className="w-28 shrink-0 px-2 py-2 rounded-xl bg-pos-bg border border-pos-border text-pos-text text-center font-mono text-lg tracking-[0.3em] outline-none focus:border-amber-500 transition"
+                      className="w-28 min-h-[48px] shrink-0 px-2 py-2 rounded-xl bg-pos-bg border border-pos-border text-pos-text text-center font-mono text-lg tracking-[0.3em] outline-none focus:border-amber-500 transition"
                       placeholder="••••"
                       aria-label={`Code PIN de ${r.name || 'caissier'}`}
                     />
                     <button
                       type="button"
                       onClick={() => removeRow(r.key)}
-                      className="shrink-0 p-2 rounded-xl hover:bg-rose-500/15 border border-transparent hover:border-rose-500/30 text-pos-muted hover:text-rose-400 transition min-h-[44px] min-w-[44px] flex items-center justify-center"
+                      className="shrink-0 p-2 rounded-xl hover:bg-rose-500/15 border border-transparent hover:border-rose-500/30 text-pos-muted hover:text-rose-600 dark:hover:text-rose-400 transition min-h-[48px] min-w-[48px] flex items-center justify-center"
                       title="Retirer ce caissier"
                       aria-label={`Retirer ${r.name || 'cette ligne'}`}
                     >
@@ -523,16 +526,16 @@ const FirstBootPinSetup: React.FC = () => {
             </p>
             <p className="text-[11px] text-pos-muted mb-2.5 leading-relaxed">
               Touchez un champ PIN, puis composez le code ici — cible :{' '}
-              <span className="font-bold text-amber-300">{pinTargetLabel}</span>.
+              <span className="font-bold text-amber-700 dark:text-amber-300">{pinTargetLabel}</span>.
             </p>
-            <div className="grid grid-cols-3 gap-2">
+            <div dir="ltr" className="grid grid-cols-3 gap-2">
               {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((d) => (
                 <button
                   key={d}
                   type="button"
                   onClick={() => appendPinDigit(d)}
                   aria-label={`Chiffre ${d}`}
-                  className="h-12 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-xl font-bold transition active:scale-95 active:border-amber-500"
+                  className="min-h-[48px] h-12 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-xl font-bold transition active:scale-95 active:border-amber-500"
                 >
                   <span aria-hidden="true">{d}</span>
                 </button>
@@ -541,7 +544,7 @@ const FirstBootPinSetup: React.FC = () => {
                 type="button"
                 onClick={clearPinField}
                 aria-label="Tout effacer"
-                className="h-12 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-base font-bold transition active:scale-95"
+                className="min-h-[48px] h-12 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-base font-bold transition active:scale-95"
               >
                 <span aria-hidden="true">C</span>
               </button>
@@ -549,7 +552,7 @@ const FirstBootPinSetup: React.FC = () => {
                 type="button"
                 onClick={() => appendPinDigit('0')}
                 aria-label="Chiffre 0"
-                className="h-12 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-xl font-bold transition active:scale-95 active:border-amber-500"
+                className="min-h-[48px] h-12 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-xl font-bold transition active:scale-95 active:border-amber-500"
               >
                 <span aria-hidden="true">0</span>
               </button>
@@ -557,7 +560,7 @@ const FirstBootPinSetup: React.FC = () => {
                 type="button"
                 onClick={backspacePinDigit}
                 aria-label="Effacer le dernier chiffre"
-                className="h-12 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-xl font-bold transition active:scale-95"
+                className="min-h-[48px] h-12 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-xl font-bold transition active:scale-95"
               >
                 <span aria-hidden="true">⌫</span>
               </button>
@@ -565,7 +568,7 @@ const FirstBootPinSetup: React.FC = () => {
           </div>
 
           {error && (
-            <p className="text-center text-rose-400 text-xs font-bold">{error}</p>
+            <p className="text-center text-rose-600 dark:text-rose-400 text-xs font-bold">{error}</p>
           )}
 
           <button
@@ -585,6 +588,11 @@ const FirstBootPinSetup: React.FC = () => {
 
 export const App: React.FC = () => {
   const { isMobile, setRoleMode } = useDeviceMode();
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.dataset.shell = isMobile ? 'mobile' : 'desktop';
+    }
+  }, [isMobile]);
   useKeyboardHotkeys();
   const { scannerActive } = useBarcodeScanner();
   const initDatabase = usePosStore((state) => state.initDatabase);
@@ -1129,18 +1137,18 @@ export const App: React.FC = () => {
     <ErrorBoundary fallbackTitle="Erreur Système POS Interceptée">
       <ToastProvider>
         <SyncNotificationListener />
-        <div className={`h-[100dvh] w-full flex flex-col bg-pos-bg text-pos-text overflow-hidden font-sans transition-all duration-200 ${scannerActive ? 'ring-4 ring-inset ring-emerald-500' : ''}`}>
+        <div className={`h-[100dvh] w-screen flex flex-col bg-surface-canvas text-fg overflow-hidden font-sans select-none chrome transition-all duration-200 ${scannerActive ? 'ring-4 ring-inset ring-pos-accent' : ''}`}>
           {/* Orientation Guidance on Mobile PC View */}
           {isMobileDevice() && !isLandscape && (
             <div className="bg-gradient-to-r from-indigo-950 via-purple-950 to-slate-900 border-b border-indigo-500/30 px-3 py-1.5 flex items-center justify-between text-[11px] text-indigo-200 shrink-0 select-none z-40">
               <div className="flex items-center gap-2 min-w-0">
-                <RotateCw className="w-3.5 h-3.5 text-cyan-400 shrink-0 animate-spin" />
+                <RotateCw className="w-3.5 h-3.5 text-cyan-400 shrink-0 animate-spin" aria-hidden="true" />
                 <span className="truncate font-medium">Pivotez l'écran en paysage pour une vue caisse optimale</span>
               </div>
               <button
                 type="button"
                 onClick={() => setRoleMode('companion_mobile')}
-                className="px-2 py-0.5 rounded-lg bg-indigo-500/30 hover:bg-indigo-500/40 text-cyan-300 font-bold text-[10px] shrink-0 ml-2 cursor-pointer transition active:scale-95"
+                className="min-h-[48px] px-3 py-1.5 rounded-xl bg-indigo-500/30 hover:bg-indigo-500/40 text-cyan-300 font-bold text-xs shrink-0 ms-2 cursor-pointer transition active:scale-95 flex items-center justify-center"
               >
                 Retour Mobile
               </button>
@@ -1167,10 +1175,10 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => setRoleMode('companion_mobile')}
-              className="fixed right-3 z-50 px-3 py-1.5 rounded-xl bg-cyan-600/95 hover:bg-cyan-500 text-white font-bold text-xs shadow-xl shadow-cyan-950/60 border border-cyan-400/40 flex items-center gap-1.5 active:scale-95 transition cursor-pointer bottom-[calc(var(--safe-bottom)+3rem)]"
+              className="fixed end-3 z-50 min-h-[48px] px-3.5 py-2 rounded-xl bg-cyan-600/95 hover:bg-cyan-500 text-white font-bold text-xs shadow-xl shadow-cyan-950/60 border border-cyan-400/40 flex items-center gap-1.5 active:scale-95 transition cursor-pointer bottom-[calc(var(--safe-bottom)+3rem)]"
               title="Revenir au mode compagnon mobile"
             >
-              <Smartphone className="w-3.5 h-3.5" />
+              <Smartphone className="w-4 h-4" aria-hidden="true" />
               <span>Mode Mobile</span>
             </button>
           )}

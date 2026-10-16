@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace < with > in evaluate
+@@ -120,17 +120,17 @@
+                     verdict: TimeVerdict::Trusted { trusted_now_ms: trusted },
+                     advisory: None,
+                     checkpoint_update: Some(CheckpointUpdate {
+                         boot_session_id: clock.boot_id().or(cp.boot_session_id),
+                         wall_utc_ms: trusted,
+                         monotonic_ms: current_m.max(cp.monotonic_ms),
+                     }),
+                 }
+-            } else if skew < 0 {
++            } else if skew > /* ~ changed by cargo-mutants ~ */ 0 {
+                 EvalOutcome {
+                     verdict: TimeVerdict::TamperSuspected,
+                     advisory: None,
+                     checkpoint_update: None,
+                 }
+             } else if (skew as u64) > WARN_AHEAD_MS {
+                 // Reachable only if an owner configures SESSION_TOLERANCE
+                 // above WARN_AHEAD (default 1 h < 24 h routes such jumps to

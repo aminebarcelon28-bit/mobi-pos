@@ -75,6 +75,7 @@ export type ActiveModalType =
   | 'mobile_simulator'
   | 'cloud_pairing'
   | 'custom_item'
+  | 'command_palette'
   | null;
 
 export interface CartSlice {
@@ -117,7 +118,7 @@ export interface CatalogSlice {
   saveProduct: (
     productInput: ProductInput,
     options?: { keepModalOpen?: boolean }
-  ) => Promise<{ success: boolean; reason?: string }>;
+  ) => Promise<{ success: boolean; reason?: string; savedProduct?: Product }>;
   deleteProduct: (id: string) => Promise<void>;
   ingestInvoiceBatch: (
     updatedProducts: Product[],

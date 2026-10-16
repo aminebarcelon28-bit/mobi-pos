@@ -19,11 +19,11 @@ const SIZE_CLASSES = {
 };
 
 const COLOR_CLASSES = {
-  emerald: 'text-emerald-400',
-  cyan: 'text-cyan-400',
-  amber: 'text-amber-400',
-  rose: 'text-rose-400',
-  purple: 'text-purple-400',
+  emerald: 'text-pos-accent',
+  cyan: 'text-pos-accent-cyan',
+  amber: 'text-pos-accent-amber',
+  rose: 'text-pos-accent-rose',
+  purple: 'text-pos-accent-purple',
   default: 'text-pos-text',
 };
 
@@ -44,7 +44,7 @@ export const MoneyDisplay: React.FC<MoneyDisplayProps> = ({
       role="text"
       className={`inline-block max-w-full truncate whitespace-nowrap font-mono font-black tracking-tight tabular-nums ${SIZE_CLASSES[size]} ${COLOR_CLASSES[color]} ${className}`}
     >
-      {displayValue}
+      <bdi dir="ltr">{displayValue}</bdi>
     </span>
   );
 };

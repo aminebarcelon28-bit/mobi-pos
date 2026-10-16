@@ -277,6 +277,14 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
             );
           }
         }
+
+        if (newStatus === 'Annulé' && target.status !== 'Annulé' && target.depositAmount > 0 && get().activeShift) {
+          await get().logCashMovement(
+            target.depositAmount,
+            'MANUAL_WITHDRAWAL',
+            `Remboursement Acompte SAV Annulé: Ticket #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`
+          );
+        }
       } catch (err) {
         console.error(`Failed to update repair order status [${orderId}]:`, err);
       }
@@ -290,6 +298,7 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
 
   updateRepairOrder: async (orderId, updates) => {
     const { repairOrders } = get();
+    const targetBefore = repairOrders.find((r) => r.id === orderId);
     const updated = repairOrders.map((r) => {
       if (r.id !== orderId) return r;
       // Legal evidence is append-only: a v2 signature / photo evidence set may
@@ -335,7 +344,27 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
     const target = updated.find((r) => r.id === orderId);
     if (target) {
       try {
-         await (await getRepairRepo()).save(target);
+        await (await getRepairRepo()).save(target);
+
+        // Track deposit changes in cash movements
+        if (targetBefore && updates.depositAmount !== undefined) {
+          const delta = target.depositAmount - targetBefore.depositAmount;
+          if (delta !== 0 && get().activeShift) {
+            if (delta > 0) {
+              await get().logCashMovement(
+                delta,
+                'MANUAL_DEPOSIT',
+                `Complément Acompte SAV: Ticket #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`
+              );
+            } else {
+              await get().logCashMovement(
+                Math.abs(delta),
+                'MANUAL_WITHDRAWAL',
+                `Remboursement Partiel Acompte SAV: Ticket #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`
+              );
+            }
+          }
+        }
       } catch (err) {
         console.error(`Failed to update repair order [${orderId}]:`, err);
       }

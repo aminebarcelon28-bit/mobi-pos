@@ -149,7 +149,7 @@ pub(crate) fn plan_prune(
     let mut delete_ids = Vec::new();
     let mut kept = 0usize;
     for (_kind, mut group) in by_kind {
-        group.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
+        group.sort_by_key(|b| std::cmp::Reverse(b.mtime_ms));
         for (pos, c) in group.iter().enumerate() {
             // Newest of each kind is always kept.
             if pos == 0 {
@@ -323,11 +323,11 @@ pub fn janitor_sweep_backups_at(live_db: &Path, backups_dir: &Path) -> SweepRepo
     if !backups_dir.is_dir() {
         return empty;
     }
-    let candidates = collect_candidates(&backups_dir);
+    let candidates = collect_candidates(backups_dir);
     if candidates.is_empty() {
         return empty;
     }
-    let rows = match read_snapshot_ref_rows(&live_db) {
+    let rows = match read_snapshot_ref_rows(live_db) {
         Ok(r) => Ok(r),
         Err(e) => {
             eprintln!("[prune:janitor] audit read failed, deleting nothing: {e}");
@@ -348,7 +348,7 @@ pub fn janitor_sweep_backups_at(live_db: &Path, backups_dir: &Path) -> SweepRepo
             deleted: vec![],
         };
     }
-    match execute_prune(&backups_dir, &plan) {
+    match execute_prune(backups_dir, &plan) {
         Ok(deleted) => {
             eprintln!(
                 "[prune:janitor] swept {} snapshot(s), kept {}: {}",
@@ -399,7 +399,7 @@ pub fn prune_snapshots(
     if verify_res.locked {
         return Err(TrustError::op_failed(format!(
             "PIN verrouillé — réessayez dans {}s.",
-            (verify_res.locked_remaining_ms + 999) / 1000
+            verify_res.locked_remaining_ms.div_ceil(1000)
         )));
     }
     if !verify_res.ok {

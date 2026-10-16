@@ -17,9 +17,11 @@ import { AppTabContent } from '../AppScreenLayout';
 import type { Product } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
 import { getProductPriceForTier } from '../../../utils/pricingEngine';
-import { soundEngine } from '../../../utils/audioFeedback';
+import { soundEngine, triggerHaptic } from '../../../utils/audioFeedback';
 import { MobileCameraScanner } from '../MobileCameraScanner';
 import { useToast } from '../../ui/Toast';
+import { useRegisterMobileBackHandler } from '../../../hooks/useMobileBackNavigation';
+import { useTranslation, Bdi } from '../../../i18n';
 
 // Normalisation insensible aux accents/casse pour la recherche catalogue.
 const foldForSearch = (s: string | undefined | null): string =>
@@ -61,12 +63,13 @@ const CatalogSkeletonCard: React.FC = () => (
     <div className="h-11 rounded-xl bg-pos-panel border border-pos-border" />
     <div className="flex items-center justify-between gap-2">
       <div className="h-4 w-20 rounded-md bg-pos-panel border border-pos-border" />
-      <div className="h-[44px] w-28 rounded-xl bg-pos-panel border border-pos-border shrink-0" />
+      <div className="h-[48px] w-28 rounded-xl bg-pos-panel border border-pos-border shrink-0" />
     </div>
   </div>
 );
 
 export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart }) => {
+  const { t } = useTranslation();
   const { products, addToCart, setEditingProduct, openModal } = usePosStore();
   const { showToast } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -74,6 +77,8 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [addedAnimationId, setAddedAnimationId] = useState<string | null>(null);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+
+  useRegisterMobileBackHandler(isScannerOpen, () => setIsScannerOpen(false), 'catalog-scanner');
 
   // Debounced scan input: instant field, list scan follows 200ms after typing.
   // Instant reset on empty query to prevent UI lag on search clear.
@@ -83,16 +88,12 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
       setDebouncedSearch('');
       return;
     }
-    const t = setTimeout(() => setDebouncedSearch(searchTerm), 200);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 200);
+    return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // Premier rendu : squelette le temps que le catalogue peigne ses cartes.
-  const [catalogHydrated, setCatalogHydrated] = useState(false);
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => setCatalogHydrated(true));
-    return () => cancelAnimationFrame(raf);
-  }, []);
+  // Premier rendu : instantané sans délai artificiel
+  const [catalogHydrated] = useState(true);
 
   const [recentSearches, setRecentSearches] = useState<string[]>(readRecentSearches);
   // Mémorise les recherches abouties (≥ 2 lettres, dédupliquées, max 5).
@@ -135,6 +136,20 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
     setDebouncedSearch(term);
   };
 
+  // Precomputed category counts ($O(N)$ once per products change)
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    let total = 0;
+    for (const p of products || []) {
+      total++;
+      if (p.category) {
+        counts.set(p.category, (counts.get(p.category) || 0) + 1);
+      }
+    }
+    counts.set('all', total);
+    return counts;
+  }, [products]);
+
   // Extract unique categories
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -174,15 +189,7 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
       return;
     }
 
-    // Tactile haptics on mobile devices supporting vibration
-    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-      try {
-        navigator.vibrate(20);
-      } catch {
-        // Haptics optional
-      }
-    }
-
+    triggerHaptic('medium');
     soundEngine.playScan?.();
     onAddToCart?.(product);
     setAddedAnimationId(product.id);
@@ -238,7 +245,10 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
             {/* Search Bar with Camera Barcode Trigger */}
             <div className="flex items-center gap-2">
               <div className="relative flex-1">
-                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" aria-hidden="true" />
+                <Search
+                  className="w-4 h-4 absolute start-3.5 top-1/2 -translate-y-1/2 text-pos-muted pointer-events-none"
+                  aria-hidden="true"
+                />
                 {/* Font size text-base (16px) strictly preserves iOS Safari auto-zoom prevention */}
                 <input
                   ref={inputRef}
@@ -248,10 +258,11 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                   autoCapitalize="none"
                   autoCorrect="off"
                   spellCheck={false}
+                  data-barcode-scan-target="true"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Nom, code-barres, référence..."
-                  className="w-full min-h-[44px] bg-pos-panel border border-pos-border focus:border-cyan-500 rounded-xl pl-9 pr-11 py-2 text-base text-pos-text placeholder-pos-muted focus:outline-none transition-all shadow-xs"
+                  placeholder={t.catalog.searchPlaceholder}
+                  className="w-full min-h-[48px] bg-pos-panel border border-pos-border focus:border-cyan-500 rounded-xl ps-10 pe-12 py-2 text-base text-pos-text placeholder-pos-muted focus:outline-none transition-all shadow-xs"
                 />
                 {searchTerm && (
                   <button
@@ -261,8 +272,8 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                       setDebouncedSearch('');
                       inputRef.current?.focus();
                     }}
-                    className="absolute right-1 top-1/2 -translate-y-1/2 min-h-[44px] min-w-[44px] text-pos-muted hover:text-pos-text flex items-center justify-center active-press cursor-pointer"
-                    aria-label="Effacer la recherche"
+                    className="absolute end-1 top-1/2 -translate-y-1/2 min-h-[48px] min-w-[48px] text-pos-muted hover:text-pos-text flex items-center justify-center active-press cursor-pointer"
+                    aria-label={t.catalog.clearSearchAria}
                   >
                     <X className="w-4 h-4" aria-hidden="true" />
                   </button>
@@ -273,12 +284,12 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
               <button
                 type="button"
                 onClick={() => setIsScannerOpen(true)}
-                className="min-h-[44px] px-3.5 bg-cyan-500/10 border border-cyan-500/30 hover:border-cyan-400 hover:bg-cyan-500/20 text-cyan-400 rounded-xl flex items-center justify-center gap-1.5 active-press transition-all text-xs font-bold shrink-0 cursor-pointer shadow-xs"
+                className="min-h-[48px] min-w-[48px] px-3.5 pos-status-info border hover:bg-cyan-500/20 rounded-xl flex items-center justify-center gap-1.5 active-press transition-all text-xs font-bold shrink-0 cursor-pointer shadow-xs"
                 title="Scanner un code-barres avec l'appareil photo"
-                aria-label="Scanner — Appareil photo"
+                aria-label={`${t.catalog.scannerButton} — Appareil photo`}
               >
                 <Camera className="w-4 h-4" aria-hidden="true" />
-                <span className="hidden xs:inline">Scanner</span>
+                <span className="hidden xs:inline">{t.catalog.scannerButton}</span>
               </button>
             </div>
 
@@ -286,9 +297,9 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
             {recentSearches.length > 0 && !searchTerm.trim() && (
               <div className="flex items-center gap-1.5">
                 <div className="flex-1 flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar scroll-smooth overscroll-contain scroll-fade-x">
-                  <span className="text-[10px] font-black uppercase tracking-wider text-pos-muted shrink-0 flex items-center gap-1 pl-0.5">
-                    <History className="w-3.5 h-3.5 text-cyan-400" aria-hidden="true" />
-                    <span>Récents</span>
+                  <span className="text-[10px] font-black uppercase tracking-wider text-pos-muted shrink-0 flex items-center gap-1 ps-0.5">
+                    <History className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" aria-hidden="true" />
+                    <span>{t.catalog.recentSearchesLabel}</span>
                   </span>
                   {recentSearches.map((term) => (
                     <button
@@ -296,7 +307,7 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                       type="button"
                       onClick={() => handleSelectRecentSearch(term)}
                       aria-label={`${term} — Rechercher`}
-                      className="min-h-[44px] px-3 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-[11px] font-bold whitespace-nowrap active-press transition hover:border-cyan-400/50 cursor-pointer shrink-0"
+                      className="min-h-[48px] px-3 rounded-xl bg-pos-panel border border-pos-border text-pos-text text-[11px] font-bold whitespace-nowrap active-press transition hover:border-cyan-500/50 cursor-pointer shrink-0"
                     >
                       {term}
                     </button>
@@ -305,9 +316,9 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                 <button
                   type="button"
                   onClick={handleClearRecentSearches}
-                  aria-label="Effacer les recherches récentes"
-                  title="Effacer les recherches récentes"
-                  className="min-h-[44px] min-w-[44px] px-2.5 rounded-xl text-pos-muted hover:text-rose-400 text-[11px] font-bold active-press transition cursor-pointer shrink-0 flex items-center justify-center border border-pos-border/50 bg-pos-panel/60"
+                  aria-label={t.catalog.clearRecentSearchesAria}
+                  title={t.catalog.clearRecentSearchesAria}
+                  className="min-h-[48px] min-w-[48px] px-2.5 rounded-xl text-pos-muted hover:text-rose-600 dark:hover:text-rose-400 text-[11px] font-bold active-press transition cursor-pointer shrink-0 flex items-center justify-center border border-pos-border bg-pos-panel/60"
                 >
                   <X className="w-4 h-4" aria-hidden="true" />
                 </button>
@@ -323,11 +334,11 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                   setEditingProduct(null);
                   openModal('product_editor');
                 }}
-                className="min-h-[44px] px-2 sm:px-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 hover:bg-emerald-500/25 text-emerald-400 active-press font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-xs truncate"
-                title="Créer une nouvelle fiche article (Éditeur complet)"
+                className="min-h-[48px] px-2 sm:px-3 rounded-xl pos-status-ok border hover:bg-emerald-500/25 active-press font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-xs truncate"
+                title={t.catalog.newProductTitle}
               >
                 <Plus className="w-3.5 h-3.5 stroke-[3] shrink-0" aria-hidden="true" />
-                <span className="truncate">Article</span>
+                <span className="truncate">{t.catalog.newProductButton}</span>
               </button>
 
               <button
@@ -336,11 +347,11 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                   soundEngine.playKeyBeep?.();
                   openModal('invoice_ingestion');
                 }}
-                className="min-h-[44px] px-2 sm:px-3 rounded-xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 border border-emerald-500/40 text-emerald-300 hover:text-emerald-200 active-press font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-xs truncate"
-                title="Scanner un Bon de Livraison ou Facture Fournisseur (IA Recon)"
+                className="min-h-[48px] px-2 sm:px-3 rounded-xl pos-status-ok border hover:bg-emerald-500/25 active-press font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-xs truncate"
+                title={t.catalog.aiInvoiceTitle}
               >
-                <Camera className="w-3.5 h-3.5 text-emerald-400 shrink-0" aria-hidden="true" />
-                <span className="truncate">Facture IA</span>
+                <Camera className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <span className="truncate">{t.catalog.aiInvoiceButton}</span>
               </button>
 
               <button
@@ -349,11 +360,11 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                   soundEngine.playKeyBeep?.();
                   openModal('compatibility');
                 }}
-                className="min-h-[44px] px-2 sm:px-3 rounded-xl bg-pos-panel border border-pos-border hover:border-cyan-400/50 text-cyan-400 active-press font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer truncate"
-                title="Matrice de compatibilité écrans, verres trempés & coques"
+                className="min-h-[48px] px-2 sm:px-3 rounded-xl bg-pos-panel border border-pos-border hover:border-cyan-500/50 text-cyan-700 dark:text-cyan-400 active-press font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer truncate"
+                title={t.catalog.compatibilityTitle}
               >
-                <Sparkles className="w-3.5 h-3.5 text-cyan-400" aria-hidden="true" />
-                <span className="truncate">Compat</span>
+                <Sparkles className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" aria-hidden="true" />
+                <span className="truncate">{t.catalog.compatibilityButton}</span>
               </button>
             </div>
 
@@ -361,10 +372,7 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar scroll-smooth overscroll-contain scroll-fade-x text-[11px] font-bold">
               {categories.map((cat) => {
                 const isSelected = selectedCategory === cat;
-                const count =
-                  cat === 'all'
-                    ? products?.length || 0
-                    : (products || []).filter((p) => p.category === cat).length;
+                const count = categoryCounts.get(cat) || 0;
                 return (
                   <button
                     key={cat}
@@ -374,22 +382,23 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                       setSelectedCategory(cat);
                     }}
                     aria-pressed={isSelected}
-                    className={`min-h-[44px] px-3.5 py-1.5 rounded-xl whitespace-nowrap transition-all duration-200 cursor-pointer flex items-center gap-1.5 active-press shrink-0 ${
+                    className={`min-h-[48px] px-3.5 py-1.5 rounded-xl whitespace-nowrap transition-all duration-200 cursor-pointer flex items-center gap-1.5 active-press shrink-0 ${
                       isSelected
                         ? 'bg-cyan-500 text-slate-950 font-black shadow-md shadow-cyan-500/20'
                         : 'bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text hover:border-pos-border/80'
                     }`}
                   >
-                    <span>{cat === 'all' ? 'Tous les articles' : cat}</span>
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono transition-colors ${
+                    <span>{cat === 'all' ? t.catalog.allCategories : cat}</span>
+                    <Bdi
+                      mono
+                      className={`text-[10px] px-1.5 py-0.5 rounded-full transition-colors ${
                         isSelected
                           ? 'bg-slate-950/25 text-slate-950 font-black'
-                          : 'bg-pos-card text-pos-text/90 border border-pos-border/60 font-bold'
+                          : 'bg-pos-card text-pos-text border border-pos-border font-bold'
                       }`}
                     >
                       {count}
-                    </span>
+                    </Bdi>
                   </button>
                 );
               })}
@@ -397,12 +406,14 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
 
             <div className="flex items-center justify-between text-[11px] font-bold text-pos-muted px-1">
               <span className="flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5 text-cyan-400" aria-hidden="true" />
-                {filteredProducts.length} articles trouvés
+                <Layers className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" aria-hidden="true" />
+                <span>
+                  {t('catalog.productsFoundCount', { count: filteredProducts.length })}
+                </span>
               </span>
               {searchTerm && (
-                <span className="text-[10px] text-cyan-400 truncate max-w-[180px]">
-                  Filtre: "{searchTerm}"
+                <span className="text-[10px] text-cyan-700 dark:text-cyan-400 truncate max-w-[180px]">
+                  {t('catalog.activeFilterPrefix', { query: searchTerm })}
                 </span>
               )}
             </div>
@@ -411,9 +422,13 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
         contentClassName="px-3.5 pb-4 select-none"
       >
         {/* Product List / Responsive High-Density Grid */}
-        <div className="pt-1" aria-busy={searchTerm !== debouncedSearch}>
+        <div className="@container pt-1" aria-busy={searchTerm !== debouncedSearch}>
           {!catalogHydrated ? (
-            <div role="status" aria-label="Chargement du catalogue…" className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div
+              role="status"
+              aria-label={t.catalog.loadingCatalogAria}
+              className="grid grid-cols-1 sm:grid-cols-2 @min-[560px]:grid-cols-2 gap-2.5"
+            >
               <CatalogSkeletonCard />
               <CatalogSkeletonCard />
               <CatalogSkeletonCard />
@@ -425,38 +440,36 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                 <Package className="w-6 h-6 opacity-60" aria-hidden="true" />
               </div>
               <div>
-                <p className="text-xs font-black text-pos-text">Aucun article trouvé</p>
-                <p className="text-[11px] text-pos-muted mt-0.5">
-                  Modifiez votre recherche ou utilisez le scanner pour identifier un code-barres.
-                </p>
+                <p className="text-xs font-black text-pos-text">{t.catalog.emptyCatalogTitle}</p>
+                <p className="text-[11px] text-pos-muted mt-0.5">{t.catalog.emptyCatalogDescription}</p>
               </div>
               <div className="flex flex-col sm:flex-row gap-2 w-full max-w-xs justify-center pt-1">
                 <button
                   type="button"
                   onClick={handleClearSearch}
-                  className="w-full min-h-[44px] px-4 rounded-xl bg-pos-card border border-pos-border hover:border-pos-text text-pos-text font-bold text-xs flex items-center justify-center gap-1.5 active-press transition cursor-pointer"
+                  className="w-full min-h-[48px] px-4 rounded-xl bg-pos-card border border-pos-border hover:border-pos-text text-pos-text font-bold text-xs flex items-center justify-center gap-1.5 active-press transition cursor-pointer"
                 >
                   <X className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Effacer la recherche</span>
+                  <span>{t.catalog.clearSearchButton}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setIsScannerOpen(true)}
-                  className="w-full min-h-[44px] px-4 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-400 font-bold text-xs flex items-center justify-center gap-1.5 active-press transition cursor-pointer shadow-xs"
+                  className="w-full min-h-[48px] px-4 rounded-xl pos-status-info border font-bold text-xs flex items-center justify-center gap-1.5 active-press transition cursor-pointer shadow-xs"
                 >
                   <Camera className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>Ouvrir le Scanner</span>
+                  <span>{t.catalog.openScannerButton}</span>
                 </button>
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 @min-[560px]:grid-cols-2 gap-2.5">
               {filteredProducts.map((prod) => {
                 const isService = Boolean(
                   prod.isService ||
-                  prod.category === 'Services' ||
-                  prod.id?.startsWith('qt-') ||
-                  prod.id?.startsWith('prod-misc-')
+                    prod.category === 'Services' ||
+                    prod.id?.startsWith('qt-') ||
+                    prod.id?.startsWith('prod-misc-'),
                 );
                 const stock = prod.stock ?? 0;
                 const isOutOfStock = !isService && stock <= 0;
@@ -476,18 +489,21 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                       isAdded
                         ? 'border-emerald-500 ring-2 ring-emerald-500/60 shadow-md shadow-emerald-500/10'
                         : isOutOfStock
-                        ? 'border-dashed border-rose-500/40 bg-rose-950/5'
+                        ? 'border-dashed border-rose-500/40 bg-rose-500/5'
                         : isLowStock
                         ? 'border-amber-500/40 hover:border-amber-500/60'
                         : 'border-pos-border hover:border-cyan-500/40'
                     }`}
                   >
                     {/* Header: Title & Stock Status Badge */}
-                    <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start justify-between gap-2 text-start">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">
                           {prod.isSerialized && (
-                            <span className="p-0.5 rounded bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 shrink-0" title="Article Sérialisé IMEI">
+                            <span
+                              className="p-0.5 rounded pos-status-info border shrink-0"
+                              title="Article Sérialisé IMEI"
+                            >
                               <Smartphone className="w-3 h-3" aria-hidden="true" />
                             </span>
                           )}
@@ -496,88 +512,104 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                           </h4>
                         </div>
                         <div className="flex items-center gap-2 text-[10px] text-pos-muted mt-1 font-mono flex-wrap">
-                          <span>Réf: {prod.sku || '-'}</span>
-                          {prod.barcode && <span>• CB: {prod.barcode}</span>}
+                          <span>
+                            {t.catalog.skuPrefix} <Bdi mono>{prod.sku || '-'}</Bdi>
+                          </span>
+                          {prod.barcode && (
+                            <span>
+                              • {t.catalog.barcodePrefix} <Bdi mono>{prod.barcode}</Bdi>
+                            </span>
+                          )}
                           {prod.imeiNumber && (
-                            <span className="text-cyan-400 font-bold bg-cyan-500/10 px-1.5 py-0.2 rounded border border-cyan-500/20">
-                              IMEI: {prod.imeiNumber}
+                            <span className="pos-status-info font-bold px-1.5 py-0.5 rounded border">
+                              IMEI: <Bdi mono>{prod.imeiNumber}</Bdi>
                             </span>
                           )}
                         </div>
                       </div>
 
-                      {/* Stock Badge with Clear States */}
+                      {/* Stock Badge with Contrast-Verified Light & Dark States */}
                       {isService ? (
-                        <span className="text-[10px] font-black px-2 py-0.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300 shrink-0 inline-flex items-center gap-1">
-                          <Sparkles className="w-2.5 h-2.5 text-amber-400" aria-hidden="true" />
-                          <span>Prestation</span>
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-lg border pos-status-warn shrink-0 inline-flex items-center gap-1">
+                          <Sparkles className="w-2.5 h-2.5" aria-hidden="true" />
+                          <span>{t.catalog.serviceBadge}</span>
                         </span>
                       ) : isOutOfStock ? (
-                        <span className="text-[10px] font-black px-2 py-0.5 rounded-lg border border-rose-500/40 bg-rose-500/15 text-rose-300 shrink-0 inline-flex items-center gap-1 shadow-xs">
-                          <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" aria-hidden="true" />
-                          <span>Rupture</span>
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-lg border pos-status-danger shrink-0 inline-flex items-center gap-1 shadow-xs">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" aria-hidden="true" />
+                          <span>{t.catalog.stockOut}</span>
                         </span>
                       ) : isLowStock ? (
-                        <span className="text-[10px] font-black px-2 py-0.5 rounded-lg border border-amber-500/40 bg-amber-500/15 text-amber-300 shrink-0 inline-flex items-center gap-1 shadow-xs">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400" aria-hidden="true" />
-                          <span>{stock} restant{stock > 1 ? 's' : ''}</span>
+                        <span className="text-[10px] font-black px-2 py-0.5 rounded-lg border pos-status-warn shrink-0 inline-flex items-center gap-1 shadow-xs">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" aria-hidden="true" />
+                          <span>
+                            {t('catalog.stockLow', { count: stock })}
+                          </span>
                         </span>
                       ) : (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 shrink-0 inline-flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" aria-hidden="true" />
-                          <span>{stock} en stock</span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg border pos-status-ok shrink-0 inline-flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+                          <span>
+                            {t('catalog.stockAvailable', { count: stock })}
+                          </span>
                         </span>
                       )}
                     </div>
 
-                    {/* Pricing Tiers Matrix & FIFO Cost */}
+                    {/* Pricing Tiers Matrix & FIFO Cost — Contrast-Verified in Light & Dark Mode */}
                     <div className="space-y-1.5">
-                      <div className="grid grid-cols-3 gap-1.5 bg-pos-panel/70 p-2 rounded-xl border border-pos-border/40 text-center">
+                      <div className="grid grid-cols-3 gap-1.5 bg-pos-panel p-2 rounded-xl border border-pos-border text-center">
                         <div>
                           <span className="text-[9px] font-bold uppercase text-pos-muted block">
-                            Détail
+                            {t.catalog.tierRetailShort}
                           </span>
-                          <span className="font-mono text-xs font-black text-pos-text block mt-0.5">
+                          <Bdi mono className="text-xs font-black text-pos-text block mt-0.5">
                             {formatDZD(retailPrice)}
-                          </span>
+                          </Bdi>
                         </div>
 
-                        <div className="border-x border-pos-border/40">
-                          <span className="text-[9px] font-bold uppercase text-cyan-400/90 block">
-                            Demi-Gros
+                        <div className="border-x border-pos-border px-1">
+                          <span className="text-[9px] font-bold uppercase text-purple-800 dark:text-purple-300 block">
+                            {t.catalog.tierSemiWholesaleShort}
                           </span>
-                          <span className="font-mono text-xs font-bold text-cyan-300 block mt-0.5">
+                          <Bdi
+                            mono
+                            className="text-xs font-bold text-purple-800 dark:text-purple-300 block mt-0.5"
+                          >
                             {formatDZD(semiWholesalePrice)}
-                          </span>
+                          </Bdi>
                         </div>
 
                         <div>
-                          <span className="text-[9px] font-bold uppercase text-purple-400/90 block">
-                            Gros
+                          <span className="text-[9px] font-bold uppercase text-indigo-800 dark:text-indigo-300 block">
+                            {t.catalog.tierWholesaleShort}
                           </span>
-                          <span className="font-mono text-xs font-bold text-purple-300 block mt-0.5">
+                          <Bdi
+                            mono
+                            className="text-xs font-bold text-indigo-800 dark:text-indigo-300 block mt-0.5"
+                          >
                             {formatDZD(wholesalePrice)}
-                          </span>
+                          </Bdi>
                         </div>
                       </div>
 
                       {/* FIFO Cost Indicator (visible where applicable: physical products with recorded cost) */}
                       {hasFifoCost && (
-                        <div className="flex items-center justify-between px-2.5 py-1 rounded-lg bg-pos-panel/40 border border-pos-border/40 text-[10px] font-mono">
+                        <div className="flex items-center justify-between px-2.5 py-1 rounded-lg bg-pos-panel border border-pos-border text-[10px] font-mono">
                           <span className="text-pos-muted font-bold flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" aria-hidden="true" />
-                            <span>Coût FIFO</span>
+                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-500" aria-hidden="true" />
+                            <span>{t.catalog.fifoCostLabel}</span>
                           </span>
-                          <span className="font-bold text-cyan-300">
+                          <Bdi mono className="font-bold text-cyan-800 dark:text-cyan-300">
                             {formatDZD(prod.costPrice)}
-                          </span>
+                          </Bdi>
                         </div>
                       )}
                     </div>
 
                     {/* Quick Add Action & Category Pill */}
                     <div className="flex items-center justify-between pt-0.5 gap-2">
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-pos-panel border border-pos-border/50 text-pos-muted truncate max-w-[110px]">
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-pos-panel border border-pos-border text-pos-muted truncate max-w-[110px]">
                         {prod.category || 'Général'}
                       </span>
 
@@ -589,35 +621,39 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
                             setEditingProduct(prod);
                             openModal('product_editor');
                           }}
-                          aria-label={`Modifier — ${prod.title}`}
-                          className="min-h-[44px] px-3 rounded-xl border border-pos-border bg-pos-panel hover:bg-pos-hover text-pos-muted hover:text-cyan-400 font-bold text-xs flex items-center gap-1.5 transition active-press cursor-pointer"
+                          aria-label={`${t.catalog.editProductButton} — ${prod.title}`}
+                          className="min-h-[48px] min-w-[48px] px-3 rounded-xl border border-pos-border bg-pos-panel hover:bg-pos-hover text-pos-muted hover:text-cyan-600 dark:hover:text-cyan-400 font-bold text-xs flex items-center justify-center gap-1.5 transition active-press cursor-pointer"
                           title="Modifier cette fiche article"
                         >
                           <Edit3 className="w-3.5 h-3.5" aria-hidden="true" />
-                          <span className="hidden xs:inline">Modifier</span>
+                          <span className="hidden xs:inline">{t.catalog.editProductButton}</span>
                         </button>
 
                         <button
                           type="button"
                           onClick={() => handleAdd(prod)}
-                          aria-label={isAdded ? `Ajouté ! — ${prod.title}` : `Au Panier — ${prod.title}`}
-                          className={`min-h-[44px] px-3.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all duration-200 active-press cursor-pointer shadow-xs ${
+                          aria-label={
+                            isAdded
+                              ? `${t.catalog.addedToCartFeedback} — ${prod.title}`
+                              : `${t.catalog.addToCartButton} — ${prod.title}`
+                          }
+                          className={`min-h-[48px] px-3.5 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all duration-200 active-press cursor-pointer shadow-xs ${
                             isAdded
                               ? 'bg-emerald-500 text-slate-950 font-black shadow-emerald-500/20'
                               : isOutOfStock
-                              ? 'bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-500 hover:text-white'
-                              : 'bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500 hover:text-slate-950 text-emerald-400'
+                              ? 'pos-status-danger border hover:bg-rose-500 hover:text-white'
+                              : 'pos-status-ok border hover:bg-emerald-500 hover:text-slate-950'
                           }`}
                         >
                           {isAdded ? (
                             <>
                               <Check className="w-3.5 h-3.5 stroke-[3]" aria-hidden="true" />
-                              <span>Ajouté !</span>
+                              <span>{t.catalog.addedToCartFeedback}</span>
                             </>
                           ) : (
                             <>
                               <Plus className="w-3.5 h-3.5 stroke-[2.5]" aria-hidden="true" />
-                              <span>Au Panier</span>
+                              <span>{t.catalog.addToCartButton}</span>
                             </>
                           )}
                         </button>
@@ -642,7 +678,7 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
             <button
               type="button"
               onClick={() => setIsScannerOpen(false)}
-              className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
+              className="min-h-[48px] min-w-[48px] flex items-center justify-center rounded-xl bg-white/10 hover:bg-white/20 text-white transition active-press cursor-pointer"
               aria-label="Fermer la caméra"
             >
               <X className="w-5 h-5" aria-hidden="true" />
@@ -661,4 +697,5 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
     </>
   );
 };
+
 

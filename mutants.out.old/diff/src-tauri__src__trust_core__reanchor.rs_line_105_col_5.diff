@@ -1,0 +1,32 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace active_time_pubkey_b64url -> Result<String, TrustError> with Ok(String::new())
+@@ -97,28 +97,17 @@
+ }
+ 
+ /// Resolve the active verification key: production pin, or the test key in
+ /// debug builds with a loud warning. Release without a production key
+ /// refuses — this is what makes unshipped enforcement fail closed. Shared
+ /// with the server-time ingestion path (one key policy, distinct envelope
+ /// prefixes so the protocols cannot cross-verify).
+ pub(crate) fn active_time_pubkey_b64url() -> Result<String, TrustError> {
+-    if PRODUCTION_TIME_PUBKEY_B64URL != "UNCONFIGURED" {
+-        return Ok(PRODUCTION_TIME_PUBKEY_B64URL.to_string());
+-    }
+-    #[cfg(debug_assertions)]
+-    {
+-        eprintln!("[trust_core] WARNING: re-anchor using TEST time key (debug/test only)");
+-        Ok(test_pubkey_b64url())
+-    }
+-    #[cfg(not(debug_assertions))]
+-    {
+-        return Err(TrustError::TrustedTimeFailure);
+-    }
++    Ok(String::new()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Verify a time assertion against the active key WITHOUT consuming any
+ /// challenge (pure; challenge consumption is a separate kernel step so tests
+ /// can exercise each rule independently).
+ fn verify_assertion(
+     assertion: &str,
+     pubkey_b64url: &str,

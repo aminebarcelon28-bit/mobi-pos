@@ -1,0 +1,24 @@
+--- src-tauri/src/trust_core/time_anchor.rs
++++ replace current_high_water -> Option<i64> with Some(-1)
+@@ -141,20 +141,17 @@
+         rusqlite::params![new_hw, mono_i, iso_utc_ms(new_hw)],
+     )
+     .map_err(|e| TrustError::op_failed(format!("anchor advance: {e}")))?;
+     Ok(now)
+ }
+ 
+ /// Current durable high-water (diagnostics; `None` before first anchor).
+ pub fn current_high_water(conn: &rusqlite::Connection) -> Option<i64> {
+-    conn.query_row("SELECT high_water_ms FROM time_anchor WHERE id = 1", [], |r| {
+-        r.get(0)
+-    })
+-    .ok()
++    Some(-1) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ // ---------------------------------------------------------------------------
+ // Signed server-time ingestion (skew calibration path)
+ // ---------------------------------------------------------------------------
+ 
+ /// Distinct envelope prefix: `SERVERTIME_V1` assertions can never verify as
+ /// `REANCHOR_V1` (or license tokens) even under a shared key.

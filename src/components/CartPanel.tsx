@@ -4,7 +4,7 @@ import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
 import { useToast } from './ui/Toast';
-import { canRedeemPoints, normalizeLoyaltyConfig, isEarnAllowed, isRedeemAllowed } from '../utils/loyaltyEngine';
+import { canRedeemPoints, normalizeLoyaltyConfig, isEarnAllowed, isRedeemAllowed, calculateMaxAllowedCredit } from '../utils/loyaltyEngine';
 import { soundEngine } from '../utils/audioFeedback';
 import { getProductPriceForTier } from '../utils/pricingEngine';
 import { computeCartTotals, computeTradeInSettlement } from '../utils/receiptMath';
@@ -12,6 +12,7 @@ import { toLegacyReal, dinarsToMinor } from '../utils/money';
 import { MoneyInput } from './ui/MoneyInput';
 import { useFifoPreviewCosts } from '../hooks/useFifoPreviewCosts';
 import { verifyManagerGate } from '../utils/pinGate';
+import { Kbd } from '../design-system/desktop/Kbd';
 
 /** A cart line is never 0 units: the committed fallback for a pending field. */
 const QTY_FALLBACK = 1;
@@ -1082,38 +1083,42 @@ export const CartPanel: React.FC = () => {
               <p className="text-xs font-black text-pos-text uppercase tracking-wider">Caisse Prête à Vendre</p>
               <p className="text-[11px] text-pos-muted">Scannez un article ou appuyez sur <span className="font-mono font-bold text-pos-accent">F1</span> — raccourcis ci-dessous :</p>
             </div>
-            <div className="w-full bg-pos-card border border-pos-border rounded-xl p-2.5 space-y-1.5 text-left text-[10.5px] shadow-sm">
-              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
-                <span className="text-pos-muted">Rechercher catalogue</span>
-                <span className="font-mono font-bold text-pos-accent bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F1 ou /</span>
+            <div className="w-full bg-surface-card border border-line-subtle rounded-ui-md p-2.5 space-y-1.5 text-left text-ui-2xs shadow-xs">
+              <div className="flex justify-between items-center py-0.5 border-b border-line-subtle/40">
+                <span className="text-fg-muted">Palette de commandes</span>
+                <Kbd size="sm">Ctrl+K</Kbd>
               </div>
-              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
-                <span className="text-pos-muted">Encaisser Espèces</span>
-                <span className="font-mono font-bold text-pos-accent bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F2 ou Espace</span>
+              <div className="flex justify-between items-center py-0.5 border-b border-line-subtle/40">
+                <span className="text-fg-muted">Rechercher catalogue</span>
+                <Kbd size="sm">F1 ou /</Kbd>
               </div>
-              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
-                <span className="text-pos-muted">Client / Dette / Fidélité</span>
-                <span className="font-mono font-bold text-pos-accent-amber bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F3</span>
+              <div className="flex justify-between items-center py-0.5 border-b border-line-subtle/40">
+                <span className="text-fg-muted">Encaisser Espèces</span>
+                <Kbd size="sm" variant="accent">F2</Kbd>
               </div>
-              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
-                <span className="text-pos-muted">Remise globale panier</span>
-                <span className="font-mono font-bold text-pos-accent-purple bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F4</span>
+              <div className="flex justify-between items-center py-0.5 border-b border-line-subtle/40">
+                <span className="text-fg-muted">Client / Dette / Fidélité</span>
+                <Kbd size="sm">F3</Kbd>
               </div>
-              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
-                <span className="text-pos-muted">Mettre la vente en attente</span>
-                <span className="font-mono font-bold text-pos-accent-cyan bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F6</span>
+              <div className="flex justify-between items-center py-0.5 border-b border-line-subtle/40">
+                <span className="text-fg-muted">Remise globale panier</span>
+                <Kbd size="sm">F4</Kbd>
               </div>
-              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
-                <span className="text-pos-muted">Réimprimer dernier ticket</span>
-                <span className="font-mono font-bold text-pos-accent-indigo bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F7</span>
+              <div className="flex justify-between items-center py-0.5 border-b border-line-subtle/40">
+                <span className="text-fg-muted">Mettre la vente en attente</span>
+                <Kbd size="sm">F6</Kbd>
               </div>
-              <div className="flex justify-between items-center py-0.5 border-b border-pos-border/40">
-                <span className="text-pos-muted">Guide des raccourcis</span>
-                <span className="font-mono font-bold text-pos-accent-amber bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">F8</span>
+              <div className="flex justify-between items-center py-0.5 border-b border-line-subtle/40">
+                <span className="text-fg-muted">Réimprimer dernier ticket</span>
+                <Kbd size="sm">F7</Kbd>
+              </div>
+              <div className="flex justify-between items-center py-0.5 border-b border-line-subtle/40">
+                <span className="text-fg-muted">Guide des raccourcis</span>
+                <Kbd size="sm">F8</Kbd>
               </div>
               <div className="flex justify-between items-center py-0.5">
-                <span className="text-pos-muted">Quantité multiple au scan</span>
-                <span className="font-mono font-bold text-pos-text bg-pos-bg px-1.5 py-0.5 rounded border border-pos-border">5*CODE</span>
+                <span className="text-fg-muted">Quantité multiple au scan</span>
+                <Kbd size="sm">5*CODE</Kbd>
               </div>
             </div>
           </div>
@@ -1474,12 +1479,20 @@ export const CartPanel: React.FC = () => {
             <button
               type="button"
               onClick={() => {
-                const maxCredit = Math.min(
+                const cartCogs = cart.reduce((acc, item) => {
+                  const unitCost = item.unitCostAtSale ?? item.unitCostPrice ?? item.product?.costPrice ?? 0;
+                  return acc + Math.max(0, Number(unitCost) || 0) * Math.abs(Number(item.quantity) || 0);
+                }, 0);
+                const { maxAllowedCredit } = calculateMaxAllowedCredit(
+                  Math.max(0, subtotal - voucherCreditApplied),
+                  cartCogs,
                   currentCustomer.storeCredit,
-                  Math.max(0, subtotal - voucherCreditApplied)
+                  50
                 );
-                setStoreCreditApplied(maxCredit);
-                soundEngine.playSuccess();
+                setStoreCreditApplied(maxAllowedCredit);
+                if (maxAllowedCredit > 0) {
+                  soundEngine.playSuccess();
+                }
               }}
               className="px-2 py-0.5 bg-purple-600 hover:bg-purple-500 text-white rounded-md text-[9.5px] font-extrabold transition cursor-pointer"
             >
@@ -1607,9 +1620,9 @@ export const CartPanel: React.FC = () => {
               <span className={`text-[8.5px] font-bold uppercase tracking-wider bg-black/25 px-1.5 py-0.5 rounded border border-white/10 ${isRefundDue ? 'text-rose-200' : 'text-emerald-200'}`}>
                 {isRefundDue ? 'Rendu' : 'Cash Only'}
               </span>
-              <kbd className="font-mono text-[9px] bg-black/40 text-white border border-white/20 px-1.5 py-0.5 rounded font-black shrink-0">
+              <Kbd size="sm" variant="accent" className="font-mono text-ui-2xs px-1.5 py-0.5 rounded-ui-xs font-black shrink-0">
                 F2
-              </kbd>
+              </Kbd>
             </div>
           </button>
         </div>

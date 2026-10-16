@@ -1,0 +1,72 @@
+--- src-tauri/src/trust_core/time_anchor.rs
++++ replace anchor_now_ms -> Result<i64, TrustError> with Ok(-1)
+@@ -85,68 +85,17 @@
+ 
+ /// Money-path now: monotonic-derived, high-water floored, ratchet-advanced —
+ /// all inside the caller's transaction (read + advance are atomic with the
+ /// commit they timestamp).
+ pub fn anchor_now_ms(
+     tx: &Transaction,
+     clock: &dyn MonotonicSource,
+ ) -> Result<i64, TrustError> {
+-    tx.execute_batch(ANCHOR_DDL)
+-        .map_err(|e| TrustError::op_failed(format!("anchor ddl: {e}")))?;
+-    let mono = clock.now_ms().ok_or_else(|| {
+-        TrustError::op_failed("SYSTEM_CLOCK_REGRESSION:monotonic_unavailable".to_string())
+-    })?;
+-    let mono_i = i64::try_from(mono).map_err(|_| {
+-        TrustError::op_failed("SYSTEM_CLOCK_REGRESSION:monotonic_unavailable".to_string())
+-    })?;
+-    let wall = system_wall_ms()?;
+-    if (wall as u64) < MIN_PLAUSIBLE_UTC_MS {
+-        return Err(TrustError::op_failed(
+-            "SYSTEM_CLOCK_REGRESSION:rtc_reset".to_string(),
+-        ));
+-    }
+-    let row: Option<(i64, i64)> = tx
+-        .query_row(
+-            "SELECT high_water_ms, high_water_mono_ms FROM time_anchor WHERE id = 1",
+-            [],
+-            |r| Ok((r.get(0)?, r.get(1)?)),
+-        )
+-        .map(Some)
+-        .or_else(|e| match e {
+-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+-            other => Err(TrustError::op_failed(format!("anchor read: {other}"))),
+-        })?;
+-    let Some((hw, hw_mono)) = row else {
+-        // First boot: adopt the (plausible, checked above) wall.
+-        tx.execute(
+-            "INSERT INTO time_anchor (id, high_water_ms, high_water_mono_ms, updated_at) \
+-             VALUES (1, ?1, ?2, ?3)",
+-            rusqlite::params![wall, mono_i, iso_utc_ms(wall)],
+-        )
+-        .map_err(|e| TrustError::op_failed(format!("anchor init: {e}")))?;
+-        return Ok(wall);
+-    };
+-    // Backward wall past tolerance = rollback. Fail closed, advance nothing.
+-    if wall + REGRESSION_TOLERANCE_MS < hw {
+-        return Err(TrustError::op_failed(format!(
+-            "SYSTEM_CLOCK_REGRESSION:last_seen_{hw}_attempted_{wall}"
+-        )));
+-    }
+-    let expected = hw.saturating_add(mono_i.saturating_sub(hw_mono));
+-    let now = expected.max(hw);
+-    // Ratchet: bless at most FORWARD_RATCHET_MS past the derived instant.
+-    let capped_wall = wall.min(now.saturating_add(FORWARD_RATCHET_MS));
+-    let new_hw = now.max(capped_wall);
+-    tx.execute(
+-        "UPDATE time_anchor SET high_water_ms = ?1, high_water_mono_ms = ?2, updated_at = ?3 WHERE id = 1",
+-        rusqlite::params![new_hw, mono_i, iso_utc_ms(new_hw)],
+-    )
+-    .map_err(|e| TrustError::op_failed(format!("anchor advance: {e}")))?;
+-    Ok(now)
++    Ok(-1) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Current durable high-water (diagnostics; `None` before first anchor).
+ pub fn current_high_water(conn: &rusqlite::Connection) -> Option<i64> {
+     conn.query_row("SELECT high_water_ms FROM time_anchor WHERE id = 1", [], |r| {
+         r.get(0)
+     })
+     .ok()

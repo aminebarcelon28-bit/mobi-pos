@@ -15,6 +15,7 @@
  */
 import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 import { X } from 'lucide-react';
+import { Kbd } from '../../design-system/desktop/Kbd';
 
 export type ModalShellWidth = 'xl' | '5xl' | 'full';
 
@@ -132,16 +133,16 @@ export const ModalShell: React.FC<ModalShellProps> = ({
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        className={`w-full ${WIDTH_CLASS[width]} flex flex-col max-h-[94dvh] sm:max-h-[90dvh] bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl overflow-hidden shadow-2xl outline-none animate-in slide-in-from-bottom-5 sm:zoom-in-95 ${className}`}
+        className={`w-full ${WIDTH_CLASS[width]} flex flex-col max-h-[94dvh] sm:max-h-[90dvh] bg-pos-panel platform-sheet-surface border border-pos-border rounded-t-m3 sm:rounded-2xl overflow-hidden shadow-2xl outline-none animate-in slide-in-from-bottom-5 sm:zoom-in-95 ${className}`}
       >
         {/* Zone 1 — non-shrinking header (mobile swipe handle + close). */}
         <div className="flex-none">
           <div
-            className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0"
+            className="sheet-handle sm:hidden shrink-0"
             aria-hidden="true"
           />
           <div className="p-3 sm:p-3.5 border-b border-pos-border bg-pos-card flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5 min-w-0">
+            <div className="flex items-center gap-2.5 min-w-0 text-start">
               {icon}
               <div className="min-w-0">
                 <h2 className="text-sm sm:text-base font-semibold text-pos-text tracking-tight flex items-center gap-2 truncate">
@@ -154,21 +155,26 @@ export const ModalShell: React.FC<ModalShellProps> = ({
                 )}
               </div>
             </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
-              aria-label={closeLabel}
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="hidden sm:inline-flex">
+                <Kbd size="sm">Esc</Kbd>
+              </span>
+              <button
+                type="button"
+                onClick={onClose}
+                className="p-2 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[48px] min-w-[48px] flex items-center justify-center shrink-0 active-press"
+                aria-label={closeLabel}
+              >
+                <X className="w-5 h-5" aria-hidden="true" />
+              </button>
+            </div>
           </div>
           {headerExtras}
         </div>
 
         {/* Zone 2 — THE ONLY scrollable container in the dialog. */}
         <div
-          className={`flex-1 overflow-y-auto overscroll-contain p-3 sm:p-3.5 space-y-3.5 bg-pos-bg ${bodyClassName}`}
+          className={`flex-1 overflow-y-auto overscroll-contain p-3 sm:p-3.5 space-y-3.5 bg-pos-bg ${!footer ? 'pb-[max(1rem,var(--safe-bottom))]' : ''} ${bodyClassName}`}
         >
           {children}
         </div>

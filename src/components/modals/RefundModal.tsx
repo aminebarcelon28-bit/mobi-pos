@@ -26,6 +26,7 @@ import { refundableValueOf } from '../../utils/receiptMath';
 import { clampCashRefund, physicalCashTendered, cashDisbursedOf } from '../../utils/cashTerms';
 import { isOwnShiftTicket } from '../../sync/refundLockPolicy';
 import { verifyManagerGate } from '../../utils/pinGate';
+import { Kbd } from '../../design-system/desktop/Kbd';
 
 export const RefundModal: React.FC = () => {
   const {
@@ -36,6 +37,7 @@ export const RefundModal: React.FC = () => {
     setSelectedTransactionForRefund,
     processRefund,
     activeShift,
+    activeCashier,
     // Phase 1: manager checks route through the native gate (no local
     // verifyManagerPin reads here — see utils/pinGate).
   } = usePosStore();
@@ -191,11 +193,12 @@ export const RefundModal: React.FC = () => {
           }
         }
       }
-    txn.items.forEach((item) => {
-        const remaining = Math.max(0, item.quantity - (alreadyRefunded.get(item.product.id) || 0));
-        initialSelected[item.product.id] = remaining > 0;
-        initialQty[item.product.id] = remaining;
-        initialRestock[item.product.id] = true;
+    txn.items.forEach((item, idx) => {
+      const itemKey = item.id || `${item.product.id}_${idx}`;
+      const remaining = Math.max(0, item.quantity - (alreadyRefunded.get(item.product.id) || 0));
+      initialSelected[itemKey] = remaining > 0;
+      initialQty[itemKey] = remaining;
+      initialRestock[itemKey] = true;
     });
 
     setSelectedItemIds(initialSelected);
@@ -220,10 +223,13 @@ export const RefundModal: React.FC = () => {
   // Calculate refund items
   const activeRefundItems: RefundItem[] = selectedTxn
     ? (selectedTxn.items || [])
-        .map((item, lineIdx) => ({ item, lineIdx }))
-        .filter(({ item }) => selectedItemIds[item.product?.id])
-        .map(({ item, lineIdx }) => {
-          const qty = Math.min(item.quantity, refundQuantities[item.product.id] || item.quantity);
+        .map((item, lineIdx) => {
+          const itemKey = item.id || `${item.product.id}_${lineIdx}`;
+          return { item, lineIdx, itemKey };
+        })
+        .filter(({ itemKey }) => selectedItemIds[itemKey])
+        .map(({ item, lineIdx, itemKey }) => {
+          const qty = Math.min(item.quantity, refundQuantities[itemKey] || item.quantity);
           const unitPrice = item.appliedPrice || item.product.price;
           // Apply proportion of line discount if any
           const discountPerUnit = item.discount > 0 && item.quantity > 0 ? item.discount / item.quantity : 0;
@@ -236,7 +242,7 @@ export const RefundModal: React.FC = () => {
             pid.startsWith('qt-') ||
             pid.startsWith('prod-misc-') ||
             (item.product?.category as string) === 'Services';
-          const restock = restockMap[item.product.id] ?? !isServiceLine;
+          const restock = restockMap[itemKey] ?? !isServiceLine;
 
           return {
             productId: item.product.id,
@@ -301,17 +307,17 @@ export const RefundModal: React.FC = () => {
   const offlineCashNeedsSupervisor =
     onlineNow === false && refundMethod === 'Espèces' && previewCashOut > offlinePinThreshold;
 
-  const handleQuantityChange = (productId: string, newQty: number, maxQty: number) => {
+  const handleQuantityChange = (key: string, newQty: number, maxQty: number) => {
     const validQty = Math.max(1, Math.min(maxQty, newQty));
-    setRefundQuantities((prev) => ({ ...prev, [productId]: validQty }));
+    setRefundQuantities((prev) => ({ ...prev, [key]: validQty }));
   };
 
-  const handleToggleItem = (productId: string) => {
-    setSelectedItemIds((prev) => ({ ...prev, [productId]: !prev[productId] }));
+  const handleToggleItem = (key: string) => {
+    setSelectedItemIds((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const handleToggleRestock = (productId: string) => {
-    setRestockMap((prev) => ({ ...prev, [productId]: !prev[productId] }));
+  const handleToggleRestock = (key: string) => {
+    setRestockMap((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   const handleSubmitRefund = async (e: React.FormEvent) => {
@@ -382,9 +388,9 @@ export const RefundModal: React.FC = () => {
         refundItems: activeRefundItems,
         refundMethod,
         refundReason: finalReason,
-        cashierName: 'Manager',
+        cashierName: activeCashier?.name || 'Caissier',
         supervisorPinVerifiedAt,
-        supervisorUserId: 'manager',
+        supervisorUserId: activeCashier?.role === 'admin' ? activeCashier.id : 'manager',
       })) as unknown as { success: boolean; reason?: string; warnings?: string[]; refundTransaction?: { total?: number; cashDisbursed?: number } };
 
       if (refundResult.success) {
@@ -471,17 +477,22 @@ export const RefundModal: React.FC = () => {
               <p className="text-[10px] text-pos-muted truncate">Gestion des retours articles et émission d'avoirs</p>
             </div>
           </div>
-          <button
-            onClick={() => {
-              setSelectedTxn(null);
-              setSelectedTransactionForRefund(null);
-              closeModal();
-            }}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
-            aria-label="Fermer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="hidden sm:inline-flex">
+              <Kbd size="sm">Esc</Kbd>
+            </span>
+            <button
+              onClick={() => {
+                setSelectedTxn(null);
+                setSelectedTransactionForRefund(null);
+                closeModal();
+              }}
+              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+              aria-label="Fermer"
+            >
+              <X className="w-5 h-5" aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         {/* Modal Main Content */}
@@ -538,12 +549,12 @@ export const RefundModal: React.FC = () => {
                       } ${offlineLocked ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <div className="flex justify-between items-center">
-                        <span className="font-mono font-bold text-xs text-purple-400">{t.receiptNumber}</span>
-                        <span className="font-black text-xs text-emerald-400">{formatDZD(t.total)}</span>
+                        <span className="font-mono font-bold text-xs text-purple-400 num">{t.receiptNumber}</span>
+                        <span className="font-black text-xs text-emerald-400 num">{formatDZD(t.total)}</span>
                       </div>
                       <div className="flex justify-between text-[11px] text-pos-muted">
                         <span>{t.customer?.name || 'Client de passage'}</span>
-                        <span className="font-mono text-[10px] whitespace-nowrap">{formatDateTime(t.createdAt)}</span>
+                        <span className="font-mono text-[10px] whitespace-nowrap num">{formatDateTime(t.createdAt)}</span>
                       </div>
                       {t.status === 'PARTIALLY_REFUNDED' && (
                         <span className="text-[9px] text-amber-400 font-bold">Partiellement Remboursé</span>
@@ -590,7 +601,7 @@ export const RefundModal: React.FC = () => {
                     <div className="min-w-0">
                       <span className="text-[10px] text-pos-muted uppercase font-bold block">Ticket Source Sélectionné</span>
                       <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5 flex-wrap">
-                        <span className="font-mono font-black text-xs sm:text-sm text-purple-400">{selectedTxn.receiptNumber}</span>
+                        <span className="font-mono font-black text-xs sm:text-sm text-purple-400 num">{selectedTxn.receiptNumber}</span>
                         <span className="text-xs text-pos-muted">•</span>
                         <span className="text-xs font-bold text-pos-text truncate">{selectedTxn.customer?.name || 'Client de passage'}</span>
                       </div>
@@ -598,7 +609,7 @@ export const RefundModal: React.FC = () => {
                     <div className="text-right flex items-center gap-2 shrink-0">
                       <div>
                         <span className="text-[10px] text-pos-muted uppercase font-bold block">Total Payé</span>
-                        <span className="text-xs sm:text-sm font-black text-emerald-400">{formatDZD(selectedTxn.total)}</span>
+                        <span className="text-xs sm:text-sm font-black text-emerald-400 num">{formatDZD(selectedTxn.total)}</span>
                       </div>
                       <button
                         type="button"
@@ -621,10 +632,11 @@ export const RefundModal: React.FC = () => {
 
                     {/* Mobile Card List View (<sm) */}
                     <div className="sm:hidden divide-y divide-pos-border/40">
-                      {(selectedTxn.items || []).map((item) => {
-                        const isChecked = Boolean(selectedItemIds[item.product.id]);
-                        const isRestocked = Boolean(restockMap[item.product.id]);
-                        const qty = refundQuantities[item.product.id] || item.quantity;
+                      {(selectedTxn.items || []).map((item, idx) => {
+                        const itemKey = item.id || `${item.product.id}_${idx}`;
+                        const isChecked = Boolean(selectedItemIds[itemKey]);
+                        const isRestocked = Boolean(restockMap[itemKey]);
+                        const qty = refundQuantities[itemKey] || item.quantity;
                         const unitPrice = item.appliedPrice || item.product.price;
                         const discountPerUnit = item.discount > 0 && item.quantity > 0 ? item.discount / item.quantity : 0;
                         const netUnitPrice = Math.max(0, unitPrice - discountPerUnit);
@@ -632,7 +644,7 @@ export const RefundModal: React.FC = () => {
 
                         return (
                           <div
-                            key={item.product.id}
+                            key={itemKey}
                             className={`p-3.5 space-y-3 transition ${
                               isChecked ? 'bg-purple-500/5' : 'opacity-60 bg-pos-bg/40'
                             }`}
@@ -640,9 +652,9 @@ export const RefundModal: React.FC = () => {
                             <div className="flex items-start gap-3">
                               <input
                                 type="checkbox"
-                                data-testid={`refund-check-${item.product.id}`}
+                                data-testid={`refund-check-${itemKey}`}
                                 checked={isChecked}
-                                onChange={() => handleToggleItem(item.product.id)}
+                                onChange={() => handleToggleItem(itemKey)}
                                 aria-label={`Sélectionner ${item.product.title}`}
                                 className="w-5 h-5 mt-0.5 rounded border-pos-border text-purple-500 focus:ring-purple-400 cursor-pointer shrink-0"
                               />
@@ -656,8 +668,8 @@ export const RefundModal: React.FC = () => {
                                 </div>
                               </div>
                               <div className="text-right shrink-0">
-                                <span className="text-xs font-black text-purple-400 block">{formatDZD(lineRefundTotal)}</span>
-                                <span className="text-[10px] text-pos-muted">{formatDZD(netUnitPrice)} /u</span>
+                                <span className="text-xs font-black text-purple-400 block num">{formatDZD(lineRefundTotal)}</span>
+                                <span className="text-[10px] text-pos-muted num">{formatDZD(netUnitPrice)} /u</span>
                               </div>
                             </div>
 
@@ -666,19 +678,20 @@ export const RefundModal: React.FC = () => {
                               <div className="flex items-center gap-1.5 bg-pos-bg border border-pos-border rounded-xl p-1 shrink-0">
                                 <button
                                   type="button"
-                                  data-testid={`refund-dec-${item.product.id}`}
+                                  data-testid={`refund-dec-${itemKey}`}
                                   disabled={!isChecked || qty <= 1}
-                                  onClick={() => handleQuantityChange(item.product.id, qty - 1, item.quantity)}
+                                  onClick={() => handleQuantityChange(itemKey, qty - 1, item.quantity)}
                                   className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-pos-card border border-pos-border text-pos-text font-bold disabled:opacity-30 cursor-pointer active:scale-95"
                                   aria-label={`Diminuer quantité ${item.product.title}`}
                                 >
                                   <span aria-hidden="true">-</span>
                                 </button>
-                                <span className="w-8 text-center text-xs font-black text-pos-text tabular-nums">{qty}</span>
+                                <span className="w-8 text-center text-xs font-black text-pos-text tabular-nums num">{qty}</span>
                                 <button
                                   type="button"
+                                  data-testid={`refund-inc-${itemKey}`}
                                   disabled={!isChecked || qty >= item.quantity}
-                                  onClick={() => handleQuantityChange(item.product.id, qty + 1, item.quantity)}
+                                  onClick={() => handleQuantityChange(itemKey, qty + 1, item.quantity)}
                                   className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-pos-card border border-pos-border text-pos-text font-bold disabled:opacity-30 cursor-pointer active:scale-95"
                                   aria-label={`Augmenter quantité ${item.product.title}`}
                                 >
@@ -690,7 +703,7 @@ export const RefundModal: React.FC = () => {
                               <button
                                 type="button"
                                 disabled={!isChecked}
-                                onClick={() => handleToggleRestock(item.product.id)}
+                                onClick={() => handleToggleRestock(itemKey)}
                                 className={`min-h-[40px] px-3 py-1.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer shrink-0 ${
                                   isRestocked
                                     ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
@@ -728,10 +741,11 @@ export const RefundModal: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-pos-border/40">
-                        {(selectedTxn.items || []).map((item) => {
-                          const isChecked = Boolean(selectedItemIds[item.product.id]);
-                          const isRestocked = Boolean(restockMap[item.product.id]);
-                          const qty = refundQuantities[item.product.id] || item.quantity;
+                        {(selectedTxn.items || []).map((item, idx) => {
+                          const itemKey = item.id || `${item.product.id}_${idx}`;
+                          const isChecked = Boolean(selectedItemIds[itemKey]);
+                          const isRestocked = Boolean(restockMap[itemKey]);
+                          const qty = refundQuantities[itemKey] || item.quantity;
                           const unitPrice = item.appliedPrice || item.product.price;
                           const discountPerUnit = item.discount > 0 && item.quantity > 0 ? item.discount / item.quantity : 0;
                           const netUnitPrice = Math.max(0, unitPrice - discountPerUnit);
@@ -739,7 +753,7 @@ export const RefundModal: React.FC = () => {
 
                           return (
                             <tr
-                              key={item.product.id}
+                              key={itemKey}
                               className={`transition ${
                                 isChecked ? 'bg-purple-500/5' : 'opacity-50 bg-pos-bg/30'
                               }`}
@@ -747,9 +761,9 @@ export const RefundModal: React.FC = () => {
                               <td className="p-3 text-center">
                                 <input
                                   type="checkbox"
-                                  data-testid={`refund-check-${item.product.id}`}
+                                  data-testid={`refund-check-${itemKey}`}
                                   checked={isChecked}
-                                  onChange={() => handleToggleItem(item.product.id)}
+                                  onChange={() => handleToggleItem(itemKey)}
                                   aria-label={`Sélectionner ${item.product.title}`}
                                   className="w-4 h-4 rounded border-pos-border text-purple-500 focus:ring-purple-400 cursor-pointer"
                                 />
@@ -767,18 +781,18 @@ export const RefundModal: React.FC = () => {
                                 <div className="flex items-center justify-center gap-1">
                                   <button
                                     type="button"
-                                    data-testid={`refund-dec-${item.product.id}`}
+                                    data-testid={`refund-dec-${itemKey}`}
                                     disabled={!isChecked || qty <= 1}
-                                    onClick={() => handleQuantityChange(item.product.id, qty - 1, item.quantity)}
+                                    onClick={() => handleQuantityChange(itemKey, qty - 1, item.quantity)}
                                     className="w-6 h-6 rounded-lg bg-pos-bg border border-pos-border text-pos-text font-bold disabled:opacity-30"
                                   >
                                     -
                                   </button>
-                                  <span className="w-8 text-center font-bold text-pos-text">{qty}</span>
+                                  <span className="w-8 text-center font-bold text-pos-text num">{qty}</span>
                                   <button
                                     type="button"
                                     disabled={!isChecked || qty >= item.quantity}
-                                    onClick={() => handleQuantityChange(item.product.id, qty + 1, item.quantity)}
+                                    onClick={() => handleQuantityChange(itemKey, qty + 1, item.quantity)}
                                     className="w-6 h-6 rounded-lg bg-pos-bg border border-pos-border text-pos-text font-bold disabled:opacity-30"
                                   >
                                     +
@@ -790,7 +804,7 @@ export const RefundModal: React.FC = () => {
                                 <button
                                   type="button"
                                   disabled={!isChecked}
-                                  onClick={() => handleToggleRestock(item.product.id)}
+                                  onClick={() => handleToggleRestock(itemKey)}
                                   className={`px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1.5 mx-auto transition cursor-pointer ${
                                     isRestocked
                                       ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
@@ -808,8 +822,8 @@ export const RefundModal: React.FC = () => {
                                   )}
                                 </button>
                               </td>
-                              <td className="p-3 text-right font-medium text-pos-muted">{formatDZD(netUnitPrice)}</td>
-                              <td className="p-3 text-right font-black text-purple-400">{formatDZD(lineRefundTotal)}</td>
+                              <td className="p-3 text-right font-medium text-pos-muted num">{formatDZD(netUnitPrice)}</td>
+                              <td className="p-3 text-right font-black text-purple-400 num">{formatDZD(lineRefundTotal)}</td>
                             </tr>
                           );
                         })}
@@ -946,7 +960,7 @@ export const RefundModal: React.FC = () => {
                 <div className="pt-3 border-t border-pos-border flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-pos-card p-3.5 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 rounded-t-2xl sm:rounded-2xl shadow-xl shrink-0">
                   <div>
                     <span className="text-[10px] text-pos-muted uppercase font-bold block">Montant Total à Rembourser</span>
-                    <span data-testid="refund-total" className="text-lg sm:text-xl font-black text-purple-400">{formatDZD(totalRefundAmount)}</span>
+                    <span data-testid="refund-total" className="text-lg sm:text-xl font-black text-purple-400 num">{formatDZD(totalRefundAmount)}</span>
                     {fundingPreview && fundingPreview.netRefund !== Math.round(totalRefundAmount) && (
                       <span className="text-[10px] text-pos-muted block">
                         Net reversé : {formatDZD(fundingPreview.netRefund)}

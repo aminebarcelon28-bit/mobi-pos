@@ -1,0 +1,159 @@
+src-tauri/src/money.rs:75:33: replace || with && in Money::from_user_input
+src-tauri/src/money.rs:125:13: replace || with && in Money::from_user_input
+src-tauri/src/money.rs:133:55: replace > with < in Money::from_user_input
+src-tauri/src/money.rs:133:55: replace > with >= in Money::from_user_input
+src-tauri/src/money.rs:178:14: replace > with >= in Money::mul_int
+src-tauri/src/money.rs:178:38: replace < with == in Money::mul_int
+src-tauri/src/money.rs:178:38: replace < with <= in Money::mul_int
+src-tauri/src/money.rs:194:30: replace * with + in Money::mul_div_half_up
+src-tauri/src/money.rs:194:30: replace * with / in Money::mul_div_half_up
+src-tauri/src/money.rs:194:43: replace + with - in Money::mul_div_half_up
+src-tauri/src/money.rs:194:43: replace + with * in Money::mul_div_half_up
+src-tauri/src/money.rs:195:39: replace || with && in Money::mul_div_half_up
+src-tauri/src/money.rs:195:20: replace > with == in Money::mul_div_half_up
+src-tauri/src/money.rs:195:20: replace > with >= in Money::mul_div_half_up
+src-tauri/src/money.rs:195:50: replace < with == in Money::mul_div_half_up
+src-tauri/src/money.rs:195:50: replace < with <= in Money::mul_div_half_up
+src-tauri/src/money.rs:202:9: replace Money::is_zero -> bool with true
+src-tauri/src/money.rs:202:9: replace Money::is_zero -> bool with false
+src-tauri/src/money.rs:202:16: replace == with != in Money::is_zero
+src-tauri/src/money.rs:206:9: replace Money::is_negative -> bool with true
+src-tauri/src/money.rs:206:9: replace Money::is_negative -> bool with false
+src-tauri/src/money.rs:206:16: replace < with == in Money::is_negative
+src-tauri/src/money.rs:206:16: replace < with > in Money::is_negative
+src-tauri/src/money.rs:206:16: replace < with <= in Money::is_negative
+src-tauri/src/money.rs:212:5: replace is_strict_fr_grouped -> bool with true
+src-tauri/src/money.rs:215:13: replace < with <= in is_strict_fr_grouped
+src-tauri/src/money.rs:215:64: replace < with <= in is_strict_fr_grouped
+src-tauri/src/money.rs:217:14: replace += with -= in is_strict_fr_grouped
+src-tauri/src/money.rs:219:18: replace || with && in is_strict_fr_grouped
+src-tauri/src/money.rs:219:26: replace > with == in is_strict_fr_grouped
+src-tauri/src/money.rs:219:26: replace > with >= in is_strict_fr_grouped
+src-tauri/src/money.rs:223:13: replace < with <= in is_strict_fr_grouped
+src-tauri/src/money.rs:226:60: replace && with || in is_strict_fr_grouped
+src-tauri/src/money.rs:226:17: replace < with <= in is_strict_fr_grouped
+src-tauri/src/money.rs:226:65: replace < with <= in is_strict_fr_grouped
+src-tauri/src/money.rs:233:16: replace += with -= in is_strict_fr_grouped
+src-tauri/src/money.rs:238:25: replace || with && in is_strict_fr_grouped
+src-tauri/src/money.rs:247:14: replace && with || in is_strict_fr_grouped
+src-tauri/src/money.rs:247:10: replace > with >= in is_strict_fr_grouped
+src-tauri/src/money.rs:255:13: replace < with <= in is_fr_grouped_int
+src-tauri/src/money.rs:255:64: replace < with <= in is_fr_grouped_int
+src-tauri/src/money.rs:257:14: replace += with -= in is_fr_grouped_int
+src-tauri/src/money.rs:259:18: replace || with && in is_fr_grouped_int
+src-tauri/src/money.rs:266:60: replace && with || in is_fr_grouped_int
+src-tauri/src/money.rs:266:65: replace < with <= in is_fr_grouped_int
+src-tauri/src/money.rs:275:12: replace > with >= in is_fr_grouped_int
+src-tauri/src/money.rs:304:16: replace > with == in parse_exact_i64
+src-tauri/src/money.rs:304:16: replace > with >= in parse_exact_i64
+src-tauri/src/trust_core/capability_policy.rs:94:13: delete match arm Capability::ReadOperationalData in authorize
+src-tauri/src/trust_core/clocks.rs:32:9: replace MonotonicSource::boot_id -> Option<String> with Some(String::new())
+src-tauri/src/trust_core/clocks.rs:32:9: replace MonotonicSource::boot_id -> Option<String> with Some("xyzzy".into())
+src-tauri/src/trust_core/clocks.rs:51:9: replace <impl MonotonicSource for WindowsMonotonic>::now_ms -> Option<u64> with Some(1)
+src-tauri/src/trust_core/clocks.rs:55:9: replace <impl MonotonicSource for WindowsMonotonic>::source_name -> &'static str with "xyzzy"
+src-tauri/src/trust_core/clocks.rs:66:9: replace <impl MonotonicSource for BoottimeMonotonic>::now_ms -> Option<u64> with None
+src-tauri/src/trust_core/clocks.rs:66:9: replace <impl MonotonicSource for BoottimeMonotonic>::now_ms -> Option<u64> with Some(0)
+src-tauri/src/trust_core/clocks.rs:66:9: replace <impl MonotonicSource for BoottimeMonotonic>::now_ms -> Option<u64> with Some(1)
+src-tauri/src/trust_core/clocks.rs:70:15: replace != with == in <impl MonotonicSource for BoottimeMonotonic>::now_ms
+src-tauri/src/trust_core/clocks.rs:77:46: replace / with % in <impl MonotonicSource for BoottimeMonotonic>::now_ms
+src-tauri/src/trust_core/clocks.rs:77:46: replace / with * in <impl MonotonicSource for BoottimeMonotonic>::now_ms
+src-tauri/src/trust_core/clocks.rs:81:9: replace <impl MonotonicSource for BoottimeMonotonic>::boot_id -> Option<String> with None
+src-tauri/src/trust_core/clocks.rs:81:9: replace <impl MonotonicSource for BoottimeMonotonic>::boot_id -> Option<String> with Some(String::new())
+src-tauri/src/trust_core/clocks.rs:84:25: delete ! in <impl MonotonicSource for BoottimeMonotonic>::boot_id
+src-tauri/src/trust_core/clocks.rs:88:9: replace <impl MonotonicSource for BoottimeMonotonic>::source_name -> &'static str with ""
+src-tauri/src/trust_core/clocks.rs:88:9: replace <impl MonotonicSource for BoottimeMonotonic>::source_name -> &'static str with "xyzzy"
+src-tauri/src/trust_core/clocks.rs:132:9: replace <impl MonotonicSource for MachContinuousMonotonic>::now_ms -> Option<u64> with None
+src-tauri/src/trust_core/clocks.rs:132:9: replace <impl MonotonicSource for MachContinuousMonotonic>::now_ms -> Option<u64> with Some(0)
+src-tauri/src/trust_core/clocks.rs:132:9: replace <impl MonotonicSource for MachContinuousMonotonic>::now_ms -> Option<u64> with Some(1)
+src-tauri/src/trust_core/clocks.rs:135:39: replace || with && in <impl MonotonicSource for MachContinuousMonotonic>::now_ms
+src-tauri/src/trust_core/clocks.rs:135:20: replace || with && in <impl MonotonicSource for MachContinuousMonotonic>::now_ms
+src-tauri/src/trust_core/clocks.rs:135:15: replace != with == in <impl MonotonicSource for MachContinuousMonotonic>::now_ms
+src-tauri/src/trust_core/clocks.rs:135:34: replace == with != in <impl MonotonicSource for MachContinuousMonotonic>::now_ms
+src-tauri/src/trust_core/clocks.rs:135:53: replace == with != in <impl MonotonicSource for MachContinuousMonotonic>::now_ms
+src-tauri/src/trust_core/clocks.rs:150:9: replace <impl MonotonicSource for MachContinuousMonotonic>::boot_id -> Option<String> with None
+src-tauri/src/trust_core/clocks.rs:150:9: replace <impl MonotonicSource for MachContinuousMonotonic>::boot_id -> Option<String> with Some(String::new())
+src-tauri/src/trust_core/clocks.rs:150:9: replace <impl MonotonicSource for MachContinuousMonotonic>::boot_id -> Option<String> with Some("xyzzy".into())
+src-tauri/src/trust_core/clocks.rs:163:15: replace != with == in <impl MonotonicSource for MachContinuousMonotonic>::boot_id
+src-tauri/src/trust_core/clocks.rs:170:9: replace <impl MonotonicSource for MachContinuousMonotonic>::source_name -> &'static str with ""
+src-tauri/src/trust_core/clocks.rs:170:9: replace <impl MonotonicSource for MachContinuousMonotonic>::source_name -> &'static str with "xyzzy"
+src-tauri/src/trust_core/clocks.rs:216:9: replace <impl MonotonicSource for NoMonotonic>::now_ms -> Option<u64> with Some(0)
+src-tauri/src/trust_core/clocks.rs:216:9: replace <impl MonotonicSource for NoMonotonic>::now_ms -> Option<u64> with Some(1)
+src-tauri/src/trust_core/clocks.rs:219:9: replace <impl MonotonicSource for NoMonotonic>::source_name -> &'static str with ""
+src-tauri/src/trust_core/clocks.rs:219:9: replace <impl MonotonicSource for NoMonotonic>::source_name -> &'static str with "xyzzy"
+src-tauri/src/trust_core/clocks.rs:252:9: replace ManualClock::set with ()
+src-tauri/src/trust_core/clocks.rs:266:9: replace <impl MonotonicSource for ManualClock>::source_name -> &'static str with ""
+src-tauri/src/trust_core/clocks.rs:266:9: replace <impl MonotonicSource for ManualClock>::source_name -> &'static str with "xyzzy"
+src-tauri/src/trust_core/license_token.rs:97:40: replace match guard parts.next().is_none() with true in verify_token_with_domain
+src-tauri/src/trust_core/license_token.rs:158:16: replace < with <= in verify_token_with_domain
+src-tauri/src/trust_core/license_token.rs:158:22: replace - with + in verify_token_with_domain
+src-tauri/src/trust_core/license_token.rs:165:38: replace > with >= in verify_token_with_domain
+src-tauri/src/trust_core/reanchor.rs:76:5: replace system_now_ms -> u64 with 0
+src-tauri/src/trust_core/reanchor.rs:76:5: replace system_now_ms -> u64 with 1
+src-tauri/src/trust_core/reanchor.rs:83:5: replace new_nonce_hex -> String with "xyzzy".into()
+src-tauri/src/trust_core/reanchor.rs:148:40: replace match guard parts.next().is_none() with true in verify_time_assertion_with_prefix
+src-tauri/src/trust_core/reanchor.rs:182:31: replace < with == in verify_time_assertion_with_prefix
+src-tauri/src/trust_core/reanchor.rs:182:31: replace < with <= in verify_time_assertion_with_prefix
+src-tauri/src/trust_core/reanchor.rs:187:15: replace > with >= in verify_time_assertion_with_prefix
+src-tauri/src/trust_core/reanchor.rs:254:5: replace apply_reanchor_assertion -> Result<u64, TrustError> with Ok(0)
+src-tauri/src/trust_core/reanchor.rs:254:5: replace apply_reanchor_assertion -> Result<u64, TrustError> with Ok(1)
+src-tauri/src/trust_core/reanchor.rs:289:24: replace > with == in trust_reanchor_time
+src-tauri/src/trust_core/reanchor.rs:289:24: replace > with < in trust_reanchor_time
+src-tauri/src/trust_core/reanchor.rs:289:24: replace > with >= in trust_reanchor_time
+src-tauri/src/trust_core/reanchor.rs:289:28: replace * with + in trust_reanchor_time
+src-tauri/src/trust_core/reanchor.rs:289:28: replace * with / in trust_reanchor_time
+src-tauri/src/trust_core/session.rs:69:18: replace < with <= in evaluate_continuity
+src-tauri/src/trust_core/session.rs:72:29: replace - with / in evaluate_continuity
+src-tauri/src/trust_core/time_anchor.rs:76:48: replace - with + in iso_utc_ms
+src-tauri/src/trust_core/time_anchor.rs:76:48: replace - with / in iso_utc_ms
+src-tauri/src/trust_core/time_anchor.rs:76:33: replace + with - in iso_utc_ms
+src-tauri/src/trust_core/time_anchor.rs:76:33: replace + with * in iso_utc_ms
+src-tauri/src/trust_core/time_anchor.rs:81:45: replace - with / in iso_utc_ms
+src-tauri/src/trust_core/time_anchor.rs:102:22: replace < with == in anchor_now_ms
+src-tauri/src/trust_core/time_anchor.rs:102:22: replace < with <= in anchor_now_ms
+src-tauri/src/trust_core/time_anchor.rs:129:39: replace < with <= in anchor_now_ms
+src-tauri/src/trust_core/time_anchor.rs:225:38: replace && with || in ingest_server_time
+src-tauri/src/trust_core/time_anchor.rs:225:23: replace == with != in ingest_server_time
+src-tauri/src/trust_core/time_anchor.rs:225:55: replace == with != in ingest_server_time
+src-tauri/src/trust_core/time_anchor.rs:286:32: replace > with == in ingest_signed_server_time
+src-tauri/src/trust_core/time_anchor.rs:286:32: replace > with < in ingest_signed_server_time
+src-tauri/src/trust_core/time_anchor.rs:286:36: replace * with + in ingest_signed_server_time
+src-tauri/src/trust_core/time_anchor.rs:286:36: replace * with / in ingest_signed_server_time
+src-tauri/src/trust_core/time_config.rs:17:43: replace * with +
+src-tauri/src/trust_core/time_config.rs:17:43: replace * with /
+src-tauri/src/trust_core/time_config.rs:17:38: replace * with +
+src-tauri/src/trust_core/time_config.rs:17:38: replace * with /
+src-tauri/src/trust_core/time_config.rs:21:35: replace * with +
+src-tauri/src/trust_core/time_config.rs:24:58: replace * with +
+src-tauri/src/trust_core/time_config.rs:24:58: replace * with /
+src-tauri/src/trust_core/time_config.rs:24:53: replace * with +
+src-tauri/src/trust_core/time_config.rs:24:53: replace * with /
+src-tauri/src/trust_core/time_config.rs:24:48: replace * with +
+src-tauri/src/trust_core/time_config.rs:24:48: replace * with /
+src-tauri/src/trust_core/time_config.rs:24:43: replace * with +
+src-tauri/src/trust_core/time_config.rs:24:43: replace * with /
+src-tauri/src/trust_core/time_config.rs:28:57: replace * with +
+src-tauri/src/trust_core/time_config.rs:28:57: replace * with /
+src-tauri/src/trust_core/time_config.rs:28:52: replace * with +
+src-tauri/src/trust_core/time_config.rs:28:52: replace * with /
+src-tauri/src/trust_core/time_config.rs:28:47: replace * with +
+src-tauri/src/trust_core/time_config.rs:28:47: replace * with /
+src-tauri/src/trust_core/time_config.rs:28:42: replace * with +
+src-tauri/src/trust_core/time_config.rs:28:42: replace * with /
+src-tauri/src/trust_core/time_config.rs:43:51: replace * with +
+src-tauri/src/trust_core/time_config.rs:43:51: replace * with /
+src-tauri/src/trust_core/time_config.rs:43:46: replace * with +
+src-tauri/src/trust_core/time_config.rs:43:46: replace * with /
+src-tauri/src/trust_core/time_engine.rs:84:20: replace < with == in evaluate
+src-tauri/src/trust_core/time_engine.rs:84:20: replace < with <= in evaluate
+src-tauri/src/trust_core/time_engine.rs:128:28: replace < with <= in evaluate
+src-tauri/src/trust_core/time_engine.rs:134:37: replace > with == in evaluate
+src-tauri/src/trust_core/time_engine.rs:134:37: replace > with < in evaluate
+src-tauri/src/trust_core/time_engine.rs:134:37: replace > with >= in evaluate
+src-tauri/src/trust_core/time_engine.rs:161:48: replace < with <= in evaluate
+src-tauri/src/trust_core/time_engine.rs:161:28: replace + with - in evaluate
+src-tauri/src/trust_core/time_engine.rs:189:9: replace PersistedCheckpoint::from_snapshot -> Option<Self> with None
+src-tauri/src/trust_core/time_engine.rs:239:9: replace TimeKernel::load_from_snapshot with ()
+src-tauri/src/trust_core/time_engine.rs:249:9: replace TimeKernel::read_fields -> TimeFields with Default::default()
+src-tauri/src/trust_core/time_engine.rs:262:9: replace TimeKernel::apply_checkpoint with ()
+src-tauri/src/trust_core/time_engine.rs:276:9: replace TimeKernel::apply_reanchor with ()
+src-tauri/src/trust_core/time_engine.rs:314:31: replace > with >= in TimeKernel::consume_challenge

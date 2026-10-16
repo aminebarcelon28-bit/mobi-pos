@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/license_token.rs
++++ replace || with && in device_binding_ok
+@@ -173,17 +173,17 @@
+ }
+ 
+ /// Hardware binding check with the same semantics as TypeScript
+ /// (`activateWithOfflineToken`): an empty or `'*'` token binding matches any
+ /// device (demo/dev); otherwise the token binding must equal the NATIVE
+ /// hardware hash. Callers must pass the natively computed fingerprint — never
+ /// a client-supplied value.
+ pub fn device_binding_ok(token_device_id: &str, native_hwid_hash: &str) -> bool {
+-    token_device_id.is_empty() || token_device_id == "*" || token_device_id == native_hwid_hash
++    token_device_id.is_empty() && /* ~ changed by cargo-mutants ~ */ token_device_id == "*" || token_device_id == native_hwid_hash
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+     use ed25519_dalek::{Signer, SigningKey};
+ 
+     fn test_keypair() -> (SigningKey, String) {

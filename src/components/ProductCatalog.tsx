@@ -11,6 +11,7 @@ import {
   createServiceProductFromTouch,
   type QuickTouchItem,
 } from '../utils/quickTouchStorage';
+import { Kbd } from '../design-system/desktop/Kbd';
 
 const CATEGORIES: CategoryType[] = [
   'Tous les produits',
@@ -20,6 +21,11 @@ const CATEGORIES: CategoryType[] = [
   'Chargeurs',
   'Câbles',
   'Protège-Écran',
+  "Téléphones d'Occasion (Reprise)",
+  'Audio',
+  'Supports',
+  'Batteries Externes',
+  'Services',
 ];
 
 const BRANDS: Array<{ label: string; value: 'Tous' | BrandName }> = [
@@ -94,9 +100,9 @@ const ProductTile = React.memo(({
         {/* Secondary Metadata Line (10-11px uppercase) */}
         <div className="flex items-center gap-1 min-w-0 flex-1">
           {shortcutKey && (
-            <kbd className="shrink-0 px-1.5 py-0.2 text-[9px] font-mono font-black rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 shadow-xs" title={`Touche rapide: ${shortcutKey}`}>
+            <Kbd size="sm" variant="accent" className="shrink-0 text-[10px] font-mono font-black" title={`Touche rapide: ${shortcutKey}`}>
               {shortcutKey}
-            </kbd>
+            </Kbd>
           )}
           <span className="text-[10px] md:text-[11px] font-bold text-pos-muted uppercase tracking-wider truncate">
             {product.brand} {product.compatibleModel ? `• ${product.compatibleModel}` : ''}
@@ -152,13 +158,13 @@ const ProductTile = React.memo(({
       {/* Bottom Bar: Tabular Price & Discreet Quick Actions */}
       <div className="flex items-center justify-between w-full pt-1 border-t border-pos-border/40 mt-auto">
         {/* Tabular Price (14-15px bold font-mono) */}
-        <div className="flex items-baseline gap-1.5 font-mono tabular-nums">
+        <div className="flex items-baseline gap-1.5 font-mono num">
           {pricingTier !== 'Retail' && product.price > activePrice && (
-            <span className="text-[10px] text-amber-400/80 line-through font-bold">
+            <span className="text-ui-2xs text-status-warn-fg line-through font-bold">
               {formatDZD(product.price)}
             </span>
           )}
-          <span className="text-[14px] md:text-[15px] font-bold text-emerald-400 tracking-tight">
+          <span className="text-ui-md font-extrabold text-status-ok-fg tracking-tight">
             {formatDZD(activePrice)}
           </span>
         </div>

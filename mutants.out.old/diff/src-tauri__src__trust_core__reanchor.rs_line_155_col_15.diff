@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace != with == in verify_time_assertion_with_prefix
+@@ -147,17 +147,17 @@
+     let (prefix, payload_b64, sig_b64) = match (parts.next(), parts.next(), parts.next()) {
+         (Some(a), Some(p), Some(s)) if parts.next().is_none() => (a, p, s),
+         _ => {
+             return Err(TrustError::IPCProtocolError {
+                 reason: "time assertion must have 3 parts",
+             })
+         }
+     };
+-    if prefix != expected_prefix {
++    if prefix == /* ~ changed by cargo-mutants ~ */ expected_prefix {
+         return Err(TrustError::IPCProtocolError {
+             reason: "unknown time assertion prefix",
+         });
+     }
+     // Reuse the token verifier with the time domain: structure, base64,
+     // signature rules are identical; only the signed bytes differ.
+     let token_like = format!("{prefix}.{payload_b64}.{sig_b64}");
+     // Header check inside the shared verifier expects alg EdDSA in a JSON

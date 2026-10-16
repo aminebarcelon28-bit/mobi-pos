@@ -779,13 +779,44 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
         })),
       });
 
+      try {
+        const { getLocalDb, mirrorStockBatchesToDexie } = await import('../db/sqlPluginAdapter');
+        const db = await getLocalDb();
+        const productIds = lines
+          .map((l) => l.selected_product_id as string)
+          .filter(Boolean);
+        await mirrorStockBatchesToDexie(db, productIds);
+
+        const { dexieDb } = await import('../db/database');
+        const nowIso = new Date().toISOString();
+        for (const item of lines) {
+          if (!item.selected_product_id) continue;
+          const p = products.find((x) => x.id === item.selected_product_id);
+          const currentStock = p?.stock ?? 0;
+          const newStock = currentStock + Math.round(item.quantity);
+          const newCost =
+            p?.costPrice && p.costPrice > 0
+              ? p.costPrice
+              : Math.round(item.unit_cost);
+          await dexieDb.products.update(item.selected_product_id, {
+            stock: newStock,
+            costPrice: newCost,
+            updatedAt: nowIso,
+          });
+        }
+        const allProducts = await dexieDb.products.toArray();
+        usePosStore.setState({ products: allProducts });
+      } catch (mirrorErr) {
+        console.warn('[PoReviewScreen] Failed to mirror stock changes to Dexie/Store:', mirrorErr);
+      }
+
       onCommitSuccess(count);
     } catch (e: unknown) {
       setErrorMessage(e instanceof Error ? e.message : String(e) || 'Échec de la transaction');
     } finally {
       setIsSubmitting(false);
     }
-  }, [mathState.isBalanced, invalidQtyCount, unassignedCount, supplierName, activeShift?.cashierName, lines, onCommitSuccess]);
+  }, [mathState.isBalanced, invalidQtyCount, unassignedCount, supplierName, activeShift?.cashierName, lines, onCommitSuccess, products]);
 
   // Keyboard Shortcuts (Ctrl+Enter to Commit, Ctrl+B to Auto-Balance)
   useEffect(() => {

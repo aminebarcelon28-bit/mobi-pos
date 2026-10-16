@@ -1,0 +1,31 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace TimeKernel::consume_challenge -> Result<(), ChallengeError> with Ok(())
+@@ -301,27 +301,17 @@
+             .challenge
+             .clone()
+             .map(|c| (c.nonce_hex, c.expires_at_ms))
+     }
+ 
+     /// Consume the active challenge iff it matches and is unexpired.
+     /// Consumed on success only; expiry bounds the replay window.
+     pub fn consume_challenge(&self, nonce_hex: &str, now_ms: u64) -> Result<(), ChallengeError> {
+-        let _guard = self.challenge_lock.lock();
+-        let mut g = self.inner.write();
+-        match &g.challenge {
+-            None => Err(ChallengeError::NoChallenge),
+-            Some(c) if c.nonce_hex != nonce_hex => Err(ChallengeError::Mismatch),
+-            Some(c) if now_ms > c.expires_at_ms => Err(ChallengeError::Expired),
+-            Some(_) => {
+-                g.challenge = None;
+-                Ok(())
+-            }
+-        }
++        Ok(()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     #[cfg(test)]
+     pub(crate) fn reset_for_tests(&self) {
+         *self.inner.write() = TimeInner {
+             boot_session_id: None,
+             last_trusted_wall_utc_ms: None,
+             last_monotonic_ms: None,

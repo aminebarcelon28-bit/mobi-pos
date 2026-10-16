@@ -3,7 +3,61 @@ import { usePosStore } from '../store/usePosStore';
 import { useToast } from '../components/ui/Toast';
 import type { MobileTab } from '../components/mobile/MobileBottomNav';
 
-interface UseMobileBackNavigationOptions {
+export interface BackStackEntry {
+  id: string;
+  onDismiss: () => void;
+}
+
+/**
+ * Module-scoped LIFO stack of open inline sheets, drawers, and overlays
+ * (e.g. `isScannerOpen`, `editingQtyItem`, `editingItem`, `isCashTenderOpen`,
+ * `customerModalOpen`, `saleCelebrationData`, `payingCustomer`).
+ */
+const activeBackStack: BackStackEntry[] = [];
+
+/**
+ * Registers an inline bottom sheet, scanner overlay, or drawer into the global
+ * mobile LIFO back-navigation stack (`motion.md` §5.4).
+ *
+ * When `isOpen` is true, pressing Android hardware Back (`mobi:back-pressed`),
+ * swiping Predictive Back (`popstate`), or pressing `Escape` pops and invokes
+ * the most recently opened handler before `M3CartProtectionModal` or tab switches.
+ */
+export function useRegisterMobileBackHandler(
+  isOpen: boolean,
+  onDismiss: () => void,
+  id: string = 'inline-sheet',
+): void {
+  const onDismissRef = useRef(onDismiss);
+  useEffect(() => {
+    onDismissRef.current = onDismiss;
+  }, [onDismiss]);
+
+  useEffect(() => {
+    if (!isOpen || typeof window === 'undefined') return;
+
+    const entry: BackStackEntry = {
+      id,
+      onDismiss: () => onDismissRef.current(),
+    };
+    activeBackStack.push(entry);
+
+    try {
+      window.history.pushState({ mobiRoot: true, mobiSheet: id }, '');
+    } catch {
+      // Ignore history API restrictions in sandboxed/test environments
+    }
+
+    return () => {
+      const idx = activeBackStack.lastIndexOf(entry);
+      if (idx !== -1) {
+        activeBackStack.splice(idx, 1);
+      }
+    };
+  }, [isOpen, id]);
+}
+
+export interface UseMobileBackNavigationOptions {
   activeTab?: MobileTab;
   setActiveTab?: (tab: MobileTab) => void;
   isMobile?: boolean;
@@ -90,7 +144,15 @@ export function useMobileBackNavigation({
         return;
       }
 
-      // 3. If any custom modal/sheet is open, dismiss it!
+      // 3. If any registered LIFO inline sheet/overlay is open, dismiss the topmost one first!
+      if (activeBackStack.length > 0) {
+        if (e && e.cancelable) e.preventDefault();
+        const topEntry = activeBackStack.pop();
+        topEntry?.onDismiss();
+        return;
+      }
+
+      // 3b. If any custom modal/sheet prop is open, dismiss it!
       if (isCustomModalOpen) {
         if (e && e.cancelable) e.preventDefault();
         onDismissCustomModal?.();
@@ -105,10 +167,13 @@ export function useMobileBackNavigation({
         }
       }
 
-      // 5. If user is in a secondary tab (checkout, catalog, kredy, management, diagnostics), go back to main activity!
+      // 5. Non-root tab fallback (ADR-001 §2 & G-07):
+      //    - 'diagnostics' returns to 'management'
+      //    - other secondary tabs ('checkout', 'catalog', 'kredy', 'management') return to 'activity'
       if (activeTab && activeTab !== 'activity' && setActiveTab) {
         if (e && e.cancelable) e.preventDefault();
-        setActiveTab('activity');
+        const targetTab: MobileTab = activeTab === 'diagnostics' ? 'management' : 'activity';
+        setActiveTab(targetTab);
         return;
       }
 
@@ -142,6 +207,7 @@ export function useMobileBackNavigation({
     // Keyboard Escape listener
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (e.defaultPrevented) return;
         handleBackAction(e);
       }
     };

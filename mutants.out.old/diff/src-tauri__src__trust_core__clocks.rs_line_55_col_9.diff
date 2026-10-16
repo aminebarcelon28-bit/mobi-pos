@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace <impl MonotonicSource for WindowsMonotonic>::source_name -> &'static str with ""
+@@ -47,17 +47,17 @@
+ #[cfg(target_os = "windows")]
+ impl MonotonicSource for WindowsMonotonic {
+     fn now_ms(&self) -> Option<u64> {
+         // SAFETY: GetTickCount64 takes no arguments and cannot fail.
+         Some(unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() })
+     }
+ 
+     fn source_name(&self) -> &'static str {
+-        "windows:GetTickCount64"
++        "" /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ /// Linux/Android: `CLOCK_BOOTTIME` — includes suspend.
+ #[cfg(any(target_os = "linux", target_os = "android"))]
+ pub struct BoottimeMonotonic;
+ 
+ #[cfg(any(target_os = "linux", target_os = "android"))]

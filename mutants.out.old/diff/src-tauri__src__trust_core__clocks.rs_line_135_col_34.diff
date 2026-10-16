@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace == with != in <impl MonotonicSource for MachContinuousMonotonic>::now_ms
+@@ -127,17 +127,17 @@
+ }
+ 
+ #[cfg(target_vendor = "apple")]
+ impl MonotonicSource for MachContinuousMonotonic {
+     fn now_ms(&self) -> Option<u64> {
+         let mut info = MachTimebaseInfo { numer: 0, denom: 0 };
+         // SAFETY: mach_timebase_info writes a fixed-size struct.
+         let rc = unsafe { mach_timebase_info(&mut info as *mut _) };
+-        if rc != 0 || info.numer == 0 || info.denom == 0 {
++        if rc != 0 || info.numer != /* ~ changed by cargo-mutants ~ */ 0 || info.denom == 0 {
+             return None;
+         }
+         // SAFETY: no arguments, cannot fail.
+         let ticks = unsafe { mach_continuous_time() };
+         (ticks as u128)
+             .checked_mul(info.numer as u128)?
+             .checked_div(info.denom as u128)?
+             .checked_div(1_000_000)?

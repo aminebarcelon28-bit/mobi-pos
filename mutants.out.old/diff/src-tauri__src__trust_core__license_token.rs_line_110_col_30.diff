@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/license_token.rs
++++ replace != with == in verify_token_with_domain
+@@ -102,17 +102,17 @@
+         }
+     };
+ 
+     let header_bytes = b64url_decode(header_b64)?;
+     let header: TokenHeader =
+         serde_json::from_slice(&header_bytes).map_err(|_| TrustError::IPCProtocolError {
+             reason: "unreadable token header",
+         })?;
+-    if header.alg.as_deref() != Some("EdDSA") {
++    if header.alg.as_deref() == /* ~ changed by cargo-mutants ~ */ Some("EdDSA") {
+         return Err(TrustError::IPCProtocolError {
+             reason: "unsupported token algorithm",
+         });
+     }
+ 
+     let pubkey_bytes = b64url_decode(pubkey_b64url)?;
+     if pubkey_bytes.len() != 32 {
+         return Err(TrustError::IPCProtocolError {

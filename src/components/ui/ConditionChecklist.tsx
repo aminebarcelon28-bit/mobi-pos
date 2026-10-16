@@ -33,7 +33,7 @@ export interface ConditionChecklistProps {
 }
 
 const chipBase =
-  'min-h-[44px] sm:min-h-[36px] px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg border text-left text-xs sm:text-sm font-medium flex items-center gap-2 transition cursor-pointer active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60';
+  'min-h-[48px] px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg border text-start text-xs sm:text-sm font-medium flex items-center gap-2 transition cursor-pointer active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60';
 const chipOff = 'bg-pos-card border-pos-border text-pos-muted';
 /** Amber while the customer is present (intake), emerald on the exit PV. */
 const chipOn = (tone: 'intake' | 'exit'): string =>

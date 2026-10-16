@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace <impl MonotonicSource for MachContinuousMonotonic>::source_name -> &'static str with ""
+@@ -162,17 +162,17 @@
+         };
+         if rc != 0 {
+             return None;
+         }
+         Some(format!("apple-boot:{}:{}", tv.tv_sec, tv.tv_usec))
+     }
+ 
+     fn source_name(&self) -> &'static str {
+-        "apple:mach_continuous_time"
++        "" /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ /// Process-wide production source for the current target.
+ #[cfg(target_os = "windows")]
+ pub fn production_monotonic() -> impl MonotonicSource {
+     WindowsMonotonic
+ }

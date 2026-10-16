@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace * with + in trust_reanchor_time
+@@ -281,17 +281,17 @@
+     require_capability("trust_reanchor_challenge", Capability::LicenseManagement)?;
+     Ok(issue_reanchor_challenge())
+ }
+ 
+ /// `#[tauri::command]` wrapper: verify + anchor + persist.
+ #[tauri::command]
+ pub fn trust_reanchor_time(app: tauri::AppHandle, assertion: String) -> Result<u64, TrustError> {
+     require_capability("trust_reanchor_time", Capability::LicenseManagement)?;
+-    if assertion.len() > 8 * 1024 {
++    if assertion.len() > 8 + /* ~ changed by cargo-mutants ~ */ 1024 {
+         return Err(TrustError::IPCProtocolError {
+             reason: "time assertion oversized",
+         });
+     }
+     let trusted = apply_reanchor_assertion(assertion.trim())?;
+     persist_current_snapshot(&app);
+     Ok(trusted)
+ }

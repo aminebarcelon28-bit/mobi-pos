@@ -1,0 +1,104 @@
+--- src-tauri/src/trust_core/license_token.rs
++++ replace verify_token_with_domain -> Result<VerifiedLicense, TrustError> with Ok(Default::default())
+@@ -81,100 +81,17 @@
+ /// bytes, so a license token can never verify as a time assertion and vice
+ /// versa — even if both were ever signed by the same key.
+ pub fn verify_token_with_domain(
+     token: &str,
+     pubkey_b64url: &str,
+     now_sec: u64,
+     domain: Option<&[u8]>,
+ ) -> Result<VerifiedLicense, TrustError> {
+-    let token = token.trim();
+-    if token.is_empty() {
+-        return Err(TrustError::IPCProtocolError {
+-            reason: "empty license token",
+-        });
+-    }
+-    let mut parts = token.split('.');
+-    let (header_b64, payload_b64, sig_b64) = match (parts.next(), parts.next(), parts.next()) {
+-        (Some(h), Some(p), Some(s)) if parts.next().is_none() => (h, p, s),
+-        _ => {
+-            return Err(TrustError::IPCProtocolError {
+-                reason: "license token must have 3 parts",
+-            })
+-        }
+-    };
+-
+-    let header_bytes = b64url_decode(header_b64)?;
+-    let header: TokenHeader =
+-        serde_json::from_slice(&header_bytes).map_err(|_| TrustError::IPCProtocolError {
+-            reason: "unreadable token header",
+-        })?;
+-    if header.alg.as_deref() != Some("EdDSA") {
+-        return Err(TrustError::IPCProtocolError {
+-            reason: "unsupported token algorithm",
+-        });
+-    }
+-
+-    let pubkey_bytes = b64url_decode(pubkey_b64url)?;
+-    if pubkey_bytes.len() != 32 {
+-        return Err(TrustError::IPCProtocolError {
+-            reason: "invalid Ed25519 public key length",
+-        });
+-    }
+-    let mut pubkey_arr = [0u8; 32];
+-    pubkey_arr.copy_from_slice(&pubkey_bytes);
+-    let verifying_key =
+-        VerifyingKey::from_bytes(&pubkey_arr).map_err(|_| TrustError::IPCProtocolError {
+-            reason: "invalid Ed25519 public key",
+-        })?;
+-
+-    let sig_bytes = b64url_decode(sig_b64)?;
+-    let signature = Signature::from_slice(&sig_bytes).map_err(|_| TrustError::IPCProtocolError {
+-        reason: "invalid Ed25519 signature length",
+-    })?;
+-
+-    let signing_input = format!("{header_b64}.{payload_b64}");
+-    let mut signed_bytes: Vec<u8> = Vec::with_capacity(
+-        domain.map(|d| d.len() + 1).unwrap_or(0) + signing_input.len(),
+-    );
+-    if let Some(d) = domain {
+-        signed_bytes.extend_from_slice(d);
+-        signed_bytes.push(b'.');
+-    }
+-    signed_bytes.extend_from_slice(signing_input.as_bytes());
+-    verifying_key
+-        .verify(&signed_bytes, &signature)
+-        .map_err(|_| TrustError::SecurityPolicyFailure {
+-            reason: "license signature invalid",
+-        })?;
+-
+-    let payload_bytes = b64url_decode(payload_b64)?;
+-    let payload: TokenPayload =
+-        serde_json::from_slice(&payload_bytes).map_err(|_| TrustError::IPCProtocolError {
+-            reason: "unreadable token payload",
+-        })?;
+-
+-    let now = now_sec as i64;
+-    let leeway = TOKEN_LEEWAY_SEC as i64;
+-    if let Some(nbf) = payload.nbf {
+-        if now < nbf - leeway {
+-            return Err(TrustError::SecurityPolicyFailure {
+-                reason: "license not yet valid",
+-            });
+-        }
+-    }
+-    let expired = match payload.exp {
+-        Some(exp) if exp != 0 => now > exp + leeway,
+-        _ => false,
+-    };
+-
+-    Ok(VerifiedLicense {
+-        device_id: payload.device_id.unwrap_or_default(),
+-        expired,
+-    })
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Hardware binding check with the same semantics as TypeScript
+ /// (`activateWithOfflineToken`): an empty or `'*'` token binding matches any
+ /// device (demo/dev); otherwise the token binding must equal the NATIVE
+ /// hardware hash. Callers must pass the natively computed fingerprint — never
+ /// a client-supplied value.
+ pub fn device_binding_ok(token_device_id: &str, native_hwid_hash: &str) -> bool {

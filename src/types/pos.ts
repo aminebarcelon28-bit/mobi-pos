@@ -9,6 +9,9 @@ export type CategoryType =
   | 'Câbles'
   | 'Protège-Écran'
   | "Téléphones d'Occasion (Reprise)"
+  | 'Audio'
+  | 'Supports'
+  | 'Batteries Externes'
   | 'Services';
 
 export type SortOption = 
@@ -428,6 +431,9 @@ export interface HeldSale {
   items: CartItem[];
   timestamp: string;
   note?: string;
+  stagedTradeIn?: StagedTradeIn | null;
+  voucherCode?: string | null;
+  voucherCreditApplied?: number;
 }
 
 export type PaymentMethodType = 'Espèces' | 'Avoir Client' | 'BaridiMob' | 'Chèque' | 'Crédit Client' | 'Reprise' | 'Autre';
@@ -1328,6 +1334,7 @@ export interface TradeInItem {
    */
   nationalIdType?: import('../utils/tradeInOrigin').NationalIdType;
   buybackValue: number;          // Cost basis for store (e.g. 50,000 DA)
+  walletCreditAmount?: number;   // Customer wallet credit (includes standalone +10% bonus)
   resaleMarginPercent: number;
   resalePrice: number;          // Retail listing price
   targetResalePrice?: number;

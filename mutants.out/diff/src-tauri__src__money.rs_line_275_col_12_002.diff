@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace > with >= in is_fr_grouped_int
+@@ -267,17 +267,17 @@
+             i += 1;
+             n += 1;
+         }
+         if n != 3 {
+             return false;
+         }
+         groups += 1;
+     }
+-    groups > 0 && i == bytes.len()
++    groups >= /* ~ changed by cargo-mutants ~ */ 0 && i == bytes.len()
+ }
+ 
+ /// C-2a: ASCII-space thousands grouping (escpos-safe). Pure string ops.
+ fn group_ascii(digits: &str) -> String {
+     if digits.len() <= 3 {
+         return digits.to_string();
+     }
+     let head = match digits.len() % 3 {

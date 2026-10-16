@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ delete ! in Money::from_user_input
+@@ -86,17 +86,17 @@
+             } else if c == '\u{066C}' {
+                 // Arabic thousands separator — dropped like FR grouping dots.
+             } else {
+                 latinized.push(c);
+             }
+         }
+         let compact: String = latinized
+             .chars()
+-            .filter(|c| !matches!(c, ' ' | '\u{00A0}' | '\u{202F}' | '\u{2009}' | '\''))
++            .filter(|c|  /* ~ changed by cargo-mutants ~ */matches!(c, ' ' | '\u{00A0}' | '\u{202F}' | '\u{2009}' | '\''))
+             .collect();
+         if compact.is_empty() {
+             return Err(MoneyError::Empty);
+         }
+         let has_comma = compact.contains(',');
+         let has_dot = compact.contains('.');
+         let (int_part, frac_part): (String, String) = if has_comma && has_dot {
+             // Strict FR grouping only ("12.500,50"); US-grouped input is

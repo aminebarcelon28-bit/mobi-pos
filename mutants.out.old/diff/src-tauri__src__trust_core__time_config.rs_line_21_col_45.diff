@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_config.rs
++++ replace * with +
+@@ -13,17 +13,17 @@
+ //! exists (`clockGuard` 5-minute skew, 7-day grace window).
+ 
+ /// Wall-vs-expected skew absorbed silently (NTP wobble, DST presentation).
+ /// Mirrors `LicenseClockGuard::SKEW_TOLERANCE_MS`.
+ pub const SKEW_TOLERANCE_MS: u64 = 5 * 60 * 1000;
+ 
+ /// Wall ahead of the trusted anchor by more than this requests revalidation
+ /// (advisory only — capabilities intact, anchor not advanced).
+-pub const WARN_AHEAD_MS: u64 = 24 * 60 * 60 * 1000;
++pub const WARN_AHEAD_MS: u64 = 24 * 60 * 60 + /* ~ changed by cargo-mutants ~ */ 1000;
+ 
+ /// Server-time staleness producing an advisory revalidation message only.
+ pub const STALENESS_ADVISORY_MS: u64 = 14 * 24 * 60 * 60 * 1000;
+ 
+ /// Maximum offline window before an advisory revalidation prompt. Never
+ /// blocks normal offline selling; mirrors the 7-day licensing grace window.
+ pub const OFFLINE_REVALIDATE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+ 

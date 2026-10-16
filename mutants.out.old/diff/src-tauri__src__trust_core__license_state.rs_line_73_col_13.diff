@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/license_state.rs
++++ delete match arm "SUSPENDED" in LicenseState::from_code
+@@ -65,17 +65,17 @@
+     /// to `CORRUPTED`, never to a permissive state.
+     pub fn from_code(code: &str) -> Option<Self> {
+         match code.trim().to_uppercase().as_str() {
+             "UNKNOWN" => Some(LicenseState::Unknown),
+             "UNACTIVATED" => Some(LicenseState::Unactivated),
+             "OPERATIONAL" => Some(LicenseState::Operational),
+             "EXPIRED" => Some(LicenseState::Expired),
+             "GRACE_EXCEEDED" => Some(LicenseState::GraceExceeded),
+-            "SUSPENDED" => Some(LicenseState::Suspended),
++             /* ~ changed by cargo-mutants ~ */
+             "REVOKED" => Some(LicenseState::Revoked),
+             "CORRUPTED" => Some(LicenseState::Corrupted),
+             "CLOCK_RESET_REQUIRED" => Some(LicenseState::ClockResetRequired),
+             "TAMPER_SUSPECTED" => Some(LicenseState::TamperSuspected),
+             _ => None,
+         }
+     }
+ 

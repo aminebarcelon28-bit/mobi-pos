@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace > with >= in evaluate
+@@ -126,17 +126,17 @@
+                     }),
+                 }
+             } else if skew < 0 {
+                 EvalOutcome {
+                     verdict: TimeVerdict::TamperSuspected,
+                     advisory: None,
+                     checkpoint_update: None,
+                 }
+-            } else if (skew as u64) > WARN_AHEAD_MS {
++            } else if (skew as u64) >= /* ~ changed by cargo-mutants ~ */ WARN_AHEAD_MS {
+                 // Reachable only if an owner configures SESSION_TOLERANCE
+                 // above WARN_AHEAD (default 1 h < 24 h routes such jumps to
+                 // NewSession first). Same contract either way: advisory only.
+                 EvalOutcome {
+                     verdict: TimeVerdict::Advisory,
+                     advisory: Some(AdvisoryCause::ForwardJump),
+                     checkpoint_update: None,
+                 }

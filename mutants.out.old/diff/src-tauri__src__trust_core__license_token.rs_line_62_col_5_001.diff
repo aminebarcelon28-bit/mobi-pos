@@ -1,0 +1,25 @@
+--- src-tauri/src/trust_core/license_token.rs
++++ replace b64url_decode -> Result<Vec<u8>, TrustError> with Ok(vec![0])
+@@ -54,21 +54,17 @@
+ /// `expired == true` to the `EXPIRED` kernel state.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct VerifiedLicense {
+     pub device_id: String,
+     pub expired: bool,
+ }
+ 
+ fn b64url_decode(input: &str) -> Result<Vec<u8>, TrustError> {
+-    URL_SAFE_NO_PAD
+-        .decode(input.trim())
+-        .map_err(|_| TrustError::IPCProtocolError {
+-            reason: "malformed license token encoding",
+-        })
++    Ok(vec![0]) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Verify a compact JWS license token. `now_sec` is the caller's wall clock
+ /// (best effort until Phase 2 trusted time).
+ pub fn verify_license_token(
+     token: &str,
+     pubkey_b64url: &str,
+     now_sec: u64,

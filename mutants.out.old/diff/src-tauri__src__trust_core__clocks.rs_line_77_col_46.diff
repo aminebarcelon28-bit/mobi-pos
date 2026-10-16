@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace / with % in <impl MonotonicSource for BoottimeMonotonic>::now_ms
+@@ -69,17 +69,17 @@
+         let rc = unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, ts.as_mut_ptr()) };
+         if rc != 0 {
+             return None;
+         }
+         let ts = unsafe { ts.assume_init() };
+         u64::try_from(ts.tv_sec)
+             .ok()?
+             .checked_mul(1_000)?
+-            .checked_add((ts.tv_nsec as u64) / 1_000_000)
++            .checked_add((ts.tv_nsec as u64) % /* ~ changed by cargo-mutants ~ */ 1_000_000)
+     }
+ 
+     fn boot_id(&self) -> Option<String> {
+         std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+             .ok()
+             .map(|s| s.trim().to_string())
+             .filter(|s| !s.is_empty())
+     }

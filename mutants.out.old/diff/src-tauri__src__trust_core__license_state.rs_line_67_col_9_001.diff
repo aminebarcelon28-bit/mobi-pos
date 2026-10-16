@@ -1,0 +1,33 @@
+--- src-tauri/src/trust_core/license_state.rs
++++ replace LicenseState::from_code -> Option<Self> with Some(Default::default())
+@@ -59,29 +59,17 @@
+             LicenseState::ClockResetRequired => "CLOCK_RESET_REQUIRED",
+             LicenseState::TamperSuspected => "TAMPER_SUSPECTED",
+         }
+     }
+ 
+     /// Strict decode. Unknown values return `None`; callers must map `None`
+     /// to `CORRUPTED`, never to a permissive state.
+     pub fn from_code(code: &str) -> Option<Self> {
+-        match code.trim().to_uppercase().as_str() {
+-            "UNKNOWN" => Some(LicenseState::Unknown),
+-            "UNACTIVATED" => Some(LicenseState::Unactivated),
+-            "OPERATIONAL" => Some(LicenseState::Operational),
+-            "EXPIRED" => Some(LicenseState::Expired),
+-            "GRACE_EXCEEDED" => Some(LicenseState::GraceExceeded),
+-            "SUSPENDED" => Some(LicenseState::Suspended),
+-            "REVOKED" => Some(LicenseState::Revoked),
+-            "CORRUPTED" => Some(LicenseState::Corrupted),
+-            "CLOCK_RESET_REQUIRED" => Some(LicenseState::ClockResetRequired),
+-            "TAMPER_SUSPECTED" => Some(LicenseState::TamperSuspected),
+-            _ => None,
+-        }
++        Some(Default::default()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Fail-closed coercion for any untrusted input (persisted snapshots,
+     /// IPC payloads, future variants): unrecognized values become
+     /// `CORRUPTED`, which grants only `LicenseManagement`.
+     pub fn coerce_from_untrusted(code: &str) -> Self {
+         Self::from_code(code).unwrap_or(LicenseState::Corrupted)
+     }

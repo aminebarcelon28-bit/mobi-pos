@@ -163,4 +163,31 @@ mod tests {
         let r = evaluate_continuity(&cp, &Dead, 2_000, SESSION_CONTINUITY_TOLERANCE_MS);
         assert_eq!(r, Continuity::NewSession);
     }
+
+    #[test]
+    fn equal_monotonic_is_continuous_not_regression() {
+        // current_m == saved monotonic is NOT a regression. Pins the strict
+        // `<` at the Signal-2 guard (`<` -> `<=` must fail here).
+        let cp = checkpoint(None, 5_000, 5_000);
+        let clock = ManualClock::new(5_000);
+        let r = evaluate_continuity(&cp, &clock, 5_000, SESSION_CONTINUITY_TOLERANCE_MS);
+        assert_eq!(r, Continuity::Continuous { delta_m_ms: 0 });
+    }
+
+    #[test]
+    fn delta_m_is_subtraction_not_division() {
+        // delta_m must be `current - saved`. A division mutant yields a tiny
+        // delta_m and blows the ΔM/ΔW consistency cross-check (|ΔM − ΔW| >
+        // tolerance), flipping Continuous to NewSession.
+        let current_m = 28_800_000u64; // ~8 h uptime, ms scale
+        let cp = checkpoint(None, 1_000, 0);
+        let clock = ManualClock::new(current_m);
+        let r = evaluate_continuity(&cp, &clock, current_m - 1_000, SESSION_CONTINUITY_TOLERANCE_MS);
+        assert_eq!(
+            r,
+            Continuity::Continuous {
+                delta_m_ms: current_m - 1_000
+            }
+        );
+    }
 }

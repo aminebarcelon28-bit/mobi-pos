@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/license_token.rs
++++ replace match guard exp != 0 with false in verify_token_with_domain
+@@ -157,17 +157,17 @@
+     if let Some(nbf) = payload.nbf {
+         if now < nbf - leeway {
+             return Err(TrustError::SecurityPolicyFailure {
+                 reason: "license not yet valid",
+             });
+         }
+     }
+     let expired = match payload.exp {
+-        Some(exp) if exp != 0 => now > exp + leeway,
++        Some(exp) if false /* ~ changed by cargo-mutants ~ */ => now > exp + leeway,
+         _ => false,
+     };
+ 
+     Ok(VerifiedLicense {
+         device_id: payload.device_id.unwrap_or_default(),
+         expired,
+     })
+ }

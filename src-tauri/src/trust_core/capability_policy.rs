@@ -246,6 +246,20 @@ mod tests {
     }
 
     #[test]
+    fn suspended_read_operational_data_is_denied_with_owner_flag() {
+        // SUSPENDED + ReadOperationalData uses its explicit `DENY_OWNER` arm.
+        // Dropping that arm still yields `granted == false` (catch-all `DENY`),
+        // so the owner-confirmation flag is the only observable difference and
+        // must be asserted for the arm to be pinned.
+        let d = authorize(&LicenseState::Suspended, Capability::ReadOperationalData);
+        assert!(!d.granted, "SUSPENDED must not grant ReadOperationalData");
+        assert!(
+            d.owner_confirmation_required,
+            "SUSPENDED + ReadOperationalData is a `*` (owner-confirm) cell"
+        );
+    }
+
+    #[test]
     fn no_state_grants_sync_or_hardware_except_operational() {
         for state in ALL_STATES {
             if state == LicenseState::Operational {

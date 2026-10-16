@@ -633,6 +633,7 @@ pub fn e2e_mirror_shift_open(
 pub fn e2e_get_shift(app: tauri::AppHandle, id: String) -> Result<ShiftOut, String> {
     let path = resolve_db_path(&app)?;
     let conn = open_db(&path)?;
+    #[allow(clippy::type_complexity)]
     let row: Option<(String, f64, Option<f64>, Option<f64>, Option<f64>, Option<String>)> = conn
         .query_row(
             "SELECT status, opening_float, expected_cash, actual_cash, discrepancy, closed_at \
@@ -978,6 +979,7 @@ pub struct SaleOut {
 pub fn e2e_get_sale(app: tauri::AppHandle, id: String) -> Result<SaleOut, String> {
     let path = resolve_db_path(&app)?;
     let conn = open_db(&path)?;
+    #[allow(clippy::type_complexity)]
     let row: Option<(String, f64, f64, f64, String, f64, f64, String, String)> = conn
         .query_row(
             "SELECT receipt_number, subtotal, discount_total, total, payment_method, \

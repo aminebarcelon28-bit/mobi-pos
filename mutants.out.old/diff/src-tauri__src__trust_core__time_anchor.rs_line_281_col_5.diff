@@ -1,0 +1,55 @@
+--- src-tauri/src/trust_core/time_anchor.rs
++++ replace ingest_signed_server_time -> Result<ServerTimeIngest, TrustError> with Ok(Default::default())
+@@ -273,51 +273,17 @@
+ /// `#[tauri::command]`: ingest gateway-signed time (LicenseManagement — the
+ /// skew-calibration plane, same as re-anchor; quarantined terminals stay
+ /// able to observe server time). Size-capped like `trust_reanchor_time`.
+ #[tauri::command]
+ pub fn ingest_signed_server_time(
+     app: tauri::AppHandle,
+     assertion: String,
+ ) -> Result<ServerTimeIngest, TrustError> {
+-    super::ipc_authorizer::authorize_and_execute(
+-        "ingest_signed_server_time",
+-        super::Capability::LicenseManagement,
+-        |_| {
+-            use tauri::Manager;
+-            if assertion.len() > 8 * 1024 {
+-                return Err(TrustError::IPCProtocolError {
+-                    reason: "time assertion oversized",
+-                });
+-            }
+-            let app_dir = app
+-                .path()
+-                .app_data_dir()
+-                .map_err(|e| TrustError::op_failed(format!("app dir: {e}")))?;
+-            let mut conn = rusqlite::Connection::open(crate::e2e::live_db_path(&app_dir))
+-                .map_err(|e| TrustError::op_failed(format!("ingest open: {e}")))?;
+-            conn.pragma_update(None, "journal_mode", "WAL")
+-                .map_err(|e| TrustError::op_failed(format!("ingest wal: {e}")))?;
+-            conn.busy_timeout(std::time::Duration::from_millis(5000))
+-                .map_err(|e| TrustError::op_failed(format!("ingest busy_timeout: {e}")))?;
+-            let wall_now = system_wall_ms().unwrap_or(0) as u64;
+-            let tx = conn
+-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+-                .map_err(|e| TrustError::op_failed(format!("ingest begin: {e}")))?;
+-            let out = ingest_server_time(
+-                &tx,
+-                &super::clocks::production_monotonic(),
+-                assertion.trim(),
+-                wall_now,
+-            )?;
+-            tx.commit()
+-                .map_err(|e| TrustError::op_failed(format!("ingest commit: {e}")))?;
+-            Ok(out)
+-        },
+-    )
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::super::clocks::ManualClock;
+     use super::*;
+ 
+     /// Debug-only mint (mirrors `reanchor` test discipline: the production

@@ -1365,10 +1365,7 @@ pub fn refund_sale_atomic(
             ManifestMac::Key(k) => Some(k),
             ManifestMac::Unavailable(_) => None,
         };
-        let mut conn = open_live_db(&app).map_err(|e| {
-            // open_live_db already returns TrustError; passthrough.
-            e
-        })?;
+        let mut conn = open_live_db(&app)?;
         // Native identity injection (TIER-B): the enrolled device id is
         // loaded here, inside the trust boundary — the client string in
         // `req.local_device_id` is only ever compared, never used.
@@ -1658,6 +1655,7 @@ mod tests {
         apply_refund(conn, req, None, gen(), &id, &test_clock())
     }
 
+    #[allow(dead_code)]
     fn run_as(
         conn: &mut Connection,
         req: &RefundRequest,
@@ -2358,10 +2356,22 @@ mod tests {
                            barrier: Arc<Barrier>,
                            req: RefundRequest| {
             std::thread::spawn(move || {
-                let mut conn = Connection::open(&path).unwrap();
-                conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-                conn.busy_timeout(std::time::Duration::from_millis(5000)).unwrap();
+                // Set the busy timeout BEFORE flipping to WAL; and route setup
+                // failures through the barrier rather than panicking first. A
+                // pre-barrier panic (e.g. SQLITE_BUSY on the journal-mode
+                // change) leaves the peer stuck on the barrier forever while
+                // this thread holds the shared serial-test mutex, hanging every
+                // other serialized test in the workspace.
+                let setup = (|path: &std::path::Path| -> Result<Connection, String> {
+                    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+                    conn.busy_timeout(std::time::Duration::from_millis(5000))
+                        .map_err(|e| e.to_string())?;
+                    conn.pragma_update(None, "journal_mode", "WAL")
+                        .map_err(|e| e.to_string())?;
+                    Ok(conn)
+                })(&path);
                 barrier.wait();
+                let mut conn = setup.map_err(|e| format!("setup: {e}"))?;
                 let id = test_identity(&conn, "dev-A");
                 let clock = test_clock();
                 apply_refund(&mut conn, &req, None, generation, &id, &clock)

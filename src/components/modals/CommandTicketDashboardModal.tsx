@@ -94,6 +94,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
     updateRepairOrderStatus,
     receiptSettings,
     setPendingRepairPrint,
+    vendorDirectory,
   } = usePosStore();
   const { showToast } = useToast();
   const [showRepairArchive, setShowRepairArchive] = useState(false);
@@ -417,7 +418,12 @@ export const CommandTicketDashboardModal: React.FC = () => {
     });
 
     const msg = `*BON DE COMMANDE N° ${po.poNumber}*\n*Fournisseur :* ${po.vendorName}\n*Date :* ${new Date(po.createdAt).toLocaleDateString('fr-DZ')}\n\n*Articles en attente :*\n${itemsText}\n*TOTAL ESTIMÉ : ${formatDZD(po.totalAmount)}*\n\nMerci de confirmer la livraison.`;
-    const url = buildWhatsAppUrl('0550000000', msg);
+    const targetPhone = vendorDirectory?.[po.vendorName]?.whatsapp || vendorDirectory?.[po.vendorName]?.phone || '';
+    if (!targetPhone) {
+      showToast(`Aucun numéro de téléphone enregistré pour le fournisseur "${po.vendorName}".`, 'warning');
+      return;
+    }
+    const url = buildWhatsAppUrl(targetPhone, msg);
     window.open(url, '_blank');
   };
 

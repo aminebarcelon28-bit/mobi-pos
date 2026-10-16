@@ -47,6 +47,7 @@ import { soundEngine } from '../../utils/audioFeedback';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { isMobileDevice, isTauriEnvironment } from '../../utils/platform';
 import { verifyManagerGate } from '../../utils/pinGate';
+import { Kbd } from '../../design-system/desktop/Kbd';
 
 export const DebtLedgerModal: React.FC = () => {
   const {
@@ -261,6 +262,7 @@ export const DebtLedgerModal: React.FC = () => {
 
     if (debtPaymentResult.success) {
       soundEngine.playSuccess();
+      const customerToPrint = payingCustomer;
       // recordCustomerDebtPayment clamps to the outstanding debt: surface the
       // applied amount + change explicitly instead of silently converting.
       const { appliedAmount, changeDue } = debtPaymentResult as typeof debtPaymentResult & {
@@ -274,6 +276,9 @@ export const DebtLedgerModal: React.FC = () => {
         'success'
       );
       setPayingCustomer(null);
+      if (customerToPrint) {
+        void handlePrintStatement(customerToPrint);
+      }
     } else {
       soundEngine.playError();
       showToast('Erreur lors de l\'enregistrement du versement.', 'error');
@@ -415,13 +420,18 @@ export const DebtLedgerModal: React.FC = () => {
               </p>
             </div>
           </div>
-          <button
-            onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
-            aria-label="Fermer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="hidden sm:inline-flex">
+              <Kbd size="sm">Esc</Kbd>
+            </span>
+            <button
+              onClick={closeModal}
+              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+              aria-label="Fermer"
+            >
+              <X className="w-5 h-5" aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         {/* ══════════════════════════════════════════════════════════════ */}
@@ -433,7 +443,7 @@ export const DebtLedgerModal: React.FC = () => {
               <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
                 Total Encours Dettes
               </span>
-              <span className="text-xl font-black text-rose-400 font-mono">{formatDZD(totalOutstandingDebt)}</span>
+              <span className="text-xl font-black text-rose-400 font-mono num">{formatDZD(totalOutstandingDebt)}</span>
             </div>
             <div className="w-9 h-9 rounded-xl bg-rose-500/10 text-rose-400 flex items-center justify-center">
               <TrendingDown className="w-5 h-5" />
@@ -445,7 +455,7 @@ export const DebtLedgerModal: React.FC = () => {
               <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
                 Clients Débiteurs
               </span>
-              <span className="text-xl font-black text-amber-400 font-mono">{allIndebted.length}</span>
+              <span className="text-xl font-black text-amber-400 font-mono num">{allIndebted.length}</span>
             </div>
             <div className="w-9 h-9 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
               <User className="w-5 h-5" />
@@ -457,7 +467,7 @@ export const DebtLedgerModal: React.FC = () => {
               <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
                 Plafond Dépassé
               </span>
-              <span className="text-xl font-black text-red-500 font-mono">{overLimitCount}</span>
+              <span className="text-xl font-black text-red-500 font-mono num">{overLimitCount}</span>
             </div>
             <div className="w-9 h-9 rounded-xl bg-red-500/10 text-red-500 flex items-center justify-center">
               <AlertTriangle className="w-5 h-5" />
@@ -469,7 +479,7 @@ export const DebtLedgerModal: React.FC = () => {
               <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
                 Plafond Global Alloué
               </span>
-              <span className="text-xl font-black text-cyan-400 font-mono">{formatDZD(totalCreditLimits)}</span>
+              <span className="text-xl font-black text-cyan-400 font-mono num">{formatDZD(totalCreditLimits)}</span>
             </div>
             <div className="w-9 h-9 rounded-xl bg-cyan-500/10 text-cyan-400 flex items-center justify-center">
               <CreditCard className="w-5 h-5" />

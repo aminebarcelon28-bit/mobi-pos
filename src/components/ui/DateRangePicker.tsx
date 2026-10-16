@@ -449,10 +449,10 @@ export const MultiSelect: React.FC<MultiSelectProps> = ({
         onClick={() => !disabled && setIsOpen(!isOpen)}
         disabled={disabled}
         ref={buttonRef}
-        className={`w-full min-h-[42px] bg-pos-bg border border-pos-border rounded-xl pl-3 pr-10 py-2 text-xs text-pos-text placeholder-pos-muted focus:outline-none focus:border-amber-400 flex items-center justify-between transition ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+        className={`w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl ps-3 pe-10 py-2 text-xs text-pos-text placeholder-pos-muted focus:outline-none focus:border-amber-400 flex items-center justify-between transition ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
       >
         <span className="truncate flex-1">{getDisplayText()}</span>
-        <X className={`w-3.5 h-3.5 text-pos-muted absolute right-3 shrink-0 transition ${isOpen ? 'rotate-180' : ''}`} />
+        <X className={`w-3.5 h-3.5 text-pos-muted absolute end-3 shrink-0 transition ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {isOpen &&
@@ -477,7 +477,7 @@ export const MultiSelect: React.FC<MultiSelectProps> = ({
                 <button
                   type="button"
                   onClick={selectAll}
-                  className="flex-1 px-2 py-1 rounded-lg text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition cursor-pointer"
+                  className="flex-1 px-2 py-1 rounded-lg text-[10px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition cursor-pointer"
                 >
                   Tout cocher
                 </button>

@@ -538,6 +538,10 @@ mod tests {
         let path = dir.join("race.db");
         {
             let conn = Connection::open(&path).unwrap();
+            // Convert to WAL once, single-threaded: the racer threads below must
+            // not race the journal-mode change (conversion is not idempotent and
+            // surfaces SQLITE_BUSY).
+            conn.pragma_update(None, "journal_mode", "WAL").unwrap();
             conn.execute_batch(
                 "CREATE TABLE sync_outbox (
                     rowid INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -574,10 +578,22 @@ mod tests {
         let barrier = Arc::new(Barrier::new(2));
         let spawn = |path: std::path::PathBuf, barrier: Arc<Barrier>| {
             std::thread::spawn(move || {
-                let mut conn = Connection::open(&path).unwrap();
-                conn.pragma_update(None, "journal_mode", "WAL").unwrap();
-                conn.busy_timeout(std::time::Duration::from_millis(5000)).unwrap();
+                // Set the busy timeout BEFORE flipping to WAL; and route setup
+                // failures through the barrier rather than panicking first. A
+                // pre-barrier panic (e.g. SQLITE_BUSY on the journal-mode
+                // change) leaves the peer stuck on the barrier forever while
+                // this thread holds the shared serial-test mutex, hanging every
+                // other serialized test in the workspace.
+                let setup = (|path: &std::path::Path| -> Result<Connection, String> {
+                    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+                    conn.busy_timeout(std::time::Duration::from_millis(5000))
+                        .map_err(|e| e.to_string())?;
+                    conn.pragma_update(None, "journal_mode", "WAL")
+                        .map_err(|e| e.to_string())?;
+                    Ok(conn)
+                })(&path);
                 barrier.wait();
+                let mut conn = setup.map_err(|e| format!("setup: {e}"))?;
                 fetch_next_outbox_batch_inner(&mut conn, 50)
                     .map(|b| b.iter().map(|m| m.seq_no).collect::<Vec<_>>())
                     .map_err(|e| format!("{e:?}"))

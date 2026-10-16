@@ -19,6 +19,8 @@ import type { MobilePrinterConfig, MobileLabelProtocol } from '../../types/pos';
 import { EscPosBuilder } from '../../utils/escpos';
 import { soundEngine } from '../../utils/audioFeedback';
 import { useToast } from '../ui/Toast';
+import { useTranslation, Bdi } from '../../i18n';
+import { useRegisterMobileBackHandler } from '../../hooks/useMobileBackNavigation';
 
 interface MobilePrinterModalProps {
   isOpen: boolean;
@@ -27,10 +29,13 @@ interface MobilePrinterModalProps {
 
 export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, onClose }) => {
   const { showToast } = useToast();
+  const { t } = useTranslation();
   const [config, setConfig] = useState<MobilePrinterConfig>(loadMobilePrinter);
   const [bondedDevices, setBondedDevices] = useState<BondedBtDevice[]>([]);
   const [isScanningBt, setIsScanningBt] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+
+  useRegisterMobileBackHandler(isOpen, onClose, 'mobile-printer');
 
   // Reload config whenever modal opens
   useEffect(() => {
@@ -39,17 +44,6 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
     }
   }, [isOpen]);
 
-  // Escape key handler
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
 
   const handleScanBluetooth = useCallback(async () => {
     soundEngine.playKeyBeep?.();
@@ -145,15 +139,15 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
         {/* Modal Header */}
         <div className="p-4 sm:p-5 border-b border-pos-border/60 flex items-center justify-between shrink-0 bg-pos-card">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-400 flex items-center justify-center shrink-0">
+            <div className="w-10 h-10 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-700 dark:text-cyan-400 flex items-center justify-center shrink-0">
               <Printer className="w-5 h-5" aria-hidden="true" />
             </div>
             <div className="min-w-0">
               <h2 id="mobile-printer-title" className="text-sm sm:text-base font-black text-pos-text truncate">
-                Configuration Imprimante Mobile
+                {t.printer.modalTitle}
               </h2>
               <p id="mobile-printer-description" className="text-[11px] text-pos-muted truncate">
-                Wi-Fi TCP 9100 / Bluetooth SPP direct
+                {t.printer.modalSubtitle}
               </p>
             </div>
           </div>
@@ -161,8 +155,8 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
           <button
             type="button"
             onClick={onClose}
-            aria-label="Fermer la boîte de configuration"
-            className="w-10 h-10 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-center text-pos-muted hover:text-pos-text cursor-pointer transition"
+            aria-label={t.printer.closeAria}
+            className="min-h-[48px] min-w-[48px] rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-center text-pos-muted hover:text-pos-text cursor-pointer transition"
           >
             <X className="w-4 h-4" aria-hidden="true" />
           </button>
@@ -174,22 +168,22 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
           <div className="p-3.5 rounded-2xl bg-pos-card border border-pos-border flex items-center justify-between gap-3">
             <div>
               <span className="font-bold text-xs text-pos-text block">
-                Impression Directe Mobile
+                {t.printer.directPrintingTitle}
               </span>
               <span className="text-[11px] text-pos-muted block">
-                Envoie les octets bruts directement à l'imprimante
+                {t.printer.directPrintingDesc}
               </span>
             </div>
             <button
               type="button"
               onClick={() => setConfig((prev) => ({ ...prev, enabled: !prev.enabled }))}
-              className={`min-h-[44px] px-4 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95 ${
+              className={`min-h-[48px] px-4 rounded-xl font-bold text-xs cursor-pointer transition active:scale-95 ${
                 config.enabled
                   ? 'bg-emerald-500 text-slate-950 font-black shadow-md shadow-emerald-500/20'
                   : 'bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text'
               }`}
             >
-              {config.enabled ? 'Activée' : 'Désactivée'}
+              {config.enabled ? t.printer.enabledBadge : t.printer.disabledBadge}
             </button>
           </div>
 
@@ -198,7 +192,7 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
               {/* Connection Type Tabs (Wi-Fi vs Bluetooth) */}
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black uppercase tracking-wider text-pos-muted">
-                  Type de Connexion
+                  {t.printer.connectionTypeLabel}
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
@@ -206,12 +200,12 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
                     onClick={() => setConfig((prev) => ({ ...prev, connection: 'wifi' }))}
                     className={`min-h-[48px] px-3 rounded-xl border flex items-center justify-center gap-2 font-bold text-xs cursor-pointer transition active:scale-98 ${
                       config.connection === 'wifi'
-                        ? 'bg-cyan-500/15 border-cyan-500/50 text-cyan-300 shadow-xs'
+                        ? 'bg-cyan-500/15 border-cyan-500/50 text-cyan-800 dark:text-cyan-300 shadow-xs'
                         : 'bg-pos-card border-pos-border text-pos-muted hover:text-pos-text'
                     }`}
                   >
                     <Wifi className="w-4 h-4 shrink-0" aria-hidden="true" />
-                    <span>Wi-Fi (Réseau IP)</span>
+                    <span>{t.printer.wifiTab}</span>
                   </button>
 
                   <button
@@ -222,12 +216,12 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
                     }}
                     className={`min-h-[48px] px-3 rounded-xl border flex items-center justify-center gap-2 font-bold text-xs cursor-pointer transition active:scale-98 ${
                       config.connection === 'bluetooth'
-                        ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-300 shadow-xs'
+                        ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-800 dark:text-indigo-300 shadow-xs'
                         : 'bg-pos-card border-pos-border text-pos-muted hover:text-pos-text'
                     }`}
                   >
                     <Bluetooth className="w-4 h-4 shrink-0" aria-hidden="true" />
-                    <span>Bluetooth (SPP)</span>
+                    <span>{t.printer.bluetoothTab}</span>
                   </button>
                 </div>
               </div>
@@ -237,23 +231,25 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
                 <div className="p-3.5 rounded-2xl bg-pos-card border border-pos-border space-y-3">
                   <div className="space-y-1">
                     <label className="text-[11px] font-bold text-pos-text block">
-                      Adresse IP de l'imprimante
+                      {t.printer.printerIpLabel}
                     </label>
                     <input
                       type="text"
+                      dir="ltr"
                       value={config.wifiHost}
                       onChange={(e) => setConfig((prev) => ({ ...prev, wifiHost: e.target.value }))}
-                      placeholder="Ex: 192.168.1.50"
-                      className="w-full min-h-[48px] px-3.5 rounded-xl bg-pos-panel border border-pos-border text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-cyan-400"
+                      placeholder={t.printer.printerIpPlaceholder}
+                      className="w-full min-h-[48px] px-3.5 rounded-xl bg-pos-panel border border-pos-border text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-cyan-400"
                     />
                   </div>
 
                   <div className="space-y-1">
                     <label className="text-[11px] font-bold text-pos-text block">
-                      Port TCP (par défaut 9100)
+                      {t.printer.tcpPortLabel}
                     </label>
                     <input
                       type="number"
+                      dir="ltr"
                       value={config.wifiPort}
                       onChange={(e) =>
                         setConfig((prev) => ({
@@ -262,7 +258,7 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
                         }))
                       }
                       placeholder="9100"
-                      className="w-full min-h-[48px] px-3.5 rounded-xl bg-pos-panel border border-pos-border text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-cyan-400"
+                      className="w-full min-h-[48px] px-3.5 rounded-xl bg-pos-panel border border-pos-border text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-cyan-400"
                     />
                   </div>
                 </div>
@@ -271,21 +267,21 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
               {/* Bluetooth Configuration Parameters */}
               {config.connection === 'bluetooth' && (
                 <div className="p-3.5 rounded-2xl bg-pos-card border border-pos-border space-y-3">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <label className="text-[11px] font-bold text-pos-text">
-                      Périphériques Bluetooth Associés
+                      {t.printer.bondedBluetoothTitle}
                     </label>
                     <button
                       type="button"
                       onClick={handleScanBluetooth}
                       disabled={isScanningBt}
-                      className="min-h-[44px] px-2.5 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border text-[11px] font-bold text-pos-text flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      className="min-h-[48px] px-3 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border text-[11px] font-bold text-pos-text flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                     >
                       <RotateCw
                         className={`w-3.5 h-3.5 ${isScanningBt ? 'animate-spin' : ''}`}
                         aria-hidden="true"
                       />
-                      <span>Actualiser</span>
+                      <span>{t.common.refresh}</span>
                     </button>
                   </div>
 
@@ -302,31 +298,32 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
                               bluetoothMac: dev.mac,
                             }))
                           }
-                          className={`w-full min-h-[46px] px-3 rounded-xl border text-left flex items-center justify-between text-xs cursor-pointer transition ${
+                          className={`w-full min-h-[48px] px-3 rounded-xl border text-start flex items-center justify-between text-xs cursor-pointer transition ${
                             config.bluetoothMac === dev.mac
-                              ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-300 font-bold'
+                              ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-800 dark:text-indigo-300 font-bold'
                               : 'bg-pos-panel border-pos-border text-pos-text hover:bg-pos-hover'
                           }`}
                         >
                           <span className="truncate">{dev.name}</span>
-                          <span className="font-mono text-[10px] text-pos-muted shrink-0 ml-2">
-                            {dev.mac}
+                          <span className="font-mono text-[10px] text-pos-muted shrink-0 ms-2">
+                            <Bdi>{dev.mac}</Bdi>
                           </span>
                         </button>
                       ))}
                     </div>
                   ) : (
                     <p className="text-[11px] text-pos-muted bg-pos-panel/60 p-2.5 rounded-xl border border-pos-border/40">
-                      Associez votre imprimante thermique dans les paramètres Bluetooth d'Android, puis touchez « Actualiser ».
+                      {t.printer.bluetoothPairingHint}
                     </p>
                   )}
 
                   <div className="space-y-1 pt-1">
                     <label className="text-[11px] font-bold text-pos-text block">
-                      Adresse MAC Bluetooth manuelle
+                      {t.printer.manualMacLabel}
                     </label>
                     <input
                       type="text"
+                      dir="ltr"
                       value={config.bluetoothMac}
                       onChange={(e) =>
                         setConfig((prev) => ({
@@ -334,8 +331,8 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
                           bluetoothMac: e.target.value.toUpperCase(),
                         }))
                       }
-                      placeholder="Ex: 00:11:22:33:44:55"
-                      className="w-full min-h-[48px] px-3.5 rounded-xl bg-pos-panel border border-pos-border text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-indigo-400"
+                      placeholder={t.printer.manualMacPlaceholder}
+                      className="w-full min-h-[48px] px-3.5 rounded-xl bg-pos-panel border border-pos-border text-base sm:text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-indigo-400"
                     />
                   </div>
                 </div>
@@ -344,7 +341,7 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
               {/* Protocol selector */}
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black uppercase tracking-wider text-pos-muted">
-                  Protocole d'Étiquettes & Reçus
+                  {t.printer.protocolLabel}
                 </label>
                 <div className="grid grid-cols-3 gap-2">
                   {(['ESCPOS', 'TSPL', 'ZPL'] as MobileLabelProtocol[]).map((proto) => (
@@ -352,13 +349,13 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
                       key={proto}
                       type="button"
                       onClick={() => setConfig((prev) => ({ ...prev, labelProtocol: proto }))}
-                      className={`min-h-[44px] px-2 rounded-xl border font-bold text-xs cursor-pointer transition active:scale-95 ${
+                      className={`min-h-[48px] px-2 rounded-xl border font-bold text-xs cursor-pointer transition active:scale-95 ${
                         config.labelProtocol === proto
-                          ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-300'
+                          ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-800 dark:text-emerald-300'
                           : 'bg-pos-card border-pos-border text-pos-muted hover:text-pos-text'
                       }`}
                     >
-                      {proto}
+                      <Bdi>{proto}</Bdi>
                     </button>
                   ))}
                 </div>
@@ -375,8 +372,8 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
             onClick={handleTestPrint}
             className="flex-1 min-h-[48px] rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border active-press text-pos-text font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <PlayCircle className="w-4 h-4 text-cyan-400" aria-hidden="true" />
-            <span>{isTesting ? 'Envoi en cours...' : 'Ticket Test'}</span>
+            <PlayCircle className="w-4 h-4 text-cyan-600 dark:text-cyan-400" aria-hidden="true" />
+            <span>{isTesting ? t.printer.sendingTestTicket : t.printer.testTicketButton}</span>
           </button>
 
           <button
@@ -385,7 +382,7 @@ export const MobilePrinterModal: React.FC<MobilePrinterModalProps> = ({ isOpen, 
             className="flex-1 min-h-[48px] rounded-xl bg-emerald-500 hover:bg-emerald-400 active-press text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-md shadow-emerald-500/20 transition cursor-pointer"
           >
             <Save className="w-4 h-4" aria-hidden="true" />
-            <span>Enregistrer</span>
+            <span>{t.common.save}</span>
           </button>
         </div>
       </div>

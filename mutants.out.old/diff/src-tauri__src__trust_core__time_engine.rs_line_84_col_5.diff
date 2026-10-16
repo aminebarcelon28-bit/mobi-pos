@@ -1,0 +1,112 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace evaluate -> EvalOutcome with Default::default()
+@@ -76,108 +76,17 @@
+ 
+ /// Pure decision function over an optional persisted checkpoint.
+ pub fn evaluate(
+     checkpoint: Option<PersistedCheckpoint>,
+     wall_now_ms: u64,
+     clock: &dyn MonotonicSource,
+ ) -> EvalOutcome {
+     // 1. RTC-reset signature first: independent of any anchor.
+-    if wall_now_ms < MIN_PLAUSIBLE_UTC_MS {
+-        return EvalOutcome {
+-            verdict: TimeVerdict::ResetRequired,
+-            advisory: None,
+-            checkpoint_update: None,
+-        };
+-    }
+-
+-    let Some(cp) = checkpoint else {
+-        return EvalOutcome {
+-            verdict: TimeVerdict::Advisory,
+-            advisory: Some(AdvisoryCause::Unanchored),
+-            checkpoint_update: None,
+-        };
+-    };
+-
+-    let continuity = evaluate_continuity(
+-        &SessionCheckpoint {
+-            boot_id: cp.boot_session_id.clone(),
+-            monotonic_ms: cp.monotonic_ms,
+-            wall_utc_ms: cp.wall_utc_ms,
+-        },
+-        clock,
+-        wall_now_ms,
+-        SESSION_CONTINUITY_TOLERANCE_MS,
+-    );
+-
+-    match continuity {
+-        Continuity::Continuous { delta_m_ms } => {
+-            let expected = cp.wall_utc_ms.saturating_add(delta_m_ms);
+-            let skew = wall_now_ms as i128 - expected as i128;
+-            let tol = SKEW_TOLERANCE_MS as i128;
+-            if skew.abs() <= tol {
+-                let trusted = wall_now_ms.max(cp.wall_utc_ms);
+-                let current_m = clock.now_ms().unwrap_or(cp.monotonic_ms);
+-                EvalOutcome {
+-                    verdict: TimeVerdict::Trusted { trusted_now_ms: trusted },
+-                    advisory: None,
+-                    checkpoint_update: Some(CheckpointUpdate {
+-                        boot_session_id: clock.boot_id().or(cp.boot_session_id),
+-                        wall_utc_ms: trusted,
+-                        monotonic_ms: current_m.max(cp.monotonic_ms),
+-                    }),
+-                }
+-            } else if skew < 0 {
+-                EvalOutcome {
+-                    verdict: TimeVerdict::TamperSuspected,
+-                    advisory: None,
+-                    checkpoint_update: None,
+-                }
+-            } else if (skew as u64) > WARN_AHEAD_MS {
+-                // Reachable only if an owner configures SESSION_TOLERANCE
+-                // above WARN_AHEAD (default 1 h < 24 h routes such jumps to
+-                // NewSession first). Same contract either way: advisory only.
+-                EvalOutcome {
+-                    verdict: TimeVerdict::Advisory,
+-                    advisory: Some(AdvisoryCause::ForwardJump),
+-                    checkpoint_update: None,
+-                }
+-            } else {
+-                // Small forward step: still trusted (NTP catch-up), ratchet up.
+-                let current_m = clock.now_ms().unwrap_or(cp.monotonic_ms);
+-                EvalOutcome {
+-                    verdict: TimeVerdict::Trusted {
+-                        trusted_now_ms: wall_now_ms,
+-                    },
+-                    advisory: None,
+-                    checkpoint_update: Some(CheckpointUpdate {
+-                        boot_session_id: clock.boot_id().or(cp.boot_session_id),
+-                        wall_utc_ms: wall_now_ms,
+-                        monotonic_ms: current_m.max(cp.monotonic_ms),
+-                    }),
+-                }
+-            }
+-        }
+-        Continuity::NewSession => {
+-            // Monotonic discarded. Wall-vs-anchor only.
+-            if wall_now_ms + SKEW_TOLERANCE_MS < cp.wall_utc_ms {
+-                EvalOutcome {
+-                    verdict: TimeVerdict::ResetRequired,
+-                    advisory: None,
+-                    checkpoint_update: None,
+-                }
+-            } else {
+-                EvalOutcome {
+-                    verdict: TimeVerdict::Advisory,
+-                    advisory: Some(AdvisoryCause::NewSessionPlausibleWall),
+-                    checkpoint_update: None,
+-                }
+-            }
+-        }
+-    }
++    Default::default() /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Checkpoint view over snapshot fields. All three must be present;
+ /// partial state is treated as absent (fail toward Advisory, never trust).
+ #[derive(Debug, Clone)]
+ pub struct PersistedCheckpoint {
+     pub boot_session_id: Option<String>,
+     pub monotonic_ms: u64,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Users,
@@ -29,6 +29,8 @@ import { normalizeAlgerianPhone, openDialer, openWhatsApp } from '../../../utils
 import { useToast } from '../../ui/Toast';
 import { MoneyInput } from '../../ui/MoneyInput';
 import { dinarsToMinor, toLegacyReal } from '../../../utils/money';
+import { useTranslation, Bdi } from '../../../i18n';
+import { useRegisterMobileBackHandler } from '../../../hooks/useMobileBackNavigation';
 
 // Normalisation diacritique insensible aux accents et à la casse
 const foldForSearch = (s: string | undefined | null): string =>
@@ -47,6 +49,7 @@ export const KredyTab: React.FC = () => {
   const { customers, customerDebts, receiptSettings, openModal, recordCustomerDebtPayment } =
     usePosStore();
   const { showToast } = useToast();
+  const { t } = useTranslation();
 
   const [search, setSearch] = useState('');
   const [activeFilter, setActiveFilter] = useState<KredyFilter>('debtors');
@@ -55,8 +58,8 @@ export const KredyTab: React.FC = () => {
   // Recherche anti-rebond : champ instantané, filtrage 200 ms après la frappe
   const [debouncedSearch, setDebouncedSearch] = useState('');
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(search), 200);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setDebouncedSearch(search), 200);
+    return () => clearTimeout(timer);
   }, [search]);
 
   // État du modal de règlement de dette
@@ -67,6 +70,12 @@ export const KredyTab: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const submittingRef = useRef<boolean>(false);
   const paymentEntryId = useRef<string>('');
+
+  useRegisterMobileBackHandler(
+    Boolean(payingCustomer),
+    () => setPayingCustomer(null),
+    'kredy-settlement',
+  );
 
   // Fermeture du modal par la touche Échap
   useEffect(() => {
@@ -81,9 +90,10 @@ export const KredyTab: React.FC = () => {
   }, [payingCustomer]);
 
   // Indexation chronologique et métadonnées d'ancienneté pour chaque client
+  const [referenceTime] = useState(() => Date.now());
   const customerDebtMetaMap = useMemo(() => {
     const map = new Map<string, CustomerDebtMeta>();
-    const now = Date.now();
+    const now = referenceTime;
     const sorted = [...(customerDebts || [])].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
@@ -107,7 +117,7 @@ export const KredyTab: React.FC = () => {
       }
     }
     return map;
-  }, [customerDebts]);
+  }, [customerDebts, referenceTime]);
 
   // Métriques globales
   const totalOutstandingDebt = useMemo(() => {
@@ -167,7 +177,7 @@ export const KredyTab: React.FC = () => {
   }, [customers, debouncedSearch, activeFilter, customerDebtMetaMap]);
 
   // Ouverture du modal de versement
-  const handleOpenPayment = (customer: Customer, e?: React.MouseEvent) => {
+  const handleOpenPayment = useCallback((customer: Customer, e?: React.MouseEvent) => {
     e?.stopPropagation();
     soundEngine.playKeyBeep?.();
     setPayingCustomer(customer);
@@ -177,7 +187,7 @@ export const KredyTab: React.FC = () => {
     setPaymentMethod('Espèces');
     setPaymentNotes('Règlement direct au comptoir');
     paymentEntryId.current = `kredy-pay-${customer.id}-${Date.now()}`;
-  };
+  }, []);
 
   // Validation et enregistrement du versement
   const handleConfirmRepayment = async (e: React.FormEvent) => {
@@ -305,13 +315,13 @@ export const KredyTab: React.FC = () => {
   const getOperatorStyle = (operator: string) => {
     switch (operator) {
       case 'Mobilis':
-        return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30';
+        return 'text-emerald-800 dark:text-emerald-300 bg-emerald-500/10 border-emerald-500/30';
       case 'Djezzy':
-        return 'text-amber-400 bg-amber-500/10 border-amber-500/30';
+        return 'text-amber-800 dark:text-amber-300 bg-amber-500/10 border-amber-500/30';
       case 'Ooredoo':
-        return 'text-rose-400 bg-rose-500/10 border-rose-500/30';
+        return 'text-rose-800 dark:text-rose-300 bg-rose-500/10 border-rose-500/30';
       case 'Fixe':
-        return 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30';
+        return 'text-cyan-800 dark:text-cyan-300 bg-cyan-500/10 border-cyan-500/30';
       default:
         return 'text-pos-muted bg-pos-panel border-pos-border';
     }
@@ -323,30 +333,30 @@ export const KredyTab: React.FC = () => {
         <div className="px-3.5 pt-3 pb-2.5 space-y-2.5 bg-pos-bg">
           {/* Bannière récapitulative des créances */}
           <div className="bg-gradient-to-br from-amber-500/15 via-pos-card to-pos-panel border border-amber-500/30 rounded-3xl p-4 shadow-sm space-y-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-black text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-                <CreditCard className="w-4 h-4" aria-hidden="true" />
-                Créances Clients (Kredy)
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-xs font-black text-amber-800 dark:text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                <CreditCard className="w-4 h-4 shrink-0" aria-hidden="true" />
+                {t.kredy.headerTitle}
               </span>
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 {overLimitCount > 0 && (
-                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center gap-1">
-                    <ShieldAlert className="w-3 h-3 text-rose-400" aria-hidden="true" />
-                    {overLimitCount} au plafond
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full pos-status-danger border flex items-center gap-1">
+                    <ShieldAlert className="w-3 h-3 shrink-0" aria-hidden="true" />
+                    <Bdi>{t('kredy.atCeilingBadge', { count: overLimitCount })}</Bdi>
                   </span>
                 )}
-                <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                  {debtorsCount} débiteur{debtorsCount > 1 ? 's' : ''}
+                <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full pos-status-warn border">
+                  <Bdi>{debtorsCount > 1 ? t('kredy.debtorsCountBadgePlural', { count: debtorsCount }) : t('kredy.debtorsCountBadge', { count: debtorsCount })}</Bdi>
                 </span>
               </div>
             </div>
 
             <div>
-              <span className="text-3xl font-black font-mono text-amber-400 block tracking-tight">
+              <Bdi mono className="text-3xl font-black text-amber-700 dark:text-amber-400 block tracking-tight">
                 {formatDZD(totalOutstandingDebt)}
-              </span>
+              </Bdi>
               <span className="text-[11px] text-pos-muted font-medium mt-0.5 block">
-                Total des créances actives en attente de recouvrement
+                {t.kredy.totalActiveReceivablesSubtitle}
               </span>
             </div>
 
@@ -358,11 +368,11 @@ export const KredyTab: React.FC = () => {
                   soundEngine.playKeyBeep?.();
                   openModal('debt_ledger');
                 }}
-                className="min-h-[44px] px-3 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm shadow-amber-500/20"
-                title="Ouvrir le Grand Livre des créances et règlements"
+                className="min-h-[48px] px-3 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-sm shadow-amber-500/20"
+                title={t.kredy.generalLedgerTitle}
               >
-                <BookOpen className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Grand Livre</span>
+                <BookOpen className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <span className="truncate">{t.kredy.generalLedgerButton}</span>
               </button>
 
               <button
@@ -371,11 +381,11 @@ export const KredyTab: React.FC = () => {
                   soundEngine.playKeyBeep?.();
                   openModal('customers');
                 }}
-                className="min-h-[44px] px-3 rounded-xl bg-pos-panel border border-pos-border hover:border-cyan-400/50 text-cyan-400 active-press font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
-                title="Gérer les clients et créer un compte (CRM)"
+                className="min-h-[48px] px-3 rounded-xl bg-pos-panel border border-pos-border hover:border-cyan-400/50 text-cyan-700 dark:text-cyan-400 active-press font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                title={t.kredy.newCustomerTitle}
               >
-                <UserPlus className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>+ Nouveau Client</span>
+                <UserPlus className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <span className="truncate">{t.kredy.newCustomerButton}</span>
               </button>
             </div>
           </div>
@@ -384,22 +394,22 @@ export const KredyTab: React.FC = () => {
           <div className="space-y-2">
             <div className="relative">
               <Search
-                className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted pointer-events-none"
+                className="w-4 h-4 absolute start-3 top-1/2 -translate-y-1/2 text-pos-muted pointer-events-none"
                 aria-hidden="true"
               />
               <input
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Rechercher nom, téléphone ou appareil..."
-                className="w-full min-h-[44px] bg-pos-panel border border-pos-border focus:border-amber-400 rounded-xl pl-9 pr-9 py-2 text-base sm:text-xs text-pos-text placeholder-pos-muted focus:outline-none transition-all shadow-xs"
+                placeholder={t.kredy.searchPlaceholder}
+                className="w-full min-h-[48px] bg-pos-panel border border-pos-border focus:border-amber-400 rounded-xl ps-10 pe-12 py-2 text-base sm:text-xs text-pos-text placeholder-pos-muted focus:outline-none transition-all shadow-xs"
               />
               {search && (
                 <button
                   type="button"
                   onClick={() => setSearch('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-pos-muted hover:text-pos-text min-h-[44px] min-w-[44px] flex items-center justify-center active-press cursor-pointer"
-                  aria-label="Effacer la recherche"
+                  className="absolute end-1.5 top-1/2 -translate-y-1/2 p-1.5 text-pos-muted hover:text-pos-text min-h-[48px] min-w-[48px] flex items-center justify-center active-press cursor-pointer"
+                  aria-label={t.common.clearSearch}
                 >
                   <X className="w-4 h-4" aria-hidden="true" />
                 </button>
@@ -411,49 +421,49 @@ export const KredyTab: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setActiveFilter('debtors')}
-                className={`min-h-[44px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 shrink-0 active-press ${
+                className={`min-h-[48px] px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 shrink-0 active-press ${
                   activeFilter === 'debtors'
                     ? 'bg-amber-500 text-slate-950 font-black shadow-md shadow-amber-500/20'
                     : 'bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text'
                 }`}
               >
-                <span>Débiteurs ({debtorsCount})</span>
+                <span>{t('kredy.filterDebtors', { count: debtorsCount })}</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setActiveFilter('over_limit')}
-                className={`min-h-[44px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 shrink-0 active-press ${
+                className={`min-h-[48px] px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 shrink-0 active-press ${
                   activeFilter === 'over_limit'
-                    ? 'bg-rose-500 text-white font-black shadow-md shadow-rose-500/20'
+                    ? 'bg-rose-600 text-white font-black shadow-md shadow-rose-500/20'
                     : 'bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text'
                 }`}
               >
-                <span>Plafond Atteint ({overLimitCount})</span>
+                <span>{t('kredy.filterOverLimit', { count: overLimitCount })}</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setActiveFilter('aging')}
-                className={`min-h-[44px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 shrink-0 active-press ${
+                className={`min-h-[48px] px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 shrink-0 active-press ${
                   activeFilter === 'aging'
                     ? 'bg-orange-500 text-slate-950 font-black shadow-md shadow-orange-500/20'
                     : 'bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text'
                 }`}
               >
-                <span>En retard &gt; 30j ({agingCount})</span>
+                <span>{t('kredy.filterAging', { count: agingCount })}</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setActiveFilter('all')}
-                className={`min-h-[44px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 shrink-0 active-press ${
+                className={`min-h-[48px] px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center justify-center gap-1.5 shrink-0 active-press ${
                   activeFilter === 'all'
                     ? 'bg-amber-500 text-slate-950 font-black shadow-md shadow-amber-500/20'
                     : 'bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text'
                 }`}
               >
-                <span>Tous ({customers?.length || 0})</span>
+                <span>{t('kredy.filterAll', { count: customers?.length || 0 })}</span>
               </button>
             </div>
 
@@ -476,16 +486,15 @@ export const KredyTab: React.FC = () => {
         !debouncedSearch.trim() ? (
           /* État de félicitation : toutes les dettes sont soldées */
           <div className="p-8 my-4 text-center bg-emerald-500/10 border border-emerald-500/30 rounded-3xl flex flex-col items-center justify-center space-y-3 shadow-xs">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-700 dark:text-emerald-400">
               <CheckCircle2 className="w-8 h-8" aria-hidden="true" />
             </div>
             <div>
-              <p className="text-sm font-black text-emerald-300">
-                Aucune dette en cours — tout est réglé ! 🎉
+              <p className="text-sm font-black text-emerald-800 dark:text-emerald-300">
+                {t.kredy.allSettledTitle}
               </p>
               <p className="text-xs text-pos-muted mt-1 max-w-xs mx-auto leading-relaxed">
-                Tous vos comptes clients sont parfaitement à jour. Les nouvelles créances
-                s'afficheront ici en temps réel.
+                {t.kredy.allSettledSubtitle}
               </p>
             </div>
           </div>
@@ -496,17 +505,17 @@ export const KredyTab: React.FC = () => {
               <Search className="w-7 h-7 opacity-60" aria-hidden="true" />
             </div>
             <div>
-              <p className="text-sm font-black text-pos-text">Aucun résultat trouvé</p>
+              <p className="text-sm font-black text-pos-text">{t.common.noResultsFound}</p>
               <p className="text-xs text-pos-muted mt-1">
-                Aucun client ne correspond à « {debouncedSearch.trim()} ».
+                {t('kredy.noCustomerMatchesQuery', { query: debouncedSearch.trim() })}
               </p>
             </div>
             <button
               type="button"
               onClick={() => setSearch('')}
-              className="min-h-[44px] px-4 rounded-xl bg-pos-card border border-pos-border hover:border-amber-400 text-amber-400 text-xs font-bold transition active-press cursor-pointer"
+              className="min-h-[48px] px-4 rounded-xl bg-pos-card border border-pos-border hover:border-amber-400 text-amber-700 dark:text-amber-400 text-xs font-bold transition active-press cursor-pointer"
             >
-              <span>Effacer la recherche</span>
+              <span>{t.common.clearSearch}</span>
             </button>
           </div>
         ) : filteredCustomers.length === 0 ? (
@@ -516,21 +525,21 @@ export const KredyTab: React.FC = () => {
               <Users className="w-7 h-7 opacity-60" aria-hidden="true" />
             </div>
             <div>
-              <p className="text-sm font-black text-pos-text">Aucun client dans ce filtre</p>
+              <p className="text-sm font-black text-pos-text">{t.kredy.noCustomerInFilterTitle}</p>
               <p className="text-xs text-pos-muted mt-1">
                 {activeFilter === 'over_limit'
-                  ? 'Aucun client n’a atteint ou dépassé son plafond de crédit.'
+                  ? t.kredy.noCustomerOverLimitDesc
                   : activeFilter === 'aging'
-                    ? 'Aucune créance en retard de plus de 30 jours.'
-                    : 'Aucun client enregistré ne correspond à ces critères.'}
+                    ? t.kredy.noCustomerAgingDesc
+                    : t.kredy.noCustomerGenericDesc}
               </p>
             </div>
             <button
               type="button"
               onClick={() => setActiveFilter('debtors')}
-              className="min-h-[44px] px-4 rounded-xl bg-pos-card border border-pos-border hover:border-amber-400 text-amber-400 text-xs font-bold transition active-press cursor-pointer"
+              className="min-h-[48px] px-4 rounded-xl bg-pos-card border border-pos-border hover:border-amber-400 text-amber-700 dark:text-amber-400 text-xs font-bold transition active-press cursor-pointer"
             >
-              <span>Afficher tous les débiteurs</span>
+              <span>{t.kredy.showAllDebtorsButton}</span>
             </button>
           </div>
         ) : (
@@ -554,7 +563,7 @@ export const KredyTab: React.FC = () => {
             return (
               <div
                 key={c.id}
-                className={`bg-pos-card border rounded-2xl p-4 space-y-3.5 shadow-xs transition-all ${
+                className={`bg-pos-card border rounded-2xl p-4 space-y-3.5 shadow-xs transition-all overflow-hidden ${
                   isOverLimit
                     ? 'border-rose-500/70 shadow-rose-500/5'
                     : isNearLimit
@@ -569,8 +578,8 @@ export const KredyTab: React.FC = () => {
                     <div
                       className={`w-11 h-11 rounded-2xl border flex items-center justify-center font-black text-xs shrink-0 shadow-xs ${
                         hasDebt
-                          ? 'bg-gradient-to-br from-amber-500/20 to-orange-500/10 border-amber-500/30 text-amber-400'
-                          : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                          ? 'bg-gradient-to-br from-amber-500/20 to-orange-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
+                          : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
                       }`}
                     >
                       {initials}
@@ -584,9 +593,9 @@ export const KredyTab: React.FC = () => {
                       <div className="flex flex-wrap items-center gap-1.5 mt-1 font-mono">
                         {phoneInfo ? (
                           <>
-                            <span className="text-[11px] text-pos-muted font-bold">
+                            <Bdi mono className="text-[11px] text-pos-muted font-bold">
                               {phoneInfo.formattedDisplay}
-                            </span>
+                            </Bdi>
                             {phoneInfo.operator !== 'Inconnu' && (
                               <span
                                 className={`text-[9px] font-bold px-1.5 py-0.2 rounded border ${getOperatorStyle(
@@ -599,42 +608,43 @@ export const KredyTab: React.FC = () => {
                           </>
                         ) : (
                           <span className="text-[10px] text-pos-muted/80 italic">
-                            Aucun numéro enregistré
+                            {t.kredy.noPhoneRegistered}
                           </span>
                         )}
                       </div>
 
                       {/* Avoir client disponible si présent */}
                       {c.storeCredit != null && c.storeCredit > 0 && (
-                        <div className="mt-1 flex items-center gap-1 text-[10px] font-bold text-cyan-400">
-                          <Wallet className="w-3 h-3" aria-hidden="true" />
-                          <span>Avoir dispo : {formatDZD(c.storeCredit)}</span>
+                        <div className="mt-1 flex items-center gap-1 text-[10px] font-bold text-cyan-800 dark:text-cyan-300">
+                          <Wallet className="w-3 h-3 shrink-0" aria-hidden="true" />
+                          <span>{t.kredy.availableStoreCreditPrefix} <Bdi mono>{formatDZD(c.storeCredit)}</Bdi></span>
                         </div>
                       )}
                     </div>
                   </div>
 
                   {/* Bloc Montant de dette et Plafond */}
-                  <div className="text-right shrink-0">
-                    <span
-                      className={`font-mono text-base font-black block tracking-tight ${
+                  <div className="text-end shrink-0">
+                    <Bdi
+                      mono
+                      className={`text-base font-black block tracking-tight ${
                         isOverLimit
-                          ? 'text-rose-400'
+                          ? 'text-rose-700 dark:text-rose-400'
                           : hasDebt
-                            ? 'text-amber-400'
-                            : 'text-emerald-400'
+                            ? 'text-amber-700 dark:text-amber-400'
+                            : 'text-emerald-700 dark:text-emerald-400'
                       }`}
                     >
                       {formatDZD(debt)}
-                    </span>
+                    </Bdi>
 
                     <span
                       className={`text-[10px] font-bold block mt-0.5 ${
-                        isNearLimit ? 'text-amber-300' : 'text-pos-muted'
+                        isNearLimit ? 'text-amber-800 dark:text-amber-300' : 'text-pos-muted'
                       }`}
                     >
-                      Plafond : {formatDZD(debtLimit)}
-                      {c.debtLimit == null ? ' (défaut)' : ''}
+                      {t.kredy.ceilingPrefix} <Bdi mono>{formatDZD(debtLimit)}</Bdi>
+                      {c.debtLimit == null ? ` ${t.kredy.defaultCeilingSuffix}` : ''}
                     </span>
 
                     {/* Badges d'alerte et d'ancienneté */}
@@ -643,34 +653,34 @@ export const KredyTab: React.FC = () => {
                         <span
                           className={`inline-block text-[9px] font-black px-2 py-0.5 rounded border ${
                             isOverLimit
-                              ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                              ? 'pos-status-danger'
                               : isNearLimit
-                                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                                ? 'pos-status-warn'
                                 : 'bg-pos-panel text-pos-muted border-pos-border'
                           }`}
                         >
                           {isOverLimit
-                            ? 'Plafond atteint — versement requis'
+                            ? t.kredy.ceilingReachedPaymentRequired
                             : isNearLimit
-                              ? 'Plafond presque atteint'
-                              : 'À recouvrer'}
+                              ? t.kredy.ceilingAlmostReached
+                              : t.kredy.toCollectBadge}
                         </span>
                       )}
 
                       {/* Indicateur de retard d'échéance */}
                       {isAgingOver30 ? (
-                        <span className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 border border-orange-500/40">
-                          <Clock className="w-2.5 h-2.5" aria-hidden="true" />
-                          <span>&gt; 30j sans versement</span>
+                        <span className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-800 dark:text-orange-300 border border-orange-500/40">
+                          <Clock className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                          <span>{t.kredy.overdueMoreThan30d}</span>
                         </span>
                       ) : isAgingOver15 ? (
-                        <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300/80 border border-amber-500/20">
-                          <Clock className="w-2.5 h-2.5" aria-hidden="true" />
-                          <span>15–30 jours</span>
+                        <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded pos-status-warn border">
+                          <Clock className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                          <span>{t.kredy.overdue15To30d}</span>
                         </span>
                       ) : !hasDebt ? (
-                        <span className="inline-block text-[9px] font-black px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                          Compte à jour
+                        <span className="inline-block text-[9px] font-black px-2 py-0.5 rounded pos-status-ok border">
+                          {t.kredy.accountUpToDateBadge}
                         </span>
                       ) : null}
                     </div>
@@ -678,39 +688,39 @@ export const KredyTab: React.FC = () => {
                 </div>
 
                 {/* Jauge visuelle de consommation du plafond */}
-                {hasDebt && debtLimit > 0 && (
+                {debtLimit > 0 && (
                   <div
                     role="progressbar"
                     aria-valuenow={limitUsagePct}
                     aria-valuemin={0}
                     aria-valuemax={100}
-                    aria-label={`Plafond consommé à ${limitUsagePct} %`}
+                    aria-label={t('kredy.ceilingUsedProgressBarAria', { pct: limitUsagePct })}
                     className="h-1.5 rounded-full bg-pos-panel border border-pos-border/60 overflow-hidden"
                   >
                     <div
                       className={`h-full rounded-full transition-all duration-300 ${
                         isOverLimit
-                          ? 'bg-rose-400'
+                          ? 'bg-rose-500 dark:bg-rose-400'
                           : isNearLimit
-                            ? 'bg-amber-400'
-                            : 'bg-emerald-400'
+                            ? 'bg-amber-500 dark:bg-amber-400'
+                            : 'bg-emerald-500 dark:bg-emerald-400'
                       }`}
                       style={{ width: `${limitUsagePct}%` }}
                     />
                   </div>
                 )}
 
-                {/* Rangée ergonomique d'actions de communication et d'encaissement */}
-                <div className="flex items-center gap-2 pt-2 border-t border-pos-border/50">
+                {/* Rangée ergonomique d'actions de communication et d'encaissement — grille 2x2 sur mobile étroit pour zéro débordement */}
+                <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 pt-2 border-t border-pos-border/50">
                   {hasDebt && (
                     <button
                       type="button"
                       onClick={(e) => handleOpenPayment(c, e)}
-                      aria-label={`Régler — ${c.name}`}
-                      className="min-h-[44px] px-4 rounded-xl bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 active:bg-amber-500/35 text-amber-300 text-xs font-black flex items-center justify-center gap-1.5 transition active-press cursor-pointer shadow-xs shrink-0"
+                      aria-label={`${t.kredy.settleAction} — ${c.name}`}
+                      className="min-h-[48px] min-w-0 px-3 rounded-xl bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25 active:bg-amber-500/35 text-amber-800 dark:text-amber-300 text-xs font-black flex items-center justify-center gap-1.5 transition active-press cursor-pointer shadow-xs sm:shrink-0"
                     >
-                      <DollarSign className="w-4 h-4 text-amber-400" aria-hidden="true" />
-                      <span>Régler</span>
+                      <DollarSign className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0" aria-hidden="true" />
+                      <span className="truncate">{t.kredy.settleAction}</span>
                     </button>
                   )}
 
@@ -719,24 +729,24 @@ export const KredyTab: React.FC = () => {
                       <button
                         type="button"
                         onClick={(e) => handleCall(c.phone, e)}
-                        aria-label={`Appeler — ${c.name}`}
-                        className="flex-1 min-h-[44px] px-3 rounded-xl bg-pos-panel border border-cyan-500/40 hover:bg-cyan-500/10 active:bg-cyan-500/20 text-cyan-400 text-xs font-bold flex items-center justify-center gap-1.5 transition active-press cursor-pointer shadow-xs"
+                        aria-label={`${t.kredy.callAction} — ${c.name}`}
+                        className="sm:flex-1 min-h-[48px] min-w-0 px-3 rounded-xl bg-pos-panel border border-cyan-500/40 hover:bg-cyan-500/10 active:bg-cyan-500/20 text-cyan-800 dark:text-cyan-300 text-xs font-bold flex items-center justify-center gap-1.5 transition active-press cursor-pointer shadow-xs"
                       >
-                        <Phone className="w-4 h-4 stroke-[2.2]" aria-hidden="true" />
-                        <span>Appeler</span>
+                        <Phone className="w-4 h-4 stroke-[2.2] shrink-0" aria-hidden="true" />
+                        <span className="truncate">{t.kredy.callAction}</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={(e) => handleWhatsApp(c, e)}
-                        aria-label={`WhatsApp — ${c.name}`}
-                        className="flex-1 min-h-[44px] px-3 rounded-xl bg-emerald-500/15 border border-emerald-500/40 hover:bg-emerald-500/25 active:bg-emerald-500/35 text-emerald-300 text-xs font-bold flex items-center justify-center gap-1.5 transition active-press cursor-pointer shadow-xs"
+                        aria-label={`${t.kredy.whatsAppAction} — ${c.name}`}
+                        className="sm:flex-1 min-h-[48px] min-w-0 px-3 rounded-xl bg-emerald-500/15 border border-emerald-500/40 hover:bg-emerald-500/25 active:bg-emerald-500/35 text-emerald-800 dark:text-emerald-300 text-xs font-bold flex items-center justify-center gap-1.5 transition active-press cursor-pointer shadow-xs"
                       >
                         <MessageSquare
-                          className="w-4 h-4 text-emerald-400 stroke-[2.2]"
+                          className="w-4 h-4 text-emerald-700 dark:text-emerald-400 stroke-[2.2] shrink-0"
                           aria-hidden="true"
                         />
-                        <span>WhatsApp</span>
+                        <span className="truncate">{t.kredy.whatsAppAction}</span>
                       </button>
                     </>
                   ) : (
@@ -746,10 +756,10 @@ export const KredyTab: React.FC = () => {
                         soundEngine.playKeyBeep?.();
                         openModal('customers');
                       }}
-                      className="flex-1 min-h-[44px] px-3 rounded-xl bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text text-xs font-medium flex items-center justify-center gap-1.5 cursor-pointer transition active-press"
+                      className="col-span-2 sm:flex-1 min-h-[48px] min-w-0 px-3 rounded-xl bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text text-xs font-medium flex items-center justify-center gap-1.5 cursor-pointer transition active-press"
                     >
-                      <UserPlus className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>Ajouter n° de téléphone</span>
+                      <UserPlus className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                      <span className="truncate">{t.kredy.addPhoneNumberButton}</span>
                     </button>
                   )}
 
@@ -762,14 +772,24 @@ export const KredyTab: React.FC = () => {
                         soundEngine.playKeyBeep?.();
                         setExpandedCustomerId((prev) => (prev === c.id ? null : c.id));
                       }}
-                      className="min-h-[44px] px-2.5 rounded-xl bg-pos-panel border border-pos-border hover:border-pos-muted text-pos-muted hover:text-pos-text text-xs font-bold flex items-center justify-center gap-1 transition active-press cursor-pointer shrink-0"
-                      title="Afficher l'historique récent des écritures"
+                      aria-label={
+                        isExpanded
+                          ? `${t('kredy.hideHistoryToggle', { count: meta.totalMovements })} — ${c.name}`
+                          : `${t('kredy.showHistoryToggle', { count: meta.totalMovements })} — ${c.name}`
+                      }
+                      className="min-h-[48px] min-w-0 px-2.5 rounded-xl bg-pos-panel border border-pos-border hover:border-pos-muted text-pos-muted hover:text-pos-text text-xs font-bold flex items-center justify-center gap-1 transition active-press cursor-pointer sm:shrink-0"
+                      title={t.kredy.historyToggleTitle}
                     >
-                      <History className="w-3.5 h-3.5" aria-hidden="true" />
+                      <History className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                      <span className="truncate text-[11px]">
+                        {isExpanded
+                          ? t('kredy.hideHistoryToggle', { count: meta.totalMovements })
+                          : t('kredy.showHistoryToggle', { count: meta.totalMovements })}
+                      </span>
                       {isExpanded ? (
-                        <ChevronUp className="w-3.5 h-3.5" aria-hidden="true" />
+                        <ChevronUp className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                       ) : (
-                        <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" />
+                        <ChevronDown className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                       )}
                     </button>
                   )}
@@ -780,8 +800,8 @@ export const KredyTab: React.FC = () => {
                   <div className="pt-2 border-t border-pos-border/40 space-y-2 bg-pos-panel/40 -mx-4 -mb-4 p-3.5 rounded-b-2xl animate-in fade-in">
                     <div className="flex items-center justify-between text-[11px] font-bold text-pos-muted uppercase tracking-wider">
                       <span className="flex items-center gap-1.5">
-                        <History className="w-3 h-3 text-amber-400" aria-hidden="true" />
-                        Dernières écritures ({meta.totalMovements})
+                        <History className="w-3 h-3 text-amber-700 dark:text-amber-400" aria-hidden="true" />
+                        {t('kredy.recentEntriesHeading', { count: meta.totalMovements })}
                       </span>
                       <button
                         type="button"
@@ -789,9 +809,9 @@ export const KredyTab: React.FC = () => {
                           soundEngine.playKeyBeep?.();
                           openModal('debt_ledger');
                         }}
-                        className="text-amber-400 hover:underline cursor-pointer lowercase"
+                        className="min-h-[48px] px-2 flex items-center text-amber-700 dark:text-amber-400 hover:underline cursor-pointer lowercase"
                       >
-                        grand livre &rarr;
+                        {t.kredy.openGeneralLedgerLink}
                       </button>
                     </div>
 
@@ -805,22 +825,22 @@ export const KredyTab: React.FC = () => {
                             <span
                               className={`font-black ${
                                 entry.type === 'DEBT_ACQUIRED'
-                                  ? 'text-rose-400'
-                                  : 'text-emerald-400'
+                                  ? 'text-rose-700 dark:text-rose-400'
+                                  : 'text-emerald-700 dark:text-emerald-400'
                               }`}
                             >
-                              {entry.type === 'DEBT_ACQUIRED' ? '+ Achat Crédit' : '— Versement'}
+                              {entry.type === 'DEBT_ACQUIRED' ? t.kredy.creditPurchaseEntry : t.kredy.paymentReceivedEntry}
                             </span>
-                            <span className="text-[10px] text-pos-muted block font-sans">
+                            <Bdi className="text-[10px] text-pos-muted block font-sans">
                               {formatDateTime(entry.createdAt)}
-                            </span>
+                            </Bdi>
                           </div>
-                          <div className="text-right">
-                            <span className="font-black text-pos-text block">
+                          <div className="text-end">
+                            <Bdi mono className="font-black text-pos-text block">
                               {formatDZD(entry.amount)}
-                            </span>
+                            </Bdi>
                             <span className="text-[10px] text-pos-muted">
-                              Solde : {formatDZD(entry.balanceAfter)}
+                              {t.kredy.balanceAfterPrefix} <Bdi mono>{formatDZD(entry.balanceAfter)}</Bdi>
                             </span>
                           </div>
                         </div>
@@ -857,7 +877,7 @@ export const KredyTab: React.FC = () => {
               {/* En-tête du modal */}
               <div className="flex items-center justify-between border-b border-pos-border pb-3">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center font-bold">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/30 flex items-center justify-center font-bold">
                     <DollarSign className="w-5 h-5" aria-hidden="true" />
                   </div>
                   <div>
@@ -865,10 +885,10 @@ export const KredyTab: React.FC = () => {
                       id="kredy-settlement-title"
                       className="text-sm font-black text-pos-text leading-tight"
                     >
-                      Règlement de Dette Client
+                      {t.kredy.debtSettlementModalTitle}
                     </h3>
                     <p className="text-[11px] text-pos-muted">
-                      Encaisser un versement direct sur le compte
+                      {t.kredy.debtSettlementModalSubtitle}
                     </p>
                   </div>
                 </div>
@@ -876,8 +896,8 @@ export const KredyTab: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setPayingCustomer(null)}
-                  aria-label="Fermer le règlement"
-                  className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition shrink-0 active-press cursor-pointer"
+                  aria-label={t.kredy.closeSettlementAria}
+                  className="min-h-[48px] min-w-[48px] flex items-center justify-center rounded-xl hover:bg-pos-hover text-pos-muted hover:text-pos-text transition shrink-0 active-press cursor-pointer"
                 >
                   <X className="w-5 h-5" aria-hidden="true" />
                 </button>
@@ -889,18 +909,20 @@ export const KredyTab: React.FC = () => {
                   <div>
                     <p className="text-xs font-black text-pos-text">{payingCustomer.name}</p>
                     <p className="text-[10px] text-pos-muted font-mono">
-                      {payingCustomer.phone
-                        ? normalizeAlgerianPhone(payingCustomer.phone).formattedDisplay
-                        : 'Aucun téléphone'}
+                      {payingCustomer.phone ? (
+                        <Bdi mono>{normalizeAlgerianPhone(payingCustomer.phone).formattedDisplay}</Bdi>
+                      ) : (
+                        t.checkout.noPhoneNumber
+                      )}
                     </p>
                   </div>
-                  <div className="text-right">
-                    <span className="text-[9px] uppercase tracking-wider text-amber-400 font-bold block">
-                      Dette Actuelle
+                  <div className="text-end">
+                    <span className="text-[9px] uppercase tracking-wider text-amber-700 dark:text-amber-400 font-bold block">
+                      {t.kredy.currentDebtLabel}
                     </span>
-                    <span className="text-base font-black text-amber-400 font-mono">
+                    <Bdi mono className="text-base font-black text-amber-700 dark:text-amber-400">
                       {formatDZD(payingCustomer.currentDebt || 0)}
-                    </span>
+                    </Bdi>
                   </div>
                 </div>
 
@@ -908,12 +930,12 @@ export const KredyTab: React.FC = () => {
                 {payingCustomer.storeCredit != null && payingCustomer.storeCredit > 0 && (
                   <div className="pt-2 border-t border-pos-border/60 flex items-center justify-between text-[11px]">
                     <span className="text-pos-muted flex items-center gap-1">
-                      <Wallet className="w-3 h-3 text-cyan-400" aria-hidden="true" />
-                      Avoir client disponible :
+                      <Wallet className="w-3 h-3 text-cyan-700 dark:text-cyan-400" aria-hidden="true" />
+                      {t.kredy.availableCustomerStoreCredit}
                     </span>
-                    <span className="font-mono font-bold text-cyan-400">
+                    <Bdi mono className="font-bold text-cyan-700 dark:text-cyan-400">
                       {formatDZD(payingCustomer.storeCredit)}
-                    </span>
+                    </Bdi>
                   </div>
                 )}
               </div>
@@ -921,15 +943,15 @@ export const KredyTab: React.FC = () => {
               {/* Formulaire de saisie du montant et du mode de versement */}
               <form onSubmit={handleConfirmRepayment} className="space-y-4">
                 <div>
-                  <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center justify-between gap-2 flex-wrap mb-1.5">
                     <label
                       htmlFor="kredy-payment-amount"
                       className="text-[10px] uppercase font-bold text-pos-muted"
                     >
-                      Montant du Versement (DA) *
+                      {t.kredy.paymentAmountLabel}
                     </label>
 
-                    {/* Raccourcis de remplissage rapide */}
+                    {/* Raccourcis de remplissage rapide (48dp touch targets) */}
                     <div className="flex items-center gap-1.5">
                       <button
                         type="button"
@@ -937,25 +959,25 @@ export const KredyTab: React.FC = () => {
                           const half = Math.round((payingCustomer.currentDebt || 0) / 2);
                           setPaymentMinor(dinarsToMinor(half));
                         }}
-                        className="px-2 py-0.5 rounded-lg bg-pos-card border border-pos-border text-pos-text text-[10px] font-bold hover:border-amber-400 transition cursor-pointer"
+                        className="min-h-[48px] px-3 rounded-xl bg-pos-card border border-pos-border text-pos-text text-xs font-bold hover:border-amber-400 transition cursor-pointer active-press"
                       >
-                        50 %
+                        {t.kredy.preset50Pct}
                       </button>
                       <button
                         type="button"
                         onClick={() => {
                           setPaymentMinor(dinarsToMinor(payingCustomer.currentDebt || 0));
                         }}
-                        className="px-2 py-0.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-black hover:bg-amber-500/25 transition cursor-pointer"
+                        className="min-h-[48px] px-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-800 dark:text-amber-300 text-xs font-black hover:bg-amber-500/25 transition cursor-pointer active-press"
                       >
-                        Totalité
+                        {t.kredy.presetFullAmount}
                       </button>
                     </div>
                   </div>
 
                   <MoneyInput
                     id="kredy-payment-amount"
-                    label="Montant du Versement (DA)"
+                    label={t.kredy.paymentAmountLabel}
                     valueMinor={paymentMinor}
                     onChangeMinor={(minor) => setPaymentMinor(minor)}
                     className="w-full bg-pos-bg border-2 border-pos-border focus:border-amber-400 rounded-xl px-4 py-2.5 text-xl font-black font-mono text-pos-text focus:outline-none transition"
@@ -975,37 +997,37 @@ export const KredyTab: React.FC = () => {
                   return (
                     <div className="bg-pos-card border border-pos-border rounded-xl p-3 space-y-2 text-xs">
                       <div className="flex items-center justify-between">
-                        <span className="text-pos-muted">Montant appliqué à la dette :</span>
-                        <span className="font-mono font-bold text-pos-text">
+                        <span className="text-pos-muted">{t.kredy.amountAppliedToDebt}</span>
+                        <Bdi mono className="font-bold text-pos-text">
                           {formatDZD(toLegacyReal(appliedMinor))}
-                        </span>
+                        </Bdi>
                       </div>
 
                       <div className="flex items-center justify-between border-t border-pos-border/60 pt-2">
-                        <span className="text-pos-muted">Solde restant après versement :</span>
+                        <span className="text-pos-muted">{t.kredy.remainingBalanceAfterPayment}</span>
                         {remainingDebtMinor === 0 ? (
-                          <span className="text-emerald-400 font-black flex items-center gap-1 font-mono">
+                          <span className="text-emerald-700 dark:text-emerald-400 font-black flex items-center gap-1 font-mono">
                             <CheckCircle2 className="w-3.5 h-3.5" aria-hidden="true" />
-                            0 DA (Soldé)
+                            <Bdi mono>{t.kredy.settledZeroBadge}</Bdi>
                           </span>
                         ) : (
-                          <span className="font-mono font-black text-amber-400">
+                          <Bdi mono className="font-black text-amber-700 dark:text-amber-400">
                             {formatDZD(toLegacyReal(remainingDebtMinor))}
-                          </span>
+                          </Bdi>
                         )}
                       </div>
 
                       {/* Alerte si le montant versé dépasse la dette totale */}
                       {changeDueMinor > 0 && (
-                        <div className="mt-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px] leading-relaxed">
-                          <p className="font-bold flex items-center gap-1 text-amber-400">
+                        <div className="mt-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 text-[11px] leading-relaxed">
+                          <p className="font-bold flex items-center gap-1 text-amber-700 dark:text-amber-400">
                             <AlertTriangle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-                            Montant supérieur à la dette ({formatDZD(debtDinars)})
+                            <span>{t('kredy.overpaymentWarningTitle', { debt: formatDZD(debtDinars) })}</span>
                           </p>
                           <p className="mt-0.5">
-                            Seuls {formatDZD(debtDinars)} seront appliqués pour solder le compte.{' '}
-                            <strong className="text-amber-200">
-                              Monnaie à rendre au client : {formatDZD(toLegacyReal(changeDueMinor))}
+                            {t('kredy.overpaymentWarningBody', { debt: formatDZD(debtDinars) })}{' '}
+                            <strong className="text-amber-900 dark:text-amber-200">
+                              {t.kredy.changeDueToCustomerPrefix} <Bdi mono>{formatDZD(toLegacyReal(changeDueMinor))}</Bdi>
                             </strong>
                             .
                           </p>
@@ -1018,7 +1040,7 @@ export const KredyTab: React.FC = () => {
                 {/* Sélection du mode de règlement */}
                 <div>
                   <label className="text-[10px] uppercase font-bold text-pos-muted block mb-1.5">
-                    Mode de Règlement
+                    {t.kredy.paymentMethodLabel}
                   </label>
                   <div className="grid grid-cols-3 gap-2">
                     {(['Espèces', 'BaridiMob', 'Chèque'] as PaymentMethodType[]).map((meth) => (
@@ -1026,19 +1048,23 @@ export const KredyTab: React.FC = () => {
                         key={meth}
                         type="button"
                         onClick={() => setPaymentMethod(meth)}
-                        className={`min-h-[44px] py-2 px-2 rounded-xl text-xs font-bold border transition cursor-pointer active-press flex items-center justify-center ${
+                        className={`min-h-[48px] py-2 px-2 rounded-xl text-xs font-bold border transition cursor-pointer active-press flex items-center justify-center ${
                           paymentMethod === meth
                             ? 'bg-amber-500 text-slate-950 border-amber-400 font-black shadow-sm'
                             : 'bg-pos-card text-pos-muted border-pos-border hover:text-pos-text'
                         }`}
                       >
-                        {meth}
+                        {meth === 'Espèces'
+                          ? t.kredy.methodCash
+                          : meth === 'BaridiMob'
+                          ? t.kredy.methodBaridiMob
+                          : t.kredy.methodCheck}
                       </button>
                     ))}
                   </div>
                   {paymentMethod === 'Espèces' && (
                     <p className="text-[10px] text-pos-muted mt-1 px-1">
-                      Enregistré automatiquement dans le tiroir-caisse de la session active.
+                      {t.kredy.cashRecordedInDrawerHint}
                     </p>
                   )}
                 </div>
@@ -1049,15 +1075,15 @@ export const KredyTab: React.FC = () => {
                     htmlFor="kredy-payment-note"
                     className="text-[10px] uppercase font-bold text-pos-muted block mb-1"
                   >
-                    Note / Référence (Facultatif)
+                    {t.kredy.paymentNoteLabel}
                   </label>
                   <input
                     id="kredy-payment-note"
                     type="text"
                     value={paymentNotes}
                     onChange={(e) => setPaymentNotes(e.target.value)}
-                    placeholder="Ex: Versement reçu au comptoir"
-                    className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text focus:border-amber-400 focus:outline-none"
+                    placeholder={t.kredy.paymentNotePlaceholder}
+                    className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base sm:text-xs text-pos-text focus:border-amber-400 focus:outline-none"
                   />
                 </div>
 
@@ -1067,23 +1093,23 @@ export const KredyTab: React.FC = () => {
                     type="button"
                     onClick={() => setPayingCustomer(null)}
                     disabled={isProcessing}
-                    className="min-h-[44px] px-4 rounded-xl bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text text-xs font-bold transition active-press cursor-pointer"
+                    className="min-h-[48px] px-4 rounded-xl bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text text-xs font-bold transition active-press cursor-pointer"
                   >
-                    Annuler
+                    {t.common.cancel}
                   </button>
 
                   <button
                     type="submit"
                     disabled={isProcessing || paymentMinor <= 0}
-                    className="min-h-[44px] px-5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition active-press cursor-pointer shadow-md shadow-amber-500/20"
+                    className="min-h-[48px] px-5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-black text-xs flex items-center justify-center gap-2 transition active-press cursor-pointer shadow-md shadow-amber-500/20"
                   >
-                    <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
+                    <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden="true" />
                     <span>
                       {isProcessing
-                        ? 'Enregistrement...'
+                        ? t.common.saving
                         : paymentMinor >= dinarsToMinor(payingCustomer.currentDebt || 0)
-                          ? 'Solder la dette'
-                          : 'Valider le versement'}
+                          ? t.kredy.settleFullDebtButton
+                          : t.kredy.confirmPaymentButton}
                     </span>
                   </button>
                 </div>

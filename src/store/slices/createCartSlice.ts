@@ -465,17 +465,30 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
       audioBus.emit('error');
       return { success: false, reason: 'EMPTY_CART' };
     }
+    const stagedTradeIn = (get() as unknown as { stagedTradeIn?: unknown }).stagedTradeIn ?? null;
+    const { voucherCode, voucherCreditApplied } = readVoucherStaging(get());
     const newHold = {
-       id: newId('hold'),
+      id: newId('hold'),
       customer: currentCustomer,
       items: [...cart],
       timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
       expiresAt: newHoldExpiryIso(),
+      stagedTradeIn,
+      voucherCode,
+      voucherCreditApplied,
     } as HeldSale & { expiresAt: string };
     audioBus.emit('keyBeep');
     const nextHolds = [...heldSales, newHold];
     persistHeldSales(nextHolds);
-    setAny({ heldSales: nextHolds, cart: [], storeCreditApplied: 0, voucherCreditApplied: 0, voucherCode: null });
+    setAny({
+      heldSales: nextHolds,
+      cart: [],
+      currentCustomer: null,
+      storeCreditApplied: 0,
+      voucherCreditApplied: 0,
+      voucherCode: null,
+      stagedTradeIn: null,
+    });
     return { success: true };
   },
 
@@ -505,12 +518,17 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
     consumedHoldIds.add(saleId);
     let updatedHeldSales = liveHolds.filter((h) => h.id !== saleId);
       if (cart.length > 0) {
+        const currentStagedTradeIn = (get() as unknown as { stagedTradeIn?: unknown }).stagedTradeIn ?? null;
+        const currentVoucher = readVoucherStaging(get());
         updatedHeldSales.push({
-           id: newId('hold'),
+          id: newId('hold'),
           customer: currentCustomer,
           items: [...cart],
           timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
           expiresAt: newHoldExpiryIso(),
+          stagedTradeIn: currentStagedTradeIn,
+          voucherCode: currentVoucher.voucherCode,
+          voucherCreditApplied: currentVoucher.voucherCreditApplied,
         } as HeldSale & { expiresAt: string });
       }
       persistHeldSales(updatedHeldSales);
@@ -550,12 +568,15 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
         audioBus.emit('error');
         return { success: false, reason: 'HOLD_ALL_LINES_REMOVED', warnings };
       }
-      set({
+      setAny({
         cart: refreshedItems,
         currentCustomer: target.customer,
         pricingTier: activeTier,
         heldSales: updatedHeldSales,
         activeModal: null,
+        stagedTradeIn: target.stagedTradeIn ?? null,
+        voucherCode: target.voucherCode ?? null,
+        voucherCreditApplied: target.voucherCreditApplied || 0,
       });
       return { success: true, warnings };
   },

@@ -101,10 +101,10 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   };
 
   useEffect(() => {
-    if (activeModal === 'db_maintenance') {
+    if (activeModal === 'db_maintenance' && maintUnlocked) {
       loadStats();
     }
-  }, [activeModal]);
+  }, [activeModal, maintUnlocked]);
 
   useEffect(() => { if (activeModal !== 'db_maintenance') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
@@ -264,32 +264,19 @@ export const DatabaseMaintenanceModal: React.FC = () => {
     }
   };
 
-  const handleExportFullJson = () => {
-    const backupData = {
-      timestamp: new Date().toISOString(),
-      appVersion: '1.5.8',
-      products: products || [],
-      customers: customers || [],
-      transactions: transactions || [],
-      repairOrders: repairOrders || [],
-      purchaseOrders: purchaseOrders || [],
-      customerDebts: customerDebts || [],
-      storeExpenses: storeExpenses || [],
-      imeiRecords: imeiRecords || [],
-      activeShift: activeShift || null,
-    };
-
-    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `MobiPOS_Full_Database_Backup_${new Date().toISOString().slice(0, 10)}.json`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    audioBus.emit('success');
-    showToast('Sauvegarde JSON intégrale téléchargée.', 'success');
+  const handleExportFullJson = async () => {
+    setIsProcessing(true);
+    try {
+      await usePosStore.getState().exportDatabase();
+      audioBus.emit('success');
+      showToast('Sauvegarde JSON intégrale téléchargée.', 'success');
+    } catch (e) {
+      console.error(e);
+      audioBus.emit('error');
+      showToast('Erreur lors de l\'exportation de la base.', 'error');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const formatBytes = (bytes: number): string => {

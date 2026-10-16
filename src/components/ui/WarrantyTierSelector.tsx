@@ -69,10 +69,10 @@ export const WarrantyTierSelector: React.FC<WarrantyTierSelectorProps> = ({
           const tone = !selected
             ? 'bg-pos-card border-pos-border text-pos-muted'
             : tier === 'none'
-              ? 'bg-slate-500/15 border-slate-400/60 text-slate-200'
+              ? 'bg-slate-500/15 border-slate-400/60 text-slate-800 dark:text-slate-200'
               : days <= 7
-                ? 'bg-amber-500/20 border-amber-500/60 text-amber-300'
-                : 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300';
+                ? 'bg-amber-500/20 border-amber-500/60 text-amber-800 dark:text-amber-300'
+                : 'bg-emerald-500/20 border-emerald-500/60 text-emerald-800 dark:text-emerald-300';
           const expiry = previewExpiry(tier);
           return (
             <button
@@ -82,14 +82,14 @@ export const WarrantyTierSelector: React.FC<WarrantyTierSelectorProps> = ({
               aria-checked={selected}
               disabled={readOnly}
               onClick={() => onChange(tier)}
-              className={`min-h-[44px] sm:min-h-[36px] px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg border text-left text-xs sm:text-sm font-medium flex items-center justify-between gap-2 transition cursor-pointer active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 ${tone}`}
+              className={`min-h-[48px] px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-lg border text-start text-xs sm:text-sm font-medium flex items-center justify-between gap-2 transition cursor-pointer active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 ${tone}`}
             >
               <span className="flex items-center gap-2 min-w-0">
                 <ShieldCheck className="w-4 h-4 shrink-0" aria-hidden="true" />
                 <span className="truncate">
                   {WARRANTY_TIER_LABELS[tier]}
                   {suggested && (
-                    <span className="ml-1.5 text-[10px] font-medium text-pos-muted">(suggéré)</span>
+                    <span className="ms-1.5 text-[10px] font-medium text-pos-muted">(suggéré)</span>
                   )}
                 </span>
               </span>

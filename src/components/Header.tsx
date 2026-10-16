@@ -41,7 +41,10 @@ import { canSeeJournalLauncher } from '../utils/auditGate';
 import { useToast } from './ui/Toast';
 import { soundEngine } from '../utils/audioFeedback';
 import { formatDZD } from '../types/pos';
-import { ReplenishmentContainer } from './replenishment';
+import { Kbd } from '../design-system/desktop/Kbd';
+import { SyncIndicator } from '../design-system/desktop/SyncIndicator';
+import { resolvePrinterForDocument } from '../utils/printerRoutingEngine';
+import { openCashDrawerViaSpooler } from '../utils/escpos';
 
 export const Header: React.FC = () => {
   // Selective subscriptions: subscribing to the whole store re-renders the
@@ -59,6 +62,7 @@ export const Header: React.FC = () => {
   const purchaseOrders = usePosStore((s) => s.purchaseOrders);
   const heldSales = usePosStore((s) => s.heldSales);
   const activeCashier = usePosStore((s) => s.activeCashier);
+  const receiptSettings = usePosStore((s) => s.receiptSettings);
   const lockScreen = usePosStore((s) => s.lockScreen);
 
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(() => soundEngine.getProfile().isMuted);
@@ -70,7 +74,6 @@ export const Header: React.FC = () => {
   // the menu is never clipped by the scrolling toolbar — see below).
   const [toolsMenuPos, setToolsMenuPos] = useState<{ top: number; right: number }>({ top: 0, right: 0 });
   const [isPinOpen, setIsPinOpen] = useState(false);
-  const [isReplenishmentOpen, setIsReplenishmentOpen] = useState(false);
   const { showToast } = useToast();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [localSearch, setLocalSearch] = useState(searchQuery);
@@ -225,6 +228,12 @@ export const Header: React.FC = () => {
       actor,
       true
     );
+    try {
+      const targetPrinter = resolvePrinterForDocument('receipt', receiptSettings?.printerRouting);
+      void openCashDrawerViaSpooler(targetPrinter.printerName);
+    } catch (drawerErr) {
+      console.warn('[Header] Cash drawer pulse error:', drawerErr);
+    }
     showToast(
       'Ouverture manuelle du tiroir-caisse autorisée (Signal RJ11 envoyé). Action enregistrée.',
       'success'
@@ -234,70 +243,83 @@ export const Header: React.FC = () => {
 
   return (
     <>
-      <header className="bg-pos-panel border-b border-pos-border px-3 py-2 flex items-center justify-between gap-2.5 select-none transition-colors duration-200 shrink-0 z-30">
+      <header className="bg-surface-panel border-b border-line px-3 py-1.5 flex items-center justify-between gap-2.5 select-none transition-colors duration-200 shrink-0 z-30">
         {/* ══════════════════════════════════════════════════════════════ */}
         {/* 1. LEFT: SLEEK BRAND & GLOBAL SEARCH */}
         {/* ══════════════════════════════════════════════════════════════ */}
         <button
           type="button"
           onClick={() => openModal('compatibility')}
-          className="flex items-center gap-2.5 shrink-0 hover:opacity-90 transition cursor-pointer text-left group"
+          className="flex items-center gap-2 shrink-0 hover:opacity-90 transition cursor-pointer text-left group"
           title="Guide de Compatibilité Modèles Smartphones & Accessoires (Cliquez pour ouvrir)"
         >
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 group-hover:scale-105 transition shrink-0">
-            <Smartphone className="w-5 h-5 stroke-[2.5]" />
+          <div className="w-8 h-8 rounded-ui-sm bg-status-ok-bg text-status-ok-fg border border-status-ok-border flex items-center justify-center shadow-xs group-hover:scale-105 transition shrink-0">
+            <Smartphone className="w-4 h-4 stroke-[2.2]" />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 leading-none">
-              <span className="font-black text-sm text-pos-text tracking-tight group-hover:text-emerald-400 transition truncate">
+              <span className="font-extrabold text-ui-sm text-fg tracking-tight group-hover:text-status-ok-fg transition truncate">
                 MobiPOS
               </span>
-              {/* PRO badge hides on very narrow windows so the brand block compresses gracefully */}
-              <span className="hidden sm:inline-block text-[9px] uppercase font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded shrink-0">
+              <span className="hidden sm:inline-block text-[9px] uppercase font-bold bg-status-ok-bg text-status-ok-fg border border-status-ok-border px-1.5 py-0.2 rounded-ui-xs shrink-0">
                 PRO
               </span>
             </div>
-            {/* Subtitle already hidden below md — verified, kept */}
-            <span className="text-[10px] text-pos-muted font-medium hidden md:block truncate">Accessoires & Caisse</span>
+            <span className="text-ui-2xs text-fg-muted font-medium hidden md:block truncate mt-0.5">Accessoires & Caisse</span>
           </div>
         </button>
 
-        {/* Global Search Bar — min width floor keeps the F1 badge visible at all widths */}
-        <div className="flex-1 min-w-[110px] max-w-xs md:max-w-sm lg:max-w-md xl:max-w-lg relative mx-1">
-          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted pointer-events-none" />
-          <input
-            ref={searchInputRef}
-            id="catalog-search"
-            data-testid="catalog-search"
-            name="catalog-search"
-            type="text"
-            // Sanctioned wedge destination (cleared after a successful decode).
-            // Manual typing here is never decoded as a barcode — see
-            // src/utils/wedgeBurst.ts (« Wedge-burst guard »).
-            data-barcode-scan-target="search"
-            value={localSearch}
-            aria-label="Recherche catalogue (F1)"
-            onChange={(e) => setLocalSearch(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                setSearchQuery(localSearch);
-              }
-            }}
-            placeholder="Scanner code-barres ou rechercher (F1 ou /)..."
-            className="w-full bg-pos-bg border border-pos-border rounded-xl pl-9 pr-14 py-1.5 text-xs text-pos-text placeholder-pos-muted focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-medium"
-          />
-          {localSearch ? (
-            <button
-              onClick={() => {
-                setLocalSearch('');
-                setSearchQuery('');
+        {/* Global Search Bar + Ctrl+K Launcher */}
+        <div className="flex-1 min-w-[140px] max-w-xs md:max-w-sm lg:max-w-md xl:max-w-lg relative mx-1 flex items-center gap-1.5">
+          <div className="relative flex-1">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted pointer-events-none" />
+            <input
+              ref={searchInputRef}
+              id="catalog-search"
+              data-testid="catalog-search"
+              name="catalog-search"
+              type="text"
+              // Sanctioned wedge destination (cleared after a successful decode).
+              // Manual typing here is never decoded as a barcode — see
+              // src/utils/wedgeBurst.ts (« Wedge-burst guard »).
+              data-barcode-scan-target="search"
+              value={localSearch}
+              aria-label="Recherche catalogue (F1)"
+              onChange={(e) => setLocalSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  setSearchQuery(localSearch);
+                }
               }}
-              className="absolute right-8 top-1/2 -translate-y-1/2 text-pos-muted hover:text-pos-text p-1 cursor-pointer"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          ) : null}
-          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 hotkey-badge text-[10px]">F1</span>
+              placeholder="Scanner code-barres ou rechercher (F1 ou /)..."
+              className="w-full bg-surface-card border border-line-subtle focus:border-line-strong rounded-ui-sm pl-9 pr-14 py-1.5 text-ui-xs text-fg placeholder:text-fg-muted focus:outline-none focus:ring-1 focus:ring-pos-accent transition-all font-medium h-ctl-md"
+            />
+            {localSearch ? (
+              <button
+                onClick={() => {
+                  setLocalSearch('');
+                  setSearchQuery('');
+                }}
+                className="absolute right-8 top-1/2 -translate-y-1/2 text-fg-muted hover:text-fg p-1 cursor-pointer"
+                aria-label="Effacer la recherche"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            ) : null}
+            <span className="absolute right-2 top-1/2 -translate-y-1/2">
+              <Kbd size="sm">F1</Kbd>
+            </span>
+          </div>
+
+          {/* Quick Command Palette Launcher */}
+          <button
+            type="button"
+            onClick={() => openModal('command_palette')}
+            className="hidden md:inline-flex items-center gap-1 px-2 py-1 rounded-ui-sm bg-surface-card border border-line-subtle hover:border-line text-ui-xs text-fg-secondary hover:text-fg transition cursor-pointer shrink-0 shadow-xs h-ctl-md"
+            title="Ouvrir la palette de commandes (Ctrl+K)"
+          >
+            <Kbd size="sm">Ctrl+K</Kbd>
+          </button>
         </div>
 
         {/* ══════════════════════════════════════════════════════════════ */}
@@ -344,7 +366,7 @@ export const Header: React.FC = () => {
 
           {/* Stock Alerts Bell — opens the enhanced FIFO replenishment suite */}
           <button
-            onClick={() => setIsReplenishmentOpen(true)}
+            onClick={() => openModal('vendor_procurement')}
             className="relative p-1.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-emerald-400 hover:text-emerald-300 transition cursor-pointer shrink-0"
             title={`Alertes Réapprovisionnement (${stockAlerts.length} articles en alerte)`}
           >
@@ -630,30 +652,35 @@ export const Header: React.FC = () => {
             <button
               data-testid="shift-pill"
               onClick={() => openModal('shift_close')}
-              className="px-2.5 py-1 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0"
+              className="px-2.5 py-1 rounded-ui-sm bg-status-ok-bg hover:bg-status-ok-bg/80 border border-status-ok-border text-status-ok-fg text-ui-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shrink-0 h-ctl-md"
               title="Session Caisse Ouverte • Cliquez pour Clôturer / Rapport Z"
             >
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="font-mono text-[11px]">{activeShift.cashierName}</span>
+              <span className="w-2 h-2 rounded-full bg-status-ok-fg animate-pulse" />
+              <span className="font-mono text-ui-2xs num">{activeShift.cashierName}</span>
             </button>
           ) : (
             <button
               data-testid="shift-pill"
               onClick={() => openModal('shift_open')}
-              className="px-2 py-1 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer animate-pulse shrink-0"
+              className="px-2 py-1 rounded-ui-sm bg-status-warn-bg hover:bg-status-warn-bg/80 border border-status-warn-border text-status-warn-fg text-ui-2xs font-bold flex items-center gap-1.5 transition cursor-pointer animate-pulse shrink-0 h-ctl-md"
               title="Caisse Fermée • Cliquez pour Ouvrir"
             >
-              <span className="w-2 h-2 rounded-full bg-amber-400" />
+              <span className="w-2 h-2 rounded-full bg-status-warn-fg" />
               <span>Ouvrir Caisse</span>
             </button>
           )}
+
+          {/* Sync Indicator */}
+          <div className="shrink-0 hidden lg:block">
+            <SyncIndicator onOpenDiagnostics={() => openModal('settings')} />
+          </div>
 
           {/* Cashier Lock & Switch Button */}
           <button
             type="button"
             data-testid="lock-button"
             onClick={lockScreen}
-            className="px-2.5 py-1 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-text text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 group"
+            className="px-2.5 py-1 rounded-ui-sm bg-surface-card hover:bg-surface-card/80 border border-line-subtle hover:border-line text-fg text-ui-xs font-medium flex items-center gap-1.5 transition cursor-pointer shrink-0 group h-ctl-md"
             title="Verrouiller l'écran (Ctrl+L) • Changer de caissier"
           >
             <div
@@ -662,8 +689,8 @@ export const Header: React.FC = () => {
             >
               {activeCashier?.name.charAt(0) || 'C'}
             </div>
-            <span className="text-[11px] font-bold truncate max-w-[100px]">{activeCashier?.name || 'Caissier'}</span>
-            <Lock className="w-3.5 h-3.5 text-pos-muted group-hover:text-amber-400 transition" />
+            <span className="text-ui-xs font-semibold truncate max-w-[100px]">{activeCashier?.name || 'Caissier'}</span>
+            <Lock className="w-3.5 h-3.5 text-fg-muted group-hover:text-status-warn-fg transition" />
           </button>
 
           {/* Scannable Store Credit Vouchers (Bons d'Avoir) */}
@@ -772,10 +799,6 @@ export const Header: React.FC = () => {
         onCancel={() => setIsPinOpen(false)}
         title="Autorisation Requise"
         description="Saisissez le code PIN Manager pour ouvrir le tiroir-caisse sans vente."
-      />
-      <ReplenishmentContainer
-        isOpen={isReplenishmentOpen}
-        onClose={() => setIsReplenishmentOpen(false)}
       />
     </>
   );

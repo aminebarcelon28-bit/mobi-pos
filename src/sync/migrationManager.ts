@@ -374,6 +374,7 @@ export class MigrationManager {
       cash_movements: 'cashMovements',
       app_settings: 'appSettings',
       credit_vouchers: 'creditVouchers',
+      sale_batch_allocations: 'saleBatchAllocations',
     };
 
     for (const remoteTable of GENERIC_SYNC_TABLES) {

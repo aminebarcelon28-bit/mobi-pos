@@ -8,12 +8,15 @@ import {
   AlertCircle,
   RefreshCw,
   Sparkles,
+  X,
 } from 'lucide-react';
 import { soundEngine } from '../../utils/audioFeedback';
+import { useTranslation } from '../../i18n';
 
 interface MobileCameraScannerProps {
   onScan: (data: string) => void;
   onError?: (err: string) => void;
+  onClose?: () => void;
   isActive?: boolean;
   mode?: 'barcode' | 'qr';
   hintText?: string;
@@ -22,10 +25,12 @@ interface MobileCameraScannerProps {
 export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
   onScan,
   onError,
+  onClose,
   isActive = true,
   mode = 'qr',
   hintText,
 }) => {
+  const { t } = useTranslation();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -48,9 +53,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
   // Refs (not state/deps): re-creating startCamera tears down getUserMedia
   // and blinds the scanner for ~1s — the main cause of flaky screen-QR reads.
   const onScanRef = useRef(onScan);
-  onScanRef.current = onScan;
   const onErrorRef = useRef(onError);
-  onErrorRef.current = onError;
   const busyRef = useRef(false);
   const lastScanRef = useRef<{ data: string; at: number } | null>(null);
 
@@ -84,7 +87,12 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
   }, []);
 
   const emitScanRef = useRef(emitScan);
-  emitScanRef.current = emitScan;
+
+  useEffect(() => {
+    onScanRef.current = onScan;
+    onErrorRef.current = onError;
+    emitScanRef.current = emitScan;
+  }, [onScan, onError, emitScan]);
 
   // jsQR is lazy-loaded (P3.1) so its ~100 KB stays out of the eager boot
   // chunk; decode frames are skipped until it arrives (first frames only).
@@ -145,7 +153,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
     setErrorMessage(null);
 
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      const err = 'La caméra n\'est pas supportée sur cet appareil ou ce navigateur.';
+      const err = "La caméra n'est pas supportée sur cet appareil ou ce navigateur.";
       setErrorMessage(err);
       setHasPermission(false);
       onErrorRef.current?.(err);
@@ -357,10 +365,11 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
     } catch (err: unknown) {
       if (isStale()) return;
       console.warn('Camera access error:', err);
-      let message = 'Impossible d\'accéder à la caméra.';
+      let message = "Impossible d'accéder à la caméra.";
       if (err instanceof Error) {
         if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          message = 'Autorisation caméra refusée. Veuillez autoriser la caméra dans les paramètres de votre appareil.';
+          message =
+            'Autorisation caméra refusée. Veuillez autoriser la caméra dans les paramètres de votre appareil.';
         } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
           message = 'Aucune caméra détectée sur votre appareil.';
         } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
@@ -397,14 +406,21 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
   };
 
   useEffect(() => {
+    const gen = generationRef;
+    let cancelled = false;
     if (isActive) {
-      startCamera();
+      void Promise.resolve().then(() => {
+        if (!cancelled) void startCamera();
+      });
     } else {
-      generationRef.current++;
-      stopCamera();
+      gen.current++;
+      void Promise.resolve().then(() => {
+        if (!cancelled) stopCamera();
+      });
     }
     return () => {
-      generationRef.current++;
+      cancelled = true;
+      gen.current++;
       stopCamera();
     };
   }, [isActive, startCamera, stopCamera]);
@@ -414,13 +430,13 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
   // + navigator.vibrate([40, 30, 80]) on every accepted decode.
   const isNoCamera = errorMessage?.includes('Aucune caméra') ?? false;
   const errorTitle = isNoCamera
-    ? 'Aucune caméra détectée'
+    ? t.scanner.noCameraDetectedTitle
     : errorMessage?.includes('déjà utilisée')
-      ? 'Caméra occupée'
-      : 'Accès Caméra Requis';
+    ? t.scanner.cameraBusyTitle
+    : t.scanner.permissionDeniedTitle;
 
   return (
-    <div className="relative w-full h-full min-h-[300px] flex flex-col items-center justify-center bg-black rounded-2xl overflow-hidden shadow-2xl border border-pos-border">
+    <div className="relative w-full h-full min-h-[280px] flex flex-col items-center justify-center bg-black rounded-2xl overflow-hidden shadow-2xl border border-pos-border">
       {/* Hidden processing canvas */}
       <canvas ref={canvasRef} className="hidden" />
 
@@ -440,8 +456,8 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
           <div className="w-full flex-1 bg-black/60 backdrop-blur-[1px]" />
 
           {/* Center scan row */}
-          <div className="w-full flex items-center justify-center">
-            {/* Left veil */}
+          <div className="w-full flex items-center justify-center" dir="ltr">
+            {/* Inline-start veil */}
             <div className={`flex-1 ${mode === 'barcode' ? 'h-40' : 'h-64'} bg-black/60 backdrop-blur-[1px]`} />
 
             {/* Viewfinder Target Frame (wide 288x160 for barcode, 256x256 for QR) */}
@@ -452,113 +468,139 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
                   : 'border-cyan-400/40 bg-transparent scale-100'
               } ${mode === 'barcode' ? 'w-72 h-40' : 'w-64 h-64'}`}
             >
-              {/* Corner Accents */}
-              <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-cyan-400 rounded-tl-lg" />
-              <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-cyan-400 rounded-tr-lg" />
-              <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-cyan-400 rounded-bl-lg" />
-              <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-cyan-400 rounded-br-lg" />
+              {/* Logical Corner Accents */}
+              <div className="absolute top-0 start-0 w-6 h-6 border-t-4 border-s-4 border-cyan-400 rounded-ss-lg" />
+              <div className="absolute top-0 end-0 w-6 h-6 border-t-4 border-e-4 border-cyan-400 rounded-se-lg" />
+              <div className="absolute bottom-0 start-0 w-6 h-6 border-b-4 border-s-4 border-cyan-400 rounded-es-lg" />
+              <div className="absolute bottom-0 end-0 w-6 h-6 border-b-4 border-e-4 border-cyan-400 rounded-ee-lg" />
 
               {/* Animated Laser Scanning Beam */}
-              <div className="absolute left-2 right-2 h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_12px_#34d399] animate-scan-beam" />
+              <div className="absolute inset-x-2 h-0.5 bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_12px_#34d399] animate-scan-beam" />
 
               {/* Center subtle reticle dot / guide */}
               <div className="w-2 h-2 rounded-full bg-cyan-400/70" />
             </div>
 
-            {/* Right veil */}
+            {/* Inline-end veil */}
             <div className={`flex-1 ${mode === 'barcode' ? 'h-40' : 'h-64'} bg-black/60 backdrop-blur-[1px]`} />
           </div>
 
           {/* Bottom dark veil with instruction hint */}
           <div className="w-full flex-1 bg-black/60 backdrop-blur-[1px] flex flex-col items-center justify-start pt-4 px-6 text-center">
-            <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-slate-900/85 border border-cyan-500/40 text-cyan-300 text-xs font-bold shadow-lg">
-              <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" aria-hidden="true" />
+            <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-pos-panel/90 border border-cyan-500/40 text-cyan-700 dark:text-cyan-300 text-xs font-bold shadow-lg">
+              <Sparkles className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" aria-hidden="true" />
               <span>
-                {hintText || (mode === 'barcode' ? "Alignez le code-barres de l'article" : 'Cadrez le QR Code affiché sur la caisse PC')}
+                {hintText ||
+                  (mode === 'barcode'
+                    ? t.scanner.alignBarcodeHint
+                    : t.scanner.alignQrHint)}
               </span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-2 max-w-xs">
+            <p className="text-[11px] text-slate-200 mt-2 max-w-xs">
               {mode === 'barcode'
-                ? 'Détection automatique de codes EAN, UPC et Code128'
-                : 'Sur le PC : Paramètres > Lier Smartphone > Étape 2'}
+                ? t.scanner.barcodeFormatsHint
+                : t.scanner.pcPairingHint}
             </p>
           </div>
         </div>
       )}
 
-      {/* Controls Overlay (Torch, Switch Camera) */}
-      {isScanningActive && (
-        <div className="absolute top-3 right-3 flex items-center gap-2 z-10">
-          {hasTorch && (
-            <button
-              type="button"
-              onClick={toggleTorch}
-              aria-label={torchOn ? 'Éteindre la torche' : 'Allumer la torche'}
-              className={`min-h-[44px] min-w-[44px] flex items-center justify-center p-2.5 rounded-xl border backdrop-blur-md transition cursor-pointer ${
-                torchOn
-                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
-                  : 'bg-black/50 text-white border-white/20 hover:bg-black/70'
-              }`}
-              title={torchOn ? 'Éteindre la torche' : 'Allumer la torche'}
-            >
-              {torchOn ? <Flashlight className="w-4 h-4" aria-hidden="true" /> : <FlashlightOff className="w-4 h-4" aria-hidden="true" />}
-            </button>
-          )}
+      {/* Controls Overlay (Torch, Switch Camera, Close) — strict 48x48dp hitboxes, Close always accessible */}
+      <div className="absolute top-3 end-3 flex items-center gap-2 z-30">
+        {isScanningActive && hasTorch && (
+          <button
+            type="button"
+            onClick={toggleTorch}
+            aria-label={torchOn ? t.scanner.torchOnAria : t.scanner.torchOffAria}
+            className={`min-h-[48px] min-w-[48px] flex items-center justify-center p-2.5 rounded-xl border backdrop-blur-md transition active-press cursor-pointer ${
+              torchOn
+                ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
+                : 'bg-black/60 text-white border-white/25 hover:bg-black/80'
+            }`}
+            title={torchOn ? t.scanner.torchOnAria : t.scanner.torchOffAria}
+          >
+            {torchOn ? (
+              <Flashlight className="w-5 h-5" aria-hidden="true" />
+            ) : (
+              <FlashlightOff className="w-5 h-5" aria-hidden="true" />
+            )}
+          </button>
+        )}
 
+        {isScanningActive && (
           <button
             type="button"
             onClick={flipCamera}
-            aria-label="Changer de caméra"
-            className="min-h-[44px] min-w-[44px] flex items-center justify-center p-2.5 rounded-xl bg-black/50 text-white border border-white/20 hover:bg-black/70 backdrop-blur-md transition cursor-pointer"
-            title="Changer de caméra"
+            aria-label={t.scanner.switchCameraAria}
+            className="min-h-[48px] min-w-[48px] flex items-center justify-center p-2.5 rounded-xl bg-black/60 text-white border border-white/25 hover:bg-black/80 backdrop-blur-md transition active-press cursor-pointer"
+            title={t.scanner.switchCameraAria}
           >
-            <SwitchCamera className="w-4 h-4" aria-hidden="true" />
+            <SwitchCamera className="w-5 h-5" aria-hidden="true" />
           </button>
-        </div>
-      )}
+        )}
+
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t.scanner.closeScannerAria}
+            className="min-h-[48px] min-w-[48px] flex items-center justify-center p-2.5 rounded-xl bg-black/60 text-white border border-white/25 hover:bg-black/80 backdrop-blur-md transition active-press cursor-pointer"
+            title={t.scanner.closeScannerAria}
+          >
+            <X className="w-5 h-5" aria-hidden="true" />
+          </button>
+        )}
+      </div>
 
       {/* Permission / Error State Display */}
       {hasPermission === false && (
         <div className="absolute inset-0 bg-pos-card/95 backdrop-blur-md p-6 flex flex-col items-center justify-center text-center space-y-3.5 z-20 overflow-y-auto">
-          <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 flex items-center justify-center shrink-0 shadow-lg shadow-rose-500/10">
+          <div className="w-12 h-12 rounded-2xl pos-status-danger border flex items-center justify-center shrink-0 shadow-lg">
             <AlertCircle className="w-6 h-6" aria-hidden="true" />
           </div>
           <div className="space-y-1">
             <h4 className="text-sm font-black text-pos-text">{errorTitle}</h4>
-            <p className="text-xs text-rose-300 font-medium max-w-xs">{errorMessage}</p>
+            <p className="text-xs text-rose-700 dark:text-rose-300 font-medium max-w-xs">{errorMessage}</p>
           </div>
           {isNoCamera ? (
-            <div className="bg-pos-bg/80 border border-pos-border rounded-xl p-3 text-[11px] text-pos-muted max-w-xs text-left space-y-1.5">
+            <div className="bg-pos-bg/80 border border-pos-border rounded-xl p-3 text-[11px] text-pos-muted max-w-xs text-start space-y-1.5">
               <p className="font-bold text-pos-text">Sans caméra, pas de blocage :</p>
-              <p>Utilisez le mode <strong>« Coller »</strong> pour saisir le code d’appairage copié depuis votre caisse PC.</p>
+              <p>
+                Utilisez le mode <strong>« Coller »</strong> pour saisir le code d’appairage copié depuis votre caisse PC.
+              </p>
             </div>
           ) : (
-          <div className="bg-pos-bg/80 border border-pos-border rounded-xl p-3 text-[11px] text-pos-muted max-w-xs text-left space-y-1.5">
-            <p className="font-bold text-pos-text flex items-center gap-1.5">
-              <span>💡</span> Comment activer la caméra :
-            </p>
-            <p>• <strong>Android :</strong> Paramètres &gt; Applis &gt; MobiPOS &gt; Autorisations &gt; Caméra &gt; Autoriser</p>
-            <p>• <strong>iOS / iPhone :</strong> Réglages &gt; Safari ou MobiPOS &gt; Caméra &gt; Demander ou Autoriser</p>
-          </div>
+            <div className="bg-pos-bg/80 border border-pos-border rounded-xl p-3 text-[11px] text-pos-muted max-w-xs text-start space-y-1.5">
+              <p className="font-bold text-pos-text flex items-center gap-1.5">
+                <span aria-hidden="true">💡</span> Comment activer la caméra :
+              </p>
+              <p>
+                • <strong>Android :</strong> Paramètres &gt; Applis &gt; MobiPOS &gt; Autorisations &gt; Caméra &gt; Autoriser
+              </p>
+              <p>
+                • <strong>iOS / iPhone :</strong> Réglages &gt; Safari ou MobiPOS &gt; Caméra &gt; Demander ou Autoriser
+              </p>
+            </div>
           )}
           <button
             type="button"
             onClick={startCamera}
-            className="min-h-[44px] px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-cyan-500/20 active:scale-95"
+            className="min-h-[48px] px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-cyan-500/20 active-press"
           >
             <RefreshCw className="w-4 h-4" aria-hidden="true" />
-            <span>Réessayer l'accès</span>
+            <span>{t.scanner.retryAccessButton}</span>
           </button>
         </div>
       )}
 
       {/* Loading state while camera opens */}
       {hasPermission === null && !errorMessage && (
-        <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center text-pos-muted gap-3 z-20">
-          <RefreshCw className="w-6 h-6 animate-spin text-cyan-400" />
-          <span className="text-xs font-medium">Ouverture de la caméra...</span>
+        <div className="absolute inset-0 bg-pos-panel flex flex-col items-center justify-center text-pos-muted gap-3 z-20">
+          <RefreshCw className="w-6 h-6 animate-spin text-cyan-600 dark:text-cyan-400" aria-hidden="true" />
+          <span className="text-xs font-medium">{t.scanner.openingCamera}</span>
         </div>
       )}
     </div>
   );
 };
+

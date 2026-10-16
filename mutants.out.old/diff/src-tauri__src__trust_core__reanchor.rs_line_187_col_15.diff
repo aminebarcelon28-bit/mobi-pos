@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace > with == in verify_time_assertion_with_prefix
+@@ -179,17 +179,17 @@
+         serde_json::from_slice(&payload_bytes).map_err(|_| TrustError::IPCProtocolError {
+             reason: "unreadable assertion payload",
+         })?;
+     if payload.server_time_ms < MIN_PLAUSIBLE_UTC_MS {
+         return Err(TrustError::SecurityPolicyFailure {
+             reason: "asserted server time implausible",
+         });
+     }
+-    if now_ms > payload.expires_at_ms {
++    if now_ms == /* ~ changed by cargo-mutants ~ */ payload.expires_at_ms {
+         return Err(TrustError::SecurityPolicyFailure {
+             reason: "time assertion expired",
+         });
+     }
+     Ok(payload)
+ }
+ 
+ fn verify_assertion_signature(

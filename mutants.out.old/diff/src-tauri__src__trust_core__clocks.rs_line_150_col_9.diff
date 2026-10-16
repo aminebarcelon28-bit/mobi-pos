@@ -1,0 +1,37 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace <impl MonotonicSource for MachContinuousMonotonic>::boot_id -> Option<String> with None
+@@ -142,33 +142,17 @@
+             .checked_div(info.denom as u128)?
+             .checked_div(1_000_000)?
+             .try_into()
+             .ok()
+     }
+ 
+     /// `kern.boottime` as the primary boot signal (best effort).
+     fn boot_id(&self) -> Option<String> {
+-        let name = core::ffi::CStr::from_bytes_with_nul(b"kern.boottime\0").ok()?;
+-        let mut tv = AppleTimeval { tv_sec: 0, tv_usec: 0 };
+-        let mut len = core::mem::size_of::<AppleTimeval>();
+-        // SAFETY: name is NUL-terminated; tv/len are valid out-pointers.
+-        let rc = unsafe {
+-            sysctlbyname(
+-                name.as_ptr(),
+-                &mut tv as *mut _ as *mut core::ffi::c_void,
+-                &mut len as *mut _,
+-                core::ptr::null_mut(),
+-                0,
+-            )
+-        };
+-        if rc != 0 {
+-            return None;
+-        }
+-        Some(format!("apple-boot:{}:{}", tv.tv_sec, tv.tv_usec))
++        None /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     fn source_name(&self) -> &'static str {
+         "apple:mach_continuous_time"
+     }
+ }
+ 
+ /// Process-wide production source for the current target.

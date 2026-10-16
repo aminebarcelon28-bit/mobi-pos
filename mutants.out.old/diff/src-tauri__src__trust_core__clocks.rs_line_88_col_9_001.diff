@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace <impl MonotonicSource for BoottimeMonotonic>::source_name -> &'static str with "xyzzy"
+@@ -80,17 +80,17 @@
+     fn boot_id(&self) -> Option<String> {
+         std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+             .ok()
+             .map(|s| s.trim().to_string())
+             .filter(|s| !s.is_empty())
+     }
+ 
+     fn source_name(&self) -> &'static str {
+-        "linux:CLOCK_BOOTTIME"
++        "xyzzy" /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ #[cfg(any(target_os = "linux", target_os = "android"))]
+ const _: () = {
+     // Compile-time proof the constant exists on these targets.
+     let _ = libc::CLOCK_BOOTTIME;
+ };

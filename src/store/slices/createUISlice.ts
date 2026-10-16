@@ -1054,7 +1054,15 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         }
         // Integer DZD like every other credit mutation (a raw float here
         // minted fractional liabilities no report ever reconciled).
-        const buybackCredit = Math.max(0, Math.round(Number(tradeInput.buybackValue) || 0));
+        const buybackCredit = Math.max(
+          0,
+          Math.round(
+            Number(
+              tradeInput.walletCreditAmount ??
+                (tradeInput.creditToWallet ? tradeInput.buybackValue * 1.1 : tradeInput.buybackValue)
+            ) || 0
+          )
+        );
         const credited = {
           ...creditTarget,
           storeCredit: (creditTarget.storeCredit || 0) + buybackCredit,

@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/license_state.rs
++++ delete match arm "CLOCK_RESET_REQUIRED" in LicenseState::from_code
+@@ -68,17 +68,17 @@
+             "UNKNOWN" => Some(LicenseState::Unknown),
+             "UNACTIVATED" => Some(LicenseState::Unactivated),
+             "OPERATIONAL" => Some(LicenseState::Operational),
+             "EXPIRED" => Some(LicenseState::Expired),
+             "GRACE_EXCEEDED" => Some(LicenseState::GraceExceeded),
+             "SUSPENDED" => Some(LicenseState::Suspended),
+             "REVOKED" => Some(LicenseState::Revoked),
+             "CORRUPTED" => Some(LicenseState::Corrupted),
+-            "CLOCK_RESET_REQUIRED" => Some(LicenseState::ClockResetRequired),
++             /* ~ changed by cargo-mutants ~ */
+             "TAMPER_SUSPECTED" => Some(LicenseState::TamperSuspected),
+             _ => None,
+         }
+     }
+ 
+     /// Fail-closed coercion for any untrusted input (persisted snapshots,
+     /// IPC payloads, future variants): unrecognized values become
+     /// `CORRUPTED`, which grants only `LicenseManagement`.

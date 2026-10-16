@@ -62,47 +62,295 @@ function byNewestAudit(a: SecurityAuditLogEntry, b: SecurityAuditLogEntry): numb
 export const operationsAdapter = {
   // ── REPAIRS ──
   async saveRepairOrder(repair: RepairOrder): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const payload = JSON.stringify(repair);
+        await db.execute(
+          `INSERT INTO repair_orders (id, ticket_number, customer_name, customer_phone, device_model, imei, status, labor_cost, parts_cost, total_cost, deposit_amount, created_at, updated_at, json_payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+           ON CONFLICT(id) DO UPDATE SET
+             ticket_number=excluded.ticket_number,
+             customer_name=excluded.customer_name,
+             customer_phone=excluded.customer_phone,
+             device_model=excluded.device_model,
+             imei=excluded.imei,
+             status=excluded.status,
+             labor_cost=excluded.labor_cost,
+             parts_cost=excluded.parts_cost,
+             total_cost=excluded.total_cost,
+             deposit_amount=excluded.deposit_amount,
+             updated_at=excluded.updated_at,
+             json_payload=excluded.json_payload,
+             version=repair_orders.version + 1`,
+          [
+            repair.id,
+            repair.ticketNumber || '',
+            repair.customerName || '',
+            repair.customerPhone || '',
+            repair.deviceModel || '',
+            repair.imei || null,
+            repair.status || 'En attente',
+            repair.laborCost || 0,
+            repair.partsCost || 0,
+            repair.totalCost || 0,
+            repair.depositAmount || 0,
+            repair.createdAt || new Date().toISOString(),
+            repair.updatedAt || new Date().toISOString(),
+            payload,
+          ],
+        );
+      } catch (err) {
+        console.warn('[operationsAdapter] SQLite saveRepairOrder failed, fallback to Dexie:', err);
+      }
+    }
     await dexieDb.repairOrders.put(repair);
     void fireSync('repair_order', repair.id, repair);
   },
 
   async getAllRepairOrders(): Promise<RepairOrder[]> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const rows = (await db.select('SELECT json_payload FROM repair_orders ORDER BY created_at DESC')) as Array<{ json_payload: string }>;
+        if (rows && rows.length > 0) {
+          const list = rows
+            .map((r) => {
+              try {
+                return JSON.parse(r.json_payload) as RepairOrder;
+              } catch {
+                return null;
+              }
+            })
+            .filter((r): r is RepairOrder => r !== null);
+          if (list.length > 0) {
+            void dexieDb.repairOrders.bulkPut(list).catch(() => {});
+            return list;
+          }
+        }
+      } catch (err) {
+        console.warn('[operationsAdapter] SQLite getAllRepairOrders failed, fallback to Dexie:', err);
+      }
+    }
     return await dexieDb.repairOrders.toArray();
   },
 
   async deleteRepairOrder(id: string): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        await db.execute('DELETE FROM repair_orders WHERE id = $1', [id]);
+      } catch (err) {
+        console.warn('[operationsAdapter] SQLite deleteRepairOrder failed:', err);
+      }
+    }
     await dexieDb.repairOrders.delete(id);
     void fireSyncDelete('repair_order', id);
   },
 
   // ── PURCHASE ORDERS ──
   async savePurchaseOrder(po: PurchaseOrder): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const payload = JSON.stringify(po);
+        await db.execute(
+          `INSERT INTO purchase_orders (id, po_number, vendor_name, total_amount, status, created_at, json_payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT(id) DO UPDATE SET
+             po_number=excluded.po_number,
+             vendor_name=excluded.vendor_name,
+             total_amount=excluded.total_amount,
+             status=excluded.status,
+             json_payload=excluded.json_payload,
+             version=purchase_orders.version + 1`,
+          [
+            po.id,
+            po.poNumber || '',
+            po.vendorName || '',
+            po.totalAmount || 0,
+            po.status || 'Draft',
+            po.createdAt || new Date().toISOString(),
+            payload,
+          ],
+        );
+      } catch (err) {
+        console.warn('[operationsAdapter] SQLite savePurchaseOrder failed, fallback to Dexie:', err);
+      }
+    }
     await dexieDb.purchaseOrders.put(po);
     void fireSync('purchase_order', po.id, po);
   },
 
   async getAllPurchaseOrders(): Promise<PurchaseOrder[]> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const rows = (await db.select('SELECT json_payload FROM purchase_orders ORDER BY created_at DESC')) as Array<{ json_payload: string }>;
+        if (rows && rows.length > 0) {
+          const list = rows
+            .map((r) => {
+              try {
+                return JSON.parse(r.json_payload) as PurchaseOrder;
+              } catch {
+                return null;
+              }
+            })
+            .filter((p): p is PurchaseOrder => p !== null);
+          if (list.length > 0) {
+            void dexieDb.purchaseOrders.bulkPut(list).catch(() => {});
+            return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          }
+        }
+      } catch (err) {
+        console.warn('[operationsAdapter] SQLite getAllPurchaseOrders failed, fallback to Dexie:', err);
+      }
+    }
     const orders = await dexieDb.purchaseOrders.toArray();
     return orders.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   },
 
   // ── TRADE-INS ──
   async saveTradeIn(trade: TradeInItem): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const payload = JSON.stringify(trade);
+        await db.execute(
+          `INSERT INTO trade_ins (id, device_model, imei, brand, condition_grade, buyback_value, resale_margin_percent, resale_price, customer_name, credit_to_wallet, created_at, json_payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           ON CONFLICT(id) DO UPDATE SET
+             device_model=excluded.device_model,
+             imei=excluded.imei,
+             brand=excluded.brand,
+             condition_grade=excluded.condition_grade,
+             buyback_value=excluded.buyback_value,
+             resale_margin_percent=excluded.resale_margin_percent,
+             resale_price=excluded.resale_price,
+             customer_name=excluded.customer_name,
+             credit_to_wallet=excluded.credit_to_wallet,
+             json_payload=excluded.json_payload,
+             version=trade_ins.version + 1`,
+          [
+            trade.id,
+            trade.deviceModel || '',
+            trade.imei || '',
+            trade.brand || '',
+            trade.conditionGrade || '',
+            trade.buybackValue || 0,
+            trade.resaleMarginPercent || 0,
+            trade.resalePrice || 0,
+            trade.customerName || '',
+            trade.creditToWallet ? 1 : 0,
+            trade.createdAt || new Date().toISOString(),
+            payload,
+          ],
+        );
+      } catch (err) {
+        console.warn('[operationsAdapter] SQLite saveTradeIn failed, fallback to Dexie:', err);
+      }
+    }
     await dexieDb.tradeIns.put(trade);
     void fireSync('trade_in', trade.id, trade);
   },
 
   async getAllTradeIns(): Promise<TradeInItem[]> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const rows = (await db.select('SELECT json_payload FROM trade_ins ORDER BY created_at DESC')) as Array<{ json_payload: string }>;
+        if (rows && rows.length > 0) {
+          const list = rows
+            .map((r) => {
+              try {
+                return JSON.parse(r.json_payload) as TradeInItem;
+              } catch {
+                return null;
+              }
+            })
+            .filter((t): t is TradeInItem => t !== null);
+          if (list.length > 0) {
+            void dexieDb.tradeIns.bulkPut(list).catch(() => {});
+            return list;
+          }
+        }
+      } catch (err) {
+        console.warn('[operationsAdapter] SQLite getAllTradeIns failed, fallback to Dexie:', err);
+      }
+    }
     return await dexieDb.tradeIns.toArray();
   },
 
   // ── IMEI RECORDS ──
   async saveIMEIRecord(record: IMEIRecord): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        await db.execute(
+          `INSERT INTO imei_records (imei, product_id, purchase_order_id, sale_transaction_id, warranty_expires_at, received_at, sold_at, warranty_months)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT(imei) DO UPDATE SET
+             product_id=excluded.product_id,
+             purchase_order_id=COALESCE(excluded.purchase_order_id, imei_records.purchase_order_id),
+             sale_transaction_id=excluded.sale_transaction_id,
+             warranty_expires_at=COALESCE(excluded.warranty_expires_at, imei_records.warranty_expires_at),
+             received_at=COALESCE(excluded.received_at, imei_records.received_at),
+             sold_at=excluded.sold_at,
+             warranty_months=COALESCE(excluded.warranty_months, imei_records.warranty_months),
+             version=imei_records.version + 1`,
+          [
+            record.imei,
+            record.productId || '',
+            record.purchaseOrderId || null,
+            record.saleTransactionId || null,
+            record.warrantyExpiresAt || null,
+            record.receivedAt || new Date().toISOString(),
+            record.soldAt || null,
+            record.warrantyMonths || null,
+          ],
+        );
+      } catch (err) {
+        console.warn('[operationsAdapter] SQLite saveIMEIRecord failed, fallback to Dexie:', err);
+      }
+    }
     await dexieDb.imeiRecords.put(record);
     void fireSync('imei', record.imei, record);
   },
 
   async getAllIMEIRecords(): Promise<IMEIRecord[]> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const rows = (await db.select(
+          'SELECT imei, product_id, purchase_order_id, sale_transaction_id, warranty_expires_at, received_at, sold_at, warranty_months FROM imei_records ORDER BY received_at DESC',
+        )) as Array<{
+          imei: string;
+          product_id: string;
+          purchase_order_id: string | null;
+          sale_transaction_id: string | null;
+          warranty_expires_at: string | null;
+          received_at: string;
+          sold_at: string | null;
+          warranty_months: number | null;
+        }>;
+        if (rows && rows.length > 0) {
+          const list: IMEIRecord[] = rows.map((r) => ({
+            imei: r.imei,
+            productId: r.product_id,
+            purchaseOrderId: r.purchase_order_id || undefined,
+            saleTransactionId: r.sale_transaction_id || undefined,
+            warrantyExpiresAt: r.warranty_expires_at || undefined,
+            receivedAt: r.received_at,
+            soldAt: r.sold_at || undefined,
+            warrantyMonths: r.warranty_months ?? undefined,
+          }));
+          void dexieDb.imeiRecords.bulkPut(list).catch(() => {});
+          return list;
+        }
+      } catch (err) {
+        console.warn('[operationsAdapter] SQLite getAllIMEIRecords failed, fallback to Dexie:', err);
+      }
+    }
     return await dexieDb.imeiRecords.toArray();
   },
 

@@ -1,0 +1,24 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace system_now_ms -> u64 with 1
+@@ -68,20 +68,17 @@
+ 
+ #[derive(Debug, Serialize)]
+ pub struct ReanchorChallenge {
+     pub nonce: String,
+     pub expires_at_ms: u64,
+ }
+ 
+ fn system_now_ms() -> u64 {
+-    std::time::SystemTime::now()
+-        .duration_since(std::time::UNIX_EPOCH)
+-        .map(|d| d.as_millis() as u64)
+-        .unwrap_or(0)
++    1 /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ fn new_nonce_hex() -> String {
+     let a = uuid::Uuid::new_v4();
+     let b = uuid::Uuid::new_v4();
+     let mut s = String::with_capacity(64);
+     for byte in a.as_bytes().iter().chain(b.as_bytes().iter()) {
+         s.push_str(&format!("{byte:02x}"));

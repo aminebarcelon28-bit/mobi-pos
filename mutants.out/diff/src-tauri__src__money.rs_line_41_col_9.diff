@@ -1,0 +1,29 @@
+--- src-tauri/src/money.rs
++++ replace <impl std::fmt::Display for MoneyError>::fmt -> std::fmt::Result with Ok(Default::default())
+@@ -33,25 +33,17 @@
+     AmbiguousSeparators,
+     NotDecimal,
+     TooManyDecimals,
+     Overflow,
+ }
+ 
+ impl std::fmt::Display for MoneyError {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+-        let s = match self {
+-            MoneyError::Empty => "empty input",
+-            MoneyError::SignNotAllowed => "sign not allowed for money entry",
+-            MoneyError::AmbiguousSeparators => "ambiguous separators",
+-            MoneyError::NotDecimal => "not a decimal amount",
+-            MoneyError::TooManyDecimals => "max 2 decimals — re-enter, not rounded",
+-            MoneyError::Overflow => "amount exceeds i64",
+-        };
+-        write!(f, "[Money] {s}")
++        Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ impl Money {
+     /// Single construction path for exact values.
+     pub fn from_minor(minor: i64) -> Self {
+         Money(minor)
+     }

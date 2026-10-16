@@ -181,9 +181,10 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
             onClick={handleClear}
             disabled={readOnly || !hasContent}
             title="Effacer la signature"
-            className={`min-h-[44px] min-w-[44px] px-2 rounded-lg text-[10px] font-medium flex items-center gap-1 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+            aria-label="Effacer — Effacer la signature"
+            className={`min-h-[48px] min-w-[48px] px-2 rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
               hasContent
-                ? 'bg-rose-500/15 text-rose-300 border border-rose-500/40 hover:bg-rose-500/25'
+                ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/40 hover:bg-rose-500/25'
                 : 'bg-pos-card text-pos-muted border border-pos-border'
             }`}
           >
@@ -227,7 +228,7 @@ export const SignaturePad: React.FC<SignaturePadProps> = ({
         )}
         {hasContent && (
           <div
-            className="absolute top-2 right-2 bg-emerald-500 text-slate-950 rounded-full p-1 shadow-lg"
+            className="absolute top-2 end-2 bg-emerald-500 text-slate-950 rounded-full p-1 shadow-lg"
             aria-hidden="true"
           >
             <Check className="w-3 h-3" />

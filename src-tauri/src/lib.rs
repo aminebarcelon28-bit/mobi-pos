@@ -10,7 +10,7 @@ pub mod hardware;
 pub mod scanner;
 pub mod geometry;
 pub mod gate;
-pub mod money;
+#[allow(clippy::should_implement_trait)] pub mod money;
 pub mod db;
 pub mod resolver;
 pub mod commands;
@@ -290,7 +290,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 112;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 114;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -678,13 +678,13 @@ pub fn backup_db_file_with_key(
             std::fs::set_permissions(&dst_path, std::fs::Permissions::from_mode(0o600))
                 .map_err(|e| TrustError::op_failed(format!("Permissions snapshot impossibles: {e}")))?;
         }
-        return Ok(BackupMeta {
+        Ok(BackupMeta {
             id,
             bytes: bytes.len() as u64,
-            mtime_ms: mtime_ms,
+            mtime_ms,
             sha256: digest,
             path: dst_path.to_string_lossy().into_owned(),
-        });
+        })
     }
 }
 
@@ -806,7 +806,7 @@ fn decrypt_snapshot_for_recovery(
     if verify_res.locked {
         return Err(TrustError::op_failed(format!(
             "PIN verrouillé — réessayez dans {}s.",
-            (verify_res.locked_remaining_ms + 999) / 1000
+            verify_res.locked_remaining_ms.div_ceil(1000)
         )));
     }
     if !verify_res.ok {
@@ -1733,6 +1733,20 @@ fn base_schema_migrations() -> Vec<Migration> {
                 last_error TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_parked_session ON sync_parked_movements(session_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v114 — Composite Query Acceleration Indexes.
+            // Accelerates customer history, shift-scoped transactions, low-stock catalog alerts,
+            // and Tier-B signed outbox drain queue.
+            version: 114,
+            description: "Composite SQLite performance indexes for customer, shift, catalog alert, and outbox drain",
+            sql: r#"
+            CREATE INDEX IF NOT EXISTS idx_txn_cust_date ON transactions(customer_id, created_at DESC) WHERE customer_id IS NOT NULL AND status != 'VOIDED';
+            CREATE INDEX IF NOT EXISTS idx_txn_shift_status ON transactions(shift_id, status) WHERE shift_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_prod_stock_alert ON products(category, stock, reorder_point) WHERE deleted = 0;
+            CREATE INDEX IF NOT EXISTS idx_outbox_signed_drain ON sync_outbox(status, device_id, seq_no) WHERE seq_no IS NOT NULL;
             "#,
             kind: MigrationKind::Up,
         },

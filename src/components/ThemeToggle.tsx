@@ -9,19 +9,19 @@ export const ThemeToggle: React.FC = () => {
     <button
       type="button"
       onClick={toggleTheme}
-      className="p-2.5 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition-all duration-200 shadow-xs flex items-center justify-center gap-1.5 min-h-[48px] min-w-[48px] touch-manipulation focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:outline-none"
+      className="p-2 rounded-ui-sm bg-surface-card hover:bg-surface-card/80 border border-line-subtle hover:border-line text-fg-muted hover:text-fg transition-all duration-200 shadow-xs flex items-center justify-center gap-1.5 min-h-[34px] min-w-[34px] touch-manipulation focus-visible:ring-2 focus-visible:ring-pos-accent focus-visible:outline-none cursor-pointer h-ctl-md"
       title={`Mode Actuel: ${themeMode === 'dark' ? 'Sombre' : 'Clair'}. Cliquer pour basculer.`}
       aria-label={themeMode === 'dark' ? 'Clair — Passer au thème clair' : 'Sombre — Passer au thème sombre'}
     >
       {themeMode === 'dark' ? (
         <>
-          <Sun aria-hidden="true" className="w-4 h-4 text-amber-400 animate-in fade-in spin-in-45 duration-300" />
-          <span className="text-xs font-semibold hidden sm:inline text-amber-300">Clair</span>
+          <Sun aria-hidden="true" className="w-3.5 h-3.5 text-status-warn-fg animate-in fade-in spin-in-45 duration-300" />
+          <span className="text-ui-xs font-semibold hidden sm:inline text-status-warn-fg">Clair</span>
         </>
       ) : (
         <>
-          <Moon aria-hidden="true" className="w-4 h-4 text-indigo-500 animate-in fade-in duration-300" />
-          <span className="text-xs font-semibold hidden sm:inline text-indigo-600">Sombre</span>
+          <Moon aria-hidden="true" className="w-3.5 h-3.5 text-indigo-400 animate-in fade-in duration-300" />
+          <span className="text-ui-xs font-semibold hidden sm:inline text-indigo-400">Sombre</span>
         </>
       )}
     </button>

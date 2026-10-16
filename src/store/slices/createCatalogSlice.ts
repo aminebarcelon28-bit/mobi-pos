@@ -206,7 +206,7 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
       }
     }
 
-    return { success: true };
+    return { success: true, savedProduct: targetProduct };
   },
 
   deleteProduct: async (id) => {

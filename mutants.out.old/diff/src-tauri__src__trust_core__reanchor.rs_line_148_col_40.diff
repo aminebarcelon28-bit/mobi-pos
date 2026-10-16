@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace match guard parts.next().is_none() with true in verify_time_assertion_with_prefix
+@@ -140,17 +140,17 @@
+     let assertion = assertion.trim();
+     if assertion.is_empty() {
+         return Err(TrustError::IPCProtocolError {
+             reason: "empty time assertion",
+         });
+     }
+     let mut parts = assertion.split('.');
+     let (prefix, payload_b64, sig_b64) = match (parts.next(), parts.next(), parts.next()) {
+-        (Some(a), Some(p), Some(s)) if parts.next().is_none() => (a, p, s),
++        (Some(a), Some(p), Some(s)) if true /* ~ changed by cargo-mutants ~ */ => (a, p, s),
+         _ => {
+             return Err(TrustError::IPCProtocolError {
+                 reason: "time assertion must have 3 parts",
+             })
+         }
+     };
+     if prefix != expected_prefix {
+         return Err(TrustError::IPCProtocolError {

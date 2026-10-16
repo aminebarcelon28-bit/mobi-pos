@@ -1,0 +1,24 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace TimeKernel::apply_checkpoint with ()
+@@ -254,20 +254,17 @@
+             last_server_time_utc_ms: g.last_server_time_utc_ms,
+             last_server_seq: g.last_server_seq,
+         }
+     }
+ 
+     /// Apply a checkpoint ratchet (Trusted verdicts only — enforced by the
+     /// caller passing only engine-approved updates).
+     pub fn apply_checkpoint(&self, upd: &CheckpointUpdate) {
+-        let mut g = self.inner.write();
+-        g.boot_session_id = upd.boot_session_id.clone();
+-        g.last_trusted_wall_utc_ms = Some(upd.wall_utc_ms);
+-        g.last_monotonic_ms = Some(upd.monotonic_ms);
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Apply a verified re-anchor (server assertion path only).
+     pub fn apply_reanchor(
+         &self,
+         server_time_ms: u64,
+         server_seq: Option<u64>,
+         mono_ms: Option<u64>,

@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { usePosStore } from '../../store/usePosStore';
+import { Kbd } from '../../design-system/desktop/Kbd';
 import {
   X,
   Keyboard,
@@ -24,6 +25,15 @@ interface HotkeyItem {
 
 const ALL_HOTKEYS: HotkeyItem[] = [
   // ─── 1. Vente au comptoir ───
+  {
+    key: 'Ctrl+K',
+    name: 'Palette de Commandes Universelle',
+    description: 'Recherche rapide et exécution directe de n\'importe quel module, écran ou action POS.',
+    category: 'vente',
+    context: 'Partout dans l\'application',
+    badge: 'Linear/Raycast',
+    isNew: true,
+  },
   {
     key: 'F1 ou /',
     name: 'Recherche Rapide Catalogue',
@@ -417,9 +427,13 @@ export const HotkeyGuideModal: React.FC = () => {
                 >
                   {/* Physical Key Button Simulation */}
                   <div className="shrink-0 pt-0.5">
-                    <kbd className="inline-flex items-center justify-center min-w-[70px] px-2.5 py-1.5 text-xs font-black font-mono text-emerald-400 bg-pos-bg border border-pos-border rounded-lg shadow-sm group-hover:border-emerald-500/50 group-hover:shadow-emerald-500/10 transition-all text-center">
+                    <Kbd
+                      variant="accent"
+                      size="md"
+                      className="min-w-[70px] text-ui-xs font-black text-center shadow-xs"
+                    >
                       {hotkey.key}
-                    </kbd>
+                    </Kbd>
                   </div>
 
                   {/* Information Details */}

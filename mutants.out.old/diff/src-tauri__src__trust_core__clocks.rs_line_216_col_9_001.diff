@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace <impl MonotonicSource for NoMonotonic>::now_ms -> Option<u64> with Some(1)
+@@ -208,17 +208,17 @@
+ #[cfg(not(any(
+     target_os = "windows",
+     target_os = "linux",
+     target_os = "android",
+     target_vendor = "apple"
+ )))]
+ impl MonotonicSource for NoMonotonic {
+     fn now_ms(&self) -> Option<u64> {
+-        None
++        Some(1) /* ~ changed by cargo-mutants ~ */
+     }
+     fn source_name(&self) -> &'static str {
+         "none:unavailable"
+     }
+ }
+ 
+ // ---------------------------------------------------------------------------
+ // Test fake

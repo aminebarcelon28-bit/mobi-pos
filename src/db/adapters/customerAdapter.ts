@@ -215,30 +215,51 @@ export const customerAdapter = {
   },
 
   async getAllCustomers(): Promise<Customer[]> {
-    const list = await dexieDb.customers.toArray();
-    if (list.length > 0) return reconcileLoyaltyState(list);
     if (isTauriEnv()) {
       try {
         const { getLocalDb } = await import('../sqlPluginAdapter');
         const db = await getLocalDb();
-        const rows = (await db.select('SELECT json_payload FROM customers WHERE deleted = 0').catch(() => [])) as Array<{ json_payload?: string }>;
+        const rows = (await db
+          .select(
+            'SELECT id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, version, created_at FROM customers WHERE deleted = 0 ORDER BY name ASC',
+          )
+          .catch(() => [])) as Array<Record<string, unknown>>;
         if (rows && rows.length > 0) {
           const loaded: Customer[] = [];
           for (const r of rows) {
+            let base: Partial<Customer> = {};
             if (r.json_payload) {
               try {
-                loaded.push(JSON.parse(r.json_payload) as Customer);
+                base = JSON.parse(String(r.json_payload)) as Partial<Customer>;
               } catch {}
             }
+            const cust: Customer = {
+              email: r.email ? String(r.email) : base.email,
+              pointBuckets: Array.isArray(base.pointBuckets) ? base.pointBuckets : undefined,
+              ledger: Array.isArray(base.ledger) ? base.ledger : undefined,
+              ...base,
+              id: String(r.id || base.id || ''),
+              name: String(r.name || base.name || 'Client'),
+              phone: String(r.phone ?? base.phone ?? ''),
+              loyaltyPoints: Number(r.loyalty_points ?? base.loyaltyPoints ?? 0),
+              storeCredit: Number(r.store_credit ?? base.storeCredit ?? 0),
+              pricingTier: (r.pricing_tier as Customer['pricingTier']) || base.pricingTier || 'Retail',
+              totalSpent: Number(r.total_spent ?? base.totalSpent ?? 0),
+              version: Number(r.version ?? base.version ?? 1),
+            };
+            loaded.push(cust);
           }
           if (loaded.length > 0) {
             await dexieDb.customers.bulkPut(loaded).catch(() => {});
             return reconcileLoyaltyState(loaded);
           }
         }
-      } catch {}
+      } catch (err) {
+        console.warn('[customerAdapter] SQLite getAllCustomers failed, fallback to Dexie:', err);
+      }
     }
-    return list;
+    const list = await dexieDb.customers.toArray();
+    return reconcileLoyaltyState(list);
   },
 
   async findCustomerByPhone(phone: string): Promise<Customer | undefined> {

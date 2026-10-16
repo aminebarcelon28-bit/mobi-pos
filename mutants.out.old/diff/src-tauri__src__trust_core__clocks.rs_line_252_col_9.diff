@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace ManualClock::set with ()
+@@ -244,17 +244,17 @@
+         }
+     }
+ 
+     pub fn advance(&mut self, delta_ms: u64) {
+         self.ms = self.ms.saturating_add(delta_ms);
+     }
+ 
+     pub fn set(&mut self, ms: u64) {
+-        self.ms = ms;
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ impl MonotonicSource for ManualClock {
+     fn now_ms(&self) -> Option<u64> {
+         Some(self.ms)
+     }
+ 

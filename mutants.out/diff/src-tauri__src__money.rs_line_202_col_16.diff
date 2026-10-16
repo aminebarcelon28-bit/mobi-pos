@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace == with != in Money::is_zero
+@@ -194,17 +194,17 @@
+         let rounded = if rem * 2 >= d { q + 1 } else { q };
+         if rounded > i64::MAX as i128 || rounded < i64::MIN as i128 {
+             return Err(MoneyError::Overflow);
+         }
+         Ok(Money(rounded as i64))
+     }
+ 
+     pub fn is_zero(self) -> bool {
+-        self.0 == 0
++        self.0 != /* ~ changed by cargo-mutants ~ */ 0
+     }
+ 
+     pub fn is_negative(self) -> bool {
+         self.0 < 0
+     }
+ }
+ 
+ fn is_strict_fr_grouped(s: &str) -> bool {

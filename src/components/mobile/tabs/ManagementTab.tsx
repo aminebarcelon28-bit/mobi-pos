@@ -55,25 +55,19 @@ import { APP_VERSION } from '../../../types/pos';
 import { todayLocalKey, toLocalDayKey } from '../../../utils/dateUtils';
 import { computeSalesMetrics } from '../../../utils/receiptMath';
 import { useAllocationCogs } from '../../../hooks/useAllocationCogs';
+import { useTranslation, Bdi } from '../../../i18n';
+import { resolvePrinterForDocument } from '../../../utils/printerRoutingEngine';
+import { openCashDrawerViaSpooler } from '../../../utils/escpos';
 
-interface ManagementTabProps {
+export interface ManagementTabProps {
   onOpenPairingWizard?: () => void;
+  onOpenDiagnostics?: () => void;
 }
 
-// Mini-nav anchors (display only — smooth-scrolls to the sections below).
-const MGMT_SECTIONS = [
-  { id: 'mgmt-caisse', label: 'Caisse' },
-  { id: 'mgmt-facture-hero', label: '📸 Facture IA' },
-  { id: 'mgmt-activite', label: 'Activité' },
-  { id: 'mgmt-atelier', label: 'Atelier' },
-  { id: 'mgmt-stocks', label: 'Stocks' },
-  { id: 'mgmt-finances', label: 'Finances' },
-  { id: 'mgmt-config', label: 'Config' },
-  { id: 'mgmt-prefs', label: 'Préférences' },
-  { id: 'mgmt-maj', label: 'MàJ' },
-] as const;
-
-export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizard }) => {
+export const ManagementTab: React.FC<ManagementTabProps> = ({
+  onOpenPairingWizard,
+  onOpenDiagnostics,
+}) => {
   const {
     openModal,
     transactions,
@@ -86,6 +80,23 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
     repairOrders,
     activeCashier,
   } = usePosStore();
+  const { t, locale, toggleLocale } = useTranslation();
+
+  const mgmtSections = useMemo(
+    () => [
+      { id: 'mgmt-diagnostic', label: t.management.sectionDiagnostics },
+      { id: 'mgmt-caisse', label: t.management.sectionRegister },
+      { id: 'mgmt-facture-hero', label: `📸 ${t.management.sectionAiInvoice}` },
+      { id: 'mgmt-activite', label: t.management.sectionActivity },
+      { id: 'mgmt-atelier', label: t.management.sectionWorkshop },
+      { id: 'mgmt-stocks', label: t.management.sectionStock },
+      { id: 'mgmt-finances', label: t.management.sectionFinances },
+      { id: 'mgmt-config', label: t.management.sectionConfig },
+      { id: 'mgmt-prefs', label: t.management.sectionPreferences },
+      { id: 'mgmt-maj', label: locale === 'fr' ? 'MàJ' : t.management.sectionUpdates },
+    ],
+    [t, locale],
+  );
   const pendingRepairsCount = useMemo(
     () =>
       (repairOrders || []).filter(
@@ -101,6 +112,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
 
   const [isPinOpen, setIsPinOpen] = useState(false);
   const [isPrinterModalOpen, setIsPrinterModalOpen] = useState(false);
+  const mobilePrinter = useMemo(() => loadMobilePrinter(), [isPrinterModalOpen]);
 
   const handleNoSaleDrawerOpen = () => {
     soundEngine.playKeyBeep?.();
@@ -109,13 +121,20 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
 
   const handlePinSuccess = () => {
     soundEngine.playCashDrawer?.();
+    const actor = activeCashier?.name?.trim() || 'Caissier (Mobile)';
     if (logSecurityAction) {
       logSecurityAction(
         'Ouverture Manuelle Tiroir ("No Sale")',
         'Tiroir-caisse ouvert sans vente depuis mobile',
-        'Caissier (Mobile)',
+        actor,
         true
       );
+    }
+    try {
+      const targetPrinter = resolvePrinterForDocument('receipt', receiptSettings?.printerRouting);
+      void openCashDrawerViaSpooler(targetPrinter.printerName);
+    } catch (drawerErr) {
+      console.warn('[ManagementTab] Cash drawer pulse error:', drawerErr);
     }
     showToast('Ouverture manuelle du tiroir-caisse autorisée.', 'success');
     setIsPinOpen(false);
@@ -235,21 +254,29 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
       })
     : null;
 
+  const handleOpenDiagnosticsView = () => {
+    soundEngine.playKeyBeep?.();
+    onOpenDiagnostics?.();
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('mobi:navigate-tab', { detail: 'diagnostics' }));
+    }
+  };
+
   return (
     <AppTabContent
       contentClassName="px-3.5 py-3 select-none font-sans text-xs"
       pinnedTop={
         <nav
-          aria-label="Sections de gestion"
+          aria-label={t.management.sectionsNavAria}
           className="px-3.5 pt-2.5 pb-2 bg-pos-bg border-b border-pos-border/60"
         >
           <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
-            {MGMT_SECTIONS.map((s) => (
+            {mgmtSections.map((s) => (
               <button
                 key={s.id}
                 type="button"
                 onClick={() => scrollToSection(s.id)}
-                className="min-h-[44px] px-3 rounded-xl bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text hover:border-cyan-400/50 font-bold text-[11px] whitespace-nowrap shrink-0 transition cursor-pointer active:scale-95"
+                className="min-h-[48px] px-3.5 rounded-xl bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text hover:border-cyan-400/50 font-bold text-[11px] whitespace-nowrap shrink-0 transition cursor-pointer active:scale-95"
               >
                 {s.label}
               </button>
@@ -259,6 +286,63 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
       }
     >
       <div className="space-y-3.5 pb-4">
+        {/* 0. Primary Entry Point to SyncDiagnosticsTab (ADR-001) */}
+        <div
+          id="mgmt-diagnostic"
+          className="bg-gradient-to-br from-cyan-500/15 via-pos-card to-pos-panel border border-cyan-500/35 rounded-3xl p-4 shadow-sm space-y-2.5 scroll-mt-2"
+        >
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-9 h-9 rounded-2xl bg-cyan-500/20 border border-cyan-500/30 text-cyan-700 dark:text-cyan-400 flex items-center justify-center shrink-0">
+                <Database className="w-4 h-4" aria-hidden="true" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-xs font-black text-pos-text leading-tight truncate">
+                  {t.management.systemDiagnosticsCardTitle}
+                </h2>
+                <p className="text-[10px] text-pos-muted truncate">
+                  {t.management.systemDiagnosticsCardSubtitle}
+                </p>
+              </div>
+            </div>
+            <span
+              className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border shrink-0 ${
+                !syncStatus.online
+                  ? 'pos-status-danger'
+                  : syncStatus.pendingCount > 0
+                  ? 'pos-status-warn'
+                  : 'pos-status-ok'
+              }`}
+            >
+              <Bdi>
+                {!syncStatus.online
+                  ? t.header.offline
+                  : syncStatus.pendingCount > 0
+                  ? t('header.pendingCount', { count: syncStatus.pendingCount })
+                  : t.header.online}
+              </Bdi>
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleOpenDiagnosticsView}
+            aria-label={`${t.management.systemDiagnosticsCardTitle} — ${t.management.systemDiagnosticsCardSubtitle}`}
+            className="w-full min-h-[48px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-cyan-500/40 text-cyan-800 dark:text-cyan-300 font-black text-xs flex items-center justify-between transition cursor-pointer active:scale-98 shadow-xs"
+          >
+            <span className="flex items-center gap-2 min-w-0">
+              <RefreshCw
+                className={`w-4 h-4 text-cyan-700 dark:text-cyan-400 shrink-0 ${
+                  syncStatus.pushing || syncStatus.pulling ? 'animate-spin' : ''
+                }`}
+                aria-hidden="true"
+              />
+              <span className="truncate">{t.management.systemDiagnosticsCardTitle}</span>
+            </span>
+            <ChevronRight className="w-4 h-4 text-cyan-700 dark:text-cyan-400 shrink-0 rtl:rotate-180" aria-hidden="true" />
+          </button>
+        </div>
+
         {/* 1. Store Header & Shift Banner */}
         <div id="mgmt-caisse" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3 scroll-mt-2">
           <div className="flex items-center justify-between gap-3">
@@ -273,11 +357,13 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 <div className="flex items-center gap-1.5 mt-1">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${
-                      activeShift ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
+                      activeShift ? 'bg-emerald-500 dark:bg-emerald-400 animate-pulse' : 'bg-amber-500 dark:bg-amber-400'
                     }`}
                   />
                   <span className="text-[11px] text-pos-muted truncate font-medium">
-                    {activeShift ? `Caisse ouverte (${activeShift.cashierName})` : 'Caisse fermée'}
+                    {activeShift
+                      ? t('management.registerOpenStatus', { name: activeShift.cashierName })
+                      : t.management.registerClosedStatus}
                   </span>
                 </div>
               </div>
@@ -287,18 +373,18 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               <button
                 type="button"
                 onClick={() => openModal('shift_close')}
-                className="min-h-[44px] px-3.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 font-bold text-xs shrink-0 cursor-pointer active:scale-95 transition"
+                className="min-h-[48px] px-3.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-800 dark:text-emerald-300 font-bold text-xs shrink-0 cursor-pointer active:scale-95 transition"
                 title="Ouvrir le récapitulatif de clôture (confirmation demandée avant validation)"
               >
-                Clôturer
+                {t.management.closeRegisterButton}
               </button>
             ) : (
               <button
                 type="button"
                 onClick={() => openModal('shift_open')}
-                className="min-h-[44px] px-3.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 font-bold text-xs shrink-0 cursor-pointer active:scale-95 transition"
+                className="min-h-[48px] px-3.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-800 dark:text-amber-300 font-bold text-xs shrink-0 cursor-pointer active:scale-95 transition"
               >
-                Ouvrir Caisse
+                {t.management.openRegisterButton}
               </button>
             )}
           </div>
@@ -308,27 +394,27 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
             <button
               type="button"
               onClick={() => openModal('shift_zreport')}
-              className="min-h-[44px] px-2 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex flex-col items-center justify-center gap-1 font-bold text-[11px] text-pos-text cursor-pointer active:scale-98 transition shadow-xs"
+              className="min-h-[48px] px-2 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex flex-col items-center justify-center gap-1 font-bold text-[11px] text-pos-text cursor-pointer active:scale-98 transition shadow-xs"
             >
-              <Receipt className="w-3.5 h-3.5 text-cyan-400 shrink-0" aria-hidden="true" />
-              <span className="truncate">Rapport Z</span>
+              <Receipt className="w-3.5 h-3.5 text-cyan-700 dark:text-cyan-400 shrink-0" aria-hidden="true" />
+              <span className="truncate">{t.management.zReportButton}</span>
             </button>
             <button
               type="button"
               onClick={() => openModal('shift_movement')}
-              className="min-h-[44px] px-2 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex flex-col items-center justify-center gap-1 font-bold text-[11px] text-pos-text cursor-pointer active:scale-98 transition shadow-xs"
+              className="min-h-[48px] px-2 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex flex-col items-center justify-center gap-1 font-bold text-[11px] text-pos-text cursor-pointer active:scale-98 transition shadow-xs"
             >
-              <DollarSign className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
-              <span className="truncate">Sortie Caisse</span>
+              <DollarSign className="w-3.5 h-3.5 text-amber-700 dark:text-amber-400 shrink-0" aria-hidden="true" />
+              <span className="truncate">{t.management.cashOutButton}</span>
             </button>
             <button
               type="button"
               onClick={handleNoSaleDrawerOpen}
-              className="min-h-[44px] px-2 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex flex-col items-center justify-center gap-1 font-bold text-[11px] text-pos-text cursor-pointer active:scale-98 transition shadow-xs"
+              className="min-h-[48px] px-2 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex flex-col items-center justify-center gap-1 font-bold text-[11px] text-pos-text cursor-pointer active:scale-98 transition shadow-xs"
               title="Ouvrir le tiroir-caisse sans vente (Code PIN requis)"
             >
-              <Unlock className="w-3.5 h-3.5 text-emerald-400 shrink-0" aria-hidden="true" />
-              <span className="truncate">Ouvrir Tiroir</span>
+              <Unlock className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
+              <span className="truncate">{t.management.openDrawerButton}</span>
             </button>
           </div>
         </div>
@@ -339,19 +425,19 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
             <div className="flex items-center gap-3 min-w-0">
               <div className="relative w-11 h-11 rounded-2xl bg-emerald-500 text-slate-950 flex items-center justify-center font-black shadow-md shadow-emerald-500/25 shrink-0">
                 <Camera className="w-5 h-5" aria-hidden="true" />
-                <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-cyan-400 ring-2 ring-pos-panel animate-ping" />
+                <span className="absolute -top-1 -end-1 w-3 h-3 rounded-full bg-cyan-400 ring-2 ring-pos-panel animate-ping" />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <h3 className="text-xs font-black text-pos-text leading-tight truncate">
-                    Scanner Facture & Bon (IA)
+                    {t.management.aiInvoiceHeroTitle}
                   </h3>
                   <span className="text-[9px] font-black uppercase tracking-wider bg-emerald-500 text-slate-950 px-1.5 py-0.5 rounded-full shrink-0">
-                    Nouveau
+                    {t.management.newBadge}
                   </span>
                 </div>
-                <p className="text-[10px] text-pos-muted truncate mt-0.5 font-medium">
-                  Capture caméra ML Kit, invariants mathématiques & entrée stock
+                <p className="text-[10px] text-pos-muted line-clamp-2 mt-0.5 font-medium">
+                  {t.management.aiInvoiceHeroSubtitle}
                 </p>
               </div>
             </div>
@@ -362,11 +448,11 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 soundEngine.playKeyBeep?.();
                 openModal('invoice_ingestion');
               }}
-              className="min-h-[44px] px-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shrink-0 cursor-pointer active:scale-95 transition shadow-sm shadow-emerald-500/20 flex items-center gap-1.5"
+              className="min-h-[48px] px-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs shrink-0 cursor-pointer active:scale-95 transition shadow-sm shadow-emerald-500/20 flex items-center gap-1.5"
               title="Ouvrir le scanner de documents et factures"
             >
-              <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Scanner</span>
+              <Sparkles className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>{t.management.scanButton}</span>
             </button>
           </div>
         </div>
@@ -375,12 +461,12 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
         <div id="mgmt-activite" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3 scroll-mt-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-pos-text font-black text-xs">
-              <TrendingUp className="w-4 h-4 text-emerald-400" aria-hidden="true" />
-              <span>Aperçu d'Activité</span>
+              <TrendingUp className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+              <span>{t.management.activityOverviewTitle}</span>
             </div>
             <span className="text-[10px] text-pos-muted font-bold flex items-center gap-1 bg-pos-panel px-2.5 py-0.5 rounded-full border border-pos-border/50">
-              <Clock className="w-3 h-3 text-cyan-400" aria-hidden="true" />
-              Aujourd'hui
+              <Clock className="w-3 h-3 text-cyan-700 dark:text-cyan-400" aria-hidden="true" />
+              {t.activity.periodToday}
             </span>
           </div>
 
@@ -388,7 +474,7 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           <div className="grid grid-cols-2 gap-2.5">
             <div className="bg-pos-panel border border-pos-border rounded-2xl p-3 flex flex-col justify-between min-w-0">
               <span className="text-[10px] text-pos-muted font-bold block uppercase tracking-wide truncate">
-                Chiffre d'Affaires
+                {t.management.revenueLabel}
               </span>
               <div className="mt-1 min-w-0 overflow-hidden">
                 <MoneyDisplay
@@ -399,25 +485,27 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 />
               </div>
               <span className="text-[10px] text-pos-muted/80 mt-1 truncate">
-                {todayMetrics.validCount === 0
-                  ? 'Aucune vente aujourd’hui — la première apparaîtra ici.'
-                  : `Panier moy. : ${averageBasket.toLocaleString('fr-DZ')} DA`}
+                {todayMetrics.validCount === 0 ? (
+                  t.management.noSaleTodayHint
+                ) : (
+                  <Bdi mono>{t('management.avgBasketPrefix', { amount: `${averageBasket.toLocaleString('fr-DZ')} DA` })}</Bdi>
+                )}
               </span>
             </div>
 
             <div className="bg-pos-panel border border-pos-border rounded-2xl p-3 flex flex-col justify-between min-w-0">
               <span className="text-[10px] text-pos-muted font-bold block uppercase tracking-wide truncate">
-                Ventes Validées
+                {t.management.validatedSalesLabel}
               </span>
               <div className="mt-1 flex items-baseline gap-1.5 min-w-0">
-                <span className="text-xl font-black text-pos-text font-mono tracking-tight">
+                <Bdi mono className="text-xl font-black text-pos-text tracking-tight">
                   {todayMetrics.validCount}
-                </span>
-                <span className="text-xs text-pos-muted font-bold">tickets</span>
+                </Bdi>
+                <span className="text-xs text-pos-muted font-bold">{t.activity.ticketsCountSuffix}</span>
               </div>
-              <span className="text-[10px] text-cyan-400 font-medium mt-1 truncate flex items-center gap-1">
-                <ShoppingBag className="w-3 h-3" aria-hidden="true" />
-                {todayMetrics.validCount === 0 ? 'En attente du premier ticket' : 'Activité en direct'}
+              <span className="text-[10px] text-cyan-700 dark:text-cyan-400 font-medium mt-1 truncate flex items-center gap-1">
+                <ShoppingBag className="w-3 h-3 shrink-0" aria-hidden="true" />
+                {todayMetrics.validCount === 0 ? t.management.waitingFirstTicket : t.management.liveActivityStatus}
               </span>
             </div>
           </div>
@@ -426,23 +514,23 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           <button
             type="button"
             onClick={() => openModal('reports')}
-            className="w-full min-h-[46px] px-3.5 rounded-2xl bg-gradient-to-r from-cyan-500/15 via-emerald-500/10 to-cyan-500/15 border border-cyan-500/30 hover:border-cyan-400 text-cyan-300 font-bold text-xs flex items-center justify-between transition cursor-pointer active:scale-98 shadow-xs"
+            className="w-full min-h-[48px] px-3.5 rounded-2xl bg-gradient-to-r from-cyan-500/15 via-emerald-500/10 to-cyan-500/15 border border-cyan-500/30 hover:border-cyan-400 text-cyan-800 dark:text-cyan-300 font-bold text-xs flex items-center justify-between transition cursor-pointer active:scale-98 shadow-xs"
           >
             <div className="flex items-center gap-2.5 min-w-0">
-              <BarChart3 className="w-4 h-4 text-cyan-400 shrink-0" aria-hidden="true" />
+              <BarChart3 className="w-4 h-4 text-cyan-700 dark:text-cyan-400 shrink-0" aria-hidden="true" />
               <span className="truncate font-black">
-                Rapports Financiers & Statistiques <span className="hidden sm:inline font-mono font-medium">(F9)</span>
+                {t.management.fullReportsButton} <span className="hidden sm:inline font-mono font-medium">(F9)</span>
               </span>
             </div>
-            <ChevronRight className="w-4 h-4 text-cyan-400 shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-cyan-700 dark:text-cyan-400 shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
         </div>
 
         {/* 3. Services Atelier, SAV & Reprises (100% Desktop Parity) */}
         <div id="mgmt-atelier" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-2 scroll-mt-2">
           <h3 className="text-[10px] font-black uppercase text-pos-muted tracking-wider mb-1 px-1 flex items-center justify-between">
-            <span>Atelier, SAV & Reprises</span>
-            <span className="text-[9px] bg-cyan-500/10 text-cyan-400 font-bold px-2 py-0.5 rounded border border-cyan-500/20">
+            <span>{t.management.workshopSectionTitle}</span>
+            <span className="text-[9px] pos-status-info font-bold px-2 py-0.5 rounded border">
               SERVICES
             </span>
           </h3>
@@ -450,320 +538,322 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           <button
             type="button"
             onClick={() => openModal('repair_work_order')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-400 flex items-center justify-center shrink-0">
                 <Wrench className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
+              <div className="text-start min-w-0">
                 <span className="font-bold text-xs flex items-center gap-1.5 text-pos-text truncate">
-                  Réparations & SAV Atelier
+                  {t.management.repairsItemTitle}
                   {pendingRepairsCount > 0 && (
-                    <span className="text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full px-2 py-0.5">
-                      {pendingRepairsCount > 9 ? '9+' : pendingRepairsCount}
+                    <span className="text-[10px] font-black pos-status-warn border rounded-full px-2 py-0.5">
+                      <Bdi>{pendingRepairsCount > 9 ? '9+' : pendingRepairsCount}</Bdi>
                     </span>
                   )}
                 </span>
-                <span className="text-[10px] text-pos-muted block truncate">Fiches de réparation, diagnostics & devis</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.repairsItemSubtitle}</span>
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <span className="hidden xs:inline-flex px-2 py-1 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-black">
-                + Nouveau
+              <span className="hidden xs:inline-flex px-2 py-1 rounded-xl pos-status-ok border text-[10px] font-black">
+                + {t.common.new}
               </span>
-              <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+              <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
             </div>
           </button>
 
           <button
             type="button"
             onClick={() => openModal('trade_in_buyback')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-cyan-500/15 text-cyan-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-cyan-500/15 text-cyan-700 dark:text-cyan-400 flex items-center justify-center shrink-0">
                 <RefreshCw className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Reprise Occasion (Trade-In)</span>
-                <span className="text-[10px] text-pos-muted block truncate">Évaluation d'état, rachat cash & bon d'achat</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.tradeInItemTitle}</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.tradeInItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => openModal('kitting_bundle')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-700 dark:text-purple-400 flex items-center justify-center shrink-0">
                 <Package className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Packs & Bundles d'Articles</span>
-                <span className="text-[10px] text-pos-muted block truncate">Composition d'offres groupées (Téléphone + Accessoires)</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.bundlesItemTitle}</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.bundlesItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => openModal('imei_inspector')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-indigo-500/15 text-indigo-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-indigo-500/15 text-indigo-700 dark:text-indigo-400 flex items-center justify-center shrink-0">
                 <Smartphone className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Traçabilité IMEI & Garantie</span>
-                <span className="text-[10px] text-pos-muted block truncate">Recherche d'historique de garantie par IMEI</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.imeiWarrantyItemTitle}</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.imeiWarrantyItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => openModal('compatibility')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
                 <Sparkles className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Compatibilité Accessoires</span>
-                <span className="text-[10px] text-pos-muted block truncate">Trouver verres trempés & coques par modèle</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.compatibilityItemTitle}</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.compatibilityItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => openModal('refund')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-rose-500/15 text-rose-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-rose-500/15 text-rose-700 dark:text-rose-400 flex items-center justify-center shrink-0">
                 <RotateCcw className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
+              <div className="text-start min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">
-                  Retours & Remboursements <span className="hidden sm:inline font-mono font-medium">(F11)</span>
+                  {t.management.refundsItemTitle} <span className="hidden sm:inline font-mono font-medium">(F11)</span>
                 </span>
-                <span className="text-[10px] text-pos-muted block truncate">Restitution d'articles et annulations de ventes</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.refundsItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => openModal('command_tickets')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-400 flex items-center justify-center shrink-0">
                 <Clock className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Commandes & Ventes Suspendues</span>
-                <span className="text-[10px] text-pos-muted block truncate">File d'attente clients et tickets en pause</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.commandTicketsItemTitle}</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.commandTicketsItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
         </div>
 
         {/* 4. Gestion des Stocks & Fournisseurs */}
         <div id="mgmt-stocks" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-2 scroll-mt-2">
           <h3 className="text-[10px] font-black uppercase text-pos-muted tracking-wider mb-1 px-1">
-            Stocks & Fournisseurs
+            {t.management.stockSectionTitle}
           </h3>
 
           <button
             type="button"
             onClick={() => openModal('inventory_manager')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
                 <Layers className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
+              <div className="text-start min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">
-                  Articles & Inventaire <span className="hidden sm:inline font-mono font-medium">(F10)</span>
+                  {t.management.inventoryItemTitle} <span className="hidden sm:inline font-mono font-medium">(F10)</span>
                 </span>
-                <span className="text-[10px] text-pos-muted block truncate font-mono">{products?.length || 0} références en stock</span>
+                <span className="text-[10px] text-pos-muted block truncate font-mono">
+                  <Bdi mono>{t('management.inventoryItemSubtitle', { count: products?.length || 0 })}</Bdi>
+                </span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => openModal('vendor_procurement')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-teal-500/15 text-teal-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-teal-500/15 text-teal-700 dark:text-teal-400 flex items-center justify-center shrink-0">
                 <Truck className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Fournisseurs & Réapprovisionnement</span>
-                <span className="text-[10px] text-pos-muted block truncate">Commandes grossistes & alertes stock</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.suppliersItemTitle}</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.suppliersItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => openModal('invoice_ingestion')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
                 <FileText className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
+              <div className="text-start min-w-0">
                 <div className="flex items-center gap-1.5">
-                  <span className="font-bold text-xs block text-pos-text truncate">Scanner & Ingestion Facture (IA)</span>
-                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Nouveau</span>
+                  <span className="font-bold text-xs block text-pos-text truncate">{t.management.invoiceIngestionItemTitle}</span>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded pos-status-ok border">{t.management.newBadge}</span>
                 </div>
-                <span className="text-[10px] text-pos-muted block truncate">Numérisation caméra, contrôle d'invariants & stock</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.invoiceIngestionItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => openModal('label_printer')}
             title="Étiquettes code-barres : feuille d'impression Android sur mobile"
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
                 <Barcode className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Étiquettes Codes-barres</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.barcodeLabelsItemTitle}</span>
                 <span className="text-[10px] text-pos-muted block truncate">
-                  Studio d'étiquettes : impression Android ou partage
+                  {t.management.barcodeLabelsItemSubtitle}
                 </span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
         </div>
 
         {/* 5. Finances & CRM Clients */}
         <div id="mgmt-finances" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-2 scroll-mt-2">
           <h3 className="text-[10px] font-black uppercase text-pos-muted tracking-wider mb-1 px-1">
-            Finances & Clients
+            {t.management.financesSectionTitle}
           </h3>
 
           <button
             type="button"
             onClick={() => openModal('customers')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-blue-500/15 text-blue-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-blue-500/15 text-blue-700 dark:text-blue-400 flex items-center justify-center shrink-0">
                 <Users className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
+              <div className="text-start min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">
-                  CRM & Fichier Clients <span className="hidden sm:inline font-mono font-medium">(F3)</span>
+                  {t.management.crmCustomersItemTitle} <span className="hidden sm:inline font-mono font-medium">(F3)</span>
                 </span>
-                <span className="text-[10px] text-pos-muted block truncate">Gestion des comptes, plafonds & fidélité</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.crmCustomersItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => openModal('debt_ledger')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-rose-500/15 text-rose-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-rose-500/15 text-rose-700 dark:text-rose-400 flex items-center justify-center shrink-0">
                 <CreditCard className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Grand Livre des Dettes (Kredy)</span>
-                <span className="text-[10px] text-pos-muted block truncate">Registre des créances & encaissement remboursements</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.debtLedgerItemTitle}</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.debtLedgerItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => openModal('expense_manager')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-400 flex items-center justify-center shrink-0">
                 <DollarSign className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Dépenses & Frais Magasin</span>
-                <span className="text-[10px] text-pos-muted block truncate">Charges, loyer, salaires & sorties de caisse</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.expensesItemTitle}</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.expensesItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
         </div>
 
         {/* 6. Configuration & Système */}
         <div id="mgmt-config" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-2 scroll-mt-2">
           <h3 className="text-[10px] font-black uppercase text-pos-muted tracking-wider mb-1 px-1">
-            Configuration, Caisse & Sécurité
+            {t.management.configSectionTitle}
           </h3>
 
           <button
             type="button"
             onClick={() => openModal('settings')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-700 dark:text-purple-400 flex items-center justify-center shrink-0">
                 <Settings className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
+              <div className="text-start min-w-0">
                 <span className="font-bold text-xs block text-pos-text truncate">
-                  Paramètres Généraux <span className="hidden sm:inline font-mono font-medium">(F12)</span>
+                  {t.management.generalSettingsItemTitle} <span className="hidden sm:inline font-mono font-medium">(F12)</span>
                 </span>
-                <span className="text-[10px] text-pos-muted block truncate">Périphériques, tickets, base & synchronisation</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.generalSettingsItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => openModal('receipt_template')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-pos-bg text-pos-muted flex items-center justify-center shrink-0">
                 <Sliders className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Modèle de Ticket de Caisse</span>
-                <span className="text-[10px] text-pos-muted block truncate">Entête, logo, mentions légales & pied de ticket</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.receiptTemplateItemTitle}</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.receiptTemplateItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           {/* FT-01: hidden for cashiers (UX only — modal gate is authoritative). */}
@@ -771,95 +861,95 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           <button
             type="button"
             onClick={() => openModal('security_audit')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-500 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-500 flex items-center justify-center shrink-0">
                 <ShieldAlert className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Journal d'Audit Sécurité</span>
-                <span className="text-[10px] text-pos-muted block truncate">Traçabilité des dérogations et codes PIN</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.securityAuditItemTitle}</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.securityAuditItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
           )}
 
           <button
             type="button"
             onClick={() => openModal('db_maintenance')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-cyan-500/15 text-cyan-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-cyan-500/15 text-cyan-700 dark:text-cyan-400 flex items-center justify-center shrink-0">
                 <Database className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Maintenance Base SQLite WAL</span>
-                <span className="text-[10px] text-pos-muted block truncate">Nettoyage, vacuum, checkpoint et intégrité</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.sqliteMaintenanceItemTitle}</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.sqliteMaintenanceItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => openModal('licensing')}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-700 dark:text-purple-400 flex items-center justify-center shrink-0">
                 <Key className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Licence & Activation</span>
-                <span className="text-[10px] text-pos-muted block truncate">Clé de licence et statut d'enregistrement</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.licensingItemTitle}</span>
+                <span className="text-[10px] text-pos-muted block truncate">{t.management.licensingItemSubtitle}</span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           <button
             type="button"
             onClick={() => setIsPrinterModalOpen(true)}
-            className="w-full min-h-[50px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
+            className="w-full min-h-[52px] px-3.5 rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border flex items-center justify-between text-pos-text cursor-pointer active:scale-98 transition"
           >
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-indigo-500/15 text-indigo-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-indigo-500/15 text-indigo-700 dark:text-indigo-400 flex items-center justify-center shrink-0">
                 <Printer className="w-4 h-4" aria-hidden="true" />
               </div>
-              <div className="text-left min-w-0">
-                <span className="font-bold text-xs block text-pos-text truncate">Imprimante Ticket Mobile</span>
+              <div className="text-start min-w-0">
+                <span className="font-bold text-xs block text-pos-text truncate">{t.management.mobilePrinterItemTitle}</span>
                 <span className="text-[10px] text-pos-muted block truncate">
-                  {loadMobilePrinter().enabled
-                    ? `${loadMobilePrinter().connection.toUpperCase()} • ${loadMobilePrinter().connection === 'wifi' ? loadMobilePrinter().wifiHost : loadMobilePrinter().bluetoothName || 'Associé'}`
-                    : 'Désactivée • Configurer Bluetooth / Wi-Fi'}
+                  {mobilePrinter.enabled
+                    ? `${mobilePrinter.connection.toUpperCase()} • ${mobilePrinter.connection === 'wifi' ? mobilePrinter.wifiHost : mobilePrinter.bluetoothName || 'Associé'}`
+                    : t.management.mobilePrinterDisabledSubtitle}
                 </span>
               </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0" aria-hidden="true" />
+            <ChevronRight className="w-4 h-4 text-pos-muted shrink-0 rtl:rotate-180" aria-hidden="true" />
           </button>
 
           {/* Cloud Pairing / QR Scan Shortcut */}
           {onOpenPairingWizard && (
             <div className="flex items-center justify-between p-3 rounded-2xl bg-pos-panel border border-pos-border">
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-8 h-8 rounded-xl bg-cyan-500/15 text-cyan-400 flex items-center justify-center shrink-0">
+                <div className="w-8 h-8 rounded-xl bg-cyan-500/15 text-cyan-700 dark:text-cyan-400 flex items-center justify-center shrink-0">
                   <QrCode className="w-4 h-4" aria-hidden="true" />
                 </div>
-                <div className="text-left min-w-0">
-                  <span className="font-bold text-xs block text-pos-text truncate">Lier une Caisse</span>
-                  <span className="text-[10px] text-pos-muted block truncate">Scanner QR code de synchronisation</span>
+                <div className="text-start min-w-0">
+                  <span className="font-bold text-xs block text-pos-text truncate">{t.management.pairRegisterTitle}</span>
+                  <span className="text-[10px] text-pos-muted block truncate">{t.management.pairRegisterSubtitle}</span>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={onOpenPairingWizard}
-                className="min-h-[44px] px-3 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-slate-950 font-bold text-xs active:scale-95 transition cursor-pointer flex items-center gap-1.5 shadow-sm shadow-emerald-500/20 shrink-0"
+                className="min-h-[48px] px-3.5 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-slate-950 font-bold text-xs active:scale-95 transition cursor-pointer flex items-center gap-1.5 shadow-sm shadow-emerald-500/20 shrink-0"
               >
-                <Camera className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Scanner</span>
+                <Camera className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <span>{t.management.scanButton}</span>
               </button>
             </div>
           )}
@@ -868,25 +958,42 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
         {/* 5. Preferences & Settings */}
         <div id="mgmt-prefs" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3 scroll-mt-2">
           <h3 className="text-[10px] font-black uppercase text-pos-muted tracking-wider px-1">
-            Préférences Rapides
+            {t.management.quickPreferencesTitle}
           </h3>
 
           {/* Theme Changer */}
           <div className="flex items-center justify-between py-1 border-b border-pos-border/40">
             <span className="font-bold text-pos-text flex items-center gap-2.5">
               {themeMode === 'dark' ? (
-                <Moon className="w-4 h-4 text-indigo-400" aria-hidden="true" />
+                <Moon className="w-4 h-4 text-indigo-700 dark:text-indigo-400" aria-hidden="true" />
               ) : (
-                <Sun className="w-4 h-4 text-amber-400" aria-hidden="true" />
+                <Sun className="w-4 h-4 text-amber-700 dark:text-amber-400" aria-hidden="true" />
               )}
-              <span>Thème visuel</span>
+              <span>{t.management.visualThemeLabel}</span>
             </span>
             <button
               type="button"
               onClick={toggleTheme}
-              className="min-h-[44px] px-3 rounded-xl bg-pos-panel border border-pos-border font-bold text-xs text-pos-text hover:border-cyan-400 active:scale-95 transition cursor-pointer flex items-center gap-1.5"
+              className="min-h-[48px] px-3.5 rounded-xl bg-pos-panel border border-pos-border font-bold text-xs text-pos-text hover:border-cyan-400 active:scale-95 transition cursor-pointer flex items-center gap-1.5"
             >
-              <span>{themeMode === 'dark' ? 'Sombre' : 'Clair'}</span>
+              <span>{themeMode === 'dark' ? t.management.themeDark : t.management.themeLight}</span>
+            </button>
+          </div>
+
+          {/* Language Switcher (FR / AR) */}
+          <div className="flex items-center justify-between py-1 border-b border-pos-border/40">
+            <span className="font-bold text-pos-text flex items-center gap-2.5">
+              <span>{t.management.languageLabel}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                soundEngine.playKeyBeep?.();
+                toggleLocale();
+              }}
+              className="min-h-[48px] px-3.5 rounded-xl bg-pos-panel border border-pos-border font-bold text-xs text-pos-text hover:border-cyan-400 active:scale-95 transition cursor-pointer flex items-center gap-1.5"
+            >
+              <span>{locale === 'ar' ? 'العربية (AR)' : 'Français (FR)'}</span>
             </button>
           </div>
 
@@ -894,18 +1001,18 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
           <div className="flex items-center justify-between py-1 border-b border-pos-border/40">
             <span className="font-bold text-pos-text flex items-center gap-2.5">
               {isAudioMuted ? (
-                <VolumeX className="w-4 h-4 text-rose-400" aria-hidden="true" />
+                <VolumeX className="w-4 h-4 text-rose-700 dark:text-rose-400" aria-hidden="true" />
               ) : (
-                <Volume2 className="w-4 h-4 text-emerald-400" aria-hidden="true" />
+                <Volume2 className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
               )}
-              <span>Bips sonores</span>
+              <span>{t.management.soundBeepsLabel}</span>
             </span>
             <button
               type="button"
               onClick={handleToggleSound}
-              className="min-h-[44px] px-3 rounded-xl bg-pos-panel border border-pos-border font-bold text-xs text-pos-text hover:border-cyan-400 active:scale-95 transition cursor-pointer"
+              className="min-h-[48px] px-3.5 rounded-xl bg-pos-panel border border-pos-border font-bold text-xs text-pos-text hover:border-cyan-400 active:scale-95 transition cursor-pointer"
             >
-              {isAudioMuted ? 'Désactivés' : 'Activés'}
+              {isAudioMuted ? t.management.soundDisabled : t.management.soundEnabled}
             </button>
           </div>
 
@@ -914,16 +1021,20 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 {syncStatus.online ? (
-                  <Wifi className="w-4 h-4 text-emerald-400" aria-hidden="true" />
+                  <Wifi className="w-4 h-4 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
                 ) : (
-                  <WifiOff className="w-4 h-4 text-rose-400" aria-hidden="true" />
+                  <WifiOff className="w-4 h-4 text-rose-700 dark:text-rose-400" aria-hidden="true" />
                 )}
                 <span className="font-bold text-pos-text text-xs">
-                  {syncStatus.online ? 'Synchronisation Cloud Active' : 'Mode Hors-Ligne'}
+                  {syncStatus.online ? t.management.cloudSyncActive : t.management.offlineMode}
                 </span>
               </div>
               <span className="text-[10px] text-pos-muted font-mono bg-pos-panel px-2.5 py-0.5 rounded-full border border-pos-border/40">
-                {syncStatus.pendingCount > 0 ? `${syncStatus.pendingCount} en attente` : 'À jour'}
+                <Bdi mono>
+                  {syncStatus.pendingCount > 0
+                    ? t('header.pendingCount', { count: syncStatus.pendingCount })
+                    : t.management.upToDateBadge}
+                </Bdi>
               </span>
             </div>
 
@@ -931,26 +1042,25 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               type="button"
               disabled={isManualSyncing || syncStatus.pushing || syncStatus.pulling}
               onClick={handleForceSync}
-              className="w-full min-h-[44px] px-3 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border active:scale-98 font-bold text-xs text-pos-text flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+              className="w-full min-h-[48px] px-3 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border active:scale-98 font-bold text-xs text-pos-text flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
             >
               <RefreshCw
                 aria-hidden="true"
-                className={`w-4 h-4 text-cyan-400 ${
+                className={`w-4 h-4 text-cyan-700 dark:text-cyan-400 ${
                   isManualSyncing || syncStatus.pushing || syncStatus.pulling ? 'animate-spin' : ''
                 }`}
               />
-              <span>{isManualSyncing ? 'Synchronisation en cours...' : 'Forcer la Synchronisation'}</span>
+              <span>{isManualSyncing ? t.diagnostics.syncingInProgress : t.management.forceSyncButton}</span>
             </button>
 
             {/* Dernière synchro réussie — affichage seul (réutilise lastPushAt/lastPullAt). */}
             <p className="text-[11px] text-pos-muted leading-relaxed bg-pos-panel/60 border border-pos-border/40 rounded-xl px-2.5 py-2">
               {lastSyncLabel ? (
                 <>
-                  Dernière synchro réussie : <strong className="text-pos-text">{lastSyncLabel}</strong>
-                  {' '}— vos ventes sont à jour sur tous les appareils.
+                  {t('management.lastSyncSuccessPrefix', { time: lastSyncLabel })}
                 </>
               ) : (
-                'Aucune synchronisation réussie pour le moment — touchez « Forcer la Synchronisation » une fois en ligne.'
+                t.management.noSyncYetHint
               )}
             </p>
           </div>
@@ -960,16 +1070,18 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
         <div id="mgmt-maj" className="bg-pos-card border border-pos-border rounded-3xl p-4 shadow-sm space-y-3 scroll-mt-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-400 flex items-center justify-center shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-purple-500/15 text-purple-700 dark:text-purple-400 flex items-center justify-center shrink-0">
                 <Sparkles className="w-4 h-4" aria-hidden="true" />
               </div>
               <div>
-                <span className="font-bold text-pos-text text-xs block">Mise à Jour MobiPOS</span>
-                <span className="text-[10px] text-pos-muted block font-mono">Version installée : v{APP_VERSION}</span>
+                <span className="font-bold text-pos-text text-xs block">{t.management.softwareUpdateTitle}</span>
+                <span className="text-[10px] text-pos-muted block font-mono">
+                  <Bdi mono>{t('management.installedVersionPrefix', { version: APP_VERSION })}</Bdi>
+                </span>
               </div>
             </div>
-            <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-              Canal Stable
+            <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full pos-status-ok border">
+              {t.management.stableChannelBadge}
             </span>
           </div>
 
@@ -978,10 +1090,10 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
               type="button"
               disabled={updater.isChecking}
               onClick={handleCheckUpdatesMobile}
-              className="flex-1 min-h-[44px] px-3 rounded-xl bg-purple-600 hover:bg-purple-500 active:scale-98 font-bold text-xs text-white flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-purple-600/20 disabled:opacity-50"
+              className="flex-1 min-h-[48px] px-3 rounded-xl bg-purple-600 hover:bg-purple-500 active:scale-98 font-bold text-xs text-white flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-purple-600/20 disabled:opacity-50"
             >
-              <RefreshCw aria-hidden="true" className={`w-3.5 h-3.5 text-white ${updater.isChecking ? 'animate-spin' : ''}`} />
-              <span>{updater.isChecking ? 'Vérification...' : 'Vérifier Mises à Jour'}</span>
+              <RefreshCw aria-hidden="true" className={`w-3.5 h-3.5 text-white shrink-0 ${updater.isChecking ? 'animate-spin' : ''}`} />
+              <span>{updater.isChecking ? t.management.checkingUpdates : t.management.checkUpdatesButton}</span>
             </button>
 
             <a
@@ -993,11 +1105,11 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
                 soundEngine.playKeyBeep?.();
                 showToast("Téléchargement de l'APK Android démarré...", 'info');
               }}
-              className="min-h-[44px] px-3 rounded-xl bg-emerald-500/15 border border-emerald-500/40 hover:bg-emerald-500/25 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-98 no-underline shrink-0 cursor-pointer"
+              className="min-h-[48px] px-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/40 hover:bg-emerald-500/25 text-emerald-800 dark:text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition active:scale-98 no-underline shrink-0 cursor-pointer"
               title="Télécharger directement le fichier APK"
             >
-              <Download className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
-              <span>APK Direct</span>
+              <Download className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
+              <span>{t.management.directApkButton}</span>
             </a>
           </div>
 
@@ -1010,28 +1122,28 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({ onOpenPairingWizar
 
         {/* 7. Switch to PC View Banner */}
         <div className="bg-gradient-to-br from-indigo-500/15 via-purple-500/10 to-cyan-500/10 border border-indigo-500/30 rounded-3xl p-4 text-center space-y-2.5">
-          <div className="flex items-center justify-center gap-1.5 text-indigo-300 font-black text-xs">
-            <Sparkles className="w-4 h-4 text-cyan-400" aria-hidden="true" />
-            <span>Transformation en Caisse Complète</span>
+          <div className="flex items-center justify-center gap-1.5 text-indigo-800 dark:text-indigo-300 font-black text-xs">
+            <Sparkles className="w-4 h-4 text-cyan-700 dark:text-cyan-400" aria-hidden="true" />
+            <span>{t.management.fullRegisterBannerTitle}</span>
           </div>
           <p className="text-[11px] text-pos-muted leading-relaxed max-w-sm mx-auto">
-            Basculez vers le mode caisse complet puis <strong className="text-pos-text">pivotez votre téléphone à l'horizontale</strong> pour scanner et encaisser comme sur un PC.
+            {t.management.fullRegisterBannerDescription}
           </p>
           <button
             type="button"
             onClick={handleSwitchToDesktop}
-            className="w-full min-h-[46px] rounded-2xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 active:scale-98 transition cursor-pointer"
+            className="w-full min-h-[48px] rounded-2xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20 active:scale-98 transition cursor-pointer"
           >
-            <Monitor className="w-4 h-4" aria-hidden="true" />
-            <span>Basculer vers le Mode Bureau (PC)</span>
+            <Monitor className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span>{t.management.switchToDesktopButton}</span>
           </button>
         </div>
 
         {/* PIN Verification Modal for No-Sale Drawer Open */}
         <PinDialog
           isOpen={isPinOpen}
-          title="Autorisation Tiroir 'No Sale'"
-          description="Saisissez le code PIN Manager pour ouvrir le tiroir-caisse sans vente."
+          title={t.management.noSalePinDialogTitle}
+          description={t.management.noSalePinDialogDescription}
           onSuccess={handlePinSuccess}
           onCancel={() => setIsPinOpen(false)}
         />

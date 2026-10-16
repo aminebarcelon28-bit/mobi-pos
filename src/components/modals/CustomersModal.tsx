@@ -15,6 +15,7 @@ import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { MoneyInput } from '../ui/MoneyInput';
 import { DzPhoneInput } from '../ui/DzPhoneInput';
 import { useToast } from '../ui/Toast';
+import { Kbd } from '../../design-system/desktop/Kbd';
 
 const foldForSearch = (s: string | undefined | null): string =>
   (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -564,13 +565,18 @@ export const CustomersModal: React.FC = () => {
                 )}
               </div>
             )}
-            <button
-              onClick={closeModal}
-              className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition shrink-0 cursor-pointer"
-              aria-label="Fermer"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="hidden sm:inline-flex">
+                <Kbd size="sm">Esc</Kbd>
+              </span>
+              <button
+                onClick={closeModal}
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg hover:bg-pos-hover text-pos-muted hover:text-pos-text transition shrink-0 cursor-pointer"
+                aria-label="Fermer"
+              >
+                <X className="w-5 h-5" aria-hidden="true" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -582,7 +588,7 @@ export const CustomersModal: React.FC = () => {
             </div>
             <div className="min-w-0">
               <span className="text-[9px] text-pos-muted uppercase font-bold block truncate">Total Clients</span>
-              <span className="text-sm font-black text-pos-text">{(customers || []).length}</span>
+              <span className="text-sm font-black text-pos-text font-mono num">{(customers || []).length}</span>
             </div>
           </div>
 
@@ -592,7 +598,7 @@ export const CustomersModal: React.FC = () => {
             </div>
             <div className="min-w-0">
               <span className="text-[9px] text-pos-muted uppercase font-bold block truncate">Points Fidélité</span>
-              <span className="text-sm font-black text-amber-400">{totalLoyaltyPoints.toLocaleString('fr-DZ')}</span>
+              <span className="text-sm font-black text-amber-400 font-mono num">{totalLoyaltyPoints.toLocaleString('fr-DZ')}</span>
             </div>
           </div>
 
@@ -602,7 +608,7 @@ export const CustomersModal: React.FC = () => {
             </div>
             <div className="min-w-0">
               <span className="text-[9px] text-pos-muted uppercase font-bold block truncate">Avoirs en Cours</span>
-              <span className="text-sm font-black text-emerald-400">{formatDZD(totalCreditOutstanding)}</span>
+              <span className="text-sm font-black text-emerald-400 font-mono num">{formatDZD(totalCreditOutstanding)}</span>
             </div>
           </div>
 
@@ -612,7 +618,7 @@ export const CustomersModal: React.FC = () => {
             </div>
             <div className="min-w-0">
               <span className="text-[9px] text-pos-muted uppercase font-bold block truncate">Grossistes</span>
-              <span className="text-sm font-black text-purple-400">{wholesaleCount}</span>
+              <span className="text-sm font-black text-purple-400 font-mono num">{wholesaleCount}</span>
             </div>
           </div>
 
@@ -622,7 +628,7 @@ export const CustomersModal: React.FC = () => {
             </div>
             <div className="min-w-0">
               <span className="text-[9px] text-pos-muted uppercase font-bold block truncate">VIP</span>
-              <span className="text-sm font-black text-rose-400">{vipCount}</span>
+              <span className="text-sm font-black text-rose-400 font-mono num">{vipCount}</span>
             </div>
           </div>
         </div>

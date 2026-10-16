@@ -1,0 +1,24 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace <impl MonotonicSource for BoottimeMonotonic>::boot_id -> Option<String> with Some(String::new())
+@@ -73,20 +73,17 @@
+         let ts = unsafe { ts.assume_init() };
+         u64::try_from(ts.tv_sec)
+             .ok()?
+             .checked_mul(1_000)?
+             .checked_add((ts.tv_nsec as u64) / 1_000_000)
+     }
+ 
+     fn boot_id(&self) -> Option<String> {
+-        std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+-            .ok()
+-            .map(|s| s.trim().to_string())
+-            .filter(|s| !s.is_empty())
++        Some(String::new()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     fn source_name(&self) -> &'static str {
+         "linux:CLOCK_BOOTTIME"
+     }
+ }
+ 
+ #[cfg(any(target_os = "linux", target_os = "android"))]

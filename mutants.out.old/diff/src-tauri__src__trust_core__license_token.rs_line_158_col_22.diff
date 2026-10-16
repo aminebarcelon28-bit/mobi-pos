@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/license_token.rs
++++ replace - with + in verify_token_with_domain
+@@ -150,17 +150,17 @@
+     let payload: TokenPayload =
+         serde_json::from_slice(&payload_bytes).map_err(|_| TrustError::IPCProtocolError {
+             reason: "unreadable token payload",
+         })?;
+ 
+     let now = now_sec as i64;
+     let leeway = TOKEN_LEEWAY_SEC as i64;
+     if let Some(nbf) = payload.nbf {
+-        if now < nbf - leeway {
++        if now < nbf + /* ~ changed by cargo-mutants ~ */ leeway {
+             return Err(TrustError::SecurityPolicyFailure {
+                 reason: "license not yet valid",
+             });
+         }
+     }
+     let expired = match payload.exp {
+         Some(exp) if exp != 0 => now > exp + leeway,
+         _ => false,

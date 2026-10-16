@@ -1,0 +1,29 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace TimeKernel::apply_reanchor with ()
+@@ -268,25 +268,17 @@
+     /// Apply a verified re-anchor (server assertion path only).
+     pub fn apply_reanchor(
+         &self,
+         server_time_ms: u64,
+         server_seq: Option<u64>,
+         mono_ms: Option<u64>,
+         boot_id: Option<String>,
+     ) {
+-        let mut g = self.inner.write();
+-        g.last_trusted_wall_utc_ms = Some(server_time_ms);
+-        g.last_monotonic_ms = mono_ms;
+-        g.boot_session_id = boot_id;
+-        g.last_server_time_utc_ms = Some(server_time_ms);
+-        if let Some(seq) = server_seq {
+-            g.last_server_seq = Some(seq);
+-        }
+-        g.challenge = None;
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Issue a single-use challenge (replaces any outstanding one).
+     pub fn issue_challenge(&self, nonce_hex: String, expires_at_ms: u64) {
+         let _guard = self.challenge_lock.lock();
+         self.inner.write().challenge = Some(Challenge {
+             nonce_hex,
+             expires_at_ms,

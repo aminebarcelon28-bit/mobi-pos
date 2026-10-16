@@ -323,3 +323,85 @@ export function setupKeyboardWedgeScanner(onScan: (barcode: string) => void): ()
     window.removeEventListener('keydown', handleKeyDown);
   };
 }
+
+export type MobilePlatform = 'android' | 'ios';
+
+const PLATFORM_OVERRIDE_KEY = 'mobi_pos_platform_override';
+
+/**
+ * Resolves the active mobile design language ('android' M3 Expressive vs 'ios' Liquid Glass).
+ * Priority:
+ *  1. URL query parameter `?platform=android` or `?platform=ios` (Playwright & QA harness)
+ *  2. localStorage override `mobi_pos_platform_override`
+ *  3. User-Agent / touch platform detection (`isIOS()` -> 'ios', otherwise 'android')
+ */
+export function getMobilePlatform(): MobilePlatform {
+  if (typeof window === 'undefined') return 'android';
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const queryPlatform = params.get('platform')?.toLowerCase();
+    if (queryPlatform === 'ios' || queryPlatform === 'android') {
+      return queryPlatform;
+    }
+  } catch {
+    // Ignore URL parsing errors
+  }
+
+  try {
+    const stored = localStorage.getItem(PLATFORM_OVERRIDE_KEY);
+    if (stored === 'ios' || stored === 'android') {
+      return stored;
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+
+  return isIOS() ? 'ios' : 'android';
+}
+
+/**
+ * Applies `data-platform="android" | "ios"` onto `document.documentElement` (`<html>`).
+ */
+export function syncPlatformAttribute(): MobilePlatform {
+  const platform = getMobilePlatform();
+  if (typeof document !== 'undefined' && document.documentElement) {
+    document.documentElement.setAttribute('data-platform', platform);
+  }
+  return platform;
+}
+
+/**
+ * Persists a manual platform override ('android' | 'ios' | null) and updates `<html data-platform>`.
+ */
+export function setMobilePlatformOverride(platform: MobilePlatform | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (!platform) {
+      localStorage.removeItem(PLATFORM_OVERRIDE_KEY);
+    } else {
+      localStorage.setItem(PLATFORM_OVERRIDE_KEY, platform);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  syncPlatformAttribute();
+  window.dispatchEvent(new Event('mobi:platform-change'));
+}
+
+/**
+ * Triggers a subtle tactile pulse on supported Android devices; no-op on iOS/desktop (R-MOT-03).
+ */
+export function triggerTactilePulse(durationMs = 8): void {
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      navigator.vibrate(durationMs);
+    }
+  } catch {
+    // Ignore vibration permission / unsupported errors
+  }
+}
+
+// Synchronize <html data-platform="android" | "ios"> immediately when loaded in a browser DOM
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  syncPlatformAttribute();
+}

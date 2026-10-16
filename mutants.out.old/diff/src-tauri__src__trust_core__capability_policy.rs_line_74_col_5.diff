@@ -1,0 +1,71 @@
+--- src-tauri/src/trust_core/capability_policy.rs
++++ replace authorize -> PolicyDecision with Default::default()
+@@ -66,67 +66,17 @@
+     granted: false,
+     owner_confirmation_required: true,
+ };
+ 
+ /// The single source of truth. Exhaustive over all known states; the
+ /// `#[non_exhaustive]` enum forces a compile error (not silent permission)
+ /// if a variant is added without updating this table.
+ pub fn authorize(state: &LicenseState, capability: Capability) -> PolicyDecision {
+-    match state {
+-        LicenseState::Unknown => DENY,
+-        LicenseState::Unactivated => match capability {
+-            Capability::LicenseManagement => ALLOW,
+-            _ => DENY,
+-        },
+-        LicenseState::Operational => ALLOW,
+-        LicenseState::Expired => match capability {
+-            Capability::ReadOperationalData => ALLOW_OWNER,
+-            Capability::EmergencyExport => ALLOW,
+-            Capability::LicenseManagement => ALLOW,
+-            _ => DENY,
+-        },
+-        LicenseState::GraceExceeded => match capability {
+-            Capability::ReadOperationalData => DENY_OWNER,
+-            Capability::EmergencyExport => ALLOW,
+-            Capability::LicenseManagement => ALLOW,
+-            _ => DENY,
+-        },
+-        LicenseState::Suspended => match capability {
+-            Capability::ReadOperationalData => DENY_OWNER,
+-            Capability::EmergencyExport => ALLOW_OWNER,
+-            Capability::LicenseManagement => ALLOW,
+-            _ => DENY,
+-        },
+-        LicenseState::Revoked => match capability {
+-            Capability::EmergencyExport => DENY_OWNER,
+-            Capability::LicenseManagement => ALLOW,
+-            _ => DENY,
+-        },
+-        LicenseState::Corrupted => match capability {
+-            Capability::EmergencyExport => DENY_OWNER,
+-            Capability::LicenseManagement => ALLOW,
+-            _ => DENY,
+-        },
+-        LicenseState::ClockResetRequired => match capability {
+-            Capability::EmergencyExport => ALLOW_OWNER,
+-            Capability::LicenseManagement => ALLOW,
+-            _ => DENY,
+-        },
+-        LicenseState::TamperSuspected => match capability {
+-            // Owner-directed (Phase 3.1 Q2): quarantine no longer blocks
+-            // emergency export. The export is read-only, changes no state,
+-            // unlocks nothing, and carries a MAC-covered "tamper" flag, so
+-            // a merchant with a wrong clock is never locked out of their
+-            // own data. REVOKED stays denied.
+-            Capability::EmergencyExport => ALLOW_OWNER,
+-            Capability::LicenseManagement => ALLOW,
+-            _ => DENY,
+-        },
+-    }
++    Default::default() /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Every state, for exhaustive tests.
+ pub const ALL_STATES: [LicenseState; 10] = [
+     LicenseState::Unknown,
+     LicenseState::Unactivated,
+     LicenseState::Operational,
+     LicenseState::Expired,

@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace != with == in Money::from_user_input
+@@ -99,17 +99,17 @@
+         let has_comma = compact.contains(',');
+         let has_dot = compact.contains('.');
+         let (int_part, frac_part): (String, String) = if has_comma && has_dot {
+             // Strict FR grouping only ("12.500,50"); US-grouped input is
+             // rejected rather than mangled 1000x.
+             if !is_strict_fr_grouped(&compact) {
+                 return Err(MoneyError::AmbiguousSeparators);
+             }
+-            let no_groups: String = compact.chars().filter(|c| *c != '.').collect();
++            let no_groups: String = compact.chars().filter(|c| *c == /* ~ changed by cargo-mutants ~ */ '.').collect();
+             let i = no_groups.find(',').unwrap_or(no_groups.len());
+             (no_groups[..i].to_string(), no_groups[i + 1..].to_string())
+         } else if has_comma {
+             let i = compact.find(',').unwrap_or(compact.len());
+             (compact[..i].to_string(), compact[i + 1..].to_string())
+         } else if has_dot {
+             if is_fr_grouped_int(&compact) {
+                 (compact.chars().filter(|c| *c != '.').collect(), String::new())

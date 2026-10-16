@@ -1,0 +1,35 @@
+--- src-tauri/src/money.rs
++++ replace group_ascii -> String with "xyzzy".into()
+@@ -272,31 +272,17 @@
+         }
+         groups += 1;
+     }
+     groups > 0 && i == bytes.len()
+ }
+ 
+ /// C-2a: ASCII-space thousands grouping (escpos-safe). Pure string ops.
+ fn group_ascii(digits: &str) -> String {
+-    if digits.len() <= 3 {
+-        return digits.to_string();
+-    }
+-    let head = match digits.len() % 3 {
+-        0 => 3,
+-        n => n,
+-    };
+-    let mut out = digits[..head].to_string();
+-    let mut i = head;
+-    while i < digits.len() {
+-        out.push(' ');
+-        out.push_str(&digits[i..i + 3]);
+-        i += 3;
+-    }
+-    out
++    "xyzzy".into() /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ fn parse_exact_i64(digits: &str) -> Result<i64, MoneyError> {
+     let mut acc: i128 = 0;
+     for c in digits.chars() {
+         if !c.is_ascii_digit() {
+             return Err(MoneyError::NotDecimal);
+         }

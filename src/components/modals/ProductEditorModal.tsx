@@ -33,6 +33,7 @@ import {
   isValidBarcode,
 } from '../../utils/barcodeGenerator';
 import { useToast } from '../ui/Toast';
+import { Kbd } from '../../design-system/desktop/Kbd';
 
 const BRANDS: BrandName[] = [
   'Apple',
@@ -52,6 +53,10 @@ const CATEGORIES: CategoryType[] = [
   'Câbles',
   'Protège-Écran',
   'Téléphones d\'Occasion (Reprise)',
+  'Audio',
+  'Supports',
+  'Batteries Externes',
+  'Services',
 ];
 
 /**
@@ -276,7 +281,7 @@ export const ProductEditorModal: React.FC = () => {
       sku: freshSku,
       imeiNumber: '',
       semiWholesalePrice: semiWholesale,
-      imageUrl: '',
+      imageUrl: source.imageUrl || '',
       stock: 10,
       isActive: true,
     });
@@ -335,7 +340,7 @@ export const ProductEditorModal: React.FC = () => {
           isActive: editingProduct.isActive !== false,
           isSerialized,
           imeiNumber: editingProduct.imeiNumber || '',
-          imageUrl: '',
+          imageUrl: editingProduct.imageUrl || '',
         });
       } else {
         const freshBarcode = generateUniqueEan13Barcode(products, '613');
@@ -454,7 +459,7 @@ export const ProductEditorModal: React.FC = () => {
       isSerialized,
       imeiNumber: formData.imeiNumber?.trim() || undefined,
       title: formattedTitle,
-      imageUrl: '',
+      imageUrl: formData.imageUrl?.trim() || editingProduct?.imageUrl || '',
     };
     const saveResult = await saveProduct(savePayload, { keepModalOpen: options?.keepModalOpen });
     setIsSubmitting(false);
@@ -468,6 +473,10 @@ export const ProductEditorModal: React.FC = () => {
       );
 
       if (autoPrintLabel) {
+        const targetId = saveResult.savedProduct?.id || editingProduct?.id;
+        if (targetId) {
+          sessionStorage.setItem('label_printer_target_id', targetId);
+        }
         openModal('label_printer');
       }
       return true;
@@ -640,14 +649,20 @@ export const ProductEditorModal: React.FC = () => {
               </div>
             )}
 
-            <button
-              type="button"
-              onClick={closeModal}
-              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer"
-              title="Fermer (Échap)"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="hidden sm:inline-flex">
+                <Kbd size="sm">Esc</Kbd>
+              </span>
+              <button
+                type="button"
+                onClick={closeModal}
+                className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+                title="Fermer (Échap)"
+                aria-label="Fermer"
+              >
+                <X className="w-5 h-5" aria-hidden="true" />
+              </button>
+            </div>
           </div>
 
         </div>
@@ -1061,7 +1076,7 @@ export const ProductEditorModal: React.FC = () => {
                     <span className="text-[8px] text-pos-muted font-bold block uppercase tracking-wider">
                       Coût Total Lot
                     </span>
-                    <span className="text-xs font-bold text-slate-300">
+                    <span className="text-xs font-bold text-slate-300 font-mono num">
                       {formatDZD(totalCostInvestment)}
                     </span>
                   </div>
@@ -1070,7 +1085,7 @@ export const ProductEditorModal: React.FC = () => {
                     <span className="text-[8px] text-pos-muted font-bold block uppercase tracking-wider">
                       Vente Estimée
                     </span>
-                    <span className="text-xs font-bold text-emerald-400">
+                    <span className="text-xs font-bold text-emerald-400 font-mono num">
                       {formatDZD(totalRetailValuation)}
                     </span>
                   </div>
@@ -1079,7 +1094,7 @@ export const ProductEditorModal: React.FC = () => {
                     <span className="text-[8px] text-pos-muted font-bold block uppercase tracking-wider">
                       Plus-Value Lot
                     </span>
-                    <span className="text-xs font-black text-emerald-400">
+                    <span className="text-xs font-black text-emerald-400 font-mono num">
                       +{formatDZD(totalExpectedGain)}
                     </span>
                   </div>

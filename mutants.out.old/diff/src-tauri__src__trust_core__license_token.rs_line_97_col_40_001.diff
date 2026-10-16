@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/license_token.rs
++++ replace match guard parts.next().is_none() with false in verify_token_with_domain
+@@ -89,17 +89,17 @@
+     let token = token.trim();
+     if token.is_empty() {
+         return Err(TrustError::IPCProtocolError {
+             reason: "empty license token",
+         });
+     }
+     let mut parts = token.split('.');
+     let (header_b64, payload_b64, sig_b64) = match (parts.next(), parts.next(), parts.next()) {
+-        (Some(h), Some(p), Some(s)) if parts.next().is_none() => (h, p, s),
++        (Some(h), Some(p), Some(s)) if false /* ~ changed by cargo-mutants ~ */ => (h, p, s),
+         _ => {
+             return Err(TrustError::IPCProtocolError {
+                 reason: "license token must have 3 parts",
+             })
+         }
+     };
+ 
+     let header_bytes = b64url_decode(header_b64)?;

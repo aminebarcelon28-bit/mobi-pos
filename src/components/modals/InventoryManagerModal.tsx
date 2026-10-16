@@ -20,6 +20,7 @@ import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { soundEngine } from '../../utils/audioFeedback';
 import { useToast } from '../ui/Toast';
+import { Kbd } from '../../design-system/desktop/Kbd';
 
 type ViewMode = 'catalog' | 'stocktake';
 type StocktakeFilter = 'all' | 'discrepancies' | 'counted';
@@ -311,14 +312,20 @@ export const InventoryManagerModal: React.FC = () => {
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={closeModal}
-              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer"
-              title="Fermer"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="hidden sm:inline-flex">
+                <Kbd size="sm">Esc</Kbd>
+              </span>
+              <button
+                type="button"
+                onClick={closeModal}
+                className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+                title="Fermer"
+                aria-label="Fermer"
+              >
+                <X className="w-5 h-5" aria-hidden="true" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -333,7 +340,7 @@ export const InventoryManagerModal: React.FC = () => {
                 <span className="text-[8px] sm:text-[9px] font-bold uppercase text-pos-muted block truncate">
                   Valeur Stock au Coût
                 </span>
-                <p className="text-xs sm:text-sm font-black font-mono text-pos-text mt-0.5 truncate">
+                <p className="text-xs sm:text-sm font-black font-mono text-pos-text mt-0.5 truncate num">
                   {formatDZD((products || []).reduce((sum, p) => sum + (p.stock || 0) * (p.costPrice || 0), 0))}
                 </p>
               </div>
@@ -342,7 +349,7 @@ export const InventoryManagerModal: React.FC = () => {
                 <span className="text-[8px] sm:text-[9px] font-bold uppercase text-pos-muted block truncate">
                   Valeur Marchande
                 </span>
-                <p className="text-xs sm:text-sm font-black font-mono text-emerald-400 mt-0.5 truncate">
+                <p className="text-xs sm:text-sm font-black font-mono text-emerald-400 mt-0.5 truncate num">
                   {formatDZD((products || []).reduce((sum, p) => sum + (p.stock || 0) * p.price, 0))}
                 </p>
               </div>
@@ -351,7 +358,7 @@ export const InventoryManagerModal: React.FC = () => {
                 <span className="text-[8px] sm:text-[9px] font-bold uppercase text-pos-muted block truncate">
                   Marge Latente
                 </span>
-                <p className="text-xs sm:text-sm font-black font-mono text-cyan-400 mt-0.5 truncate">
+                <p className="text-xs sm:text-sm font-black font-mono text-cyan-400 mt-0.5 truncate num">
                   {formatDZD(
                     (products || []).reduce((sum, p) => sum + (p.stock || 0) * (p.price - (p.costPrice || 0)), 0)
                   )}
@@ -362,7 +369,7 @@ export const InventoryManagerModal: React.FC = () => {
                 <span className="text-[8px] sm:text-[9px] font-bold uppercase text-pos-muted block truncate">
                   Volume Pièces
                 </span>
-                <p className="text-xs sm:text-sm font-black font-mono text-amber-400 mt-0.5 truncate">
+                <p className="text-xs sm:text-sm font-black font-mono text-amber-400 mt-0.5 truncate num">
                   {(products || []).reduce((sum, p) => sum + (p.stock || 0), 0)} un. ({(products || []).length} réf.)
                 </p>
               </div>

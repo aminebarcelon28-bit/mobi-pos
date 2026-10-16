@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace % with + in group_ascii
+@@ -275,17 +275,17 @@
+     groups > 0 && i == bytes.len()
+ }
+ 
+ /// C-2a: ASCII-space thousands grouping (escpos-safe). Pure string ops.
+ fn group_ascii(digits: &str) -> String {
+     if digits.len() <= 3 {
+         return digits.to_string();
+     }
+-    let head = match digits.len() % 3 {
++    let head = match digits.len() + /* ~ changed by cargo-mutants ~ */ 3 {
+         0 => 3,
+         n => n,
+     };
+     let mut out = digits[..head].to_string();
+     let mut i = head;
+     while i < digits.len() {
+         out.push(' ');
+         out.push_str(&digits[i..i + 3]);

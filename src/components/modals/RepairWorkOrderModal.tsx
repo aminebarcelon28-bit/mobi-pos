@@ -66,6 +66,7 @@ import type {
   WarrantySnapshot,
   WarrantyTier,
 } from '../../types/pos';
+import type { SaleTransaction } from '../../types/pos';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { useToast } from '../ui/Toast';
 import { MoneyInput } from '../ui/MoneyInput';
@@ -616,8 +617,84 @@ export const RepairWorkOrderModal: React.FC = () => {
     openModal('whatsapp_dispatch');
   };
 
+  const handleZeroBalanceDeliver = async (order: RepairOrder) => {
+    const { markRepairDelivered, activeShift, activeCashier } = usePosStore.getState();
+    const ok = await markRepairDelivered(order.id);
+    if (!ok) {
+      showToast('Livraison impossible — solde restant.', 'warning');
+      return;
+    }
+
+    // Record a SaleTransaction for the 100%-prepaid delivered repair so turnover and COGS are accounted
+    try {
+      const { newId, newReceiptNumber } = await import('../../utils/ids');
+      const { sqliteAdapter } = await import('../../db/sqliteAdapter');
+      const { dexieDb } = await import('../../db/database');
+      const nowIso = new Date().toISOString();
+      const txnId = newId('TXN-SAV');
+      const receiptNumber = newReceiptNumber();
+      const partsCost = Math.max(0, Number(order.partsCost) || 0);
+      const totalCost = Math.max(0, Number(order.totalCost) || 0);
+
+      const savTxn: SaleTransaction = {
+        id: txnId,
+        receiptNumber,
+        items: [
+          {
+            product: {
+              id: `sav-${order.id}`,
+              sku: order.ticketNumber || `SAV-${order.id.slice(0, 8)}`,
+              title: `Réparation ${order.deviceModel} — ${order.problemDescription || order.issueDescription || order.ticketNumber}`,
+              price: totalCost,
+              costPrice: partsCost,
+              category: 'Services',
+              stock: 1,
+              minStockAlert: 0,
+              isFavorite: false,
+              createdAt: nowIso,
+              updatedAt: nowIso,
+            },
+            quantity: 1,
+            appliedPrice: totalCost,
+            unitCostAtSale: partsCost,
+            discount: 0,
+          },
+        ],
+        subtotal: totalCost,
+        discount: 0,
+        tax: 0,
+        total: totalCost,
+        paymentMethod: 'Autre',
+        payments: [
+          {
+            id: newId('PAY'),
+            method: 'Autre',
+            amount: totalCost,
+            details: `Acompte SAV ${order.ticketNumber} (100% réglé à l'intake)`,
+          },
+        ],
+        status: 'completed',
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        shiftId: activeShift?.id || 'SHIFT-AUTONOMOUS',
+        cashierName: activeCashier?.name || activeShift?.cashierName || 'Technicien',
+        createdAt: nowIso,
+      };
+
+      await sqliteAdapter.saveTransaction(savTxn);
+      await dexieDb.transactions.put(savTxn);
+      usePosStore.setState((s) => ({
+        transactions: [savTxn, ...s.transactions],
+      }));
+    } catch (txnErr) {
+      console.warn('[SAV] Failed to record SaleTransaction for zero-balance delivered repair:', txnErr);
+    }
+
+    showToast(`Ticket ${order.ticketNumber} livré avec succès.`, 'success');
+  };
+
   const handleSettleAndDeliver = async (order: RepairOrder) => {
-    const { settleAndDeliverRepair, markRepairDelivered } = usePosStore.getState();
+    const { settleAndDeliverRepair } = usePosStore.getState();
     const res = await settleAndDeliverRepair(order.id);
     if (res.action === 'cart') {
       showToast(`Solde ${formatDZD(res.remainingBalance)} injecté au panier — encaissez pour livrer ${order.ticketNumber}.`, 'success');
@@ -625,8 +702,7 @@ export const RepairWorkOrderModal: React.FC = () => {
       return;
     }
     if (window.confirm(`Livrer ${order.ticketNumber} (${order.deviceModel}) ? Solde à zéro confirmé.`)) {
-      const ok = await markRepairDelivered(order.id);
-      showToast(ok ? `Ticket ${order.ticketNumber} livré.` : 'Livraison impossible — solde restant.', ok ? 'success' : 'warning');
+      await handleZeroBalanceDeliver(order);
     }
   };
 
@@ -647,12 +723,17 @@ export const RepairWorkOrderModal: React.FC = () => {
   const handleSaveOrder = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    const validDeposit = Math.min(money.totalCost, money.depositAmount);
+    if (status === 'Livré' && (money.totalCost - validDeposit) > 0) {
+      showToast(`Impossible d'enregistrer en statut Livré : solde restant de ${formatDZD(money.totalCost - validDeposit)}. Encaissez d'abord le solde.`, 'error');
+      return;
+    }
+
     // Fail closed BEFORE any write: an incomplete v2 legal record must never
     // reach SQLite, because a ticket without a signature is unenforceable in
     // exactly the restitution dispute it exists to settle.
     const sanitized =
       imeiKind === 'manual' ? '' : sanitizeDeviceIdentifier(imei.trim().toUpperCase(), imeiKind).value;
-    const validDeposit = Math.min(money.totalCost, money.depositAmount);
     // `manual` in the form is persisted as `none` — the stored vocabulary has
     // exactly three values and a ticket must never contain a UI-only one.
     const storedKind: NonNullable<RepairOrder['imeiKind']> =
@@ -841,7 +922,18 @@ export const RepairWorkOrderModal: React.FC = () => {
     setActiveTab('Nouveau');
   };
 
-  const handleStatusChange = (id: string, newStatus: RepairOrder['status']) => {
+  const handleStatusChange = async (id: string, newStatus: RepairOrder['status']) => {
+    const order = repairOrders.find((r) => r.id === id);
+    if (!order) return;
+    if (newStatus === 'Livré') {
+      const remaining = repairRemainingBalance(order);
+      if (remaining > 0) {
+        showToast(`Impossible de marquer Livré : solde restant de ${formatDZD(remaining)}. Utilisez "Régler & Livrer".`, 'error');
+        return;
+      }
+      await handleZeroBalanceDeliver(order);
+      return;
+    }
     updateRepairOrderStatus(id, newStatus);
     showSuccess('Statut mis à jour !');
   };
@@ -981,8 +1073,7 @@ export const RepairWorkOrderModal: React.FC = () => {
   // Customer-facing tracking link for the restitution PV. The customer scans
   // this with the phone camera to follow the ticket after they leave the shop.
   const orderLookupUrl = useMemo(() => {
-    const ticket = justDelivered?.tickets[0] ?? '';
-    return ticket ? `https://mobi-pos.app/sav/${encodeURIComponent(ticket)}` : '';
+    return justDelivered?.tickets[0] ?? '';
   }, [justDelivered?.tickets]);
 
   // Abort sweep: an intake that is closed, cancelled or reset BEFORE its
@@ -1185,12 +1276,12 @@ export const RepairWorkOrderModal: React.FC = () => {
                   <QRCodeImage
                     value={orderLookupUrl}
                     size={64}
-                    alt={`Suivi du ticket SAV ${justDelivered.tickets[0]}`}
+                    alt={`Ticket SAV ${justDelivered.tickets[0]}`}
                   />
-                  <span className="text-[10px] text-pos-muted leading-tight">
-                    Le client scanne ce QR
+                  <span className="text-[10px] text-pos-muted leading-tight font-mono">
+                    {justDelivered.tickets[0]}
                     <br />
-                    pour suivre son dossier
+                    <span className="font-sans text-[9px] text-pos-muted">Scannez pour restitution</span>
                   </span>
                 </div>
               )}

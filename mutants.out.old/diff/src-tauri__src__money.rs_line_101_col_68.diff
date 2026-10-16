@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace && with || in Money::from_user_input
+@@ -93,17 +93,17 @@
+             .chars()
+             .filter(|c| !matches!(c, ' ' | '\u{00A0}' | '\u{202F}' | '\u{2009}' | '\''))
+             .collect();
+         if compact.is_empty() {
+             return Err(MoneyError::Empty);
+         }
+         let has_comma = compact.contains(',');
+         let has_dot = compact.contains('.');
+-        let (int_part, frac_part): (String, String) = if has_comma && has_dot {
++        let (int_part, frac_part): (String, String) = if has_comma || /* ~ changed by cargo-mutants ~ */ has_dot {
+             // Strict FR grouping only ("12.500,50"); US-grouped input is
+             // rejected rather than mangled 1000x.
+             if !is_strict_fr_grouped(&compact) {
+                 return Err(MoneyError::AmbiguousSeparators);
+             }
+             let no_groups: String = compact.chars().filter(|c| *c != '.').collect();
+             let i = no_groups.find(',').unwrap_or(no_groups.len());
+             (no_groups[..i].to_string(), no_groups[i + 1..].to_string())

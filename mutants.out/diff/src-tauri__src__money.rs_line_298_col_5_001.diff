@@ -1,0 +1,31 @@
+--- src-tauri/src/money.rs
++++ replace parse_exact_i64 -> Result<i64, MoneyError> with Ok(1)
+@@ -290,27 +290,17 @@
+         out.push(' ');
+         out.push_str(&digits[i..i + 3]);
+         i += 3;
+     }
+     out
+ }
+ 
+ fn parse_exact_i64(digits: &str) -> Result<i64, MoneyError> {
+-    let mut acc: i128 = 0;
+-    for c in digits.chars() {
+-        if !c.is_ascii_digit() {
+-            return Err(MoneyError::NotDecimal);
+-        }
+-        acc = acc * 10 + (c as i128 - '0' as i128);
+-        if acc > i64::MAX as i128 {
+-            return Err(MoneyError::Overflow);
+-        }
+-    }
+-    Ok(acc as i64)
++    Ok(1) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
+     #[test]
+     fn currency_exponent_is_two() {

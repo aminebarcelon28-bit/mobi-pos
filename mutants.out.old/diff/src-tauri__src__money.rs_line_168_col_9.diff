@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace Money::add -> Result<Money, MoneyError> with Ok(Default::default())
+@@ -160,17 +160,17 @@
+         if neg {
+             format!("-{whole}.{frac:02} DA")
+         } else {
+             format!("{whole}.{frac:02} DA")
+         }
+     }
+ 
+     pub fn add(self, other: Money) -> Result<Money, MoneyError> {
+-        self.0.checked_add(other.0).map(Money).ok_or(MoneyError::Overflow)
++        Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     pub fn sub(self, other: Money) -> Result<Money, MoneyError> {
+         self.0.checked_sub(other.0).map(Money).ok_or(MoneyError::Overflow)
+     }
+ 
+     /// Integer multiplier with a widened i128 intermediate.
+     pub fn mul_int(self, k: i64) -> Result<Money, MoneyError> {

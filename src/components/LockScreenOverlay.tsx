@@ -687,29 +687,31 @@ export const LockScreenOverlay: React.FC = () => {
   return (
     <div
       data-testid="lock-screen"
-      className="fixed inset-0 z-[100] bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-between p-4 sm:p-6 select-none animate-in fade-in duration-200"
+      className="fixed inset-0 z-[100] bg-pos-bg/95 text-pos-text backdrop-blur-xl flex flex-col items-center justify-between p-4 sm:p-6 select-none animate-in fade-in duration-200"
       style={{
         paddingTop: 'max(var(--safe-top, 24px), 1.5rem)',
         paddingBottom: 'max(var(--safe-bottom, 24px), 1.5rem)',
       }}
     >
       {/* Top Bar: Store Brand & Live Clock */}
-      <div className="w-full max-w-4xl flex items-center justify-between text-slate-400 pt-2">
+      <div className="w-full max-w-4xl flex items-center justify-between text-pos-muted pt-2">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-black text-sm">
+          <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-center font-black text-sm">
             <Lock className="w-4 h-4" aria-hidden="true" />
           </div>
           <div>
-            <h1 className="text-sm font-black text-white tracking-wide uppercase">
+            <h1 className="text-sm font-black text-pos-text tracking-wide uppercase">
               {receiptSettings.storeName || 'ACCESSOIRES MOBI'}
             </h1>
-            <p className="text-[11px] text-slate-500">Connexion Caisse • Veille Sécurisée</p>
+            <p className="text-[11px] text-pos-muted">Connexion Caisse • Veille Sécurisée</p>
           </div>
         </div>
 
-        <div className="text-right font-mono">
-          <div className="text-xl font-black text-amber-400 tracking-wider">{currentTime}</div>
-          <div className="text-[11px] text-slate-400 capitalize">{currentDate}</div>
+        <div className="text-end font-mono">
+          <div className="text-xl font-black text-amber-600 dark:text-amber-400 tracking-wider">
+            <bdi dir="ltr">{currentTime}</bdi>
+          </div>
+          <div className="text-[11px] text-pos-muted capitalize">{currentDate}</div>
         </div>
       </div>
 
@@ -717,7 +719,7 @@ export const LockScreenOverlay: React.FC = () => {
       <div className="w-full max-w-md flex flex-col items-center my-auto">
         {/* Cashier selection cards */}
         <div className="w-full mb-6">
-          <label className="text-[10px] uppercase tracking-wider font-bold text-slate-400 block text-center mb-2.5">
+          <label className="text-[10px] uppercase tracking-wider font-bold text-pos-muted block text-center mb-2.5">
             Sélectionnez votre compte caissier pour vous connecter
           </label>
           <div className="grid grid-cols-3 gap-2">
@@ -735,10 +737,10 @@ export const LockScreenOverlay: React.FC = () => {
                     soundEngine.playKeyBeep?.();
                     inputRef.current?.focus();
                   }}
-                  className={`p-3 rounded-2xl border transition-all flex flex-col items-center gap-1.5 cursor-pointer ${
+                  className={`min-h-[48px] p-3 rounded-2xl border transition-all flex flex-col items-center gap-1.5 cursor-pointer ${
                     isSelected
-                      ? 'bg-amber-500/20 border-amber-500/80 text-white shadow-lg shadow-amber-500/10 scale-102'
-                      : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-white'
+                      ? 'bg-amber-500/20 border-amber-500/80 text-pos-text shadow-lg shadow-amber-500/10 scale-102'
+                      : 'bg-pos-card border-pos-border text-pos-muted hover:border-amber-500/40 hover:text-pos-text'
                   }`}
                 >
                   <div
@@ -753,7 +755,7 @@ export const LockScreenOverlay: React.FC = () => {
                   </div>
                   <div className="text-center truncate w-full">
                     <span className="text-xs font-bold block truncate">{u.name}</span>
-                    <span className="text-[9.5px] uppercase font-mono text-slate-400 block">{u.role}</span>
+                    <span className="text-[9.5px] uppercase font-mono text-pos-muted block">{u.role}</span>
                   </div>
                 </button>
               );
@@ -763,11 +765,11 @@ export const LockScreenOverlay: React.FC = () => {
 
         {/* Target Cashier Greeting */}
         <div className="text-center mb-4">
-          <div className="text-sm font-semibold text-slate-300">
-            {greeting}, <span className="font-black text-amber-400">{selectedUser?.name || 'Caissier'}</span>
+          <div className="text-sm font-semibold text-pos-text">
+            {greeting}, <span className="font-black text-amber-600 dark:text-amber-400">{selectedUser?.name || 'Caissier'}</span>
           </div>
           {!rotationFor && (
-            <div className="text-[11px] text-slate-400 mt-0.5">
+            <div className="text-[11px] text-pos-muted mt-0.5">
               {isManagerProfile
                 ? 'Saisissez votre code PIN gérant (6 à 8 chiffres)'
                 : 'Saisissez votre code PIN caissier (4 chiffres)'}
@@ -781,10 +783,10 @@ export const LockScreenOverlay: React.FC = () => {
             after a fresh PIN is set below. */}
         {rotationFor ? (
           <div className="w-full max-w-[280px] rounded-2xl border border-amber-500/50 bg-amber-500/10 p-4">
-            <div className="text-amber-300 text-xs font-black text-center">
+            <div className="text-amber-800 dark:text-amber-300 text-xs font-black text-center">
               Mise à jour sécurité requise
             </div>
-            <p className="text-slate-300 text-[11px] text-center mt-1 mb-3 leading-relaxed">
+            <p className="text-pos-text text-[11px] text-center mt-1 mb-3 leading-relaxed">
               {rotationFor.name}, votre code PIN utilise un ancien format.
               Choisissez un nouveau code
               {rotationFor.isManager ? ' (gérant : 6 à 8 chiffres)' : ' (4 chiffres)'} pour
@@ -792,6 +794,7 @@ export const LockScreenOverlay: React.FC = () => {
             </p>
             <input
               type="password"
+              dir="ltr"
               inputMode="numeric"
               pattern="[0-9]*"
               autoComplete="new-password"
@@ -805,10 +808,11 @@ export const LockScreenOverlay: React.FC = () => {
               }}
               placeholder="Nouveau PIN"
               autoFocus
-              className="w-full min-h-[48px] bg-slate-900 border border-slate-700 rounded-xl px-4 text-center text-xl font-mono font-black tracking-[0.4em] text-white placeholder:text-slate-700 focus:outline-none focus:border-amber-400 transition mb-2"
+              className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-xl px-4 text-center text-xl font-mono font-black tracking-[0.4em] text-pos-text placeholder:text-pos-muted/50 focus:outline-none focus:border-amber-400 transition mb-2"
             />
             <input
               type="password"
+              dir="ltr"
               inputMode="numeric"
               pattern="[0-9]*"
               autoComplete="new-password"
@@ -821,10 +825,10 @@ export const LockScreenOverlay: React.FC = () => {
                 setRotationConfirm(e.target.value.replace(/[^0-9]/g, '').slice(0, 8));
               }}
               placeholder="Confirmer"
-              className="w-full min-h-[48px] bg-slate-900 border border-slate-700 rounded-xl px-4 text-center text-xl font-mono font-black tracking-[0.4em] text-white placeholder:text-slate-700 focus:outline-none focus:border-amber-400 transition"
+              className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-xl px-4 text-center text-xl font-mono font-black tracking-[0.4em] text-pos-text placeholder:text-pos-muted/50 focus:outline-none focus:border-amber-400 transition"
             />
             {rotationError && (
-              <div role="alert" className="text-rose-400 text-xs font-bold text-center mt-2">
+              <div role="alert" className="text-rose-600 dark:text-rose-400 text-xs font-bold text-center mt-2">
                 {rotationError}
               </div>
             )}
@@ -841,6 +845,7 @@ export const LockScreenOverlay: React.FC = () => {
           <div className="w-full flex flex-col items-center">
             {/* Dynamic Slot PIN Input UI */}
             <div
+              dir="ltr"
               data-testid="login-pin-pad"
               className={`relative flex items-center justify-center ${
                 maxPinLength > 6 ? 'gap-1.5 sm:gap-2.5' : 'gap-2 sm:gap-3'
@@ -894,12 +899,12 @@ export const LockScreenOverlay: React.FC = () => {
                         : 'w-11 h-14 sm:w-14 sm:h-16 rounded-xl sm:rounded-2xl'
                     } border-2 flex items-center justify-center transition-all duration-150 select-none ${
                       hasError
-                        ? 'border-rose-500/80 bg-rose-950/30 text-rose-400 shadow-lg shadow-rose-950/30'
+                        ? 'border-rose-500/80 bg-rose-500/15 text-rose-600 dark:text-rose-400 shadow-lg shadow-rose-950/30'
                         : isFilled
-                          ? 'border-amber-400 bg-amber-500/10 text-amber-400 shadow-md shadow-amber-500/10 scale-102'
+                          ? 'border-amber-400 bg-amber-500/10 text-amber-600 dark:text-amber-400 shadow-md shadow-amber-500/10 scale-102'
                           : isActive
-                            ? 'border-amber-400/90 bg-slate-900 ring-4 ring-amber-400/20 text-white'
-                            : 'border-slate-800 bg-slate-900/60 text-slate-600 hover:border-slate-700'
+                            ? 'border-amber-400/90 bg-pos-card ring-4 ring-amber-400/20 text-pos-text'
+                            : 'border-pos-border bg-pos-card/60 text-pos-muted hover:border-amber-500/40'
                     }`}
                   >
                     {isFilled ? (
@@ -914,7 +919,7 @@ export const LockScreenOverlay: React.FC = () => {
                       <div
                         className={`${
                           isCompact ? 'w-1.5 h-1.5 sm:w-2 sm:h-2' : 'w-2 h-2'
-                        } rounded-full bg-slate-700/60`}
+                        } rounded-full bg-pos-muted/40`}
                       />
                     )}
                   </div>
@@ -926,13 +931,13 @@ export const LockScreenOverlay: React.FC = () => {
             {errorMsg ? (
               <div
                 role="alert"
-                className="mt-3 px-3.5 py-1.5 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-semibold flex items-center justify-center gap-1.5 animate-in fade-in duration-150 min-h-[28px]"
+                className="mt-3 px-3.5 py-1.5 rounded-full bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center justify-center gap-1.5 animate-in fade-in duration-150 min-h-[28px]"
               >
                 <AlertCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                 <span>{errorMsg}</span>
               </div>
             ) : (
-              <div className="mt-3 text-[11px] text-slate-400 font-medium min-h-[28px] flex items-center justify-center">
+              <div className="mt-3 text-[11px] text-pos-muted font-medium min-h-[28px] flex items-center justify-center">
                 {isManagerProfile ? (
                   <span>Saisissez 6 à 8 chiffres puis Valider</span>
                 ) : (
@@ -941,6 +946,55 @@ export const LockScreenOverlay: React.FC = () => {
               </div>
             )}
 
+            {/* Tactile On-Screen 3x4 Keypad for Mobile Touch Screens */}
+            <div className="grid grid-cols-3 gap-2 w-full max-w-xs mt-3 select-none" dir="ltr">
+              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
+                <button
+                  key={digit}
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playKeyBeep?.();
+                    handleDigit(digit);
+                  }}
+                  className="min-h-[52px] rounded-2xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-text font-black text-xl flex items-center justify-center transition active-press cursor-pointer shadow-xs"
+                >
+                  {digit}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playKeyBeep?.();
+                  handleClear();
+                }}
+                className="min-h-[52px] rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text font-bold text-xs flex items-center justify-center transition active-press cursor-pointer"
+                aria-label="Effacer tout"
+              >
+                C
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playKeyBeep?.();
+                  handleDigit('0');
+                }}
+                className="min-h-[52px] rounded-2xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-text font-black text-xl flex items-center justify-center transition active-press cursor-pointer shadow-xs"
+              >
+                0
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playKeyBeep?.();
+                  handleBackspace();
+                }}
+                className="min-h-[52px] rounded-2xl bg-pos-panel hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-rose-500 font-bold text-lg flex items-center justify-center transition active-press cursor-pointer"
+                aria-label="Effacer le dernier chiffre"
+              >
+                <span aria-hidden="true">⌫</span>
+              </button>
+            </div>
+
             {/* Manual submit: required for managers (variable length), escape
                 hatch for cashiers */}
             {showManualSubmit && (
@@ -948,7 +1002,7 @@ export const LockScreenOverlay: React.FC = () => {
                 type="button"
                 data-testid="login-submit"
                 onClick={() => void handleSubmitPin()}
-                className="mt-3 px-6 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold transition active:scale-95 cursor-pointer"
+                className="mt-3 min-h-[48px] px-6 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-800 dark:text-amber-300 border border-amber-500/40 text-xs font-bold transition active:scale-95 cursor-pointer"
               >
                 Valider ({pinInput.length} chiffres)
               </button>
@@ -958,7 +1012,7 @@ export const LockScreenOverlay: React.FC = () => {
             <button
               type="button"
               onClick={() => void handleOpenTechRecovery()}
-              className="mt-4 text-xs text-slate-400 hover:text-amber-400 transition underline underline-offset-4 cursor-pointer flex items-center gap-1.5"
+              className="mt-3 min-h-[48px] px-4 rounded-xl text-xs text-pos-muted hover:text-amber-600 dark:hover:text-amber-400 transition underline underline-offset-4 cursor-pointer flex items-center gap-1.5"
             >
               <Wrench className="w-3.5 h-3.5" aria-hidden="true" />
               <span>Code PIN oublié ? Assistance technicien</span>
@@ -968,44 +1022,45 @@ export const LockScreenOverlay: React.FC = () => {
       </div>
 
       {/* Footer Info */}
-      <div className="text-center text-[11px] text-slate-500 font-mono">
+      <div className="text-center text-[11px] text-pos-muted font-mono">
         Saisissez votre code PIN au clavier
       </div>
 
       {/* Technician Recovery Modal (Model 1: Dynamic Challenge-Response) */}
       {showTechRecovery && (
-        <div className="fixed inset-0 z-[110] bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-150">
-          <div className="w-full max-w-md bg-slate-900 border border-amber-500/40 rounded-3xl p-6 shadow-2xl relative">
+        <div className="fixed inset-0 z-[110] bg-pos-bg/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-pos-panel border border-amber-500/40 rounded-3xl p-6 shadow-2xl relative">
             <button
               type="button"
               onClick={() => setShowTechRecovery(false)}
-              className="absolute top-5 right-5 text-slate-400 hover:text-white transition p-1 cursor-pointer"
+              aria-label="Fermer"
+              className="absolute top-3 end-3 min-h-[48px] min-w-[48px] flex items-center justify-center rounded-xl text-pos-muted hover:text-pos-text hover:bg-pos-card transition cursor-pointer"
             >
-              <X className="w-5 h-5" />
+              <X className="w-5 h-5" aria-hidden="true" />
             </button>
 
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center font-black">
-                <Wrench className="w-5 h-5" />
+            <div className="flex items-center gap-3 mb-4 pe-10">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-600 dark:text-amber-400 flex items-center justify-center font-black shrink-0">
+                <Wrench className="w-5 h-5" aria-hidden="true" />
               </div>
               <div>
-                <h3 className="text-base font-black text-white">Assistance Technicien</h3>
-                <p className="text-xs text-slate-400">Récupération d'accès sécurisée sans mot de passe universel</p>
+                <h3 className="text-base font-black text-pos-text">Assistance Technicien</h3>
+                <p className="text-xs text-pos-muted">Récupération d'accès sécurisée sans mot de passe universel</p>
               </div>
             </div>
 
             {recoveryStep === 'enter_code' ? (
               <div className="space-y-4">
-                <p className="text-xs text-slate-300 leading-relaxed">
+                <p className="text-xs text-pos-text leading-relaxed">
                   Si vous avez oublié le code PIN gérant, contactez votre distributeur / technicien (par téléphone ou WhatsApp) et communiquez-lui ce code de défi :
                 </p>
 
                 {/* Challenge Badge */}
-                <div className="bg-slate-950 border border-amber-500/50 rounded-2xl p-4 flex items-center justify-between shadow-inner">
+                <div className="bg-pos-card border border-amber-500/50 rounded-2xl p-4 flex items-center justify-between gap-2 shadow-inner">
                   <div>
-                    <div className="text-[10px] text-amber-400 font-bold uppercase tracking-wider">Code de défi caisse</div>
-                    <div className="text-xl sm:text-2xl font-mono font-black text-white tracking-widest mt-0.5 select-all">
-                      {recoveryChallenge || 'Chargement...'}
+                    <div className="text-[10px] text-amber-700 dark:text-amber-400 font-bold uppercase tracking-wider">Code de défi caisse</div>
+                    <div className="text-xl sm:text-2xl font-mono font-black text-pos-text tracking-widest mt-0.5 select-all">
+                      <bdi dir="ltr">{recoveryChallenge || 'Chargement...'}</bdi>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1018,26 +1073,27 @@ export const LockScreenOverlay: React.FC = () => {
                           setTimeout(() => setCopiedChallenge(false), 2000);
                         }
                       }}
-                      className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                      className="min-h-[48px] px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-800 dark:text-amber-300 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
                     >
-                      {copiedChallenge ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copiedChallenge ? <Check className="w-3.5 h-3.5" aria-hidden="true" /> : <Copy className="w-3.5 h-3.5" aria-hidden="true" />}
                       <span>{copiedChallenge ? 'Copié' : 'Copier'}</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => void handleRefreshChallenge()}
                       title="Générer un nouveau code"
-                      className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
+                      aria-label="Générer un nouveau code"
+                      className="min-h-[48px] min-w-[48px] flex items-center justify-center rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border text-pos-text transition cursor-pointer"
                     >
-                      <RotateCw className={`w-4 h-4 ${recoveryLoading ? 'animate-spin' : ''}`} />
+                      <RotateCw className={`w-4 h-4 ${recoveryLoading ? 'animate-spin' : ''}`} aria-hidden="true" />
                     </button>
                   </div>
                 </div>
 
-                <div className="text-[11px] text-slate-400 bg-slate-800/40 rounded-xl p-3 border border-slate-800 leading-relaxed">
+                <div className="text-[11px] text-pos-muted bg-pos-card rounded-xl p-3 border border-pos-border leading-relaxed">
                   Le technicien calcule un code de déverrouillage temporaire (6 chiffres) signé pour votre terminal.
                   {nativeLockRemainingMs !== null && nativeLockRemainingMs > 0 && (
-                    <span className="block mt-1.5 text-amber-300 font-bold">
+                    <span className="block mt-1.5 text-amber-800 dark:text-amber-300 font-bold">
                       Verrouillage natif actif : {Math.max(1, Math.ceil(nativeLockRemainingMs / 1000))}s restantes.
                       La récupération remplace le PIN local mais ne lève pas ce verrou avant son expiration.
                     </span>
@@ -1046,11 +1102,12 @@ export const LockScreenOverlay: React.FC = () => {
 
                 {/* Input for the 6-digit technician code */}
                 <div>
-                  <label className="text-[11px] font-bold text-slate-300 block mb-1.5">
+                  <label className="text-[11px] font-bold text-pos-text block mb-1.5">
                     Code de secours technicien (6 chiffres)
                   </label>
                   <input
                     type="text"
+                    dir="ltr"
                     inputMode="numeric"
                     pattern="[0-9]*"
                     maxLength={6}
@@ -1061,13 +1118,13 @@ export const LockScreenOverlay: React.FC = () => {
                     }}
                     placeholder="ex: 137680"
                     autoFocus
-                    className="w-full h-12 bg-slate-950 border border-slate-700 rounded-xl px-4 text-center text-2xl font-mono font-black tracking-widest text-amber-400 placeholder:text-slate-700 focus:outline-none focus:border-amber-400 transition"
+                    className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-xl px-4 text-center text-2xl font-mono font-black tracking-widest text-amber-600 dark:text-amber-400 placeholder:text-pos-muted/50 focus:outline-none focus:border-amber-400 transition"
                   />
                 </div>
 
                 {recoveryError && (
-                  <div role="alert" className="text-rose-400 text-xs font-bold flex items-center gap-1.5">
-                    <AlertCircle className="w-4 h-4 shrink-0" />
+                  <div role="alert" className="text-rose-600 dark:text-rose-400 text-xs font-bold flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
                     <span>{recoveryError}</span>
                   </div>
                 )}
@@ -1076,7 +1133,7 @@ export const LockScreenOverlay: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowTechRecovery(false)}
-                    className="flex-1 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition cursor-pointer"
+                    className="flex-1 min-h-[48px] py-3 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-text font-bold text-xs transition cursor-pointer"
                   >
                     Annuler
                   </button>
@@ -1084,7 +1141,7 @@ export const LockScreenOverlay: React.FC = () => {
                     type="button"
                     disabled={recoveryLoading || recoveryOtpInput.length !== 6}
                     onClick={() => void handleVerifyTechOtp()}
-                    className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-xs transition cursor-pointer"
+                    className="flex-1 min-h-[48px] py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-xs transition cursor-pointer"
                   >
                     {recoveryLoading ? 'Vérification...' : 'Valider le code'}
                   </button>
@@ -1092,17 +1149,18 @@ export const LockScreenOverlay: React.FC = () => {
               </div>
             ) : (
               <div className="space-y-4">
-                <div className="bg-emerald-950/30 border border-emerald-500/40 rounded-2xl p-3.5 text-emerald-300 text-xs font-semibold leading-relaxed flex items-center gap-2">
-                  <Check className="w-4 h-4 shrink-0 text-emerald-400" />
+                <div className="bg-emerald-500/15 border border-emerald-500/40 rounded-2xl p-3.5 text-emerald-800 dark:text-emerald-300 text-xs font-semibold leading-relaxed flex items-center gap-2">
+                  <Check className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
                   <span>Code technicien validé ! Veuillez définir votre nouveau code PIN gérant :</span>
                 </div>
 
                 <div>
-                  <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                  <label className="text-[11px] font-bold text-pos-text block mb-1">
                     Nouveau code PIN gérant (6 à 8 chiffres)
                   </label>
                   <input
                     type="password"
+                    dir="ltr"
                     inputMode="numeric"
                     pattern="[0-9]*"
                     maxLength={8}
@@ -1113,16 +1171,17 @@ export const LockScreenOverlay: React.FC = () => {
                     }}
                     placeholder="••••••"
                     autoFocus
-                    className="w-full h-12 bg-slate-950 border border-slate-700 rounded-xl px-4 text-center text-xl font-mono font-black tracking-widest text-white placeholder:text-slate-700 focus:outline-none focus:border-amber-400 transition"
+                    className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-xl px-4 text-center text-xl font-mono font-black tracking-widest text-pos-text placeholder:text-pos-muted/50 focus:outline-none focus:border-amber-400 transition"
                   />
                 </div>
 
                 <div>
-                  <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                  <label className="text-[11px] font-bold text-pos-text block mb-1">
                     Confirmer le nouveau code PIN
                   </label>
                   <input
                     type="password"
+                    dir="ltr"
                     inputMode="numeric"
                     pattern="[0-9]*"
                     maxLength={8}
@@ -1132,13 +1191,13 @@ export const LockScreenOverlay: React.FC = () => {
                       setRecoveryConfirmPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 8));
                     }}
                     placeholder="••••••"
-                    className="w-full h-12 bg-slate-950 border border-slate-700 rounded-xl px-4 text-center text-xl font-mono font-black tracking-widest text-white placeholder:text-slate-700 focus:outline-none focus:border-amber-400 transition"
+                    className="w-full min-h-[48px] bg-pos-card border border-pos-border rounded-xl px-4 text-center text-xl font-mono font-black tracking-widest text-pos-text placeholder:text-pos-muted/50 focus:outline-none focus:border-amber-400 transition"
                   />
                 </div>
 
                 {recoveryError && (
-                  <div role="alert" className="text-rose-400 text-xs font-bold flex items-center gap-1.5">
-                    <AlertCircle className="w-4 h-4 shrink-0" />
+                  <div role="alert" className="text-rose-600 dark:text-rose-400 text-xs font-bold flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0" aria-hidden="true" />
                     <span>{recoveryError}</span>
                   </div>
                 )}
@@ -1147,7 +1206,7 @@ export const LockScreenOverlay: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setShowTechRecovery(false)}
-                    className="flex-1 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs transition cursor-pointer"
+                    className="flex-1 min-h-[48px] py-3 rounded-xl bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-text font-bold text-xs transition cursor-pointer"
                   >
                     Annuler
                   </button>
@@ -1155,7 +1214,7 @@ export const LockScreenOverlay: React.FC = () => {
                     type="button"
                     disabled={recoveryLoading || recoveryNewPin.length < 6}
                     onClick={() => void handleSubmitNewManagerPin()}
-                    className="flex-1 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-xs transition cursor-pointer"
+                    className="flex-1 min-h-[48px] py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-xs transition cursor-pointer"
                   >
                     {recoveryLoading ? 'Enregistrement...' : 'Enregistrer et déverrouiller'}
                   </button>

@@ -8,6 +8,7 @@ import {
   type GateRole,
 } from '../../utils/auditGate';
 import { verifyManagerGate } from '../../utils/pinGate';
+import { useRegisterMobileBackHandler } from '../../hooks/useMobileBackNavigation';
 
 interface PinDialogProps {
   isOpen: boolean;
@@ -123,6 +124,8 @@ export const PinDialog: React.FC<PinDialogProps> = ({
     }
   }, [verifying, logSecurityAction, onSuccess]);
 
+  useRegisterMobileBackHandler(isOpen, onCancel, 'pin-dialog');
+
   useEffect(() => {
     if (!isOpen) return;
 
@@ -130,6 +133,8 @@ export const PinDialog: React.FC<PinDialogProps> = ({
       // Escape ferme ; chiffres / Backspace / Enter appartiennent au champ
       // natif (saisie OS, suppression et validation natives).
       if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
         onCancel();
       }
     };
@@ -162,7 +167,7 @@ export const PinDialog: React.FC<PinDialogProps> = ({
           aria-modal="true"
           aria-labelledby="pin-dialog-title"
           aria-describedby="pin-dialog-desc"
-          className={`w-full max-w-sm bg-pos-panel border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl shadow-2xl p-6 pb-[max(1.5rem,var(--safe-bottom))] sm:pb-6 outline-none ${error ? 'animate-shake' : ''}`}
+          className={`w-full max-w-sm bg-pos-panel platform-sheet-surface border-t sm:border border-pos-border rounded-t-[28px] sm:rounded-2xl shadow-2xl p-6 pb-[max(1.5rem,var(--safe-bottom))] sm:pb-6 outline-none ${error ? 'animate-shake' : ''}`}
         >
           {/* M3 Standard Drag Handle */}
           <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto -mt-2 mb-4 sm:hidden shrink-0" aria-hidden="true" />
@@ -195,6 +200,7 @@ export const PinDialog: React.FC<PinDialogProps> = ({
               pattern="[0-9]*"
               autoComplete="current-password"
               enterKeyHint="done"
+              dir="ltr"
               aria-label={role === 'cashier' ? 'Code PIN à 4 chiffres' : 'Code PIN manager'}
               aria-invalid={error}
               aria-describedby={error ? 'pin-dialog-error' : 'pin-dialog-desc'}
@@ -231,7 +237,7 @@ export const PinDialog: React.FC<PinDialogProps> = ({
             <button
               type="button"
               onClick={onCancel}
-              className="flex-1 py-3 px-4 rounded-xl font-bold text-pos-muted bg-pos-card hover:bg-pos-hover border border-pos-border transition-colors duration-200"
+              className="flex-1 min-h-[48px] py-3 px-4 rounded-xl font-bold text-pos-muted bg-pos-card hover:bg-pos-hover border border-pos-border transition-colors duration-200"
             >
               Annuler
             </button>

@@ -18,6 +18,7 @@ import {
 import { usePosStore } from '../store/usePosStore';
 import { useToast } from './ui/Toast';
 import { useSyncStatus } from '../hooks/useSyncStatus';
+import { Kbd } from '../design-system/desktop/Kbd';
 // P11.3: sync engine loads on demand (static import pulls ~267 kB into entry).
 
 // 1-second clock isolated so its tick does not re-render the whole bottom bar.
@@ -43,9 +44,9 @@ const BottomBarClock: React.FC = React.memo(() => {
   }, []);
 
   return (
-    <div className="text-right whitespace-nowrap leading-tight">
-      <span className="font-black text-pos-text text-xs tracking-wide font-mono">{timeStr || '19:30'}</span>
-      <p className="text-[10px] text-pos-muted capitalize font-medium">{dateStr || '1 Septembre 2026'}</p>
+    <div className="text-right whitespace-nowrap leading-tight select-none">
+      <span className="font-bold text-fg text-ui-xs tracking-wide font-mono num">{timeStr || '19:30'}</span>
+      <p className="text-ui-2xs text-fg-muted capitalize font-medium">{dateStr || '1 Septembre 2026'}</p>
     </div>
   );
 });
@@ -120,6 +121,10 @@ export const BottomBar: React.FC = () => {
   };
 
   const handleHoldSaleClick = () => {
+    if (cart.length === 0 && heldSales.length > 0) {
+      openModal('hold');
+      return;
+    }
     const holdResult = holdSale();
     if (holdResult && holdResult.success) {
       showToast('Vente mise en attente avec succès ! (Ticket sauvegardé)', 'success');
@@ -129,65 +134,65 @@ export const BottomBar: React.FC = () => {
   };
 
   return (
-    <footer aria-label="Barre d'actions caisse" className="bg-pos-panel border-t border-pos-border px-3 py-1.5 select-none shrink-0 relative z-20 w-full max-w-full overflow-hidden">
+    <footer aria-label="Barre d'actions caisse" className="bg-surface-panel border-t border-line px-3 py-1.5 select-none shrink-0 relative z-20 w-full max-w-full overflow-hidden">
       <div className="flex items-center gap-3 w-full max-w-full min-w-0">
         {/* Left Side: Shortcut Function Keys — défilement horizontal + fondus de bord */}
         <div className="relative min-w-0 flex-1 overflow-hidden">
-        <div ref={stripRef} className="flex flex-nowrap items-center gap-1.5 overflow-x-auto overflow-y-hidden max-w-full min-w-0 no-scrollbar py-0.5 px-0.5 [&_button]:focus-visible:outline-none [&_button]:focus-visible:ring-2 [&_button]:focus-visible:ring-emerald-500 [&_button]:active:scale-95" role="toolbar" aria-label="Encaissement et modules">
+        <div ref={stripRef} className="flex flex-nowrap items-center gap-1.5 overflow-x-auto overflow-y-hidden max-w-full min-w-0 no-scrollbar py-0.5 px-0.5 [&_button]:focus-visible:outline-none [&_button]:focus-visible:ring-2 [&_button]:focus-visible:ring-pos-accent [&_button]:active:scale-95" role="toolbar" aria-label="Encaissement et modules">
           {/* Quick Cash Tender (F2) */}
           <button
             onClick={() => cart.length > 0 && openModal('payment')}
             disabled={cart.length === 0}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap shrink-0 shadow-sm ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-ui-sm text-ui-xs font-bold transition whitespace-nowrap shrink-0 shadow-xs h-ctl-md ${
               cart.length > 0
-                ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20 cursor-pointer'
-                : 'bg-pos-card text-pos-muted border border-pos-border opacity-60 cursor-not-allowed'
+                ? 'bg-pos-accent hover:bg-pos-accent/90 text-slate-950 cursor-pointer'
+                : 'bg-surface-card text-fg-muted border border-line-subtle opacity-60 cursor-not-allowed'
             }`}
             title="Valider la Vente / Encaisser (F2 ou Espace)"
           >
             <Banknote className="w-3.5 h-3.5 shrink-0" />
             <span>Encaisser</span>
-            <span className="bg-black/20 text-current px-1 py-0.2 rounded text-[10px] font-mono">F2</span>
+            <Kbd size="sm" variant={cart.length > 0 ? 'accent' : 'subtle'}>F2</Kbd>
           </button>
 
           {/* Customer Directory (F3) */}
           <button
             data-testid="clients-button"
             onClick={() => openModal('customers')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-ui-sm bg-surface-card hover:bg-surface-card/80 border border-line-subtle hover:border-line text-ui-xs text-fg transition font-medium cursor-pointer whitespace-nowrap shrink-0 h-ctl-md"
             title="Fichier Clients & Dettes Kredy (F3)"
           >
             <Users className="w-3.5 h-3.5 text-blue-400 shrink-0" />
             <span>Clients</span>
-            <span className="hotkey-badge">F3</span>
+            <Kbd size="sm">F3</Kbd>
           </button>
 
           {/* Discount (F4) */}
           <button
             data-testid="discount-button"
             onClick={() => openModal('discount')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-ui-sm bg-surface-card hover:bg-surface-card/80 border border-line-subtle hover:border-line text-ui-xs text-fg transition font-medium cursor-pointer whitespace-nowrap shrink-0 h-ctl-md"
             title="Appliquer une Remise Panier (F4)"
           >
             <Percent className="w-3.5 h-3.5 text-purple-400 shrink-0" />
             <span>Remise</span>
-            <span className="hotkey-badge">F4</span>
+            <Kbd size="sm">F4</Kbd>
           </button>
 
           {/* Hold / Recall (F6) */}
           <button
             onClick={handleHoldSaleClick}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium relative cursor-pointer whitespace-nowrap shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-ui-sm bg-surface-card hover:bg-surface-card/80 border border-line-subtle hover:border-line text-ui-xs text-fg transition font-medium relative cursor-pointer whitespace-nowrap shrink-0 h-ctl-md"
             title="Mettre en Attente ou Reprendre (F6)"
           >
-            <PauseCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <PauseCircle className="w-3.5 h-3.5 text-status-warn-fg shrink-0" />
             <span>Attente</span>
             {heldSales.length > 0 && (
-              <span className="w-4 h-4 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black flex items-center justify-center">
+              <span className="w-4 h-4 rounded-full bg-status-warn-fg text-slate-950 text-[10px] font-black flex items-center justify-center num">
                 {heldSales.length}
               </span>
             )}
-            <span className="hotkey-badge">F6</span>
+            <Kbd size="sm">F6</Kbd>
           </button>
 
           {/* Instant Reprint (F7) */}
@@ -200,29 +205,29 @@ export const BottomBar: React.FC = () => {
                 showToast('Aucun ticket récent à réimprimer.', 'warning');
               }
             }}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-ui-sm bg-surface-card hover:bg-surface-card/80 border border-line-subtle hover:border-line text-ui-xs text-fg transition font-medium cursor-pointer whitespace-nowrap shrink-0 h-ctl-md"
             title="Réimprimer le Dernier Ticket (F7)"
           >
-            <Printer className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <Printer className="w-3.5 h-3.5 text-status-ok-fg shrink-0" />
             <span>Réimprimer</span>
-            <span className="hotkey-badge">F7</span>
+            <Kbd size="sm">F7</Kbd>
           </button>
 
           {/* Hotkey Guide (F8) */}
           <button
             onClick={() => openModal('hotkey_guide')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-ui-sm bg-surface-card hover:bg-surface-card/80 border border-line-subtle hover:border-line text-ui-xs text-fg transition font-medium cursor-pointer whitespace-nowrap shrink-0 h-ctl-md"
             title="Guide des Raccourcis Clavier (F8)"
           >
-            <Keyboard className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <Keyboard className="w-3.5 h-3.5 text-status-warn-fg shrink-0" />
             <span>Guide</span>
-            <span className="hotkey-badge">F8</span>
+            <Kbd size="sm">F8</Kbd>
           </button>
 
           {/* Reports (no hotkey — F9 opens custom items) */}
           <button
             onClick={() => openModal('reports')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-ui-sm bg-surface-card hover:bg-surface-card/80 border border-line-subtle hover:border-line text-ui-xs text-fg transition font-medium cursor-pointer whitespace-nowrap shrink-0 h-ctl-md"
             title="Rapports Financiers & Synthèse"
           >
             <BarChart3 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
@@ -232,55 +237,55 @@ export const BottomBar: React.FC = () => {
           {/* Stock (F10) */}
           <button
             onClick={() => openModal('inventory_manager')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-ui-sm bg-surface-card hover:bg-surface-card/80 border border-line-subtle hover:border-line text-ui-xs text-fg transition font-medium cursor-pointer whitespace-nowrap shrink-0 h-ctl-md"
             title="Gestion de Stock & Inventaire (F10)"
           >
-            <Boxes className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+            <Boxes className="w-3.5 h-3.5 text-status-ok-fg shrink-0" />
             <span>Stock</span>
-            <span className="hotkey-badge">F10</span>
+            <Kbd size="sm">F10</Kbd>
           </button>
 
           {/* Refund (F11) */}
           <button
             data-testid="refund-button"
             onClick={() => openModal('refund')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-ui-sm bg-surface-card hover:bg-surface-card/80 border border-line-subtle hover:border-line text-ui-xs text-fg transition font-medium cursor-pointer whitespace-nowrap shrink-0 h-ctl-md"
             title="Retours Marchandise & Remboursements (F11)"
           >
             <RotateCcw className="w-3.5 h-3.5 text-purple-400 shrink-0" />
             <span>Remboursement</span>
-            <span className="hotkey-badge">F11</span>
+            <Kbd size="sm">F11</Kbd>
           </button>
 
           {/* Settings (F12) */}
           <button
             onClick={() => openModal('settings')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pos-card hover:bg-pos-hover border border-pos-border text-xs text-pos-text transition font-medium cursor-pointer whitespace-nowrap shrink-0"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-ui-sm bg-surface-card hover:bg-surface-card/80 border border-line-subtle hover:border-line text-ui-xs text-fg transition font-medium cursor-pointer whitespace-nowrap shrink-0 h-ctl-md"
             title="Paramètres & Diagnostic (F12)"
           >
-            <Settings className="w-3.5 h-3.5 text-pos-muted shrink-0" />
+            <Settings className="w-3.5 h-3.5 text-fg-muted shrink-0" />
             <span>Paramètres</span>
-            <span className="hotkey-badge">F12</span>
+            <Kbd size="sm">F12</Kbd>
           </button>
           </div>
-          <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 w-6" style={{ background: 'linear-gradient(to right, var(--pos-panel), transparent)' }} />
-          <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 w-6" style={{ background: 'linear-gradient(to left, var(--pos-panel), transparent)' }} />
+          <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 w-6" style={{ background: 'linear-gradient(to right, var(--surface-panel), transparent)' }} />
+          <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 w-6" style={{ background: 'linear-gradient(to left, var(--surface-panel), transparent)' }} />
         </div>
 
         {/* Right Corner: Telemetry & System Clock */}
-        <div className="flex items-center gap-3 pl-3 border-l border-pos-border shrink-0 text-xs">
+        <div className="flex items-center gap-2.5 pl-2.5 border-l border-line shrink-0 text-ui-xs">
           <button
             onClick={handleSyncClick}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 cursor-pointer shadow-sm shrink-0 ${
+            className={`flex items-center gap-1.5 px-2 py-1 rounded-ui-sm border text-ui-2xs font-semibold transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pos-accent cursor-pointer shadow-xs shrink-0 ${
               !sync.online
-                ? 'bg-slate-500/10 hover:bg-slate-500/20 border-slate-500/30 text-slate-300'
+                ? 'bg-surface-card text-fg-muted border-line-subtle'
                 : sync.pushing || sync.pulling
-                  ? 'bg-sky-500/10 hover:bg-sky-500/20 border-sky-500/30 text-sky-300'
-                  : failedCount > 0
-                    ? 'bg-rose-500/10 hover:bg-rose-500/20 border-rose-500/30 text-rose-300'
-                    : sync.pendingCount > 0
-                      ? 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-300'
-                      : 'bg-emerald-500/10 hover:bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
+                ? 'bg-pos-accent/10 border-pos-accent/30 text-pos-accent'
+                : failedCount > 0
+                ? 'bg-status-danger-bg border-status-danger-border text-status-danger-fg'
+                : sync.pendingCount > 0
+                ? 'bg-status-warn-bg border-status-warn-border text-status-warn-fg'
+                : 'bg-status-ok-bg border-status-ok-border text-status-ok-fg'
             }`}
             title={
               !sync.online
@@ -295,58 +300,58 @@ export const BottomBar: React.FC = () => {
             ) : (
               <Cloud className="w-3.5 h-3.5 shrink-0" />
             )}
-            <span className="font-mono">
+            <span className="font-mono num">
               {!sync.online
                 ? 'Hors ligne'
                 : sync.pushing || sync.pulling
-                  ? 'Sync…'
-                  : failedCount > 0 && sync.pendingCount > 0
-                    ? `${sync.pendingCount} en attente • ${failedCount} échec`
-                    : failedCount > 0
-                      ? `${failedCount} échec`
-                      : sync.pendingCount > 0
-                        ? `${sync.pendingCount} en attente`
-                        : sync.relayConnected
-                          ? 'Relay Actif'
-                          : 'Sync Turso'}
+                ? 'Sync…'
+                : failedCount > 0 && sync.pendingCount > 0
+                ? `${sync.pendingCount} en attente • ${failedCount} échec`
+                : failedCount > 0
+                ? `${failedCount} échec`
+                : sync.pendingCount > 0
+                ? `${sync.pendingCount} en attente`
+                : sync.relayConnected
+                ? 'Relay Actif'
+                : 'Sync Turso'}
             </span>
             <span
               className={`w-1.5 h-1.5 rounded-full ${
                 !sync.online
-                  ? 'bg-slate-400'
+                  ? 'bg-fg-muted'
                   : failedCount > 0
-                    ? 'bg-rose-400 animate-pulse'
-                    : sync.pendingCount > 0
-                      ? 'bg-amber-400 animate-pulse'
-                      : sync.relayConnected
-                        ? 'bg-emerald-400 animate-pulse'
-                        : 'bg-emerald-400'
+                  ? 'bg-status-danger-fg animate-pulse'
+                  : sync.pendingCount > 0
+                  ? 'bg-status-warn-fg animate-pulse'
+                  : sync.relayConnected
+                  ? 'bg-status-ok-fg animate-pulse'
+                  : 'bg-status-ok-fg'
               }`}
             />
           </button>
           {outboxPendingCount > 500 && (
             <span
-              className="text-[10px] font-bold text-amber-400 whitespace-nowrap"
+              className="text-ui-2xs font-bold text-status-warn-fg whitespace-nowrap num"
               title={`File d’envoi signée : ${outboxPendingCount} mutations en attente de passerelle`}
             >
-              Sync backlog accumulating. Transactions remain safely buffered locally.
+              Backlog sync ({outboxPendingCount}). Mutations sécurisées localement.
             </span>
           )}
 
           <button
             onClick={() => openModal('db_maintenance')}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-[11px] font-bold text-cyan-300 transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 cursor-pointer shadow-sm shrink-0"
+            className="flex items-center gap-1.5 px-2 py-1 rounded-ui-sm bg-surface-card hover:bg-surface-card/80 border border-line-subtle text-ui-2xs font-semibold text-fg-secondary transition active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pos-accent cursor-pointer shadow-xs shrink-0"
             title="Moteur SQLite WAL Actif • Cliquez pour ouvrir le Centre de Maintenance"
           >
             <Database className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
             <span className="font-mono">SQLite WAL</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="w-1.5 h-1.5 rounded-full bg-status-ok-fg animate-pulse" />
           </button>
 
           <BottomBarClock />
 
           <div
-            className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-md shadow-emerald-500/50 animate-pulse shrink-0"
+            className="w-2 h-2 rounded-full bg-status-ok-fg shadow-xs shadow-status-ok-fg/50 animate-pulse shrink-0"
             title="Système En Ligne & Synchronisé"
           />
         </div>

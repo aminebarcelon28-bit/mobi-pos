@@ -1,0 +1,27 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace new_nonce_hex -> String with String::new()
+@@ -75,23 +75,17 @@
+ fn system_now_ms() -> u64 {
+     std::time::SystemTime::now()
+         .duration_since(std::time::UNIX_EPOCH)
+         .map(|d| d.as_millis() as u64)
+         .unwrap_or(0)
+ }
+ 
+ fn new_nonce_hex() -> String {
+-    let a = uuid::Uuid::new_v4();
+-    let b = uuid::Uuid::new_v4();
+-    let mut s = String::with_capacity(64);
+-    for byte in a.as_bytes().iter().chain(b.as_bytes().iter()) {
+-        s.push_str(&format!("{byte:02x}"));
+-    }
+-    s
++    String::new() /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ #[cfg(debug_assertions)]
+ fn test_pubkey_b64url() -> String {
+     use ed25519_dalek::SigningKey;
+     let sk = SigningKey::from_bytes(&TEST_TIME_SEED);
+     URL_SAFE_NO_PAD.encode(sk.verifying_key().to_bytes())
+ }

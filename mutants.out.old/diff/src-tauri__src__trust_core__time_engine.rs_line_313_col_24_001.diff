@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace match guard c.nonce_hex != nonce_hex with false in TimeKernel::consume_challenge
+@@ -305,17 +305,17 @@
+ 
+     /// Consume the active challenge iff it matches and is unexpired.
+     /// Consumed on success only; expiry bounds the replay window.
+     pub fn consume_challenge(&self, nonce_hex: &str, now_ms: u64) -> Result<(), ChallengeError> {
+         let _guard = self.challenge_lock.lock();
+         let mut g = self.inner.write();
+         match &g.challenge {
+             None => Err(ChallengeError::NoChallenge),
+-            Some(c) if c.nonce_hex != nonce_hex => Err(ChallengeError::Mismatch),
++            Some(c) if false /* ~ changed by cargo-mutants ~ */ => Err(ChallengeError::Mismatch),
+             Some(c) if now_ms > c.expires_at_ms => Err(ChallengeError::Expired),
+             Some(_) => {
+                 g.challenge = None;
+                 Ok(())
+             }
+         }
+     }
+ 

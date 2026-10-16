@@ -89,6 +89,7 @@ export const ZReportPaper: React.FC<{ snapshot: ZReportSnapshot }> = ({ snapshot
       {s.creditSales > 0 ? <MoneyRow label="Ventes à Crédit:" value={formatDZD(s.creditSales)} /> : null}
       {s.repriseTake > 0 ? <MoneyRow label="Reprises (Trade-in):" value={`-${formatDZD(s.repriseTake)}`} /> : null}
       <MoneyRow label="TOTAL VENTES NETTES:" value={formatDZD(s.netSales)} strong />
+      {s.savSettled > 0 ? <MoneyRow label="dont Soldes SAV encaissés:" value={formatDZD(s.savSettled)} /> : null}
     </div>
 
     <div className="py-2 space-y-0.5 border-b border-dashed border-gray-400">
@@ -97,7 +98,6 @@ export const ZReportPaper: React.FC<{ snapshot: ZReportSnapshot }> = ({ snapshot
       <MoneyRow label="Encaissements espèces:" value={`+${formatDZD(s.cashSales)}`} />
       {s.debtSettlements > 0 ? <MoneyRow label="Règlements dettes reçus:" value={`+${formatDZD(s.debtSettlements)}`} /> : null}
       {s.savDeposits > 0 ? <MoneyRow label="Acomptes SAV:" value={`+${formatDZD(s.savDeposits)}`} /> : null}
-      {s.savSettled > 0 ? <MoneyRow label="Soldes SAV encaissés:" value={`+${formatDZD(s.savSettled)}`} /> : null}
       {s.manualIn > 0 ? <MoneyRow label="Apports manuels:" value={`+${formatDZD(s.manualIn)}`} /> : null}
       {s.refunds > 0 ? <MoneyRow label="Remboursements client:" value={`-${formatDZD(s.refunds)}`} /> : null}
       {s.expenses > 0 ? <MoneyRow label="Dépenses de caisse:" value={`-${formatDZD(s.expenses)}`} /> : null}

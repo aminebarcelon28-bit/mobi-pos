@@ -1,0 +1,34 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace <impl MonotonicSource for MachContinuousMonotonic>::now_ms -> Option<u64> with Some(1)
+@@ -124,30 +124,17 @@
+ struct AppleTimeval {
+     tv_sec: i64,
+     tv_usec: i32,
+ }
+ 
+ #[cfg(target_vendor = "apple")]
+ impl MonotonicSource for MachContinuousMonotonic {
+     fn now_ms(&self) -> Option<u64> {
+-        let mut info = MachTimebaseInfo { numer: 0, denom: 0 };
+-        // SAFETY: mach_timebase_info writes a fixed-size struct.
+-        let rc = unsafe { mach_timebase_info(&mut info as *mut _) };
+-        if rc != 0 || info.numer == 0 || info.denom == 0 {
+-            return None;
+-        }
+-        // SAFETY: no arguments, cannot fail.
+-        let ticks = unsafe { mach_continuous_time() };
+-        (ticks as u128)
+-            .checked_mul(info.numer as u128)?
+-            .checked_div(info.denom as u128)?
+-            .checked_div(1_000_000)?
+-            .try_into()
+-            .ok()
++        Some(1) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// `kern.boottime` as the primary boot signal (best effort).
+     fn boot_id(&self) -> Option<String> {
+         let name = core::ffi::CStr::from_bytes_with_nul(b"kern.boottime\0").ok()?;
+         let mut tv = AppleTimeval { tv_sec: 0, tv_usec: 0 };
+         let mut len = core::mem::size_of::<AppleTimeval>();
+         // SAFETY: name is NUL-terminated; tv/len are valid out-pointers.

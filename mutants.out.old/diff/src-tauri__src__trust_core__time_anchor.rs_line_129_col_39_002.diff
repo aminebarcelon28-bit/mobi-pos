@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_anchor.rs
++++ replace < with <= in anchor_now_ms
+@@ -121,17 +121,17 @@
+             "INSERT INTO time_anchor (id, high_water_ms, high_water_mono_ms, updated_at) \
+              VALUES (1, ?1, ?2, ?3)",
+             rusqlite::params![wall, mono_i, iso_utc_ms(wall)],
+         )
+         .map_err(|e| TrustError::op_failed(format!("anchor init: {e}")))?;
+         return Ok(wall);
+     };
+     // Backward wall past tolerance = rollback. Fail closed, advance nothing.
+-    if wall + REGRESSION_TOLERANCE_MS < hw {
++    if wall + REGRESSION_TOLERANCE_MS <= /* ~ changed by cargo-mutants ~ */ hw {
+         return Err(TrustError::op_failed(format!(
+             "SYSTEM_CLOCK_REGRESSION:last_seen_{hw}_attempted_{wall}"
+         )));
+     }
+     let expected = hw.saturating_add(mono_i.saturating_sub(hw_mono));
+     let now = expected.max(hw);
+     // Ratchet: bless at most FORWARD_RATCHET_MS past the derived instant.
+     let capped_wall = wall.min(now.saturating_add(FORWARD_RATCHET_MS));

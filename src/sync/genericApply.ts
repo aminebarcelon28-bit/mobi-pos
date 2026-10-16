@@ -43,6 +43,7 @@ export const GENERIC_TABLES: Record<string, string> = {
   setting: 'app_settings',
   stock_batches: 'stock_batches',
   credit_voucher: 'credit_vouchers',
+  sale_batch_allocation: 'sale_batch_allocations',
 };
 
 /** Plural remote KV table -> Dexie store. */
@@ -62,6 +63,7 @@ export const GENERIC_PULL: Record<string, { dexie: string }> = {
   app_settings: { dexie: 'appSettings' },
   stock_batches: { dexie: 'stockBatches' },
   credit_vouchers: { dexie: 'creditVouchers' },
+  sale_batch_allocations: { dexie: 'saleBatchAllocations' },
 };
 
 // H12: the pull-side watermark lives in `entity_keys`, whose key is the

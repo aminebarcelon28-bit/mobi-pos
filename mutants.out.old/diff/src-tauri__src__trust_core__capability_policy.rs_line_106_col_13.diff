@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/capability_policy.rs
++++ delete match arm Capability::LicenseManagement in authorize
+@@ -98,17 +98,17 @@
+         },
+         LicenseState::Revoked => match capability {
+             Capability::EmergencyExport => DENY_OWNER,
+             Capability::LicenseManagement => ALLOW,
+             _ => DENY,
+         },
+         LicenseState::Corrupted => match capability {
+             Capability::EmergencyExport => DENY_OWNER,
+-            Capability::LicenseManagement => ALLOW,
++             /* ~ changed by cargo-mutants ~ */
+             _ => DENY,
+         },
+         LicenseState::ClockResetRequired => match capability {
+             Capability::EmergencyExport => ALLOW_OWNER,
+             Capability::LicenseManagement => ALLOW,
+             _ => DENY,
+         },
+         LicenseState::TamperSuspected => match capability {

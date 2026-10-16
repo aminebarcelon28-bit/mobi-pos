@@ -13,58 +13,178 @@
  */
 @custom-variant dark (&:where(.dark, .dark *));
 
+@theme {
+  --breakpoint-xs: 360px;
+}
+
 :root {
   --pos-bg: #f8fafc;
-  --pos-panel: #ffffff;
+  --pos-panel: #f8fafc;
   --pos-card: #ffffff;
   --pos-hover: #f1f5f9;
-  --pos-border: #e2e8f0;
+  --pos-border: #cbd5e1;
   --pos-text: #0f172a;
-  --pos-muted: #64748b;
+  --pos-muted: #475569;
   --pos-input-bg: #f8fafc;
+  --pos-focus: #059669;
+  --pos-accent: #047857;
+
+  /* Cross-spec aliases used by S01-S15 blueprints */
+  --bg-app: var(--pos-bg);
+  --bg-surface: var(--pos-panel);
+  --bg-card: var(--pos-card);
+  --border-default: var(--pos-border);
+  --border-subtle: #e2e8f0;
+  --text-primary: var(--pos-text);
+  --text-secondary: var(--pos-muted);
+  --ios-bg-grouped-secondary: #ffffff;
+
+  /* Canonical 5-Step Surface Hierarchy (--surface-* & --md-surface-container-*) */
+  --surface-lowest: #ffffff;
+  --surface-low: #f8fafc;
+  --surface: #f8fafc;
+  --surface-high: #f1f5f9;
+  --surface-highest: #e2e8f0;
 
   /* Material Design 3 Tonal Surface Tokens */
   --md-surface: #f8fafc;
-  --md-surface-dim: #edeef2;
+  --md-surface-dim: #e2e8f0;
   --md-surface-bright: #ffffff;
-  --md-surface-container-lowest: #ffffff;
-  --md-surface-container-low: #f1f5f9;
-  --md-surface-container: #ffffff;
-  --md-surface-container-high: #e2e8f0;
-  --md-surface-container-highest: #cbd5e1;
-  --md-on-surface: #0f172a;
-  --md-on-surface-variant: #475569;
-  --md-outline: #cbd5e1;
-  --md-outline-variant: #e2e8f0;
+  --md-surface-container-lowest: var(--surface-lowest);
+  --md-surface-container-low: var(--surface-low);
+  --md-surface-container: var(--surface);
+  --md-surface-container-high: var(--surface-high);
+  --md-surface-container-highest: var(--surface-highest);
+  --md-on-surface: var(--pos-text);
+  --md-on-surface-variant: var(--pos-muted);
+  --md-outline: #94a3b8;
+  --md-outline-variant: var(--pos-border);
 
-  /* iOS 18 Frosted Glass Tokens */
+  /* Semantic Status Role Tokens — LIGHT MODE (700 accents, 800 foregrounds >= 6.48:1 AA+) */
+  --status-ok: #047857;
+  --status-ok-fg: #065f46;
+  --status-ok-bg: rgba(16, 185, 129, 0.12);
+  --status-ok-border: rgba(5, 150, 105, 0.32);
+  --status-ok-on-solid: #ecfdf5;
+
+  --status-warn: #b45309;
+  --status-warn-fg: #92400e;
+  --status-warn-bg: rgba(245, 158, 11, 0.14);
+  --status-warn-border: rgba(217, 119, 6, 0.35);
+  --status-warn-on-solid: #fffbeb;
+
+  --status-danger: #be123c;
+  --status-danger-fg: #9f1239;
+  --status-danger-bg: rgba(244, 63, 94, 0.11);
+  --status-danger-border: rgba(225, 29, 72, 0.32);
+  --status-danger-on-solid: #fff1f2;
+
+  --status-info: #0e7490;
+  --status-info-fg: #155e75;
+  --status-info-bg: rgba(6, 182, 212, 0.12);
+  --status-info-border: rgba(8, 145, 178, 0.32);
+  --status-info-on-solid: #ecfeff;
+
+  --status-vip: #6d28d9;
+  --status-vip-fg: #5b21b6;
+  --status-vip-bg: rgba(139, 92, 246, 0.11);
+  --status-vip-border: rgba(124, 58, 237, 0.32);
+  --status-vip-on-solid: #f5f3ff;
+
+  --status-wholesale: #4338ca;
+  --status-wholesale-fg: #3730a3;
+  --status-wholesale-bg: rgba(99, 102, 241, 0.11);
+  --status-wholesale-border: rgba(79, 70, 229, 0.32);
+  --status-wholesale-on-solid: #eef2ff;
+
+  --status-neutral: #475569;
+  --status-neutral-fg: #334155;
+  --status-neutral-bg: rgba(100, 116, 139, 0.12);
+  --status-neutral-border: rgba(100, 116, 139, 0.30);
+
+  /* iOS 26 Liquid Glass Tokens */
   --ios-glass-bg: rgba(255, 255, 255, 0.85);
   --ios-glass-border: rgba(0, 0, 0, 0.08);
   --ios-glass-highlight: rgba(255, 255, 255, 0.65);
-  --ios-glass-blur: 24px;
+  --ios-glass-blur: 20px;
   --ios-glass-saturate: 180%;
 
-  /* Motion physics tokens (M3 Expressive + iOS 18 Spring) */
-  --motion-spring-press: cubic-bezier(0.34, 1.4, 0.64, 1);
+  /* 1. Android Material 3 Expressive Dual-Spring Tokens (R-MOT-01, R-AND-01) */
+  --motion-spring-spatial-fast: 350ms cubic-bezier(0.42, 1.67, 0.21, 0.90);
+  --motion-spring-spatial-default: 500ms cubic-bezier(0.38, 1.21, 0.22, 1.00);
+  --motion-spring-effects-fast: 150ms cubic-bezier(0.31, 0.94, 0.34, 1.00);
+  --motion-spring-effects-default: 200ms cubic-bezier(0.34, 0.80, 0.34, 1.00);
+
+  --ease-m3-spatial-fast: cubic-bezier(0.42, 1.67, 0.21, 0.90);
+  --dur-m3-spatial-fast: 350ms;
+  --ease-m3-spatial-default: cubic-bezier(0.38, 1.21, 0.22, 1.00);
+  --dur-m3-spatial-default: 500ms;
+  --ease-m3-effects-fast: cubic-bezier(0.31, 0.94, 0.34, 1.00);
+  --dur-m3-effects-fast: 150ms;
+  --ease-m3-effects-default: cubic-bezier(0.34, 0.80, 0.34, 1.00);
+  --dur-m3-effects-default: 200ms;
+
+  /* 2. iOS 26 Critically Damped Spring Tokens (R-MOT-02, R-IOS-15) */
+  --motion-ios-spring: 320ms cubic-bezier(0.32, 0.72, 0, 1);
+  --motion-ios-press: 120ms cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-ios-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-ios-spring: 320ms;
+  --ease-ios-press: cubic-bezier(0.25, 1, 0.5, 1);
+  --dur-ios-press: 120ms;
+
+  /* 3. Platform-Adaptive Active Aliases (Default = Android M3 Expressive) */
+  --motion-active-spatial-fast: var(--motion-spring-spatial-fast);
+  --motion-active-spatial-default: var(--motion-spring-spatial-default);
+  --motion-active-effects-fast: var(--motion-spring-effects-fast);
+  --motion-active-effects-default: var(--motion-spring-effects-default);
+
+  /* Motion physics tokens (legacy alias bridge) */
+  --motion-spring-press: var(--ease-m3-spatial-fast);
   --motion-press-in: cubic-bezier(0.25, 1, 0.5, 1);
   --motion-sheet-enter: cubic-bezier(0.16, 1, 0.3, 1);
   --motion-sheet-exit: cubic-bezier(0.7, 0, 0.84, 0);
   --motion-duration-sheet: 280ms;
+  --motion-press-scale: 0.96;
 
-  /* Universal safe-area tokens (enterprise App Shell).
-     Guaranteed minimums keep headers/footers clear of the status bar,
-     notch, and iOS home indicator even when env() reports 0px (desktop). */
+  /* Universal safe-area tokens (enterprise App Shell). */
   --safe-top: max(env(safe-area-inset-top, 0px), 16px);
   --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
   --safe-left: max(env(safe-area-inset-left, 0px), 0px);
   --safe-right: max(env(safe-area-inset-right, 0px), 0px);
   --keyboard-height: 0px;
 
-  /* Centralized shape + status tokens (values already repeated 3+ times
-     across the codebase: rounded-2xl cards, M3 28px sheets, status tints). */
-  --pos-radius-card: 1rem; /* = rounded-2xl, standard card/panel radius */
-  --pos-radius-sheet: 28px; /* M3 bottom-sheet top radius */
-  --pos-focus: #10b981; /* emerald-500, global :focus-visible ring */
+  /* Default Platform Chrome & Shape Tokens = Android M3 Expressive */
+  --chrome-top-bg: var(--surface);
+  --chrome-bottom-bg: var(--surface);
+  --sheet-bg: var(--surface);
+  --chrome-backdrop-filter: none;
+  --chrome-border-width: 1px;
+  --chrome-specular-shadow: none;
+
+  --radius-sheet: 28px;
+  --radius-card: 16px;
+  --radius-card-inset: 12px;
+  --radius-button: 14px;
+  --radius-button-pill: 9999px;
+  --radius-button-active: 16px;
+  --pos-radius-card: var(--radius-card);
+  --pos-radius-sheet: var(--radius-sheet);
+
+  --sheet-handle-width: 32px;
+  --sheet-handle-height: 4px;
+  --sheet-handle-opacity: 0.40;
+
+  /* Z-Layer Scale */
+  --z-sticky: 10;
+  --z-app-bar: 20;
+  --z-fab: 40;
+  --z-sheet: 50;
+  --z-portal-modal: 60;
+  --z-orientation-banner: 90;
+  --z-lock-screen: 100;
+  --z-tech-recovery: 110;
+  --z-first-boot: 200;
+  --z-toast: 9999;
 }
 
 html.dark {
@@ -74,29 +194,225 @@ html.dark {
   --pos-hover: #243046;
   --pos-border: #2a364f;
   --pos-text: #e2e8f0;
-  --pos-muted: #8e9bb0;
+  --pos-muted: #94a3b8;
   --pos-input-bg: #0b0f19;
+  --pos-focus: #10b981;
+  --pos-accent: #34d399;
+
+  --bg-app: var(--pos-bg);
+  --bg-surface: var(--pos-panel);
+  --bg-card: var(--pos-card);
+  --border-default: var(--pos-border);
+  --border-subtle: #1e293b;
+  --text-primary: var(--pos-text);
+  --text-secondary: var(--pos-muted);
+  --ios-bg-grouped-secondary: #1a2234;
+
+  --surface-lowest: #080c14;
+  --surface-low: #0f1420;
+  --surface: #121824;
+  --surface-high: #1a2234;
+  --surface-highest: #243046;
 
   /* Material Design 3 Dark Tonal Surface Tokens */
   --md-surface: #0b0f19;
   --md-surface-dim: #070a12;
   --md-surface-bright: #161e2e;
-  --md-surface-container-lowest: #080c14;
-  --md-surface-container-low: #0f1420;
-  --md-surface-container: #121824;
-  --md-surface-container-high: #1a2234;
-  --md-surface-container-highest: #243046;
-  --md-on-surface: #e2e8f0;
-  --md-on-surface-variant: #8e9bb0;
-  --md-outline: #2a364f;
-  --md-outline-variant: #1a2234;
+  --md-surface-container-lowest: var(--surface-lowest);
+  --md-surface-container-low: var(--surface-low);
+  --md-surface-container: var(--surface);
+  --md-surface-container-high: var(--surface-high);
+  --md-surface-container-highest: var(--surface-highest);
+  --md-on-surface: var(--pos-text);
+  --md-on-surface-variant: var(--pos-muted);
+  --md-outline: #3b4c6b;
+  --md-outline-variant: var(--pos-border);
 
-  /* iOS 18 Dark Frosted Glass Tokens */
+  /* Semantic Status Role Tokens — DARK MODE (400 accents, 300 foregrounds >= 8.35:1 AAA) */
+  --status-ok: #34d399;
+  --status-ok-fg: #6ee7b7;
+  --status-ok-bg: rgba(16, 185, 129, 0.14);
+  --status-ok-border: rgba(52, 211, 153, 0.30);
+  --status-ok-on-solid: #022c22;
+
+  --status-warn: #fbbf24;
+  --status-warn-fg: #fcd34d;
+  --status-warn-bg: rgba(245, 158, 11, 0.14);
+  --status-warn-border: rgba(251, 191, 36, 0.30);
+  --status-warn-on-solid: #451a03;
+
+  --status-danger: #fb7185;
+  --status-danger-fg: #fda4af;
+  --status-danger-bg: rgba(244, 63, 94, 0.14);
+  --status-danger-border: rgba(251, 113, 133, 0.32);
+  --status-danger-on-solid: #450a12;
+
+  --status-info: #22d3ee;
+  --status-info-fg: #67e8f9;
+  --status-info-bg: rgba(6, 182, 212, 0.14);
+  --status-info-border: rgba(34, 211, 238, 0.30);
+  --status-info-on-solid: #082f49;
+
+  --status-vip: #c084fc;
+  --status-vip-fg: #d8b4fe;
+  --status-vip-bg: rgba(168, 85, 247, 0.14);
+  --status-vip-border: rgba(192, 132, 252, 0.30);
+  --status-vip-on-solid: #2e1065;
+
+  --status-wholesale: #818cf8;
+  --status-wholesale-fg: #a5b4fc;
+  --status-wholesale-bg: rgba(99, 102, 241, 0.14);
+  --status-wholesale-border: rgba(129, 140, 248, 0.30);
+  --status-wholesale-on-solid: #1e1b4b;
+
+  --status-neutral: #94a3b8;
+  --status-neutral-fg: #cbd5e1;
+  --status-neutral-bg: rgba(148, 163, 184, 0.14);
+  --status-neutral-border: rgba(148, 163, 184, 0.28);
+
+  /* iOS 26 Dark Liquid Glass Tokens */
   --ios-glass-bg: rgba(18, 24, 36, 0.85);
   --ios-glass-border: rgba(255, 255, 255, 0.08);
   --ios-glass-highlight: rgba(255, 255, 255, 0.12);
-  --ios-glass-blur: 24px;
+  --ios-glass-blur: 20px;
   --ios-glass-saturate: 180%;
+}
+
+/* Platform-Adaptive Layer: Android M3 Expressive vs iOS 26 Liquid Glass */
+html[data-platform="android"] {
+  --chrome-top-bg: var(--surface);
+  --chrome-bottom-bg: var(--surface);
+  --sheet-bg: var(--surface);
+  --chrome-backdrop-filter: none;
+  --chrome-border-width: 1px;
+  --chrome-specular-shadow: none;
+
+  --radius-sheet: 28px;
+  --radius-card: 16px;
+  --radius-card-inset: 12px;
+  --radius-button: 14px;
+  --radius-button-active: 16px;
+
+  --sheet-handle-width: 32px;
+  --sheet-handle-height: 4px;
+  --sheet-handle-opacity: 0.40;
+
+  --motion-active-spatial-fast: var(--motion-spring-spatial-fast);
+  --motion-active-spatial-default: var(--motion-spring-spatial-default);
+  --motion-active-effects-fast: var(--motion-spring-effects-fast);
+  --motion-active-effects-default: var(--motion-spring-effects-default);
+  --motion-press-scale: 0.96;
+}
+
+html[data-platform="ios"] {
+  --chrome-top-bg: rgba(248, 250, 252, 0.78);
+  --chrome-bottom-bg: rgba(255, 255, 255, 0.82);
+  --sheet-bg: rgba(255, 255, 255, 0.88);
+  --chrome-backdrop-filter: blur(20px) saturate(180%);
+  --chrome-border-width: 0.5px;
+  --chrome-specular-shadow: inset 0 0.5px 0 0 rgba(255, 255, 255, 0.70);
+
+  --radius-sheet: 32px;
+  --radius-card: 20px;
+  --radius-card-inset: 16px;
+  --radius-button: 14px;
+  --radius-button-active: 9999px;
+
+  --sheet-handle-width: 36px;
+  --sheet-handle-height: 5px;
+  --sheet-handle-opacity: 0.35;
+
+  --motion-active-spatial-fast: var(--motion-ios-spring);
+  --motion-active-spatial-default: var(--motion-ios-spring);
+  --motion-active-effects-fast: var(--motion-ios-press);
+  --motion-active-effects-default: 200ms cubic-bezier(0.25, 1, 0.5, 1);
+  --motion-spring-press: var(--ease-ios-spring);
+  --motion-press-in: var(--ease-ios-press);
+  --motion-sheet-enter: var(--ease-ios-spring);
+  --motion-duration-sheet: var(--dur-ios-spring);
+  --motion-press-scale: 0.97;
+}
+
+html.dark[data-platform="ios"] {
+  --chrome-top-bg: rgba(18, 24, 36, 0.76);
+  --chrome-bottom-bg: rgba(18, 24, 36, 0.80);
+  --sheet-bg: rgba(26, 34, 52, 0.88);
+  --chrome-specular-shadow: inset 0 0.5px 0 0 rgba(255, 255, 255, 0.14);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html[data-platform="ios"],
+  html.dark[data-platform="ios"] {
+    --chrome-top-bg: var(--pos-panel);
+    --chrome-bottom-bg: var(--pos-panel);
+    --sheet-bg: var(--pos-panel);
+    --chrome-backdrop-filter: none;
+    --chrome-border-width: 1px;
+  }
+  .ios-glass {
+    background-color: var(--pos-panel) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+/* R-AND-12 / AND-05: Disable GPU-expensive backdrop-blur across Android WebView surfaces */
+:root[data-platform="android"] [class*="backdrop-blur"] {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* IOS-AUD-01: Unlayered 16px mobile input floor so utility classes (text-xs, text-sm)
+   never override it and trigger iOS WKWebView auto-zoom on <640px viewports. */
+@media (max-width: 639px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: max(16px, 1rem) !important;
+  }
+}
+
+/* ── Desktop Enterprise Workspace Tokens (data-shell="desktop") ── */
+html[data-shell="desktop"] {
+  --surface-canvas: #eef2f6;
+  --surface-panel: #f8fafc;
+  --surface-card: #ffffff;
+  --surface-overlay: #ffffff;
+
+  --border-subtle: #e2e8f0;
+  --border-default: #cbd5e1;
+  --border-strong: #94a3b8;
+  --border-focus: var(--pos-focus);
+  --border-danger: var(--status-danger-border);
+
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+
+  --pos-bg: var(--surface-canvas);
+
+  --z-dropdown: 30;
+  --z-popover: 45;
+  --z-modal: 50;
+  --z-modal-nested: 55;
+  --z-command-palette: 70;
+}
+
+html.dark[data-shell="desktop"] {
+  --surface-canvas: #090d16;
+  --surface-panel: #0f172a;
+  --surface-card: #182235;
+  --surface-overlay: #1e293b;
+
+  --border-subtle: #1e293b;
+  --border-default: #2a364f;
+  --border-strong: #475569;
+
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+
+  --pos-bg: var(--surface-canvas);
 }
 
 @layer base {
@@ -132,7 +448,7 @@ html.dark {
 
   /* Prevent iOS Safari / WKWebView auto-zoom on input focus */
   @media (max-width: 640px) {
-    input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea {
       font-size: 16px;
     }
   }
@@ -141,6 +457,28 @@ html.dark {
   .font-mono {
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum" 1;
+  }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  .chrome {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .copyable {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  .press {
+    transition: transform var(--dur-snap-fast, 100ms) var(--ease-snap, cubic-bezier(0.16, 1, 0.3, 1));
+  }
+  .press:active:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(0.98);
   }
 }
 
@@ -154,30 +492,26 @@ html.dark {
 .text-pos-muted { color: var(--pos-muted); }
 .text-pos-text { color: var(--pos-text); }
 
-/* Theme-adaptive accent text (a11y): fixed 400-level hues pass on the dark
-   panel but fail WCAG AA on light surfaces (e.g. emerald-400 on white =
-   1.9:1). These utilities hold ≥4.5:1 in BOTH modes — light uses the
-   700/800 step, dark keeps the vivid 400 step. */
-.text-pos-accent { color: #047857; }
-.text-pos-accent-amber { color: #92400e; }
-.text-pos-accent-purple { color: #6d28d9; }
-.text-pos-accent-cyan { color: #0e7490; }
-.text-pos-accent-indigo { color: #4338ca; }
-html.dark .text-pos-accent { color: #34d399; }
-html.dark .text-pos-accent-amber { color: #fbbf24; }
-html.dark .text-pos-accent-purple { color: #c084fc; }
-html.dark .text-pos-accent-cyan { color: #22d3ee; }
-html.dark .text-pos-accent-indigo { color: #818cf8; }
+/* Theme-adaptive accent text (a11y): holds >= 6.48:1 in BOTH modes — light uses
+   the 700/800 step, dark keeps the vivid 300/400 step. */
+.text-pos-accent { color: var(--status-ok-fg); }
+.text-pos-accent-amber { color: var(--status-warn-fg); }
+.text-pos-accent-rose { color: var(--status-danger-fg); }
+.text-pos-accent-purple { color: var(--status-vip-fg); }
+.text-pos-accent-cyan { color: var(--status-info-fg); }
+.text-pos-accent-indigo { color: var(--status-wholesale-fg); }
 
-/* Universal App Shell safe-area utilities */
+/* Universal App Shell safe-area & platform-adaptive utilities */
 @layer utilities {
   .pt-safe { padding-top: var(--safe-top); }
   .pb-safe { padding-bottom: var(--safe-bottom); }
+  .ps-safe { padding-inline-start: var(--safe-left); }
+  .pe-safe { padding-inline-end: var(--safe-right); }
   .pl-safe { padding-left: var(--safe-left); }
   .pr-safe { padding-right: var(--safe-right); }
   .px-safe {
-    padding-left: var(--safe-left);
-    padding-right: var(--safe-right);
+    padding-inline-start: var(--safe-left);
+    padding-inline-end: var(--safe-right);
   }
   .py-safe {
     padding-top: var(--safe-top);
@@ -185,27 +519,79 @@ html.dark .text-pos-accent-indigo { color: #818cf8; }
   }
   .mt-safe-top { margin-top: var(--safe-top); }
   .mb-safe-bottom { margin-bottom: var(--safe-bottom); }
+  .ms-safe { margin-inline-start: var(--safe-left); }
+  .me-safe { margin-inline-end: var(--safe-right); }
   .ml-safe { margin-left: var(--safe-left); }
   .mr-safe { margin-right: var(--safe-right); }
   .mx-safe {
-    margin-left: var(--safe-left);
-    margin-right: var(--safe-right);
+    margin-inline-start: var(--safe-left);
+    margin-inline-end: var(--safe-right);
   }
   .pb-keyboard-safe { padding-bottom: max(var(--safe-bottom), var(--keyboard-height, 0px)); }
 
-  /* Material Design 3 Tonal Surface Utilities */
+  /* 5-Step Surface Hierarchy & M3 Tonal Surface Utilities */
+  .surface-c0, .bg-surface-lowest, .bg-md-surface-container-lowest { background-color: var(--surface-lowest); }
+  .surface-c1, .bg-surface-low, .bg-md-surface-container-low { background-color: var(--surface-low); }
+  .surface-c2, .bg-surface, .bg-md-surface-container { background-color: var(--surface); }
+  .surface-c3, .bg-surface-high, .bg-md-surface-container-high { background-color: var(--surface-high); }
+  .surface-c4, .bg-surface-highest, .bg-md-surface-container-highest { background-color: var(--surface-highest); }
+
   .bg-md-surface { background-color: var(--md-surface); }
   .bg-md-surface-dim { background-color: var(--md-surface-dim); }
   .bg-md-surface-bright { background-color: var(--md-surface-bright); }
-  .bg-md-surface-container-lowest { background-color: var(--md-surface-container-lowest); }
-  .bg-md-surface-container-low { background-color: var(--md-surface-container-low); }
-  .bg-md-surface-container { background-color: var(--md-surface-container); }
-  .bg-md-surface-container-high { background-color: var(--md-surface-container-high); }
-  .bg-md-surface-container-highest { background-color: var(--md-surface-container-highest); }
   .text-md-on-surface { color: var(--md-on-surface); }
   .text-md-on-surface-variant { color: var(--md-on-surface-variant); }
   .border-md-outline { border-color: var(--md-outline); }
   .border-md-outline-variant { border-color: var(--md-outline-variant); }
+
+  /* Platform-Adaptive Chrome Surfaces (Opaque on Android, Liquid Glass on iOS) */
+  .platform-chrome-top,
+  .glass-header {
+    background-color: var(--chrome-top-bg);
+    backdrop-filter: var(--chrome-backdrop-filter);
+    -webkit-backdrop-filter: var(--chrome-backdrop-filter);
+    border-bottom: var(--chrome-border-width) solid var(--pos-border);
+    box-shadow: var(--chrome-specular-shadow);
+  }
+  .platform-chrome-bottom {
+    background-color: var(--chrome-bottom-bg);
+    backdrop-filter: var(--chrome-backdrop-filter);
+    -webkit-backdrop-filter: var(--chrome-backdrop-filter);
+    border-top: var(--chrome-border-width) solid var(--pos-border);
+    box-shadow: var(--chrome-specular-shadow);
+  }
+  .platform-sheet-surface,
+  .pos-bottom-sheet {
+    border-top-left-radius: var(--radius-sheet, 28px);
+    border-top-right-radius: var(--radius-sheet, 28px);
+    background-color: var(--sheet-bg, var(--pos-panel));
+    backdrop-filter: var(--chrome-backdrop-filter, none);
+    -webkit-backdrop-filter: var(--chrome-backdrop-filter, none);
+    box-shadow: var(--chrome-specular-shadow), 0 -12px 32px rgba(0, 0, 0, 0.22);
+    max-height: calc(100dvh - var(--safe-top, 16px) - 24px);
+    padding-bottom: max(16px, var(--safe-bottom, 12px), var(--keyboard-height, 0px));
+    animation: sheet-enter-bottom 160ms var(--motion-sheet-enter, cubic-bezier(0.16, 1, 0.3, 1)) both;
+  }
+  @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    .platform-chrome-top,
+    .glass-header,
+    .platform-chrome-bottom,
+    .platform-sheet-surface,
+    .pos-bottom-sheet {
+      background-color: var(--pos-panel);
+    }
+  }
+
+  /* Standard M3 / iOS mobile form field (16px floor on <640px per R-ERG-02) */
+  .m3-field {
+    min-height: 48px;
+    font-size: 16px;
+    background-color: var(--pos-input-bg);
+    color: var(--pos-text);
+    border: 1px solid var(--pos-border);
+    border-radius: var(--radius-card-inset, 12px);
+    padding-inline: 0.875rem;
+  }
 
   /* Dynamic viewport height (keyboard / browser-chrome resilient) */
   .h-dvh-shell { height: 100dvh; }
@@ -225,9 +611,7 @@ html.dark .text-pos-accent-indigo { color: #818cf8; }
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
-  /* Horizontal-scroll affordance: fade the trailing edge so a chip strip or
-     KPI row reads as "more to the right" instead of a hard-clipped wall.
-     Paired with scroll-snap containers, never used on the modal body. */
+  /* Horizontal-scroll affordance: fade the trailing edge */
   .scroll-fade-x {
     mask-image: linear-gradient(to right, black 0%, black 85%, transparent 100%);
     -webkit-mask-image: linear-gradient(to right, black 0%, black 85%, transparent 100%);
@@ -241,45 +625,136 @@ html.dark .text-pos-accent-indigo { color: #818cf8; }
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum" 1;
   }
-  /* Standard M3 32x4dp bottom sheet drag handle */
+  /* Platform-adaptive bottom sheet drag handle (32x4px Android / 36x5px iOS) */
   .sheet-handle {
-    width: 32px;
-    height: 4px;
+    width: var(--sheet-handle-width, 32px);
+    height: var(--sheet-handle-height, 4px);
     border-radius: 9999px;
-    background-color: var(--pos-muted);
-    opacity: 0.35;
+    background-color: var(--md-on-surface-variant, var(--pos-muted));
+    opacity: var(--sheet-handle-opacity, 0.40);
     margin: 8px auto;
+    flex-shrink: 0;
   }
-  /* Tactile button press feedback with authentic spring rebound */
+  html[data-platform="ios"] .sheet-handle {
+    width: 36px;
+    height: 5px;
+    opacity: 0.5;
+    margin: 6px auto 8px;
+  }
+
+  /* Tactile button press feedback (.active-press) */
   .active-press {
-    transition: transform 0.2s var(--motion-spring-press, cubic-bezier(0.34, 1.4, 0.64, 1));
-    will-change: transform;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
     -webkit-user-select: none;
     user-select: none;
+    will-change: transform;
+    transition:
+      transform var(--motion-spring-spatial-fast, 350ms cubic-bezier(0.42, 1.67, 0.21, 0.90)),
+      opacity var(--motion-spring-effects-fast, 150ms cubic-bezier(0.31, 0.94, 0.34, 1.00)),
+      background-color var(--motion-spring-effects-fast, 150ms cubic-bezier(0.31, 0.94, 0.34, 1.00)),
+      border-color var(--motion-spring-effects-fast, 150ms cubic-bezier(0.31, 0.94, 0.34, 1.00));
   }
-  .active-press:active {
-    transform: scale(0.96);
-    transition-duration: 0.08s;
+  .active-press:active:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(var(--motion-press-scale, 0.96));
+    transition-duration: 80ms;
     transition-timing-function: var(--motion-press-in, cubic-bezier(0.25, 1, 0.5, 1));
   }
-  /* M3 28dp sheet corner radius */
+  html[data-platform="ios"] .active-press {
+    transition:
+      transform var(--motion-ios-spring, 320ms cubic-bezier(0.32, 0.72, 0, 1)),
+      opacity var(--motion-ios-press, 120ms cubic-bezier(0.25, 1, 0.5, 1)),
+      background-color var(--motion-ios-press, 120ms cubic-bezier(0.25, 1, 0.5, 1));
+  }
+  html[data-platform="ios"] .active-press:active:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(0.97);
+    opacity: 0.85;
+    transition:
+      transform var(--motion-ios-press, 120ms cubic-bezier(0.25, 1, 0.5, 1)),
+      opacity var(--motion-ios-press, 120ms cubic-bezier(0.25, 1, 0.5, 1));
+  }
+
+  /* M3 Expressive Shape-Morphing Pill (.m3-morph-pill & .active-morph-pill per G-05) */
+  .m3-morph-pill,
+  .active-morph-pill {
+    position: relative;
+    border-radius: 9999px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+    will-change: border-radius, transform;
+    transition:
+      border-radius var(--motion-spring-spatial-fast, 350ms cubic-bezier(0.42, 1.67, 0.21, 0.90)),
+      transform var(--motion-spring-spatial-fast, 350ms cubic-bezier(0.42, 1.67, 0.21, 0.90)),
+      background-color var(--motion-spring-effects-fast, 150ms cubic-bezier(0.31, 0.94, 0.34, 1.00)),
+      border-color var(--motion-spring-effects-fast, 150ms cubic-bezier(0.31, 0.94, 0.34, 1.00)),
+      color var(--motion-spring-effects-fast, 150ms cubic-bezier(0.31, 0.94, 0.34, 1.00));
+  }
+  .m3-morph-pill:active:not(:disabled):not([aria-disabled="true"]),
+  .active-morph-pill:active:not(:disabled):not([aria-disabled="true"]) {
+    border-radius: var(--radius-button-active, 16px);
+    transform: scale(0.97);
+    background-image: linear-gradient(
+      color-mix(in oklab, currentColor 10%, transparent),
+      color-mix(in oklab, currentColor 10%, transparent)
+    );
+    transition:
+      border-radius 80ms cubic-bezier(0.25, 1, 0.5, 1),
+      transform 80ms cubic-bezier(0.25, 1, 0.5, 1),
+      background-color 80ms cubic-bezier(0.31, 0.94, 0.34, 1.00);
+  }
+  .m3-morph-pill[aria-pressed="true"],
+  .m3-morph-pill[aria-selected="true"],
+  .active-morph-pill[aria-pressed="true"],
+  .active-morph-pill[aria-selected="true"] {
+    border-radius: var(--radius-button-active, 16px);
+  }
+  html[data-platform="ios"] .m3-morph-pill,
+  html[data-platform="ios"] .m3-morph-pill:active:not(:disabled):not([aria-disabled="true"]),
+  html[data-platform="ios"] .m3-morph-pill[aria-pressed="true"],
+  html[data-platform="ios"] .m3-morph-pill[aria-selected="true"],
+  html[data-platform="ios"] .active-morph-pill,
+  html[data-platform="ios"] .active-morph-pill:active:not(:disabled):not([aria-disabled="true"]),
+  html[data-platform="ios"] .active-morph-pill[aria-pressed="true"],
+  html[data-platform="ios"] .active-morph-pill[aria-selected="true"] {
+    border-radius: 9999px;
+    background-image: none;
+  }
+  html[data-platform="ios"] .m3-morph-pill,
+  html[data-platform="ios"] .active-morph-pill {
+    transition:
+      transform var(--motion-ios-spring, 320ms cubic-bezier(0.32, 0.72, 0, 1)),
+      opacity var(--motion-ios-press, 120ms cubic-bezier(0.25, 1, 0.5, 1)),
+      background-color var(--motion-ios-press, 120ms cubic-bezier(0.25, 1, 0.5, 1));
+  }
+  html[data-platform="ios"] .m3-morph-pill:active:not(:disabled):not([aria-disabled="true"]),
+  html[data-platform="ios"] .active-morph-pill:active:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(0.97);
+    opacity: 0.85;
+    transition:
+      transform var(--motion-ios-press, 120ms cubic-bezier(0.25, 1, 0.5, 1)),
+      opacity var(--motion-ios-press, 120ms cubic-bezier(0.25, 1, 0.5, 1));
+  }
+
+  /* Sheet corner radius */
   .rounded-t-m3 {
-    border-top-left-radius: 28px;
-    border-top-right-radius: 28px;
+    border-top-left-radius: var(--radius-sheet, 28px);
+    border-top-right-radius: var(--radius-sheet, 28px);
   }
   @media (max-width: 640px) {
     .rounded-t-3xl {
-      border-top-left-radius: 28px !important;
-      border-top-right-radius: 28px !important;
+      border-top-left-radius: var(--radius-sheet, 28px) !important;
+      border-top-right-radius: var(--radius-sheet, 28px) !important;
     }
   }
-  /* iOS 18 Frosted Glass Material with specular top sheen */
+  /* iOS 26 Liquid Glass Material with specular top sheen */
   .ios-glass {
     background-color: var(--ios-glass-bg);
-    backdrop-filter: blur(var(--ios-glass-blur, 24px)) saturate(var(--ios-glass-saturate, 180%));
-    -webkit-backdrop-filter: blur(var(--ios-glass-blur, 24px)) saturate(var(--ios-glass-saturate, 180%));
+    backdrop-filter: blur(var(--ios-glass-blur, 20px)) saturate(var(--ios-glass-saturate, 180%));
+    -webkit-backdrop-filter: blur(var(--ios-glass-blur, 20px)) saturate(var(--ios-glass-saturate, 180%));
     border-color: var(--ios-glass-border);
-    box-shadow: inset 0 1px 0 0 var(--ios-glass-highlight, rgba(255, 255, 255, 0.4));
+    box-shadow: inset 0 0.5px 0 0 var(--ios-glass-highlight, rgba(255, 255, 255, 0.4));
   }
   @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
     .ios-glass {
@@ -291,27 +766,58 @@ html.dark .text-pos-accent-indigo { color: #818cf8; }
     min-width: 48px;
     min-height: 48px;
   }
-  /* Centralized status-tint combos (mirrors the recurring
-     bg-[color]/10 + border-[color]/30 + text-[color]-300/400 patterns used 10+ times).
-     Additive tokens only — existing usages keep their own classes. */
-  .pos-status-danger {
-    background-color: rgb(244 63 94 / 0.1);
-    border-color: rgb(244 63 94 / 0.3);
-    color: #fda4af;
+
+  /* Contrast-verified Light & Dark semantic status-tint classes
+     (Both .pos-status-* and .status-* aliases supported) */
+  .pos-status-ok,
+  .status-ok {
+    background-color: var(--status-ok-bg);
+    border-color: var(--status-ok-border);
+    color: var(--status-ok-fg);
   }
-  .pos-status-warn {
-    background-color: rgb(245 158 11 / 0.1);
-    border-color: rgb(245 158 11 / 0.3);
-    color: #fcd34d;
+  .pos-status-warn,
+  .status-warn {
+    background-color: var(--status-warn-bg);
+    border-color: var(--status-warn-border);
+    color: var(--status-warn-fg);
   }
-  .pos-status-ok {
-    background-color: rgb(16 185 129 / 0.1);
-    border-color: rgb(16 185 129 / 0.3);
-    color: #6ee7b7;
+  .pos-status-danger,
+  .status-danger {
+    background-color: var(--status-danger-bg);
+    border-color: var(--status-danger-border);
+    color: var(--status-danger-fg);
   }
-  /* Centralized card radius alias (same pixels as rounded-2xl). */
+  .pos-status-info,
+  .status-info {
+    background-color: var(--status-info-bg);
+    border-color: var(--status-info-border);
+    color: var(--status-info-fg);
+  }
+  .pos-status-vip,
+  .status-vip {
+    background-color: var(--status-vip-bg);
+    border-color: var(--status-vip-border);
+    color: var(--status-vip-fg);
+  }
+  .pos-status-wholesale,
+  .status-wholesale {
+    background-color: var(--status-wholesale-bg);
+    border-color: var(--status-wholesale-border);
+    color: var(--status-wholesale-fg);
+  }
+  .pos-status-neutral,
+  .status-neutral {
+    background-color: var(--status-neutral-bg);
+    border-color: var(--status-neutral-border);
+    color: var(--status-neutral-fg);
+  }
+
+  /* Centralized card radius aliases */
   .rounded-pos-card {
-    border-radius: var(--pos-radius-card);
+    border-radius: var(--radius-card, 16px);
+  }
+  .rounded-pos-card-inset {
+    border-radius: var(--radius-card-inset, 12px);
   }
 
   /* Entrance animations for bottom sheets, modals, and toasts */
@@ -358,8 +864,8 @@ html.dark .text-pos-accent-indigo { color: #818cf8; }
 /* Keyframes for entrance transitions */
 @keyframes sheet-enter-bottom {
   from {
-    transform: translateY(100%);
-    opacity: 0.8;
+    transform: translateY(16px);
+    opacity: 0.95;
   }
   to {
     transform: translateY(0);
@@ -472,11 +978,51 @@ html.dark {
   --pos-on-info: #082f49;
 }
 
-/* Registering the palette here is what makes `bg-pos-danger/10` resolve:
-   Tailwind v4 derives the utility from `--color-pos-danger` and composes the
-   alpha modifier with color-mix against the var, so the light/dark override
-   above flows through without a second class. */
+/* Registering the palette here is what makes `bg-pos-danger/10`,
+   `border-pos-border/40`, `bg-pos-panel/95`, etc. resolve: Tailwind v4 derives
+   the utility from `--color-*` and composes the alpha modifier with color-mix
+   against the var, so the light/dark override flows through automatically. */
 @theme {
+  /* Core POS Tokens (Desktop + Mobile unified) */
+  --color-pos-bg: var(--pos-bg);
+  --color-pos-panel: var(--pos-panel);
+  --color-pos-card: var(--pos-card);
+  --color-pos-hover: var(--pos-hover);
+  --color-pos-border: var(--pos-border);
+  --color-pos-text: var(--pos-text);
+  --color-pos-muted: var(--pos-muted);
+  --color-pos-input-bg: var(--pos-input-bg);
+  --color-pos-focus: var(--pos-focus);
+  --color-pos-accent: var(--pos-accent);
+
+  /* Legacy Desktop Brand Colors from tailwind.config.js */
+  --color-pos-green: #22c55e;
+  --color-pos-blue: #0284c7;
+  --color-pos-apple: #ffffff;
+  --color-pos-dark-apple: #18181b;
+
+  /* 5-Step Surface Hierarchy */
+  --color-surface-lowest: var(--surface-lowest);
+  --color-surface-low: var(--surface-low);
+  --color-surface: var(--surface);
+  --color-surface-high: var(--surface-high);
+  --color-surface-highest: var(--surface-highest);
+
+  /* M3 Tonal Surface Aliases */
+  --color-md-surface: var(--md-surface);
+  --color-md-surface-dim: var(--md-surface-dim);
+  --color-md-surface-bright: var(--md-surface-bright);
+  --color-md-surface-container-lowest: var(--md-surface-container-lowest);
+  --color-md-surface-container-low: var(--md-surface-container-low);
+  --color-md-surface-container: var(--md-surface-container);
+  --color-md-surface-container-high: var(--md-surface-container-high);
+  --color-md-surface-container-highest: var(--md-surface-container-highest);
+  --color-md-on-surface: var(--md-on-surface);
+  --color-md-on-surface-variant: var(--md-on-surface-variant);
+  --color-md-outline: var(--md-outline);
+  --color-md-outline-variant: var(--md-outline-variant);
+
+  /* Semantic Status Role Palette */
   --color-pos-danger: var(--pos-danger);
   --color-pos-warn: var(--pos-warn);
   --color-pos-ok: var(--pos-ok);
@@ -487,8 +1033,97 @@ html.dark {
   --color-pos-on-ok: var(--pos-on-ok);
   --color-pos-on-info: var(--pos-on-info);
 
-  --font-mono-pos: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono",
-    Menlo, Consolas, "Liberation Mono", monospace;
+  --color-status-ok: var(--status-ok);
+  --color-status-ok-fg: var(--status-ok-fg);
+  --color-status-ok-bg: var(--status-ok-bg);
+  --color-status-ok-border: var(--status-ok-border);
+
+  --color-status-warn: var(--status-warn);
+  --color-status-warn-fg: var(--status-warn-fg);
+  --color-status-warn-bg: var(--status-warn-bg);
+  --color-status-warn-border: var(--status-warn-border);
+
+  --color-status-danger: var(--status-danger);
+  --color-status-danger-fg: var(--status-danger-fg);
+  --color-status-danger-bg: var(--status-danger-bg);
+  --color-status-danger-border: var(--status-danger-border);
+
+  --color-status-info: var(--status-info);
+  --color-status-info-fg: var(--status-info-fg);
+  --color-status-info-bg: var(--status-info-bg);
+  --color-status-info-border: var(--status-info-border);
+
+  --color-status-vip: var(--status-vip);
+  --color-status-vip-fg: var(--status-vip-fg);
+  --color-status-vip-bg: var(--status-vip-bg);
+  --color-status-vip-border: var(--status-vip-border);
+
+  --color-status-wholesale: var(--status-wholesale);
+  --color-status-wholesale-fg: var(--status-wholesale-fg);
+  --color-status-wholesale-bg: var(--status-wholesale-bg);
+  --color-status-wholesale-border: var(--status-wholesale-border);
+
+  --color-status-neutral: var(--status-neutral);
+  --color-status-neutral-fg: var(--status-neutral-fg);
+  --color-status-neutral-bg: var(--status-neutral-bg);
+  --color-status-neutral-border: var(--status-neutral-border);
+
+  --font-sans-pos: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Inter", "Roboto", "Noto Sans Arabic", "Segoe UI", system-ui, sans-serif;
+  --font-mono-pos: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono",
+    "Roboto Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Desktop Type Scale */
+  --text-ui-2xs: 11px;
+  --text-ui-2xs--line-height: 14px;
+  --text-ui-xs: 12px;
+  --text-ui-xs--line-height: 16px;
+  --text-ui-sm: 13px;
+  --text-ui-sm--line-height: 18px;
+  --text-ui-md: 14px;
+  --text-ui-md--line-height: 20px;
+  --text-ui-lg: 16px;
+  --text-ui-lg--line-height: 22px;
+  --text-ui-xl: 20px;
+  --text-ui-xl--line-height: 26px;
+  --text-ui-2xl: 24px;
+  --text-ui-2xl--line-height: 30px;
+  --text-kpi: 30px;
+  --text-kpi--line-height: 34px;
+
+  /* Desktop Elevation Surfaces */
+  --color-surface-canvas: var(--surface-canvas);
+  --color-surface-panel: var(--surface-panel);
+  --color-surface-card: var(--surface-card);
+  --color-surface-overlay: var(--surface-overlay);
+
+  /* Desktop Hairline Borders */
+  --color-line-subtle: var(--border-subtle);
+  --color-line: var(--border-default);
+  --color-line-strong: var(--border-strong);
+
+  /* Desktop Typography Roles */
+  --color-fg: var(--text-primary);
+  --color-fg-secondary: var(--text-secondary);
+  --color-fg-muted: var(--text-muted);
+
+  /* Desktop Border Radii */
+  --radius-ui-xs: 4px;
+  --radius-ui-sm: 6px;
+  --radius-ui-md: 8px;
+  --radius-ui-lg: 10px;
+  --radius-ui-xl: 14px;
+
+  /* Standard Component Control Heights */
+  --spacing-ctl-sm: 28px;
+  --spacing-ctl-md: 34px;
+  --spacing-ctl-lg: 40px;
+  --spacing-ctl-xl: 48px;
+
+  /* Desktop Snappy Spring Physics */
+  --ease-snap: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-snap-fast: 100ms;
+  --dur-snap-normal: 150ms;
 }
 
 /* Micro-badge: the shared shape of every status pill in the audit journal.
@@ -659,16 +1294,57 @@ html.dark .hotkey-badge {
   outline-offset: 2px;
 }
 
-/* prefers-reduced-motion: kill slide/fade/zoom/scan/shake animation;
-   keep (near-instant) opacity so show/hide logic never breaks layout. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--dur-m3-effects-default, 200ms);
+  animation-timing-function: var(--ease-m3-effects-default, cubic-bezier(0.34, 0.80, 0.34, 1.00));
+}
+
+/* prefers-reduced-motion: complete deterministic collapse (R-MOT-03).
+   1. Collapses all spatial & effects spring duration tokens to 0.01ms.
+   2. Neutralizes :active scale transforms on .active-press and .m3-morph-pill / .active-morph-pill.
+   3. Disables ::view-transition animations so DOM updates settle in 1 frame. */
 @media (prefers-reduced-motion: reduce) {
+  :root,
+  html[data-platform="android"],
+  html[data-platform="ios"] {
+    --motion-spring-spatial-fast: 0.01ms linear;
+    --motion-spring-spatial-default: 0.01ms linear;
+    --motion-spring-effects-fast: 0.01ms linear;
+    --motion-spring-effects-default: 0.01ms linear;
+    --motion-ios-spring: 0.01ms linear;
+    --motion-ios-press: 0.01ms linear;
+    --motion-active-spatial-fast: 0.01ms linear;
+    --motion-active-spatial-default: 0.01ms linear;
+    --motion-active-effects-fast: 0.01ms linear;
+    --motion-active-effects-default: 0.01ms linear;
+    --motion-duration-sheet: 0.01ms;
+    --dur-m3-spatial-fast: 0.01ms;
+    --dur-m3-spatial-default: 0.01ms;
+    --dur-m3-effects-fast: 0.01ms;
+    --dur-m3-effects-default: 0.01ms;
+    --dur-ios-spring: 0.01ms;
+    --dur-ios-press: 0.01ms;
+  }
+
   *,
   *::before,
-  *::after {
+  *::after,
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
     animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
     scroll-behavior: auto !important;
+  }
+
+  .active-press:active:not(:disabled):not([aria-disabled="true"]),
+  .m3-morph-pill:active:not(:disabled):not([aria-disabled="true"]),
+  .active-morph-pill:active:not(:disabled):not([aria-disabled="true"]) {
+    transform: none !important;
   }
 }
 
@@ -1406,6 +2082,7 @@ html.dark .hotkey-badge {
 
 .money-input__field {
   width: 100%;
+  min-height: 48px;
   padding-inline-end: 3rem; /* room for the badge */
   text-align: end;
   font-variant-numeric: tabular-nums;
@@ -1432,7 +2109,7 @@ html.dark .hotkey-badge {
 }
 
 .money-input__error {
-  color: #b3261e;
+  color: var(--status-danger-fg, #b3261e);
   font-size: 0.75rem;
 }
 

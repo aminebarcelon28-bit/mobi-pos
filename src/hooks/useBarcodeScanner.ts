@@ -230,6 +230,26 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
     const effectiveLower = effectiveCode.toLowerCase();
     const effectiveDigits = effectiveCode.replace(/[^0-9]/g, '');
 
+    // Check if code matches a Repair Order (SAV ticket number e.g. SAV-2026-0001)
+    const savTicketMatch = (store.repairOrders || []).find(
+      (r) =>
+        r.ticketNumber === effectiveCode ||
+        (effectiveCode.includes('SAV-') &&
+          r.ticketNumber === effectiveCode.match(/SAV-[A-Za-z0-9_-]+/)?.[0])
+    );
+    if (savTicketMatch) {
+      soundEngine.playSuccess();
+      void store.settleAndDeliverRepair(savTicketMatch.id).then((res) => {
+        if (res.action === 'cart') {
+          setLastScannedCode(null);
+        } else {
+          store.openModal('repair_work_order');
+          setLastScannedCode(null);
+        }
+      });
+      return;
+    }
+
     // Check if code matches a Customer Loyalty Card Barcode (PVC / Digital Pass)
     // Exact keys hit the prebuilt map; only the substring fallback scans entries
     // (over precomputed cleanIds, no per-item regex).

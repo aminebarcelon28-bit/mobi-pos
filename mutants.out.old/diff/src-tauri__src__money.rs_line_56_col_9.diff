@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace Money::from_minor -> Self with Default::default()
+@@ -48,17 +48,17 @@
+         };
+         write!(f, "[Money] {s}")
+     }
+ }
+ 
+ impl Money {
+     /// Single construction path for exact values.
+     pub fn from_minor(minor: i64) -> Self {
+-        Money(minor)
++        Default::default() /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     pub fn to_minor(self) -> i64 {
+         self.0
+     }
+ 
+     /// PD-22 string-based entry. NEVER float-based: the decimal string is
+     /// split and concatenated into minor units ("130.5"→13050, "4.35"→435).

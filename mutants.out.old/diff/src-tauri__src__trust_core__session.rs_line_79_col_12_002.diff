@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/session.rs
++++ replace > with >= in evaluate_continuity
+@@ -71,17 +71,17 @@
+     }
+     let delta_m = current_m - checkpoint.monotonic_ms;
+ 
+     // Signal 3: ΔM/ΔW consistency cross-check closes the off-for-days hole:
+     // a reboot followed by a long uptime can pass signal 2 while the wall
+     // advanced by days. Unsigned comparison via saturating arithmetic.
+     let delta_w = current_wall_utc_ms.saturating_sub(checkpoint.wall_utc_ms);
+     let gap = delta_m.saturating_sub(delta_w).max(delta_w.saturating_sub(delta_m));
+-    if gap > tolerance_ms {
++    if gap >= /* ~ changed by cargo-mutants ~ */ tolerance_ms {
+         return Continuity::NewSession;
+     }
+ 
+     Continuity::Continuous { delta_m_ms: delta_m }
+ }
+ 
+ #[cfg(test)]
+ mod tests {

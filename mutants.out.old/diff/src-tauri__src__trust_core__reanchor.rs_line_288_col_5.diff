@@ -1,0 +1,29 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace trust_reanchor_time -> Result<u64, TrustError> with Ok(0)
+@@ -280,25 +280,17 @@
+ pub fn trust_reanchor_challenge() -> Result<ReanchorChallenge, TrustError> {
+     require_capability("trust_reanchor_challenge", Capability::LicenseManagement)?;
+     Ok(issue_reanchor_challenge())
+ }
+ 
+ /// `#[tauri::command]` wrapper: verify + anchor + persist.
+ #[tauri::command]
+ pub fn trust_reanchor_time(app: tauri::AppHandle, assertion: String) -> Result<u64, TrustError> {
+-    require_capability("trust_reanchor_time", Capability::LicenseManagement)?;
+-    if assertion.len() > 8 * 1024 {
+-        return Err(TrustError::IPCProtocolError {
+-            reason: "time assertion oversized",
+-        });
+-    }
+-    let trusted = apply_reanchor_assertion(assertion.trim())?;
+-    persist_current_snapshot(&app);
+-    Ok(trusted)
++    Ok(0) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::super::license_token::verify_token_with_domain;
+     use super::*;
+     use crate::trust_core::ipc_authorizer::serial_test_lock;
+     use ed25519_dalek::{Signer, SigningKey};

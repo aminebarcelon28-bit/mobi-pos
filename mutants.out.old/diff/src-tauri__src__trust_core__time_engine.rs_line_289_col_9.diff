@@ -1,0 +1,25 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace TimeKernel::issue_challenge with ()
+@@ -281,21 +281,17 @@
+         if let Some(seq) = server_seq {
+             g.last_server_seq = Some(seq);
+         }
+         g.challenge = None;
+     }
+ 
+     /// Issue a single-use challenge (replaces any outstanding one).
+     pub fn issue_challenge(&self, nonce_hex: String, expires_at_ms: u64) {
+-        let _guard = self.challenge_lock.lock();
+-        self.inner.write().challenge = Some(Challenge {
+-            nonce_hex,
+-            expires_at_ms,
+-        });
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Peek the active challenge without consuming (for diagnostics/tests).
+     #[cfg(test)]
+     pub fn peek_challenge(&self) -> Option<(String, u64)> {
+         self.inner
+             .read()
+             .challenge

@@ -26,6 +26,7 @@ import { computeCartTotals, computeTradeInSettlement } from '../../utils/receipt
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { MoneyInput } from '../ui/MoneyInput';
 import { calculateMaxAllowedCredit, calculateCustomerTier, normalizeLoyaltyConfig } from '../../utils/loyaltyEngine';
+import { Kbd } from '../../design-system/desktop/Kbd';
 
 /** Display-only tier resolution — the cached loyaltyTier string may be stale after renames. */
 const resolveTierName = (totalSpent?: number): string => {
@@ -525,13 +526,18 @@ export const PaymentModal: React.FC = () => {
               <p className="text-[10px] text-pos-muted truncate">Encaissement Espèces & Gestion Rigoureuse des Dettes Clients</p>
             </div>
           </div>
-          <button
-            onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
-            aria-label="Fermer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="hidden sm:inline-flex">
+              <Kbd size="sm">Esc</Kbd>
+            </span>
+            <button
+              onClick={closeModal}
+              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+              aria-label="Fermer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Content */}
@@ -549,7 +555,7 @@ export const PaymentModal: React.FC = () => {
                 </span>
               </div>
               <div className="text-right">
-                <span data-testid="pay-net" className={`text-3xl font-black tracking-tight font-mono ${isRefundDue ? 'text-rose-400' : 'text-emerald-400'}`}>
+                <span data-testid="pay-net" className={`text-3xl font-black tracking-tight font-mono num ${isRefundDue ? 'text-rose-400' : 'text-emerald-400'}`}>
                   {isRefundDue ? `-${formatDZD(refundDue)}` : formatDZD(netToPay)}
                 </span>
                 {isRefundDue && (

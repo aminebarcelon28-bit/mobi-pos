@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace <impl MonotonicSource for ManualClock>::boot_id -> Option<String> with Some(String::new())
+@@ -254,17 +254,17 @@
+ }
+ 
+ impl MonotonicSource for ManualClock {
+     fn now_ms(&self) -> Option<u64> {
+         Some(self.ms)
+     }
+ 
+     fn boot_id(&self) -> Option<String> {
+-        self.boot.map(|s| s.to_string())
++        Some(String::new()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     fn source_name(&self) -> &'static str {
+         "test:manual"
+     }
+ }
+ 
+ #[cfg(test)]

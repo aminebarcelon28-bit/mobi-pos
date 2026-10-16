@@ -13,6 +13,7 @@ import {
   Activity,
   CheckCircle2,
   Key,
+  ArrowLeft,
 } from 'lucide-react';
 import { syncManager } from '../../../sync/SyncManager';
 import type { SyncStatus, MerchantDevice } from '../../../sync/types';
@@ -29,8 +30,13 @@ import {
   type NativeDeviceCredentials,
 } from '../../../api/device';
 import { getStableDeviceId } from '../../../sync/device';
+import { useTranslation, Bdi } from '../../../i18n';
 
-export const SyncDiagnosticsTab: React.FC = () => {
+export interface SyncDiagnosticsTabProps {
+  onBack?: () => void;
+}
+
+export const SyncDiagnosticsTab: React.FC<SyncDiagnosticsTabProps> = ({ onBack }) => {
   const {
     products,
     transactions,
@@ -43,6 +49,7 @@ export const SyncDiagnosticsTab: React.FC = () => {
     drainArmed,
     refreshSyncHealth,
   } = usePosStore();
+  const { t, locale } = useTranslation();
 
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({
     online: typeof navigator === 'undefined' ? true : navigator.onLine,
@@ -120,9 +127,9 @@ export const SyncDiagnosticsTab: React.FC = () => {
   const loadDeviceIdentity = async () => {
     setIsLoadingIdentity(true);
     try {
-      const [creds, consistent, stableId] = await Promise.all([
-        getCachedDeviceIdentity().catch(() => null),
-        verifyDeviceIdentityConsistency().catch(() => null),
+      const creds = await getCachedDeviceIdentity().catch(() => null);
+      const [consistent, stableId] = await Promise.all([
+        creds?.publicKeyHex ? verifyDeviceIdentityConsistency().catch(() => null) : Promise.resolve(null),
         getStableDeviceId().catch(() => ''),
       ]);
       setNativeIdentity(creds);
@@ -140,6 +147,10 @@ export const SyncDiagnosticsTab: React.FC = () => {
   const [merchantDevices, setMerchantDevices] = useState<MerchantDevice[]>([]);
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
   const [deviceActionId, setDeviceActionId] = useState<string | null>(null);
+  const [confirmingRevoke, setConfirmingRevoke] = useState<{
+    deviceId: string;
+    revoked: boolean;
+  } | null>(null);
 
   const loadMerchantDevices = async () => {
     setIsLoadingDevices(true);
@@ -152,13 +163,8 @@ export const SyncDiagnosticsTab: React.FC = () => {
     }
   };
 
-  const handleDeviceRevocation = async (deviceId: string, revoked: boolean) => {
-    const ok = window.confirm(
-      revoked
-        ? 'Révoquer cet appareil ? Il ne recevra plus les ventes et ne pourra plus envoyer les siennes, jusqu’à réadmission.'
-        : 'Réadmettre cet appareil ? Il reprendra la synchronisation.'
-    );
-    if (!ok) return;
+  const executeDeviceRevocation = async (deviceId: string, revoked: boolean) => {
+    setConfirmingRevoke(null);
     setDeviceActionId(deviceId);
     try {
       const done = await syncManager.setDeviceRevoked(deviceId, revoked);
@@ -254,11 +260,13 @@ export const SyncDiagnosticsTab: React.FC = () => {
 
   // Full repair synchronization (re-enqueue all + reset cursors + verify).
   const [isFullSyncing, setIsFullSyncing] = useState(false);
+  const [confirmingRepair, setConfirmingRepair] = useState(false);
   const [fullSyncStep, setFullSyncStep] = useState('');
   const [fullSyncReport, setFullSyncReport] = useState<string | null>(null);
 
   const handleFullResync = async () => {
     soundEngine.playKeyBeep?.();
+    setConfirmingRepair(false);
     setIsFullSyncing(true);
     setFullSyncReport(null);
     setFullSyncStep('Démarrage…');
@@ -361,8 +369,33 @@ export const SyncDiagnosticsTab: React.FC = () => {
 
   const isSyncing = syncStatus.pushing || syncStatus.pulling || isManualSyncing;
 
+  const handleBackToManagement = () => {
+    soundEngine.playKeyBeep?.();
+    onBack?.();
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('mobi:navigate-tab', { detail: 'management' }));
+    }
+  };
+
   return (
-    <AppTabContent contentClassName="p-3.5 select-none">
+    <AppTabContent
+      pinnedTop={
+        <div className="px-3.5 pt-2.5 pb-2 bg-pos-bg border-b border-pos-border/60 flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={handleBackToManagement}
+            className="min-h-[48px] px-3.5 rounded-xl bg-pos-panel hover:bg-pos-hover border border-pos-border text-pos-text font-bold text-xs flex items-center gap-2 active-press transition cursor-pointer shadow-xs"
+          >
+            <ArrowLeft className="w-4 h-4 text-cyan-700 dark:text-cyan-400 shrink-0 rtl:rotate-180" aria-hidden="true" />
+            <span>{locale === 'ar' ? `${t.common.back} — ${t.nav.management}` : 'Retour à Gestion'}</span>
+          </button>
+          <span className="text-[11px] font-black uppercase tracking-wider text-pos-muted truncate">
+            {t.management.systemDiagnosticsCardTitle}
+          </span>
+        </div>
+      }
+      contentClassName="p-3.5 select-none"
+    >
       <div className="space-y-3.5 pb-2">
         {/* Cloud Status Card */}
         <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 shadow-sm">
@@ -371,8 +404,8 @@ export const SyncDiagnosticsTab: React.FC = () => {
               <div
                 className={`w-9 h-9 rounded-xl flex items-center justify-center ${
                   syncStatus.online
-                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                    : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                    ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
+                    : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/30'
                 }`}
               >
                 {syncStatus.online ? (
@@ -383,19 +416,19 @@ export const SyncDiagnosticsTab: React.FC = () => {
               </div>
               <div>
                 <h3 className="text-xs font-black text-pos-text">
-                  {syncStatus.online ? 'Connecté au Cloud Turso' : 'Mode Hors-Ligne Actif'}
+                  {syncStatus.online ? t.diagnostics.cloudConnectedTitle : t.diagnostics.offlineActiveTitle}
                 </h3>
                 <p className="text-[10px] text-pos-muted">
                   {syncStatus.online
-                    ? 'Réplication temps réel & outbox active'
-                    : 'Les ventes sont enregistrées localement (Contrat C2)'}
+                    ? t.diagnostics.cloudConnectedSubtitle
+                    : t.diagnostics.offlineActiveSubtitle}
                 </p>
               </div>
             </div>
 
             <span
-              className={`w-3 h-3 rounded-full ${
-                syncStatus.online ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'
+              className={`w-3 h-3 rounded-full shrink-0 ${
+                syncStatus.online ? 'bg-emerald-500 dark:bg-emerald-400 animate-pulse' : 'bg-rose-500 dark:bg-rose-400'
               }`}
             />
           </div>
@@ -405,32 +438,59 @@ export const SyncDiagnosticsTab: React.FC = () => {
             type="button"
             disabled={isSyncing}
             onClick={handleManualSync}
-            className="w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-md transition cursor-pointer disabled:opacity-50"
+            className="w-full min-h-[48px] py-2.5 px-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-slate-950 font-black text-xs flex items-center justify-center gap-2 shadow-md transition cursor-pointer disabled:opacity-50"
           >
-            <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
-            <span>{isSyncing ? 'Synchronisation en cours...' : 'Forcer la Synchronisation'}</span>
+            <RefreshCw className={`w-4 h-4 shrink-0 ${isSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+            <span>{isSyncing ? t.diagnostics.syncingInProgress : t.diagnostics.forceSyncButton}</span>
           </button>
 
-          {/* Full repair: re-enqueue all + reset cursors + verify (missing data). */}
-          <button
-            type="button"
-            disabled={isSyncing || isFullSyncing}
-            onClick={() => void handleFullResync()}
-            title="Renvoie tout vers le cloud, relit tout et vérifie — quand des informations manquent sur un appareil"
-            className="w-full min-h-[44px] py-2.5 px-3 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 active:scale-95 border border-cyan-500/40 text-cyan-200 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${isFullSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
-            <span>{isFullSyncing ? (fullSyncStep || 'Synchronisation complète…') : 'Synchronisation complète (réparer)'}</span>
-          </button>
+          {/* Full repair: re-enqueue all + reset cursors + verify (missing data) with inline confirmation */}
+          {!confirmingRepair ? (
+            <button
+              type="button"
+              disabled={isSyncing || isFullSyncing}
+              onClick={() => {
+                soundEngine.playKeyBeep?.();
+                setConfirmingRepair(true);
+              }}
+              title="Renvoie tout vers le cloud, relit tout et vérifie — quand des informations manquent sur un appareil"
+              className="w-full min-h-[48px] py-2.5 px-3 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 active:scale-95 border border-cyan-500/40 text-cyan-800 dark:text-cyan-200 font-black text-xs flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 shrink-0 ${isFullSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+              <span>{isFullSyncing ? (fullSyncStep || t.diagnostics.syncingInProgress) : t.diagnostics.fullRepairSyncButton}</span>
+            </button>
+          ) : (
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/35 space-y-2.5 animate-in fade-in">
+              <p className="text-[11px] font-bold text-amber-800 dark:text-amber-300 leading-relaxed">
+                Confirmer la synchronisation complète ? Toutes les écritures locales seront renvoyées et les curseurs de lecture réinitialisés.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmingRepair(false)}
+                  className="min-h-[48px] px-3 rounded-xl bg-pos-panel border border-pos-border text-pos-text font-bold text-xs cursor-pointer active-press transition"
+                >
+                  {t.common.cancel}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleFullResync()}
+                  className="min-h-[48px] px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer active-press transition"
+                >
+                  {locale === 'ar' ? t.common.confirm : 'Confirmer la réparation'}
+                </button>
+              </div>
+            </div>
+          )}
 
           {manualSyncMsg && (
-            <p className="text-[11px] font-bold text-center text-cyan-300 animate-in fade-in">
+            <p className="text-[11px] font-bold text-center text-cyan-800 dark:text-cyan-300 animate-in fade-in">
               {manualSyncMsg}
             </p>
           )}
 
           {fullSyncReport && (
-            <p className="text-[11px] font-bold text-center text-cyan-200 bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-2 animate-in fade-in">
+            <p className="text-[11px] font-bold text-center text-cyan-900 dark:text-cyan-200 bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-2 animate-in fade-in">
               {fullSyncReport}
             </p>
           )}
@@ -438,63 +498,63 @@ export const SyncDiagnosticsTab: React.FC = () => {
 
         {/* Turso Cloud Live Ping Card */}
         <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 shadow-sm text-xs">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <h4 className="text-[11px] font-black uppercase text-pos-muted tracking-wider flex items-center gap-1.5">
-              <Activity className="w-3.5 h-3.5 text-cyan-400" aria-hidden="true" />
-              Latence & Ping Cloud Turso
+              <Activity className="w-3.5 h-3.5 text-cyan-700 dark:text-cyan-400" aria-hidden="true" />
+              {t.diagnostics.pingCardTitle}
             </h4>
             <button
               type="button"
               disabled={isPingingCloud}
               onClick={() => void handleCloudPing()}
-              className="min-h-[44px] min-w-[44px] py-1.5 px-2.5 rounded-lg bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 font-bold text-[11px] flex items-center gap-1.5 active:scale-95 transition cursor-pointer disabled:opacity-50"
+              className="min-h-[48px] min-w-[48px] py-1.5 px-3 rounded-xl bg-cyan-500/15 border border-cyan-500/40 text-cyan-800 dark:text-cyan-300 font-bold text-[11px] flex items-center gap-1.5 active:scale-95 transition cursor-pointer disabled:opacity-50"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isPingingCloud ? 'animate-spin' : ''}`} aria-hidden="true" />
-              <span>Tester le Ping Cloud</span>
+              <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isPingingCloud ? 'animate-spin' : ''}`} aria-hidden="true" />
+              <span>{t.diagnostics.testPingButton}</span>
             </button>
           </div>
 
           {isPingingCloud ? (
-            <div className="p-3 bg-pos-panel/60 rounded-xl border border-pos-border flex items-center gap-2 text-cyan-300">
-              <RefreshCw className="w-4 h-4 animate-spin" aria-hidden="true" />
-              <span>Mesure de la latence réseau en cours...</span>
+            <div className="p-3 bg-pos-panel/60 rounded-xl border border-pos-border flex items-center gap-2 text-cyan-800 dark:text-cyan-300">
+              <RefreshCw className="w-4 h-4 animate-spin shrink-0" aria-hidden="true" />
+              <span>{t.diagnostics.measuringLatency}</span>
             </div>
           ) : cloudPing ? (
             <div className="space-y-2">
               <div
-                className={`p-3 rounded-xl border flex items-center justify-between ${
+                className={`p-3 rounded-xl border flex items-center justify-between gap-2 ${
                   cloudPing.ok
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                    : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
+                    : 'bg-rose-500/10 border-rose-500/30 text-rose-800 dark:text-rose-300'
                 }`}
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 min-w-0">
                   {cloudPing.ok ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" aria-hidden="true" />
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
                   ) : (
-                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" aria-hidden="true" />
+                    <AlertTriangle className="w-4 h-4 text-rose-700 dark:text-rose-400 shrink-0" aria-hidden="true" />
                   )}
-                  <div>
-                    <span className="font-bold block">
-                      {cloudPing.ok ? 'Base Cloud Accessible' : 'Erreur de Connexion'}
+                  <div className="min-w-0">
+                    <span className="font-bold block truncate">
+                      {cloudPing.ok ? t.diagnostics.cloudReachable : t.diagnostics.connectionError}
                     </span>
-                    <span className="text-[10px] opacity-80 block font-mono">
+                    <Bdi mono className="text-[10px] opacity-80 block truncate">
                       {cloudHost ? cloudHost : 'Hôte Turso'}
-                    </span>
+                    </Bdi>
                   </div>
                 </div>
 
                 {cloudPing.ok && (
-                  <div className="text-right">
-                    <span className="font-mono font-black text-sm px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 inline-block">
+                  <div className="text-end shrink-0">
+                    <Bdi mono className="font-black text-sm px-2 py-0.5 rounded-md pos-status-ok border inline-block">
                       {cloudPing.latencyMs} ms
-                    </span>
+                    </Bdi>
                     <span className="block text-[9px] text-pos-muted font-bold mt-0.5">
                       {cloudPing.latencyMs < 150
-                        ? 'Excellente'
+                        ? t.diagnostics.latencyExcellent
                         : cloudPing.latencyMs < 400
-                          ? 'Normale'
-                          : 'Élevée'}
+                          ? t.diagnostics.latencyNormal
+                          : t.diagnostics.latencyHigh}
                     </span>
                   </div>
                 )}
@@ -502,37 +562,37 @@ export const SyncDiagnosticsTab: React.FC = () => {
 
               {cloudPing.ok ? (
                 <div className="flex justify-between items-center text-[10px] text-pos-muted px-1 font-mono">
-                  <span>Schéma base : v{cloudPing.appliedVersion} (Prêt)</span>
-                  {lastPingAt && <span>Dernier test à {lastPingAt}</span>}
+                  <span>Schéma base : <Bdi mono>v{cloudPing.appliedVersion}</Bdi> (Prêt)</span>
+                  {lastPingAt && <span>Dernier test à <Bdi mono>{lastPingAt}</Bdi></span>}
                 </div>
               ) : (
-                <p className="text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/20 rounded-lg p-2 leading-relaxed">
+                <p className="text-[11px] text-rose-800 dark:text-rose-300 bg-rose-500/10 border border-rose-500/20 rounded-lg p-2 leading-relaxed">
                   {cloudPing.error}
                 </p>
               )}
             </div>
           ) : (
             <p className="text-[11px] text-pos-muted leading-relaxed">
-              Touchez « Tester le Ping Cloud » pour vérifier la connectivité et la latence en millisecondes.
+              Touchez « {t.diagnostics.testPingButton} » pour vérifier la connectivité et la latence en millisecondes.
             </p>
           )}
         </div>
 
         {/* Device Identity Certificate Status (TIER-B Cryptographic Identity) */}
         <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 shadow-sm text-xs">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <h4 className="text-[11px] font-black uppercase text-pos-muted tracking-wider flex items-center gap-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
-              Certificat & Identité Numérique (Tier B)
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+              {t.diagnostics.tierBCertTitle}
             </h4>
             <button
               type="button"
               disabled={isLoadingIdentity}
               onClick={() => void loadDeviceIdentity()}
-              className="min-h-[44px] min-w-[44px] py-1 px-2.5 rounded-lg bg-pos-panel border border-pos-border text-pos-muted font-bold text-[11px] flex items-center gap-1 active:scale-95 transition cursor-pointer disabled:opacity-50"
+              className="min-h-[48px] min-w-[48px] py-1.5 px-3 rounded-xl bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text font-bold text-[11px] flex items-center gap-1.5 active:scale-95 transition cursor-pointer disabled:opacity-50"
             >
-              <RefreshCw className={`w-3 h-3 ${isLoadingIdentity ? 'animate-spin' : ''}`} aria-hidden="true" />
-              <span>Vérifier l'identité</span>
+              <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isLoadingIdentity ? 'animate-spin' : ''}`} aria-hidden="true" />
+              <span>{t.diagnostics.verifyIdentityButton}</span>
             </button>
           </div>
 
@@ -541,37 +601,37 @@ export const SyncDiagnosticsTab: React.FC = () => {
             <div className="bg-pos-panel/60 p-2.5 rounded-xl border border-pos-border flex items-center justify-between">
               <div>
                 <span className="text-[10px] font-bold text-pos-muted uppercase tracking-wider block">
-                  Statut d'Enrôlement
+                  {t.diagnostics.enrollmentStatusLabel}
                 </span>
                 <span className="font-bold text-pos-text text-xs mt-0.5 block">
-                  {nativeIdentity?.publicKeyHex ? 'Certifié Ed25519 (Tier B)' : 'Identité Standard (Compagnon)'}
+                  {nativeIdentity?.publicKeyHex ? t.diagnostics.ed25519Enrolled : t.diagnostics.standardCompanionIdentity}
                 </span>
               </div>
               <span
                 className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                   nativeIdentity?.publicKeyHex
-                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
-                    : 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                    ? 'pos-status-ok'
+                    : 'pos-status-info'
                 }`}
               >
-                {nativeIdentity?.publicKeyHex ? 'Natif Enrôlé' : 'Web / App'}
+                {nativeIdentity?.publicKeyHex ? t.diagnostics.nativeEnrolledBadge : 'Web / App'}
               </span>
             </div>
 
             {/* Device ID & Key Fingerprint */}
             <div className="space-y-1.5 bg-pos-bg p-2.5 rounded-xl border border-pos-border text-[11px] font-mono">
-              <div className="flex justify-between items-center">
-                <span className="text-pos-muted text-[10px]">ID Appareil :</span>
-                <span className="text-pos-text font-bold truncate max-w-[200px]" title={authorshipId || nativeIdentity?.deviceId || ''}>
+              <div className="flex justify-between items-center gap-2">
+                <span className="text-pos-muted text-[10px] shrink-0">{t.diagnostics.deviceIdLabel}</span>
+                <Bdi mono className="text-pos-text font-bold truncate max-w-[200px]" title={authorshipId || nativeIdentity?.deviceId || ''}>
                   {authorshipId || nativeIdentity?.deviceId || 'Non assigné'}
-                </span>
+                </Bdi>
               </div>
               {nativeIdentity?.publicKeyHex && (
-                <div className="flex justify-between items-center border-t border-pos-border/40 pt-1.5">
-                  <span className="text-pos-muted text-[10px]">Clé Publique :</span>
-                  <span className="text-emerald-400 font-bold truncate max-w-[200px]" title={nativeIdentity.publicKeyHex}>
+                <div className="flex justify-between items-center gap-2 border-t border-pos-border/40 pt-1.5">
+                  <span className="text-pos-muted text-[10px] shrink-0">{t.diagnostics.publicKeyLabel}</span>
+                  <Bdi mono className="text-emerald-700 dark:text-emerald-400 font-bold truncate max-w-[200px]" title={nativeIdentity.publicKeyHex}>
                     ed25519:{nativeIdentity.publicKeyHex.slice(0, 16)}…
-                  </span>
+                  </Bdi>
                 </div>
               )}
             </div>
@@ -581,19 +641,19 @@ export const SyncDiagnosticsTab: React.FC = () => {
               <div
                 className={`p-2 rounded-xl border text-[11px] flex items-center gap-2 ${
                   isIdentityConsistent
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                    : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
+                    : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
                 }`}
               >
                 {isIdentityConsistent ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" aria-hidden="true" />
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
                 ) : (
-                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" aria-hidden="true" />
+                  <AlertTriangle className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0" aria-hidden="true" />
                 )}
                 <span>
                   {isIdentityConsistent
-                    ? 'Cohérence cryptographique validée (Authorship = Enrôlement natif).'
-                    : 'Attention : Mismatch d\'identité détecté (possible clone ou restauration).'}
+                    ? t.diagnostics.cryptoConsistencyOk
+                    : t.diagnostics.cryptoConsistencyMismatch}
                 </span>
               </div>
             )}
@@ -602,17 +662,17 @@ export const SyncDiagnosticsTab: React.FC = () => {
 
         {/* Sync Metrics Details & Signed Drain Status */}
         <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 text-xs shadow-sm">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <h4 className="text-[11px] font-black uppercase text-pos-muted tracking-wider">
-              Métriques de Synchronisation & Drain
+              {t.diagnostics.syncMetricsTitle}
             </h4>
             <button
               type="button"
               onClick={() => void refreshSyncHealth()}
-              className="min-h-[44px] min-w-[44px] py-1 px-2.5 rounded-lg bg-pos-panel border border-pos-border text-pos-muted font-bold text-[11px] flex items-center gap-1 active:scale-95 transition cursor-pointer"
+              className="min-h-[48px] min-w-[48px] py-1.5 px-3 rounded-xl bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text font-bold text-[11px] flex items-center gap-1.5 active:scale-95 transition cursor-pointer"
             >
-              <RefreshCw className="w-3 h-3 text-cyan-400" aria-hidden="true" />
-              <span>Rafraîchir les métriques</span>
+              <RefreshCw className="w-3.5 h-3.5 text-cyan-700 dark:text-cyan-400 shrink-0" aria-hidden="true" />
+              <span>{t.diagnostics.refreshMetricsButton}</span>
             </button>
           </div>
 
@@ -621,11 +681,11 @@ export const SyncDiagnosticsTab: React.FC = () => {
             <div className="py-1 border-b border-pos-border/40">
               <div className="flex justify-between items-center">
                 <span className="text-pos-muted flex items-center gap-1.5">
-                  <Cloud className="w-3.5 h-3.5 text-cyan-400" aria-hidden="true" /> Mutations en attente (Outbox) :
+                  <Cloud className="w-3.5 h-3.5 text-cyan-700 dark:text-cyan-400" aria-hidden="true" /> {t.diagnostics.pendingOutboxLabel}
                 </span>
-                <span className="font-mono font-black text-pos-text">
+                <Bdi mono className="font-black text-pos-text">
                   {syncStatus.pendingCount}
-                </span>
+                </Bdi>
               </div>
               <p className="text-[11px] text-pos-muted leading-relaxed mt-1">
                 {syncStatus.pendingCount === 0
@@ -636,49 +696,49 @@ export const SyncDiagnosticsTab: React.FC = () => {
 
             {/* Signed Lane Drain Worker Metrics */}
             <div className="py-1 border-b border-pos-border/40 bg-pos-panel/30 p-2.5 rounded-xl border border-pos-border/40 space-y-2">
-              <div className="flex justify-between items-center">
+              <div className="flex justify-between items-center gap-2">
                 <span className="font-bold text-pos-text flex items-center gap-1.5">
-                  <Key className="w-3.5 h-3.5 text-amber-400" aria-hidden="true" /> File Signée (Drain TIER-B) :
+                  <Key className="w-3.5 h-3.5 text-amber-700 dark:text-amber-400" aria-hidden="true" /> {t.diagnostics.signedLaneDrainLabel}
                 </span>
                 <span
                   className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                     drainArmed
                       ? isDrainSyncing
-                        ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
-                        : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                        ? 'pos-status-info'
+                        : 'pos-status-ok'
                       : 'bg-pos-panel text-pos-muted border-pos-border'
                   }`}
                 >
                   {drainArmed
                     ? isDrainSyncing
-                      ? 'En transfert...'
+                      ? t.diagnostics.drainTransferring
                       : outboxInFlightCount > 0
-                        ? 'En vol (Dispatch)'
-                        : 'Armé & Au repos'
-                    : 'Non armé'}
+                        ? t.diagnostics.drainInFlight
+                        : t.diagnostics.drainArmedIdle
+                    : t.diagnostics.drainUnarmed}
                 </span>
               </div>
 
               <div className="grid grid-cols-2 gap-2 text-center pt-1 font-mono text-[11px]">
                 <div className="bg-pos-bg p-1.5 rounded-lg border border-pos-border">
                   <span className="text-[10px] text-pos-muted block font-sans">En attente (signé)</span>
-                  <span className="font-black text-pos-text">{outboxPendingCount}</span>
+                  <Bdi mono className="font-black text-pos-text">{outboxPendingCount}</Bdi>
                 </div>
                 <div className="bg-pos-bg p-1.5 rounded-lg border border-pos-border">
                   <span className="text-[10px] text-pos-muted block font-sans">En cours d'envoi</span>
-                  <span className="font-black text-cyan-400">{outboxInFlightCount}</span>
+                  <Bdi mono className="font-black text-cyan-700 dark:text-cyan-400">{outboxInFlightCount}</Bdi>
                 </div>
               </div>
 
               {lastDrainAt && (
                 <div className="flex justify-between text-[10px] text-pos-muted font-mono pt-1">
                   <span>Dernier envoi drainé :</span>
-                  <span>{new Date(lastDrainAt).toLocaleTimeString('fr-FR')}</span>
+                  <Bdi mono>{new Date(lastDrainAt).toLocaleTimeString('fr-FR')}</Bdi>
                 </div>
               )}
 
               {lastDrainError && (
-                <p className="text-[10px] font-mono text-rose-300 bg-rose-500/10 p-1.5 rounded-lg border border-rose-500/20">
+                <p className="text-[10px] font-mono text-rose-800 dark:text-rose-300 bg-rose-500/10 p-1.5 rounded-lg border border-rose-500/20">
                   {lastDrainError}
                 </p>
               )}
@@ -688,13 +748,13 @@ export const SyncDiagnosticsTab: React.FC = () => {
             <div className="py-1 border-b border-pos-border/40">
               <div className="flex justify-between items-center">
                 <span className="text-pos-muted flex items-center gap-1.5">
-                  <RefreshCw className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" /> Dernier Envoi (Push) :
+                  <RefreshCw className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" /> {t.diagnostics.lastPushLabel}
                 </span>
-                <span className="font-mono text-pos-text font-medium">
+                <Bdi mono className="text-pos-text font-medium">
                   {syncStatus.lastPushAt
                     ? new Date(syncStatus.lastPushAt).toLocaleTimeString('fr-FR')
                     : 'Aucun'}
-                </span>
+                </Bdi>
               </div>
               <p className="text-[11px] text-pos-muted leading-relaxed mt-1">
                 Heure du dernier envoi de vos ventes vers le cloud.
@@ -705,13 +765,13 @@ export const SyncDiagnosticsTab: React.FC = () => {
             <div className="py-1 border-b border-pos-border/40">
               <div className="flex justify-between items-center">
                 <span className="text-pos-muted flex items-center gap-1.5">
-                  <Database className="w-3.5 h-3.5 text-purple-400" aria-hidden="true" /> Dernière Réception (Pull) :
+                  <Database className="w-3.5 h-3.5 text-purple-700 dark:text-purple-400" aria-hidden="true" /> {t.diagnostics.lastPullLabel}
                 </span>
-                <span className="font-mono text-pos-text font-medium">
+                <Bdi mono className="text-pos-text font-medium">
                   {syncStatus.lastPullAt
                     ? new Date(syncStatus.lastPullAt).toLocaleTimeString('fr-FR')
                     : 'Initial'}
-                </span>
+                </Bdi>
               </div>
               <p className="text-[11px] text-pos-muted leading-relaxed mt-1">
                 Heure de la dernière réception (catalogue, prix, clients) depuis le cloud vers ce téléphone.
@@ -722,10 +782,10 @@ export const SyncDiagnosticsTab: React.FC = () => {
             <div className="py-1 border-b border-pos-border/40">
               <div className="flex justify-between items-center">
                 <span className="text-pos-muted flex items-center gap-1.5">
-                  <Radio className="w-3.5 h-3.5 text-cyan-400" aria-hidden="true" /> Relais Temps Réel (Relay DO) :
+                  <Radio className="w-3.5 h-3.5 text-cyan-700 dark:text-cyan-400" aria-hidden="true" /> {t.diagnostics.realtimeRelayLabel}
                 </span>
-                <span className={`font-mono text-xs font-bold ${syncStatus.relayConnected ? 'text-emerald-400' : 'text-amber-400'}`}>
-                  {syncStatus.relayConnected ? 'Connecté (WebSocket)' : 'Mode Polling Adaptatif'}
+                <span className={`font-mono text-xs font-bold ${syncStatus.relayConnected ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'}`}>
+                  {syncStatus.relayConnected ? t.diagnostics.relayConnectedWs : t.diagnostics.relayAdaptivePolling}
                 </span>
               </div>
               <p className="text-[11px] text-pos-muted leading-relaxed mt-1">
@@ -741,11 +801,11 @@ export const SyncDiagnosticsTab: React.FC = () => {
             <div className="py-1 border-b border-pos-border/40">
               <div className="flex justify-between items-center">
                 <span className="text-pos-muted flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" /> Contrat C1 Latence :
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" /> Contrat C1 Latence :
                 </span>
-                <span className="font-mono font-bold text-emerald-400">
+                <Bdi mono className="font-bold text-emerald-700 dark:text-emerald-400">
                   ≤ 1.5s p95 (objectif)
-                </span>
+                </Bdi>
               </div>
               <p className="text-[11px] text-pos-muted leading-relaxed mt-1">
                 Objectif de conception : une vente saisie sur la caisse apparaît sur ce téléphone en moins de 1,5 seconde.
@@ -756,19 +816,19 @@ export const SyncDiagnosticsTab: React.FC = () => {
 
         {/* Cloud Storage Meter (Turso quota — read-only) */}
         <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 text-xs shadow-sm">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <h4 className="text-[11px] font-black uppercase text-pos-muted tracking-wider flex items-center gap-1.5">
-              <Database className="w-3.5 h-3.5 text-indigo-400" aria-hidden="true" />
-              Stockage Cloud Turso
+              <Database className="w-3.5 h-3.5 text-indigo-700 dark:text-indigo-400" aria-hidden="true" />
+              {t.diagnostics.storageCardTitle}
             </h4>
             <button
               type="button"
               onClick={() => void loadStorageReport()}
               disabled={isLoadingStorage}
-              className="min-h-[44px] min-w-[44px] py-1 px-2 rounded-lg bg-pos-panel border border-pos-border text-pos-muted font-bold text-[11px] flex items-center gap-1 active:scale-95 transition cursor-pointer disabled:opacity-50"
+              className="min-h-[48px] min-w-[48px] py-1.5 px-3 rounded-xl bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text font-bold text-[11px] flex items-center gap-1.5 active:scale-95 transition cursor-pointer disabled:opacity-50"
             >
-              <RefreshCw className={`w-3 h-3 ${isLoadingStorage ? 'animate-spin' : ''}`} aria-hidden="true" />
-              <span>Actualiser</span>
+              <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${isLoadingStorage ? 'animate-spin' : ''}`} aria-hidden="true" />
+              <span>{t.common.refresh}</span>
             </button>
           </div>
 
@@ -782,12 +842,12 @@ export const SyncDiagnosticsTab: React.FC = () => {
             <div className="space-y-2">
               <div className="flex justify-between font-bold text-pos-text">
                 <span>
-                  {formatBytes(storageReport.totalBytes)} utilisés{' '}
+                  <Bdi mono>{formatBytes(storageReport.totalBytes)}</Bdi> utilisés{' '}
                   {storageReport.isEstimated && '(estimé)'}
                 </span>
-                <span className="text-pos-muted font-mono">
+                <Bdi mono className="text-pos-muted">
                   {storageReport.usedPercentage}% / {formatBytes(storageReport.quotaBytes)}
-                </span>
+                </Bdi>
               </div>
               <div className="w-full bg-pos-bg rounded-full h-2.5 overflow-hidden border border-pos-border">
                 <div
@@ -802,9 +862,9 @@ export const SyncDiagnosticsTab: React.FC = () => {
                 />
               </div>
               <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-pos-muted font-mono">
-                <span>Fichier : <span className="text-pos-text font-bold">{formatBytes(storageReport.fileBytes)}</span></span>
-                <span>Données : <span className="text-pos-text font-bold">{formatBytes(storageReport.liveBytes)}</span></span>
-                <span>Réutilisable : <span className="text-emerald-400 font-bold">{formatBytes(storageReport.freelistBytes)}</span></span>
+                <span>Fichier : <Bdi mono className="text-pos-text font-bold">{formatBytes(storageReport.fileBytes)}</Bdi></span>
+                <span>Données : <Bdi mono className="text-pos-text font-bold">{formatBytes(storageReport.liveBytes)}</Bdi></span>
+                <span>Réutilisable : <Bdi mono className="text-emerald-700 dark:text-emerald-400 font-bold">{formatBytes(storageReport.freelistBytes)}</Bdi></span>
               </div>
               <p className="text-[11px] text-pos-muted leading-relaxed">
                 En clair : « Réutilisable » sera récupéré automatiquement par le cloud.
@@ -813,7 +873,7 @@ export const SyncDiagnosticsTab: React.FC = () => {
               {(storageReport.thresholdLevel === 'WARNING' ||
                 storageReport.thresholdLevel === 'CRITICAL' ||
                 storageReport.thresholdLevel === 'EXCEEDED') && (
-                <p className="text-[11px] font-bold text-amber-300">
+                <p className="text-[11px] font-bold text-amber-800 dark:text-amber-300">
                   {storageReport.alertMessage} {storageReport.actionRequired}
                 </p>
               )}
@@ -824,16 +884,16 @@ export const SyncDiagnosticsTab: React.FC = () => {
         {/* Quarantined Outbox Mutations Card (Edge Case 6) */}
         {(syncStatus.failedCount ?? 0) > 0 && (
           <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4 space-y-3 text-xs">
-            <div className="flex items-center gap-2 text-rose-400 font-bold">
+            <div className="flex items-center gap-2 text-rose-700 dark:text-rose-400 font-bold">
               <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
-              <span>{syncStatus.failedCount} mutation(s) en quarantaine (Échecs répétés)</span>
+              <span><Bdi>{t('diagnostics.quarantinedCardTitle', { count: syncStatus.failedCount ?? 0 })}</Bdi></span>
             </div>
             <p className="text-[11px] text-pos-muted leading-relaxed">
               Ces opérations ont échoué après 10 tentatives et ont été isolées pour ne pas bloquer les ventes en cours (Protection anti-blocage).
               {' Que faire : touchez « Réessayer » une fois en ligne.'}
             </p>
             {syncStatus.lastError && (
-              <p className="text-[10px] font-mono bg-pos-panel/60 p-2 rounded-lg text-rose-300 break-all border border-rose-500/20">
+              <p className="text-[10px] font-mono bg-pos-panel/60 p-2 rounded-lg text-rose-800 dark:text-rose-300 break-all border border-rose-500/20">
                 {syncStatus.lastError}
               </p>
             )}
@@ -841,34 +901,34 @@ export const SyncDiagnosticsTab: React.FC = () => {
               type="button"
               disabled={isRetryingQuarantined || isSyncing}
               onClick={handleRetryQuarantined}
-              className="w-full min-h-[44px] py-2 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 active:scale-95 border border-rose-500/40 text-rose-300 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+              className="w-full min-h-[48px] py-2 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 active:scale-95 border border-rose-500/40 text-rose-800 dark:text-rose-300 font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
             >
-              <RotateCcw className={`w-3.5 h-3.5 ${isRetryingQuarantined ? 'animate-spin' : ''}`} aria-hidden="true" />
-              <span>{isRetryingQuarantined ? 'Réactivation en cours...' : 'Réessayer les éléments en quarantaine'}</span>
+              <RotateCcw className={`w-3.5 h-3.5 shrink-0 ${isRetryingQuarantined ? 'animate-spin' : ''}`} aria-hidden="true" />
+              <span>{isRetryingQuarantined ? 'Réactivation en cours...' : t.diagnostics.retryQuarantinedButton}</span>
             </button>
           </div>
         )}
 
-        {/* Merchant Devices (ad.md §15 — registry + revocation) */}
+        {/* Merchant Devices (ad.md §15 — registry + revocation with inline confirmation) */}
         <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 text-xs shadow-sm">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <h4 className="text-[11px] font-black uppercase text-pos-muted tracking-wider flex items-center gap-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
-              Appareils du Magasin ({merchantDevices.length})
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" aria-hidden="true" />
+              <Bdi>{t('diagnostics.merchantDevicesTitle', { count: merchantDevices.length })}</Bdi>
             </h4>
             <button
               type="button"
               onClick={() => void loadMerchantDevices()}
               disabled={isLoadingDevices}
-              aria-label="Actualiser la liste des appareils"
-              className="min-h-[44px] min-w-[44px] py-1.5 px-2.5 rounded-lg bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 font-bold text-[11px] active:scale-95 transition cursor-pointer"
+              aria-label={t.diagnostics.refreshDevicesAria}
+              className="min-h-[48px] min-w-[48px] py-1.5 px-3 rounded-xl bg-cyan-500/15 border border-cyan-500/40 text-cyan-800 dark:text-cyan-300 font-bold text-[11px] flex items-center justify-center active:scale-95 transition cursor-pointer"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isLoadingDevices ? 'animate-spin' : ''}`} aria-hidden="true" />
             </button>
           </div>
           {syncStatus.deviceRevoked && (
-            <p className="text-[11px] font-bold text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-lg p-2">
-              Cet appareil a été révoqué — synchronisation suspendue. Les ventes locales restent disponibles.
+            <p className="text-[11px] font-bold text-rose-800 dark:text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-lg p-2">
+              {t.diagnostics.thisDeviceRevokedBanner}
             </p>
           )}
           {merchantDevices.length === 0 ? (
@@ -877,31 +937,71 @@ export const SyncDiagnosticsTab: React.FC = () => {
             </p>
           ) : (
             <div className="space-y-2">
-              {merchantDevices.map((d) => (
-                <div key={d.deviceId} className="bg-pos-panel/60 p-2 rounded-lg border border-pos-border/60 flex items-center gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-bold text-pos-text truncate">
-                      {d.deviceName} <span className="font-mono text-pos-muted">· {d.platform}</span>
-                    </p>
-                    <p className="text-[10px] font-mono text-pos-muted truncate">
-                      {d.deviceId.slice(0, 18)}… · vu {new Date(d.lastSeen).toLocaleString('fr-FR')}
-                      {d.revoked && <span className="text-rose-300 font-bold"> · RÉVOQUÉ</span>}
-                    </p>
+              {merchantDevices.map((d) => {
+                const isConfirmingThis = confirmingRevoke?.deviceId === d.deviceId;
+                return (
+                  <div key={d.deviceId} className="bg-pos-panel/60 p-2.5 rounded-xl border border-pos-border/60 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-bold text-pos-text truncate">
+                          {d.deviceName} <span className="font-mono text-pos-muted">· {d.platform}</span>
+                        </p>
+                        <p className="text-[10px] font-mono text-pos-muted truncate">
+                          <Bdi mono>{d.deviceId.slice(0, 18)}…</Bdi> · vu <Bdi mono>{new Date(d.lastSeen).toLocaleString('fr-FR')}</Bdi>
+                          {d.revoked && <span className="text-rose-700 dark:text-rose-300 font-bold"> · RÉVOQUÉ</span>}
+                        </p>
+                      </div>
+                      {!isConfirmingThis && (
+                        <button
+                          type="button"
+                          disabled={deviceActionId === d.deviceId}
+                          onClick={() => {
+                            soundEngine.playKeyBeep?.();
+                            setConfirmingRevoke({ deviceId: d.deviceId, revoked: !d.revoked });
+                          }}
+                          className={`min-h-[48px] px-3 rounded-xl font-bold text-[11px] active:scale-95 transition cursor-pointer border ${
+                            d.revoked
+                              ? 'pos-status-ok'
+                              : 'pos-status-danger'
+                          }`}
+                        >
+                          <span>{deviceActionId === d.deviceId ? '…' : d.revoked ? t.diagnostics.reinstateButton : t.diagnostics.revokeButton}</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {isConfirmingThis && confirmingRevoke && (
+                      <div className="pt-2 border-t border-pos-border/50 space-y-2 animate-in fade-in">
+                        <p className="text-[11px] font-bold text-pos-text leading-snug">
+                          {confirmingRevoke.revoked
+                            ? t.diagnostics.revokeConfirmDescription
+                            : 'Réadmettre cet appareil ? Il reprendra la synchronisation.'}
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setConfirmingRevoke(null)}
+                            className="min-h-[48px] px-3 rounded-xl bg-pos-card border border-pos-border text-pos-text font-bold text-xs cursor-pointer active-press transition"
+                          >
+                            {t.common.cancel}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void executeDeviceRevocation(d.deviceId, confirmingRevoke.revoked)}
+                            className={`min-h-[48px] px-3 rounded-xl font-black text-xs cursor-pointer active-press transition ${
+                              confirmingRevoke.revoked
+                                ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                                : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950'
+                            }`}
+                          >
+                            {t.common.confirm}
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    disabled={deviceActionId === d.deviceId}
-                    onClick={() => void handleDeviceRevocation(d.deviceId, !d.revoked)}
-                    className={`min-h-[44px] px-2.5 rounded-lg font-bold text-[11px] active:scale-95 transition cursor-pointer border ${
-                      d.revoked
-                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
-                        : 'bg-rose-500/15 border-rose-500/40 text-rose-300'
-                    }`}
-                  >
-                    <span>{deviceActionId === d.deviceId ? '…' : d.revoked ? 'Réadmettre' : 'Révoquer'}</span>
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -909,9 +1009,9 @@ export const SyncDiagnosticsTab: React.FC = () => {
         {/* Both-offline double-payout exceptions (payoutWatch convergence) */}
         {payoutExceptions.length > 0 && (
           <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-4 space-y-3 text-xs">
-            <div className="flex items-center gap-2 text-rose-400 font-bold">
+            <div className="flex items-center gap-2 text-rose-700 dark:text-rose-400 font-bold">
               <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
-              <span>{payoutExceptions.length} double-paiement(s) suspecté(s) — caisse à contrôler</span>
+              <span><Bdi>{t('diagnostics.doublePayoutCardTitle', { count: payoutExceptions.length })}</Bdi></span>
             </div>
             <p className="text-[11px] text-pos-muted leading-relaxed">
               Le même ticket a été payé en espèces sur deux appareils (souvent pendant une coupure internet).
@@ -921,9 +1021,9 @@ export const SyncDiagnosticsTab: React.FC = () => {
               {payoutExceptions.slice(0, 5).map((ex) => (
                 <div key={ex.id} className="bg-pos-panel/60 p-2 rounded-lg border border-rose-500/20">
                   <p className="text-[11px] text-pos-text leading-relaxed">{ex.details}</p>
-                  <span className="font-mono text-[10px] text-pos-muted">
+                  <Bdi mono className="text-[10px] text-pos-muted">
                     {ex.timestamp ? new Date(ex.timestamp).toLocaleString('fr-FR') : ''}
-                  </span>
+                  </Bdi>
                 </div>
               ))}
             </div>
@@ -932,51 +1032,51 @@ export const SyncDiagnosticsTab: React.FC = () => {
 
         {/* Crash & Freeze Reports (P2 telemetry) */}
         <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 text-xs shadow-sm">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <h4 className="text-[11px] font-black uppercase text-pos-muted tracking-wider flex items-center gap-1.5">
-              <AlertTriangle className={`w-3.5 h-3.5 ${crashReports.length > 0 ? 'text-amber-400' : 'text-emerald-400'}`} aria-hidden="true" />
-              Incidents Appareil ({crashReports.length})
+              <AlertTriangle className={`w-3.5 h-3.5 ${crashReports.length > 0 ? 'text-amber-700 dark:text-amber-400' : 'text-emerald-700 dark:text-emerald-400'}`} aria-hidden="true" />
+              <Bdi>{t('diagnostics.crashReportsTitle', { count: crashReports.length })}</Bdi>
             </h4>
             {crashReports.length > 0 && (
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={handleCopyCrashReports}
-                  className="min-h-[44px] min-w-[44px] py-1.5 px-2.5 rounded-lg bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 font-bold text-[11px] active:scale-95 transition cursor-pointer"
+                  className="min-h-[48px] min-w-[48px] py-1.5 px-3 rounded-xl bg-cyan-500/15 border border-cyan-500/40 text-cyan-800 dark:text-cyan-300 font-bold text-[11px] active:scale-95 transition cursor-pointer"
                 >
-                  <span>Copier</span>
+                  <span>{t.diagnostics.copyButton}</span>
                 </button>
                 <button
                   type="button"
                   onClick={handleClearCrashReports}
-                  className="min-h-[44px] min-w-[44px] py-1.5 px-2.5 rounded-lg bg-pos-panel border border-pos-border text-pos-muted font-bold text-[11px] active:scale-95 transition cursor-pointer"
+                  className="min-h-[48px] min-w-[48px] py-1.5 px-3 rounded-xl bg-pos-panel border border-pos-border text-pos-muted hover:text-pos-text font-bold text-[11px] active:scale-95 transition cursor-pointer"
                 >
-                  <span>Effacer</span>
+                  <span>{t.diagnostics.clearButton}</span>
                 </button>
               </div>
             )}
           </div>
           {crashReports.length === 0 ? (
             <p className="text-[11px] text-pos-muted">
-              Aucun incident capturé sur cet appareil. Les gels et plantages futurs seront enregistrés ici automatiquement.
+              {t.diagnostics.noCrashReports}
             </p>
           ) : (
             <div className="space-y-2">
               {crashReports.slice(0, 5).map((report, idx) => (
                 <div key={`${report.at}-${idx}`} className="bg-pos-panel/60 p-2 rounded-lg border border-pos-border/60">
                   <div className="flex justify-between items-center gap-2">
-                    <span className={`font-mono text-[10px] font-bold ${report.kind === 'unhandledrejection' ? 'text-amber-300' : 'text-rose-300'}`}>
+                    <span className={`font-mono text-[10px] font-bold ${report.kind === 'unhandledrejection' ? 'text-amber-800 dark:text-amber-300' : 'text-rose-800 dark:text-rose-300'}`}>
                       {report.kind === 'unhandledrejection' ? 'Promesse rejetée' : 'Erreur'}
                     </span>
-                    <span className="font-mono text-[10px] text-pos-muted">
+                    <Bdi mono className="text-[10px] text-pos-muted">
                       {new Date(report.at).toLocaleString('fr-FR')}
-                    </span>
+                    </Bdi>
                   </div>
                   <p className="text-[10px] font-mono text-pos-text break-all mt-1">{report.message}</p>
                 </div>
               ))}
               {crashMsg && (
-                <p className="text-[11px] font-bold text-center text-cyan-300">{crashMsg}</p>
+                <p className="text-[11px] font-bold text-center text-cyan-800 dark:text-cyan-300">{crashMsg}</p>
               )}
             </div>
           )}
@@ -985,30 +1085,34 @@ export const SyncDiagnosticsTab: React.FC = () => {
         {/* Local Storage Records Count */}
         <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3 text-xs shadow-sm">
           <h4 className="text-[11px] font-black uppercase text-pos-muted tracking-wider flex items-center gap-1.5">
-            <Layers className="w-3.5 h-3.5 text-cyan-400" aria-hidden="true" />
+            <Layers className="w-3.5 h-3.5 text-cyan-700 dark:text-cyan-400" aria-hidden="true" />
             Base de Données Locale (SQLite)
           </h4>
 
           <div className="grid grid-cols-3 gap-2 text-center">
             <div className="bg-pos-panel p-2 rounded-xl border border-pos-border">
-              <span className="text-[10px] text-pos-muted font-bold block">Articles</span>
-              <span className="font-mono text-sm font-black text-pos-text mt-0.5 block">
+              <span className="text-[10px] text-pos-muted font-bold block">{t.nav.catalog}</span>
+              <Bdi mono className="text-sm font-black text-pos-text mt-0.5 block">
                 {products?.length || 0}
-              </span>
+              </Bdi>
             </div>
 
             <div className="bg-pos-panel p-2 rounded-xl border border-pos-border">
-              <span className="text-[10px] text-pos-muted font-bold block">Ventes</span>
-              <span className="font-mono text-sm font-black text-pos-text mt-0.5 block">
+              <span className="text-[10px] text-pos-muted font-bold block">
+                {locale === 'ar' ? t.activity.validatedSalesKpiLabel : 'Ventes'}
+              </span>
+              <Bdi mono className="text-sm font-black text-pos-text mt-0.5 block">
                 {transactions?.length || 0}
-              </span>
+              </Bdi>
             </div>
 
             <div className="bg-pos-panel p-2 rounded-xl border border-pos-border">
-              <span className="text-[10px] text-pos-muted font-bold block">Clients</span>
-              <span className="font-mono text-sm font-black text-pos-text mt-0.5 block">
-                {customers?.length || 0}
+              <span className="text-[10px] text-pos-muted font-bold block">
+                {locale === 'ar' ? t.kredy.debtorsLabel : 'Clients'}
               </span>
+              <Bdi mono className="text-sm font-black text-pos-text mt-0.5 block">
+                {customers?.length || 0}
+              </Bdi>
             </div>
           </div>
         </div>

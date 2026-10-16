@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace + with - in evaluate
+@@ -153,17 +153,17 @@
+                         wall_utc_ms: wall_now_ms,
+                         monotonic_ms: current_m.max(cp.monotonic_ms),
+                     }),
+                 }
+             }
+         }
+         Continuity::NewSession => {
+             // Monotonic discarded. Wall-vs-anchor only.
+-            if wall_now_ms + SKEW_TOLERANCE_MS < cp.wall_utc_ms {
++            if wall_now_ms - /* ~ changed by cargo-mutants ~ */ SKEW_TOLERANCE_MS < cp.wall_utc_ms {
+                 EvalOutcome {
+                     verdict: TimeVerdict::ResetRequired,
+                     advisory: None,
+                     checkpoint_update: None,
+                 }
+             } else {
+                 EvalOutcome {
+                     verdict: TimeVerdict::Advisory,

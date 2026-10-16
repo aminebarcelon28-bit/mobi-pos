@@ -1,0 +1,86 @@
+--- src-tauri/src/money.rs
++++ replace Money::from_user_input -> Result<Self, MoneyError> with Ok(Default::default())
+@@ -63,82 +63,17 @@
+     /// PD-22 string-based entry. NEVER float-based: the decimal string is
+     /// split and concatenated into minor units ("130.5"→13050, "4.35"→435).
+     /// Accepts "." and "," separators (FR/DZ keyboards); strips grouping
+     /// spaces (regular, NBSP U+00A0, narrow NBSP U+202F) and apostrophes;
+     /// understands FR thousand-grouping dots ("45.000"→45000, "12.500,50").
+     /// REJECTS (Err, never silently rounded): 3+ decimals, signs,
+     /// empty/unparseable input, i64 overflow.
+     pub fn from_user_input(input: &str) -> Result<Self, MoneyError> {
+-        let raw = input.trim();
+-        if raw.is_empty() {
+-            return Err(MoneyError::Empty);
+-        }
+-        if raw.starts_with('-') || raw.starts_with('+') {
+-            return Err(MoneyError::SignNotAllowed);
+-        }
+-        // BUG-MONEY-03 parity: normalize Arabic-script numerals (TS Test J
+-        // pins the same vectors on both sides via shared sources).
+-        let mut latinized = String::with_capacity(raw.len());
+-        for c in raw.chars() {
+-            if ('\u{0660}'..='\u{0669}').contains(&c) {
+-                latinized.push((c as u32 - 0x0660 + '0' as u32) as u8 as char);
+-            } else if c == '\u{066B}' {
+-                latinized.push('.');
+-            } else if c == '\u{066C}' {
+-                // Arabic thousands separator — dropped like FR grouping dots.
+-            } else {
+-                latinized.push(c);
+-            }
+-        }
+-        let compact: String = latinized
+-            .chars()
+-            .filter(|c| !matches!(c, ' ' | '\u{00A0}' | '\u{202F}' | '\u{2009}' | '\''))
+-            .collect();
+-        if compact.is_empty() {
+-            return Err(MoneyError::Empty);
+-        }
+-        let has_comma = compact.contains(',');
+-        let has_dot = compact.contains('.');
+-        let (int_part, frac_part): (String, String) = if has_comma && has_dot {
+-            // Strict FR grouping only ("12.500,50"); US-grouped input is
+-            // rejected rather than mangled 1000x.
+-            if !is_strict_fr_grouped(&compact) {
+-                return Err(MoneyError::AmbiguousSeparators);
+-            }
+-            let no_groups: String = compact.chars().filter(|c| *c != '.').collect();
+-            let i = no_groups.find(',').unwrap_or(no_groups.len());
+-            (no_groups[..i].to_string(), no_groups[i + 1..].to_string())
+-        } else if has_comma {
+-            let i = compact.find(',').unwrap_or(compact.len());
+-            (compact[..i].to_string(), compact[i + 1..].to_string())
+-        } else if has_dot {
+-            if is_fr_grouped_int(&compact) {
+-                (compact.chars().filter(|c| *c != '.').collect(), String::new())
+-            } else {
+-                let i = compact.find('.').unwrap_or(compact.len());
+-                (compact[..i].to_string(), compact[i + 1..].to_string())
+-            }
+-        } else {
+-            (compact, String::new())
+-        };
+-        let int_part = if int_part.is_empty() { "0".to_string() } else { int_part };
+-        if !int_part.chars().all(|c| c.is_ascii_digit())
+-            || !frac_part.chars().all(|c| c.is_ascii_digit())
+-        {
+-            return Err(MoneyError::NotDecimal);
+-        }
+-        if frac_part.len() > CURRENCY_EXPONENT as usize {
+-            return Err(MoneyError::TooManyDecimals);
+-        }
+-        let mut padded = format!("{int_part}{:0<2}", frac_part);
+-        while padded.starts_with('0') && padded.len() > 1 {
+-            padded.remove(0);
+-        }
+-        parse_exact_i64(&padded).map(Money)
++        Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// PD-3: JSON carries integer minor units as STRINGS.
+     pub fn from_json_str(s: &str) -> Result<Self, MoneyError> {
+         if s.is_empty() || !s.chars().all(|c| c.is_ascii_digit()) {
+             return Err(MoneyError::NotDecimal);
+         }
+         parse_exact_i64(s).map(Money)

@@ -21,6 +21,7 @@ import {
 } from '../../utils/cashTerms';
 import { ZReportPaper, type ZReportSnapshot } from '../receipt/ZReportPaper';
 import { blindRevealAuditDetail, buildZSnapshot } from '../../utils/zReportSnapshot';
+import { Kbd } from '../../design-system/desktop/Kbd';
 
 export const ShiftZReportModal: React.FC = () => {
   const {
@@ -96,8 +97,6 @@ export const ShiftZReportModal: React.FC = () => {
   // trade-in payouts — both were missing here, understating and overstating
   // expected cash respectively. Settled balances are informational only
   // (cash already inside cashSalesFromTxns — never added to expected cash).
-  const savDeposits = savDepositsFromRepairs((repairOrders || []).filter((r) => inShiftWindow(r.createdAt)));
-  const savSettled = savSettledFromTxns(shiftTxns);
   const closedShiftCount = (allShifts || []).filter((s) => s.status === 'CLOSED').length;
   const zNumber = zTicketNumber(closedShiftCount);
   const tradeInCashOut = (tradeIns || [])
@@ -109,8 +108,6 @@ export const ShiftZReportModal: React.FC = () => {
 
   // Movement-only terms from the open session's in-store movements (same
   // rows booking reads): exchange cash-outs + twin-less manual movements.
-  // Soulte payouts ride inside the unified exchange lane for expected-cash
-  // math but display on their own Z line (no double-show).
   const sessionMovements = activeShift?.movements || [];
   const exchangeOut = exchangeCashOutFromMovements(sessionMovements);
   const soulteOut = sessionMovements
@@ -121,16 +118,9 @@ export const ShiftZReportModal: React.FC = () => {
   const exchangeOutPure = Math.max(0, exchangeOut - soulteOut);
   const manualIn = standaloneDepositsFromMovements(sessionMovements);
   const manualOut = standaloneExpensesFromMovements(sessionMovements);
-
   const openingFloat = activeShift?.openingFloat ?? shiftFloat;
-  const expectedCash =
-    openingFloat + totalCashSales + todayDebtSettlements + savDeposits + manualIn
-    - totalCashRefunds - totalDrops - totalPayouts - todayCashExpenses - tradeInCashOut - exchangeOut - manualOut;
-  const variance = actualCountedCash - expectedCash;
 
-  // Frozen print snapshot — single definition shared with the close ticket,
-  // the ESC/POS twin and the mobile text (see utils/zReportSnapshot). Preview
-  // locals above stay untouched; this feeds print paths only.
+  // Unified print and display snapshot — single definition shared across all Z surfaces
   const zSnapshot: ZReportSnapshot = buildZSnapshot({
     settings: receiptSettings,
     shift: activeShift,
@@ -143,14 +133,16 @@ export const ShiftZReportModal: React.FC = () => {
     cashDrops: cashDrops || [],
     payouts: payouts || [],
     countedCash: actualCountedCash,
-    // This Z is an INTERIM preview: until a digit is tallied there is no counted
-    // amount, so the document must say "non effectué" rather than print 0 and a
-    // fabricated -expected variance. The reveal flag is exactly that signal.
     blindCountPerformed: isBlindRevealed,
     closedAtISO: new Date().toISOString(),
     closedShiftCount,
     fallbackCashier: lockScreenCashier,
   });
+
+  const savDeposits = zSnapshot.savDeposits;
+  const savSettled = zSnapshot.savSettled;
+  const expectedCash = zSnapshot.expectedCash;
+  const variance = isBlindRevealed ? zSnapshot.variance : 0;
   const responsibleName = zSnapshot.responsibleName;
   const turnover = { card: zSnapshot.cardSales, credit: zSnapshot.creditSales, reprise: zSnapshot.repriseTake };
   const netSales = zSnapshot.netSales;
@@ -238,14 +230,19 @@ export const ShiftZReportModal: React.FC = () => {
               Clôture de Caisse & Rapport Z de Fin de Journée
             </h2>
           </div>
-          <button
-            onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
-            aria-label="Fermer — fermer le rapport Z"
-            title="Fermer"
-          >
-            <X className="w-5 h-5" aria-hidden="true" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="hidden sm:inline-flex">
+              <Kbd size="sm">Esc</Kbd>
+            </span>
+            <button
+              onClick={closeModal}
+              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[48px] min-w-[48px] flex items-center justify-center shrink-0"
+              aria-label="Fermer"
+              title="Fermer"
+            >
+              <X className="w-5 h-5" aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         {/* Scrollable Body */}
@@ -255,39 +252,39 @@ export const ShiftZReportModal: React.FC = () => {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
               <span className="text-[10px] text-pos-muted uppercase font-bold">Fond Initial</span>
-              <p className="text-sm font-bold text-pos-text mt-0.5">{formatDZD(openingFloat)}</p>
+              <p className="text-sm font-bold text-pos-text mt-0.5 num">{formatDZD(openingFloat)}</p>
             </div>
 
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
               <span className="text-[10px] text-pos-muted uppercase font-bold">Ventes Espèces</span>
-              <p className="text-sm font-bold text-emerald-400 mt-0.5">{formatDZD(totalCashSales)}</p>
+              <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400 mt-0.5 num">{formatDZD(totalCashSales)}</p>
             </div>
 
             {todayDebtSettlements > 0 && (
               <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
                 <span className="text-[10px] text-pos-muted uppercase font-bold">Règlements Dettes</span>
-                <p className="text-sm font-bold text-emerald-400 mt-0.5">+{formatDZD(todayDebtSettlements)}</p>
+                <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400 mt-0.5 num">+{formatDZD(todayDebtSettlements)}</p>
               </div>
             )}
 
             {todayCashExpenses > 0 && (
               <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
                 <span className="text-[10px] text-pos-muted uppercase font-bold">Dépenses Espèces</span>
-                <p className="text-sm font-bold text-red-400 mt-0.5">−{formatDZD(todayCashExpenses)}</p>
+                <p className="text-sm font-bold text-rose-600 dark:text-rose-400 mt-0.5 num">−{formatDZD(todayCashExpenses)}</p>
               </div>
             )}
 
             {totalCashRefunds > 0 && (
               <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
                 <span className="text-[10px] text-pos-muted uppercase font-bold">Remboursements</span>
-                <p className="text-sm font-bold text-purple-400 mt-0.5">-{formatDZD(totalCashRefunds)}</p>
+                <p className="text-sm font-bold text-purple-600 dark:text-purple-400 mt-0.5">-{formatDZD(totalCashRefunds)}</p>
               </div>
             )}
 
             {savDeposits > 0 && (
               <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
                 <span className="text-[10px] text-pos-muted uppercase font-bold">Acomptes SAV</span>
-                <p className="text-sm font-bold text-emerald-400 mt-0.5">+{formatDZD(savDeposits)}</p>
+                <p className="text-sm font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">+{formatDZD(savDeposits)}</p>
               </div>
             )}
 

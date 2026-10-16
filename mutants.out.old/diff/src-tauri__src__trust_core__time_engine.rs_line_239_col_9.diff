@@ -1,0 +1,26 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace TimeKernel::load_from_snapshot with ()
+@@ -231,22 +231,17 @@
+                 challenge: None,
+             }),
+             challenge_lock: Mutex::new(()),
+         }
+     }
+ 
+     /// Load time fields from a verified snapshot (startup / migration).
+     pub fn load_from_snapshot(&self, data: &SnapshotData) {
+-        let mut g = self.inner.write();
+-        g.boot_session_id = data.boot_session_id.clone();
+-        g.last_trusted_wall_utc_ms = data.last_trusted_wall_utc_ms;
+-        g.last_monotonic_ms = data.last_monotonic_ms;
+-        g.last_server_time_utc_ms = data.last_server_time_utc_ms;
+-        g.last_server_seq = data.last_server_seq;
++        () /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Snapshot the current time fields for dual persist.
+     pub fn read_fields(&self) -> TimeFields {
+         let g = self.inner.read();
+         TimeFields {
+             boot_session_id: g.boot_session_id.clone(),
+             last_trusted_wall_utc_ms: g.last_trusted_wall_utc_ms,

@@ -1,0 +1,41 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace apply_reanchor_assertion -> Result<u64, TrustError> with Ok(1)
+@@ -246,37 +246,17 @@
+         nonce,
+         expires_at_ms,
+     }
+ }
+ 
+ /// Step 2: verify the assertion, consume the challenge, anchor on success.
+ /// Returns the newly trusted wall time (ms).
+ pub fn apply_reanchor_assertion(assertion: &str) -> Result<u64, TrustError> {
+-    let now = system_now_ms();
+-    let pubkey = active_time_pubkey_b64url()?;
+-    let payload = verify_assertion(assertion, &pubkey, now)?;
+-    // Challenge check AFTER signature validity is established: malformed or
+-    // forged assertions never burn a challenge; only well-formed ones bind.
+-    // (Replay of a well-formed assertion fails here — challenge consumed.)
+-    global_time_kernel()
+-        .consume_challenge(&payload.nonce, now)
+-        .map_err(|_| TrustError::SecurityPolicyFailure {
+-            reason: "stale or unknown re-anchor challenge",
+-        })?;
+-    let mono = production_monotonic();
+-    global_time_kernel().apply_reanchor(
+-        payload.server_time_ms,
+-        payload.seq,
+-        mono.now_ms(),
+-        mono.boot_id(),
+-    );
+-    // Any persisted mutation bumps the rollback counter.
+-    global_kernel().bump_counter_only();
+-    Ok(payload.server_time_ms)
++    Ok(1) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// `#[tauri::command]` wrapper: issue challenge (LicenseManagement, so a
+ /// quarantined terminal can always begin recovery).
+ #[tauri::command]
+ pub fn trust_reanchor_challenge() -> Result<ReanchorChallenge, TrustError> {
+     require_capability("trust_reanchor_challenge", Capability::LicenseManagement)?;
+     Ok(issue_reanchor_challenge())

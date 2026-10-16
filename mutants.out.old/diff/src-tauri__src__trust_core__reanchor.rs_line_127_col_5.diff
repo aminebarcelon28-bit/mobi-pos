@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace verify_assertion -> Result<TimeAssertionPayload, TrustError> with Ok(Default::default())
+@@ -119,17 +119,17 @@
+ /// Verify a time assertion against the active key WITHOUT consuming any
+ /// challenge (pure; challenge consumption is a separate kernel step so tests
+ /// can exercise each rule independently).
+ fn verify_assertion(
+     assertion: &str,
+     pubkey_b64url: &str,
+     now_ms: u64,
+ ) -> Result<TimeAssertionPayload, TrustError> {
+-    verify_time_assertion_with_prefix(assertion, ASSERTION_PREFIX, pubkey_b64url, now_ms)
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Prefix-parametrized assertion verifier shared with the server-time
+ /// ingestion path (`SERVERTIME_V1`): identical structure/base64/signature
+ /// rules, only the expected envelope prefix differs — the two protocols
+ /// cannot cross-verify even under a shared key.
+ pub(crate) fn verify_time_assertion_with_prefix(
+     assertion: &str,

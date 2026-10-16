@@ -74,9 +74,17 @@ export const LabelPrinterModal: React.FC = () => {
     });
   }, [products, debouncedSearch, categoryFilter, brandFilter]);
 
-  // Auto-select first matching product if current selection is invalid
+  // Auto-select target product or first matching product
   useEffect(() => {
     if (activeModal === 'label_printer') {
+      const targetId = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('label_printer_target_id') : null;
+      if (targetId) {
+        sessionStorage.removeItem('label_printer_target_id');
+        if (products.some((p) => p.id === targetId)) {
+          setSelectedProductId(targetId);
+          return;
+        }
+      }
       if (!selectedProductId && products.length > 0) {
         setSelectedProductId(products[0].id);
       }
@@ -129,6 +137,7 @@ export const LabelPrinterModal: React.FC = () => {
           quantity: safeQty,
           showPrice,
           showStoreName,
+          showModel,
           storeName: receiptSettings?.storeName || 'MOBI-POS',
         },
         receiptSettings?.printerRouting

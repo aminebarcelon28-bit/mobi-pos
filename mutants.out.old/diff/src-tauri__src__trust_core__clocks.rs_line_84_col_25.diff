@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ delete ! in <impl MonotonicSource for BoottimeMonotonic>::boot_id
+@@ -76,17 +76,17 @@
+             .checked_mul(1_000)?
+             .checked_add((ts.tv_nsec as u64) / 1_000_000)
+     }
+ 
+     fn boot_id(&self) -> Option<String> {
+         std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+             .ok()
+             .map(|s| s.trim().to_string())
+-            .filter(|s| !s.is_empty())
++            .filter(|s|  /* ~ changed by cargo-mutants ~ */s.is_empty())
+     }
+ 
+     fn source_name(&self) -> &'static str {
+         "linux:CLOCK_BOOTTIME"
+     }
+ }
+ 
+ #[cfg(any(target_os = "linux", target_os = "android"))]

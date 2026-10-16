@@ -1,0 +1,32 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace <impl MonotonicSource for BoottimeMonotonic>::now_ms -> Option<u64> with Some(1)
+@@ -58,28 +58,17 @@
+ 
+ /// Linux/Android: `CLOCK_BOOTTIME` — includes suspend.
+ #[cfg(any(target_os = "linux", target_os = "android"))]
+ pub struct BoottimeMonotonic;
+ 
+ #[cfg(any(target_os = "linux", target_os = "android"))]
+ impl MonotonicSource for BoottimeMonotonic {
+     fn now_ms(&self) -> Option<u64> {
+-        let mut ts = std::mem::MaybeUninit::<libc::timespec>::uninit();
+-        // SAFETY: ts is a valid out-pointer; CLOCK_BOOTTIME is valid on
+-        // Linux ≥ 2.6.39 and Android.
+-        let rc = unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, ts.as_mut_ptr()) };
+-        if rc != 0 {
+-            return None;
+-        }
+-        let ts = unsafe { ts.assume_init() };
+-        u64::try_from(ts.tv_sec)
+-            .ok()?
+-            .checked_mul(1_000)?
+-            .checked_add((ts.tv_nsec as u64) / 1_000_000)
++        Some(1) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     fn boot_id(&self) -> Option<String> {
+         std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+             .ok()
+             .map(|s| s.trim().to_string())
+             .filter(|s| !s.is_empty())
+     }

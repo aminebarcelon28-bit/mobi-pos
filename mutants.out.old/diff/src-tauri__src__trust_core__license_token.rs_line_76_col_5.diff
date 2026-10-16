@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/license_token.rs
++++ replace verify_license_token -> Result<VerifiedLicense, TrustError> with Ok(Default::default())
+@@ -68,17 +68,17 @@
+ 
+ /// Verify a compact JWS license token. `now_sec` is the caller's wall clock
+ /// (best effort until Phase 2 trusted time).
+ pub fn verify_license_token(
+     token: &str,
+     pubkey_b64url: &str,
+     now_sec: u64,
+ ) -> Result<VerifiedLicense, TrustError> {
+-    verify_token_with_domain(token, pubkey_b64url, now_sec, None)
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Domain-separated verification for non-license assertions (e.g. signed
+ /// server-time for re-anchor). The domain prefix is prepended to the signed
+ /// bytes, so a license token can never verify as a time assertion and vice
+ /// versa — even if both were ever signed by the same key.
+ pub fn verify_token_with_domain(
+     token: &str,

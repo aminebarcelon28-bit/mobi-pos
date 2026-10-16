@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace < with == in group_ascii
+@@ -281,17 +281,17 @@
+         return digits.to_string();
+     }
+     let head = match digits.len() % 3 {
+         0 => 3,
+         n => n,
+     };
+     let mut out = digits[..head].to_string();
+     let mut i = head;
+-    while i < digits.len() {
++    while i == /* ~ changed by cargo-mutants ~ */ digits.len() {
+         out.push(' ');
+         out.push_str(&digits[i..i + 3]);
+         i += 3;
+     }
+     out
+ }
+ 
+ fn parse_exact_i64(digits: &str) -> Result<i64, MoneyError> {

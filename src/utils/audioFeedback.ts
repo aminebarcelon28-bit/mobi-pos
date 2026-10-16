@@ -13,6 +13,50 @@ export interface AudioSettingsProfile {
   enableCashChime: boolean;
 }
 
+export type HapticIntent = 'light' | 'medium' | 'success' | 'warning' | 'error';
+export type HapticPattern = HapticIntent;
+
+/**
+ * Feature-detected, fail-safe haptic pulse helper (R-MOT-03, motion.md §4).
+ * Respects `@media (prefers-reduced-motion: reduce)` and never throws on
+ * iOS WKWebView, desktop browsers, or restricted permissions.
+ */
+export function triggerHaptic(intent: HapticIntent = 'light'): void {
+  if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') {
+    return;
+  }
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    try {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        return;
+      }
+    } catch {
+      // Ignore matchMedia errors on legacy/mocked environments
+    }
+  }
+  try {
+    switch (intent) {
+      case 'light':
+        navigator.vibrate(8);
+        break;
+      case 'medium':
+        navigator.vibrate(20);
+        break;
+      case 'success':
+        navigator.vibrate([12, 28, 18]);
+        break;
+      case 'warning':
+        navigator.vibrate([25, 35, 25]);
+        break;
+      case 'error':
+        navigator.vibrate([45, 45, 45]);
+        break;
+    }
+  } catch {
+    // Safe to ignore on unsupported platforms
+  }
+}
+
 const STORAGE_KEY = 'mobi_pos_audio_profile';
 
 class SoundEngine {
@@ -106,29 +150,8 @@ class SoundEngine {
    * Subtle native haptic feedback for mobile touch screens (Android & supported iOS).
    * WCAG & mobile platform standard: provides tactile confirmation of tap/scan/success.
    */
-  public triggerHaptic(type: 'light' | 'medium' | 'success' | 'warning' | 'error' = 'light'): void {
-    if (typeof navigator === 'undefined' || !navigator.vibrate) return;
-    try {
-      switch (type) {
-        case 'light':
-          navigator.vibrate(10);
-          break;
-        case 'medium':
-          navigator.vibrate(25);
-          break;
-        case 'success':
-          navigator.vibrate([15, 30, 20]);
-          break;
-        case 'warning':
-          navigator.vibrate([30, 40, 30]);
-          break;
-        case 'error':
-          navigator.vibrate([50, 50, 50]);
-          break;
-      }
-    } catch {
-      // Safe to ignore on unsupported platforms
-    }
+  public triggerHaptic(type: HapticIntent = 'light'): void {
+    triggerHaptic(type);
   }
 
   /**

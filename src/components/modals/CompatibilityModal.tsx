@@ -39,34 +39,36 @@ export const CompatibilityModal: React.FC = () => {
         <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
         
         {/* Header */}
-        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-slate-900/90 shrink-0 gap-2">
-          <div className="flex items-center gap-2.5 text-emerald-400 min-w-0">
+        <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
+          <div className="flex items-center gap-2.5 text-emerald-700 dark:text-emerald-300 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0">
-              <Smartphone className="w-4 h-4" />
+              <Smartphone className="w-4 h-4" aria-hidden="true" />
             </div>
-            <h2 className="text-sm sm:text-base font-extrabold text-white tracking-wide truncate">Compatibilité Accessoires</h2>
+            <h2 className="text-sm sm:text-base font-extrabold text-pos-text tracking-wide truncate">Compatibilité Accessoires</h2>
           </div>
           <button
+            type="button"
             onClick={closeModal}
-            className="p-2 hover:bg-pos-hover text-pos-muted hover:text-white rounded-xl transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0 active:scale-95"
+            className="p-2 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition cursor-pointer min-h-[48px] min-w-[48px] flex items-center justify-center shrink-0 active:scale-95"
             aria-label="Fermer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
         {/* Content */}
         <div className="flex-1 flex overflow-hidden">
           {/* Sidebar: Brands & Models */}
-          <div className={`bg-pos-card border-r border-pos-border flex flex-col h-full ${selectedModel ? 'hidden sm:flex sm:w-1/3' : 'w-full sm:w-1/3'}`}>
+          <div className={`bg-pos-card border-e border-pos-border flex flex-col h-full ${selectedModel ? 'hidden sm:flex sm:w-1/3' : 'w-full sm:w-1/3'}`}>
             <div className="p-3 sm:p-4 border-b border-pos-border bg-pos-bg/50">
               <span className="text-[11px] font-bold text-pos-muted uppercase tracking-wider mb-2 block">1. Marque</span>
               <div className="flex flex-wrap gap-1.5 sm:gap-2">
                 {BRANDS.map(brand => (
                   <button
                     key={brand}
+                    type="button"
                     onClick={() => { setSelectedBrand(brand); setSelectedModel(null); }}
-                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition border min-h-[44px] active:scale-95 cursor-pointer ${
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold transition border min-h-[48px] active:scale-95 cursor-pointer ${
                       selectedBrand === brand
                         ? 'bg-emerald-500 text-slate-950 border-emerald-500 shadow-md shadow-emerald-500/20 font-black'
                         : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text hover:border-pos-text'
@@ -86,10 +88,11 @@ export const CompatibilityModal: React.FC = () => {
                 modelsForBrand.map(model => (
                   <button
                     key={model}
+                    type="button"
                     onClick={() => setSelectedModel(model)}
-                    className={`w-full text-left px-4 py-3 rounded-xl text-xs sm:text-sm font-semibold transition border min-h-[48px] cursor-pointer active:scale-98 ${
+                    className={`w-full text-start px-4 py-3 rounded-xl text-xs sm:text-sm font-semibold transition border min-h-[48px] cursor-pointer active-press ${
                       selectedModel === model
-                        ? 'bg-emerald-500/15 border-emerald-500 text-emerald-400 font-bold shadow-sm'
+                        ? 'bg-emerald-500/15 border-emerald-500 text-emerald-700 dark:text-emerald-300 font-bold shadow-sm'
                         : 'bg-pos-bg border-pos-border/60 text-pos-text hover:border-emerald-500/30'
                     }`}
                   >
@@ -109,15 +112,15 @@ export const CompatibilityModal: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setSelectedModel(null)}
-                    className="sm:hidden text-xs font-bold text-cyan-400 px-3 py-1.5 rounded-lg bg-pos-card border border-pos-border cursor-pointer min-h-[40px] flex items-center active:scale-95"
+                    className="sm:hidden text-xs font-bold text-cyan-700 dark:text-cyan-300 px-3 py-1.5 rounded-lg bg-pos-card border border-pos-border cursor-pointer min-h-[48px] flex items-center active-press"
                   >
                     ← Changer Modèle
                   </button>
                 )}
               </div>
               {selectedModel && (
-                <h3 className="text-sm sm:text-lg font-bold text-white mt-1">
-                  Accessoires pour <span className="text-emerald-400 font-black">{selectedModel}</span>
+                <h3 className="text-sm sm:text-lg font-bold text-pos-text mt-1">
+                  Accessoires pour <span className="text-emerald-700 dark:text-emerald-300 font-black">{selectedModel}</span>
                 </h3>
               )}
             </div>
@@ -126,7 +129,7 @@ export const CompatibilityModal: React.FC = () => {
               {!selectedModel ? (
                 <div className="h-full flex flex-col items-center justify-center text-pos-muted py-12 text-center">
                   <div className="w-16 h-16 rounded-2xl bg-pos-card border border-pos-border flex items-center justify-center mb-3 text-pos-muted">
-                    <Smartphone className="w-8 h-8 opacity-40" />
+                    <Smartphone className="w-8 h-8 opacity-40" aria-hidden="true" />
                   </div>
                   <p className="text-sm font-semibold text-pos-text">Sélectionnez un modèle</p>
                   <p className="text-xs text-pos-muted mt-1 max-w-xs">Choisissez une marque et un modèle pour voir les accessoires 100% compatibles.</p>
@@ -134,7 +137,7 @@ export const CompatibilityModal: React.FC = () => {
               ) : matchingProducts.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-pos-muted py-12 text-center">
                   <div className="w-16 h-16 rounded-2xl bg-pos-card border border-pos-border flex items-center justify-center mb-3 text-pos-muted">
-                    <Package className="w-8 h-8 opacity-40" />
+                    <Package className="w-8 h-8 opacity-40" aria-hidden="true" />
                   </div>
                   <p className="text-sm font-semibold text-pos-text">Aucun accessoire en stock</p>
                   <p className="text-xs text-pos-muted mt-1">Tous les accessoires pour ce modèle sont actuellement épuisés.</p>
@@ -143,24 +146,24 @@ export const CompatibilityModal: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {matchingProducts.map(prod => (
                     <div key={prod.id} className="bg-pos-card border border-pos-border rounded-xl p-3 flex gap-3 hover:border-emerald-500/40 transition group shadow-sm">
-                      <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-pos-bg border border-pos-border flex items-center justify-center shrink-0 text-emerald-400">
-                        <Package className="w-7 h-7 sm:w-8 sm:h-8" />
+                      <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-pos-bg border border-pos-border flex items-center justify-center shrink-0 text-emerald-700 dark:text-emerald-300">
+                        <Package className="w-7 h-7 sm:w-8 sm:h-8" aria-hidden="true" />
                       </div>
                       <div className="flex-1 flex flex-col justify-between min-w-0">
                         <div>
                           <p className="text-xs font-bold text-pos-text leading-tight line-clamp-2" title={prod.title}>
                             {prod.title}
                           </p>
-                          <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full inline-block mt-1">
+                          <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-bold bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full inline-block mt-1">
                             En stock: {prod.stock}
                           </span>
                         </div>
                         <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-pos-border/40">
-                          <span className="text-sm font-black text-white">{formatDZD(prod.price)}</span>
+                          <span className="text-sm font-black text-pos-text">{formatDZD(prod.price)}</span>
                           <button
                             type="button"
                             onClick={() => addToCart(prod)}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl min-h-[44px] min-w-[44px] flex items-center justify-center shadow-md shadow-emerald-950/40 transition transform active:scale-95 cursor-pointer shrink-0"
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl min-h-[48px] min-w-[48px] flex items-center justify-center shadow-md shadow-emerald-950/40 transition transform active:scale-95 cursor-pointer shrink-0"
                             aria-label={`Ajouter ${prod.title} au panier`}
                           >
                             <Plus className="w-5 h-5" aria-hidden="true" />
@@ -178,13 +181,13 @@ export const CompatibilityModal: React.FC = () => {
         {/* Footer */}
         <div className="p-3.5 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-panel flex justify-between items-center gap-3 shrink-0">
           <div className="flex items-center gap-2 text-pos-muted text-xs">
-            <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" /> 
+            <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" aria-hidden="true" /> 
             <span className="truncate">Garantie d'adaptation parfaite</span>
           </div>
           <button
             type="button"
             onClick={closeModal}
-            className="px-5 py-2.5 min-h-[44px] bg-pos-card hover:bg-pos-hover text-white font-bold rounded-xl text-xs sm:text-sm transition cursor-pointer active:scale-95 shrink-0"
+            className="px-5 py-2.5 min-h-[48px] bg-pos-card hover:bg-pos-hover text-pos-text border border-pos-border font-bold rounded-xl text-xs sm:text-sm transition cursor-pointer active-press shrink-0"
           >
             Fermer l'Assistant
           </button>

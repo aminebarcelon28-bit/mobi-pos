@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace > with >= in is_fr_grouped_int
+@@ -251,17 +251,17 @@
+     // ^\d{1,3}(\.\d{3})+$
+     let bytes = s.as_bytes();
+     let mut i = 0;
+     let mut lead = 0;
+     while i < bytes.len() && bytes[i].is_ascii_digit() && lead < 3 {
+         i += 1;
+         lead += 1;
+     }
+-    if lead == 0 || lead > 3 {
++    if lead == 0 || lead >= /* ~ changed by cargo-mutants ~ */ 3 {
+         return false;
+     }
+     let mut groups = 0;
+     while i < bytes.len() && bytes[i] == b'.' {
+         i += 1;
+         let mut n = 0;
+         while i < bytes.len() && bytes[i].is_ascii_digit() && n < 3 {
+             i += 1;

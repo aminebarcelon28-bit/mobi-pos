@@ -1,0 +1,27 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace issue_reanchor_challenge -> ReanchorChallenge with Default::default()
+@@ -234,23 +234,17 @@
+ 
+ /// Domain separation is enforced through the shared token verifier's
+ /// `domain` parameter (see `verify_token_with_domain`): the assertion path
+ /// signs `DOMAIN + "." + envelope`, so the two protocols cannot cross-verify
+ /// even under a shared key. Covered by `domain_isolation_between_protocols`.
+ ///
+ /// Step 1: issue a kernel-generated, single-use, expiring challenge.
+ pub fn issue_reanchor_challenge() -> ReanchorChallenge {
+-    let nonce = new_nonce_hex();
+-    let expires_at_ms = system_now_ms().saturating_add(REANCHOR_CHALLENGE_TTL_MS);
+-    global_time_kernel().issue_challenge(nonce.clone(), expires_at_ms);
+-    ReanchorChallenge {
+-        nonce,
+-        expires_at_ms,
+-    }
++    Default::default() /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Step 2: verify the assertion, consume the challenge, anchor on success.
+ /// Returns the newly trusted wall time (ms).
+ pub fn apply_reanchor_assertion(assertion: &str) -> Result<u64, TrustError> {
+     let now = system_now_ms();
+     let pubkey = active_time_pubkey_b64url()?;
+     let payload = verify_assertion(assertion, &pubkey, now)?;

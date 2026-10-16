@@ -1,0 +1,698 @@
+{
+  "src/components/audit/AuditDiffList.tsx": {
+    "rawStatusColors": 17,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 17
+  },
+  "src/components/audit/AuditInspectionDrawer.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 0
+  },
+  "src/components/audit/AuditRelativeTime.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 0
+  },
+  "src/components/audit/AuditSeverityChip.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 0
+  },
+  "src/components/audit/AuditVerificationBanner.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 0
+  },
+  "src/components/audit/CommandFilter.tsx": {
+    "rawStatusColors": 5,
+    "rawNeutrals": 1,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 6
+  },
+  "src/components/audit/DenialSummaryStrip.tsx": {
+    "rawStatusColors": 5,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 5
+  },
+  "src/components/BottomBar.tsx": {
+    "rawStatusColors": 39,
+    "rawNeutrals": 7,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 46
+  },
+  "src/components/camera/UniversalCameraScannerModal.tsx": {
+    "rawStatusColors": 22,
+    "rawNeutrals": 25,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 1,
+    "totalDebt": 48
+  },
+  "src/components/CartPanel.tsx": {
+    "rawStatusColors": 171,
+    "rawNeutrals": 9,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 180
+  },
+  "src/components/ErrorBoundary.tsx": {
+    "rawStatusColors": 9,
+    "rawNeutrals": 1,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 10
+  },
+  "src/components/GlobalModalHost.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 0
+  },
+  "src/components/Header.tsx": {
+    "rawStatusColors": 69,
+    "rawNeutrals": 7,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 76
+  },
+  "src/components/licensing/ActivationGateScreen.tsx": {
+    "rawStatusColors": 147,
+    "rawNeutrals": 4,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 151
+  },
+  "src/components/LockScreenOverlay.tsx": {
+    "rawStatusColors": 77,
+    "rawNeutrals": 6,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 83
+  },
+  "src/components/modals/CloudPairingModal.tsx": {
+    "rawStatusColors": 32,
+    "rawNeutrals": 6,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 38
+  },
+  "src/components/modals/CommandTicketDashboardModal.tsx": {
+    "rawStatusColors": 91,
+    "rawNeutrals": 17,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 108
+  },
+  "src/components/modals/CompatibilityModal.tsx": {
+    "rawStatusColors": 26,
+    "rawNeutrals": 2,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 28
+  },
+  "src/components/modals/CustomerDisplayModal.tsx": {
+    "rawStatusColors": 9,
+    "rawNeutrals": 1,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 10
+  },
+  "src/components/modals/CustomersModal.tsx": {
+    "rawStatusColors": 152,
+    "rawNeutrals": 11,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 163
+  },
+  "src/components/modals/CustomItemModal.tsx": {
+    "rawStatusColors": 60,
+    "rawNeutrals": 8,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 68
+  },
+  "src/components/modals/DatabaseMaintenanceModal.tsx": {
+    "rawStatusColors": 52,
+    "rawNeutrals": 2,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 54
+  },
+  "src/components/modals/DebtLedgerModal.tsx": {
+    "rawStatusColors": 63,
+    "rawNeutrals": 14,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 77
+  },
+  "src/components/modals/DiscountModal.tsx": {
+    "rawStatusColors": 26,
+    "rawNeutrals": 6,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 32
+  },
+  "src/components/modals/ExpenseManagerModal.tsx": {
+    "rawStatusColors": 44,
+    "rawNeutrals": 5,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 49
+  },
+  "src/components/modals/HoldSalesModal.tsx": {
+    "rawStatusColors": 17,
+    "rawNeutrals": 1,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 18
+  },
+  "src/components/modals/HotkeyGuideModal.tsx": {
+    "rawStatusColors": 26,
+    "rawNeutrals": 3,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 29
+  },
+  "src/components/modals/ImeiWarrantyInspectorModal.tsx": {
+    "rawStatusColors": 56,
+    "rawNeutrals": 7,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 63
+  },
+  "src/components/modals/InventoryManagerModal.tsx": {
+    "rawStatusColors": 96,
+    "rawNeutrals": 5,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 101
+  },
+  "src/components/modals/InvoiceIngestionModal.tsx": {
+    "rawStatusColors": 45,
+    "rawNeutrals": 3,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 48
+  },
+  "src/components/modals/KittingBundleModal.tsx": {
+    "rawStatusColors": 58,
+    "rawNeutrals": 5,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 63
+  },
+  "src/components/modals/LabelPrinterModal.tsx": {
+    "rawStatusColors": 30,
+    "rawNeutrals": 12,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 42
+  },
+  "src/components/modals/LicensingModal.tsx": {
+    "rawStatusColors": 40,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 40
+  },
+  "src/components/modals/LoyaltyCardModal.tsx": {
+    "rawStatusColors": 20,
+    "rawNeutrals": 34,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 54
+  },
+  "src/components/modals/PaymentModal.tsx": {
+    "rawStatusColors": 136,
+    "rawNeutrals": 11,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 147
+  },
+  "src/components/modals/ProductEditorModal.tsx": {
+    "rawStatusColors": 120,
+    "rawNeutrals": 65,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 185
+  },
+  "src/components/modals/ProductMatrixModal.tsx": {
+    "rawStatusColors": 32,
+    "rawNeutrals": 2,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 34
+  },
+  "src/components/modals/PurchaseOrderA4Document.tsx": {
+    "rawStatusColors": 27,
+    "rawNeutrals": 92,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 119
+  },
+  "src/components/modals/PurchaseOrderModal.tsx": {
+    "rawStatusColors": 138,
+    "rawNeutrals": 13,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 151
+  },
+  "src/components/modals/ReceiptModal.tsx": {
+    "rawStatusColors": 14,
+    "rawNeutrals": 2,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 16
+  },
+  "src/components/modals/ReceiptTemplateModal.tsx": {
+    "rawStatusColors": 21,
+    "rawNeutrals": 3,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 24
+  },
+  "src/components/modals/RefundModal.tsx": {
+    "rawStatusColors": 74,
+    "rawNeutrals": 1,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 75
+  },
+  "src/components/modals/RepairWorkOrderModal.tsx": {
+    "rawStatusColors": 197,
+    "rawNeutrals": 25,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 222
+  },
+  "src/components/modals/ReportsModal.tsx": {
+    "rawStatusColors": 237,
+    "rawNeutrals": 13,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 250
+  },
+  "src/components/modals/SecurityAuditModal.tsx": {
+    "rawStatusColors": 8,
+    "rawNeutrals": 2,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 10
+  },
+  "src/components/modals/SettingsModal.tsx": {
+    "rawStatusColors": 381,
+    "rawNeutrals": 47,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 428
+  },
+  "src/components/modals/ShiftCloseModal.tsx": {
+    "rawStatusColors": 70,
+    "rawNeutrals": 8,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 78
+  },
+  "src/components/modals/ShiftMovementModal.tsx": {
+    "rawStatusColors": 19,
+    "rawNeutrals": 2,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 21
+  },
+  "src/components/modals/ShiftOpenModal.tsx": {
+    "rawStatusColors": 27,
+    "rawNeutrals": 3,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 30
+  },
+  "src/components/modals/ShiftZReportModal.tsx": {
+    "rawStatusColors": 32,
+    "rawNeutrals": 2,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 34
+  },
+  "src/components/modals/TradeInBuybackModal.tsx": {
+    "rawStatusColors": 94,
+    "rawNeutrals": 4,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 98
+  },
+  "src/components/modals/UpdateModal.tsx": {
+    "rawStatusColors": 27,
+    "rawNeutrals": 5,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 32
+  },
+  "src/components/modals/VoucherModal.tsx": {
+    "rawStatusColors": 39,
+    "rawNeutrals": 21,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 60
+  },
+  "src/components/modals/WhatsAppDispatchModal.tsx": {
+    "rawStatusColors": 7,
+    "rawNeutrals": 2,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 9
+  },
+  "src/components/po/BarcodeStagingModal.tsx": {
+    "rawStatusColors": 15,
+    "rawNeutrals": 43,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 58
+  },
+  "src/components/po/DocumentVisualHud.tsx": {
+    "rawStatusColors": 6,
+    "rawNeutrals": 24,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 30
+  },
+  "src/components/po/VendorDisputeModal.tsx": {
+    "rawStatusColors": 25,
+    "rawNeutrals": 54,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 79
+  },
+  "src/components/PoReviewScreen.tsx": {
+    "rawStatusColors": 233,
+    "rawNeutrals": 291,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 524
+  },
+  "src/components/ProductCatalog.tsx": {
+    "rawStatusColors": 114,
+    "rawNeutrals": 17,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 131
+  },
+  "src/components/receipt/ReceiptPaper.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 42,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 42
+  },
+  "src/components/receipt/ZReportPaper.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 8,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 8
+  },
+  "src/components/replenishment/FilterToolbar.tsx": {
+    "rawStatusColors": 15,
+    "rawNeutrals": 50,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 65
+  },
+  "src/components/replenishment/KPISummaryBar.tsx": {
+    "rawStatusColors": 22,
+    "rawNeutrals": 8,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 30
+  },
+  "src/components/replenishment/ReplenishmentContainer.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 0
+  },
+  "src/components/replenishment/ReplenishmentDemo.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 0
+  },
+  "src/components/replenishment/ReplenishmentEmptyState.tsx": {
+    "rawStatusColors": 5,
+    "rawNeutrals": 13,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 18
+  },
+  "src/components/replenishment/ReplenishmentHeader.tsx": {
+    "rawStatusColors": 14,
+    "rawNeutrals": 27,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 41
+  },
+  "src/components/replenishment/ReplenishmentModal.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 9,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 9
+  },
+  "src/components/replenishment/SupplierCard.tsx": {
+    "rawStatusColors": 114,
+    "rawNeutrals": 165,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 279
+  },
+  "src/components/reports/SalesAnalyticsCharts.tsx": {
+    "rawStatusColors": 12,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 12
+  },
+  "src/components/settings/CloudSyncPanel.tsx": {
+    "rawStatusColors": 97,
+    "rawNeutrals": 8,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 105
+  },
+  "src/components/SilentReceiptPrinter.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 0
+  },
+  "src/components/ThemeToggle.tsx": {
+    "rawStatusColors": 4,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 4
+  },
+  "src/components/ui/ConditionChecklist.tsx": {
+    "rawStatusColors": 38,
+    "rawNeutrals": 1,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 39
+  },
+  "src/components/ui/DateRangePicker.tsx": {
+    "rawStatusColors": 17,
+    "rawNeutrals": 2,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 19
+  },
+  "src/components/ui/DzPhoneInput.tsx": {
+    "rawStatusColors": 2,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 2
+  },
+  "src/components/ui/MobileSheetHeader.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 0
+  },
+  "src/components/ui/ModalShell.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 0
+  },
+  "src/components/ui/MoneyDisplay.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 0
+  },
+  "src/components/ui/MoneyInput.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 0
+  },
+  "src/components/ui/PinDialog.tsx": {
+    "rawStatusColors": 6,
+    "rawNeutrals": 1,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 7
+  },
+  "src/components/ui/QRCodeImage.tsx": {
+    "rawStatusColors": 0,
+    "rawNeutrals": 6,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 6
+  },
+  "src/components/ui/SignaturePad.tsx": {
+    "rawStatusColors": 10,
+    "rawNeutrals": 2,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 12
+  },
+  "src/components/ui/Toast.tsx": {
+    "rawStatusColors": 4,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 4
+  },
+  "src/components/ui/WarrantyBadge.tsx": {
+    "rawStatusColors": 16,
+    "rawNeutrals": 4,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 20
+  },
+  "src/components/ui/WarrantyStatusChips.tsx": {
+    "rawStatusColors": 30,
+    "rawNeutrals": 0,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 30
+  },
+  "src/components/ui/WarrantyTierSelector.tsx": {
+    "rawStatusColors": 10,
+    "rawNeutrals": 4,
+    "arbitraryTextSizes": 0,
+    "arbitraryZ": 0,
+    "inlineHexInClassName": 0,
+    "totalDebt": 14
+  }
+}

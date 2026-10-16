@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/capability_policy.rs
++++ delete match arm Capability::EmergencyExport in authorize
+@@ -75,17 +75,17 @@
+         LicenseState::Unknown => DENY,
+         LicenseState::Unactivated => match capability {
+             Capability::LicenseManagement => ALLOW,
+             _ => DENY,
+         },
+         LicenseState::Operational => ALLOW,
+         LicenseState::Expired => match capability {
+             Capability::ReadOperationalData => ALLOW_OWNER,
+-            Capability::EmergencyExport => ALLOW,
++             /* ~ changed by cargo-mutants ~ */
+             Capability::LicenseManagement => ALLOW,
+             _ => DENY,
+         },
+         LicenseState::GraceExceeded => match capability {
+             Capability::ReadOperationalData => DENY_OWNER,
+             Capability::EmergencyExport => ALLOW,
+             Capability::LicenseManagement => ALLOW,
+             _ => DENY,

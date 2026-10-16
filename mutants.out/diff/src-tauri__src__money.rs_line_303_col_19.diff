@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace * with + in parse_exact_i64
+@@ -295,17 +295,17 @@
+ }
+ 
+ fn parse_exact_i64(digits: &str) -> Result<i64, MoneyError> {
+     let mut acc: i128 = 0;
+     for c in digits.chars() {
+         if !c.is_ascii_digit() {
+             return Err(MoneyError::NotDecimal);
+         }
+-        acc = acc * 10 + (c as i128 - '0' as i128);
++        acc = acc + /* ~ changed by cargo-mutants ~ */ 10 + (c as i128 - '0' as i128);
+         if acc > i64::MAX as i128 {
+             return Err(MoneyError::Overflow);
+         }
+     }
+     Ok(acc as i64)
+ }
+ 
+ #[cfg(test)]

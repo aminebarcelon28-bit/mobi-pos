@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace <impl MonotonicSource for NoMonotonic>::source_name -> &'static str with "xyzzy"
+@@ -211,17 +211,17 @@
+     target_os = "android",
+     target_vendor = "apple"
+ )))]
+ impl MonotonicSource for NoMonotonic {
+     fn now_ms(&self) -> Option<u64> {
+         None
+     }
+     fn source_name(&self) -> &'static str {
+-        "none:unavailable"
++        "xyzzy" /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ // ---------------------------------------------------------------------------
+ // Test fake
+ // ---------------------------------------------------------------------------
+ 
+ /// Manually advanced clock for unit tests (all platform logic is exercised

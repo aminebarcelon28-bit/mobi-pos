@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_anchor.rs
++++ replace && with || in ingest_server_time
+@@ -217,17 +217,17 @@
+         )
+         .or_else(|e| match e {
+             rusqlite::Error::QueryReturnedNoRows => Ok((0i64, String::new())),
+             other => Err(TrustError::op_failed(format!("anchor read: {other}"))),
+         })?;
+     // Anti-replay: server observations must strictly advance; an exact
+     // duplicate (captured token replayed) dies here even inside expiry.
+     if server_ms <= last_server
+-        || (server_ms == last_server && payload.nonce == last_nonce)
++        || (server_ms == last_server || /* ~ changed by cargo-mutants ~ */ payload.nonce == last_nonce)
+     {
+         return Err(TrustError::op_failed(
+             "GATEWAY_TIME_SIGNATURE_INVALID:stale_or_replayed".to_string(),
+         ));
+     }
+     if server_ms == last_server {
+         return Err(TrustError::op_failed(
+             "GATEWAY_TIME_SIGNATURE_INVALID:stale_or_replayed".to_string(),

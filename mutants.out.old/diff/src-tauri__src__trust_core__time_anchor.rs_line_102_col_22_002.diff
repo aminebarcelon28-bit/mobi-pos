@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_anchor.rs
++++ replace < with <= in anchor_now_ms
+@@ -94,17 +94,17 @@
+         .map_err(|e| TrustError::op_failed(format!("anchor ddl: {e}")))?;
+     let mono = clock.now_ms().ok_or_else(|| {
+         TrustError::op_failed("SYSTEM_CLOCK_REGRESSION:monotonic_unavailable".to_string())
+     })?;
+     let mono_i = i64::try_from(mono).map_err(|_| {
+         TrustError::op_failed("SYSTEM_CLOCK_REGRESSION:monotonic_unavailable".to_string())
+     })?;
+     let wall = system_wall_ms()?;
+-    if (wall as u64) < MIN_PLAUSIBLE_UTC_MS {
++    if (wall as u64) <= /* ~ changed by cargo-mutants ~ */ MIN_PLAUSIBLE_UTC_MS {
+         return Err(TrustError::op_failed(
+             "SYSTEM_CLOCK_REGRESSION:rtc_reset".to_string(),
+         ));
+     }
+     let row: Option<(i64, i64)> = tx
+         .query_row(
+             "SELECT high_water_ms, high_water_mono_ms FROM time_anchor WHERE id = 1",
+             [],

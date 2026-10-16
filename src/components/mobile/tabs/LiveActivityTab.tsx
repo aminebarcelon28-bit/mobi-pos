@@ -14,6 +14,7 @@ import {
   CalendarDays,
   CreditCard,
   ChevronRight,
+  AlertTriangle,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
 import { AppTabContent } from '../AppScreenLayout';
@@ -22,6 +23,7 @@ import { formatDZD } from '../../../types/pos';
 import { computeSalesMetrics, isExchangeSaleTx } from '../../../utils/receiptMath';
 import { useAllocationCogs } from '../../../hooks/useAllocationCogs';
 import { soundEngine } from '../../../utils/audioFeedback';
+import { useTranslation, Bdi, type Translator } from '../../../i18n';
 
 interface LiveActivityTabProps {
   onSelectSale?: (sale: SaleTransaction) => void;
@@ -55,21 +57,24 @@ const formatRelativeFr = (createdAt: string | number | Date): string => {
 interface TransactionPresentation {
   label: string;
   badgeClass: string;
-  borderLeftClass: string;
+  borderStartClass: string;
   iconBgClass: string;
   iconColorClass: string;
   Icon: React.ComponentType<{ className?: string; 'aria-hidden'?: boolean | 'true' | 'false' }>;
 }
 
-const getTransactionPresentation = (tx: SaleTransaction): TransactionPresentation => {
+const getTransactionPresentation = (
+  tx: SaleTransaction,
+  t: Translator,
+): TransactionPresentation => {
   const isVoided = tx.status === 'VOIDED';
   if (isVoided) {
     return {
-      label: 'ANNULÉ',
-      badgeClass: 'bg-rose-500/20 text-rose-300 border border-rose-500/30',
-      borderLeftClass: 'border-l-rose-500/80',
+      label: t.liveActivity.badgeVoided || 'ANNULÉ',
+      badgeClass: 'pos-status-danger border',
+      borderStartClass: 'border-s-rose-500/80',
       iconBgClass: 'bg-rose-500/15 border-rose-500/30',
-      iconColorClass: 'text-rose-400',
+      iconColorClass: 'text-rose-700 dark:text-rose-400',
       Icon: RotateCcw,
     };
   }
@@ -77,11 +82,11 @@ const getTransactionPresentation = (tx: SaleTransaction): TransactionPresentatio
   const isRefund = Boolean(tx.isRefund || tx.status === 'REFUNDED');
   if (isRefund) {
     return {
-      label: 'AVOIR',
-      badgeClass: 'bg-purple-500/20 text-purple-300 border border-purple-500/30',
-      borderLeftClass: 'border-l-purple-500/80',
+      label: t.liveActivity.badgeRefunded || 'AVOIR',
+      badgeClass: 'bg-purple-500/15 text-purple-800 dark:text-purple-300 border border-purple-500/30',
+      borderStartClass: 'border-s-purple-500/80',
       iconBgClass: 'bg-purple-500/15 border-purple-500/30',
-      iconColorClass: 'text-purple-400',
+      iconColorClass: 'text-purple-700 dark:text-purple-400',
       Icon: RotateCcw,
     };
   }
@@ -89,11 +94,11 @@ const getTransactionPresentation = (tx: SaleTransaction): TransactionPresentatio
   // Règlement mixte / multi-lignes
   if (tx.tenders && Array.isArray(tx.tenders) && tx.tenders.length > 1) {
     return {
-      label: 'SPLIT',
-      badgeClass: 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30',
-      borderLeftClass: 'border-l-indigo-500/80',
+      label: t.liveActivity.badgeSplit || 'SPLIT',
+      badgeClass: 'bg-indigo-500/15 text-indigo-800 dark:text-indigo-300 border border-indigo-500/30',
+      borderStartClass: 'border-s-indigo-500/80',
       iconBgClass: 'bg-indigo-500/15 border-indigo-500/30',
-      iconColorClass: 'text-indigo-400',
+      iconColorClass: 'text-indigo-700 dark:text-indigo-400',
       Icon: Receipt,
     };
   }
@@ -101,11 +106,11 @@ const getTransactionPresentation = (tx: SaleTransaction): TransactionPresentatio
   const method = tx.paymentMethod || 'Espèces';
   if (method === 'Crédit Client') {
     return {
-      label: 'CRÉDIT',
-      badgeClass: 'bg-amber-500/20 text-amber-300 border border-amber-500/30',
-      borderLeftClass: 'border-l-amber-500/80',
+      label: t.liveActivity.badgeCredit || 'CRÉDIT',
+      badgeClass: 'pos-status-warn border',
+      borderStartClass: 'border-s-amber-500/80',
       iconBgClass: 'bg-amber-500/15 border-amber-500/30',
-      iconColorClass: 'text-amber-400',
+      iconColorClass: 'text-amber-700 dark:text-amber-400',
       Icon: Coins,
     };
   }
@@ -113,10 +118,10 @@ const getTransactionPresentation = (tx: SaleTransaction): TransactionPresentatio
   if (method === 'BaridiMob') {
     return {
       label: 'BARIDIMOB',
-      badgeClass: 'bg-sky-500/20 text-sky-300 border border-sky-500/30',
-      borderLeftClass: 'border-l-sky-500/80',
+      badgeClass: 'bg-sky-500/15 text-sky-800 dark:text-sky-300 border border-sky-500/30',
+      borderStartClass: 'border-s-sky-500/80',
       iconBgClass: 'bg-sky-500/15 border-sky-500/30',
-      iconColorClass: 'text-sky-400',
+      iconColorClass: 'text-sky-700 dark:text-sky-400',
       Icon: CreditCard,
     };
   }
@@ -124,21 +129,21 @@ const getTransactionPresentation = (tx: SaleTransaction): TransactionPresentatio
   if (method === 'Chèque') {
     return {
       label: 'CHÈQUE',
-      badgeClass: 'bg-blue-500/20 text-blue-300 border border-blue-500/30',
-      borderLeftClass: 'border-l-blue-500/80',
+      badgeClass: 'bg-blue-500/15 text-blue-800 dark:text-blue-300 border border-blue-500/30',
+      borderStartClass: 'border-s-blue-500/80',
       iconBgClass: 'bg-blue-500/15 border-blue-500/30',
-      iconColorClass: 'text-blue-400',
+      iconColorClass: 'text-blue-700 dark:text-blue-400',
       Icon: CreditCard,
     };
   }
 
   if (method === 'Reprise') {
     return {
-      label: 'REPRISE',
-      badgeClass: 'bg-teal-500/20 text-teal-300 border border-teal-500/30',
-      borderLeftClass: 'border-l-teal-500/80',
+      label: t.liveActivity.badgeTradeIn || 'REPRISE',
+      badgeClass: 'bg-teal-500/15 text-teal-800 dark:text-teal-300 border border-teal-500/30',
+      borderStartClass: 'border-s-teal-500/80',
       iconBgClass: 'bg-teal-500/15 border-teal-500/30',
-      iconColorClass: 'text-teal-400',
+      iconColorClass: 'text-teal-700 dark:text-teal-400',
       Icon: Coins,
     };
   }
@@ -146,32 +151,32 @@ const getTransactionPresentation = (tx: SaleTransaction): TransactionPresentatio
   if (method === 'Autre') {
     return {
       label: 'TPE / CARTE',
-      badgeClass: 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30',
-      borderLeftClass: 'border-l-cyan-500/80',
+      badgeClass: 'pos-status-info border',
+      borderStartClass: 'border-s-cyan-500/80',
       iconBgClass: 'bg-cyan-500/15 border-cyan-500/30',
-      iconColorClass: 'text-cyan-400',
+      iconColorClass: 'text-cyan-700 dark:text-cyan-400',
       Icon: CreditCard,
     };
   }
 
   // Règlement espèces standard
   return {
-    label: 'ESPÈCES',
-    badgeClass: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25',
-    borderLeftClass: 'border-l-emerald-500/80',
+    label: t.liveActivity.badgeCash || 'ESPÈCES',
+    badgeClass: 'pos-status-ok border',
+    borderStartClass: 'border-s-emerald-500/80',
     iconBgClass: 'bg-emerald-500/15 border-emerald-500/30',
-    iconColorClass: 'text-emerald-400',
+    iconColorClass: 'text-emerald-700 dark:text-emerald-400',
     Icon: Receipt,
   };
 };
 
 // Squelette du flux : mêmes dimensions que les cartes de vente (p-3 sm:p-3.5,
-// border-l-4, avatar 10x10, deux lignes de texte, montant) pour éviter tout
+// border-s-4, avatar 10x10, deux lignes de texte, montant) pour éviter tout
 // saut de mise en page quand les données arrivent.
 const FeedSkeletonRow: React.FC = () => (
   <div
     aria-hidden="true"
-    className="bg-pos-card border border-pos-border border-l-4 border-l-pos-border rounded-2xl p-3 sm:p-3.5 flex items-center justify-between animate-pulse shadow-xs"
+    className="bg-pos-card border border-pos-border border-s-4 border-s-pos-border rounded-2xl p-3 sm:p-3.5 flex items-center justify-between animate-pulse shadow-xs"
   >
     <div className="flex items-center gap-3 min-w-0">
       <div className="w-10 h-10 rounded-2xl bg-pos-panel border border-pos-border shrink-0" />
@@ -226,7 +231,9 @@ const isDayKeyInRange = (
 
 export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }) => {
   const { transactions, activeShift, openModal } = usePosStore();
+  const { t } = useTranslation();
   const [isSyncing, setIsSyncing] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [rangeKey, setRangeKey] = useState<ActivityRangeKey>('today');
   // Premier rendu : affiche le squelette (mêmes dimensions que le flux) le
   // temps que le store hydraté par SQLite peigne les premières données.
@@ -246,6 +253,7 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
 
   const handleManualRefresh = async () => {
     setIsSyncing(true);
+    setFetchError(null);
     try {
       const { syncManager } = await import('../../../sync/SyncManager');
       await syncManager.kick();
@@ -254,6 +262,7 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
       await usePosStore.getState().refreshPullTargets(syncManager.getLastPullTouched());
     } catch (err) {
       console.warn('Manual pull failed:', err);
+      setFetchError(t.liveActivity.syncFailedBanner);
     } finally {
       setIsSyncing(false);
     }
@@ -262,7 +271,17 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
   // Business-day "today" in shop timezone on BOTH sides of the comparison.
   // The previous UTC slice moved midnight sales to the wrong day.
   const todayDateStr = todayLocalKey();
-  const activeRange = ACTIVITY_RANGES.find((r) => r.key === rangeKey) ?? ACTIVITY_RANGES[0];
+  const localizedRanges = useMemo(
+    () => [
+      { key: 'today' as const, label: t.liveActivity.rangeToday, short: t.liveActivity.rangeToday, days: 1, feedLimit: 30 },
+      { key: '7d' as const, label: t.liveActivity.range7d, short: t.liveActivity.range7dShort, days: 7, feedLimit: 50 },
+      { key: '30d' as const, label: t.liveActivity.range30d, short: t.liveActivity.range30dShort, days: 30, feedLimit: 100 },
+      { key: '90d' as const, label: t.liveActivity.range90d, short: t.liveActivity.range90dShort, days: 90, feedLimit: 100 },
+      { key: 'all' as const, label: t.liveActivity.rangeAll, short: t.liveActivity.rangeAllShort, days: null, feedLimit: 100 },
+    ],
+    [t]
+  );
+  const activeRange = localizedRanges.find((r) => r.key === rangeKey) ?? localizedRanges[0] ?? ACTIVITY_RANGES[0];
 
   // Clé-jour minimale incluse (comparaison lexicographique YYYY-MM-DD valide).
   // "today" garde l'égalité stricte ; les plages glissantes incluent les N
@@ -504,11 +523,11 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <span
-                  className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399] shrink-0"
+                  className="w-2.5 h-2.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399] shrink-0"
                   aria-hidden="true"
                 />
-                <span className="text-[11px] font-black uppercase tracking-wider text-emerald-400 truncate max-w-[200px]">
-                  {activeShift ? `Session : ${activeShift.cashierName}` : 'Caisse Principale (En Ligne)'}
+                <span className="text-[11px] font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-400 truncate max-w-[200px]">
+                  {activeShift ? t('liveActivity.activeSessionPrefix', { name: activeShift.cashierName }) : t.liveActivity.mainRegisterOnline}
                 </span>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
@@ -516,30 +535,30 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
                   type="button"
                   onClick={handleManualRefresh}
                   disabled={isSyncing}
-                  className="px-2.5 py-1.5 rounded-xl bg-pos-panel hover:bg-pos-hover text-pos-muted hover:text-cyan-400 border border-pos-border transition cursor-pointer flex items-center gap-1.5 text-[10px] font-bold active-press shadow-xs min-h-[44px]"
-                  title="Synchroniser immédiatement avec la caisse"
-                  aria-label="Sync — Actualiser les données"
+                  className="px-3 py-1.5 rounded-xl bg-pos-panel hover:bg-pos-hover text-pos-muted hover:text-cyan-700 dark:hover:text-cyan-400 border border-pos-border transition cursor-pointer flex items-center gap-1.5 text-[10px] font-bold active-press shadow-xs min-h-[48px] min-w-[48px]"
+                  title={t.liveActivity.syncButtonTitle}
+                  aria-label={t.liveActivity.syncButtonAria}
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 text-cyan-400 ${isSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
-                  <span className="text-[10px] font-mono font-bold text-cyan-300">Sync</span>
+                  <RefreshCw className={`w-3.5 h-3.5 text-cyan-700 dark:text-cyan-400 ${isSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
+                  <span className="text-[10px] font-mono font-bold text-cyan-800 dark:text-cyan-300">{t.liveActivity.syncButton}</span>
                 </button>
                 <span
-                  className="text-[10px] font-mono font-bold text-pos-muted bg-pos-panel/80 px-2.5 py-1.5 rounded-xl border border-pos-border shrink-0 min-h-[44px] flex items-center justify-center tabular-nums"
+                  className="text-[10px] font-mono font-bold text-pos-muted bg-pos-panel/80 px-2.5 py-1.5 rounded-xl border border-pos-border shrink-0 min-h-[48px] flex items-center justify-center tabular-nums"
                   title={rangeKey === 'today' ? todayDateStr : `${activeRange.label} • ${todayDateStr}`}
                 >
-                  {rangeKey === 'today' ? todayDateStr : activeRange.label}
+                  <Bdi mono>{rangeKey === 'today' ? todayDateStr : activeRange.label}</Bdi>
                 </span>
               </div>
             </div>
 
-            {/* Filtre de période — pastilles tactiles 44px, défilement horizontal */}
+            {/* Filtre de période — pastilles tactiles 48px, défilement horizontal */}
             <div
               className="flex gap-1.5 mt-3 overflow-x-auto pb-1 -mx-1 px-1"
               role="group"
-              aria-label="Filtrer l'activité par période"
+              aria-label={t.liveActivity.filterByPeriodAria}
             >
-              <CalendarDays className="w-4 h-4 text-pos-muted self-center shrink-0 ml-1 mr-0.5" aria-hidden="true" />
-              {ACTIVITY_RANGES.map((r) => {
+              <CalendarDays className="w-4 h-4 text-pos-muted self-center shrink-0 ms-1 me-0.5" aria-hidden="true" />
+              {localizedRanges.map((r) => {
                 const isActive = rangeKey === r.key;
                 return (
                   <button
@@ -550,9 +569,9 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
                       soundEngine.playKeyBeep?.();
                       setRangeKey(r.key);
                     }}
-                    className={`shrink-0 min-h-[44px] px-3.5 rounded-full text-[11px] font-black border transition active-press cursor-pointer ${
+                    className={`shrink-0 min-h-[48px] px-3.5 rounded-full text-[11px] font-black border transition active-press cursor-pointer ${
                       isActive
-                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-xs'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-300 shadow-xs'
                         : 'bg-pos-panel border-pos-border text-pos-muted hover:text-pos-text'
                     }`}
                   >
@@ -565,19 +584,19 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
             {/* Big Revenue Hero — suit la période sélectionnée */}
             <div className="mt-3.5 min-w-0 overflow-hidden">
               <span className="text-xs font-bold text-pos-muted uppercase tracking-wider block">
-                Chiffre d'Affaires Net ({activeRange.label})
+                {t('liveActivity.netRevenueTitle', { period: activeRange.label })}
               </span>
               <div className="flex items-baseline gap-2 mt-1 min-w-0 flex-wrap">
-                <span className="text-3xl sm:text-4xl font-black text-pos-text tracking-tight font-mono tabular-nums leading-tight break-words [overflow-wrap:anywhere] whitespace-normal">
+                <Bdi mono className="text-3xl sm:text-4xl font-black text-pos-text tracking-tight leading-tight break-words [overflow-wrap:anywhere] whitespace-normal">
                   {formatDZD(netRevenue)}
-                </span>
+                </Bdi>
                 {refundTotal > 0 && (
                   <span
-                    className="text-[11px] font-bold text-purple-300 bg-purple-500/15 border border-purple-500/30 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 font-mono tabular-nums shrink-0"
+                    className="text-[11px] font-bold text-purple-800 dark:text-purple-300 bg-purple-500/15 border border-purple-500/30 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1 font-mono tabular-nums shrink-0"
                     title={`Avoirs déduits : ${formatDZD(refundTotal)} (${periodRefunds.length} retour${periodRefunds.length > 1 ? 's' : ''})`}
                   >
                     <RotateCcw className="w-3 h-3" aria-hidden="true" />
-                    <span>-{formatDZD(refundTotal)} ({periodRefunds.length} avoir{periodRefunds.length > 1 ? 's' : ''})</span>
+                    <Bdi mono>-{formatDZD(refundTotal)} ({periodRefunds.length} avoir{periodRefunds.length > 1 ? 's' : ''})</Bdi>
                   </span>
                 )}
               </div>
@@ -588,43 +607,45 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
               <div className="bg-pos-panel/85 p-2 sm:p-2.5 rounded-2xl border border-pos-border/70 hover:border-cyan-500/30 transition-colors text-center shadow-xs min-w-0 overflow-hidden flex flex-col items-center justify-between min-h-[66px]">
                 <div className="flex items-center justify-center gap-1 text-pos-muted text-[10px] font-bold uppercase max-w-full min-w-0">
                   <div className="w-4 h-4 rounded bg-cyan-500/10 flex items-center justify-center shrink-0">
-                    <Receipt className="w-3 h-3 text-cyan-400 shrink-0" aria-hidden="true" />
+                    <Receipt className="w-3 h-3 text-cyan-700 dark:text-cyan-400 shrink-0" aria-hidden="true" />
                   </div>
-                  <span className="truncate">Tickets</span>
+                  <span className="truncate">{t.liveActivity.ticketsMetric}</span>
                 </div>
-                <span className="text-sm sm:text-base font-black text-pos-text block mt-1 font-mono tabular-nums max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal">
+                <Bdi mono className="text-sm sm:text-base font-black text-pos-text block mt-1 max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal">
                   {periodSales.length}
-                </span>
+                </Bdi>
               </div>
 
               <div className="bg-pos-panel/85 p-2 sm:p-2.5 rounded-2xl border border-pos-border/70 hover:border-emerald-500/30 transition-colors text-center shadow-xs min-w-0 overflow-hidden flex flex-col items-center justify-between min-h-[66px]">
                 <div className="flex items-center justify-center gap-1 text-pos-muted text-[10px] font-bold uppercase max-w-full min-w-0">
                   <div className="w-4 h-4 rounded bg-emerald-500/10 flex items-center justify-center shrink-0">
-                    <TrendingUp className="w-3 h-3 text-emerald-400 shrink-0" aria-hidden="true" />
+                    <TrendingUp className="w-3 h-3 text-emerald-700 dark:text-emerald-400 shrink-0" aria-hidden="true" />
                   </div>
-                  <span className="truncate">Bénéfice</span>
+                  <span className="truncate">{t.liveActivity.profitMetric}</span>
                 </div>
-                <span
+                <Bdi
+                  mono
                   title={formatDZD(totalProfit)}
-                  className="text-sm sm:text-base font-black text-emerald-400 block mt-1 font-mono tabular-nums max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal"
+                  className="text-sm sm:text-base font-black text-emerald-700 dark:text-emerald-400 block mt-1 max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal"
                 >
                   {formatDZD(totalProfit)}
-                </span>
+                </Bdi>
               </div>
 
               <div className="bg-pos-panel/85 p-2 sm:p-2.5 rounded-2xl border border-pos-border/70 hover:border-amber-500/30 transition-colors text-center shadow-xs min-w-0 overflow-hidden flex flex-col items-center justify-between min-h-[66px]">
                 <div className="flex items-center justify-center gap-1 text-pos-muted text-[10px] font-bold uppercase max-w-full min-w-0">
                   <div className="w-4 h-4 rounded bg-amber-500/10 flex items-center justify-center shrink-0">
-                    <Coins className="w-3 h-3 text-amber-400 shrink-0" aria-hidden="true" />
+                    <Coins className="w-3 h-3 text-amber-700 dark:text-amber-400 shrink-0" aria-hidden="true" />
                   </div>
-                  <span className="truncate">Panier</span>
+                  <span className="truncate">{t.liveActivity.basketMetric}</span>
                 </div>
-                <span
+                <Bdi
+                  mono
                   title={formatDZD(averageBasket)}
-                  className="text-sm sm:text-base font-black text-amber-300 block mt-1 font-mono tabular-nums max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal"
+                  className="text-sm sm:text-base font-black text-amber-800 dark:text-amber-300 block mt-1 max-w-full leading-tight break-words [overflow-wrap:anywhere] whitespace-normal"
                 >
                   {formatDZD(averageBasket)}
-                </span>
+                </Bdi>
               </div>
             </div>
 
@@ -633,16 +654,17 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
               <div className="mt-3 bg-pos-panel/90 p-2.5 sm:p-3 rounded-2xl border border-pos-border flex items-center justify-between gap-2 shadow-xs min-w-0 overflow-hidden">
                 <span className="text-pos-muted flex items-center gap-2 font-bold min-w-0 flex-1 text-xs">
                   <div className="w-6 h-6 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0">
-                    <DollarSign className="w-3.5 h-3.5 text-amber-400 shrink-0" aria-hidden="true" />
+                    <DollarSign className="w-3.5 h-3.5 text-amber-700 dark:text-amber-400 shrink-0" aria-hidden="true" />
                   </div>
-                  <span className="truncate">Espèces Estimées en Tiroir :</span>
+                  <span className="truncate">{t.liveActivity.estimatedDrawerCash}</span>
                 </span>
-                <span
+                <Bdi
+                  mono
                   title={formatDZD(estimatedCashInDrawer)}
-                  className="font-mono font-black text-amber-400 text-sm sm:text-base tabular-nums min-w-0 max-w-[55%] text-right leading-tight break-words [overflow-wrap:anywhere] whitespace-normal shrink-0"
+                  className="font-black text-amber-700 dark:text-amber-400 text-sm sm:text-base min-w-0 max-w-[55%] text-end leading-tight break-words [overflow-wrap:anywhere] whitespace-normal shrink-0"
                 >
                   {formatDZD(estimatedCashInDrawer)}
-                </span>
+                </Bdi>
               </div>
             )}
 
@@ -654,11 +676,11 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
                   soundEngine.playKeyBeep?.();
                   openModal('refund');
                 }}
-                className="min-h-[44px] px-3.5 rounded-xl bg-pos-panel border border-pos-border hover:border-rose-500/40 hover:bg-rose-500/5 text-rose-400 font-bold text-xs flex items-center justify-center gap-2 transition active-press cursor-pointer shadow-xs"
-                title="Effectuer un retour d'article ou un remboursement client"
+                className="min-h-[48px] px-3.5 rounded-xl bg-pos-panel border border-pos-border hover:border-rose-500/40 hover:bg-rose-500/5 text-rose-700 dark:text-rose-400 font-bold text-xs flex items-center justify-center gap-2 transition active-press cursor-pointer shadow-xs"
+                title={t.liveActivity.refundButtonTitle}
               >
                 <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Remboursement</span>
+                <span>{t.liveActivity.refundButton}</span>
               </button>
 
               <button
@@ -667,11 +689,11 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
                   soundEngine.playKeyBeep?.();
                   openModal('shift_zreport');
                 }}
-                className="min-h-[44px] px-3.5 rounded-xl bg-pos-panel border border-pos-border hover:border-cyan-400/50 hover:bg-cyan-500/5 text-cyan-400 font-bold text-xs flex items-center justify-center gap-2 transition active-press cursor-pointer shadow-xs"
-                title="Clôture de caisse et Rapport Z de session"
+                className="min-h-[48px] px-3.5 rounded-xl bg-pos-panel border border-pos-border hover:border-cyan-400/50 hover:bg-cyan-500/5 text-cyan-700 dark:text-cyan-400 font-bold text-xs flex items-center justify-center gap-2 transition active-press cursor-pointer shadow-xs"
+                title={t.liveActivity.zReportButtonTitle}
               >
                 <FileSpreadsheet className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Rapport Z</span>
+                <span>{t.liveActivity.zReportButton}</span>
               </button>
             </div>
           </div>
@@ -679,16 +701,39 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
       }
       contentClassName="px-3.5 pb-4"
     >
+      {/* Explicit Error Banner with >=48px Retry Button */}
+      {fetchError && (
+        <div
+          role="alert"
+          className="mb-2.5 p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-between gap-3"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertTriangle className="w-4 h-4 text-rose-700 dark:text-rose-400 shrink-0" aria-hidden="true" />
+            <p className="text-xs font-bold text-rose-800 dark:text-rose-300 leading-snug">
+              {fetchError}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleManualRefresh()}
+            disabled={isSyncing}
+            className="min-h-[48px] px-3.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-800 dark:text-rose-200 font-bold text-xs shrink-0 active-press transition cursor-pointer"
+          >
+            {t.common.retry}
+          </button>
+        </div>
+      )}
+
       {/* Sales Stream Header — suit la période sélectionnée */}
       <div className="flex items-center justify-between py-2 sticky top-0 z-10 bg-pos-bg">
         <h3 className="text-xs font-black uppercase tracking-wider text-pos-muted flex items-center gap-1.5 min-w-0">
-          <Clock className="w-3.5 h-3.5 text-cyan-400 shrink-0" aria-hidden="true" />
+          <Clock className="w-3.5 h-3.5 text-cyan-700 dark:text-cyan-400 shrink-0" aria-hidden="true" />
           <span className="truncate">
-            {rangeKey === 'today' ? `Flux des Ventes en Direct (${recentFeed.length})` : `Ventes • ${activeRange.label} (${recentFeed.length})`}
+            {rangeKey === 'today' ? t('liveActivity.liveSalesFeedTitle', { count: recentFeed.length }) : t('liveActivity.periodSalesFeedTitle', { period: activeRange.label, count: recentFeed.length })}
           </span>
         </h3>
-        <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-bold bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 tabular-nums">
-          <ShieldCheck className="w-3 h-3" aria-hidden="true" /> Sync ≤ 1.5s
+        <span className="text-[10px] text-emerald-800 dark:text-emerald-300 flex items-center gap-1 font-bold bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 tabular-nums">
+          <ShieldCheck className="w-3 h-3" aria-hidden="true" /> <Bdi mono>{t.liveActivity.syncLatencyBadge}</Bdi>
         </span>
       </div>
 
@@ -705,7 +750,7 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
         >
           <div className="h-11 flex items-center justify-center gap-2 text-[11px] font-bold">
             <RefreshCw
-              className={`w-4 h-4 text-cyan-400 ${ptrLiveRefreshing || isSyncing ? 'animate-spin' : ''}`}
+              className={`w-4 h-4 text-cyan-700 dark:text-cyan-400 ${ptrLiveRefreshing || isSyncing ? 'animate-spin' : ''}`}
               style={
                 !ptrLiveRefreshing && !isSyncing
                   ? {
@@ -720,21 +765,21 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
             <span
               className={
                 isThresholdMet || ptrLiveRefreshing || isSyncing
-                  ? 'text-cyan-300 font-extrabold'
+                  ? 'text-cyan-800 dark:text-cyan-300 font-extrabold'
                   : 'text-pos-muted'
               }
             >
               {ptrLiveRefreshing || isSyncing
-                ? 'Actualisation en cours…'
+                ? t.liveActivity.ptrRefreshing
                 : isThresholdMet
-                  ? 'Relâchez pour actualiser'
-                  : 'Tirez pour actualiser'}
+                  ? t.liveActivity.ptrReleaseToRefresh
+                  : t.liveActivity.ptrPullToRefresh}
             </span>
           </div>
         </div>
 
         {showFeedSkeleton ? (
-          <div role="status" aria-label="Chargement de l'activité…" className="space-y-2">
+          <div role="status" aria-label={t.liveActivity.loadingActivityAria} className="space-y-2">
             <FeedSkeletonRow />
             <FeedSkeletonRow />
             <FeedSkeletonRow />
@@ -747,13 +792,13 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
             <div>
               <p className="text-xs font-bold text-pos-text">
                 {rangeKey === 'today'
-                  ? "Aucune vente enregistrée aujourd'hui"
-                  : `Aucune vente trouvée sur ${activeRange.label.toLowerCase()}`}
+                  ? t.liveActivity.noSalesTodayTitle
+                  : t('liveActivity.noSalesPeriodTitle', { period: activeRange.label.toLowerCase() })}
               </p>
               <p className="text-[11px] text-pos-muted mt-0.5">
                 {rangeKey === 'today'
-                  ? 'Les nouvelles transactions apparaîtront automatiquement en temps réel.'
-                  : 'Modifiez la période sélectionnée ou lancez une synchronisation.'}
+                  ? t.liveActivity.noSalesTodaySubtitle
+                  : t.liveActivity.noSalesPeriodSubtitle}
               </p>
             </div>
             <div className="flex items-center gap-2 pt-1 flex-wrap justify-center">
@@ -764,20 +809,20 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
                     soundEngine.playKeyBeep?.();
                     setRangeKey('today');
                   }}
-                  className="min-h-[44px] px-4 rounded-xl bg-pos-card border border-pos-border hover:border-pos-text text-pos-text font-bold text-xs flex items-center gap-1.5 active-press transition cursor-pointer"
+                  className="min-h-[48px] px-4 rounded-xl bg-pos-card border border-pos-border hover:border-pos-text text-pos-text font-bold text-xs flex items-center gap-1.5 active-press transition cursor-pointer"
                 >
                   <CalendarDays className="w-3.5 h-3.5 text-pos-muted" aria-hidden="true" />
-                  <span>Voir Aujourd'hui</span>
+                  <span>{t.liveActivity.viewTodayButton}</span>
                 </button>
               )}
               <button
                 type="button"
                 onClick={() => void handleManualRefresh()}
                 disabled={isSyncing}
-                className="min-h-[44px] px-4 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-400 font-bold text-xs flex items-center gap-1.5 active-press transition cursor-pointer disabled:opacity-50 shadow-xs"
+                className="min-h-[48px] px-4 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-800 dark:text-cyan-300 font-bold text-xs flex items-center gap-1.5 active-press transition cursor-pointer disabled:opacity-50 shadow-xs"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} aria-hidden="true" />
-                <span>{isSyncing ? 'Actualisation…' : 'Actualiser'}</span>
+                <span>{isSyncing ? t.common.refreshing : t.common.refresh}</span>
               </button>
             </div>
           </div>
@@ -785,7 +830,7 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
           recentFeed.map((tx) => {
             const isRefund = Boolean(tx.isRefund || tx.status === 'REFUNDED');
             const isVoided = tx.status === 'VOIDED';
-            const presentation = getTransactionPresentation(tx);
+            const presentation = getTransactionPresentation(tx, t);
             const timeStr = new Date(tx.createdAt).toLocaleTimeString('fr-FR', {
               hour: '2-digit',
               minute: '2-digit',
@@ -825,7 +870,7 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
                   soundEngine.playKeyBeep?.();
                   onSelectSale?.(tx);
                 }}
-                className={`w-full text-left bg-pos-card border border-pos-border border-l-4 rounded-2xl p-3 sm:p-3.5 flex items-center justify-between hover:border-cyan-500/40 focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:outline-none transition active-press cursor-pointer shadow-xs group ${presentation.borderLeftClass}`}
+                className={`w-full text-start bg-pos-card border border-pos-border border-s-4 rounded-2xl p-3 sm:p-3.5 flex items-center justify-between hover:border-cyan-500/40 focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:outline-none transition active-press cursor-pointer shadow-xs group ${presentation.borderStartClass}`}
                 title="Voir le ticket de caisse et les détails de la transaction"
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -837,9 +882,9 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="font-mono text-xs font-black text-pos-text truncate">
+                      <Bdi mono className="text-xs font-black text-pos-text truncate">
                         #{tx.receiptNumber || tx.id.slice(0, 8)}
-                      </span>
+                      </Bdi>
                       <span
                         className={`text-[9px] font-black px-1.5 py-0.5 rounded-md uppercase shrink-0 ${presentation.badgeClass}`}
                       >
@@ -848,47 +893,48 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
                     </div>
 
                     <div className="flex items-center gap-1.5 text-[10px] text-pos-muted mt-0.5 truncate">
-                      <span className="flex items-center gap-1 font-medium truncate">
+                      <span className="flex items-center gap-1 font-medium truncate min-w-[80px] max-w-[160px]">
                         <User className="w-3 h-3 shrink-0" aria-hidden="true" />
-                        <span className="truncate">{tx.customer?.name || 'Client Comptoir'}</span>
+                        <span className="truncate">{tx.customer?.name || t.liveActivity.walkInCustomerShort}</span>
                       </span>
                       <span aria-hidden="true">•</span>
-                      <span className="shrink-0 font-mono tabular-nums">{tx.items?.length || 1} art.</span>
+                      <Bdi mono className="shrink-0">{tx.items?.length || 1} {t.liveActivity.itemsAbbrev}</Bdi>
                       <span aria-hidden="true">•</span>
-                      <span className="shrink-0 font-mono tabular-nums" title={fullStr}>
+                      <Bdi mono className="shrink-0" title={fullStr}>
                         {relativeFr ? `${relativeFr} • ${timeStr}` : timeStr}
-                      </span>
+                      </Bdi>
                     </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 pl-2 shrink-0">
-                  <div className="text-right">
-                    <span
-                      className={`font-mono text-sm font-black tabular-nums block ${
+                <div className="flex items-center gap-1.5 ps-2 shrink-0">
+                  <div className="text-end">
+                    <Bdi
+                      mono
+                      className={`text-sm font-black block ${
                         isVoided
                           ? 'line-through text-pos-muted'
                           : isRefund
-                          ? 'text-purple-400'
-                          : 'text-emerald-400'
+                          ? 'text-purple-700 dark:text-purple-400'
+                          : 'text-emerald-700 dark:text-emerald-400'
                       }`}
                     >
                       {isRefund ? `-${formatDZD(tx.total)}` : formatDZD(tx.total)}
-                    </span>
+                    </Bdi>
                     {!isVoided && !isRefund && badgeProfit !== undefined && badgeProfit > 0 && (
-                      <span className="text-[10px] font-bold text-pos-muted/80 font-mono tabular-nums block">
-                        +{formatDZD(badgeProfit)} net
-                      </span>
+                      <Bdi mono className="text-[10px] font-bold text-pos-muted/80 block">
+                        +{formatDZD(badgeProfit)} {t.liveActivity.netProfitSuffix}
+                      </Bdi>
                     )}
                   </div>
 
                   <ChevronRight
-                    className="w-4 h-4 text-pos-muted/40 group-hover:text-cyan-400 group-hover:translate-x-0.5 transition-all shrink-0 ml-0.5"
+                    className="w-4 h-4 text-pos-muted/40 group-hover:text-cyan-700 dark:group-hover:text-cyan-400 group-hover:translate-x-0.5 transition-all shrink-0 ms-0.5 rtl:rotate-180"
                     aria-hidden="true"
                   />
                 </div>
                 <span className="sr-only">
-                  Ouvrir le ticket #{tx.receiptNumber || tx.id.slice(0, 8)}
+                  {t('liveActivity.openReceiptSrOnly', { number: tx.receiptNumber || tx.id.slice(0, 8) })}
                 </span>
               </button>
             );

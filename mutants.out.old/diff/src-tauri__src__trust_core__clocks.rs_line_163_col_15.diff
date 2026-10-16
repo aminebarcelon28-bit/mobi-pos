@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace != with == in <impl MonotonicSource for MachContinuousMonotonic>::boot_id
+@@ -155,17 +155,17 @@
+             sysctlbyname(
+                 name.as_ptr(),
+                 &mut tv as *mut _ as *mut core::ffi::c_void,
+                 &mut len as *mut _,
+                 core::ptr::null_mut(),
+                 0,
+             )
+         };
+-        if rc != 0 {
++        if rc == /* ~ changed by cargo-mutants ~ */ 0 {
+             return None;
+         }
+         Some(format!("apple-boot:{}:{}", tv.tv_sec, tv.tv_usec))
+     }
+ 
+     fn source_name(&self) -> &'static str {
+         "apple:mach_continuous_time"
+     }

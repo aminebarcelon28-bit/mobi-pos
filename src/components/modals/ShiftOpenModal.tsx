@@ -5,6 +5,7 @@ import { formatDZD, formatDateTime, type DenominationCount } from '../../types/p
 import { useToast } from '../ui/Toast';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
+import { Kbd } from '../../design-system/desktop/Kbd';
 
 // Lock-screen cashier (createUISlice owns `activeCashier`; absent from the
 // shared PosState type, so read via structural cast). Used as the default
@@ -102,6 +103,18 @@ export const ShiftOpenModal: React.FC = () => {
         qty10: 0,
         coins: 0,
       });
+    } else if (amount === 30000) {
+      setDenominations({
+        qty2000: 10,
+        qty1000: 10,
+        qty500: 0,
+        qty200: 0,
+        qty100: 0,
+        qty50: 0,
+        qty20: 0,
+        qty10: 0,
+        coins: 0,
+      });
     } else if (amount === 50000) {
       setDenominations({
         qty2000: 15,
@@ -177,13 +190,18 @@ export const ShiftOpenModal: React.FC = () => {
               </p>
             </div>
           </div>
-          <button
-            onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
-            aria-label="Fermer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="hidden sm:inline-flex">
+              <Kbd size="sm">Esc</Kbd>
+            </span>
+            <button
+              onClick={closeModal}
+              className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-lg transition cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
+              aria-label="Fermer"
+            >
+              <X className="w-5 h-5" aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         {/* Body */}
@@ -273,7 +291,7 @@ export const ShiftOpenModal: React.FC = () => {
                   <Calculator className="w-4 h-4 text-emerald-400" /> Moteur de Coupures Monétaires (DZD)
                 </span>
                 <span className="text-xs text-pos-muted font-mono">
-                  Total calculé : <strong className="text-emerald-400 font-bold">{formatDZD(talliedTotal)}</strong>
+                  Total calculé : <strong className="text-emerald-400 font-bold num">{formatDZD(talliedTotal)}</strong>
                 </span>
               </div>
 
@@ -403,7 +421,7 @@ export const ShiftOpenModal: React.FC = () => {
             <span className="text-[10px] uppercase font-bold text-pos-muted block">
               Fond de Caisse Validé
             </span>
-            <span data-testid="shift-open-total" className="text-base font-black text-emerald-400 font-mono">
+            <span data-testid="shift-open-total" className="text-base font-black text-emerald-400 font-mono num">
               {formatDZD(finalFloat)}
             </span>
           </div>

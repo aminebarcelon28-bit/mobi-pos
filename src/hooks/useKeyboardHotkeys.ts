@@ -47,6 +47,17 @@ export const useKeyboardHotkeys = () => {
         return;
       }
 
+      // Ctrl+K / Cmd+K: Command Palette (Raycast / Linear style launcher)
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        if (activeModal === 'command_palette') {
+          closeModal();
+        } else {
+          openModal('command_palette');
+        }
+        return;
+      }
+
       // Prevent browser default behavior for function keys
       if (e.key.startsWith('F') && e.key.length <= 3) {
         e.preventDefault();

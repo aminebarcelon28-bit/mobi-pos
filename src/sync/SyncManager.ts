@@ -121,6 +121,7 @@ const GENERIC_PULL: Record<string, { dexie: string; ts: string[] }> = {
   // Without this entry applyRemoteRow fell through with no write while the
   // cursor still advanced past the row — peer depletions never converged (C6).
   stock_batches: { dexie: 'stockBatches', ts: ['updatedAt'] },
+  sale_batch_allocations: { dexie: 'saleBatchAllocations', ts: ['createdAt', 'updatedAt'] },
 };
 
 // P-½ bleed-stop: explicit pull projections (drop SELECT *). Column lists mirror

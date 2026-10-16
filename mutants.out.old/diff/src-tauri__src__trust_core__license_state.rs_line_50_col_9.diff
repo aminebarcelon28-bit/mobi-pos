@@ -1,0 +1,32 @@
+--- src-tauri/src/trust_core/license_state.rs
++++ replace LicenseState::as_code -> &'static str with ""
+@@ -42,28 +42,17 @@
+     fn default() -> Self {
+         LicenseState::Unknown
+     }
+ }
+ 
+ impl LicenseState {
+     /// Canonical wire/persistence code (SCREAMING_SNAKE_CASE).
+     pub fn as_code(&self) -> &'static str {
+-        match self {
+-            LicenseState::Unknown => "UNKNOWN",
+-            LicenseState::Unactivated => "UNACTIVATED",
+-            LicenseState::Operational => "OPERATIONAL",
+-            LicenseState::Expired => "EXPIRED",
+-            LicenseState::GraceExceeded => "GRACE_EXCEEDED",
+-            LicenseState::Suspended => "SUSPENDED",
+-            LicenseState::Revoked => "REVOKED",
+-            LicenseState::Corrupted => "CORRUPTED",
+-            LicenseState::ClockResetRequired => "CLOCK_RESET_REQUIRED",
+-            LicenseState::TamperSuspected => "TAMPER_SUSPECTED",
+-        }
++        "" /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// Strict decode. Unknown values return `None`; callers must map `None`
+     /// to `CORRUPTED`, never to a permissive state.
+     pub fn from_code(code: &str) -> Option<Self> {
+         match code.trim().to_uppercase().as_str() {
+             "UNKNOWN" => Some(LicenseState::Unknown),
+             "UNACTIVATED" => Some(LicenseState::Unactivated),

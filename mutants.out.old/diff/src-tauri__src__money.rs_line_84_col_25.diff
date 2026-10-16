@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace == with != in Money::from_user_input
+@@ -76,17 +76,17 @@
+             return Err(MoneyError::SignNotAllowed);
+         }
+         // BUG-MONEY-03 parity: normalize Arabic-script numerals (TS Test J
+         // pins the same vectors on both sides via shared sources).
+         let mut latinized = String::with_capacity(raw.len());
+         for c in raw.chars() {
+             if ('\u{0660}'..='\u{0669}').contains(&c) {
+                 latinized.push((c as u32 - 0x0660 + '0' as u32) as u8 as char);
+-            } else if c == '\u{066B}' {
++            } else if c != /* ~ changed by cargo-mutants ~ */ '\u{066B}' {
+                 latinized.push('.');
+             } else if c == '\u{066C}' {
+                 // Arabic thousands separator — dropped like FR grouping dots.
+             } else {
+                 latinized.push(c);
+             }
+         }
+         let compact: String = latinized

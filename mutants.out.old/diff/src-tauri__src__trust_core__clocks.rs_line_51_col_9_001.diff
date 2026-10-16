@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace <impl MonotonicSource for WindowsMonotonic>::now_ms -> Option<u64> with Some(0)
+@@ -43,17 +43,17 @@
+ /// `QueryUnbiasedInterruptTime` is deliberately NOT used (excludes suspend).
+ #[cfg(target_os = "windows")]
+ pub struct WindowsMonotonic;
+ 
+ #[cfg(target_os = "windows")]
+ impl MonotonicSource for WindowsMonotonic {
+     fn now_ms(&self) -> Option<u64> {
+         // SAFETY: GetTickCount64 takes no arguments and cannot fail.
+-        Some(unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() })
++        Some(0) /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     fn source_name(&self) -> &'static str {
+         "windows:GetTickCount64"
+     }
+ }
+ 
+ /// Linux/Android: `CLOCK_BOOTTIME` — includes suspend.

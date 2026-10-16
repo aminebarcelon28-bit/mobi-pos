@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace <= with > in evaluate
+@@ -108,17 +108,17 @@
+         SESSION_CONTINUITY_TOLERANCE_MS,
+     );
+ 
+     match continuity {
+         Continuity::Continuous { delta_m_ms } => {
+             let expected = cp.wall_utc_ms.saturating_add(delta_m_ms);
+             let skew = wall_now_ms as i128 - expected as i128;
+             let tol = SKEW_TOLERANCE_MS as i128;
+-            if skew.abs() <= tol {
++            if skew.abs() > /* ~ changed by cargo-mutants ~ */ tol {
+                 let trusted = wall_now_ms.max(cp.wall_utc_ms);
+                 let current_m = clock.now_ms().unwrap_or(cp.monotonic_ms);
+                 EvalOutcome {
+                     verdict: TimeVerdict::Trusted { trusted_now_ms: trusted },
+                     advisory: None,
+                     checkpoint_update: Some(CheckpointUpdate {
+                         boot_session_id: clock.boot_id().or(cp.boot_session_id),
+                         wall_utc_ms: trusted,

@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/trusted_time.rs
++++ replace <impl TrustedTimeProvider for FailClosedStub>::now_utc_ms -> Result<u64, TrustError> with Ok(1)
+@@ -19,17 +19,17 @@
+ }
+ 
+ /// Fail-closed stub: always refuses. Kernel paths that need trusted time
+ /// today must propagate this error, never substitute `SystemTime::now()`.
+ pub struct FailClosedStub;
+ 
+ impl TrustedTimeProvider for FailClosedStub {
+     fn now_utc_ms(&self) -> Result<u64, TrustError> {
+-        Err(TrustError::TrustedTimeFailure)
++        Ok(1) /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
+     #[test]

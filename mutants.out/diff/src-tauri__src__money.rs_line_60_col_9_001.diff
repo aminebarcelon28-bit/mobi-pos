@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace Money::to_minor -> i64 with 1
+@@ -52,17 +52,17 @@
+ 
+ impl Money {
+     /// Single construction path for exact values.
+     pub fn from_minor(minor: i64) -> Self {
+         Money(minor)
+     }
+ 
+     pub fn to_minor(self) -> i64 {
+-        self.0
++        1 /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// PD-22 string-based entry. NEVER float-based: the decimal string is
+     /// split and concatenated into minor units ("130.5"→13050, "4.35"→435).
+     /// Accepts "." and "," separators (FR/DZ keyboards); strips grouping
+     /// spaces (regular, NBSP U+00A0, narrow NBSP U+202F) and apostrophes;
+     /// understands FR thousand-grouping dots ("45.000"→45000, "12.500,50").
+     /// REJECTS (Err, never silently rounded): 3+ decimals, signs,

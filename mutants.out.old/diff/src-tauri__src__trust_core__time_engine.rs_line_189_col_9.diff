@@ -1,0 +1,25 @@
+--- src-tauri/src/trust_core/time_engine.rs
++++ replace PersistedCheckpoint::from_snapshot -> Option<Self> with None
+@@ -181,21 +181,17 @@
+ pub struct PersistedCheckpoint {
+     pub boot_session_id: Option<String>,
+     pub monotonic_ms: u64,
+     pub wall_utc_ms: u64,
+ }
+ 
+ impl PersistedCheckpoint {
+     pub fn from_snapshot(data: &SnapshotData) -> Option<Self> {
+-        Some(Self {
+-            boot_session_id: data.boot_session_id.clone(),
+-            monotonic_ms: data.last_monotonic_ms?,
+-            wall_utc_ms: data.last_trusted_wall_utc_ms?,
+-        })
++        None /* ~ changed by cargo-mutants ~ */
+     }
+ }
+ 
+ // ---------------------------------------------------------------------------
+ // Time kernel singleton (challenge store + time-field mirror)
+ // ---------------------------------------------------------------------------
+ 
+ /// Single-use re-anchor challenge.

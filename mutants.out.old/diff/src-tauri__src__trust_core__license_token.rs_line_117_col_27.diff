@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/license_token.rs
++++ replace != with == in verify_token_with_domain
+@@ -109,17 +109,17 @@
+         })?;
+     if header.alg.as_deref() != Some("EdDSA") {
+         return Err(TrustError::IPCProtocolError {
+             reason: "unsupported token algorithm",
+         });
+     }
+ 
+     let pubkey_bytes = b64url_decode(pubkey_b64url)?;
+-    if pubkey_bytes.len() != 32 {
++    if pubkey_bytes.len() == /* ~ changed by cargo-mutants ~ */ 32 {
+         return Err(TrustError::IPCProtocolError {
+             reason: "invalid Ed25519 public key length",
+         });
+     }
+     let mut pubkey_arr = [0u8; 32];
+     pubkey_arr.copy_from_slice(&pubkey_bytes);
+     let verifying_key =
+         VerifyingKey::from_bytes(&pubkey_arr).map_err(|_| TrustError::IPCProtocolError {

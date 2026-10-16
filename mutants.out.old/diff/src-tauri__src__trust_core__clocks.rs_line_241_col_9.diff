@@ -1,0 +1,24 @@
+--- src-tauri/src/trust_core/clocks.rs
++++ replace ManualClock::with_boot -> Self with Default::default()
+@@ -233,20 +233,17 @@
+ }
+ 
+ impl ManualClock {
+     pub fn new(ms: u64) -> Self {
+         Self { ms, boot: None }
+     }
+ 
+     pub fn with_boot(ms: u64, boot: &'static str) -> Self {
+-        Self {
+-            ms,
+-            boot: Some(boot),
+-        }
++        Default::default() /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     pub fn advance(&mut self, delta_ms: u64) {
+         self.ms = self.ms.saturating_add(delta_ms);
+     }
+ 
+     pub fn set(&mut self, ms: u64) {
+         self.ms = ms;

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   X,
   Printer,
@@ -8,7 +8,13 @@ import {
   Square,
 } from 'lucide-react';
 import { formatDZD } from '../../types/pos';
+import type { Product } from '../../types/pos';
 import type { EditableReviewLine } from '../../types/po';
+import { usePosStore } from '../../store/usePosStore';
+import { useToast } from '../ui/Toast';
+import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
+import { directPrintProductLabels } from '../../utils/escpos';
+import { resolvePrinterForDocument } from '../../utils/printerRoutingEngine';
 
 interface BarcodeStagingModalProps {
   lines: EditableReviewLine[];
@@ -18,9 +24,11 @@ interface BarcodeStagingModalProps {
 
 interface StagedLabelItem {
   clientId: string;
+  productId: string;
   title: string;
   barcode: string;
   sellingPrice: number;
+  unitCost: number;
   quantity: number;
   selected: boolean;
 }
@@ -30,9 +38,12 @@ export const BarcodeStagingModal: React.FC<BarcodeStagingModalProps> = ({
   catalogMap,
   onClose,
 }) => {
+  const { receiptSettings } = usePosStore();
+  const { showToast } = useToast();
   const [labelSize, setLabelSize] = useState<'50x25' | '60x40' | '40x20'>('50x25');
   const [showStoreName] = useState(true);
   const [isPrinting, setIsPrinting] = useState(false);
+  const barcodeCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // Initialize staging items from lines
   const [stagedItems, setStagedItems] = useState<StagedLabelItem[]>(() => {
@@ -46,9 +57,11 @@ export const BarcodeStagingModal: React.FC<BarcodeStagingModalProps> = ({
 
       return {
         clientId: l.client_id,
+        productId: l.selected_product_id || l.client_id,
         title,
         barcode,
         sellingPrice,
+        unitCost: l.unit_cost,
         quantity: Math.max(1, l.quantity),
         selected: true,
       };
@@ -78,15 +91,67 @@ export const BarcodeStagingModal: React.FC<BarcodeStagingModalProps> = ({
     );
   };
 
-  const handlePrint = () => {
-    setIsPrinting(true);
-    if (typeof window !== 'undefined') {
-      window.print();
-    }
-    setTimeout(() => setIsPrinting(false), 1000);
-  };
-
   const activePreviewItem = stagedItems.find((it) => it.selected) || stagedItems[0];
+
+  useEffect(() => {
+    if (activePreviewItem && activePreviewItem.barcode && barcodeCanvasRef.current) {
+      renderBarcodeToCanvas(barcodeCanvasRef.current, activePreviewItem.barcode, 'code128', {
+        height: 32,
+        showText: false,
+      });
+    }
+  }, [activePreviewItem, labelSize]);
+
+  const handlePrint = async () => {
+    setIsPrinting(true);
+    try {
+      const selectedList = stagedItems.filter((it) => it.selected && it.quantity > 0);
+      if (selectedList.length === 0) return;
+
+      const targetPrinter = resolvePrinterForDocument('label', receiptSettings?.printerRouting);
+      const protocol = /zebra|zpl|dymo|brother/i.test(targetPrinter.printerName || targetPrinter.protocol || '')
+        ? 'ZPL'
+        : /tsc|tspl|tsp|godex|rongta|gprinter|gx-|da200|ttp-|da220|te200/i.test(targetPrinter.printerName || targetPrinter.protocol || '')
+          ? 'TSPL'
+          : 'ESCPOS';
+
+      let totalPrinted = 0;
+      for (const item of selectedList) {
+        const syntheticProduct: Product = {
+          id: item.productId,
+          title: item.title,
+          barcode: item.barcode,
+          sku: item.barcode,
+          price: item.sellingPrice,
+          category: 'Tous les produits',
+          brand: '',
+          costPrice: item.unitCost || 0,
+          stock: item.quantity,
+        };
+
+        await directPrintProductLabels(
+          syntheticProduct,
+          {
+            format: protocol,
+            protocol,
+            size: labelSize === '40x20' ? '50x25' : labelSize,
+            quantity: item.quantity,
+            showPrice: true,
+            showStoreName,
+            storeName: receiptSettings?.storeName || 'MOBI-STORE DZ',
+          },
+          receiptSettings?.printerRouting
+        );
+        totalPrinted += item.quantity;
+      }
+      showToast(`${totalPrinted} étiquette(s) envoyée(s) à l'imprimante.`, 'success');
+    } catch (err) {
+      console.error('[BarcodeStagingModal Print Error]', err);
+      showToast(`Erreur d'impression : ${err instanceof Error ? err.message : String(err)}`, 'error');
+    } finally {
+      setIsPrinting(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 overflow-y-auto animate-in fade-in select-none">
@@ -237,20 +302,9 @@ export const BarcodeStagingModal: React.FC<BarcodeStagingModalProps> = ({
                     {activePreviewItem.title}
                   </p>
 
-                  {/* Simulated High-Res Barcode Vector */}
+                  {/* Real Barcode Canvas */}
                   <div className="w-full flex flex-col items-center">
-                    <svg className="w-36 h-9" viewBox="0 0 100 24">
-                      {Array.from({ length: 42 }).map((_, i) => (
-                        <rect
-                          key={i}
-                          x={i * 2.3 + 2}
-                          y={2}
-                          width={(i % 3 === 0 || i % 7 === 0) ? 1.6 : 0.9}
-                          height={18}
-                          fill="#0f172a"
-                        />
-                      ))}
-                    </svg>
+                    <canvas ref={barcodeCanvasRef} className="max-w-[160px] h-9 object-contain" />
                     <span className="font-mono text-[9px] font-extrabold tracking-widest text-slate-800">
                       {activePreviewItem.barcode}
                     </span>

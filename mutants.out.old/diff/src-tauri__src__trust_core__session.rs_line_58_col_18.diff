@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/session.rs
++++ replace != with == in evaluate_continuity
+@@ -50,17 +50,17 @@
+ pub fn evaluate_continuity(
+     checkpoint: &SessionCheckpoint,
+     clock: &dyn MonotonicSource,
+     current_wall_utc_ms: u64,
+     tolerance_ms: u64,
+ ) -> Continuity {
+     // Signal 1: boot-id mismatch is definitive.
+     if let (Some(saved), Some(current)) = (checkpoint.boot_id.as_deref(), clock.boot_id()) {
+-        if saved != current {
++        if saved == /* ~ changed by cargo-mutants ~ */ current {
+             return Continuity::NewSession;
+         }
+     }
+ 
+     let current_m = match clock.now_ms() {
+         Some(m) => m,
+         None => return Continuity::NewSession,
+     };

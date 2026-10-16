@@ -8,9 +8,10 @@ import type {
 } from '../../types/pos';
 import { db as dexieDb } from '../database';
 import { fireSync, fireSyncDelete, isTauriEnv } from './base';
+import { getLocalDb } from '../sqlPluginAdapter';
 import { newId } from '../../utils/ids';
 import { verifyManagerGate } from '../../utils/pinGate';
-import { cashSalesFromTxns, cashRefundsFromTxns } from '../../utils/cashTerms';
+import { cashSalesFromTxns, cashRefundsFromTxns, DRAWER_REASON_PREFIXES } from '../../utils/cashTerms';
 import { toWholeDa, type SqlDb } from './wholeDinar';
 import {
   INSERT_SESSION_SQL,
@@ -285,6 +286,32 @@ function codedError(code: string, message: string, existingSession?: CashSession
 export const shiftAdapter = {
   // ── CASH DROPS & PAYOUTS ──
   async saveCashDrop(entry: CashDropEntry, isPayout = false): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        await db.execute(
+          `INSERT INTO cash_drops (id, timestamp, amount, reason, user, is_payout)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT(id) DO UPDATE SET
+             timestamp=excluded.timestamp,
+             amount=excluded.amount,
+             reason=excluded.reason,
+             user=excluded.user,
+             is_payout=excluded.is_payout,
+             version=cash_drops.version + 1`,
+          [
+            entry.id,
+            entry.timestamp || new Date().toISOString(),
+            entry.amount || 0,
+            entry.reason || '',
+            entry.user || 'Admin',
+            isPayout ? 1 : 0,
+          ],
+        );
+      } catch (err) {
+        console.warn('[shiftAdapter] SQLite saveCashDrop failed, fallback to Dexie:', err);
+      }
+    }
     if (isPayout) {
       await dexieDb.payouts.put(entry);
     } else {
@@ -294,20 +321,111 @@ export const shiftAdapter = {
   },
 
   async getCashDrops(isPayout = false): Promise<CashDropEntry[]> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const rows = (await db.select(
+          'SELECT id, timestamp, amount, reason, user FROM cash_drops WHERE is_payout = $1 ORDER BY timestamp DESC',
+          [isPayout ? 1 : 0],
+        )) as Array<{ id: string; timestamp: string; amount: number; reason: string; user: string }>;
+        if (rows && rows.length > 0) {
+          const list: CashDropEntry[] = rows.map((r) => ({
+            id: r.id,
+            timestamp: r.timestamp,
+            amount: Number(r.amount || 0),
+            reason: r.reason || '',
+            user: r.user || 'Admin',
+          }));
+          if (isPayout) {
+            void dexieDb.payouts.bulkPut(list).catch(() => {});
+          } else {
+            void dexieDb.cashDrops.bulkPut(list).catch(() => {});
+          }
+          return list;
+        }
+      } catch (err) {
+        console.warn('[shiftAdapter] SQLite getCashDrops failed, fallback to Dexie:', err);
+      }
+    }
     return isPayout ? await dexieDb.payouts.toArray() : await dexieDb.cashDrops.toArray();
   },
 
   // ── STORE EXPENSES (EBITDA) ──
   async saveStoreExpense(expense: StoreExpense): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const payload = JSON.stringify(expense);
+        await db.execute(
+          `INSERT INTO store_expenses (id, category, title, amount, payment_method, paid_to, notes, recorded_by, created_at, json_payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           ON CONFLICT(id) DO UPDATE SET
+             category=excluded.category,
+             title=excluded.title,
+             amount=excluded.amount,
+             payment_method=excluded.payment_method,
+             paid_to=excluded.paid_to,
+             notes=excluded.notes,
+             recorded_by=excluded.recorded_by,
+             json_payload=excluded.json_payload,
+             version=store_expenses.version + 1`,
+          [
+            expense.id,
+            expense.category || 'Général',
+            expense.title || '',
+            expense.amount || 0,
+            expense.paymentMethod || 'Espèces',
+            expense.paidTo || null,
+            expense.notes || null,
+            expense.recordedBy || 'Admin',
+            expense.createdAt || new Date().toISOString(),
+            payload,
+          ],
+        );
+      } catch (err) {
+        console.warn('[shiftAdapter] SQLite saveStoreExpense failed, fallback to Dexie:', err);
+      }
+    }
     await dexieDb.storeExpenses.put(expense);
     void fireSync('store_expense', expense.id, expense);
   },
 
   async getAllStoreExpenses(): Promise<StoreExpense[]> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const rows = (await db.select('SELECT json_payload FROM store_expenses ORDER BY created_at DESC')) as Array<{ json_payload: string }>;
+        if (rows && rows.length > 0) {
+          const list = rows
+            .map((r) => {
+              try {
+                return JSON.parse(r.json_payload) as StoreExpense;
+              } catch {
+                return null;
+              }
+            })
+            .filter((e): e is StoreExpense => e !== null);
+          if (list.length > 0) {
+            void dexieDb.storeExpenses.bulkPut(list).catch(() => {});
+            return list;
+          }
+        }
+      } catch (err) {
+        console.warn('[shiftAdapter] SQLite getAllStoreExpenses failed, fallback to Dexie:', err);
+      }
+    }
     return await dexieDb.storeExpenses.toArray();
   },
 
   async deleteStoreExpense(id: string): Promise<void> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        await db.execute('DELETE FROM store_expenses WHERE id = $1', [id]);
+      } catch (err) {
+        console.warn('[shiftAdapter] SQLite deleteStoreExpense failed:', err);
+      }
+    }
     await dexieDb.storeExpenses.delete(id);
     void fireSyncDelete('store_expense', id);
   },
@@ -714,6 +832,17 @@ export const shiftAdapter = {
       }
     }
 
+    const operatingExpenses = movements
+      .filter((m) => {
+        if (m.type !== 'EXPENSE') return false;
+        const r = m.reason || '';
+        if (r.startsWith(DRAWER_REASON_PREFIXES.SOULTE_CASHOUT)) return false;
+        if (r.startsWith(DRAWER_REASON_PREFIXES.EXCHANGE_CASHOUT)) return false;
+        if (r.startsWith('Dépôt coffre') || r.startsWith('DROP_SAFE') || r.startsWith('COFFRE')) return false;
+        return true;
+      })
+      .reduce((sum, m) => sum + m.amount, 0);
+
     const closedSession: CashSession = {
       ...openSession,
       status: 'CLOSED',
@@ -724,10 +853,9 @@ export const shiftAdapter = {
       totalSalesCount: sessionTxns.length,
       totalSalesRevenue: sessionTxns.reduce((sum, t) => sum + t.total, 0),
       totalProfits: toWholeDa(totalProfits),
-      // Net of session EXPENSE movements — same definition the close-modal
-      // preview shows (`totalSaleMargins - expenses`). Previously unset, so
-      // the shift-close audit logged "Profit Net: undefined DA".
-      dailyNetProfit: toWholeDa(totalProfits - expenses),
+      // Net of operating EXPENSE movements — same definition the close-modal
+      // preview shows (`totalSaleMargins - operatingExpenses`).
+      dailyNetProfit: toWholeDa(totalProfits - operatingExpenses),
       closingNote: closingNote || '',
       movements,
       updatedAt: closeNowIso,

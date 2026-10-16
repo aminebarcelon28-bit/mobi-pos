@@ -173,8 +173,9 @@ console.log('\n--- Rule 4: Phase 1c input sweep (one parsing path) ---');
       check(`${file}: MoneyInput adopted`, src.includes('MoneyInput'),
         'no MoneyInput import — money fields must use the shared component');
     }
-    const pla = (src.match(/parseLocalizedAmount\s*\(/g) || []).length;
-    const pf = (src.match(/parseFloat\s*\(/g) || []).length;
+    const codeOnly = src.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    const pla = (codeOnly.match(/parseLocalizedAmount\s*\(/g) || []).length;
+    const pf = (codeOnly.match(/parseFloat\s*\(/g) || []).length;
     check(`${file}: legacy parsers within registry (pla ${pla}<=${max.pla}, pf ${pf}<=${max.pf})`,
       pla <= max.pla && pf <= max.pf, `got pla=${pla} pf=${pf}`);
   }

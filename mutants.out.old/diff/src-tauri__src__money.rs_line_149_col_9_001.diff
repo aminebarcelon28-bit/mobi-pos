@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace Money::to_json_string -> String with "xyzzy".into()
+@@ -141,17 +141,17 @@
+         if s.is_empty() || !s.chars().all(|c| c.is_ascii_digit()) {
+             return Err(MoneyError::NotDecimal);
+         }
+         parse_exact_i64(s).map(Money)
+     }
+ 
+     /// PD-3: serialize as minor-unit string.
+     pub fn to_json_string(self) -> String {
+-        self.0.to_string()
++        "xyzzy".into() /* ~ changed by cargo-mutants ~ */
+     }
+ 
+     /// PD-23 display (+ C-2a grouping): dinars with ALWAYS two decimals,
+     /// integer div/rem + zero-pad, whole part grouped with ASCII spaces
+     /// (escpos-safe). 13050 → "130.50 DA", 4500000 → "45 000.00 DA".
+     pub fn format(self) -> String {
+         let neg = self.0 < 0;
+         let abs = self.0.unsigned_abs();

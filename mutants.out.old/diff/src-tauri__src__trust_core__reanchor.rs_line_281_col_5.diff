@@ -1,0 +1,22 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace trust_reanchor_challenge -> Result<ReanchorChallenge, TrustError> with Ok(Default::default())
+@@ -273,18 +273,17 @@
+     global_kernel().bump_counter_only();
+     Ok(payload.server_time_ms)
+ }
+ 
+ /// `#[tauri::command]` wrapper: issue challenge (LicenseManagement, so a
+ /// quarantined terminal can always begin recovery).
+ #[tauri::command]
+ pub fn trust_reanchor_challenge() -> Result<ReanchorChallenge, TrustError> {
+-    require_capability("trust_reanchor_challenge", Capability::LicenseManagement)?;
+-    Ok(issue_reanchor_challenge())
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// `#[tauri::command]` wrapper: verify + anchor + persist.
+ #[tauri::command]
+ pub fn trust_reanchor_time(app: tauri::AppHandle, assertion: String) -> Result<u64, TrustError> {
+     require_capability("trust_reanchor_time", Capability::LicenseManagement)?;
+     if assertion.len() > 8 * 1024 {
+         return Err(TrustError::IPCProtocolError {

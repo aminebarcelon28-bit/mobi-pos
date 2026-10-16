@@ -2439,6 +2439,61 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       requiresPin: true,
     };
 
+    const origLines = originalTransaction.items || [];
+    const findOrigLine = (ri: { productId: string; saleItemId?: string }) => {
+      if (ri.saleItemId) {
+        const m = String(ri.saleItemId).match(/-item-(\d+)$/);
+        const idx = m ? Number(m[1]) : -1;
+        const byIdx = idx >= 0 ? origLines[idx] : undefined;
+        if (byIdx && byIdx.product?.id === ri.productId) return byIdx;
+      }
+      return origLines.find((i) => i.product?.id === ri.productId);
+    };
+
+    const recordDefectiveLossExpenses = async (warningsOut: string[]) => {
+      const defective = refundItems.filter(
+        (i) => (i.condition ?? (i.restock ? 'restock' : 'defective')) === 'defective' && i.quantity > 0
+      );
+      if (defective.length > 0) {
+        try {
+          const { addStoreExpense } = get() as unknown as {
+            addStoreExpense: (e: {
+              category: 'Perte Stock / SAV';
+              title: string;
+              amount: number;
+              paymentMethod: 'Autre';
+              notes?: string;
+              recordedBy: string;
+            }) => Promise<unknown>;
+          };
+          for (const di of defective) {
+            const origLine = findOrigLine(di);
+            const lossUnitCost = Math.max(
+              0,
+              Math.round(
+                origLine?.unitCostAtSale ?? origLine?.unitCostPrice
+                ?? products.find((p) => p.id === di.productId)?.costPrice
+                ?? di.unitPrice ?? 0
+              )
+            );
+            const lossAmount = lossUnitCost * Math.max(0, Math.round(di.quantity));
+            if (lossAmount <= 0) continue;
+            await addStoreExpense({
+              category: 'Perte Stock / SAV',
+              title: `Rebut SAV : ${di.title || di.productId} (x${di.quantity}) — Avoir #${refundReceiptNumber}`,
+              amount: lossAmount,
+              paymentMethod: 'Autre',
+              notes: `Ticket origine #${originalTransaction.receiptNumber}. Motif: ${refundReason}`,
+              recordedBy: cashierName || 'Manager',
+            });
+          }
+        } catch (woErr) {
+          console.warn('[refund:writeoff] inventory-loss entry deferred:', woErr);
+          warningsOut.push("Rebut SAV : perte stock à comptabiliser manuellement dans les charges.");
+        }
+      }
+    };
+
     // MOBI-DEFECT-F native barrier (Tauri only): every money effect of this
     // refund — ticket CAS, refund row + lines, inventory deltas, batch
     // restitution, debt ledger, voucher CAS, drawer trail, outbox, audit —
@@ -2450,16 +2505,6 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       const batchSeed = `ref-${refundTxnId}`;
       const restitutionAllocations: Array<{ batchId?: string; productId: string; quantity: number; unitCost: number }> = [];
       {
-        const origLines = originalTransaction.items || [];
-        const findOrigLine = (ri: { productId: string; saleItemId?: string }) => {
-          if (ri.saleItemId) {
-            const m = String(ri.saleItemId).match(/-item-(\d+)$/);
-            const idx = m ? Number(m[1]) : -1;
-            const byIdx = idx >= 0 ? origLines[idx] : undefined;
-            if (byIdx && byIdx.product?.id === ri.productId) return byIdx;
-          }
-          return origLines.find((i) => i.product?.id === ri.productId);
-        };
         const restocked = refundItems.filter((i) => i.restock && i.quantity > 0 && !isUnstockedProduct(i.productId, products));
         for (const ri of restocked) {
           const origItem = findOrigLine(ri);
@@ -2790,6 +2835,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       if (nativeSettings?.autoPrintEnabled !== false) {
         void printReceipt(refundTransaction, nativeSettings);
       }
+      await recordDefectiveLossExpenses(nativeWarnings);
       return { success: true, refundTransaction, warnings: nativeWarnings };
     }
 
@@ -2850,16 +2896,6 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // Matching is by saleItemId (exact original line); the product-only
         // lookup is a legacy fallback for pre-link refund payloads.
         const restitutionAllocations: Array<{ batchId?: string; productId: string; quantity: number; unitCost: number }> = [];
-        const origLines = originalTransaction.items || [];
-        const findOrigLine = (ri: { productId: string; saleItemId?: string }) => {
-          if (ri.saleItemId) {
-            const m = String(ri.saleItemId).match(/-item-(\d+)$/);
-            const idx = m ? Number(m[1]) : -1;
-            const byIdx = idx >= 0 ? origLines[idx] : undefined;
-            if (byIdx && byIdx.product?.id === ri.productId) return byIdx;
-          }
-          return origLines.find((i) => i.product?.id === ri.productId);
-        };
         for (const ri of restocked) {
           const origItem = findOrigLine(ri);
           const origAllocations = origItem?.fifoAllocations || [];
@@ -2897,51 +2933,9 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             console.warn('[refund:batches] Batch restitution error:', err);
           });
         }
-
-        // Quarantine / SAV write-off (Condition Défectueux): no sellable
-        // stock movement happened above for these lines (they were excluded
-        // from `restocked`). Log their historical cost as an inventory loss
-        // so the P&L reflects it in operating charges — never in sales COGS
-        // (refund vouchers carry cost 0) and never in the cash drawer
-        // (paymentMethod 'Autre' is excluded from Espèces reconciliation).
-        const defective = refundItems.filter(
-          (i) => (i.condition ?? (i.restock ? 'restock' : 'defective')) === 'defective' && i.quantity > 0
-        );
-        if (defective.length > 0) {
-          try {
-            const { addStoreExpense } = get() as unknown as {
-              addStoreExpense: (e: {
-                category: 'Perte Stock / SAV'; title: string; amount: number;
-                paymentMethod: 'Autre'; notes?: string; recordedBy: string;
-              }) => Promise<unknown>;
-            };
-            for (const di of defective) {
-              const origLine = findOrigLine(di);
-              const lossUnitCost = Math.max(
-                0,
-                Math.round(
-                  origLine?.unitCostAtSale ?? origLine?.unitCostPrice
-                  ?? products.find((p) => p.id === di.productId)?.costPrice
-                  ?? di.unitPrice ?? 0
-                )
-              );
-              const lossAmount = lossUnitCost * Math.max(0, Math.round(di.quantity));
-              if (lossAmount <= 0) continue;
-              await addStoreExpense({
-                category: 'Perte Stock / SAV',
-                title: `Rebut SAV : ${di.title || di.productId} (x${di.quantity}) — Avoir #${refundReceiptNumber}`,
-                amount: lossAmount,
-                paymentMethod: 'Autre',
-                notes: `Ticket origine #${originalTransaction.receiptNumber}. Motif: ${refundReason}`,
-                recordedBy: cashierName || 'Manager',
-              });
-            }
-          } catch (woErr) {
-            console.warn('[refund:writeoff] inventory-loss entry deferred:', woErr);
-            refundWarnings.push("Rebut SAV : perte stock à comptabiliser manuellement dans les charges.");
-          }
-        }
       }
+
+      await recordDefectiveLossExpenses(refundWarnings);
       const { enqueueOrderSync } = await import('../../db/sqlPluginAdapter');
         const { writeCheckoutAtomic } = await import('../../db/sqlPluginAdapter');
       // Full object for the same reason as void: preserve receipt detail in cloud + peers.

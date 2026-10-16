@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Play, Clock, User, AlertTriangle } from 'lucide-react';
+import { X, Play, Clock, User, AlertTriangle, Trash2 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
 import { formatDZD } from '../../types/pos';
@@ -110,6 +110,11 @@ export const HoldSalesModal: React.FC = () => {
     showToast('Vente en attente reprise en caisse.', 'success');
   };
 
+  const handleDelete = (saleId: string) => {
+    usePosStore.getState().deleteHeldSale(saleId);
+    showToast('Vente en attente supprimée.', 'info');
+  };
+
   return (
     <div role="dialog" aria-modal="true" aria-label="Ventes en attente" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
       <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:zoom-in-95 max-h-[94dvh] sm:max-h-[90dvh] flex flex-col">
@@ -118,8 +123,8 @@ export const HoldSalesModal: React.FC = () => {
 
         <div className="p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
           <div className="min-w-0">
-            <h2 className="text-base font-black text-white flex items-center gap-2">
-              <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+            <h2 className="text-base font-black text-pos-text flex items-center gap-2">
+              <Clock className="w-4 h-4 text-amber-500 dark:text-amber-400 shrink-0" aria-hidden="true" />
               <span className="truncate">Ventes en Attente ({(heldSales || []).length})</span>
             </h2>
             <p className="text-[11px] text-pos-muted truncate hidden sm:block">
@@ -129,11 +134,11 @@ export const HoldSalesModal: React.FC = () => {
           <button
             ref={closeBtnRef}
             onClick={closeModal}
-            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-white rounded-xl transition min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer shrink-0"
-            aria-label="Fermer (Échap)"
+            className="p-1.5 hover:bg-pos-hover text-pos-muted hover:text-pos-text rounded-xl transition min-h-[48px] min-w-[48px] flex items-center justify-center cursor-pointer shrink-0"
+            aria-label="Fermer"
             title="Fermer (Échap)"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -174,18 +179,18 @@ export const HoldSalesModal: React.FC = () => {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
-                      <User className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      <span className="text-sm font-black text-white truncate">
+                      <User className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" aria-hidden="true" />
+                      <span className="text-sm font-black text-pos-text truncate">
                         {sale.customer ? sale.customer.name : 'Client Passage'}
                       </span>
                     </div>
-                    <span className="font-mono font-black text-base text-emerald-400 shrink-0 tabular-nums">
+                    <span className="font-mono font-black text-base text-emerald-700 dark:text-emerald-400 shrink-0 tabular-nums">
                       {formatDZD(total)}
                     </span>
                   </div>
                   <p className="text-[11px] text-pos-muted mt-1 flex items-center gap-1.5">
                     <span className="flex items-center gap-1 shrink-0">
-                      <Clock className="w-3 h-3" /> Suspendu à {sale.timestamp}
+                      <Clock className="w-3 h-3" aria-hidden="true" /> Suspendu à {sale.timestamp}
                     </span>
                     <span aria-hidden="true">•</span>
                     <span className="truncate">
@@ -199,15 +204,15 @@ export const HoldSalesModal: React.FC = () => {
                     <p
                       className={`text-[11px] mt-1 flex items-center gap-1 font-bold ${
                         expiry.status === 'expired' || expiry.status === 'urgent'
-                          ? 'text-red-400'
+                          ? 'text-rose-700 dark:text-rose-400'
                           : expiry.status === 'soon'
-                          ? 'text-amber-300'
+                          ? 'text-amber-700 dark:text-amber-300'
                           : 'text-pos-muted'
                       }`}
                       role="status"
                     >
                       {(expiry.status === 'expired' || expiry.status === 'urgent') && (
-                        <AlertTriangle className="w-3 h-3 shrink-0" />
+                        <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
                       )}
                       {expiry.status === 'expired'
                         ? `Expiré — sera purgé à la reprise`
@@ -220,12 +225,24 @@ export const HoldSalesModal: React.FC = () => {
                   )}
                 </div>
 
-                <button
-                  onClick={() => handleRetrieve(sale.id)}
-                  className="px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition shadow-md shadow-amber-500/20 min-h-[44px] shrink-0 active-press"
-                >
-                  <Play className="w-3.5 h-3.5 fill-slate-950" /> Reprendre
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(sale.id)}
+                    className="p-2.5 rounded-xl border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 transition min-h-[48px] min-w-[48px] flex items-center justify-center cursor-pointer active-press"
+                    aria-label="Supprimer la vente en attente"
+                    title="Supprimer la vente en attente"
+                  >
+                    <Trash2 className="w-4 h-4" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleRetrieve(sale.id)}
+                    className="px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition shadow-md shadow-amber-500/20 min-h-[48px] active-press cursor-pointer"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-slate-950" aria-hidden="true" /> Reprendre
+                  </button>
+                </div>
               </div>
               );
             })

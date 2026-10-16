@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace += with -= in is_strict_fr_grouped
+@@ -225,17 +225,17 @@
+         let mut n = 0;
+         while i < bytes.len() && bytes[i].is_ascii_digit() && n < 3 {
+             i += 1;
+             n += 1;
+         }
+         if n != 3 {
+             return false;
+         }
+-        groups += 1;
++        groups -= /* ~ changed by cargo-mutants ~ */ 1;
+     }
+     if groups == 0 {
+         return false;
+     }
+     if i >= bytes.len() || bytes[i] != b',' {
+         return false;
+     }
+     i += 1;

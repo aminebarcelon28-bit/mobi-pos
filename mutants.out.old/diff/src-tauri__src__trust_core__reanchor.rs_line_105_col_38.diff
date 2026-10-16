@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/reanchor.rs
++++ replace != with == in active_time_pubkey_b64url
+@@ -97,17 +97,17 @@
+ }
+ 
+ /// Resolve the active verification key: production pin, or the test key in
+ /// debug builds with a loud warning. Release without a production key
+ /// refuses — this is what makes unshipped enforcement fail closed. Shared
+ /// with the server-time ingestion path (one key policy, distinct envelope
+ /// prefixes so the protocols cannot cross-verify).
+ pub(crate) fn active_time_pubkey_b64url() -> Result<String, TrustError> {
+-    if PRODUCTION_TIME_PUBKEY_B64URL != "UNCONFIGURED" {
++    if PRODUCTION_TIME_PUBKEY_B64URL == /* ~ changed by cargo-mutants ~ */ "UNCONFIGURED" {
+         return Ok(PRODUCTION_TIME_PUBKEY_B64URL.to_string());
+     }
+     #[cfg(debug_assertions)]
+     {
+         eprintln!("[trust_core] WARNING: re-anchor using TEST time key (debug/test only)");
+         Ok(test_pubkey_b64url())
+     }
+     #[cfg(not(debug_assertions))]

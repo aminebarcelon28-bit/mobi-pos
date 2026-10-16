@@ -100,7 +100,19 @@ export function buildZSnapshot(a: BuildZSnapshotArgs): ZReportSnapshot {
   const todayCashExpenses = (a.storeExpenses || [])
     .filter((e) => e.paymentMethod === 'Espèces' && inShiftWindow(e.createdAt))
     .reduce((acc, e) => acc + (e.amount || 0), 0);
-  const savDeposits = savDepositsFromRepairs((a.repairOrders || []).filter((r) => inShiftWindow(r.createdAt)));
+  const sessionMovements = a.shift?.movements || [];
+  const savAcompteFromMovs = sessionMovements
+    .filter(
+      (m) =>
+        m &&
+        m.type === 'MANUAL_DEPOSIT' &&
+        ((m.reason || '').includes('Acompte SAV') || (m.reason || '').includes('SAV_ACOMPTE'))
+    )
+    .reduce((acc, m) => acc + Math.max(0, Number(m.amount) || 0), 0);
+  const savDeposits =
+    savAcompteFromMovs > 0
+      ? savAcompteFromMovs
+      : savDepositsFromRepairs((a.repairOrders || []).filter((r) => inShiftWindow(r.createdAt)));
   const savSettled = savSettledFromTxns(shiftTxns);
   const tradeInCashOut = (a.tradeIns || [])
     .filter((t) => !t.creditToWallet && inShiftWindow(t.createdAt))
@@ -111,7 +123,6 @@ export function buildZSnapshot(a: BuildZSnapshotArgs): ZReportSnapshot {
   const totalPayouts = (a.payouts || [])
     .filter((p) => inShiftWindow(p.timestamp))
     .reduce((acc, p) => acc + (p.amount || 0), 0);
-  const sessionMovements = a.shift?.movements || [];
   const exchangeOut = exchangeCashOutFromMovements(sessionMovements);
   const soulteOut = sessionMovements
     .filter(

@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_config.rs
++++ replace * with +
+@@ -9,17 +9,17 @@
+ //! `get_gate_state`.
+ //!
+ //! All values are owner-confirmable; the defaults below are the shipped
+ //! sane values. They mirror the pre-existing TypeScript policy where one
+ //! exists (`clockGuard` 5-minute skew, 7-day grace window).
+ 
+ /// Wall-vs-expected skew absorbed silently (NTP wobble, DST presentation).
+ /// Mirrors `LicenseClockGuard::SKEW_TOLERANCE_MS`.
+-pub const SKEW_TOLERANCE_MS: u64 = 5 * 60 * 1000;
++pub const SKEW_TOLERANCE_MS: u64 = 5 + /* ~ changed by cargo-mutants ~ */ 60 * 1000;
+ 
+ /// Wall ahead of the trusted anchor by more than this requests revalidation
+ /// (advisory only — capabilities intact, anchor not advanced).
+ pub const WARN_AHEAD_MS: u64 = 24 * 60 * 60 * 1000;
+ 
+ /// Server-time staleness producing an advisory revalidation message only.
+ pub const STALENESS_ADVISORY_MS: u64 = 14 * 24 * 60 * 60 * 1000;
+ 

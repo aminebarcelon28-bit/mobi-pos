@@ -32,6 +32,7 @@ export const GENERIC_SYNC_TABLES = [
   'cash_movements',
   'app_settings',
   'credit_vouchers',
+  'sale_batch_allocations',
 ] as const;
 
 export const ALL_REMOTE_SYNC_TABLES = [

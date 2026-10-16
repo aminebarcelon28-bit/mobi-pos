@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/time_anchor.rs
++++ replace > with >= in ingest_signed_server_time
+@@ -278,17 +278,17 @@
+     app: tauri::AppHandle,
+     assertion: String,
+ ) -> Result<ServerTimeIngest, TrustError> {
+     super::ipc_authorizer::authorize_and_execute(
+         "ingest_signed_server_time",
+         super::Capability::LicenseManagement,
+         |_| {
+             use tauri::Manager;
+-            if assertion.len() > 8 * 1024 {
++            if assertion.len() >= /* ~ changed by cargo-mutants ~ */ 8 * 1024 {
+                 return Err(TrustError::IPCProtocolError {
+                     reason: "time assertion oversized",
+                 });
+             }
+             let app_dir = app
+                 .path()
+                 .app_data_dir()
+                 .map_err(|e| TrustError::op_failed(format!("app dir: {e}")))?;

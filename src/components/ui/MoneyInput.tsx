@@ -312,7 +312,7 @@ export function MoneyInput({
             Saisie rejetée – montant inchangé
           </span>
         ) : showEcho ? (
-          <span className="money-input__echo">= {Money.fromMinor(echoMinor).format()}</span>
+          <span className="money-input__echo">= <bdi dir="ltr">{Money.fromMinor(echoMinor).format()}</bdi></span>
         ) : null}
       </span>
     </div>

@@ -1,0 +1,21 @@
+--- src-tauri/src/trust_core/license_state.rs
++++ delete match arm "TAMPER_SUSPECTED" in LicenseState::from_code
+@@ -69,17 +69,17 @@
+             "UNACTIVATED" => Some(LicenseState::Unactivated),
+             "OPERATIONAL" => Some(LicenseState::Operational),
+             "EXPIRED" => Some(LicenseState::Expired),
+             "GRACE_EXCEEDED" => Some(LicenseState::GraceExceeded),
+             "SUSPENDED" => Some(LicenseState::Suspended),
+             "REVOKED" => Some(LicenseState::Revoked),
+             "CORRUPTED" => Some(LicenseState::Corrupted),
+             "CLOCK_RESET_REQUIRED" => Some(LicenseState::ClockResetRequired),
+-            "TAMPER_SUSPECTED" => Some(LicenseState::TamperSuspected),
++             /* ~ changed by cargo-mutants ~ */
+             _ => None,
+         }
+     }
+ 
+     /// Fail-closed coercion for any untrusted input (persisted snapshots,
+     /// IPC payloads, future variants): unrecognized values become
+     /// `CORRUPTED`, which grants only `LicenseManagement`.
+     pub fn coerce_from_untrusted(code: &str) -> Self {

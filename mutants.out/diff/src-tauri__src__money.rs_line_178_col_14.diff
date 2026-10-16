@@ -1,0 +1,21 @@
+--- src-tauri/src/money.rs
++++ replace > with == in Money::mul_int
+@@ -170,17 +170,17 @@
+ 
+     pub fn sub(self, other: Money) -> Result<Money, MoneyError> {
+         self.0.checked_sub(other.0).map(Money).ok_or(MoneyError::Overflow)
+     }
+ 
+     /// Integer multiplier with a widened i128 intermediate.
+     pub fn mul_int(self, k: i64) -> Result<Money, MoneyError> {
+         let r = (self.0 as i128) * (k as i128);
+-        if r > i64::MAX as i128 || r < i64::MIN as i128 {
++        if r == /* ~ changed by cargo-mutants ~ */ i64::MAX as i128 || r < i64::MIN as i128 {
+             return Err(MoneyError::Overflow);
+         }
+         Ok(Money(r as i64))
+     }
+ 
+     /// Exact proportional core (future §8 allocator):
+     /// roundHalfUp(self × mult / div), widened intermediate, no float.
+     pub fn mul_div_half_up(self, mult: i64, div: i64) -> Result<Money, MoneyError> {

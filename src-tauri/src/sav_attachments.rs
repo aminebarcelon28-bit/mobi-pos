@@ -302,10 +302,8 @@ pub fn sav_attachment_purge(
                 let candidate: &Path = &entry.path();
                 // Only unlink regular files we own (never follow a symlink out).
                 match entry.file_type() {
-                    Ok(ft) if ft.is_file() => {
-                        if std::fs::remove_file(candidate).is_ok() {
-                            removed += 1;
-                        }
+                    Ok(ft) if ft.is_file() && std::fs::remove_file(candidate).is_ok() => {
+                        removed += 1;
                     }
                     _ => {}
                 }

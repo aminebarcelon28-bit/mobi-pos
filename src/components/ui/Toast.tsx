@@ -35,10 +35,10 @@ const getIcon = (type: ToastType) => {
 
 const getBorderClass = (type: ToastType) => {
   switch (type) {
-    case 'success': return 'border-l-emerald-500';
-    case 'error': return 'border-l-red-500';
-    case 'warning': return 'border-l-amber-500';
-    case 'info': return 'border-l-blue-500';
+    case 'success': return 'border-s-emerald-500';
+    case 'error': return 'border-s-red-500';
+    case 'warning': return 'border-s-amber-500';
+    case 'info': return 'border-s-blue-500';
   }
 };
 
@@ -101,7 +101,7 @@ export const ToastProvider: React.FC<ToastProviderProps> = ({ children }) => {
   return (
     <ToastContext.Provider value={{ showToast }}>
       {children}
-      <div className="fixed right-4 z-50 flex flex-col gap-2 pointer-events-none top-[max(1rem,var(--safe-top))]">
+      <div className="fixed end-4 z-[9999] flex flex-col gap-2 pointer-events-none top-[max(1rem,var(--safe-top))]">
         {toasts.map((toast) => (
           <ToastItem key={toast.id} toast={toast} onRemove={removeToast} />
         ))}
@@ -170,8 +170,8 @@ const ToastItem: React.FC<ToastItemProps> = ({ toast, onRemove }) => {
       role={isAssertive ? 'alert' : 'status'}
       aria-live={isAssertive ? 'assertive' : 'polite'}
       aria-atomic="true"
-      className={`bg-pos-panel border border-pos-border border-l-4 ${getBorderClass(toast.type)} 
-        rounded-lg shadow-lg p-4 flex items-start gap-3 pointer-events-auto min-w-[300px] max-w-md
+      className={`bg-pos-panel border border-pos-border border-s-4 ${getBorderClass(toast.type)} 
+        rounded-lg shadow-lg p-4 flex items-start gap-3 pointer-events-auto min-w-[300px] max-w-md text-start
         transition-all duration-300 transform origin-top-right
         ${isShowing ? 'opacity-100 translate-x-0 scale-100' : 'opacity-0 translate-x-8 scale-95'}
       `}
@@ -186,7 +186,7 @@ const ToastItem: React.FC<ToastItemProps> = ({ toast, onRemove }) => {
         onClick={handleClose}
         type="button"
         aria-label="Fermer la notification"
-        className="shrink-0 text-pos-muted hover:text-pos-text transition-colors"
+        className="shrink-0 -my-2 -me-2 min-h-[48px] min-w-[48px] inline-flex items-center justify-center rounded-xl text-pos-muted hover:text-pos-text hover:bg-pos-hover transition-colors cursor-pointer active-press"
       >
         <X className="w-4 h-4" aria-hidden="true" />
       </button>

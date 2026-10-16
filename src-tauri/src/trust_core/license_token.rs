@@ -289,4 +289,57 @@ mod tests {
         let bytes = URL_SAFE_NO_PAD.decode(PRODUCTION_PUBLIC_KEY_B64URL).unwrap();
         assert_eq!(bytes.len(), 32);
     }
+
+    #[test]
+    fn extra_token_segment_is_rejected() {
+        // The 3-part guard (`parts.next().is_none()`) must reject a 4-part
+        // token even when the first three parts form a valid JWS. If the guard
+        // were forced to `true`, the trailing segment would be silently
+        // ignored and the token would verify.
+        let (sk, pk) = test_keypair();
+        let tok = mint_token(&sk, r#"{"exp":0,"device_id":"abc123"}"#);
+        let forged = format!("{tok}.deadbeef");
+        assert!(matches!(
+            verify_license_token(&forged, &pk, 1_700_000_000).unwrap_err(),
+            TrustError::IPCProtocolError { .. }
+        ));
+    }
+
+    #[test]
+    fn nbf_at_leeway_boundary_is_accepted() {
+        // now == nbf - leeway is the last accepted instant: `now < nbf - leeway`
+        // is false, so the token passes. Pins the strict `<` (a `<=` mutant
+        // would reject at exact equality).
+        let (sk, pk) = test_keypair();
+        let now = 1_800_000_000u64;
+        let nbf = now + TOKEN_LEEWAY_SEC; // nbf - leeway == now
+        let tok = mint_token(&sk, &format!(r#"{{"nbf":{nbf},"exp":0}}"#));
+        let v = verify_license_token(&tok, &pk, now).unwrap();
+        assert!(!v.expired);
+    }
+
+    #[test]
+    fn nbf_within_leeway_is_accepted() {
+        // A `nbf` slightly in the future but within the leeway is accepted.
+        // Pins `nbf - leeway` (a `+` mutant widens the window forward and would
+        // reject this token).
+        let (sk, pk) = test_keypair();
+        let now = 1_800_000_000u64;
+        let nbf = now + 60; // < leeway of 120 s
+        let tok = mint_token(&sk, &format!(r#"{{"nbf":{nbf},"exp":0}}"#));
+        assert!(verify_license_token(&tok, &pk, now).is_ok());
+    }
+
+    #[test]
+    fn exp_at_leeway_boundary_is_not_expired() {
+        // now == exp + leeway is the last non-expired instant: `now > exp + leeway`
+        // is false. Pins the strict `>` (a `>=` mutant would report expired at
+        // exact equality).
+        let (sk, pk) = test_keypair();
+        let now = 1_800_000_000u64;
+        let exp = now - TOKEN_LEEWAY_SEC; // exp + leeway == now
+        let tok = mint_token(&sk, &format!(r#"{{"exp":{exp},"device_id":"d"}}"#));
+        let v = verify_license_token(&tok, &pk, now).unwrap();
+        assert!(!v.expired);
+    }
 }

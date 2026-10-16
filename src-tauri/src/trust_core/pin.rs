@@ -362,7 +362,7 @@ fn provision_fresh_pepper(
         argon2::password_hash::rand_core::OsRng.fill_bytes(&mut *fresh);
     }
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    writer(&URL_SAFE_NO_PAD.encode(&*fresh))?;
+    writer(&URL_SAFE_NO_PAD.encode(&fresh[..]))?;
     eprintln!("[trust_core] provisioned fresh PIN pepper");
     Ok(fresh)
 }
@@ -1106,7 +1106,7 @@ fn store_credential(
         serde_json::from_str(&roster).map_err(|_| TrustError::SecurityPolicyFailure {
             reason: "cashier roster unreadable",
         })?;
-    let arr = users.as_array_mut().ok_or_else(|| TrustError::SecurityPolicyFailure {
+    let arr = users.as_array_mut().ok_or(TrustError::SecurityPolicyFailure {
         reason: "cashier roster malformed",
     })?;
     // An admin profile in the roster aliases the manager credential ONLY when
@@ -1117,7 +1117,7 @@ fn store_credential(
     let target = arr
         .iter_mut()
         .find(|u| u.get("id").and_then(|v| v.as_str()).unwrap_or("") == uid)
-        .ok_or_else(|| TrustError::SecurityPolicyFailure {
+        .ok_or(TrustError::SecurityPolicyFailure {
             reason: "unknown cashier credential",
         })?;
     if target.get("role").and_then(|v| v.as_str()) == Some("admin")
@@ -1320,7 +1320,7 @@ pub fn pin_verify(
             }
             match detect_format(&stored) {
                 PinFormat::LegacyV1 => {
-                    if verify_legacy_sha256(&clean, &stored) {
+                    if verify_legacy_sha256(clean, &stored) {
                         record_success_for(&*store, &request.user_id)?;
                         let is_device_local = stored
                             .split('$')
