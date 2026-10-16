@@ -93,6 +93,24 @@ console.log('\n[2] every generic entity pushes, pulls, and has a remote table');
   }
 }
 
+console.log('\n[2b] push SQL statements are shape-balanced (columns = VALUES items)');
+{
+  // Regression guard: commit 3653e52 shipped the sale_batch_allocations upsert
+  // with 14 columns but only 13 VALUES entries (missing one `?` before the
+  // 'synced' literal). Every batch push carrying a FIFO allocation died with
+  // "SQLite error: 13 values for 14 columns" and fell back to item-by-item.
+  // Static balance scan over SyncManager's literal-table INSERTs. Dynamic
+  // `${genericTable}` statements do not match the regex (the generic KV shape
+  // is fixed and covered by section [2] wiring checks).
+  const stmts = [...smSrc.matchAll(/INSERT INTO\s+(\w+)\s*\(([^()]*)\)\s*VALUES\s*\(([^()]*)\)/g)];
+  check('push SQL statements found for shape check', stmts.length >= 8, stmts.length);
+  for (const [, table, colsRaw, valsRaw] of stmts) {
+    const cols = colsRaw.split(',').map((s) => s.trim()).filter(Boolean).length;
+    const vals = valsRaw.split(',').map((s) => s.trim()).filter(Boolean).length;
+    check(`push '${table}' VALUES count matches columns`, cols === vals, `${cols} columns vs ${vals} values`);
+  }
+}
+
 console.log('\n[3] every Dexie store has pull coverage or is documented local-only');
 {
   const stores = [...dexieSrc.matchAll(/^\s*([a-zA-Z]+)!: Table</gm)].map((x) => x[1]);

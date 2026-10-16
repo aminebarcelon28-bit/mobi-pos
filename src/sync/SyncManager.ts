@@ -2012,7 +2012,7 @@ class SyncManager {
           id, sale_id, batch_id, qty_consumed, unit_cost_at_sale,
           created_at, product_id, sale_item_id, device_id,
           idempotency_key, sync_status, version, updated_at, deleted
-        ) VALUES (?,?,?,?,?,?,?,?,?,'synced',?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,'synced',?,?,?)
         ON CONFLICT(id) DO UPDATE SET
           sale_id = excluded.sale_id,
           batch_id = excluded.batch_id,
