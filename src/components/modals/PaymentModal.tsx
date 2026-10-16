@@ -53,6 +53,7 @@ export const PaymentModal: React.FC = () => {
     currentCustomer,
     openModal,
     setCartItemIMEI,
+    imeiRecords,
     storeCreditApplied,
     setStoreCreditApplied,
   } = usePosStore();
@@ -1224,20 +1225,43 @@ export const PaymentModal: React.FC = () => {
                 <AlertCircle className="w-4 h-4" /> Numéros IMEI requis pour validation
               </h4>
               <div className="space-y-2">
-                {serializedItems.map((item) => (
-                  <div key={item.product.id} className="flex items-center gap-2 bg-pos-bg p-2 rounded-lg border border-pos-border">
-                    <span className="text-xs text-pos-text flex-1 truncate font-bold">{item.product.title}</span>
-                    <input
-                      type="text"
-                      placeholder="Saisir l'IMEI..."
-                      value={item.imeiNumber || ''}
-                      onChange={(e) => setCartItemIMEI(item.product.id, e.target.value)}
-                      className={`text-xs px-2.5 py-1.5 rounded-lg border ${
-                        !item.imeiNumber ? 'border-amber-500 bg-amber-500/10' : 'border-pos-border bg-pos-card'
-                      } text-pos-text focus:outline-none focus:border-emerald-500 w-40 font-mono`}
-                    />
-                  </div>
-                ))}
+                {serializedItems.map((item) => {
+                  const availableImeis = (imeiRecords || []).filter(
+                    (r) => r.productId === item.product.id && !r.saleTransactionId && !r.soldAt
+                  );
+                  return (
+                    <div key={item.product.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-pos-bg p-2.5 rounded-lg border border-pos-border">
+                      <span className="text-xs text-pos-text flex-1 truncate font-bold">{item.product.title}</span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {availableImeis.length > 0 ? (
+                          <select
+                            value={item.imeiNumber || ''}
+                            onChange={(e) => setCartItemIMEI(item.product.id, e.target.value)}
+                            className={`text-xs px-2 py-1.5 rounded-lg border ${
+                              !item.imeiNumber ? 'border-amber-500 bg-amber-500/10 text-amber-300' : 'border-pos-border bg-pos-card text-pos-text'
+                            } focus:outline-none focus:border-emerald-500 font-mono`}
+                          >
+                            <option value="">-- Choisir IMEI en Stock ({availableImeis.length}) --</option>
+                            {availableImeis.map((r) => (
+                              <option key={r.imei} value={r.imei}>
+                                {r.imei}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
+                        <input
+                          type="text"
+                          placeholder="Saisir ou scanner IMEI..."
+                          value={item.imeiNumber || ''}
+                          onChange={(e) => setCartItemIMEI(item.product.id, e.target.value)}
+                          className={`text-xs px-2.5 py-1.5 rounded-lg border ${
+                            !item.imeiNumber ? 'border-amber-500 bg-amber-500/10' : 'border-pos-border bg-pos-card'
+                          } text-pos-text focus:outline-none focus:border-emerald-500 w-44 font-mono`}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

@@ -669,6 +669,7 @@ export interface PurchaseOrder {
     | 'Cancelled';
   expenseRecorded?: boolean;
   expenseId?: string;
+  supplierInvoiceNo?: string;
   notes?: string;
 }
 

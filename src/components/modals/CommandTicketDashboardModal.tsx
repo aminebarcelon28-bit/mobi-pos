@@ -95,6 +95,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
     receiptSettings,
     setPendingRepairPrint,
     vendorDirectory,
+    products,
   } = usePosStore();
   const { showToast } = useToast();
   const [showRepairArchive, setShowRepairArchive] = useState(false);
@@ -128,6 +129,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
   const [verifiedQtyMap, setVerifiedQtyMap] = useState<Record<string, number>>({});
   const [verifiedCostMap, setVerifiedCostMap] = useState<Record<string, number>>({});
   const [discrepancyReasons, setDiscrepancyReasons] = useState<Record<string, string>>({});
+  const [verifiedImeisMap, setVerifiedImeisMap] = useState<Record<string, string[]>>({});
   const [supplierInvoiceNo, setSupplierInvoiceNo] = useState<string>('');
   const [receptionSnapshot, setReceptionSnapshot] = useState<import('../../types/pos').POReceptionSnapshot | null>(null);
   const [autoRecordExpense, setAutoRecordExpense] = useState<boolean>(true);
@@ -335,6 +337,8 @@ export const CommandTicketDashboardModal: React.FC = () => {
     setVerifiedQtyMap(initQty);
     setVerifiedCostMap(initCost);
     setDiscrepancyReasons(initReasons);
+    setVerifiedImeisMap({});
+    setSupplierInvoiceNo(po.supplierInvoiceNo || '');
   };
 
   const handleConfirmReception = async () => {
@@ -345,11 +349,13 @@ export const CommandTicketDashboardModal: React.FC = () => {
       const receivedQty = verifiedQtyMap[item.productId] !== undefined ? verifiedQtyMap[item.productId] : item.suggestedQty;
       const actualUnitCost = verifiedCostMap[item.productId] !== undefined ? verifiedCostMap[item.productId] : item.unitCost;
       const discrepancyReason = discrepancyReasons[item.productId] || '';
+      const imeis = verifiedImeisMap[item.productId] || [];
 
       return {
         productId: item.productId,
         receivedQty,
         actualUnitCost,
+        imeis,
         discrepancyReason: receivedQty < item.suggestedQty && !discrepancyReason ? 'Quantité partielle reçue' : discrepancyReason,
       };
     });
@@ -359,6 +365,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
       verifiedItems,
       recordExpense: autoRecordExpense,
       expensePaymentMethod,
+      supplierInvoiceNo: supplierInvoiceNo.trim() || undefined,
     });
 
     setIsProcessing(false);
@@ -1159,6 +1166,50 @@ export const CommandTicketDashboardModal: React.FC = () => {
                             />
                           </div>
                         </div>
+
+                        {/* Discrepancy Reason Input */}
+                        {currentQty !== item.suggestedQty && (
+                          <div className="pt-1.5 space-y-1">
+                            <label className="text-[9px] uppercase font-bold text-amber-400 block">
+                              Motif de divergence ({currentQty < item.suggestedQty ? 'Manquant' : 'Surplus'}) :
+                            </label>
+                            <input
+                              type="text"
+                              value={discrepancyReasons[item.productId] || ''}
+                              onChange={(e) => setDiscrepancyReasons((prev) => ({ ...prev, [item.productId]: e.target.value }))}
+                              placeholder="Ex: Colis incomplet, rupture fournisseur, avarie transport..."
+                              className="w-full bg-pos-bg border border-amber-500/40 rounded-lg px-2.5 py-1 text-xs text-pos-text placeholder:text-pos-muted focus:outline-none focus:border-amber-400 min-h-[36px]"
+                            />
+                          </div>
+                        )}
+
+                        {/* Serialized Device IMEI Capture */}
+                        {(() => {
+                          const prod = (products || []).find((p) => p.id === item.productId);
+                          const isSerialized = !!prod?.isSerialized;
+                          if (!isSerialized || currentQty <= 0) return null;
+                          const currentImeis = verifiedImeisMap[item.productId] || [];
+                          return (
+                            <div className="pt-1.5 space-y-1 bg-pos-bg p-2 rounded-lg border border-pos-border">
+                              <label className="text-[9px] uppercase font-bold text-pos-text flex items-center justify-between">
+                                <span>Numéros IMEI ({currentQty} requis) :</span>
+                                <span className={currentImeis.length === currentQty ? 'text-emerald-400 font-bold' : 'text-amber-400'}>
+                                  {currentImeis.length}/{currentQty} saisis
+                                </span>
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="Scanner ou saisir les IMEIs séparés par virgule..."
+                                value={currentImeis.join(', ')}
+                                onChange={(e) => {
+                                  const parts = e.target.value.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
+                                  setVerifiedImeisMap((prev) => ({ ...prev, [item.productId]: parts }));
+                                }}
+                                className="w-full bg-pos-card border border-pos-border rounded px-2.5 py-1 text-xs font-mono text-pos-text focus:outline-none focus:border-emerald-500"
+                              />
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })}

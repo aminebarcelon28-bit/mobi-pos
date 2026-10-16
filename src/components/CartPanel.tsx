@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X, ShoppingBag, AlertTriangle, ArrowLeftRight, RotateCcw, Layers, RefreshCw, Pencil } from 'lucide-react';
+import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X, ShoppingBag, AlertTriangle, ArrowLeftRight, RotateCcw, Layers, RefreshCw, Pencil, Barcode } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
@@ -208,6 +208,8 @@ export const CartPanel: React.FC = () => {
   const stagedTradeIn = usePosStore((s) => s.stagedTradeIn);
   const clearStagedTradeIn = usePosStore((s) => s.clearStagedTradeIn);
   const openTradeInExchange = usePosStore((s) => s.openTradeInExchange);
+  const imeiRecords = usePosStore((s) => s.imeiRecords);
+  const setCartItemIMEI = usePosStore((s) => s.setCartItemIMEI);
 
   const [isDiscountOpen, setIsDiscountOpen] = useState(false);
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
@@ -1327,6 +1329,52 @@ export const CartPanel: React.FC = () => {
                       </button>
                     </div>
                   </div>
+
+                  {/* Serialized Device Stock-IMEI Selector */}
+                  {item.product.isSerialized && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-1.5 pt-1.5 border-t border-pos-border/40 flex flex-wrap items-center justify-between gap-1.5 text-xs"
+                    >
+                      <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1 shrink-0">
+                        <Barcode className="w-3 h-3" /> IMEI Appareil :
+                      </span>
+                      {(() => {
+                        const availableImeis = (imeiRecords || []).filter(
+                          (r) => r.productId === item.product.id && !r.saleTransactionId && !r.soldAt
+                        );
+                        return (
+                          <div className="flex items-center gap-1.5 flex-1 min-w-[200px] justify-end">
+                            {availableImeis.length > 0 ? (
+                              <select
+                                value={item.imeiNumber || ''}
+                                onChange={(e) => setCartItemIMEI(item.product.id, e.target.value)}
+                                className={`text-[10px] font-mono font-bold bg-pos-bg border ${
+                                  !item.imeiNumber ? 'border-amber-500 text-amber-300' : 'border-pos-border text-pos-text'
+                                } rounded px-2 py-1 focus:outline-none focus:border-emerald-500 max-w-[190px]`}
+                              >
+                                <option value="">-- Choisir IMEI en Stock ({availableImeis.length}) --</option>
+                                {availableImeis.map((r) => (
+                                  <option key={r.imei} value={r.imei}>
+                                    {r.imei}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : null}
+                            <input
+                              type="text"
+                              placeholder="Ou saisir/scanner IMEI..."
+                              value={item.imeiNumber || ''}
+                              onChange={(e) => setCartItemIMEI(item.product.id, e.target.value)}
+                              className={`text-[10px] font-mono bg-pos-bg border ${
+                                !item.imeiNumber ? 'border-amber-500/60 bg-amber-500/10' : 'border-pos-border bg-pos-card'
+                              } rounded px-2 py-1 text-pos-text focus:outline-none focus:border-emerald-500 w-36`}
+                            />
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
 
                   {/* Inline Price Override Popover */}
                   {editingPriceProductId === item.product.id && (

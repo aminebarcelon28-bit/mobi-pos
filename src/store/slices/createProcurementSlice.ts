@@ -377,7 +377,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
   },
 
   validateAndReceivePO: async (payload) => {
-    const { poId, verifiedItems, recordExpense = true, expensePaymentMethod = 'Espèces', notes } = payload;
+    const { poId, verifiedItems, recordExpense = true, expensePaymentMethod = 'Espèces', notes, supplierInvoiceNo } = payload;
     const { purchaseOrders, products, logSecurityAction, addStoreExpense } = get();
 
     const targetPO = purchaseOrders.find((p) => p.id === poId);
@@ -554,6 +554,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
       validatedAt: new Date().toISOString(),
       receivedAt: new Date().toISOString(),
       notes: notes || targetPO.notes,
+      supplierInvoiceNo: supplierInvoiceNo || targetPO.supplierInvoiceNo,
       expenseRecorded: recordExpense ? true : targetPO.expenseRecorded,
     };
 
