@@ -1096,7 +1096,6 @@ fn base_schema_migrations() -> Vec<Migration> {
             );
             CREATE INDEX IF NOT EXISTS idx_bundles_barcode ON product_bundles(barcode);
             CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1);
             CREATE TABLE IF NOT EXISTS cash_sessions (
                 id TEXT PRIMARY KEY, opened_at TEXT NOT NULL, closed_at TEXT,
                 opening_float INTEGER NOT NULL, expected_cash INTEGER, actual_cash INTEGER,
