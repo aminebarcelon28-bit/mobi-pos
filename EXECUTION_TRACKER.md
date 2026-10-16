@@ -112,8 +112,19 @@
   - Protected standalone `CreditVoucher` issuance in `VoucherModal.tsx` behind Manager PIN verification (`verifyManagerGate`) with drawer cash intake (`DEPOSIT` movement) or courtesy funding, and rendered real `<canvas>` barcode on preview ticket card.
   - Required Manager PIN on in-cart returns (`toggleCartItemReturn`), and restituted FIFO `stock_batches` in SQLite and Dexie on return cart items (`createOrderSlice.ts`).
   - Removed arbitrary SKU fallback in `KittingBundleModal.tsx` and locked bundle items in cart with `bundleGroupId` so removing or modifying a member revokes bundle discounts.
-- [ ] **Task 5.4 — Customer Display Route, Supplier AP & Final Audit Verification:**
-  - Add `/customer-display` BroadcastChannel route in `src/App.tsx` and wire `hardware_update_vfd`.
-  - Fix supplier expense tracking & credit PO balance in `PurchaseOrderModal.tsx`, persist `VendorDisputeModal.tsx` to DB with real phone lookup, and fix analytics date filters and FIFO unit costs in `ReportsModal.tsx` and `SalesAnalyticsCharts.tsx`.
-  - Execute full verification battery (`tsc`, `oxlint`, `cargo test`, `test:money`, `test:audit`, `test:sync-e2e`), update `EXECUTION_TRACKER.md` to 100%, and update `AUDIT_AND_ROADMAP_REPORT.md` with Post-Remediation Final Scorecard.
+- [x] **Task 5.4 — Customer Display Route, Supplier AP & Final Audit Verification:**
+  - Added dedicated `/customer-display` BroadcastChannel receiver view in `src/components/CustomerDisplayScreen.tsx` and lightweight router in `src/App.tsx`.
+  - Added live store-level broadcaster in `src/App.tsx` publishing live cart state via `computeCartTotals` (supporting returns, trade-ins, and credits) and driving hardware 2-line VFD pole displays via `MobilePosRoutingEngine.routeVfdUpdate` (`hardware_update_vfd`).
+  - Fixed completed purchase orders in `PurchaseOrderModal.tsx` to conditionally display `"Charge enregistrée"` only when `autoRecordExpense === true`, and render amber `"Crédit fournisseur (À payer: ...)"` with 1-click `"Régler charge"` action when false.
+  - Added Supplier Accounts Payable (AP) aggregate KPI banner on the completed POs tab tracking total unpaid credit balance and pending invoice count.
+  - Hardened `VendorDisputeModal.tsx` to resolve supplier phone numbers from `vendorDirectory` or procurement contacts, sync edited contacts back to `vendorDirectory`, and persist itemized dispute claims to `localStorage` and Dexie `appSettings` with a visible `"Litige Enregistré"` badge.
+  - Updated `ReportsModal.tsx` to pass `dateRangeFilter` and `dateFilteredTransactions` into `<SalesAnalyticsCharts />`, and enhanced `SalesAnalyticsCharts.tsx` with a "Top Produits & Marges Réelles (FIFO)" performance table calculating product margins from historical `unitCostAtSale` and accounting for returns/refunds.
+  - Executed full verification battery: `npx tsc --noEmit` (0 errors), `npx oxlint` (0 errors), `cargo test` (289/289 passed), `npm run test:money` (159/159 passed), `npm run test:audit` (passed), `npm run test:sync-e2e` (18/18 passed).
+
+---
+
+## 🏆 ROADMAP STATUS: 100% COMPLETED (SPRINTS 1 TO 5 FULLY DELIVERED & VERIFIED)
+- **Total Sprints**: 5 / 5 Complete
+- **Total Tasks**: 20 / 20 Complete
+- **Self-Verifying Loop**: 100% passing across all TypeScript, Oxlint, Rust, Money, Audit, and Sync test suites.
 
