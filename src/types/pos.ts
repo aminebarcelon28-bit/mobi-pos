@@ -1344,6 +1344,7 @@ export interface TradeInItem {
   conditionGrade: ConditionGrade;
   customerName: string;
   customerPhone?: string;
+  customerId?: string;
   nationalIdNumber?: string;
   /**
    * Which document `nationalIdNumber` is (Livre de Police). Optional and

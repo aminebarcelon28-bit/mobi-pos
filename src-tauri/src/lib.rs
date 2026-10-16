@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 114;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 115;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -1756,6 +1756,19 @@ fn base_schema_migrations() -> Vec<Migration> {
             CREATE INDEX IF NOT EXISTS idx_txn_shift_status ON transactions(shift_id, status) WHERE shift_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_prod_stock_alert ON products(category, stock, reorder_point) WHERE deleted = 0;
             CREATE INDEX IF NOT EXISTS idx_outbox_signed_drain ON sync_outbox(status, device_id, seq_no) WHERE seq_no IS NOT NULL;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v115 — Immutable customer_id foreign key binding for repair orders and trade-ins.
+            version: 115,
+            description: "Add customer_id to repair_orders and customer_id + customer_phone to trade_ins",
+            sql: r#"
+            ALTER TABLE repair_orders ADD COLUMN customer_id TEXT;
+            CREATE INDEX IF NOT EXISTS idx_repair_cust ON repair_orders(customer_id);
+            ALTER TABLE trade_ins ADD COLUMN customer_id TEXT;
+            ALTER TABLE trade_ins ADD COLUMN customer_phone TEXT;
+            CREATE INDEX IF NOT EXISTS idx_trade_ins_cust ON trade_ins(customer_id);
             "#,
             kind: MigrationKind::Up,
         },

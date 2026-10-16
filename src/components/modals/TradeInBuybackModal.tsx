@@ -74,6 +74,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
   // Form State
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [nationalIdNumber, setNationalIdNumber] = useState('');
   const [nationalIdType, setNationalIdType] = useState<NationalIdType | ''>('');
   const [deviceModel, setDeviceModel] = useState('');
@@ -134,6 +135,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
     const init = exchangeInitial;
     if (init.customerName) setCustomerName(init.customerName);
     if (init.customerPhone) setCustomerPhone(init.customerPhone);
+    if (init.customerId) setSelectedCustomerId(init.customerId);
     if (init.nationalIdNumber) setNationalIdNumber(init.nationalIdNumber);
     if (init.nationalIdType) setNationalIdType(normalizeNationalIdType(init.nationalIdType) ?? '');
     if (init.deviceModel) setDeviceModel(init.deviceModel);
@@ -171,6 +173,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
     setActiveTab('Nouvelle');
     setCustomerName(editingTrade.customerName || '');
     setCustomerPhone(editingTrade.customerPhone || '');
+    setSelectedCustomerId(editingTrade.customerId || null);
     setNationalIdNumber(editingTrade.nationalIdNumber || '');
     setNationalIdType(normalizeNationalIdType(editingTrade.nationalIdType) ?? '');
     setDeviceModel(editingTrade.deviceModel || '');
@@ -206,6 +209,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
   const resetForm = () => {
     setCustomerName('');
     setCustomerPhone('');
+    setSelectedCustomerId(null);
     setNationalIdNumber('');
     setNationalIdType('');
     setDeviceModel('');
@@ -219,6 +223,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
   };
 
   const handleSelectCustomer = (customerId: string) => {
+    setSelectedCustomerId(customerId);
     const found = customers.find(c => c.id === customerId);
     if (found) {
       setCustomerName(found.name);
@@ -336,6 +341,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
             : newId('staged'),
         customerName: customerPhone ? `${customerName.trim()} (${customerPhone.trim()})` : customerName.trim(),
         customerPhone: customerPhone.trim() || undefined,
+        customerId: selectedCustomerId || undefined,
         nationalIdNumber: nationalIdNumber.trim() || undefined,
         nationalIdType: nationalIdType || undefined,
         deviceModel: deviceModel.trim(),
@@ -358,6 +364,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
     const res = await processTradeIn({
       customerName: customerPhone ? `${customerName} (${customerPhone})` : customerName,
       customerPhone: customerPhone || undefined,
+      customerId: selectedCustomerId || undefined,
       nationalIdNumber: nationalIdNumber.trim() || undefined,
       nationalIdType: nationalIdType || undefined,
       deviceModel,

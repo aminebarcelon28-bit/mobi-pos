@@ -37,6 +37,7 @@ proxy/.env
 *.key.pub
 *.sig
 src-tauri/target
+src-tauri/target_check
 target/
 /target
 

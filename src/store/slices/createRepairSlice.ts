@@ -17,6 +17,7 @@ import {
   savBalanceOf,
   savCartProductIdFor,
 } from '../../utils/savSettlement';
+import { sanitizeDzPhone } from '../../utils/savValidation';
 
 // Broadcast when a completed repair still has an unpaid balance, so the UI
 // can toast + route the cashier to an EXPLICIT caisse deposit
@@ -273,8 +274,14 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
       throw new Error(`Dossier SAV incomplet: ${verdict.reasons.join(' • ')}`);
     }
     const createdAt = new Date().toISOString();
+    const cleanPhone = orderInput.customerPhone ? sanitizeDzPhone(orderInput.customerPhone) : '';
+    const candidateCustomerId = orderInput.customerId ||
+      get().customers.find(c => (c.phone && cleanPhone && sanitizeDzPhone(c.phone) === cleanPhone))?.id ||
+      undefined;
+
     const newOrder: RepairOrder = {
       ...orderInput,
+      customerId: candidateCustomerId,
       id: newId('rep'),
       // Collision-safe: ticketNumber is an indexed Dexie key, and the old
       // 4-random-digit form repeats every ~1e4 orders, which would silently

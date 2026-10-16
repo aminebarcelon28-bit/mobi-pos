@@ -299,10 +299,11 @@ export const CustomersModal: React.FC = () => {
 
   const customerRepairs = useMemo(() => {
     if (!activeProfile) return [];
+    const profDigits = normalizeAlgerianPhone(activeProfile.phone).digitsOnly;
     return (repairOrders || [])
       .filter(
         r => r.customerId === activeProfile.id ||
-             (activeProfile.phone && r.customerPhone === activeProfile.phone) ||
+             (profDigits && normalizeAlgerianPhone(r.customerPhone).digitsOnly === profDigits) ||
              (activeProfile.name && r.customerName && r.customerName.toLowerCase() === activeProfile.name.toLowerCase())
       )
       .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
@@ -310,9 +311,11 @@ export const CustomersModal: React.FC = () => {
 
   const customerTradeIns = useMemo(() => {
     if (!activeProfile) return [];
+    const profDigits = normalizeAlgerianPhone(activeProfile.phone).digitsOnly;
     return (tradeIns || [])
       .filter(
-        t => (activeProfile.phone && t.customerPhone === activeProfile.phone) ||
+        t => t.customerId === activeProfile.id ||
+             (profDigits && normalizeAlgerianPhone(t.customerPhone).digitsOnly === profDigits) ||
              (activeProfile.name && t.customerName && t.customerName.toLowerCase() === activeProfile.name.toLowerCase())
       )
       .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
@@ -320,9 +323,10 @@ export const CustomersModal: React.FC = () => {
 
   const customerVouchers = useMemo(() => {
     if (!activeProfile) return [];
+    const profDigits = normalizeAlgerianPhone(activeProfile.phone).digitsOnly;
     return (creditVouchers || [])
       .filter(
-        v => (activeProfile.phone && v.customerPhone === activeProfile.phone) ||
+        v => (profDigits && normalizeAlgerianPhone(v.customerPhone).digitsOnly === profDigits) ||
              (activeProfile.name && v.customerName && v.customerName.toLowerCase() === activeProfile.name.toLowerCase())
       )
       .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
@@ -1245,16 +1249,27 @@ export const CustomersModal: React.FC = () => {
                           </span>
                         </div>
                         {(customer.currentDebt || 0) > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDebtPaymentCustomer(customer);
-                              setDebtPaymentAmount(customer.currentDebt || 0);
-                            }}
-                            className="px-3 py-1.5 min-h-[36px] bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-lg transition shadow-sm cursor-pointer flex items-center gap-1"
-                          >
-                            <DollarSign className="w-3.5 h-3.5" /> Encaisser Versement
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setWhatsappDebtCustomer(customer)}
+                              className="px-2.5 py-1.5 min-h-[36px] bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 font-bold text-xs rounded-lg transition cursor-pointer flex items-center gap-1"
+                              title="Envoyer un rappel de solde via WhatsApp"
+                              aria-label={`Relance WhatsApp — ${customer.name}`}
+                            >
+                              <MessageSquare className="w-3.5 h-3.5" aria-hidden="true" /> Relance WhatsApp
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDebtPaymentCustomer(customer);
+                                setDebtPaymentAmount(customer.currentDebt || 0);
+                              }}
+                              className="px-3 py-1.5 min-h-[36px] bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-lg transition shadow-sm cursor-pointer flex items-center gap-1"
+                            >
+                              <DollarSign className="w-3.5 h-3.5" /> Encaisser Versement
+                            </button>
+                          </div>
                         )}
                       </div>
                       {customerDebtsFiltered.length === 0 ? (
@@ -2142,18 +2157,31 @@ export const CustomersModal: React.FC = () => {
                     <Edit2 className="w-4 h-4 shrink-0 text-pos-muted" /> Ajuster les Points
                   </button>
                   {(curCustomer.currentDebt || 0) > 0 && (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setProfileMenuOpen(false);
-                        setDebtPaymentCustomer(curCustomer);
-                        setDebtPaymentAmount(curCustomer.currentDebt || 0);
-                      }}
-                      className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-emerald-400 hover:bg-emerald-500/10 transition text-left cursor-pointer"
-                    >
-                      <DollarSign className="w-4 h-4 shrink-0" /> Encaisser Dette ({formatDZD(curCustomer.currentDebt || 0)})
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setProfileMenuOpen(false);
+                          setWhatsappDebtCustomer(curCustomer);
+                        }}
+                        className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-emerald-400 hover:bg-emerald-500/10 transition text-left cursor-pointer"
+                      >
+                        <MessageSquare className="w-4 h-4 shrink-0" aria-hidden="true" /> Relance WhatsApp ({formatDZD(curCustomer.currentDebt || 0)})
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setProfileMenuOpen(false);
+                          setDebtPaymentCustomer(curCustomer);
+                          setDebtPaymentAmount(curCustomer.currentDebt || 0);
+                        }}
+                        className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-amber-400 hover:bg-amber-500/10 transition text-left cursor-pointer"
+                      >
+                        <DollarSign className="w-4 h-4 shrink-0" /> Encaisser Dette ({formatDZD(curCustomer.currentDebt || 0)})
+                      </button>
+                    </>
                   )}
                 </div>
               </div>

@@ -501,6 +501,11 @@ export async function ensureShiftLedgerV113(db: Database): Promise<void> {
     // v107 warranty term: ALTER (not IF NOT EXISTS) — duplicate-column on
     // healthy DBs is benign (warned once), anything else is an error.
     ['imei_records.warranty_months', 'ALTER TABLE imei_records ADD COLUMN warranty_months INTEGER;'],
+    ['repair_orders.customer_id', 'ALTER TABLE repair_orders ADD COLUMN customer_id TEXT;'],
+    ['idx_repair_cust', 'CREATE INDEX IF NOT EXISTS idx_repair_cust ON repair_orders(customer_id);'],
+    ['trade_ins.customer_id', 'ALTER TABLE trade_ins ADD COLUMN customer_id TEXT;'],
+    ['trade_ins.customer_phone', 'ALTER TABLE trade_ins ADD COLUMN customer_phone TEXT;'],
+    ['idx_trade_ins_cust', 'CREATE INDEX IF NOT EXISTS idx_trade_ins_cust ON trade_ins(customer_id);'],
   ];
   const failures: string[] = [];
   for (const [label, sql] of steps) {

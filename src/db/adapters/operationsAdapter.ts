@@ -67,12 +67,13 @@ export const operationsAdapter = {
         const db = await getLocalDb();
         const payload = JSON.stringify(repair);
         await db.execute(
-          `INSERT INTO repair_orders (id, ticket_number, customer_name, customer_phone, device_model, imei, status, labor_cost, parts_cost, total_cost, deposit_amount, created_at, updated_at, json_payload)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          `INSERT INTO repair_orders (id, ticket_number, customer_name, customer_phone, customer_id, device_model, imei, status, labor_cost, parts_cost, total_cost, deposit_amount, created_at, updated_at, json_payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
            ON CONFLICT(id) DO UPDATE SET
              ticket_number=excluded.ticket_number,
              customer_name=excluded.customer_name,
              customer_phone=excluded.customer_phone,
+             customer_id=excluded.customer_id,
              device_model=excluded.device_model,
              imei=excluded.imei,
              status=excluded.status,
@@ -88,6 +89,7 @@ export const operationsAdapter = {
             repair.ticketNumber || '',
             repair.customerName || '',
             repair.customerPhone || '',
+            repair.customerId || null,
             repair.deviceModel || '',
             repair.imei || null,
             repair.status || 'En attente',
@@ -217,8 +219,8 @@ export const operationsAdapter = {
         const db = await getLocalDb();
         const payload = JSON.stringify(trade);
         await db.execute(
-          `INSERT INTO trade_ins (id, device_model, imei, brand, condition_grade, buyback_value, resale_margin_percent, resale_price, customer_name, credit_to_wallet, created_at, json_payload)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          `INSERT INTO trade_ins (id, device_model, imei, brand, condition_grade, buyback_value, resale_margin_percent, resale_price, customer_name, customer_phone, customer_id, credit_to_wallet, created_at, json_payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
            ON CONFLICT(id) DO UPDATE SET
              device_model=excluded.device_model,
              imei=excluded.imei,
@@ -228,6 +230,8 @@ export const operationsAdapter = {
              resale_margin_percent=excluded.resale_margin_percent,
              resale_price=excluded.resale_price,
              customer_name=excluded.customer_name,
+             customer_phone=excluded.customer_phone,
+             customer_id=excluded.customer_id,
              credit_to_wallet=excluded.credit_to_wallet,
              json_payload=excluded.json_payload,
              version=trade_ins.version + 1`,
@@ -241,6 +245,8 @@ export const operationsAdapter = {
             trade.resaleMarginPercent || 0,
             trade.resalePrice || 0,
             trade.customerName || '',
+            trade.customerPhone || null,
+            trade.customerId || null,
             trade.creditToWallet ? 1 : 0,
             trade.createdAt || new Date().toISOString(),
             payload,

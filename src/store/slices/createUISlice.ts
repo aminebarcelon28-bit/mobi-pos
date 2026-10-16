@@ -20,7 +20,7 @@ import { markBoot, printBootSummary } from '../../utils/bootTimings';
 import { checkPinLockout, recordPinFailure, resetPinLockout } from '../../utils/security';
 import { computeEffectiveUnitPrice } from '../../utils/pricingEngine';
 import { generateUniqueEan13Barcode, generateUniqueSku } from '../../utils/barcodeGenerator';
-import { luhnCheckImei, validateDeviceIdentifierForIntake } from '../../utils/savValidation';
+import { luhnCheckImei, validateDeviceIdentifierForIntake, sanitizeDzPhone } from '../../utils/savValidation';
 import { normalizeDeviceKey } from '../../utils/warrantyResolver';
 import { isImeiAllocatedInCart } from '../../utils/tradeInExchange';
 import { maskNationalId, maskPhone, normalizeNationalIdType } from '../../utils/tradeInOrigin';
@@ -851,8 +851,13 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         ? tradeInput.barcode.trim()
         : generateUniqueEan13Barcode(products, '613');
 
+      const candidateCustomerId = tradeInput.customerId ||
+        get().currentCustomer?.id ||
+        (tradeInput.customerPhone ? get().customers.find(c => c.phone && (c.phone === tradeInput.customerPhone || sanitizeDzPhone(c.phone) === sanitizeDzPhone(tradeInput.customerPhone)))?.id : undefined);
+
       const newTradeIn: TradeInItem = {
         ...tradeInput,
+        customerId: candidateCustomerId,
         // Canonical, so the origin join, the registry row and the sold-gate all
         // agree on one spelling (they compared raw strings before).
         imei: canonicalImei,
