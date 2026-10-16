@@ -4055,7 +4055,7 @@ async function depleteStockBatchesFifoInner(
         'SELECT cost_price FROM products WHERE id = $1',
         [item.productId]
       ).catch(rethrowBusy)) as Array<{ cost_price?: number }>;
-      fallbackCost = Math.max(0, Math.round(Number(prodRows?.[0]?.cost_price) || 0));
+      fallbackCost = Math.max(0, toIntMoney(prodRows?.[0]?.cost_price));
     } catch {}
 
     const batches = (await db.select(
@@ -4086,7 +4086,7 @@ async function depleteStockBatchesFifoInner(
       const rem = Number(b.quantity_remaining) || 0;
       if (rem <= 0) continue;
       const take = Math.min(rem, needed);
-      const unitCost = Math.max(0, Math.round(Number(b.unit_cost) || 0));
+      const unitCost = Math.max(0, toIntMoney(b.unit_cost));
 
       await db.execute(
         `UPDATE stock_batches
@@ -4146,7 +4146,7 @@ async function depleteStockBatchesFifoInner(
       totalCost += needed * fallbackCost;
     }
 
-    const blendedUnitCost = qty > 0 ? Math.round(totalCost / qty) : fallbackCost;
+    const blendedUnitCost = qty > 0 ? toIntMoney(totalCost / qty) : fallbackCost;
     results.push({
       productId: item.productId,
       quantity: qty,

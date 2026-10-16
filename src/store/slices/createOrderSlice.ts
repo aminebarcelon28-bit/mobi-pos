@@ -27,6 +27,7 @@ async function getCustomerRepo() {
   return customerRepository;
 }
   import { newId, newReceiptNumber, deterministicId } from '../../utils/ids';
+  import { toIntMoney } from '../../utils/fifoPreview';
   import { refundIdentity, refundSaleNative } from '../../db/adapters/refundNative';
   import type { NativeRefundRequest } from '../../db/adapters/refundNative';
   import { sortedTransactions } from '../transactionOrder';
@@ -1135,8 +1136,8 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             const now = new Date().toISOString();
             for (const [rIdx, rItem] of returnItems.entries()) {
               const pId = rItem.product.id;
-              const lineQty = Math.max(1, Math.round(Number(rItem.quantity) || 1));
-              const lineCost = Math.max(0, Math.round(Number(rItem.unitCostPrice ?? rItem.product.costPrice ?? 0)));
+              const lineQty = Math.max(1, toIntMoney(Number(rItem.quantity) || 1));
+              const lineCost = Math.max(0, toIntMoney(rItem.unitCostPrice ?? rItem.product.costPrice ?? 0));
               const existingBatch = await dexieDb.stockBatches.where('productId').equals(pId).first();
               if (existingBatch) {
                 await dexieDb.stockBatches.update(existingBatch.batchId, {

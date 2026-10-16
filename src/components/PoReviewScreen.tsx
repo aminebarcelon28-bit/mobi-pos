@@ -31,6 +31,7 @@ import { formatDZD, type CategoryType, type BrandName } from '../types/pos';
 import { commitStockBatch } from '../api/po';
 import { usePosStore } from '../store/usePosStore';
 import { newId } from '../utils/ids';
+import { toIntMoney } from '../utils/fifoPreview';
 import { extractScanAttributes } from '../utils/intelligentScanEngine';
 import { printCoordinator } from '../utils/printCoordinator';
 import { parseTextToBoundingBoxes } from '../utils/documentScanner';
@@ -792,11 +793,11 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
           if (!item.selected_product_id) continue;
           const p = products.find((x) => x.id === item.selected_product_id);
           const currentStock = p?.stock ?? 0;
-          const newStock = currentStock + Math.round(item.quantity);
+          const newStock = currentStock + toIntMoney(item.quantity);
           const newCost =
             p?.costPrice && p.costPrice > 0
               ? p.costPrice
-              : Math.round(item.unit_cost);
+              : toIntMoney(item.unit_cost);
           await dexieDb.products.update(item.selected_product_id, {
             stock: newStock,
             costPrice: newCost,

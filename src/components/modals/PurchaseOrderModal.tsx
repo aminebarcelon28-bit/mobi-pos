@@ -1617,67 +1617,50 @@ export const PurchaseOrderModal: React.FC = () => {
                       <label className="text-[11px] font-bold text-pos-muted block mb-1">
                         💵 Espèces (Sortie Caisse)
                       </label>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          min={0}
-                          max={totalVerifiedCostAmount}
-                          value={paidCash || ''}
-                          onChange={(e) => {
-                            const val = Math.max(0, parseFloat(e.target.value) || 0);
-                            setPaidCash(val);
-                            setSupplierDebt(Math.max(0, totalVerifiedCostAmount - val - paidBank));
-                            setCustomSettlementEdited(true);
-                          }}
-                          placeholder="0"
-                          className="w-full bg-pos-card border border-pos-border rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400"
-                        />
-                        <span className="absolute right-2 top-2 text-[10px] text-pos-muted font-bold">DA</span>
-                      </div>
+                      <MoneyInput
+                        label="💵 Espèces (Sortie Caisse)"
+                        valueMinor={dinarsToMinor(paidCash || 0)}
+                        onChangeMinor={(minor) => {
+                          const val = toLegacyReal(minor);
+                          setPaidCash(val);
+                          setSupplierDebt(Math.max(0, totalVerifiedCostAmount - val - paidBank));
+                          setCustomSettlementEdited(true);
+                        }}
+                        className="w-full bg-pos-card border border-pos-border rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400"
+                      />
                     </div>
 
                     <div>
                       <label className="text-[11px] font-bold text-pos-muted block mb-1">
                         💳 Virement / Chèque
                       </label>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          min={0}
-                          max={totalVerifiedCostAmount}
-                          value={paidBank || ''}
-                          onChange={(e) => {
-                            const val = Math.max(0, parseFloat(e.target.value) || 0);
-                            setPaidBank(val);
-                            setSupplierDebt(Math.max(0, totalVerifiedCostAmount - paidCash - val));
-                            setCustomSettlementEdited(true);
-                          }}
-                          placeholder="0"
-                          className="w-full bg-pos-card border border-pos-border rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400"
-                        />
-                        <span className="absolute right-2 top-2 text-[10px] text-pos-muted font-bold">DA</span>
-                      </div>
+                      <MoneyInput
+                        label="💳 Virement / Chèque"
+                        valueMinor={dinarsToMinor(paidBank || 0)}
+                        onChangeMinor={(minor) => {
+                          const val = toLegacyReal(minor);
+                          setPaidBank(val);
+                          setSupplierDebt(Math.max(0, totalVerifiedCostAmount - paidCash - val));
+                          setCustomSettlementEdited(true);
+                        }}
+                        className="w-full bg-pos-card border border-pos-border rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400"
+                      />
                     </div>
 
                     <div>
                       <label className="text-[11px] font-bold text-amber-400 block mb-1">
                         📋 Dette Fournisseur (Crédit)
                       </label>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          min={0}
-                          value={supplierDebt || ''}
-                          onChange={(e) => {
-                            const val = Math.max(0, parseFloat(e.target.value) || 0);
-                            setSupplierDebt(val);
-                            setCustomSettlementEdited(true);
-                          }}
-                          placeholder="0"
-                          className="w-full bg-pos-card border border-amber-500/40 rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-amber-300 focus:outline-none focus:border-amber-400"
-                        />
-                        <span className="absolute right-2 top-2 text-[10px] text-amber-500/80 font-bold">DA</span>
-                      </div>
+                      <MoneyInput
+                        label="📋 Dette Fournisseur (Crédit)"
+                        valueMinor={dinarsToMinor(supplierDebt || 0)}
+                        onChangeMinor={(minor) => {
+                          const val = toLegacyReal(minor);
+                          setSupplierDebt(val);
+                          setCustomSettlementEdited(true);
+                        }}
+                        className="w-full bg-pos-card border border-amber-500/40 rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-amber-300 focus:outline-none focus:border-amber-400"
+                      />
                     </div>
                   </div>
 

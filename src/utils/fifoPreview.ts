@@ -57,7 +57,10 @@ function toFinite(n: unknown, fallback = 0): number {
   return Number.isFinite(v) ? v : fallback;
 }
 
-function toIntMoney(n: unknown): number {
+/** Whole-number rounding for money/qty edge values (never NaN, preserves
+ * sign). Same semantics as the adapter's local toIntMoney; exported so the
+ * Dexie mirror writers can stop duplicating the raw float pattern. */
+export function toIntMoney(n: unknown): number {
   const v = Math.round(Number(n) || 0);
   return Number.isFinite(v) ? v : 0;
 }

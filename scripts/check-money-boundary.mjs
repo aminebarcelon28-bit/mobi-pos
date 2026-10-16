@@ -149,7 +149,9 @@ console.log('\n--- Rule 4: Phase 1c input sweep (one parsing path) ---');
     'src/components/modals/ShiftZReportModal.tsx': { pla: 0, pf: 0 },
     'src/components/modals/ShiftOpenModal.tsx': { pla: 0, pf: 0 },
     'src/components/modals/ShiftMovementModal.tsx': { pla: 0, pf: 0 },
-    'src/components/modals/SettingsModal.tsx': { pla: 0, pf: 1 }, // audio volume slider
+    // SettingsModal ENTRY RETIRED (Task 5.1 decomposition): the modal no
+    // longer hosts money fields (pf=0); the audio slider moved to
+    // HardwareSettingsTab (non-money, percent-scale).
     'src/components/modals/InvoiceIngestionModal.tsx': { pla: 1, pf: 0 }, // OCR cost extraction (Phase 1b-i removed the TVA field: 2 -> 1)
     // PoReviewScreen DEFERRED (Phase 1c doc §5): 7 parseFloat money inputs sit
     // inside another lane's in-flight card/table rewrite and cannot be
