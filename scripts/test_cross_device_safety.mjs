@@ -18,6 +18,7 @@ function check(name, cond, extra) {
 const orderSrc = readFileSync(join(ROOT, 'src', 'store', 'slices', 'createOrderSlice.ts'), 'utf8');
 const custSrc = readFileSync(join(ROOT, 'src', 'store', 'slices', 'createCustomerSlice.ts'), 'utf8');
 const dbSrc = readFileSync(join(ROOT, 'src', 'db', 'sqlPluginAdapter.ts'), 'utf8');
+const refundNativeSrc = readFileSync(join(ROOT, 'src', 'db', 'adapters', 'refundNative.ts'), 'utf8');
 const smSrc = readFileSync(join(ROOT, 'src', 'sync', 'SyncManager.ts'), 'utf8');
 const relaySrc = readFileSync(join(ROOT, 'workers', 'relay', 'src', 'index.ts'), 'utf8');
 
@@ -32,7 +33,11 @@ console.log('\n[1] deterministicId: same op -> same id, different op -> differen
 }
 
 console.log('\n[2] refund/void compensation uses deterministic identity');
-check('refund txn id is deterministic', /deterministicId\('REF',\s*originalTransaction\.id/.test(orderSrc));
+check(
+  'refund txn id is deterministic',
+  /deterministicId\(\s*'REF',\s*p\.ticketId/.test(refundNativeSrc) &&
+    /refundIdentity\(\{\s*ticketId:\s*originalTransaction\.id/.test(orderSrc),
+);
 check('refund items canonically ordered', /canonicalRefundItems/.test(orderSrc));
 check('refund ledger deltas carry deterministic ids', /deterministicId\('LED-REF'/.test(orderSrc));
 check('void ledger deltas carry deterministic ids', /deterministicId\('LED-VOID'/.test(orderSrc));
