@@ -69,9 +69,9 @@
 
 ## SPRINT 3: NATIVE RUST ATOMIC CHECKOUT (`src-tauri/src/checkout.rs`)
 
-- [ ] **Task 3.1 — Implement Native `checkout_sale_atomic` in `src-tauri/src/checkout.rs`:**
+- [x] **Task 3.1 — Implement Native `checkout_sale_atomic` in `src-tauri/src/checkout.rs`:**
   - Mirror `src-tauri/src/refund.rs` to execute oversell validation (via batched CTE), FIFO `stock_batches` depletion, `sale_batch_allocations` insertion, `transactions` & `transaction_items` insertion, `inventory_ledger` logging, customer debt/credit updates, and `sync_outbox` enqueueing inside a single native `rusqlite` `TransactionBehavior::Immediate` transaction (< 5ms lock time).
-- [ ] **Task 3.2 — Wire `sqlPluginAdapter.ts` (`writeCheckoutAtomicInner`) to `checkout_sale_atomic`:**
+- [x] **Task 3.2 — Wire `sqlPluginAdapter.ts` (`writeCheckoutAtomicInner`) to `checkout_sale_atomic`:**
   - Replace the 50–100+ IPC round-trip loop in `src/db/sqlPluginAdapter.ts:1120-1670` with a single Tauri `invoke('checkout_sale_atomic', ...)` call while preserving existing replay/idempotency guarantees and test compatibility.
 
 ---

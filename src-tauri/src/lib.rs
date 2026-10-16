@@ -15,6 +15,7 @@ pub mod db;
 pub mod resolver;
 pub mod commands;
 pub mod refund;
+pub mod checkout;
 pub mod sync_outbox;
 pub mod emergency_export;
 pub mod snapshot_prune;
@@ -1929,6 +1930,7 @@ pub fn run() {
             commands::process_raw_scan,
             commands::commit_stock_batch,
             refund::refund_sale_atomic,
+            checkout::checkout_sale_atomic,
             trust_core::device_identity::get_device_identity_info,
             sync_outbox::fetch_next_outbox_batch,
             sync_outbox::mark_outbox_synced,
@@ -1998,6 +2000,7 @@ pub fn run() {
             commands::process_raw_scan,
             commands::commit_stock_batch,
             refund::refund_sale_atomic,
+            checkout::checkout_sale_atomic,
             trust_core::device_identity::get_device_identity_info,
             sync_outbox::fetch_next_outbox_batch,
             sync_outbox::mark_outbox_synced,

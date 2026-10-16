@@ -40,6 +40,8 @@ import { withBusyRetry, isBusyError, isStaleTxnError, isRetryableDbError } from 
 export { isRetryableDbError, isBusyError, isStaleTxnError, withBusyRetry };
 import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL, CUSTOMER_DEBTS_HEAL_PROBE_SQL } from './schemaHeal';
 import { markBoot } from '../utils/bootTimings';
+import { isTauriEnv } from './adapters/base';
+import { invokeCommand } from '../platform/invoke';
 
 const DB_PATH = 'sqlite:mobi_pos.db';
 
@@ -1115,6 +1117,33 @@ function normalizeMoneyInput(input: CheckoutWriteInput): void {
 
 async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<CheckoutWriteResult> {
   devBenchMark('checkout:start');
+
+  // Single-hop native barrier under Tauri: eliminates 50-100+ IPC round-trips
+  // by executing oversell validation, FIFO stock_batches depletion,
+  // sale_batch_allocations, transactions, items, ledger and outbox writes
+  // atomically in Rust (< 5ms).
+  if (isTauriEnv()) {
+    try {
+      normalizeMoneyInput(input);
+      const res = await invokeCommand<CheckoutWriteResult, { req: CheckoutWriteInput }>(
+        'checkout_sale_atomic',
+        { req: input },
+      );
+      devBenchMark('checkout:native-commit');
+      return res;
+    } catch (err: unknown) {
+      const errMsg = (err as { message?: string })?.message || String(err);
+      if (
+        errMsg.includes('INSUFFICIENT_STOCK') ||
+        errMsg.includes('IMEI_ALREADY_SOLD') ||
+        errMsg.includes('BUSY:')
+      ) {
+        throw new Error(errMsg);
+      }
+      console.warn('[writeCheckoutAtomic] native checkout_sale_atomic fallback to TS:', err);
+    }
+  }
+
   const db = await getLocalDb();
   const deviceId = (await getOrCreateDeviceId(db)) || 'default';
   const now = utcNowIso();
