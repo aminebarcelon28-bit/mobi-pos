@@ -50,8 +50,14 @@ export const ReceiptPaper: React.FC<ReceiptPaperProps> = ({
   const fiscal = fiscalIdentifierLine(settings);
   const showBarcodeBlock = showBarcode && (settings.showBarcode !== false);
 
+  const is58mm = settings.paperWidth === '58mm';
+
   return (
-    <div className="print-receipt-target w-[80mm] max-w-[80mm] bg-white text-black p-4 font-mono tabular-nums text-xs leading-tight">
+    <div
+      className={`print-receipt-target ${
+        is58mm ? 'w-[58mm] max-w-[58mm] p-2 text-[10.5px]' : 'w-[80mm] max-w-[80mm] p-4 text-xs'
+      } bg-white text-black font-mono tabular-nums leading-tight`}
+    >
       {/* ── Store header ── */}
       <div className="text-center pb-3 border-b border-dashed border-gray-400">
         {settings.logoUrl ? (

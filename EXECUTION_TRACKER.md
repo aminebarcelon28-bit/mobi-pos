@@ -95,8 +95,12 @@
 
 ## SPRINT 5: FRONTEND MONOLITH DECOMPOSITION, VIRTUALIZATION & P2 HARDENING
 
-- [ ] **Task 5.1 — Decompose `SettingsModal.tsx` (3,713 lines) & Wire Real Hardware/Settings:**
-  - Split `SettingsModal.tsx` into modular tab components under `src/components/modals/settings/`, wire `hardware_scan_devices` (`src/api/hardware.ts:35`), make printer routing cards editable, and expose missing inputs for `baridimobRip`, `ccpAccount`, `bankBeneficiaryName`, `paperWidth`, `kickCashDrawerOnCash`, and `storeSubheader`.
+- [x] **Task 5.1 — Decompose `SettingsModal.tsx` (3,713 lines) & Wire Real Hardware/Settings:**
+  - Split `SettingsModal.tsx` into modular tab components under `src/components/modals/settings/` (`GeneralSettingsTab`, `HardwareSettingsTab`, `SecuritySettingsTab`, `CloudSyncSettingsTab`, `DiagnosticsSettingsTab`, `LoyaltySettingsTab`, `BackupSettingsTab`, `UpdatesSettingsTab`).
+  - Wired `scanHardwareDevices` (`hardware_scan_devices`), real printer routing configuration, real SQLite WAL/outbox/hardware/security probes (eliminating `Math.random()` simulation).
+  - Exposed UI inputs for `baridimobRip`, `ccpAccount`, `bankBeneficiaryName`, `paperWidth`, `kickCashDrawerOnCash`, `storeSubheader`, `categoryMultipliers`, `activeCampaigns`, and `loyaltyVisible`.
+  - Wired native encrypted backup APIs (`createDatabaseBackup`, `listDatabaseBackups`, `pruneSnapshots`, `decryptSnapshotForRecovery`) and `sqlite_db_maintenance` (WAL checkpoint + vacuum + optimize) into `DatabaseMaintenanceModal.tsx` and `BackupSettingsTab.tsx`.
+  - Updated `ReceiptPaper.tsx`, `ReceiptModal.tsx`, `ImeiWarrantyInspectorModal.tsx`, and `Header.tsx` to honor `paperWidth` and `loyaltyVisible`.
 - [ ] **Task 5.2 — Virtualize High-Density Lists & Fix 150 Cascading Render Warnings:**
   - Add `@tanstack/react-virtual` to `CustomersModal.tsx` and `InventoryManagerModal.tsx`, and refactor the `react(set-state-in-effect)` warnings across modals (`RefundModal`, `PurchaseOrderModal`, `ReportsModal`, `ProductEditorModal`).
 - [ ] **Task 5.3 — Blind Shift Close, Blind Stocktake & Manager PIN Hardening:**

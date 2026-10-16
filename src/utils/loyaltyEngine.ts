@@ -62,6 +62,7 @@ export const DEFAULT_LOYALTY_CONFIG: LoyaltyProgramConfig = {
   disabledMode: 'freeze-all',
   pointsEnabled: true,
   tierMultipliersEnabled: true,
+  loyaltyVisible: true,
   baseSpendPerPoint: 100, // 100 DA spent = 1 base point
   pointRedemptionRate: 10, // 1 Point = 10 DA store credit
   minimumRedemptionPoints: 50, // Minimum 50 points needed to redeem
@@ -301,6 +302,7 @@ export const normalizeLoyaltyConfig = (raw: unknown): LoyaltyProgramConfig => {
     disabledMode: r.disabledMode === 'earn-off-redeem-on' ? 'earn-off-redeem-on' : 'freeze-all',
     pointsEnabled: r.pointsEnabled ?? true,
     tierMultipliersEnabled: r.tierMultipliersEnabled ?? true,
+    loyaltyVisible: r.loyaltyVisible !== false,
     baseSpendPerPoint: numOr(r.baseSpendPerPoint, base.baseSpendPerPoint) > 0
       ? numOr(r.baseSpendPerPoint, base.baseSpendPerPoint) : base.baseSpendPerPoint,
     pointRedemptionRate: numOr(r.pointRedemptionRate, base.pointRedemptionRate) > 0

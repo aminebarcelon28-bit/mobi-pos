@@ -768,10 +768,12 @@ export const Header: React.FC = () => {
                   <span className="font-bold text-pos-text truncate text-xs">{currentCustomer.name}</span>
                 </div>
                 <div className="flex items-center gap-2 text-[10px] text-pos-muted mt-0.5">
-                  <span className="text-amber-400 font-bold flex items-center gap-0.5">
-                    <Star className="w-2.5 h-2.5 fill-amber-400" />
-                    {currentCustomer.loyaltyPoints} pts
-                  </span>
+                  {receiptSettings?.loyaltyConfig?.loyaltyVisible !== false && (
+                    <span className="text-amber-400 font-bold flex items-center gap-0.5">
+                      <Star className="w-2.5 h-2.5 fill-amber-400" />
+                      {currentCustomer.loyaltyPoints} pts
+                    </span>
+                  )}
                   {(currentCustomer.storeCredit || 0) > 0 && (
                     <span className="text-emerald-400 font-bold font-mono">
                       +{formatDZD(currentCustomer.storeCredit)}

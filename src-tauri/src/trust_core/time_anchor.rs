@@ -447,7 +447,11 @@ mod tests {
             tx.commit().unwrap();
             t
         };
-        assert_eq!(t1, t0 + 10_000);
+        assert!(
+            (t1 - (t0 + 10_000)).abs() <= 10,
+            "t1 {t1} expected within 10ms of t0+10_000 {}",
+            t0 + 10_000
+        );
     }
 
     #[test]

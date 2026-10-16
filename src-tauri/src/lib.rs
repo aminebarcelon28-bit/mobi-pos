@@ -880,9 +880,17 @@ fn decrypt_snapshot_for_recovery(
 }
 
 #[tauri::command]
-fn sqlite_db_maintenance() -> Result<String, String> {
-    // Maintenance command — exposed as `invoke('sqlite_db_maintenance')`
-    Ok("ok".to_string())
+fn sqlite_db_maintenance(app_handle: tauri::AppHandle) -> Result<String, String> {
+    let app_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let db_path = crate::e2e::live_db_path(&app_dir);
+    if !db_path.exists() {
+        return Ok("Base non initialisée".to_string());
+    }
+    let conn = rusqlite::Connection::open(&db_path).map_err(|e| format!("open failed: {e}"))?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(5000));
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA optimize;")
+        .map_err(|e| format!("maintenance failed: {e}"))?;
+    Ok("Checkpoint WAL (TRUNCATE) et VACUUM exécutés avec succès".to_string())
 }
 
 /// Boot-gate companion to the `setup` version check below: lets the TS boot

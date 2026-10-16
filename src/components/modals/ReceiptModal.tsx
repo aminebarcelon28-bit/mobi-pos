@@ -149,7 +149,10 @@ export const ReceiptModal: React.FC = () => {
 
           {/* Screen-only warranty certificate actions (never printed: outside .print-receipt-target) */}
           {warrantyItems.length > 0 ? (
-            <div className="w-[80mm] max-w-[80mm] flex flex-col gap-1.5" aria-label="Certificats de garantie">
+            <div
+              className={`${receiptSettings?.paperWidth === '58mm' ? 'w-[58mm] max-w-[58mm]' : 'w-[80mm] max-w-[80mm]'} flex flex-col gap-1.5`}
+              aria-label="Certificats de garantie"
+            >
               {warrantyItems.map((item) => (
                 <button
                   key={`${item.product.id}-${item.imeiNumber}`}
@@ -195,7 +198,7 @@ export const ReceiptModal: React.FC = () => {
             <button
               type="button"
               onClick={handlePrintThermal}
-              aria-label="Imprimer Thermique — imprimer le ticket 80mm"
+              aria-label={`Imprimer Thermique — imprimer le ticket ${receiptSettings?.paperWidth === '58mm' ? '58mm' : '80mm'}`}
               className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 transition shadow-lg shadow-emerald-500/20 active:scale-95 cursor-pointer order-1 sm:order-3"
             >
               <Printer className="w-4 h-4 stroke-[2.5]" aria-hidden="true" /> <span>Imprimer Thermique</span>

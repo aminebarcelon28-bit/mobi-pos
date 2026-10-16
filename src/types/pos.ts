@@ -241,6 +241,8 @@ export interface LoyaltyProgramConfig {
   pointsEnabled?: boolean;
   /** When false, tier multipliers earn at 1.0x (campaigns still apply). */
   tierMultipliersEnabled?: boolean;
+  /** Controls whether loyalty points & chips are displayed on tickets & customer headers. Defaults to true. */
+  loyaltyVisible?: boolean;
   baseSpendPerPoint: number; // e.g. 100 DA spent = 1 base point
   pointRedemptionRate: number; // e.g. 10 Pts = 100 DA (1 Pt = 10 DA value)
   minimumRedemptionPoints: number; // e.g. 50 pts required

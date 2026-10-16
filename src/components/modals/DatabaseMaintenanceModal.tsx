@@ -17,7 +17,15 @@ import { maintenanceService, type DbStats, type IntegrityReport } from '../../se
 import { useToast } from '../ui/Toast';
 import { audioBus } from '../../utils/audioEvents';
 import { verifyManagerGate } from '../../utils/pinGate';
-import { Lock, ShieldAlert } from 'lucide-react';
+import { Lock, ShieldAlert, FileKey, Trash2, KeyRound, FileCheck } from 'lucide-react';
+import {
+  createDatabaseBackup,
+  listDatabaseBackups,
+  pruneSnapshots,
+  decryptSnapshotForRecovery,
+} from '../../api/backup';
+import { invokeCommand } from '../../platform/invoke';
+import { isTauriEnv } from '../../db/adapters/base';
 
 export const DatabaseMaintenanceModal: React.FC = () => {
   const {
@@ -44,6 +52,12 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   const [actionOutput, setActionOutput] = useState<string>('');
   const [repairTicketId, setRepairTicketId] = useState<string>('');
 
+  // Encrypted Snapshots (.db.enc)
+  const [snapshots, setSnapshots] = useState<string[]>([]);
+  const [snapshotPin, setSnapshotPin] = useState('');
+  const [selectedSnapshotForAction, setSelectedSnapshotForAction] = useState<string | null>(null);
+  const [showActionPinModal, setShowActionPinModal] = useState<'prune' | 'decrypt' | null>(null);
+
   // Decision 2: the maintenance center exposes the full-JSON export and
   // snapshot creation — fresh manager PIN per open (native gate,
   // fail-closed), same bar as the journal. Covers every launcher
@@ -53,12 +67,22 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   const [maintError, setMaintError] = useState<string | null>(null);
   const [maintVerifying, setMaintVerifying] = useState(false);
 
+  const loadSnapshots = async () => {
+    try {
+      const list = await listDatabaseBackups();
+      setSnapshots(list || []);
+    } catch {
+      setSnapshots([]);
+    }
+  };
+
   const loadStats = async () => {
     try {
       const s = await maintenanceService.getDatabaseStats();
       setStats(s);
       const rep = await maintenanceService.runDatabaseIntegrityCheck();
       setIntegrity(rep);
+      await loadSnapshots();
     } catch (e) {
       console.error('Failed to load DB stats:', e);
     }
@@ -110,13 +134,20 @@ export const DatabaseMaintenanceModal: React.FC = () => {
 
   if (activeModal !== 'db_maintenance') return null;
 
-  // ══════════════════════════════════════════════════════════════
-  // ACTIONS: MAINTENANCE & INTEGRITY
-  // ══════════════════════════════════════════════════════════════
   const handleCheckpointWal = async () => {
     setIsProcessing(true);
     try {
-      const msg = await maintenanceService.checkpointDatabaseWal();
+      let msg = '';
+      if (isTauriEnv()) {
+        try {
+          await invokeCommand('sqlite_db_maintenance', { op: 'checkpoint' });
+          msg = 'Point de contrôle SQLite WAL (TRUNCATE) natif exécuté avec succès.';
+        } catch {
+          msg = await maintenanceService.checkpointDatabaseWal();
+        }
+      } else {
+        msg = await maintenanceService.checkpointDatabaseWal();
+      }
       setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] ${msg}`);
       audioBus.emit('success');
       showToast('WAL Checkpoint exécuté avec succès.', 'success');
@@ -133,7 +164,17 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   const handleVacuum = async () => {
     setIsProcessing(true);
     try {
-      const msg = await maintenanceService.vacuumDatabase();
+      let msg = '';
+      if (isTauriEnv()) {
+        try {
+          await invokeCommand('sqlite_db_maintenance', { op: 'vacuum' });
+          msg = 'Base de données défragmentée et compactée (VACUUM & OPTIMIZE natif) !';
+        } catch {
+          msg = await maintenanceService.vacuumDatabase();
+        }
+      } else {
+        msg = await maintenanceService.vacuumDatabase();
+      }
       setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] ${msg}`);
       audioBus.emit('success');
       showToast('Base de données SQLite défragmentée et compactée !', 'success');
@@ -249,16 +290,75 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   const handleCreateSnapshot = async () => {
     setIsProcessing(true);
     try {
-      const now = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const fileName = `MobiPOS_Backup_${now}.db`;
-      const backupResult = await maintenanceService.backupDatabaseToFile(fileName);
-      setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] Instantané créé : ${backupResult}`);
-      audioBus.emit('success');
-      showToast(`Instantané de sauvegarde créé : ${fileName}`, 'success');
+      if (isTauriEnv()) {
+        const meta = await createDatabaseBackup('manual');
+        const msg = `Instantané chiffré créé : ${meta.id} (${(meta.bytes / 1024).toFixed(1)} Ko)`;
+        setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] ${msg}`);
+        audioBus.emit('success');
+        showToast(msg, 'success');
+        await loadSnapshots();
+      } else {
+        const now = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const fileName = `MobiPOS_Backup_${now}.db`;
+        const backupResult = await maintenanceService.backupDatabaseToFile(fileName);
+        setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] Instantané créé : ${backupResult}`);
+        audioBus.emit('success');
+        showToast(`Instantané de sauvegarde créé : ${fileName}`, 'success');
+      }
+      await loadStats();
     } catch (e) {
       console.error(e);
       audioBus.emit('error');
       showToast('Erreur lors de la création de la sauvegarde snapshot.', 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleExecutePrune = async () => {
+    const pin = snapshotPin.trim();
+    if (!pin) {
+      showToast('PIN Manager requis pour purger les instantanés.', 'warning');
+      return;
+    }
+    setIsProcessing(true);
+    try {
+      const rep = await pruneSnapshots(pin, { keepLast: 5 });
+      const msg = `Purge terminée : ${rep.deleted.length} instantané(s) purgé(s), ${rep.kept} conservé(s).`;
+      setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] ${msg}`);
+      audioBus.emit('success');
+      showToast(msg, 'success');
+      setShowActionPinModal(null);
+      setSnapshotPin('');
+      await loadSnapshots();
+    } catch (e) {
+      audioBus.emit('error');
+      showToast(e instanceof Error ? e.message : 'Erreur lors de la purge.', 'error');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleExecuteDecrypt = async () => {
+    if (!selectedSnapshotForAction) return;
+    const pin = snapshotPin.trim();
+    if (!pin) {
+      showToast('PIN Manager requis pour déchiffrer l\'instantané.', 'warning');
+      return;
+    }
+    setIsProcessing(true);
+    try {
+      const result = await decryptSnapshotForRecovery(selectedSnapshotForAction, pin);
+      const msg = `Instantané déchiffré dans : ${result.decryptedFile}`;
+      setActionOutput(`[${new Date().toLocaleTimeString('fr-FR')}] ${msg}`);
+      audioBus.emit('success');
+      showToast(msg, 'success', 8000);
+      setShowActionPinModal(null);
+      setSnapshotPin('');
+      setSelectedSnapshotForAction(null);
+    } catch (e) {
+      audioBus.emit('error');
+      showToast(e instanceof Error ? e.message : 'Échec de déchiffrement.', 'error');
     } finally {
       setIsProcessing(false);
     }
@@ -625,6 +725,125 @@ export const DatabaseMaintenanceModal: React.FC = () => {
                 Reconstruit la ligne + reçu depuis les lots gelés. Refuse les tickets annulés ou déjà exacts.
               </p>
             </div>
+
+            {/* Encrypted Snapshots (.db.enc) Management Card */}
+            <div className="bg-pos-card border border-pos-border rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-pos-border/60 pb-2">
+                <div className="flex items-center gap-2">
+                  <FileKey className="w-4 h-4 text-purple-400" />
+                  <h4 className="text-xs font-bold text-pos-text uppercase tracking-wider">
+                    Instantanés Chiffrés Natifs (.db.enc)
+                  </h4>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCreateSnapshot}
+                    disabled={isProcessing}
+                    className="py-1.5 px-3 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shadow-md disabled:opacity-50"
+                  >
+                    <FileKey className="w-3.5 h-3.5" />
+                    <span>Créer Snapshot Chiffré</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowActionPinModal('prune');
+                      setSnapshotPin('');
+                    }}
+                    disabled={isProcessing || snapshots.length === 0}
+                    className="py-1.5 px-2.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-rose-400 font-bold text-xs flex items-center gap-1 transition cursor-pointer disabled:opacity-40"
+                    title="Purger les anciens instantanés"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Purger</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                {snapshots.length === 0 ? (
+                  <p className="text-xs text-pos-muted italic">
+                    Aucun instantané chiffré stocké sur cet appareil.
+                  </p>
+                ) : (
+                  snapshots.map((snap) => (
+                    <div
+                      key={snap}
+                      className="bg-pos-bg border border-pos-border rounded-lg p-2 flex items-center justify-between text-xs font-mono"
+                    >
+                      <div className="flex items-center gap-2 truncate min-w-0">
+                        <FileCheck className="w-4 h-4 text-purple-400 shrink-0" />
+                        <span className="text-pos-text truncate font-bold">{snap}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedSnapshotForAction(snap);
+                          setShowActionPinModal('decrypt');
+                          setSnapshotPin('');
+                        }}
+                        className="px-2 py-1 rounded bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 border border-purple-500/40 text-[10px] font-bold cursor-pointer shrink-0 ml-2"
+                      >
+                        Déchiffrer Secours
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Snapshot Action Pin Modal (Prune / Decrypt) */}
+            {showActionPinModal && (
+              <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                <div className="bg-pos-card border border-pos-border rounded-2xl p-5 max-w-sm w-full space-y-3 shadow-2xl animate-in zoom-in-95">
+                  <div className="flex items-center gap-2.5">
+                    <KeyRound className="w-5 h-5 text-purple-400" />
+                    <h4 className="text-sm font-bold text-pos-text">
+                      {showActionPinModal === 'prune'
+                        ? 'Purger les Instantanés'
+                        : 'Déchiffrer l\'Instantané'}
+                    </h4>
+                  </div>
+                  <p className="text-xs text-pos-muted">
+                    {showActionPinModal === 'prune'
+                      ? 'Saisissez le code PIN Manager pour purger les sauvegardes chiffrées antérieures.'
+                      : `Saisissez le code PIN Manager pour déchiffrer une copie claire de « ${selectedSnapshotForAction} ».`}
+                  </p>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={8}
+                    value={snapshotPin}
+                    onChange={(e) => setSnapshotPin(e.target.value)}
+                    placeholder="PIN Manager (6-8 chiffres)"
+                    className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:outline-none focus:border-purple-400"
+                    autoFocus
+                  />
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowActionPinModal(null);
+                        setSnapshotPin('');
+                        setSelectedSnapshotForAction(null);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-pos-bg text-pos-muted text-xs font-bold cursor-pointer hover:bg-pos-hover"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      type="button"
+                      onClick={showActionPinModal === 'prune' ? handleExecutePrune : handleExecuteDecrypt}
+                      disabled={isProcessing || !snapshotPin.trim()}
+                      className="px-4 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold cursor-pointer shadow-md disabled:opacity-50"
+                    >
+                      {isProcessing ? 'Traitement...' : 'Confirmer'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Action Log Box */}
             {actionOutput && (
