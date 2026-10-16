@@ -102,10 +102,10 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
     }
   },
 
-  logCashMovement: async (amount, type, reason, cashierName, movementId) => {
+  logCashMovement: async (amount, type, reason, cashierName, movementId, category, refType, refId) => {
     const { activeShift, logSecurityAction } = get();
     try {
-      const movement = await (await getSqlite()).logExpense(amount, type, reason, cashierName, activeShift?.id, movementId);
+      const movement = await (await getSqlite()).logExpense(amount, type, reason, cashierName, activeShift?.id, movementId, category, refType, refId);
       const refreshedActive = await (await getSqlite()).getActiveShift();
       logSecurityAction(
         type === 'EXPENSE' ? 'Décaissement / Dépense Caisse' : 'Apport de Caisse / Dépôt Manuel',

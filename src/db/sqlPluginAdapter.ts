@@ -3925,6 +3925,170 @@ export async function getProductStockBatches(productId: string): Promise<Array<{
   }));
 }
 
+export interface BatchDepletionAllocation {
+  batchId: string;
+  quantity: number;
+  unitCost: number;
+}
+
+export interface ProductBatchDepletionResult {
+  productId: string;
+  quantity: number;
+  unitCost: number;
+  totalCost: number;
+  allocations: BatchDepletionAllocation[];
+}
+
+export async function depleteStockBatchesFifo(
+  items: Array<{ productId: string; quantity: number }>,
+  opts?: { refType?: string; refId?: string }
+): Promise<ProductBatchDepletionResult[]> {
+  const clean = items.filter((it) => it.productId && Number(it.quantity) > 0);
+  if (clean.length === 0) return [];
+
+  const { results, productIds } = await withBusyRetry(
+    () => withWriteLock(() => depleteStockBatchesFifoInner(clean, opts)),
+    { attempts: 8, baseDelayMs: 120, label: 'deplete-fifo' }
+  );
+
+  if (productIds.length > 0) {
+    try {
+      const db = await getLocalDb();
+      await mirrorStockBatchesToDexie(db, productIds);
+    } catch (mirrorErr) {
+      console.warn('[depleteStockBatchesFifo] Dexie batch mirror skipped:', mirrorErr);
+    }
+  }
+
+  return results;
+}
+
+async function depleteStockBatchesFifoInner(
+  items: Array<{ productId: string; quantity: number }>,
+  opts?: { refType?: string; refId?: string }
+): Promise<{ results: ProductBatchDepletionResult[]; productIds: string[] }> {
+  const db = await getLocalDb();
+  const deviceId = (await getOrCreateDeviceId(db)) || 'default';
+  const now = utcNowIso();
+  const refId = opts?.refId || newIdempotencyKey();
+  const results: ProductBatchDepletionResult[] = [];
+  const touchedProductIds: string[] = [];
+
+  for (const item of items) {
+    const qty = Math.max(0, item.quantity);
+    if (qty <= 0) continue;
+    touchedProductIds.push(item.productId);
+
+    let fallbackCost = 0;
+    try {
+      const prodRows = (await db.select(
+        'SELECT cost_price FROM products WHERE id = $1',
+        [item.productId]
+      ).catch(rethrowBusy)) as Array<{ cost_price?: number }>;
+      fallbackCost = Math.max(0, Math.round(Number(prodRows?.[0]?.cost_price) || 0));
+    } catch {}
+
+    const batches = (await db.select(
+      `SELECT batch_id, product_id, quantity_remaining, unit_cost, received_at, version, device_id, purchase_order_id, created_at, idempotency_key
+       FROM stock_batches
+       WHERE product_id = $1 AND deleted = 0 AND quantity_remaining > 0
+       ORDER BY received_at ASC, rowid ASC`,
+      [item.productId]
+    ).catch(rethrowBusy)) as Array<{
+      batch_id: string;
+      product_id: string;
+      quantity_remaining: number;
+      unit_cost: number;
+      received_at: string;
+      version?: number;
+      device_id?: string;
+      purchase_order_id?: string | null;
+      created_at?: string;
+      idempotency_key?: string;
+    }>;
+
+    let needed = qty;
+    let totalCost = 0;
+    const allocations: BatchDepletionAllocation[] = [];
+
+    for (const b of batches) {
+      if (needed <= 0) break;
+      const rem = Number(b.quantity_remaining) || 0;
+      if (rem <= 0) continue;
+      const take = Math.min(rem, needed);
+      const unitCost = Math.max(0, Math.round(Number(b.unit_cost) || 0));
+
+      await db.execute(
+        `UPDATE stock_batches
+         SET quantity_remaining = quantity_remaining - $1,
+             version = version + 1,
+             updated_at = $2,
+             sync_status = 'pending'
+         WHERE batch_id = $3`,
+        [take, now, b.batch_id]
+      ).catch(rethrowBusy);
+
+      const bumped = (await db.select(
+        'SELECT version, quantity_remaining, unit_cost, received_at, purchase_order_id, device_id FROM stock_batches WHERE batch_id = $1',
+        [b.batch_id]
+      ).catch(rethrowBusy)) as Array<{
+        version?: number;
+        quantity_remaining?: number;
+        unit_cost?: number;
+        received_at?: string;
+        purchase_order_id?: string | null;
+        device_id?: string;
+      }>;
+      const br = bumped?.[0];
+      const newVersion = Number(br?.version ?? (Number(b.version ?? 1) + 1));
+      const outKey = `sb-${b.batch_id}-${refId}-${newVersion}`;
+
+      await db.execute(
+        `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)
+         VALUES ($1, 'stock_batches', $2, 'UPSERT', $3, 'pending')
+         ON CONFLICT(idempotency_key) DO UPDATE SET payload_json=excluded.payload_json, status='pending', updated_at=$4`,
+        [
+          outKey,
+          b.batch_id,
+          JSON.stringify({
+            version: newVersion,
+            batch_id: b.batch_id,
+            product_id: item.productId,
+            quantity_remaining: Number(br?.quantity_remaining ?? (rem - take)),
+            unit_cost: unitCost,
+            received_at: br?.received_at ?? b.received_at,
+            purchase_order_id: br?.purchase_order_id ?? b.purchase_order_id ?? null,
+            device_id: br?.device_id ?? b.device_id ?? deviceId,
+            idempotency_key: outKey,
+            updated_at: now,
+          }),
+          now,
+        ]
+      ).catch(rethrowBusy);
+
+      allocations.push({ batchId: b.batch_id, quantity: take, unitCost });
+      totalCost += take * unitCost;
+      needed -= take;
+    }
+
+    if (needed > 0) {
+      allocations.push({ batchId: 'unbatched', quantity: needed, unitCost: fallbackCost });
+      totalCost += needed * fallbackCost;
+    }
+
+    const blendedUnitCost = qty > 0 ? Math.round(totalCost / qty) : fallbackCost;
+    results.push({
+      productId: item.productId,
+      quantity: qty,
+      unitCost: blendedUnitCost,
+      totalCost,
+      allocations,
+    });
+  }
+
+  return { results, productIds: [...new Set(touchedProductIds)] };
+}
+
 /**
  * Calculates FIFO inventory valuation: SUM(quantity_remaining * unit_cost).
  */

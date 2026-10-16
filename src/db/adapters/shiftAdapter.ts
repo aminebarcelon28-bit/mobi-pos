@@ -547,7 +547,10 @@ export const shiftAdapter = {
     reason: string,
     cashierName?: string,
     sessionId?: string,
-    movementId?: string
+    movementId?: string,
+    category?: string,
+    refType?: string,
+    refId?: string
   ): Promise<CashMovement> {
     const fallbackSession = sessionId || (await dexieDb.cashSessions.where('status').equals('OPEN').first())?.id || 'DEFAULT_SHIFT';
     const cleanReason = (reason || '').trim() || 'Mouvement de caisse';
@@ -561,6 +564,9 @@ export const shiftAdapter = {
       type: movementType,
       amount: wholeAmount,
       reason: cleanReason,
+      category,
+      refType,
+      refId,
       cashierName: cashierName || 'Caissier',
       createdAt: new Date().toISOString(),
     };

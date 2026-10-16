@@ -1205,6 +1205,11 @@ export interface RepairPartUsage {
   unitCost?: number;
   consumedAt?: string;
   isConsumed?: boolean;
+  batchAllocations?: Array<{
+    batchId: string;
+    quantity: number;
+    unitCost: number;
+  }>;
 }
 
 /** Append-only audit trail for status transitions. */
@@ -1671,6 +1676,9 @@ export interface CashMovement {
   type: 'EXPENSE' | 'MANUAL_DEPOSIT' | 'ALLOCATION';
   amount: number; // In DA
   reason: string;
+  category?: string;
+  refType?: string;
+  refId?: string;
   cashierName?: string;
   createdAt: string;
 }

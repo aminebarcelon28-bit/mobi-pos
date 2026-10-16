@@ -180,7 +180,10 @@ export interface ShiftSlice {
     type: 'EXPENSE' | 'MANUAL_DEPOSIT',
     reason: string,
     cashierName?: string,
-    movementId?: string
+    movementId?: string,
+    category?: string,
+    refType?: string,
+    refId?: string
   ) => Promise<{ success: boolean; movement?: CashMovement; reason?: string }>;
   closeShift: (
     blindCount: number,

@@ -117,16 +117,25 @@ async function consumeSparePartsInventory(
   if (unconsumed.length === 0) return order;
 
   try {
-    const { appendInventoryDeltas } = await import('../../db/sqlPluginAdapter');
+    const { appendInventoryDeltas, depleteStockBatchesFifo } = await import('../../db/sqlPluginAdapter');
+
+    // 1. Deplete FIFO stock batches in SQLite
+    const depletionResults = await depleteStockBatchesFifo(
+      unconsumed.map((p) => ({ productId: p.productId, quantity: p.quantity })),
+      { refType: 'REPAIR_ORDER', refId: order.id }
+    );
+
+    // 2. Append inventory_ledger deltas with REPAIR_PARTS tracking
     const deltas = unconsumed.map((p) => ({
       productId: p.productId,
       delta: -Math.abs(Number(p.quantity) || 1),
       reason: 'ADJUST' as const,
-      refType: 'REPAIR_ORDER',
+      refType: 'REPAIR_PARTS',
       refId: order.id,
     }));
     await appendInventoryDeltas(deltas);
 
+    // 3. Mirror stock adjustments to Dexie products
     try {
       const { dexieDb } = await import('../../db/database');
       for (const p of unconsumed) {
@@ -141,6 +150,7 @@ async function consumeSparePartsInventory(
       /* dexie mirror best effort */
     }
 
+    // 4. Update in-memory Zustand products
     const liveProducts = get().products || [];
     const updatedLiveProducts = liveProducts.map((prod) => {
       const consumed = unconsumed.find((u) => u.productId === prod.id);
@@ -151,11 +161,35 @@ async function consumeSparePartsInventory(
     });
     set({ products: updatedLiveProducts });
 
+    // 5. Update spare parts with FIFO cost basis and allocations
     const consumedTime = new Date().toISOString();
-    const updatedSpareParts = parts.map((p) =>
-      p.isConsumed ? p : { ...p, isConsumed: true, consumedAt: consumedTime }
-    );
-    const updatedOrder = { ...order, spareParts: updatedSpareParts };
+    let totalFifoPartsCost = 0;
+    const updatedSpareParts = parts.map((p) => {
+      if (p.isConsumed) {
+        totalFifoPartsCost += (p.unitCost ?? p.unitPrice) * p.quantity;
+        return p;
+      }
+      const dep = depletionResults.find((r) => r.productId === p.productId);
+      const unitCost = dep ? dep.unitCost : (p.unitCost ?? p.unitPrice);
+      totalFifoPartsCost += unitCost * p.quantity;
+      return {
+        ...p,
+        isConsumed: true,
+        consumedAt: consumedTime,
+        unitCost,
+        batchAllocations: dep?.allocations || [],
+      };
+    });
+
+    // Compute partsCost from actual FIFO batch cost basis (permitting manual markup/external parts if greater)
+    const newPartsCost = Math.max(order.partsCost || 0, Math.round(totalFifoPartsCost));
+    const totalCost = (order.laborCost || 0) + newPartsCost;
+    const updatedOrder: RepairOrder = {
+      ...order,
+      spareParts: updatedSpareParts,
+      partsCost: newPartsCost,
+      totalCost,
+    };
     await (await getRepairRepo()).save(updatedOrder);
     return updatedOrder;
   } catch (err) {
@@ -174,16 +208,43 @@ async function restoreSparePartsInventory(
   if (consumed.length === 0) return order;
 
   try {
-    const { appendInventoryDeltas } = await import('../../db/sqlPluginAdapter');
+    const { appendInventoryDeltas, restituteStockBatches } = await import('../../db/sqlPluginAdapter');
+
+    // 1. Restitute stock batches
+    const allocationsToRestitute: Array<{ batchId?: string; productId: string; quantity: number; unitCost: number }> = [];
+    for (const p of consumed) {
+      if (p.batchAllocations && p.batchAllocations.length > 0) {
+        for (const alloc of p.batchAllocations) {
+          allocationsToRestitute.push({
+            batchId: alloc.batchId,
+            productId: p.productId,
+            quantity: alloc.quantity,
+            unitCost: alloc.unitCost,
+          });
+        }
+      } else {
+        allocationsToRestitute.push({
+          productId: p.productId,
+          quantity: p.quantity,
+          unitCost: p.unitCost ?? p.unitPrice,
+        });
+      }
+    }
+    if (allocationsToRestitute.length > 0) {
+      await restituteStockBatches(allocationsToRestitute, { batchKeySeed: `sav-${order.id}` });
+    }
+
+    // 2. Compensating inventory ledger deltas
     const deltas = consumed.map((p) => ({
       productId: p.productId,
       delta: Math.abs(Number(p.quantity) || 1),
       reason: 'ADJUST' as const,
-      refType: 'REPAIR_ORDER',
+      refType: 'REPAIR_PARTS_CANCEL',
       refId: order.id,
     }));
     await appendInventoryDeltas(deltas);
 
+    // 3. Mirror to Dexie products
     try {
       const { dexieDb } = await import('../../db/database');
       for (const p of consumed) {
@@ -198,6 +259,7 @@ async function restoreSparePartsInventory(
       /* dexie mirror best effort */
     }
 
+    // 4. Update Zustand products
     const liveProducts = get().products || [];
     const updatedLiveProducts = liveProducts.map((prod) => {
       const restored = consumed.find((u) => u.productId === prod.id);
@@ -208,7 +270,7 @@ async function restoreSparePartsInventory(
     });
     set({ products: updatedLiveProducts });
 
-    const updatedSpareParts = parts.map((p) => ({ ...p, isConsumed: false }));
+    const updatedSpareParts = parts.map((p) => ({ ...p, isConsumed: false, batchAllocations: undefined }));
     const updatedOrder = { ...order, spareParts: updatedSpareParts };
     await (await getRepairRepo()).save(updatedOrder);
     return updatedOrder;
@@ -319,8 +381,19 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
         await get().logCashMovement(
           deposit,
           'MANUAL_DEPOSIT',
-          `Acompte SAV Réparation: Ticket #${newOrder.ticketNumber} (${newOrder.customerName} - ${newOrder.deviceModel})`
+          `SAV_ACOMPTE: Acompte Réparation #${newOrder.ticketNumber} (${newOrder.customerName} - ${newOrder.deviceModel})`,
+          get().activeCashier?.name || 'Caissier',
+          undefined,
+          'SAV_ACOMPTE',
+          'REPAIR_ORDER',
+          newOrder.id
         );
+      }
+
+      if (newOrder.status === 'Prêt / Terminé' || newOrder.status === 'Livré') {
+        const orderWithDeductedParts = await consumeSparePartsInventory(newOrder, get, set);
+        const idx = updated.findIndex((r) => r.id === newOrder.id);
+        if (idx !== -1) updated[idx] = orderWithDeductedParts;
       }
 
       set({
@@ -410,7 +483,12 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
             await get().logCashMovement(
               depAmt,
               'EXPENSE',
-              `Remboursement Acompte SAV Annulé: Ticket #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`
+              `SAV_ACOMPTE: Remboursement Acompte SAV Annulé #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`,
+              get().activeCashier?.name || 'Caissier',
+              undefined,
+              'SAV_ACOMPTE_REFUND',
+              'REPAIR_ORDER',
+              target.id
             );
           }
         }
@@ -483,16 +561,33 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
               await get().logCashMovement(
                 delta,
                 'MANUAL_DEPOSIT',
-                `Complément Acompte SAV: Ticket #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`
+                `SAV_ACOMPTE: Complément Acompte #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`,
+                get().activeCashier?.name || 'Caissier',
+                undefined,
+                'SAV_ACOMPTE',
+                'REPAIR_ORDER',
+                target.id
               );
             } else {
               await get().logCashMovement(
                 Math.abs(delta),
                 'EXPENSE',
-                `Remboursement Partiel Acompte SAV: Ticket #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`
+                `SAV_ACOMPTE: Remboursement Partiel Acompte #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`,
+                get().activeCashier?.name || 'Caissier',
+                undefined,
+                'SAV_ACOMPTE_REFUND',
+                'REPAIR_ORDER',
+                target.id
               );
             }
           }
+        }
+
+        // If order is completed/delivered and has unconsumed spare parts, consume them
+        if ((target.status === 'Prêt / Terminé' || target.status === 'Livré') && target.spareParts?.some((p) => !p.isConsumed)) {
+          const orderWithDeductedParts = await consumeSparePartsInventory(target, get, set);
+          const idx = updated.findIndex((r) => r.id === orderId);
+          if (idx !== -1) updated[idx] = orderWithDeductedParts;
         }
       } catch (err) {
         console.error(`Failed to update repair order [${orderId}]:`, err);

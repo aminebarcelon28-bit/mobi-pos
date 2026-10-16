@@ -26,7 +26,7 @@
  * Usage: node scripts/check-pin-boundary.mjs (wired into test:boundaries)
  * Exit: 0 = clean, 1 = violation(s) found
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readdirSync, statSync } from 'node:fs';
@@ -167,9 +167,12 @@ console.log('== P4: routing module ==');
   // action; a direct TS mint for credentials would fail the suite below.
   const slice = read('store/slices/createUISlice.ts');
   const settingsModal = read('components/modals/SettingsModal.tsx');
+  const secTab = existsSync(join(SRC, 'components/modals/settings/SecuritySettingsTab.tsx'))
+    ? read('components/modals/settings/SecuritySettingsTab.tsx')
+    : '';
   check('rotation authority lives in the store', slice.includes('rotatePinCredential: async'));
   check('lock screen rotates through the authority', overlay.includes('rotatePinCredential('));
-  check('settings rotates through the authority', settingsModal.includes('rotatePinCredential('));
+  check('settings rotates through the authority', (settingsModal + secTab).includes('rotatePinCredential('));
   check(
     'native failure never falls back to a local mint',
     /NEVER falls back to a local mint/i.test(slice)
@@ -191,11 +194,13 @@ console.log('== P4: routing module ==');
   // Raw verifyPin CALLS: definition + login fallback + lock screen +
   // roster uniqueness. The shiftAdapter variance gate is gone from this list
   // (native-routed) — its return would fail the gate below.
+  const secTabRel = 'components/modals/settings/SecuritySettingsTab.tsx';
+  const hasSecTab = existsSync(join(SRC, secTabRel));
   const allowedRaw = new Set([
     'utils/security.ts', // definition
     'store/slices/createUISlice.ts', // login fallback + gate impl (non-Tauri path)
     'components/LockScreenOverlay.tsx', // native-first login + rotation
-    'components/modals/SettingsModal.tsx', // uniqueness checks (documented oracle, never auth)
+    ...(hasSecTab ? [secTabRel] : ['components/modals/SettingsModal.tsx']),
   ]);
   const rawCallers = [];
   for (const f of tsFiles(SRC)) {
