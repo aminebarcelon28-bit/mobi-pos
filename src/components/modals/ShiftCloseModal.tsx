@@ -106,6 +106,7 @@ export const ShiftCloseModal: React.FC = () => {
     qty50: 0,
     qty20: 0,
     qty10: 0,
+    qty5: 0,
     coins: 0,
   });
 
@@ -119,6 +120,7 @@ export const ShiftCloseModal: React.FC = () => {
       (denominations.qty50 || 0) * 50 +
       (denominations.qty20 || 0) * 20 +
       (denominations.qty10 || 0) * 10 +
+      (denominations.qty5 || 0) * 5 +
       (denominations.coins || 0)
     );
   }, [denominations]);
@@ -449,6 +451,8 @@ export const ShiftCloseModal: React.FC = () => {
             closedAtISO: new Date().toISOString(),
             closedShiftCount: (st.allShifts || []).length,
             fallbackCashier: cashierName,
+            closingDenominations: useDenom ? denominations : undefined,
+            openingDenominations: activeShift?.denominations,
           });
           const ok = await openNativePrint(
             `Rapport Z ${cashierName.trim() || 'Caisse'}`,
@@ -497,6 +501,8 @@ export const ShiftCloseModal: React.FC = () => {
               closedAtISO,
               closedShiftCount: preClosedCount,
               fallbackCashier: cashierName.trim() || readLockScreenCashierName(),
+              closingDenominations: useDenom ? denominations : undefined,
+              openingDenominations: shiftBefore?.denominations,
             })
           );
           showToast('Session caisse clôturée avec succès. Rapport Z imprimé.', 'success');
@@ -649,6 +655,7 @@ export const ShiftCloseModal: React.FC = () => {
                       { key: 'qty50', label: '50 DA', val: 50, color: 'text-amber-400' },
                       { key: 'qty20', label: '20 DA', val: 20, color: 'text-amber-400' },
                       { key: 'qty10', label: '10 DA', val: 10, color: 'text-amber-400' },
+                      { key: 'qty5', label: '5 DA', val: 5, color: 'text-amber-400' },
                     ].map((item) => (
                       <div
                         key={item.key}

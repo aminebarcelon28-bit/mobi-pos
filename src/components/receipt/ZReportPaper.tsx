@@ -54,6 +54,8 @@ export interface ZReportSnapshot {
    */
   blindCountPerformed?: boolean;
   dropsList?: Array<{ id: string; reason: string; amount: number }>;
+  closingDenominations?: import('../../types/pos').DenominationCount | null;
+  openingDenominations?: import('../../types/pos').DenominationCount | null;
 }
 
 function MoneyRow({ label, value, strong }: { label: string; value: string; strong?: boolean }): React.JSX.Element {
@@ -142,6 +144,22 @@ export const ZReportPaper: React.FC<{ snapshot: ZReportSnapshot }> = ({ snapshot
             <span className="font-bold whitespace-nowrap">{formatDZD(drop.amount)}</span>
           </div>
         ))}
+      </div>
+    ) : null}
+
+    {s.closingDenominations ? (
+      <div className="py-2 border-b border-dashed border-gray-400 space-y-0.5">
+        <p className="font-bold text-[10px] uppercase mb-1">Billetage de Clôture (DZD):</p>
+        {s.closingDenominations.qty2000 ? <div className="flex justify-between text-[10px]"><span>2 000 DA × {s.closingDenominations.qty2000}</span><span className="font-bold">{formatDZD(s.closingDenominations.qty2000 * 2000)}</span></div> : null}
+        {s.closingDenominations.qty1000 ? <div className="flex justify-between text-[10px]"><span>1 000 DA × {s.closingDenominations.qty1000}</span><span className="font-bold">{formatDZD(s.closingDenominations.qty1000 * 1000)}</span></div> : null}
+        {s.closingDenominations.qty500 ? <div className="flex justify-between text-[10px]"><span>500 DA × {s.closingDenominations.qty500}</span><span className="font-bold">{formatDZD(s.closingDenominations.qty500 * 500)}</span></div> : null}
+        {s.closingDenominations.qty200 ? <div className="flex justify-between text-[10px]"><span>200 DA × {s.closingDenominations.qty200}</span><span className="font-bold">{formatDZD(s.closingDenominations.qty200 * 200)}</span></div> : null}
+        {s.closingDenominations.qty100 ? <div className="flex justify-between text-[10px]"><span>100 DA × {s.closingDenominations.qty100}</span><span className="font-bold">{formatDZD(s.closingDenominations.qty100 * 100)}</span></div> : null}
+        {s.closingDenominations.qty50 ? <div className="flex justify-between text-[10px]"><span>50 DA × {s.closingDenominations.qty50}</span><span className="font-bold">{formatDZD(s.closingDenominations.qty50 * 50)}</span></div> : null}
+        {s.closingDenominations.qty20 ? <div className="flex justify-between text-[10px]"><span>20 DA × {s.closingDenominations.qty20}</span><span className="font-bold">{formatDZD(s.closingDenominations.qty20 * 20)}</span></div> : null}
+        {s.closingDenominations.qty10 ? <div className="flex justify-between text-[10px]"><span>10 DA × {s.closingDenominations.qty10}</span><span className="font-bold">{formatDZD(s.closingDenominations.qty10 * 10)}</span></div> : null}
+        {s.closingDenominations.qty5 ? <div className="flex justify-between text-[10px]"><span>5 DA × {s.closingDenominations.qty5}</span><span className="font-bold">{formatDZD(s.closingDenominations.qty5 * 5)}</span></div> : null}
+        {s.closingDenominations.coins ? <div className="flex justify-between text-[10px]"><span>Pièces Div.</span><span className="font-bold">{formatDZD(s.closingDenominations.coins)}</span></div> : null}
       </div>
     ) : null}
 

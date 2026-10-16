@@ -707,6 +707,22 @@ export function buildZReportBuffer(s: ZReportSnapshot, settings: ReceiptSettings
     b.text(pair(`Coffre: ${drop.reason}`.slice(0, cols), formatDZD(drop.amount))).newline();
   }
 
+  if (s.closingDenominations) {
+    b.bold(true).text('BILLETAGE DE CLOTURE (DZD):').newline().bold(false);
+    const cd = s.closingDenominations;
+    if (cd.qty2000) money(`2 000 DA x ${cd.qty2000}`, cd.qty2000 * 2000);
+    if (cd.qty1000) money(`1 000 DA x ${cd.qty1000}`, cd.qty1000 * 1000);
+    if (cd.qty500) money(`500 DA x ${cd.qty500}`, cd.qty500 * 500);
+    if (cd.qty200) money(`200 DA x ${cd.qty200}`, cd.qty200 * 200);
+    if (cd.qty100) money(`100 DA x ${cd.qty100}`, cd.qty100 * 100);
+    if (cd.qty50) money(`50 DA x ${cd.qty50}`, cd.qty50 * 50);
+    if (cd.qty20) money(`20 DA x ${cd.qty20}`, cd.qty20 * 20);
+    if (cd.qty10) money(`10 DA x ${cd.qty10}`, cd.qty10 * 10);
+    if (cd.qty5) money(`5 DA x ${cd.qty5}`, cd.qty5 * 5);
+    if (cd.coins) money('Pieces Div.', cd.coins);
+    b.separator('-', cols);
+  }
+
   b.align('center').newline();
   b.text('Signature Caissier: ____________________').newline();
   b.text('Signature Gerant: ____________________').newline();

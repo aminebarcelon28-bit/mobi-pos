@@ -48,6 +48,7 @@ export const ShiftOpenModal: React.FC = () => {
     qty50: 0,
     qty20: 0,
     qty10: 0,
+    qty5: 0,
     coins: 0,
   });
 
@@ -61,6 +62,7 @@ export const ShiftOpenModal: React.FC = () => {
       (denominations.qty50 || 0) * 50 +
       (denominations.qty20 || 0) * 20 +
       (denominations.qty10 || 0) * 10 +
+      (denominations.qty5 || 0) * 5 +
       (denominations.coins || 0)
     );
   }, [denominations]);
@@ -91,6 +93,7 @@ export const ShiftOpenModal: React.FC = () => {
         qty50: 0,
         qty20: 0,
         qty10: 0,
+        qty5: 0,
         coins: 0,
       });
     } else if (amount === 10000) {
@@ -103,6 +106,7 @@ export const ShiftOpenModal: React.FC = () => {
         qty50: 0,
         qty20: 0,
         qty10: 0,
+        qty5: 0,
         coins: 0,
       });
     } else if (amount === 30000) {
@@ -115,6 +119,7 @@ export const ShiftOpenModal: React.FC = () => {
         qty50: 0,
         qty20: 0,
         qty10: 0,
+        qty5: 0,
         coins: 0,
       });
     } else if (amount === 50000) {
@@ -127,6 +132,7 @@ export const ShiftOpenModal: React.FC = () => {
         qty50: 0,
         qty20: 0,
         qty10: 0,
+        qty5: 0,
         coins: 0,
       });
     }
@@ -345,6 +351,7 @@ export const ShiftOpenModal: React.FC = () => {
                     { key: 'qty50', label: '50 DA', val: 50 },
                     { key: 'qty20', label: '20 DA', val: 20 },
                     { key: 'qty10', label: '10 DA', val: 10 },
+                    { key: 'qty5', label: '5 DA', val: 5 },
                   ].map((item) => (
                     <div
                       key={item.key}

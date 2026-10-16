@@ -124,8 +124,7 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
     }
   },
 
-  // NOTE: trailing params `managerPin` and `closingDenominations` are extra vs shared type
-  closeShift: async (blindCount, closingNote, cashierName, managerPin?: string, closingDenominations?: any) => {
+  closeShift: async (blindCount, closingNote, cashierName, managerPin?: string, closingDenominations?: DenominationCount) => {
     const { activeShift, logSecurityAction } = get();
     try {
       const closedSession = await (await getSqlite()).closeShift(

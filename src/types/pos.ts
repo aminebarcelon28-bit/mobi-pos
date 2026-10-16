@@ -1661,6 +1661,7 @@ export interface DenominationCount {
   qty50: number;
   qty20: number;
   qty10: number;
+  qty5?: number;
   coins: number;
 }
 

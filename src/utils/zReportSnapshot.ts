@@ -1,5 +1,6 @@
 import type {
   CustomerDebtEntry,
+  DenominationCount,
   ReceiptSettings,
   RepairOrder,
   SaleTransaction,
@@ -37,10 +38,13 @@ export interface PayoutLike {
 export interface ZSnapshotShift {
   id?: string;
   openedAt?: string | null;
+  closedAt?: string | null;
   openingFloat: number;
   openedBy?: string;
   cashierName?: string;
   movements?: Array<{ type?: string; amount?: number; reason?: string }>;
+  denominations?: DenominationCount | null;
+  closingDenominations?: DenominationCount | null;
 }
 
 export interface BuildZSnapshotArgs {
@@ -71,6 +75,8 @@ export interface BuildZSnapshotArgs {
   closedShiftCount: number;
   /** Lock-screen cashier ultimate fallback (never blank output). */
   fallbackCashier?: string;
+  closingDenominations?: DenominationCount | null;
+  openingDenominations?: DenominationCount | null;
 }
 
 /**
@@ -82,14 +88,17 @@ export interface BuildZSnapshotArgs {
  */
 export function buildZSnapshot(a: BuildZSnapshotArgs): ZReportSnapshot {
   const openedAt = a.shift?.openedAt ?? null;
+  const closedAt = a.shift?.closedAt ?? a.closedAtISO ?? null;
   const inShiftWindow = (iso: string | undefined): boolean => {
     if (!openedAt) return true;
     if (!iso) return true;
-    return iso >= openedAt;
+    if (iso < openedAt) return false;
+    if (closedAt && iso > closedAt) return false;
+    return true;
   };
   const safeTransactions = a.transactions || [];
   const shiftTxns = openedAt
-    ? safeTransactions.filter((t) => isTxInCloseScope(t, { id: a.shift?.id, openedAt }))
+    ? safeTransactions.filter((t) => isTxInCloseScope(t, { id: a.shift?.id, openedAt, closedAt }, a.closedAtISO))
     : safeTransactions;
 
   const totalCashSales = cashSalesFromTxns(shiftTxns);
@@ -186,6 +195,8 @@ export function buildZSnapshot(a: BuildZSnapshotArgs): ZReportSnapshot {
     dropsList: (a.cashDrops || [])
         .filter((d) => inShiftWindow(d.timestamp))
         .map((d) => ({ id: d.id, reason: d.reason, amount: d.amount })),
+    closingDenominations: a.closingDenominations ?? a.shift?.closingDenominations ?? null,
+    openingDenominations: a.openingDenominations ?? a.shift?.denominations ?? null,
   };
 }
 

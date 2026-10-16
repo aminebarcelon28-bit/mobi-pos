@@ -189,7 +189,9 @@ export interface ShiftSlice {
   closeShift: (
     blindCount: number,
     closingNote?: string,
-    cashierName?: string
+    cashierName?: string,
+    managerPin?: string,
+    closingDenominations?: DenominationCount
   ) => Promise<{ success: boolean; session?: CashSession; reason?: string }>;
   fetchActiveShift: () => Promise<void>;
   fetchInventoryValuation: () => Promise<void>;
