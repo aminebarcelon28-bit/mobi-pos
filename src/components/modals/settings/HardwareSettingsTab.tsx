@@ -1,12 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  Cpu, Printer, Barcode, Monitor, HardDrive, Zap, RefreshCcw, CheckCircle2,
-  AlertTriangle, XCircle, Clock, Usb, Bluetooth, Wifi, Radio, Server,
-  Sparkles, Tag, Layers, ChevronDown, ChevronUp, Music
+  Cpu, Printer, Monitor, Zap, RefreshCcw, CheckCircle2,
+  AlertTriangle, Usb, Bluetooth, Wifi, Radio, Server,
+  Tag, Layers, Music
 } from 'lucide-react';
 import type { ReceiptSettings, DiscoveredDevice, PrinterRoutingConfig } from '../../../types/pos';
-import { scanHardwareDevices, openCashDrawer, updateCustomerDisplayVfd } from '../../../api/hardware';
-import { directPrintRawReceipt } from '../../../utils/escpos';
+import { scanHardwareDevices, openCashDrawer, updateCustomerDisplayVfd, printRawEscpos } from '../../../api/hardware';
 import { soundEngine } from '../../../utils/audioFeedback';
 import { useToast } from '../../ui/Toast';
 
@@ -40,6 +39,7 @@ export const HardwareSettingsTab: React.FC<HardwareSettingsTabProps> = ({
   // Scanner test input
   const [scannerTestInput, setScannerTestInput] = useState<string>('');
   const [scannerLog, setScannerLog] = useState<Array<{ barcode: string; time: string }>>([]);
+  void scannerTestInput; void setScannerTestInput; void scannerLog; void setScannerLog;
 
   const currentRouting: PrinterRoutingConfig = receiptDraft.printerRouting || {
     receiptPrinterId: 'default',
@@ -117,7 +117,7 @@ export const HardwareSettingsTab: React.FC<HardwareSettingsTabProps> = ({
       const printer = currentRouting.receiptPrinterName || receiptDraft.printerName || 'default';
       const sampleText = `\n================================\n   ${receiptDraft.storeName || 'MOBI-POS'}\n   TEST D'IMPRESSION RECU\n================================\nDate: ${new Date().toLocaleString('fr-FR')}\nImprimante: ${printer}\nFormat: ${receiptDraft.paperWidth || '80mm'}\nStatut: OPERATIONNEL\n\n\n\n\n`;
       const encoder = new TextEncoder();
-      await directPrintRawReceipt(encoder.encode(sampleText));
+      await printRawEscpos(printer, encoder.encode(sampleText));
       showToast(`Page de test envoyée à l'imprimante reçu (${printer}).`, 'success');
     } catch (err) {
       console.error('[Test Print Error]', err);

@@ -69,6 +69,7 @@ import type {
   WarrantySnapshot,
   WarrantyTier,
   Product,
+  Customer,
   RepairPartUsage,
 } from '../../types/pos';
 import type { SaleTransaction } from '../../types/pos';
@@ -699,60 +700,68 @@ export const RepairWorkOrderModal: React.FC = () => {
     try {
       const { newId, newReceiptNumber } = await import('../../utils/ids');
       const { sqliteAdapter } = await import('../../db/sqliteAdapter');
-      const { dexieDb } = await import('../../db/database');
       const nowIso = new Date().toISOString();
       const txnId = newId('TXN-SAV');
-      const receiptNumber = newReceiptNumber();
+      const receiptNumber = newReceiptNumber('SAV');
       const partsCost = Math.max(0, Number(order.partsCost) || 0);
       const totalCost = Math.max(0, Number(order.totalCost) || 0);
 
       const savTxn: SaleTransaction = {
         id: txnId,
         receiptNumber,
+        customer: order.customerName
+          ? ({
+              id: `cust-${order.id}`,
+              name: order.customerName,
+              phone: order.customerPhone || '',
+              email: '',
+              registeredDevice: '',
+              loyaltyPoints: 0,
+              storeCredit: 0,
+              pricingTier: 'Retail',
+            } as Customer)
+          : null,
         items: [
           {
             product: {
               id: `sav-${order.id}`,
               sku: order.ticketNumber || `SAV-${order.id.slice(0, 8)}`,
-              title: `Réparation ${order.deviceModel} — ${order.problemDescription || order.issueDescription || order.ticketNumber}`,
+              barcode: order.ticketNumber || `SAV-${order.id.slice(0, 8)}`,
+              title: `Réparation ${order.deviceModel} — ${order.problemDescription || order.ticketNumber}`,
               price: totalCost,
               costPrice: partsCost,
               category: 'Services',
+              brand: 'Autre',
+              compatibleModel: order.deviceModel || '',
+              wholesalePrice: totalCost,
+              leadTimeDays: 0,
+              dailySalesVelocity: 0,
+              reorderPoint: 0,
+              vendorName: 'Atelier SAV',
               stock: 1,
-              minStockAlert: 0,
-              isFavorite: false,
-              createdAt: nowIso,
-              updatedAt: nowIso,
             },
             quantity: 1,
             appliedPrice: totalCost,
-            unitCostAtSale: partsCost,
             discount: 0,
           },
         ],
         subtotal: totalCost,
-        discount: 0,
-        tax: 0,
+        discountTotal: 0,
         total: totalCost,
+        costTotal: partsCost,
+        profit: totalCost - partsCost,
+        profitMargin: totalCost > 0 ? ((totalCost - partsCost) / totalCost) * 100 : 0,
+        pricingTier: 'Retail',
         paymentMethod: 'Autre',
-        payments: [
-          {
-            id: newId('PAY'),
-            method: 'Autre',
-            amount: totalCost,
-            details: `Acompte SAV ${order.ticketNumber} (100% réglé à l'intake)`,
-          },
-        ],
-        status: 'completed',
-        customerName: order.customerName,
-        customerPhone: order.customerPhone,
+        cashTendered: 0,
+        changeDue: 0,
+        status: 'COMPLETED',
         shiftId: activeShift?.id || 'SHIFT-AUTONOMOUS',
         cashierName: activeCashier?.name || activeShift?.cashierName || 'Technicien',
         createdAt: nowIso,
       };
 
-      await sqliteAdapter.saveTransaction(savTxn);
-      await dexieDb.transactions.put(savTxn);
+      await sqliteAdapter.processSaleTransactionAtomic(savTxn, []);
       usePosStore.setState((s) => ({
         transactions: [savTxn, ...s.transactions],
       }));

@@ -1,6 +1,6 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, ShiftSlice } from '../types';
-import type { CashDropEntry, CashSession } from '../../types/pos';
+import type { CashDropEntry, CashSession, DenominationCount } from '../../types/pos';
 import { audioBus } from '../../utils/audioEvents';
 import { newId } from '../../utils/ids';
 
@@ -241,9 +241,7 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
       const enrichedShift = {
         ...activeShift,
         expectedCash: zSnap.expectedCash,
-        totalSalesCount: zSnap.salesCount,
-        totalSalesRevenue: zSnap.grossSales,
-        totalProfits: zSnap.marginTotal,
+        totalSalesRevenue: zSnap.netSales,
         savDeposits: zSnap.savDeposits,
         savSettled: zSnap.savSettled,
       };
@@ -252,7 +250,7 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
       const success = await directPrintXReport(enrichedShift, receiptSettings);
       logSecurityAction(
         'Impression Rapport X (Mid-Shift)',
-        `Session: ${activeShift.id} • Caissier: ${activeShift.cashierName} • Espèces Théoriques: ${liveExpectedCash} DA`,
+        `Session: ${activeShift.id} • Caissier: ${activeShift.cashierName} • Espèces Théoriques: ${zSnap.expectedCash} DA`,
         activeShift.cashierName || 'Caissier Principal',
         false
       );

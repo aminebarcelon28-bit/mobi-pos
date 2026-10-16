@@ -63,6 +63,7 @@ export type ActiveModalType =
   | 'hotkey_guide'
   | 'customer_display'
   | 'credit_voucher'
+  | 'voucher'
   | 'product_matrix'
   | 'loyalty_card'
   | 'refund'
@@ -82,6 +83,9 @@ export type ActiveModalType =
 export interface CartSlice {
   cart: CartItem[];
   storeCreditApplied: number;
+  voucherCreditApplied?: number;
+  voucherCode?: string | null;
+  clearVoucherCredit?: () => void;
   heldSales: HeldSale[];
 
   addToCart: (product: Product, overridePin?: boolean, quantity?: number, isReturn?: boolean) => { success: boolean; reason?: string };

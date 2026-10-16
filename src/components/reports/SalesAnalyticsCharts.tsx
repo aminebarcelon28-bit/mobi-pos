@@ -5,7 +5,7 @@ import { formatDZD } from '../../types/pos';
 import { toLocalDayKey, todayLocalKey } from '../../utils/dateUtils';
 import { computeSalesMetrics, netFromTransaction, isExchangeSaleTx } from '../../utils/receiptMath';
 import { useAllocationCogs } from '../../hooks/useAllocationCogs';
-import { TrendingUp, Activity, PieChart, Package, Award } from 'lucide-react';
+import { TrendingUp, Activity, PieChart, Award } from 'lucide-react';
 
 export interface SalesAnalyticsChartsProps {
   dateRangeFilter?: 'all' | 'today' | '7days' | '30days';
@@ -253,7 +253,7 @@ export const SalesAnalyticsCharts: React.FC<SalesAnalyticsChartsProps> = ({
             : avgUnitCost ?? (it.product?.costPrice ?? 0);
         const lineCogs = frozenUnitCost * signedQty;
 
-        const prodId = it.product?.id || it.productId || it.product?.title || 'Unknown';
+        const prodId = it.product?.id || it.product?.title || 'Unknown';
         const title = it.product?.title || 'Article';
         const category = it.product?.category || 'Divers';
 

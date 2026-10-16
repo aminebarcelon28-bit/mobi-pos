@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Sun, Moon, CheckCircle2, Store, FileText, CreditCard,
+  Sun, Moon, CheckCircle2, Store, CreditCard,
   Building, MapPin, Phone, Mail, Hash, ShieldCheck, Printer, Zap
 } from 'lucide-react';
 import type { ReceiptSettings } from '../../../types/pos';

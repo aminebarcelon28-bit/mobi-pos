@@ -155,7 +155,7 @@ export const VoucherModal: React.FC = () => {
       try {
         await logCashMovement(
           amount,
-          'DEPOSIT',
+          'MANUAL_DEPOSIT',
           `Encaissement pour émission bon d'avoir: ${customerName.trim() || 'Client sans nom'}`
         );
       } catch (e) {

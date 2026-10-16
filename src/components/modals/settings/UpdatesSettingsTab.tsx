@@ -9,8 +9,9 @@ import {
   Clock,
   Smartphone,
 } from 'lucide-react';
-import { useAppUpdater, APP_VERSION } from '../../../hooks/useAppUpdater';
-import { soundEngine } from '../../../utils/soundEngine';
+import { useAppUpdater } from '../../../hooks/useAppUpdater';
+import { APP_VERSION } from '../../../types/pos';
+import { soundEngine } from '../../../utils/audioFeedback';
 
 interface UpdatesSettingsTabProps {
   showToast: (msg: string, type?: 'success' | 'error' | 'info' | 'warning', duration?: number) => void;
@@ -23,7 +24,7 @@ export const UpdatesSettingsTab: React.FC<UpdatesSettingsTabProps> = ({ showToas
     soundEngine.playKeyBeep?.();
     showToast('Recherche des mises à jour en cours...', 'info', 2000);
     const res = await updater.checkForUpdates(true);
-    if (!res?.shouldUpdate) {
+    if (!res?.hasUpdate) {
       showToast('Votre système est déjà à jour (dernière version stable).', 'success');
     }
   };

@@ -124,9 +124,15 @@ export const BarcodeStagingModal: React.FC<BarcodeStagingModalProps> = ({
           sku: item.barcode,
           price: item.sellingPrice,
           category: 'Tous les produits',
-          brand: '',
+          brand: 'Autre',
+          compatibleModel: '',
+          wholesalePrice: item.sellingPrice,
           costPrice: item.unitCost || 0,
           stock: item.quantity,
+          vendorName: 'Fournisseur',
+          leadTimeDays: 0,
+          dailySalesVelocity: 0,
+          reorderPoint: 0,
         };
 
         await directPrintProductLabels(

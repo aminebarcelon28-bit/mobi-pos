@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 
 const foldForSearch = (s: string | undefined | null): string =>
   (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -173,7 +173,7 @@ export const RefundModal: React.FC = () => {
       }
     }
     txn.items.forEach((item, idx) => {
-      const itemKey = item.id || `${item.product.id}_${idx}`;
+      const itemKey = `${item.product.id}_${idx}`;
       const remaining = Math.max(0, item.quantity - (alreadyRefunded.get(item.product.id) || 0));
       initialSelected[itemKey] = remaining > 0;
       initialQty[itemKey] = remaining;
@@ -258,7 +258,7 @@ export const RefundModal: React.FC = () => {
   const activeRefundItems: RefundItem[] = selectedTxn
     ? (selectedTxn.items || [])
         .map((item, lineIdx) => {
-          const itemKey = item.id || `${item.product.id}_${lineIdx}`;
+          const itemKey = `${item.product.id}_${lineIdx}`;
           return { item, lineIdx, itemKey };
         })
         .filter(({ itemKey }) => selectedItemIds[itemKey])
@@ -667,7 +667,7 @@ export const RefundModal: React.FC = () => {
                     {/* Mobile Card List View (<sm) */}
                     <div className="sm:hidden divide-y divide-pos-border/40">
                       {(selectedTxn.items || []).map((item, idx) => {
-                        const itemKey = item.id || `${item.product.id}_${idx}`;
+                        const itemKey = `${item.product.id}_${idx}`;
                         const isChecked = Boolean(selectedItemIds[itemKey]);
                         const isRestocked = Boolean(restockMap[itemKey]);
                         const qty = refundQuantities[itemKey] || item.quantity;
@@ -776,7 +776,7 @@ export const RefundModal: React.FC = () => {
                       </thead>
                       <tbody className="divide-y divide-pos-border/40">
                         {(selectedTxn.items || []).map((item, idx) => {
-                          const itemKey = item.id || `${item.product.id}_${idx}`;
+                          const itemKey = `${item.product.id}_${idx}`;
                           const isChecked = Boolean(selectedItemIds[itemKey]);
                           const isRestocked = Boolean(restockMap[itemKey]);
                           const qty = refundQuantities[itemKey] || item.quantity;

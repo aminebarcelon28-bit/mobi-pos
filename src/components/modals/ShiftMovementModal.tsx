@@ -57,10 +57,10 @@ export const ShiftMovementModal: React.FC = () => {
       if (type === 'EXPENSE' && linkStoreExpense) {
         await addStoreExpense({
           title: reason.trim(),
-          category: expenseCategory,
+          category: (expenseCategory as import('../../types/pos').ExpenseCategory) || 'Autre Frais',
           amount: validAmount,
           paymentMethod: 'Espèces',
-          recordedBy: cashierName.trim() || undefined,
+          recordedBy: cashierName.trim() || 'Caisse',
         });
         showToast(
           `Dépense de ${formatDZD(validAmount)} enregistrée et déduite de la caisse.`,

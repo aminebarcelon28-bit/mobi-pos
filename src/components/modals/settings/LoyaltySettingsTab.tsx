@@ -11,7 +11,8 @@ import {
   Plus,
 } from 'lucide-react';
 import { MoneyInput } from '../../ui/MoneyInput';
-import { dinarsToMinor, toLegacyReal, formatDZD } from '../../../utils/currency';
+import { dinarsToMinor, toLegacyReal } from '../../../utils/money';
+import { formatDZD } from '../../../types/pos';
 import {
   normalizeLoyaltyConfig,
   calculateFinancialProfitImpact,

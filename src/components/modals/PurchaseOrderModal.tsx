@@ -240,7 +240,8 @@ export const PurchaseOrderModal: React.FC = () => {
         title: `Règlement Fournisseur : ${po.vendorName} (Bon #${po.poNumber})`,
         amount,
         paymentMethod: 'Espèces',
-        receiptNumber: po.poNumber,
+        paidTo: po.vendorName,
+        recordedBy: 'Admin / Approvisionnement',
         notes: `Règlement dette fournisseur suite réception crédit (Bon #${po.poNumber})`,
       });
 
@@ -248,8 +249,8 @@ export const PurchaseOrderModal: React.FC = () => {
         ...po,
         expenseRecorded: true,
       };
-      const { getSqlite } = await import('../../db/sqlPluginAdapter');
-      await (await getSqlite()).savePurchaseOrder(updatedPO);
+      const { operationsAdapter } = await import('../../db/adapters/operationsAdapter');
+      await operationsAdapter.savePurchaseOrder(updatedPO);
 
       usePosStore.setState((state) => ({
         purchaseOrders: state.purchaseOrders.map((p) => (p.id === po.id ? updatedPO : p)),

@@ -379,8 +379,6 @@ export const ProductEditorModal: React.FC = () => {
           volumeDiscounts: [],
         });
       }
-      setCategoryDiscounts({});
-      setValidationErrors({});
     }
   }
 

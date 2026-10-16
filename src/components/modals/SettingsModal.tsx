@@ -24,6 +24,7 @@ import { DiagnosticsSettingsTab } from './settings/DiagnosticsSettingsTab';
 import { LoyaltySettingsTab } from './settings/LoyaltySettingsTab';
 import { BackupSettingsTab } from './settings/BackupSettingsTab';
 import { UpdatesSettingsTab } from './settings/UpdatesSettingsTab';
+import type { ReceiptSettings } from '../../types/pos';
 
 export type SettingsTab =
   | 'appearance'
@@ -48,11 +49,19 @@ export const SettingsModal: React.FC = () => {
   } = usePosStore();
 
   const { showToast } = useToast();
+  const safeShowToast = (msg: string, type: 'success' | 'error' | 'info' | 'warning' = 'info', duration?: number) => {
+    showToast(msg, type, duration);
+  };
   const _canAccessJournal = canSeeJournalLauncher(activeCashier?.role);
+  void _canAccessJournal;
   void verifyManagerGate;
   void verifyUserGate;
   const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
   const tabStripRef = useRef<HTMLDivElement>(null);
+
+  const scheduleReceiptSave = (next: ReceiptSettings) => {
+    setReceiptSettings(next);
+  };
 
   // Keyboard shortcut listener for Escape & F12 to close
   useEffect(() => {
@@ -165,28 +174,23 @@ export const SettingsModal: React.FC = () => {
         <div className="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-6">
           {activeTab === 'appearance' && (
             <GeneralSettingsTab
-              theme={themeMode}
-              setTheme={(t) => {
-                if (themeMode !== t) toggleTheme();
-              }}
-              receiptSettings={receiptSettings}
-              onSave={setReceiptSettings}
-              showToast={showToast}
+              themeMode={themeMode}
+              toggleTheme={toggleTheme}
+              receiptDraft={receiptSettings}
+              scheduleReceiptSave={scheduleReceiptSave}
             />
           )}
 
           {activeTab === 'hardware' && (
             <HardwareSettingsTab
-              receiptSettings={receiptSettings}
-              onSave={setReceiptSettings}
-              showToast={showToast}
+              receiptDraft={receiptSettings}
+              scheduleReceiptSave={scheduleReceiptSave}
             />
           )}
 
           {activeTab === 'security' && (
             <SecuritySettingsTab
               managerKdfLabel={managerKdfLabel}
-              showToast={showToast}
             />
           )}
 
@@ -200,18 +204,18 @@ export const SettingsModal: React.FC = () => {
             <LoyaltySettingsTab
               receiptSettings={receiptSettings}
               onSave={setReceiptSettings}
-              showToast={showToast}
+              showToast={safeShowToast}
             />
           )}
 
           {activeTab === 'backup' && (
             <BackupSettingsTab
-              showToast={showToast}
+              showToast={safeShowToast}
               openSecurityTab={() => setActiveTab('security')}
             />
           )}
 
-          {activeTab === 'updates' && <UpdatesSettingsTab showToast={showToast} />}
+          {activeTab === 'updates' && <UpdatesSettingsTab showToast={safeShowToast} />}
         </div>
 
         {/* ═══ Footer ═══ */}

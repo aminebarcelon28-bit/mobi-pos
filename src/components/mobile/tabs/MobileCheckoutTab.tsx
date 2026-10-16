@@ -974,7 +974,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                       <button
                         type="button"
                         onClick={() => {
-                          usePosStore.setState({ voucherCreditApplied: 0, voucherCode: null } as unknown as Partial<typeof usePosStore>);
+                          usePosStore.getState().clearVoucherCredit?.() ?? usePosStore.setState({ voucherCreditApplied: 0, voucherCode: null });
                         }}
                         className="px-2 py-1 rounded-lg bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30 text-[10.5px] font-bold flex items-center gap-1 cursor-pointer"
                       >
@@ -984,7 +984,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                     ) : (
                       <button
                         type="button"
-                        onClick={() => openModal('voucher')}
+                        onClick={() => openModal('credit_voucher')}
                         className="px-2 py-1 rounded-lg bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20 text-[10.5px] font-bold flex items-center gap-1 cursor-pointer"
                       >
                         <Tag className="w-3 h-3" />

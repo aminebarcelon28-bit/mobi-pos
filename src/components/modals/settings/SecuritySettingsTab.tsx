@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   Shield, ShieldCheck, ShieldAlert, Lock, Users, UserPlus,
-  Edit3, Trash2, Eye, EyeOff, User, Check
+  Edit3, Trash2, Eye, EyeOff
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
 import { useToast } from '../../ui/Toast';

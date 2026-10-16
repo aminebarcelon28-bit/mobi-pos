@@ -5,17 +5,14 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
-  Activity,
-  ShieldCheck,
   Database,
   Cloud,
   Printer,
   Shield,
-  Layers,
 } from 'lucide-react';
 import { maintenanceService } from '../../../services/maintenanceService';
 import { scanHardwareDevices, type DiscoveredDevice } from '../../../api/hardware';
-import { getGateState } from '../../../utils/pinGate';
+import { checkPinLockout } from '../../../utils/security';
 import { getPendingOutbox } from '../../../db/sqlPluginAdapter';
 import type { ReceiptSettings } from '../../../types/pos';
 
@@ -51,6 +48,7 @@ export const DiagnosticsSettingsTab: React.FC<DiagnosticsSettingsTabProps> = ({ 
   const runAllDiagnostics = useCallback(async () => {
     setIsRunning(true);
     const startOverall = performance.now();
+    void startOverall;
     const results: DiagnosticItem[] = [];
 
     // 1. SQLite Database Integrity Probe
@@ -221,15 +219,15 @@ export const DiagnosticsSettingsTab: React.FC<DiagnosticsSettingsTabProps> = ({ 
     // 5. Manager Security & Lockout Gate Probe
     const tSec = performance.now();
     try {
-      const gateState = await getGateState();
+      const gateState = checkPinLockout();
       const secDuration = Math.round(performance.now() - tSec);
 
-      if (gateState.locked) {
+      if (gateState.isLocked) {
         results.push({
           id: 'diag-sec',
           category: 'security',
           name: 'Contrôleur de Sécurité & PIN',
-          description: `Système verrouillé suite à plusieurs tentatives erronées (${Math.ceil(gateState.remainingMs / 1000)}s restantes)`,
+          description: `Système verrouillé suite à plusieurs tentatives erronées (${gateState.remainingSeconds}s restantes)`,
           status: 'fail',
           message: 'Verrouillage Actif',
           durationMs: secDuration,
@@ -412,7 +410,6 @@ export const DiagnosticsSettingsTab: React.FC<DiagnosticsSettingsTabProps> = ({ 
         {diagnostics.map((d) => {
           const isPass = d.status === 'pass';
           const isFail = d.status === 'fail';
-          const isWarn = d.status === 'warning';
 
           const icon = isPass ? (
             <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />

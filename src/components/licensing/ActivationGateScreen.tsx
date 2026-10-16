@@ -83,7 +83,7 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const [hwid, setHwid] = useState<HardwareFingerprintResult | null>(null);
-  const [deviceType] = useState<'desktop' | 'mobile'>(() => getDetailedPlatform().roleHint);
+  const [deviceType, setDeviceType] = useState<'desktop' | 'mobile'>(() => getDetailedPlatform().roleHint);
   const [platformInfo] = useState<DevicePlatformDetails>(() => getDetailedPlatform());
   const [copiedHwid, setCopiedHwid] = useState(false);
   const [copiedPasteSuccess, setCopiedPasteSuccess] = useState(false);

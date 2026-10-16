@@ -12,8 +12,6 @@ import {
   AlertTriangle,
   Download,
   Upload,
-  Lock,
-  Layers,
   FileCheck,
   Trash2,
   KeyRound,
@@ -29,11 +27,10 @@ import {
   listDatabaseBackups,
   pruneSnapshots,
   decryptSnapshotForRecovery,
-  type DatabaseBackupMeta,
 } from '../../../api/backup';
 import { verifyManagerGate } from '../../../utils/pinGate';
 import { usePosStore } from '../../../store/usePosStore';
-import { PinDialog } from '../../PinDialog';
+import { PinDialog } from '../../ui/PinDialog';
 
 interface BackupSettingsTabProps {
   showToast: (msg: string, type?: 'success' | 'error' | 'info' | 'warning', duration?: number) => void;
@@ -44,6 +41,7 @@ export const BackupSettingsTab: React.FC<BackupSettingsTabProps> = ({
   showToast,
   openSecurityTab,
 }) => {
+  void openSecurityTab;
   const { exportDatabase, importDatabase, logSecurityAction, activeCashier } = usePosStore();
 
   const [dbStats, setDbStats] = useState<DbStats | null>(null);

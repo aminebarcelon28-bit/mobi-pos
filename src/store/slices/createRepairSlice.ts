@@ -120,7 +120,7 @@ async function consumeSparePartsInventory(
     const deltas = unconsumed.map((p) => ({
       productId: p.productId,
       delta: -Math.abs(Number(p.quantity) || 1),
-      reason: 'SAV_PARTS',
+      reason: 'ADJUST' as const,
       refType: 'REPAIR_ORDER',
       refId: order.id,
     }));
@@ -177,7 +177,7 @@ async function restoreSparePartsInventory(
     const deltas = consumed.map((p) => ({
       productId: p.productId,
       delta: Math.abs(Number(p.quantity) || 1),
-      reason: 'SAV_PARTS_RESTORE',
+      reason: 'ADJUST' as const,
       refType: 'REPAIR_ORDER',
       refId: order.id,
     }));
@@ -398,10 +398,11 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
             const idx = updated.findIndex((r) => r.id === orderId);
             if (idx !== -1) updated[idx] = orderWithRestoredParts;
           }
-          if (target.depositAmount > 0 && get().activeShift) {
+          const depAmt = Number(target.depositAmount || 0);
+          if (depAmt > 0 && get().activeShift) {
             await get().logCashMovement(
-              target.depositAmount,
-              'MANUAL_WITHDRAWAL',
+              depAmt,
+              'EXPENSE',
               `Remboursement Acompte SAV Annulé: Ticket #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`
             );
           }
@@ -469,7 +470,7 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
 
         // Track deposit changes in cash movements
         if (targetBefore && updates.depositAmount !== undefined) {
-          const delta = target.depositAmount - targetBefore.depositAmount;
+          const delta = Number(target.depositAmount || 0) - Number(targetBefore.depositAmount || 0);
           if (delta !== 0 && get().activeShift) {
             if (delta > 0) {
               await get().logCashMovement(
@@ -480,7 +481,7 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
             } else {
               await get().logCashMovement(
                 Math.abs(delta),
-                'MANUAL_WITHDRAWAL',
+                'EXPENSE',
                 `Remboursement Partiel Acompte SAV: Ticket #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`
               );
             }

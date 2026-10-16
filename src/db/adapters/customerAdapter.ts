@@ -234,7 +234,8 @@ export const customerAdapter = {
               } catch {}
             }
             const cust: Customer = {
-              email: r.email ? String(r.email) : base.email,
+              email: String(r.email || base.email || ''),
+              registeredDevice: String(r.registered_device || base.registeredDevice || ''),
               pointBuckets: Array.isArray(base.pointBuckets) ? base.pointBuckets : undefined,
               ledger: Array.isArray(base.ledger) ? base.ledger : undefined,
               ...base,
@@ -245,8 +246,8 @@ export const customerAdapter = {
               storeCredit: Number(r.store_credit ?? base.storeCredit ?? 0),
               pricingTier: (r.pricing_tier as Customer['pricingTier']) || base.pricingTier || 'Retail',
               totalSpent: Number(r.total_spent ?? base.totalSpent ?? 0),
-              version: Number(r.version ?? base.version ?? 1),
             };
+            (cust as unknown as { version?: number }).version = Number(r.version ?? (base as unknown as { version?: number }).version ?? 1);
             loaded.push(cust);
           }
           if (loaded.length > 0) {

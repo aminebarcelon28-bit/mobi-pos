@@ -14,8 +14,6 @@ import {
   exchangeCashOutFromMovements,
   standaloneDepositsFromMovements,
   standaloneExpensesFromMovements,
-  savDepositsFromRepairs,
-  savSettledFromTxns,
   zTicketNumber,
   DRAWER_REASON_PREFIXES,
 } from '../../utils/cashTerms';

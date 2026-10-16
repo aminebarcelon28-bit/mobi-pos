@@ -1,7 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
-import { getProductPriceForTier } from '../../utils/pricingEngine';
 import { computeCartTotals } from '../../utils/receiptMath';
 import { X, MonitorPlay } from 'lucide-react';
 

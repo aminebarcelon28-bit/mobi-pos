@@ -220,6 +220,8 @@ export const ShiftCloseModal: React.FC = () => {
       )
       .reduce((sum, m) => sum + m.amount, 0);
   }, [activeShift?.movements]);
+  void _tradeInCashOut;
+  void _soulteCashOut;
 
   const operatingExpenses = useMemo(() => {
     return (activeShift?.movements || [])
@@ -446,7 +448,7 @@ export const ShiftCloseModal: React.FC = () => {
             `Rapport Z ${cashierName.trim() || 'Caisse'}`,
             zReportText({
               storeName: zSnap.storeName,
-              cashierName: zSnap.cashierName,
+              cashierName: zSnap.responsibleName || cashierName,
               dateStr: new Date().toLocaleString('fr-DZ'),
               openingFloat: zSnap.openingFloat,
               cashSales: zSnap.cashSales,

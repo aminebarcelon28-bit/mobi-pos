@@ -32,7 +32,17 @@ export async function updateCustomerDisplayVfd(
   );
 }
 
-export async function scanHardwareDevices<T = unknown>(): Promise<T[]> {
+export interface DiscoveredDevice {
+  id?: string;
+  name?: string;
+  type?: string;
+  address?: string;
+  vendorId?: number;
+  productId?: number;
+  status?: string;
+}
+
+export async function scanHardwareDevices<T = DiscoveredDevice>(): Promise<T[]> {
   const list = await invokeCommand<T[]>('hardware_scan_devices', undefined, 'HARDWARE_ERROR');
   return list || [];
 }

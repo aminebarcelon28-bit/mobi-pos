@@ -788,7 +788,6 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
         await mirrorStockBatchesToDexie(db, productIds);
 
         const { dexieDb } = await import('../db/database');
-        const nowIso = new Date().toISOString();
         for (const item of lines) {
           if (!item.selected_product_id) continue;
           const p = products.find((x) => x.id === item.selected_product_id);
@@ -801,7 +800,6 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
           await dexieDb.products.update(item.selected_product_id, {
             stock: newStock,
             costPrice: newCost,
-            updatedAt: nowIso,
           });
         }
         const allProducts = await dexieDb.products.toArray();
