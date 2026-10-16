@@ -13,7 +13,7 @@
 import Database from '@tauri-apps/plugin-sql';
 import { recordShadowEvent, initClock } from '../sync/eventInterceptor.ts';
 import { backfillExistingProducts } from '../sync/snapshotBackfill.ts';
-import type { Product } from '../types/pos';
+import type { HeldSale, Product } from '../types/pos';
 import { newId } from '../utils/ids';
 import { toLocalDayKey } from '../utils/dateUtils';
 import { withWriteLock } from './writeMutex';

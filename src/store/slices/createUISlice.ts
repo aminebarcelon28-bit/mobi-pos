@@ -872,9 +872,13 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         ? tradeInput.barcode.trim()
         : generateUniqueEan13Barcode(products, '613');
 
+      // Hoisted so the callback below sees a narrowed `string` — narrowing does
+      // not survive into closures on mutable properties, and sanitizeDzPhone
+      // takes `string`. Same value, same guard: no behavior change.
+      const tradeInCustomerPhone = tradeInput.customerPhone;
       const candidateCustomerId = tradeInput.customerId ||
         get().currentCustomer?.id ||
-        (tradeInput.customerPhone ? get().customers.find(c => c.phone && (c.phone === tradeInput.customerPhone || sanitizeDzPhone(c.phone) === sanitizeDzPhone(tradeInput.customerPhone)))?.id : undefined);
+        (tradeInCustomerPhone ? get().customers.find(c => c.phone && (c.phone === tradeInCustomerPhone || sanitizeDzPhone(c.phone) === sanitizeDzPhone(tradeInCustomerPhone)))?.id : undefined);
 
       const newTradeIn: TradeInItem = {
         ...tradeInput,

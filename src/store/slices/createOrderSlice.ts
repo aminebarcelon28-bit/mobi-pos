@@ -2986,7 +2986,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             quantity: item.quantity,
             unitCost: origItem?.unitCostAtSale ?? origItem?.product?.costPrice ?? 0,
             reason: refundReason,
-            saleId: origTxn.id,
+            saleId: originalTransaction.id,
             refundId: refundTxnId,
           });
         }

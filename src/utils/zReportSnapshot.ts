@@ -1,4 +1,5 @@
 import type {
+  CashMovement,
   CustomerDebtEntry,
   DenominationCount,
   ReceiptSettings,
@@ -42,7 +43,7 @@ export interface ZSnapshotShift {
   openingFloat: number;
   openedBy?: string;
   cashierName?: string;
-  movements?: Array<{ type?: string; amount?: number; reason?: string }>;
+  movements?: CashMovement[];
   denominations?: DenominationCount | null;
   closingDenominations?: DenominationCount | null;
 }
