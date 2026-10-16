@@ -81,6 +81,23 @@ export const VoucherModal: React.FC = () => {
 
   useEffect(() => { if (activeModal !== 'credit_voucher') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
+  useEffect(() => {
+    if (activeModal !== 'credit_voucher') return;
+
+    const handleVoucherScanned = (e: Event) => {
+      const customEvent = e as CustomEvent<{ code: string }>;
+      const code = customEvent.detail?.code?.trim();
+      if (!code) return;
+
+      setActiveTab('list');
+      setSearchQuery(code);
+      showToast(`Bon d'achat scanné : ${code}`, 'success');
+    };
+
+    window.addEventListener('pos:voucher-scanned', handleVoucherScanned);
+    return () => window.removeEventListener('pos:voucher-scanned', handleVoucherScanned);
+  }, [activeModal, showToast]);
+
   if (activeModal !== 'credit_voucher') return null;
 
   const handleCreateVoucher = async () => {

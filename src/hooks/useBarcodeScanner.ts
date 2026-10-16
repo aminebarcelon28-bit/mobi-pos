@@ -204,7 +204,26 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
       return;
     }
 
-    // Guard: If any other modal is open (e.g. settings, security audit, pin prompt, reports, refund), ignore scan
+    // In-modal scan routing: RefundModal or VoucherModal
+    if (activeModal === 'refund') {
+      setLastScannedCode(effectiveCode);
+      soundEngine.playScan();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pos:refund-barcode-scanned', { detail: { code: effectiveCode } }));
+      }
+      return;
+    }
+
+    if (activeModal === 'credit_voucher') {
+      setLastScannedCode(effectiveCode);
+      soundEngine.playScan();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('pos:voucher-scanned', { detail: { code: effectiveCode } }));
+      }
+      return;
+    }
+
+    // Guard: If any other modal is open (e.g. settings, security audit, pin prompt, reports), ignore scan
     if (activeModal !== null) {
       return;
     }
@@ -229,6 +248,25 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
     const cleanCode = alnumUpper(effectiveCode);
     const effectiveLower = effectiveCode.toLowerCase();
     const effectiveDigits = effectiveCode.replace(/[^0-9]/g, '');
+
+    // Check if code matches a Receipt / Transaction barcode (e.g. REC-..., TXN-..., or direct receiptNumber / transaction.id)
+    const txnMatch = (store.transactions || []).find(
+      (t) =>
+        t.id === effectiveCode ||
+        t.receiptNumber === effectiveCode ||
+        ((effectiveCode.startsWith('REC-') || effectiveCode.startsWith('TXN-') || effectiveCode.startsWith('REF-')) &&
+          (t.receiptNumber === effectiveCode ||
+            t.id === effectiveCode ||
+            t.receiptNumber?.includes(effectiveCode) ||
+            t.id.includes(effectiveCode)))
+    );
+    if (txnMatch) {
+      soundEngine.playSuccess();
+      store.setSelectedTransactionForRefund(txnMatch);
+      store.openModal('refund');
+      setLastScannedCode(null);
+      return;
+    }
 
     // Check if code matches a Repair Order (SAV ticket number e.g. SAV-2026-0001)
     const savTicketMatch = (store.repairOrders || []).find(

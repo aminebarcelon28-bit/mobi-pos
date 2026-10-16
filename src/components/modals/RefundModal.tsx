@@ -208,6 +208,40 @@ export const RefundModal: React.FC = () => {
 
   useEffect(() => { if (activeModal !== 'refund') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
+  useEffect(() => {
+    if (activeModal !== 'refund') return;
+
+    const handleRefundBarcodeScanned = (e: Event) => {
+      const customEvent = e as CustomEvent<{ code: string }>;
+      const code = customEvent.detail?.code?.trim();
+      if (!code) return;
+
+      const matchedTxn = (transactions || []).find(
+        (t) =>
+          t.id === code ||
+          t.receiptNumber === code ||
+          ((code.startsWith('REC-') || code.startsWith('TXN-') || code.startsWith('REF-')) &&
+            (t.receiptNumber === code ||
+              t.id === code ||
+              t.receiptNumber?.includes(code) ||
+              t.id.includes(code)))
+      );
+
+      if (matchedTxn) {
+        setSelectedTxn(matchedTxn);
+        setSelectedTransactionForRefund(matchedTxn);
+        initializeRefundState(matchedTxn);
+        showToast(`Ticket #${matchedTxn.receiptNumber || matchedTxn.id} identifié et chargé`, 'success');
+      } else {
+        setSearchQuery(code);
+        showToast(`Recherche ticket / article : ${code}`, 'info');
+      }
+    };
+
+    window.addEventListener('pos:refund-barcode-scanned', handleRefundBarcodeScanned);
+    return () => window.removeEventListener('pos:refund-barcode-scanned', handleRefundBarcodeScanned);
+  }, [activeModal, transactions, setSelectedTransactionForRefund, showToast]);
+
   if (activeModal !== 'refund') return null;
 
   // Eligible transactions (exclude already voided or fully refunded)
