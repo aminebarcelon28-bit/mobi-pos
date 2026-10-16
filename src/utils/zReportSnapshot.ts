@@ -126,7 +126,9 @@ export function buildZSnapshot(a: BuildZSnapshotArgs): ZReportSnapshot {
   const exchangeOut = exchangeCashOutFromMovements(sessionMovements);
   const soulteOut = sessionMovements
     .filter(
-      (m) => m.type === 'EXPENSE' && (m.reason || '').startsWith(DRAWER_REASON_PREFIXES.SOULTE_CASHOUT)
+      (m) =>
+        m.type === 'EXPENSE' &&
+        (m.category === 'TRADE_IN_SOULTE' || (m.reason || '').startsWith(DRAWER_REASON_PREFIXES.SOULTE_CASHOUT))
     )
     .reduce((acc, m) => acc + Math.max(0, Number(m.amount) || 0), 0);
   const exchangeOutPure = Math.max(0, exchangeOut - soulteOut);

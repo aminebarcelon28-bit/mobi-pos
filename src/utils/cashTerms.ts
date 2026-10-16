@@ -79,6 +79,7 @@ export interface CashMovementLike {
   type?: string;
   amount?: number;
   reason?: string;
+  category?: string;
   createdAt?: string;
 }
 
@@ -191,7 +192,8 @@ export function exchangeCashOutFromMovements(movs: CashMovementLike[] | undefine
       (m) =>
         m &&
         m.type === 'EXPENSE' &&
-        ((m.reason || '').startsWith(DRAWER_REASON_PREFIXES.EXCHANGE_CASHOUT) ||
+        (m.category === 'TRADE_IN_SOULTE' ||
+          (m.reason || '').startsWith(DRAWER_REASON_PREFIXES.EXCHANGE_CASHOUT) ||
           (m.reason || '').startsWith(DRAWER_REASON_PREFIXES.SOULTE_CASHOUT))
     )
     .reduce((acc, m) => acc + toCashAmount(m.amount), 0);

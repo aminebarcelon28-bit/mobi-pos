@@ -846,6 +846,8 @@ export const shiftAdapter = {
         if (r.startsWith(DRAWER_REASON_PREFIXES.SOULTE_CASHOUT)) return false;
         if (r.startsWith(DRAWER_REASON_PREFIXES.EXCHANGE_CASHOUT)) return false;
         if (r.startsWith('Dépôt coffre') || r.startsWith('DROP_SAFE') || r.startsWith('COFFRE')) return false;
+        if (m.category === 'TRADE_IN_PAYOUT' || m.category === 'TRADE_IN_SOULTE' || m.category === 'SAV_ACOMPTE_REFUND') return false;
+        if (r.includes('Rachat Occasion') || r.includes('Reprise') || r.includes('Remboursement Acompte SAV')) return false;
         return true;
       })
       .reduce((sum, m) => sum + m.amount, 0);

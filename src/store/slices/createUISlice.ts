@@ -1010,7 +1010,12 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         const drawerRes = await get().logCashMovement(
           buybackCash,
           'EXPENSE',
-          `Décaissement Rachat Occasion: ${newTradeIn.deviceModel} (IMEI: ${newTradeIn.imei})`
+          `Décaissement Rachat Occasion: ${newTradeIn.deviceModel} (IMEI: ${newTradeIn.imei})`,
+          get().activeCashier?.name || 'Caissier',
+          undefined,
+          'TRADE_IN_PAYOUT',
+          'TRADE_IN',
+          newTradeIn.id
         );
         // B-036: a failed drawer deposit after a successful trade-in must not
         // report pure success — the books are now short cash with no movement.

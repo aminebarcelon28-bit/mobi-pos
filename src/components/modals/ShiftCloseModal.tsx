@@ -231,7 +231,13 @@ export const ShiftCloseModal: React.FC = () => {
           !(m.reason || '').startsWith(DRAWER_REASON_PREFIXES.SOULTE_CASHOUT) &&
           !(m.reason || '').startsWith(DRAWER_REASON_PREFIXES.EXCHANGE_CASHOUT) &&
           !(m.reason || '').startsWith('Dépôt coffre') &&
-          !(m.reason || '').startsWith('DROP_SAFE')
+          !(m.reason || '').startsWith('DROP_SAFE') &&
+          m.category !== 'TRADE_IN_PAYOUT' &&
+          m.category !== 'TRADE_IN_SOULTE' &&
+          m.category !== 'SAV_ACOMPTE_REFUND' &&
+          !(m.reason || '').includes('Rachat Occasion') &&
+          !(m.reason || '').includes('Reprise') &&
+          !(m.reason || '').includes('Remboursement Acompte SAV')
       )
       .reduce((sum, m) => sum + m.amount, 0);
   }, [activeShift?.movements]);

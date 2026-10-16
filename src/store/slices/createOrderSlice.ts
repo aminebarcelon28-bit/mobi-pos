@@ -1294,7 +1294,11 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
               soulteDue,
               'EXPENSE',
               `${DRAWER_REASON_PREFIXES.SOULTE_CASHOUT} ${soulteLabel}`,
-              activeShift.cashierName
+              activeShift.cashierName,
+              undefined,
+              'TRADE_IN_SOULTE',
+              'TRADE_IN',
+              exchangeTradeId ?? undefined
             );
             if (!soulteOut.success) {
               noteWarning(
