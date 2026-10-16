@@ -1186,6 +1186,19 @@ export interface RepairOrder {
   warrantyTier?: WarrantyTier;
   warrantyExpiresAt?: string;
   statusHistory?: RepairStatusHistoryEntry[];
+  /** Spare parts / components consumed from catalog inventory */
+  spareParts?: RepairPartUsage[];
+}
+
+export interface RepairPartUsage {
+  id: string;
+  productId: string;
+  productTitle: string;
+  quantity: number;
+  unitPrice: number;
+  unitCost?: number;
+  consumedAt?: string;
+  isConsumed?: boolean;
 }
 
 /** Append-only audit trail for status transitions. */

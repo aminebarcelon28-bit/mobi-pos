@@ -106,6 +106,117 @@ async function getRepairRepo() {
   return repairRepository;
 }
 
+async function consumeSparePartsInventory(
+  order: RepairOrder,
+  get: () => PosState,
+  set: (state: Partial<PosState>) => void
+): Promise<RepairOrder> {
+  const parts = order.spareParts || [];
+  const unconsumed = parts.filter((p) => !p.isConsumed);
+  if (unconsumed.length === 0) return order;
+
+  try {
+    const { appendInventoryDeltas } = await import('../../db/sqlPluginAdapter');
+    const deltas = unconsumed.map((p) => ({
+      productId: p.productId,
+      delta: -Math.abs(Number(p.quantity) || 1),
+      reason: 'SAV_PARTS',
+      refType: 'REPAIR_ORDER',
+      refId: order.id,
+    }));
+    await appendInventoryDeltas(deltas);
+
+    try {
+      const { dexieDb } = await import('../../db/database');
+      for (const p of unconsumed) {
+        const existing = await dexieDb.products.get(p.productId);
+        if (existing) {
+          await dexieDb.products.update(p.productId, {
+            stock: Math.max(0, existing.stock - p.quantity),
+          });
+        }
+      }
+    } catch {
+      /* dexie mirror best effort */
+    }
+
+    const liveProducts = get().products || [];
+    const updatedLiveProducts = liveProducts.map((prod) => {
+      const consumed = unconsumed.find((u) => u.productId === prod.id);
+      if (consumed) {
+        return { ...prod, stock: Math.max(0, prod.stock - consumed.quantity) };
+      }
+      return prod;
+    });
+    set({ products: updatedLiveProducts });
+
+    const consumedTime = new Date().toISOString();
+    const updatedSpareParts = parts.map((p) =>
+      p.isConsumed ? p : { ...p, isConsumed: true, consumedAt: consumedTime }
+    );
+    const updatedOrder = { ...order, spareParts: updatedSpareParts };
+    await (await getRepairRepo()).save(updatedOrder);
+    return updatedOrder;
+  } catch (err) {
+    console.error('Failed to deduct SAV spare parts inventory:', err);
+    return order;
+  }
+}
+
+async function restoreSparePartsInventory(
+  order: RepairOrder,
+  get: () => PosState,
+  set: (state: Partial<PosState>) => void
+): Promise<RepairOrder> {
+  const parts = order.spareParts || [];
+  const consumed = parts.filter((p) => p.isConsumed);
+  if (consumed.length === 0) return order;
+
+  try {
+    const { appendInventoryDeltas } = await import('../../db/sqlPluginAdapter');
+    const deltas = consumed.map((p) => ({
+      productId: p.productId,
+      delta: Math.abs(Number(p.quantity) || 1),
+      reason: 'SAV_PARTS_RESTORE',
+      refType: 'REPAIR_ORDER',
+      refId: order.id,
+    }));
+    await appendInventoryDeltas(deltas);
+
+    try {
+      const { dexieDb } = await import('../../db/database');
+      for (const p of consumed) {
+        const existing = await dexieDb.products.get(p.productId);
+        if (existing) {
+          await dexieDb.products.update(p.productId, {
+            stock: existing.stock + p.quantity,
+          });
+        }
+      }
+    } catch {
+      /* dexie mirror best effort */
+    }
+
+    const liveProducts = get().products || [];
+    const updatedLiveProducts = liveProducts.map((prod) => {
+      const restored = consumed.find((u) => u.productId === prod.id);
+      if (restored) {
+        return { ...prod, stock: prod.stock + restored.quantity };
+      }
+      return prod;
+    });
+    set({ products: updatedLiveProducts });
+
+    const updatedSpareParts = parts.map((p) => ({ ...p, isConsumed: false }));
+    const updatedOrder = { ...order, spareParts: updatedSpareParts };
+    await (await getRepairRepo()).save(updatedOrder);
+    return updatedOrder;
+  } catch (err) {
+    console.error('Failed to restore SAV spare parts inventory:', err);
+    return order;
+  }
+}
+
 export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (set, get) => ({
   repairOrders: [],
   selectedRepairOrderForNotification: null,
@@ -262,8 +373,11 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
       try {
          await (await getRepairRepo()).save(updatedOrder);
 
-        if (newStatus === 'Prêt / Terminé') {
-          remainingBalance = repairRemainingBalance(target);
+        if (newStatus === 'Prêt / Terminé' || newStatus === 'Livré') {
+          const orderWithDeductedParts = await consumeSparePartsInventory(updatedOrder, get, set);
+          const idx = updated.findIndex((r) => r.id === orderId);
+          if (idx !== -1) updated[idx] = orderWithDeductedParts;
+          remainingBalance = repairRemainingBalance(orderWithDeductedParts);
           if (remainingBalance > 0 && typeof window !== 'undefined') {
             window.dispatchEvent(
               new CustomEvent(REPAIR_BALANCE_DUE_EVENT, {
@@ -278,12 +392,19 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
           }
         }
 
-        if (newStatus === 'Annulé' && target.status !== 'Annulé' && target.depositAmount > 0 && get().activeShift) {
-          await get().logCashMovement(
-            target.depositAmount,
-            'MANUAL_WITHDRAWAL',
-            `Remboursement Acompte SAV Annulé: Ticket #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`
-          );
+        if (newStatus === 'Annulé' && target.status !== 'Annulé') {
+          if (target.spareParts?.some((p) => p.isConsumed)) {
+            const orderWithRestoredParts = await restoreSparePartsInventory(updatedOrder, get, set);
+            const idx = updated.findIndex((r) => r.id === orderId);
+            if (idx !== -1) updated[idx] = orderWithRestoredParts;
+          }
+          if (target.depositAmount > 0 && get().activeShift) {
+            await get().logCashMovement(
+              target.depositAmount,
+              'MANUAL_WITHDRAWAL',
+              `Remboursement Acompte SAV Annulé: Ticket #${target.ticketNumber} (${target.customerName} - ${target.deviceModel})`
+            );
+          }
         }
       } catch (err) {
         console.error(`Failed to update repair order status [${orderId}]:`, err);

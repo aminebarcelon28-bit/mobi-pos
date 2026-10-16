@@ -23,7 +23,10 @@ import {
   ScanLine,
   ChevronDown,
   ClipboardCheck,
+  Package,
+  Trash2,
 } from 'lucide-react';
+import { newId } from '../../utils/ids';
 import { usePosStore } from '../../store/usePosStore';
 import { REPAIR_BALANCE_DUE_EVENT, REPAIR_DELIVERED_EVENT } from '../../store/slices/createRepairSlice';
 import {
@@ -65,6 +68,8 @@ import type {
   WarrantyDossierSnapshot,
   WarrantySnapshot,
   WarrantyTier,
+  Product,
+  RepairPartUsage,
 } from '../../types/pos';
 import type { SaleTransaction } from '../../types/pos';
 import { printCoordinator } from '../../utils/printCoordinator';
@@ -315,6 +320,65 @@ export const RepairWorkOrderModal: React.FC = () => {
   const damageSeverity = intakeDamageSeverity(intakeDamage);
   const money = repairFinancials({ laborCost, partsCost, depositAmount });
 
+  // SAV Spare Parts state
+  const [spareParts, setSpareParts] = useState<RepairPartUsage[]>([]);
+  const [partSearch, setPartSearch] = useState('');
+  const [partQty, setPartQty] = useState(1);
+
+  const filteredProductsForParts = useMemo(() => {
+    if (!partSearch.trim()) return [];
+    const q = partSearch.toLowerCase().trim();
+    return (products || [])
+      .filter(
+        (p) =>
+          p.category !== 'Services' &&
+          ((p.title && p.title.toLowerCase().includes(q)) ||
+            (p.sku && p.sku.toLowerCase().includes(q)) ||
+            (p.barcode && p.barcode.includes(q)))
+      )
+      .slice(0, 8);
+  }, [products, partSearch]);
+
+  const handleAddPart = (product: Product) => {
+    const qty = Math.max(1, partQty);
+    const existing = spareParts.find((p) => p.productId === product.id);
+    let updated: RepairPartUsage[];
+    if (existing) {
+      updated = spareParts.map((p) =>
+        p.productId === product.id ? { ...p, quantity: p.quantity + qty } : p
+      );
+    } else {
+      const newPart: RepairPartUsage = {
+        id: newId('part'),
+        productId: product.id,
+        productTitle: product.title,
+        quantity: qty,
+        unitPrice: Math.round(Number(product.price) || 0),
+        unitCost: Math.round(Number(product.costPrice) || 0),
+        isConsumed: false,
+      };
+      updated = [...spareParts, newPart];
+    }
+    setSpareParts(updated);
+    const totalParts = updated.reduce((sum, p) => sum + p.unitPrice * p.quantity, 0);
+    setPartsCost(totalParts);
+    setPartSearch('');
+    setPartQty(1);
+    showToast(`Pièce ajoutée : ${product.title} (x${qty})`, 'info');
+  };
+
+  const handleRemovePart = (partId: string) => {
+    const target = spareParts.find((p) => p.id === partId);
+    if (target?.isConsumed) {
+      showToast('Impossible de retirer une pièce déjà sortie du stock.', 'warning');
+      return;
+    }
+    const updated = spareParts.filter((p) => p.id !== partId);
+    setSpareParts(updated);
+    const totalParts = updated.reduce((sum, p) => sum + p.unitPrice * p.quantity, 0);
+    setPartsCost(totalParts);
+  };
+
   /**
    * Inspector → SAV hydration. Runs once when the modal opens for a NEW ticket
    * and consumes the draft atomically, so a reopen cannot replay it and the
@@ -546,6 +610,9 @@ export const RepairWorkOrderModal: React.FC = () => {
     setTermsAccepted(false);
     setWarrantyTier(undefined);
     setIntakePhotos([]);
+    setSpareParts([]);
+    setPartSearch('');
+    setPartQty(1);
   };
 
   /** Attach intake photos (filesystem + SHA-256, never inline bytes). */
@@ -798,6 +865,7 @@ export const RepairWorkOrderModal: React.FC = () => {
       laborCost: money.laborCost,
       partsCost: money.partsCost,
       depositAmount: validDeposit,
+      spareParts,
       estimatedCompletionDate: estimatedDate,
       conditionChecklist: checklist,
       postRepairChecklist: postChecklist,
@@ -918,6 +986,9 @@ export const RepairWorkOrderModal: React.FC = () => {
     // unset instead and let the operator choose from the presets.
     setWarrantyTier(order.warrantyTier ?? undefined);
     setIntakePhotos(order.intakePhotos ?? []);
+    setSpareParts(order.spareParts || []);
+    setPartSearch('');
+    setPartQty(1);
     setImeiTouched(false);
     setActiveTab('Nouveau');
   };
@@ -1960,6 +2031,113 @@ export const RepairWorkOrderModal: React.FC = () => {
                       }`}
                     />
                   </div>
+                </div>
+
+                {/* ── Spare Parts Section (Consommation de pièces détachées) ── */}
+                <div className="p-3 bg-pos-card border border-pos-border rounded-xl space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-pos-text flex items-center gap-1.5">
+                      <Package className="w-4 h-4 text-emerald-500" /> Pièces Détachées du Stock Magasin
+                    </span>
+                    <span className="text-[10px] text-pos-muted font-mono">
+                      {spareParts.length} article{spareParts.length > 1 ? 's' : ''} rattaché{spareParts.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+
+                  {/* Search and add part */}
+                  <div className="space-y-1.5">
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-pos-muted pointer-events-none" />
+                        <input
+                          type="text"
+                          value={partSearch}
+                          onChange={(e) => setPartSearch(e.target.value)}
+                          placeholder="Rechercher une pièce dans le catalogue (écran, batterie, nappe, SKU...)"
+                          className="w-full h-9 pl-8 pr-3 text-xs bg-pos-bg border border-pos-border rounded-lg text-pos-text placeholder:text-pos-muted focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
+                      </div>
+                      <div className="w-20">
+                        <input
+                          type="number"
+                          min="1"
+                          value={partQty}
+                          onChange={(e) => setPartQty(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                          className="w-full h-9 px-2 text-xs text-center font-mono bg-pos-bg border border-pos-border rounded-lg text-pos-text focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                          title="Quantité"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Suggestions dropdown */}
+                    {filteredProductsForParts.length > 0 && (
+                      <div className="max-h-44 overflow-y-auto divide-y divide-pos-border bg-pos-bg border border-pos-border rounded-lg shadow-xl z-20">
+                        {filteredProductsForParts.map((p) => (
+                          <div
+                            key={p.id}
+                            onClick={() => handleAddPart(p)}
+                            className="p-2 flex items-center justify-between hover:bg-emerald-500/10 cursor-pointer text-xs transition"
+                          >
+                            <div className="min-w-0 pr-2">
+                              <p className="font-semibold text-pos-text truncate">{p.title}</p>
+                              <p className="text-[10px] text-pos-muted">SKU: {p.sku || 'N/A'} · En stock: {p.stock ?? 0}</p>
+                            </div>
+                            <div className="text-right whitespace-nowrap">
+                              <span className="font-mono font-bold text-emerald-500 dark:text-emerald-400">{formatDZD(p.price)}</span>
+                              <span className="block text-[9px] text-emerald-600 dark:text-emerald-300 font-medium">+ Ajouter</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Attached parts list */}
+                  {spareParts.length > 0 ? (
+                    <div className="space-y-1.5 pt-1 border-t border-pos-border">
+                      {spareParts.map((part) => (
+                        <div
+                          key={part.id}
+                          className="flex items-center justify-between p-2 rounded-lg bg-pos-bg border border-pos-border text-xs"
+                        >
+                          <div className="min-w-0 pr-2">
+                            <span className="font-medium text-pos-text block truncate">{part.productTitle}</span>
+                            <div className="flex items-center gap-2 text-[10px] text-pos-muted">
+                              <span>Qté: {part.quantity} × {formatDZD(part.unitPrice)}</span>
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                  part.isConsumed
+                                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                    : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                }`}
+                              >
+                                {part.isConsumed ? 'Sortie Stock Effectuée' : 'Réservé SAV'}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="font-mono font-bold text-pos-text">
+                              {formatDZD(part.unitPrice * part.quantity)}
+                            </span>
+                            {!part.isConsumed && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemovePart(part.id)}
+                                className="p-1 hover:text-rose-400 text-pos-muted transition"
+                                title="Supprimer la pièce"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-pos-muted italic text-center py-0.5">
+                      Aucune pièce rattachée. Utilisez la recherche pour intégrer et déduire des composants du stock.
+                    </p>
+                  )}
                 </div>
 
                 {/* Single source of truth for the totals. `balanceDue` is DERIVED

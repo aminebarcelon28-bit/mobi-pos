@@ -82,7 +82,7 @@
   - Add `'CIB / Edahabia'`, `'BaridiMob'`, and `'Chèque'` tender types to `PaymentModal.tsx:900-925` and `MobileCheckoutTab.tsx:917-946`, and add UI controls in `MobileCheckoutTab.tsx:866-881` to apply customer `storeCredit` (`Avoir`), `CreditVoucher` (`Bon d'Avoir`), and stage a `TradeIn`.
 - [x] **Task 4.2 — Scan-to-Refund Receipt Barcodes & In-Modal Scanner Routing:**
   - Update `src/hooks/useBarcodeScanner.ts:193-282` to match scanned `transaction.id` barcodes and open `RefundModal` with that sale loaded, and route scans when `RefundModal` or `VoucherModal` is active.
-- [ ] **Task 4.3 — SAV Spare Parts Inventory Consumption:**
+- [x] **Task 4.3 — SAV Spare Parts Inventory Consumption:**
   - Extend `RepairWorkOrderModal.tsx:1847-1853` and `createRepairSlice.ts` so technicians can select spare-part SKUs from `products`, deducting FIFO `stock_batches` and logging `inventory_ledger` entries on repair completion.
 - [ ] **Task 4.4 — Stock-IMEI Picker at Checkout & Serialized PO Receiving:**
   - Add an unsold `imei_records` dropdown/autocomplete in `CartPanel.tsx:1218-1240` and `PaymentModal.tsx:1118-1140`, and add IMEI capture + `supplierInvoiceNo` / `discrepancyReasons` persistence in `CommandTicketDashboardModal.tsx:356-361, 1096-1158`.
