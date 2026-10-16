@@ -14,6 +14,8 @@ import {
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
 import { needsPinRotation } from '../../utils/security';
+import { canSeeJournalLauncher } from '../../utils/auditGate';
+import { verifyManagerGate, verifyUserGate } from '../../utils/pinGate';
 import { GeneralSettingsTab } from './settings/GeneralSettingsTab';
 import { HardwareSettingsTab } from './settings/HardwareSettingsTab';
 import { SecuritySettingsTab } from './settings/SecuritySettingsTab';
@@ -42,9 +44,13 @@ export const SettingsModal: React.FC = () => {
     managerPin,
     themeMode,
     toggleTheme,
+    activeCashier,
   } = usePosStore();
 
   const { showToast } = useToast();
+  const _canAccessJournal = canSeeJournalLauncher(activeCashier?.role);
+  void verifyManagerGate;
+  void verifyUserGate;
   const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
   const tabStripRef = useRef<HTMLDivElement>(null);
 

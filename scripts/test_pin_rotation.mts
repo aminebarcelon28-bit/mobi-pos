@@ -62,7 +62,7 @@ const {
 // ── 2. Every minting UI path routes through rotatePinCredential ───────────
 {
   const overlay = read('src/components/LockScreenOverlay.tsx');
-  const settings = read('src/components/modals/SettingsModal.tsx');
+  const settings = read('src/components/modals/SettingsModal.tsx') + read('src/components/modals/settings/SecuritySettingsTab.tsx');
   const slice = read('src/store/slices/createUISlice.ts');
   const api = read('src/api/pin.ts');
 
@@ -132,7 +132,7 @@ const {
   check('blocklist passes a real PIN (6)', isCommonPin('482916') === false);
 
   const overlay = read('src/components/LockScreenOverlay.tsx');
-  const settings = read('src/components/modals/SettingsModal.tsx');
+  const settings = read('src/components/modals/SettingsModal.tsx') + read('src/components/modals/settings/SecuritySettingsTab.tsx');
   const app = read('src/App.tsx');
   const slice = read('src/store/slices/createUISlice.ts');
   const api = read('src/api/pin.ts');
