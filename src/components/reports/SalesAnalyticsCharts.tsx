@@ -1,17 +1,41 @@
 import React, { useState, useMemo } from 'react';
 import { usePosStore } from '../../store/usePosStore';
+import type { SaleTransaction } from '../../types/pos';
 import { formatDZD } from '../../types/pos';
-import { toLocalDayKey } from '../../utils/dateUtils';
+import { toLocalDayKey, todayLocalKey } from '../../utils/dateUtils';
 import { computeSalesMetrics, netFromTransaction, isExchangeSaleTx } from '../../utils/receiptMath';
 import { useAllocationCogs } from '../../hooks/useAllocationCogs';
-import { TrendingUp, Activity, PieChart } from 'lucide-react';
+import { TrendingUp, Activity, PieChart, Package, Award } from 'lucide-react';
 
-export const SalesAnalyticsCharts: React.FC = () => {
+export interface SalesAnalyticsChartsProps {
+  dateRangeFilter?: 'all' | 'today' | '7days' | '30days';
+  filteredTransactions?: SaleTransaction[];
+}
+
+export const SalesAnalyticsCharts: React.FC<SalesAnalyticsChartsProps> = ({
+  dateRangeFilter,
+  filteredTransactions,
+}) => {
   const { transactions } = usePosStore();
   const [hoveredHour, setHoveredHour] = useState<number | null>(null);
 
-  // --- Derived Data Calculations ---
-  const safeTransactions = useMemo(() => transactions || [], [transactions]);
+  // --- Derived Data Calculations (Honoring dateRangeFilter + historical allocations) ---
+  const safeTransactions = useMemo(() => {
+    if (filteredTransactions) {
+      return filteredTransactions;
+    }
+    const list = transactions || [];
+    if (!dateRangeFilter || dateRangeFilter === 'all') return list;
+    const now = new Date();
+    return list.filter((t) => {
+      const txDate = new Date(t.createdAt);
+      if (isNaN(txDate.getTime())) return true;
+      if (dateRangeFilter === 'today') return toLocalDayKey(txDate) === todayLocalKey();
+      if (dateRangeFilter === '7days') return txDate.getTime() >= now.getTime() - 7 * 86400000;
+      if (dateRangeFilter === '30days') return txDate.getTime() >= now.getTime() - 30 * 86400000;
+      return true;
+    });
+  }, [transactions, filteredTransactions, dateRangeFilter]);
 
   // KPI Metrics — canonical unified formula (same as ReportsModal + Mobile):
   // CA Net = Σ net(valid) − Σ refunds, profit = CA Net − Σ cost,
@@ -174,6 +198,97 @@ export const SalesAnalyticsCharts: React.FC = () => {
       out[0].value += 100 - shown;
     }
     return out;
+  }, [safeTransactions, allocCogsBySaleId]);
+
+  // Top Products & Historical Margin Calculations:
+  // Derived from frozen historical unitCostAtSale (and allocation COGS average),
+  // accounting for refunded/returned items and line discounts.
+  interface ProductPerformance {
+    id: string;
+    title: string;
+    category: string;
+    unitsSold: number;
+    revenue: number;
+    cogs: number;
+    profit: number;
+    marginPct: number;
+  }
+
+  const topProducts = useMemo<ProductPerformance[]>(() => {
+    const perfMap = new Map<string, {
+      title: string;
+      category: string;
+      unitsSold: number;
+      revenue: number;
+      cogs: number;
+    }>();
+
+    for (const txn of safeTransactions) {
+      if (txn.status === 'VOIDED') continue;
+      const rawAlloc = allocCogsBySaleId[txn.id];
+      const alloc = Number(rawAlloc);
+      const hasAlloc = Number.isFinite(alloc) && alloc >= 0;
+      const ledger = Number((txn as { ledgerCogsTotal?: unknown }).ledgerCogsTotal);
+      const hasLedger = Number.isFinite(ledger) && ledger >= 0;
+      const items = txn.items || [];
+      const totalTxnQty = items.reduce((a, it) => a + Math.abs(Number(it.quantity ?? 0)), 0);
+      const avgUnitCost =
+        totalTxnQty > 0 && (hasAlloc || hasLedger)
+          ? (hasAlloc ? alloc : ledger) / totalTxnQty
+          : undefined;
+
+      for (const it of items) {
+        const rawQty = Number(it.quantity ?? 0);
+        if (rawQty === 0) continue;
+        const isRet = Boolean(it.isReturn || txn.isRefund);
+        const signedQty = isRet ? -Math.abs(rawQty) : Math.abs(rawQty);
+
+        const chargedUnit = Number(it.unitPriceCharged ?? it.appliedPrice ?? it.product?.price ?? 0);
+        const lineDiscount = Number(it.discount ?? 0);
+        const lineRevenue = (chargedUnit * signedQty) - (isRet ? -lineDiscount : lineDiscount);
+
+        const frozenUnitCost =
+          typeof it.unitCostAtSale === 'number' && Number.isFinite(it.unitCostAtSale)
+            ? it.unitCostAtSale
+            : avgUnitCost ?? (it.product?.costPrice ?? 0);
+        const lineCogs = frozenUnitCost * signedQty;
+
+        const prodId = it.product?.id || it.productId || it.product?.title || 'Unknown';
+        const title = it.product?.title || 'Article';
+        const category = it.product?.category || 'Divers';
+
+        const existing = perfMap.get(prodId) || {
+          title,
+          category,
+          unitsSold: 0,
+          revenue: 0,
+          cogs: 0,
+        };
+
+        existing.unitsSold += signedQty;
+        existing.revenue += lineRevenue;
+        existing.cogs += lineCogs;
+        perfMap.set(prodId, existing);
+      }
+    }
+
+    const list: ProductPerformance[] = [];
+    for (const [id, stat] of perfMap.entries()) {
+      const profit = stat.revenue - stat.cogs;
+      const marginPct = stat.revenue > 0 ? Math.round((profit / stat.revenue) * 100) : 0;
+      list.push({
+        id,
+        title: stat.title,
+        category: stat.category,
+        unitsSold: stat.unitsSold,
+        revenue: Math.round(stat.revenue),
+        cogs: Math.round(stat.cogs),
+        profit: Math.round(profit),
+        marginPct,
+      });
+    }
+
+    return list.sort((a, b) => b.profit - a.profit).slice(0, 5);
   }, [safeTransactions, allocCogsBySaleId]);
   
   // SVG Donut Calculations
@@ -345,6 +460,79 @@ export const SalesAnalyticsCharts: React.FC = () => {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Top 5 Products by Profit & Margin */}
+      <div className="bg-pos-card border border-pos-border p-4 rounded-xl space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Award className="w-4 h-4 text-amber-400" />
+            <h3 className="text-xs font-bold text-pos-text">Top Produits & Marges Réelles (FIFO)</h3>
+          </div>
+          <span className="text-[10px] text-pos-muted font-mono">
+            {topProducts.length} référence{topProducts.length > 1 ? 's' : ''} classée{topProducts.length > 1 ? 's' : ''}
+          </span>
+        </div>
+
+        {topProducts.length === 0 ? (
+          <div className="py-6 text-center text-xs text-pos-muted">
+            Aucune vente enregistrée sur la période sélectionnée.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="text-[10px] uppercase font-bold text-pos-muted border-b border-pos-border/60">
+                <tr>
+                  <th className="pb-2">Produit</th>
+                  <th className="pb-2 text-center">Qté Nette</th>
+                  <th className="pb-2 text-right">CA Réalisé</th>
+                  <th className="pb-2 text-right">Coût FIFO</th>
+                  <th className="pb-2 text-right">Bénéfice Net</th>
+                  <th className="pb-2 text-right">Marge %</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-pos-border/40 font-mono text-[11px]">
+                {topProducts.map((p, idx) => (
+                  <tr key={p.id} className="hover:bg-pos-hover/30 transition">
+                    <td className="py-2 pr-2 font-sans font-medium text-pos-text">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-4 text-center font-mono font-bold text-[10px] text-pos-muted">
+                          #{idx + 1}
+                        </span>
+                        <span className="truncate max-w-[200px]" title={p.title}>
+                          {p.title}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="py-2 text-center text-pos-muted">{p.unitsSold}</td>
+                    <td className="py-2 text-right text-pos-text">{formatDZD(p.revenue)}</td>
+                    <td className="py-2 text-right text-pos-muted">{formatDZD(p.cogs)}</td>
+                    <td
+                      className={`py-2 text-right font-bold ${
+                        p.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {formatDZD(p.profit)}
+                    </td>
+                    <td className="py-2 text-right">
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                          p.marginPct >= 25
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                            : p.marginPct >= 10
+                            ? 'bg-blue-500/10 text-blue-400 border border-blue-500/30'
+                            : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                        }`}
+                      >
+                        {p.marginPct}%
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

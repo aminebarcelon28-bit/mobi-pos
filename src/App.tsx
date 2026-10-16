@@ -32,6 +32,9 @@ import { ActivationGateScreen } from './components/licensing/ActivationGateScree
 
 import { isMobileDevice } from './utils/platform';
 import { Smartphone, RotateCw, RefreshCw, ShieldCheck, Plus, Trash2 } from 'lucide-react';
+import { CustomerDisplayScreen } from './components/CustomerDisplayScreen';
+import { computeCartTotals } from './utils/receiptMath';
+import { MobilePosRoutingEngine } from './utils/mobilePosRoutingEngine';
 
 const SyncNotificationListener: React.FC = () => {
   const { showToast } = useToast();
@@ -94,6 +97,102 @@ const SyncNotificationListener: React.FC = () => {
       unsubPull?.();
     };
   }, [showToast]);
+
+  return null;
+};
+
+const CustomerDisplayBroadcaster: React.FC = () => {
+  const cart = usePosStore((s) => s.cart);
+  const currentCustomer = usePosStore((s) => s.currentCustomer);
+  const pricingTier = usePosStore((s) => s.pricingTier);
+  const stagedTradeIn = usePosStore((s) => s.stagedTradeIn);
+  const storeCreditApplied = usePosStore((s) => s.storeCreditApplied);
+  const voucherCreditApplied = usePosStore((s) => s.voucherCreditApplied);
+  const receiptSettings = usePosStore((s) => s.receiptSettings);
+
+  const channelRef = React.useRef<BroadcastChannel | null>(null);
+
+  React.useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return;
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel('mobi_pos_customer_display');
+      channelRef.current = channel;
+
+      channel.onmessage = (event: MessageEvent) => {
+        if (event?.data?.type === 'REQUEST_STATE') {
+          const s = usePosStore.getState();
+          const tradeInCredit = Math.max(0, Math.round(Number(s.stagedTradeIn?.buybackValue) || 0));
+          const totals = computeCartTotals(s.cart, {
+            pricingTier: s.pricingTier,
+            storeCreditApplied: s.storeCreditApplied,
+            voucherCreditApplied: s.voucherCreditApplied,
+            tradeInCredit,
+          });
+          channel?.postMessage({
+            type: 'SYNC_STATE',
+            payload: {
+              cart: s.cart,
+              currentCustomer: s.currentCustomer,
+              totals,
+              storeName: s.receiptSettings?.storeName,
+              storeSubheader: s.receiptSettings?.storeSubheader,
+            },
+          });
+        }
+      };
+    } catch {
+      // ignore channel init errors
+    }
+
+    return () => {
+      try {
+        channel?.close();
+      } catch {
+        // ignore
+      }
+      channelRef.current = null;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const tradeInCredit = Math.max(0, Math.round(Number(stagedTradeIn?.buybackValue) || 0));
+    const totals = computeCartTotals(cart, {
+      pricingTier,
+      storeCreditApplied,
+      voucherCreditApplied,
+      tradeInCredit,
+    });
+
+    // 1. Broadcast to external monitor / tab
+    channelRef.current?.postMessage({
+      type: 'SYNC_STATE',
+      payload: {
+        cart,
+        currentCustomer,
+        totals,
+        storeName: receiptSettings?.storeName,
+        storeSubheader: receiptSettings?.storeSubheader,
+      },
+    });
+
+    // 2. Drive hardware 2-line VFD pole display (if configured)
+    const lastItem = cart[cart.length - 1];
+    const line1 = lastItem
+      ? (lastItem.isReturn ? `[RET] ${lastItem.product.title}` : lastItem.product.title).slice(0, 20)
+      : (receiptSettings?.storeName || 'Bienvenue').slice(0, 20);
+    const line2 = cart.length > 0 ? `Total: ${Math.round(totals.total)} DZD` : 'MobiPOS';
+    MobilePosRoutingEngine.routeVfdUpdate(line1, line2).catch(() => {});
+  }, [
+    cart,
+    currentCustomer,
+    pricingTier,
+    stagedTradeIn,
+    storeCreditApplied,
+    voucherCreditApplied,
+    receiptSettings?.storeName,
+    receiptSettings?.storeSubheader,
+  ]);
 
   return null;
 };
@@ -585,7 +684,7 @@ const FirstBootPinSetup: React.FC = () => {
   );
 };
 
-export const App: React.FC = () => {
+const PosAppRoot: React.FC = () => {
   const { isMobile, setRoleMode } = useDeviceMode();
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -1108,6 +1207,7 @@ export const App: React.FC = () => {
       <ErrorBoundary fallbackTitle="Erreur Mobile POS Interceptée">
         <ToastProvider>
           <SyncNotificationListener />
+          <CustomerDisplayBroadcaster />
           <div className="h-[100dvh] w-full flex flex-col bg-pos-bg text-pos-text overflow-hidden font-sans">
             <React.Suspense fallback={<PairingWizardFallback />}>
               <CompanionShell onOpenPairingWizard={() => setShowPairingWizard(true)} />
@@ -1136,6 +1236,7 @@ export const App: React.FC = () => {
     <ErrorBoundary fallbackTitle="Erreur Système POS Interceptée">
       <ToastProvider>
         <SyncNotificationListener />
+        <CustomerDisplayBroadcaster />
         <div className={`h-[100dvh] w-screen flex flex-col bg-surface-canvas text-fg overflow-hidden font-sans select-none chrome transition-all duration-200 ${scannerActive ? 'ring-4 ring-inset ring-pos-accent' : ''}`}>
           {/* Orientation Guidance on Mobile PC View */}
           {isMobileDevice() && !isLandscape && (
@@ -1196,6 +1297,24 @@ export const App: React.FC = () => {
       </ToastProvider>
     </ErrorBoundary>
   );
+};
+
+export const App: React.FC = () => {
+  const [isCustomerDisplay] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.location.pathname === '/customer-display' ||
+      window.location.pathname.endsWith('/customer-display') ||
+      window.location.hash.includes('customer-display') ||
+      window.location.search.includes('customer-display')
+    );
+  });
+
+  if (isCustomerDisplay) {
+    return <CustomerDisplayScreen />;
+  }
+
+  return <PosAppRoot />;
 };
 
 export default App;

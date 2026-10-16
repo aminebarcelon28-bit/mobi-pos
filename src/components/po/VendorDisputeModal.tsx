@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   AlertTriangle,
@@ -11,7 +11,58 @@ import {
 import { formatDZD } from '../../types/pos';
 import { normalizeAlgerianPhone } from '../../utils/phoneUtils';
 import { DzPhoneInput } from '../ui/DzPhoneInput';
+import { usePosStore } from '../../store/usePosStore';
 import type { DisputeBrief } from '../../utils/disputeGenerator';
+
+export interface StoredVendorDispute {
+  id: string;
+  supplierName: string;
+  supplierPhone: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  originalReportedTotal: number;
+  totalClaimAmount: number;
+  adjustedPayableTotal: number;
+  status: 'DRAFT' | 'TRANSMITTED_WHATSAPP' | 'PRINTED' | 'RESOLVED';
+  itemsCount: number;
+  items: Array<{
+    lineIndex: number;
+    description: string;
+    claimAmount: number;
+    reason: string;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const DISPUTES_STORAGE_KEY = 'mobi_pos_vendor_disputes';
+
+export function getStoredDisputes(): StoredVendorDispute[] {
+  try {
+    const raw = localStorage.getItem(DISPUTES_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveStoredDispute(dispute: StoredVendorDispute): void {
+  try {
+    const list = getStoredDisputes();
+    const idx = list.findIndex((d) => d.id === dispute.id);
+    if (idx >= 0) {
+      list[idx] = dispute;
+    } else {
+      list.unshift(dispute);
+    }
+    localStorage.setItem(DISPUTES_STORAGE_KEY, JSON.stringify(list));
+    import('../../db/database').then(({ dexieDb }) => {
+      dexieDb.appSettings.put({ key: `dispute_${dispute.id}`, value: JSON.stringify(dispute) }).catch(() => {});
+    }).catch(() => {});
+  } catch (e) {
+    console.warn('[VendorDispute] Failed to persist dispute:', e);
+  }
+}
 
 interface VendorDisputeModalProps {
   brief: DisputeBrief;
@@ -22,9 +73,60 @@ export const VendorDisputeModal: React.FC<VendorDisputeModalProps> = ({
   brief,
   onClose,
 }) => {
-  const [phoneNumber, setPhoneNumber] = useState(brief.supplierPhone || '');
+  const vendorDirectory = usePosStore((s) => s.vendorDirectory);
+  const setVendorContact = usePosStore((s) => s.setVendorContact);
+
+  const initialPhone = useMemo(() => {
+    if (brief.supplierPhone && brief.supplierPhone.trim()) {
+      return brief.supplierPhone;
+    }
+    const dirContact = vendorDirectory?.[brief.supplierName];
+    return dirContact?.whatsapp || dirContact?.phone || '';
+  }, [brief.supplierPhone, brief.supplierName, vendorDirectory]);
+
+  const [phoneNumber, setPhoneNumber] = useState(initialPhone);
   const [activeLang, setActiveLang] = useState<'fr' | 'ar'>('fr');
   const [copied, setCopied] = useState(false);
+  const [savedDispute, setSavedDispute] = useState(false);
+
+  const disputeId = useMemo(() => {
+    return `disp-${brief.supplierName.toLowerCase().replace(/\s+/g, '-')}-${brief.invoiceNumber || 'draft'}-${brief.invoiceDate || 'now'}`;
+  }, [brief.supplierName, brief.invoiceNumber, brief.invoiceDate]);
+
+  // Persist dispute claim on mount / updates
+  useEffect(() => {
+    const claimRecord: StoredVendorDispute = {
+      id: disputeId,
+      supplierName: brief.supplierName,
+      supplierPhone: phoneNumber,
+      invoiceNumber: brief.invoiceNumber || 'S/N',
+      invoiceDate: brief.invoiceDate || new Date().toISOString().slice(0, 10),
+      originalReportedTotal: brief.originalReportedTotal,
+      totalClaimAmount: brief.totalClaimAmount,
+      adjustedPayableTotal: brief.adjustedPayableTotal,
+      status: 'DRAFT',
+      itemsCount: brief.items.length,
+      items: brief.items.map((it) => ({
+        lineIndex: it.lineIndex,
+        description: it.description,
+        claimAmount: it.claimAmount,
+        reason: it.reason,
+      })),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    saveStoredDispute(claimRecord);
+    setSavedDispute(true);
+  }, [disputeId, brief, phoneNumber]);
+
+  // If user modifies phone number, sync to vendorDirectory if valid
+  const handlePhoneChange = (val: string) => {
+    setPhoneNumber(val);
+    const norm = normalizeAlgerianPhone(val);
+    if (norm.isValid) {
+      setVendorContact(brief.supplierName, { phone: val, whatsapp: norm.whatsAppFormat || val });
+    }
+  };
 
   const phoneNorm = normalizeAlgerianPhone(phoneNumber);
   const activeMessage = activeLang === 'fr' ? brief.whatsAppTextFr : brief.whatsAppTextAr;
@@ -45,9 +147,26 @@ export const VendorDisputeModal: React.FC<VendorDisputeModalProps> = ({
     if (typeof window !== 'undefined') {
       window.open(url, '_blank', 'noopener,noreferrer');
     }
+    const existing = getStoredDisputes().find((d) => d.id === disputeId);
+    if (existing) {
+      saveStoredDispute({
+        ...existing,
+        status: 'TRANSMITTED_WHATSAPP',
+        supplierPhone: phoneNumber,
+        updatedAt: new Date().toISOString(),
+      });
+    }
   };
 
   const handlePrintDisputeSheet = () => {
+    const existing = getStoredDisputes().find((d) => d.id === disputeId);
+    if (existing) {
+      saveStoredDispute({
+        ...existing,
+        status: 'PRINTED',
+        updatedAt: new Date().toISOString(),
+      });
+    }
     if (typeof window !== 'undefined') {
       window.print();
     }
@@ -66,11 +185,16 @@ export const VendorDisputeModal: React.FC<VendorDisputeModalProps> = ({
               <AlertTriangle className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2">
+              <h2 className="text-sm sm:text-base font-extrabold text-white flex items-center gap-2 flex-wrap">
                 <span>Dossier de Litige & Réclamation Fournisseur</span>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-rose-950 text-rose-300 border border-rose-800">
                   Avoir Demandé
                 </span>
+                {savedDispute && (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-1">
+                    <Check className="w-3 h-3 text-emerald-400" /> Litige Enregistré
+                  </span>
+                )}
               </h2>
               <p className="text-[11px] text-slate-400">
                 Génération automatique du dossier contradictoire pour négociation & avoir.
@@ -197,7 +321,7 @@ export const VendorDisputeModal: React.FC<VendorDisputeModalProps> = ({
                   <Phone className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
                   <DzPhoneInput
                     value={phoneNumber}
-                    onChange={setPhoneNumber}
+                    onChange={handlePhoneChange}
                     placeholder="Ex: 0550 12 34 56 ou 0661 00 11 22"
                     showBadge={false}
                     showHint={false}

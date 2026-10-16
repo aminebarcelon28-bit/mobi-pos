@@ -58,6 +58,7 @@ export const PurchaseOrderModal: React.FC = () => {
     createManualPurchaseOrder,
     poDraftBuilderRequested,
     consumePoDraftBuilder,
+    addStoreExpense,
   } = usePosStore();
   const { showToast } = useToast();
 
@@ -227,6 +228,37 @@ export const PurchaseOrderModal: React.FC = () => {
       await cancelPO(poId, 'Annulé par l\'administrateur');
       showToast('Bon de commande annulé avec succès.', 'info');
       setInspectingPO(null);
+    }
+  };
+
+  const handleSettlePoCredit = async (po: PurchaseOrder) => {
+    const amount = po.actualTotalAmount || po.totalAmount || 0;
+    if (amount <= 0) return;
+    try {
+      await addStoreExpense({
+        category: 'Achat Marchandises / Fournisseur',
+        title: `Règlement Fournisseur : ${po.vendorName} (Bon #${po.poNumber})`,
+        amount,
+        paymentMethod: 'Espèces',
+        receiptNumber: po.poNumber,
+        notes: `Règlement dette fournisseur suite réception crédit (Bon #${po.poNumber})`,
+      });
+
+      const updatedPO: PurchaseOrder = {
+        ...po,
+        expenseRecorded: true,
+      };
+      const { getSqlite } = await import('../../db/sqlPluginAdapter');
+      await (await getSqlite()).savePurchaseOrder(updatedPO);
+
+      usePosStore.setState((state) => ({
+        purchaseOrders: state.purchaseOrders.map((p) => (p.id === po.id ? updatedPO : p)),
+      }));
+
+      showToast(`💶 Facture #${po.poNumber} réglée et charge de ${formatDZD(amount)} enregistrée !`, 'success');
+    } catch (err) {
+      console.error('Failed to settle PO credit expense:', err);
+      showToast('Erreur lors du règlement de la dette fournisseur', 'error');
     }
   };
 
@@ -1565,6 +1597,31 @@ export const PurchaseOrderModal: React.FC = () => {
                 </div>
               </div>
 
+              {(() => {
+                const unpaidSupplierPOs = (completedOrders || []).filter((po) => !po.expenseRecorded);
+                const totalUnpaidSupplierDebt = unpaidSupplierPOs.reduce((sum, po) => sum + (po.actualTotalAmount || po.totalAmount || 0), 0);
+                if (unpaidSupplierPOs.length === 0) return null;
+                return (
+                  <div className="bg-amber-950/40 border border-amber-600/50 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                        <Clock className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs sm:text-sm font-black text-white">Dettes Fournisseurs en Attente (Comptabilité AP)</h4>
+                        <p className="text-[11px] text-amber-200/80">
+                          {unpaidSupplierPOs.length} bon{unpaidSupplierPOs.length > 1 ? 's' : ''} réceptionné{unpaidSupplierPOs.length > 1 ? 's' : ''} à crédit en attente de décaissement caisse.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-left sm:text-right shrink-0">
+                      <span className="text-[10px] uppercase font-bold text-amber-400 block">Solde Dû Total</span>
+                      <span className="text-base sm:text-lg font-black text-amber-300 font-mono">{formatDZD(totalUnpaidSupplierDebt)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {completedOrders.length === 0 ? (
                 <div className="text-center py-20 text-pos-muted bg-pos-card border border-pos-border rounded-2xl max-w-md mx-auto">
                   <FileText className="w-12 h-12 mx-auto mb-3 opacity-40 text-pos-muted" />
@@ -1621,9 +1678,25 @@ export const PurchaseOrderModal: React.FC = () => {
                       </div>
 
                       <div className="flex justify-between items-center pt-2 border-t border-pos-border text-xs gap-2 flex-wrap">
-                        <span className="text-pos-muted flex items-center gap-1">
-                          <Check className="w-3.5 h-3.5 text-emerald-400" /> Charge enregistrée
-                        </span>
+                        {po.expenseRecorded ? (
+                          <span className="text-pos-muted flex items-center gap-1 font-medium">
+                            <Check className="w-3.5 h-3.5 text-emerald-400" /> Charge enregistrée
+                          </span>
+                        ) : (
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-amber-400 font-bold flex items-center gap-1">
+                              <Clock className="w-3.5 h-3.5 text-amber-400" /> Crédit fournisseur (À payer : {formatDZD(po.actualTotalAmount || po.totalAmount)})
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleSettlePoCredit(po)}
+                              className="px-2 py-0.5 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold text-[11px] border border-amber-500/40 transition cursor-pointer"
+                              title="Enregistrer la dépense et solder la dette fournisseur"
+                            >
+                              Régler charge
+                            </button>
+                          </div>
+                        )}
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <button
                             type="button"

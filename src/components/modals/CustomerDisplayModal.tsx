@@ -2,11 +2,17 @@ import React, { useEffect, useRef } from 'react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { getProductPriceForTier } from '../../utils/pricingEngine';
+import { computeCartTotals } from '../../utils/receiptMath';
 import { X, MonitorPlay } from 'lucide-react';
 
 export const CustomerDisplayModal: React.FC = () => {
   const { activeModal, closeModal, cart, currentCustomer } = usePosStore();
-    const pricingTier = usePosStore((s) => s.pricingTier);
+  const pricingTier = usePosStore((s) => s.pricingTier);
+  const stagedTradeIn = usePosStore((s) => s.stagedTradeIn);
+  const storeCreditApplied = usePosStore((s) => s.storeCreditApplied);
+  const voucherCreditApplied = usePosStore((s) => s.voucherCreditApplied);
+  const receiptSettings = usePosStore((s) => s.receiptSettings);
+
   // Persistent channel: allocated once, reused across cart changes, closed on unmount.
   const channelRef = useRef<BroadcastChannel | null>(null);
 
@@ -22,6 +28,14 @@ export const CustomerDisplayModal: React.FC = () => {
     return channelRef.current;
   };
 
+  const tradeInCredit = Math.max(0, Math.round(Number(stagedTradeIn?.buybackValue) || 0));
+  const totals = computeCartTotals(cart, {
+    pricingTier,
+    storeCreditApplied,
+    voucherCreditApplied,
+    tradeInCredit,
+  });
+
   // Use BroadcastChannel to sync data to external display if needed
   useEffect(() => {
     if (activeModal === 'customer_display') {
@@ -30,10 +44,13 @@ export const CustomerDisplayModal: React.FC = () => {
         payload: {
           cart,
           currentCustomer,
+          totals,
+          storeName: receiptSettings?.storeName,
+          storeSubheader: receiptSettings?.storeSubheader,
         },
       });
     }
-  }, [activeModal, cart, currentCustomer]);
+  }, [activeModal, cart, currentCustomer, totals, receiptSettings]);
 
   useEffect(() => {
     return () => {
@@ -50,14 +67,9 @@ export const CustomerDisplayModal: React.FC = () => {
 
   if (activeModal !== 'customer_display') return null;
 
-  // Mirror CartPanel: tier-aware unit price with a safe fallback, so a
-  // Demi-Gros/Gros customer-facing screen never shows the retail total.
-  const subtotal = cart.reduce((sum, item) => {
-    const unit = item.appliedPrice ?? getProductPriceForTier(item.product, pricingTier);
-    return sum + unit * item.quantity;
-  }, 0);
-  const totalDiscount = cart.reduce((sum, item) => sum + (item.discount || 0), 0);
-  const total = Math.max(0, subtotal - totalDiscount);
+  const subtotal = totals.grossSubtotal;
+  const totalDiscount = totals.discountTotal;
+  const total = totals.total;
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Affichage client" className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
@@ -107,7 +119,7 @@ export const CustomerDisplayModal: React.FC = () => {
             {currentCustomer && (
               <div className="p-3 sm:p-4 bg-emerald-500/10 border-b border-pos-border shrink-0">
                 <p className="text-sm sm:text-lg font-medium text-emerald-400 truncate">Client: {currentCustomer.name}</p>
-                <p className="text-[10px] sm:text-xs text-emerald-400/80">Points de fidélité gagnés: {Math.floor(total / 100)}</p>
+                <p className="text-[10px] sm:text-xs text-emerald-400/80">Points de fidélité : {currentCustomer.loyaltyPoints ?? 0} pts</p>
               </div>
             )}
             

@@ -1251,7 +1251,12 @@ export const ReportsModal: React.FC = () => {
                 </div>
               )}
 
-              {activeTab === 'analytics' && <SalesAnalyticsCharts />}
+              {activeTab === 'analytics' && (
+                <SalesAnalyticsCharts
+                  dateRangeFilter={dateRangeFilter}
+                  filteredTransactions={dateFilteredTransactions}
+                />
+              )}
 
               {activeTab === 'history' && (
                 <div className="space-y-4">

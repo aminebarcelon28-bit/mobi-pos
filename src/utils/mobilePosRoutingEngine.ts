@@ -97,4 +97,8 @@ export class MobilePosRoutingEngine {
       console.warn('[VFD Display] Stream update failed:', e);
     }
   }
+
+  public static async routeVfdUpdate(line1: string, line2: string): Promise<void> {
+    return this.updateCustomerDisplay(line1, line2);
+  }
 }
