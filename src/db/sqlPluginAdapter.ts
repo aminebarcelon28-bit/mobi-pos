@@ -584,7 +584,7 @@ export async function ensureShiftLedgerV113(db: Database): Promise<void> {
     } catch (e: unknown) {
       const msg = String((e as Error)?.message ?? e);
       if (/duplicate column/i.test(msg)) {
-        console.warn(`[heal:shift-ledger-v113] ${label} already present`);
+        console.debug(`[heal:shift-ledger-v113] ${label} already present`);
       } else {
         console.error(`[heal:shift-ledger-v113] ${label} FAILED:`, e);
         failures.push(`${label}: ${msg.slice(0, 160)}`);
