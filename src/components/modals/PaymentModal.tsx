@@ -175,7 +175,7 @@ export const PaymentModal: React.FC = () => {
   const currentCashGiven = cashTenderAmount;
 
   const resteAPayer = Math.max(0, netToPay - currentCashGiven);
-  const changeDue = Math.max(0, currentCashGiven - netToPay);
+  const changeDue = Math.min(currentCashGiven, Math.max(0, currentCashGiven - netToPay));
 
   const quickBillsDZD = [500, 1000, 2000, 3000, 4000, 5000];
 
@@ -416,11 +416,26 @@ export const PaymentModal: React.FC = () => {
       finalTenders.push({ method: 'Reprise', amount: liveTradeInCredit });
     }
 
+    // Non-cash tenders (Card, BaridiMob, Debt, etc.) cannot exceed the balance due
+    const nonCashTenders = finalTenders.filter((t) => t.method !== 'Espèces' && t.method !== 'Reprise');
+    for (const nct of nonCashTenders) {
+      if (nct.amount > submitNet) {
+        showToast(
+          `Règlement ${nct.method} supérieur au montant dû (${formatDZD(nct.amount)} > ${formatDZD(submitNet)}) — monnaie impossible sur paiement électronique.`,
+          'error'
+        );
+        setIsProcessing(false);
+        return;
+      }
+    }
+
     // Change counts money handed (Reprise value is not cash tendered).
+    // Multi-tender change cap: change returned cannot exceed physical cash received.
     const totalTendered = finalTenders
       .filter((t) => t.method !== 'Reprise')
       .reduce((acc, t) => acc + t.amount, 0);
-      const calculatedChange = Math.max(0, totalTendered - submitNet);
+    const cashTender = finalTenders.find((t) => t.method === 'Espèces')?.amount || 0;
+    const calculatedChange = Math.min(cashTender, Math.max(0, totalTendered - submitNet));
 
     const result = (await processPayment(finalTenders)) as unknown as {
       success: boolean;

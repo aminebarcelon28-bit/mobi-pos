@@ -506,6 +506,49 @@ export async function ensureShiftLedgerV113(db: Database): Promise<void> {
     ['trade_ins.customer_id', 'ALTER TABLE trade_ins ADD COLUMN customer_id TEXT;'],
     ['trade_ins.customer_phone', 'ALTER TABLE trade_ins ADD COLUMN customer_phone TEXT;'],
     ['idx_trade_ins_cust', 'CREATE INDEX IF NOT EXISTS idx_trade_ins_cust ON trade_ins(customer_id);'],
+    [
+      'held_orders table',
+      `CREATE TABLE IF NOT EXISTS held_orders (
+        id TEXT PRIMARY KEY,
+        customer_id TEXT,
+        customer_name TEXT,
+        items_count INTEGER NOT NULL DEFAULT 0,
+        total_amount REAL NOT NULL DEFAULT 0,
+        json_payload TEXT NOT NULL,
+        device_id TEXT NOT NULL DEFAULT 'local',
+        idempotency_key TEXT UNIQUE,
+        sync_status TEXT DEFAULT 'pending',
+        version INTEGER DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        deleted INTEGER NOT NULL DEFAULT 0
+      );`,
+    ],
+    ['idx_held_orders_customer', 'CREATE INDEX IF NOT EXISTS idx_held_orders_customer ON held_orders(customer_id);'],
+    ['idx_held_orders_created', 'CREATE INDEX IF NOT EXISTS idx_held_orders_created ON held_orders(created_at DESC);'],
+    [
+      'defective_returns table',
+      `CREATE TABLE IF NOT EXISTS defective_returns (
+        id TEXT PRIMARY KEY,
+        product_id TEXT NOT NULL,
+        product_name TEXT,
+        imei TEXT,
+        quantity REAL NOT NULL,
+        unit_cost REAL,
+        reason TEXT,
+        sale_id TEXT,
+        refund_id TEXT,
+        device_id TEXT NOT NULL DEFAULT 'local',
+        idempotency_key TEXT UNIQUE,
+        sync_status TEXT DEFAULT 'pending',
+        version INTEGER DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        deleted INTEGER NOT NULL DEFAULT 0
+      );`,
+    ],
+    ['idx_defective_product', 'CREATE INDEX IF NOT EXISTS idx_defective_product ON defective_returns(product_id);'],
+    ['idx_defective_refund', 'CREATE INDEX IF NOT EXISTS idx_defective_refund ON defective_returns(refund_id);'],
   ];
   const failures: string[] = [];
   for (const [label, sql] of steps) {
@@ -5383,3 +5426,133 @@ export async function ensureProductParents(productIds: Iterable<string>): Promis
     console.warn('[batches:parents] Product stub bridge skipped:', e);
   }
 }
+
+export async function saveHeldOrder(held: HeldSale): Promise<void> {
+  if (!isTauriEnv()) return;
+  try {
+    const db = await getLocalDb();
+    const now = utcNowIso();
+    const itemsCount = (held.items || []).reduce((s, i) => s + (i.quantity || 0), 0);
+    const totalAmount = (held.items || []).reduce(
+      (sum, item) => sum + (item.appliedPrice ?? item.product?.price ?? 0) * (item.quantity || 0) - (item.discount || 0),
+      0
+    );
+    const customerId = held.customer?.id ?? null;
+    const customerName = held.customer?.name ?? null;
+    const payload = JSON.stringify(held);
+
+    await withBusyRetry(
+      () =>
+        db.execute(
+          `INSERT INTO held_orders (
+            id, customer_id, customer_name, items_count, total_amount, json_payload,
+            device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted
+          ) VALUES ($1, $2, $3, $4, $5, $6, 'local', $1, 'pending', 1, $7, $7, 0)
+          ON CONFLICT(id) DO UPDATE SET
+            customer_id = excluded.customer_id,
+            customer_name = excluded.customer_name,
+            items_count = excluded.items_count,
+            total_amount = excluded.total_amount,
+            json_payload = excluded.json_payload,
+            updated_at = excluded.updated_at,
+            version = held_orders.version + 1,
+            deleted = 0;`,
+          [held.id, customerId, customerName, itemsCount, totalAmount, payload, now]
+        ),
+      { attempts: 3, baseDelayMs: 50, label: 'save-held-order' }
+    );
+  } catch (e) {
+    console.warn('[held_orders] Failed to save held order:', e);
+  }
+}
+
+export async function deleteHeldOrder(id: string): Promise<void> {
+  if (!isTauriEnv()) return;
+  try {
+    const db = await getLocalDb();
+    const now = utcNowIso();
+    await withBusyRetry(
+      () =>
+        db.execute(
+          `UPDATE held_orders SET deleted = 1, updated_at = $1, version = version + 1 WHERE id = $2;`,
+          [now, id]
+        ),
+      { attempts: 3, baseDelayMs: 50, label: 'delete-held-order' }
+    );
+  } catch (e) {
+    console.warn('[held_orders] Failed to delete held order:', e);
+  }
+}
+
+export async function getHeldOrders(): Promise<HeldSale[]> {
+  if (!isTauriEnv()) return [];
+  try {
+    const db = await getLocalDb();
+    const rows = await withBusyRetry(
+      () =>
+        db.select<Array<{ json_payload: string }>>(
+          `SELECT json_payload FROM held_orders WHERE deleted = 0 ORDER BY created_at DESC;`
+        ),
+      { attempts: 2, baseDelayMs: 50, label: 'get-held-orders' }
+    );
+    const list: HeldSale[] = [];
+    for (const row of rows || []) {
+      try {
+        const parsed = JSON.parse(row.json_payload);
+        if (parsed && typeof parsed.id === 'string' && Array.isArray(parsed.items)) {
+          list.push(parsed as HeldSale);
+        }
+      } catch {
+        // ignore corrupted rows
+      }
+    }
+    return list;
+  } catch (e) {
+    console.warn('[held_orders] Failed to read held orders:', e);
+    return [];
+  }
+}
+
+export async function recordDefectiveReturn(entry: {
+  productId: string;
+  productName?: string;
+  imei?: string;
+  quantity: number;
+  unitCost?: number;
+  reason?: string;
+  saleId?: string;
+  refundId?: string;
+}): Promise<void> {
+  if (!isTauriEnv()) return;
+  try {
+    const db = await getLocalDb();
+    const now = utcNowIso();
+    const id = `def-${entry.refundId || 'unk'}-${entry.productId}-${Date.now()}`;
+    await withBusyRetry(
+      () =>
+        db.execute(
+          `INSERT INTO defective_returns (
+            id, product_id, product_name, imei, quantity, unit_cost, reason,
+            sale_id, refund_id, device_id, idempotency_key, sync_status, version,
+            created_at, updated_at, deleted
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'local', $1, 'pending', 1, $10, $10, 0);`,
+          [
+            id,
+            entry.productId,
+            entry.productName ?? null,
+            entry.imei ?? null,
+            entry.quantity,
+            entry.unitCost ?? 0,
+            entry.reason ?? null,
+            entry.saleId ?? null,
+            entry.refundId ?? null,
+            now,
+          ]
+        ),
+      { attempts: 3, baseDelayMs: 50, label: 'record-defective-return' }
+    );
+  } catch (e) {
+    console.warn('[defective_returns] Failed to record defective return:', e);
+  }
+}
+

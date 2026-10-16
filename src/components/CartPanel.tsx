@@ -257,6 +257,8 @@ export const CartPanel: React.FC = () => {
   const [editingPriceProductId, setEditingPriceProductId] = useState<string | null>(null);
   const [overridePriceInput, setOverridePriceInput] = useState<number>(0);
   const [managerPinInput, setManagerPinInput] = useState<string>('');
+  const [overrideReason, setOverrideReason] = useState<string>('PROMO');
+  const [overrideCustomReason, setOverrideCustomReason] = useState<string>('');
   const [overrideError, setOverrideError] = useState<string | null>(null);
 
   const [returnPinPromptProductId, setReturnPinPromptProductId] = useState<string | null>(null);
@@ -342,6 +344,8 @@ export const CartPanel: React.FC = () => {
     const initialPrice = item.unitPriceCharged ?? item.appliedPrice ?? getItemPrice(item);
     setOverridePriceInput(initialPrice);
     setManagerPinInput('');
+    setOverrideReason('PROMO');
+    setOverrideCustomReason('');
     setOverrideError(null);
   };
 
@@ -382,6 +386,16 @@ export const CartPanel: React.FC = () => {
       setOverrideError(res.reason || 'Erreur modification');
       return;
     }
+
+    const effectiveReason = overrideReason === 'AUTRE' && overrideCustomReason.trim()
+      ? overrideCustomReason.trim()
+      : overrideReason;
+    await logSecurityAction(
+      'Dérogation Prix Manuel',
+      `Article: ${item.product.title} | Ancien prix: ${defaultPrice} DA | Nouveau: ${newPrice} DA | Motif: ${effectiveReason}${managerApproved ? ' (Approuvé par PIN Manager)' : ''}`,
+      operatorName(),
+      false
+    );
 
     soundEngine.playSuccess?.();
     setEditingPriceProductId(null);
@@ -1380,8 +1394,21 @@ export const CartPanel: React.FC = () => {
                         const availableImeis = (imeiRecords || []).filter(
                           (r) => r.productId === item.product.id && !r.saleTransactionId && !r.soldAt
                         );
+                        const enteredImei = (item.imeiNumber || '').trim();
+                        const isUntracked =
+                          enteredImei.length > 0 &&
+                          !availableImeis.some((r) => r.imei.trim() === enteredImei);
                         return (
-                          <div className="flex items-center gap-1.5 flex-1 min-w-[200px] justify-end">
+                          <div className="flex items-center gap-1.5 flex-1 min-w-[200px] justify-end flex-wrap">
+                            {isUntracked && (
+                              <span
+                                className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold flex items-center gap-1 shrink-0"
+                                title="Cet IMEI n'est pas répertorié dans les stocks actifs de cet article"
+                              >
+                                <AlertTriangle className="w-2.5 h-2.5 text-amber-400" />
+                                Hors stock
+                              </span>
+                            )}
                             {availableImeis.length > 0 ? (
                               <select
                                 value={item.imeiNumber || ''}
@@ -1404,7 +1431,11 @@ export const CartPanel: React.FC = () => {
                               value={item.imeiNumber || ''}
                               onChange={(e) => setCartItemIMEI(item.product.id, e.target.value)}
                               className={`text-[10px] font-mono bg-pos-bg border ${
-                                !item.imeiNumber ? 'border-amber-500/60 bg-amber-500/10' : 'border-pos-border bg-pos-card'
+                                !item.imeiNumber
+                                  ? 'border-amber-500/60 bg-amber-500/10'
+                                  : isUntracked
+                                  ? 'border-amber-500/80 bg-pos-card text-amber-200'
+                                  : 'border-pos-border bg-pos-card'
                               } rounded px-2 py-1 text-pos-text focus:outline-none focus:border-emerald-500 w-36`}
                             />
                           </div>
@@ -1501,6 +1532,43 @@ export const CartPanel: React.FC = () => {
                       {overrideError && (
                         <p className="text-[10px] text-red-400 font-bold">{overrideError}</p>
                       )}
+
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-pos-muted block mb-1">
+                          Motif de Dérogation :
+                        </span>
+                        <div className="flex gap-1 flex-wrap">
+                          {([
+                            { key: 'PROMO', label: 'Promo' },
+                            { key: 'CLIENT_FIDELE', label: 'Fidélité' },
+                            { key: 'DEFAUT_MINEUR', label: 'Défaut' },
+                            { key: 'NEGOCIATION', label: 'Négociation' },
+                            { key: 'AUTRE', label: 'Autre' },
+                          ] as const).map(({ key, label }) => (
+                            <button
+                              key={key}
+                              type="button"
+                              onClick={() => setOverrideReason(key)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-semibold transition cursor-pointer ${
+                                overrideReason === key
+                                  ? 'bg-amber-500 text-slate-950 font-bold'
+                                  : 'bg-pos-card border border-pos-border text-pos-muted hover:text-pos-text'
+                              }`}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        {overrideReason === 'AUTRE' && (
+                          <input
+                            type="text"
+                            placeholder="Préciser le motif de la dérogation..."
+                            value={overrideCustomReason}
+                            onChange={(e) => setOverrideCustomReason(e.target.value)}
+                            className="mt-1.5 w-full bg-pos-card border border-pos-border rounded px-2 py-1 text-xs text-pos-text focus:outline-none focus:border-amber-400"
+                          />
+                        )}
+                      </div>
 
                       <div className="flex justify-end gap-1.5 pt-1">
                         <button

@@ -2974,6 +2974,35 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         }
       }
 
+      const defective = refundItems.filter((i) => !i.restock && i.quantity > 0);
+      if (defective.length > 0) {
+        const { recordDefectiveReturn, appendInventoryDeltas } = await import('../../db/sqlPluginAdapter');
+        for (const item of defective) {
+          const origItem = findOrigLine(item);
+          await recordDefectiveReturn({
+            productId: item.productId,
+            productName: origItem?.product?.title,
+            imei: item.imeiNumber,
+            quantity: item.quantity,
+            unitCost: origItem?.unitCostAtSale ?? origItem?.product?.costPrice ?? 0,
+            reason: refundReason,
+            saleId: origTxn.id,
+            refundId: refundTxnId,
+          });
+        }
+        await appendInventoryDeltas(
+          defective.map((i) => ({
+            id: deterministicId('LED-DEF', refundTxnId, i.productId, i.quantity),
+            idempotencyKey: deterministicId('LED-DEF', refundTxnId, i.productId, i.quantity),
+            productId: i.productId,
+            delta: 0,
+            reason: 'ADJUST' as const,
+            refType: 'DEFECTIVE_QUARANTINE',
+            refId: refundTxnId,
+          }))
+        ).catch((err) => console.warn('[refund:quarantine] Ledger delta error:', err));
+      }
+
       await recordDefectiveLossExpenses(refundWarnings);
       const { enqueueOrderSync } = await import('../../db/sqlPluginAdapter');
         const { writeCheckoutAtomic } = await import('../../db/sqlPluginAdapter');

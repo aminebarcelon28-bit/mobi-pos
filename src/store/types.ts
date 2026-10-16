@@ -86,6 +86,7 @@ export interface CartSlice {
   voucherCreditApplied?: number;
   voucherCode?: string | null;
   clearVoucherCredit?: () => void;
+  redeemVoucherInCart?: (code: string) => Promise<{ success: boolean; reason?: string; amount?: number }>;
   heldSales: HeldSale[];
 
   addToCart: (product: Product, overridePin?: boolean, quantity?: number, isReturn?: boolean) => { success: boolean; reason?: string };

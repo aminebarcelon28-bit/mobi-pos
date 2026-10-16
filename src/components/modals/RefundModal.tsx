@@ -239,7 +239,11 @@ export const RefundModal: React.FC = () => {
     };
 
     window.addEventListener('pos:refund-barcode-scanned', handleRefundBarcodeScanned);
-    return () => window.removeEventListener('pos:refund-barcode-scanned', handleRefundBarcodeScanned);
+    window.addEventListener('pos:barcode-scanned', handleRefundBarcodeScanned);
+    return () => {
+      window.removeEventListener('pos:refund-barcode-scanned', handleRefundBarcodeScanned);
+      window.removeEventListener('pos:barcode-scanned', handleRefundBarcodeScanned);
+    };
   }, [activeModal, transactions, setSelectedTransactionForRefund, showToast, initializeRefundState]);
 
   if (activeModal !== 'refund') return null;

@@ -555,6 +555,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
     audioBus.emit('keyBeep');
     const nextHolds = [...heldSales, newHold];
     persistHeldSales(nextHolds);
+    void import('../../db/sqlPluginAdapter').then(({ saveHeldOrder }) => saveHeldOrder(newHold));
     setAny({
       heldSales: nextHolds,
       cart: [],
@@ -577,6 +578,10 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
     });
     if (liveHolds.length !== heldSales.length) {
       persistHeldSales(liveHolds);
+      const purged = heldSales.filter((h) => !liveHolds.some((lh) => lh.id === h.id));
+      void import('../../db/sqlPluginAdapter').then(({ deleteHeldOrder }) => {
+        for (const p of purged) deleteHeldOrder(p.id);
+      });
       set({ heldSales: liveHolds });
     }
     // Double-restore guard: each hold id restores at most once per session.
@@ -592,10 +597,11 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
     }
     consumedHoldIds.add(saleId);
     let updatedHeldSales = liveHolds.filter((h) => h.id !== saleId);
+    void import('../../db/sqlPluginAdapter').then(({ deleteHeldOrder }) => deleteHeldOrder(saleId));
       if (cart.length > 0) {
         const currentStagedTradeIn = (get() as unknown as { stagedTradeIn?: unknown }).stagedTradeIn ?? null;
         const currentVoucher = readVoucherStaging(get());
-        updatedHeldSales.push({
+        const replacementHold = {
           id: newId('hold'),
           customer: currentCustomer,
           items: [...cart],
@@ -604,7 +610,9 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
           stagedTradeIn: currentStagedTradeIn,
           voucherCode: currentVoucher.voucherCode,
           voucherCreditApplied: currentVoucher.voucherCreditApplied,
-        } as HeldSale & { expiresAt: string });
+        } as HeldSale & { expiresAt: string };
+        updatedHeldSales.push(replacementHold);
+        void import('../../db/sqlPluginAdapter').then(({ saveHeldOrder }) => saveHeldOrder(replacementHold));
       }
       persistHeldSales(updatedHeldSales);
       const activeTier = target.customer ? target.customer.pricingTier : 'Retail';
@@ -661,6 +669,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
     const target = heldSales.find((h) => h.id === saleId);
     const next = heldSales.filter((h) => h.id !== saleId);
     persistHeldSales(next);
+    void import('../../db/sqlPluginAdapter').then(({ deleteHeldOrder }) => deleteHeldOrder(saleId));
     set({ heldSales: next });
     // Discarding a held cart with SAV lines purges linkage (stays Prêt).
     const savIds = ((target?.items || []) as Array<{ product?: { id?: string } }>)
@@ -670,6 +679,50 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
       void import('../../utils/savSettlement').then(({ unlinkSavCartItems }) =>
         unlinkSavCartItems(savIds)
       );
+    }
+  },
+
+  clearVoucherCredit: () => {
+    setAny({
+      voucherCreditApplied: 0,
+      voucherCode: null,
+    });
+  },
+
+  redeemVoucherInCart: async (code: string) => {
+    const cleanCode = (code || '').trim().toUpperCase();
+    if (!cleanCode) return { success: false, reason: "Code bon d'avoir manquant" };
+    try {
+      const { voucherAdapter } = await import('../../db/adapters/voucherAdapter');
+      const voucher = await voucherAdapter.findCreditVoucherByCode(cleanCode);
+      if (!voucher) {
+        return { success: false, reason: "Bon d'avoir introuvable" };
+      }
+      if (voucher.status !== 'ACTIVE' || voucher.remainingAmount <= 0) {
+        return { success: false, reason: "Ce bon d'avoir est déjà épuisé ou inactif" };
+      }
+      if (voucher.expiresAt && new Date(voucher.expiresAt).getTime() < Date.now()) {
+        return { success: false, reason: "Ce bon d'avoir a expiré" };
+      }
+      const { cart, pricingTier, storeCreditApplied } = get();
+      const totals = computeCartTotals(cart, {
+        pricingTier,
+        storeCreditApplied,
+        voucherCreditApplied: 0,
+      });
+      const maxApplicable = Math.max(0, totals.total);
+      if (maxApplicable <= 0) {
+        return { success: false, reason: "Le panier n'a pas de solde à payer" };
+      }
+      const applied = Math.min(voucher.remainingAmount, maxApplicable);
+      setAny({
+        voucherCode: voucher.code,
+        voucherCreditApplied: applied,
+      });
+      return { success: true, amount: applied };
+    } catch (e) {
+      console.error('[voucher] Error redeeming voucher in cart:', e);
+      return { success: false, reason: "Erreur lors de la validation du bon d'avoir" };
     }
   },
   };

@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 115;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 116;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -1769,6 +1769,52 @@ fn base_schema_migrations() -> Vec<Migration> {
             ALTER TABLE trade_ins ADD COLUMN customer_id TEXT;
             ALTER TABLE trade_ins ADD COLUMN customer_phone TEXT;
             CREATE INDEX IF NOT EXISTS idx_trade_ins_cust ON trade_ins(customer_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v116 — Held sales persistence in SQLite and defective returns quarantine log
+            version: 116,
+            description: "Add held_orders table for durable parked carts and defective_returns table for quarantine RMA tracking",
+            sql: r#"
+            CREATE TABLE IF NOT EXISTS held_orders (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT,
+                customer_name TEXT,
+                items_count INTEGER NOT NULL DEFAULT 0,
+                total_amount REAL NOT NULL DEFAULT 0,
+                json_payload TEXT NOT NULL,
+                device_id TEXT NOT NULL DEFAULT 'local',
+                idempotency_key TEXT UNIQUE,
+                sync_status TEXT DEFAULT 'pending',
+                version INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                deleted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_held_orders_customer ON held_orders(customer_id);
+            CREATE INDEX IF NOT EXISTS idx_held_orders_created ON held_orders(created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS defective_returns (
+                id TEXT PRIMARY KEY,
+                product_id TEXT NOT NULL,
+                product_name TEXT,
+                imei TEXT,
+                quantity REAL NOT NULL,
+                unit_cost REAL,
+                reason TEXT,
+                sale_id TEXT,
+                refund_id TEXT,
+                device_id TEXT NOT NULL DEFAULT 'local',
+                idempotency_key TEXT UNIQUE,
+                sync_status TEXT DEFAULT 'pending',
+                version INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                deleted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_defective_product ON defective_returns(product_id);
+            CREATE INDEX IF NOT EXISTS idx_defective_refund ON defective_returns(refund_id);
             "#,
             kind: MigrationKind::Up,
         },

@@ -264,6 +264,11 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
       soundEngine.playSuccess();
       store.setSelectedTransactionForRefund(txnMatch);
       store.openModal('refund');
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('pos:refund-barcode-scanned', { detail: { code: effectiveCode } })
+        );
+      }
       setLastScannedCode(null);
       return;
     }

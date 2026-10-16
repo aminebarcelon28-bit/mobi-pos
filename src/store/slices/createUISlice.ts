@@ -1605,7 +1605,17 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           const managerPin = await (await getSettingsRepo()).get('manager_pin', '');
           const receiptSettings = await loadReceiptSettings();
           const savedCashiers = await (await getSettingsRepo()).get<CashierUser[]>('cashier_users', DEFAULT_CASHIERS);
-          const creditVouchers = await sqlite.getAllCreditVouchers().catch(() => []);
+          const [creditVouchers, sqliteHeldSales] = await Promise.all([
+            sqlite.getAllCreditVouchers().catch(() => []),
+            (async () => {
+              try {
+                const { getHeldOrders } = await import('../../db/sqlPluginAdapter');
+                return await getHeldOrders();
+              } catch {
+                return [];
+              }
+            })(),
+          ]);
         // Phase 4a credential reconciliation (rank-merge). The native
         // `pin_set` writes SQLite directly; a kill between the native commit
         // and the TS mirror refresh leaves Dexie stale, and Dexie-first
@@ -1732,8 +1742,8 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           cashierUsers: finalUsers,
           activeCashier: finalUsers[0] || DEFAULT_CASHIERS[0],
           creditVouchers,
-          // Wave-B persists holds to localStorage; hydrate here (fail silent to []).
-          heldSales: loadHeldSalesFromStorage(),
+          // Hydrate held sales from SQLite authority with localStorage fallback.
+          heldSales: sqliteHeldSales.length > 0 ? sqliteHeldSales : loadHeldSalesFromStorage(),
           isDbInitialized: true,
         });
         markBoot('init:paint');
