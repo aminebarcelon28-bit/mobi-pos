@@ -109,17 +109,18 @@ export const ReceiptTemplateModal: React.FC = () => {
   // Live 42-col ticket preview: header + footer update as the merchant types.
   // Optional lines (address/phone/email/footer) vanish when blank — the same
   // omission rule the three print engines apply, so the preview never lies.
+  const previewCols = formData.paperWidth === '58mm' ? 32 : 42;
   const previewHeader: string[] = [
-    center42((formData.storeName || 'NOM MAGASIN').toUpperCase()),
+    center42((formData.storeName || 'NOM MAGASIN').toUpperCase(), previewCols),
     ...((formData.storeSubheader || formData.customHeaderMsg || '').trim()
-      ? [center42((formData.storeSubheader || formData.customHeaderMsg || '').trim())]
+      ? [center42((formData.storeSubheader || formData.customHeaderMsg || '').trim(), previewCols)]
       : []),
-    ...((formData.address || '').trim() ? fold42((formData.address || '').trim()).map((l) => center42(l)) : []),
-    ...((formData.phone || '').trim() ? [center42(`Tél: ${(formData.phone || '').trim()}`)] : []),
-    ...((formData.email || '').trim() ? [center42(`Email: ${(formData.email || '').trim()}`.slice(0, 42))] : []),
+    ...((formData.address || '').trim() ? fold42((formData.address || '').trim(), previewCols).map((l) => center42(l, previewCols)) : []),
+    ...((formData.phone || '').trim() ? [center42(`Tél: ${(formData.phone || '').trim()}`, previewCols)] : []),
+    ...((formData.email || '').trim() ? [center42(`Email: ${(formData.email || '').trim()}`.slice(0, previewCols), previewCols)] : []),
   ];
   const footerText = (formData.footerMessage || '').trim();
-  const previewFooter: string[] = footerText ? fold42(footerText) : fold42(STORE_RETURN_POLICY);
+  const previewFooter: string[] = footerText ? fold42(footerText, previewCols) : fold42(STORE_RETURN_POLICY, previewCols);
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Personnalisation du ticket" className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-4 select-none">
@@ -316,10 +317,49 @@ export const ReceiptTemplateModal: React.FC = () => {
             </button>
           </div>
 
-          {/* Ticket Live 42-Column Preview (header + footer, same omission rules as print) */}
+          {/* Format Papier Thermique (80mm vs 58mm) */}
+          <div className="bg-pos-card border border-pos-border p-3.5 rounded-xl space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-pos-text">Format du Rouleau Papier Thermique</p>
+                <p className="text-[10px] text-pos-muted">Largeur d'impression pour l'imprimante caisse standard ou compacte</p>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+                {formData.paperWidth || '80mm'} ({formData.paperWidth === '58mm' ? '32 cols' : '42 cols'})
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, paperWidth: '80mm' })}
+                className={`py-2 px-3 rounded-lg border text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  (formData.paperWidth || '80mm') === '80mm'
+                    ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-sm'
+                    : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
+                }`}
+              >
+                <span>80 mm (Standard - 42 colonnes)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, paperWidth: '58mm' })}
+                className={`py-2 px-3 rounded-lg border text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  formData.paperWidth === '58mm'
+                    ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-sm'
+                    : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
+                }`}
+              >
+                <span>58 mm (Compact - 32 colonnes)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Ticket Live Preview (dynamic 32 or 42 cols) */}
           <div className="bg-slate-950 p-3 rounded-xl border border-pos-border">
-            <p className="text-[10px] text-pos-muted uppercase font-bold mb-2">Aperçu ticket 42 colonnes :</p>
-            <div className="bg-white text-black p-3 rounded font-mono text-[10px] leading-tight">
+            <p className="text-[10px] text-pos-muted uppercase font-bold mb-2">
+              Aperçu ticket thermique ({formData.paperWidth === '58mm' ? '58 mm • 32 colonnes' : '80 mm • 42 colonnes'}) :
+            </p>
+            <div className={`bg-white text-black p-3 rounded font-mono text-[10px] leading-tight mx-auto ${formData.paperWidth === '58mm' ? 'max-w-[220px]' : 'max-w-[280px]'}`}>
               {formData.logoUrl && (
                 <img
                   src={formData.logoUrl}
@@ -328,7 +368,7 @@ export const ReceiptTemplateModal: React.FC = () => {
                 />
               )}
               <pre className="whitespace-pre-wrap text-center" aria-label="Aperçu en-tête du ticket">
-                {['='.repeat(42), ...previewHeader, '='.repeat(42)].join('\n')}
+                {['='.repeat(previewCols), ...previewHeader, '='.repeat(previewCols)].join('\n')}
               </pre>
               <pre className="whitespace-pre-wrap text-center mt-2" aria-label="Aperçu pied de page du ticket">
                 {[...previewFooter, 'Merci de votre visite et à bientôt !'].join('\n')}

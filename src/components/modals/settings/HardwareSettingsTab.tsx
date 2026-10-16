@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Cpu, Printer, Monitor, Zap, RefreshCcw, CheckCircle2,
   AlertTriangle, Usb, Bluetooth, Wifi, Radio, Server,
-  Tag, Layers, Music
+  Tag, Layers, Music, Volume2, VolumeX
 } from 'lucide-react';
 import type { ReceiptSettings, DiscoveredDevice, PrinterRoutingConfig } from '../../../types/pos';
 import { scanHardwareDevices, openCashDrawer, updateCustomerDisplayVfd, printRawEscpos } from '../../../api/hardware';
@@ -40,6 +40,14 @@ export const HardwareSettingsTab: React.FC<HardwareSettingsTabProps> = ({
   const [scannerTestInput, setScannerTestInput] = useState<string>('');
   const [scannerLog, setScannerLog] = useState<Array<{ barcode: string; time: string }>>([]);
   void scannerTestInput; void setScannerTestInput; void scannerLog; void setScannerLog;
+
+  // Audio Feedback Profile State
+  const [audioProfile, setAudioProfile] = useState(() => soundEngine.getProfile());
+
+  const handleUpdateAudio = (patch: Partial<import('../../../utils/audioFeedback').AudioSettingsProfile>) => {
+    soundEngine.setProfile(patch);
+    setAudioProfile(soundEngine.getProfile());
+  };
 
   const currentRouting: PrinterRoutingConfig = receiptDraft.printerRouting || {
     receiptPrinterId: 'default',
@@ -537,44 +545,103 @@ export const HardwareSettingsTab: React.FC<HardwareSettingsTabProps> = ({
       </div>
 
       {/* ── Audio Feedback & Sound FX Card ── */}
-      <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-3 shadow-md">
-        <div className="flex items-center gap-2">
-          <Music className="w-4 h-4 text-purple-400" />
-          <h4 className="text-xs font-bold text-pos-text">Effets Sonores & Retours Audio</h4>
+      <div className="bg-pos-card border border-pos-border rounded-xl p-4 space-y-4 shadow-md">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Music className="w-4 h-4 text-purple-400" />
+            <h4 className="text-xs font-bold text-pos-text">Effets Sonores & Retours Audio</h4>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleUpdateAudio({ isMuted: !audioProfile.isMuted })}
+            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+              audioProfile.isMuted
+                ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+            }`}
+          >
+            {audioProfile.isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+            <span>{audioProfile.isMuted ? 'Muet' : 'Son Actif'}</span>
+          </button>
         </div>
-        <p className="text-[11px] text-pos-muted">
-          Testez les signaux sonores émis lors de la saisie au clavier, la lecture code-barres et l'encaissement.
-        </p>
 
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <button
-            type="button"
-            onClick={() => soundEngine.playKeyBeep?.()}
-            className="px-3 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-xs text-pos-text font-medium transition cursor-pointer"
-          >
-            Bip Clavier
-          </button>
-          <button
-            type="button"
-            onClick={() => soundEngine.playSuccess?.()}
-            className="px-3 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-xs text-emerald-300 font-medium transition cursor-pointer flex items-center gap-1"
-          >
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Vente Réussie
-          </button>
-          <button
-            type="button"
-            onClick={() => soundEngine.playError?.()}
-            className="px-3 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-xs text-red-300 font-medium transition cursor-pointer flex items-center gap-1"
-          >
-            <AlertTriangle className="w-3.5 h-3.5 text-red-400" /> Alerte Erreur
-          </button>
-          <button
-            type="button"
-            onClick={() => soundEngine.playCashDrawer?.()}
-            className="px-3 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-xs text-amber-300 font-medium transition cursor-pointer flex items-center gap-1"
-          >
-            <Zap className="w-3.5 h-3.5 text-amber-400" /> Clic Tiroir
-          </button>
+        {/* Volume Modulation Slider */}
+        <div className="space-y-1.5 bg-pos-bg p-3 rounded-xl border border-pos-border">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-bold text-pos-text flex items-center gap-1.5">
+              <Volume2 className="w-3.5 h-3.5 text-purple-400" />
+              Volume Principal
+            </span>
+            <span className="font-mono font-bold text-purple-300">
+              {audioProfile.isMuted ? '0% (Muet)' : `${Math.round(audioProfile.masterVolume * 100)}%`}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            disabled={audioProfile.isMuted}
+            value={audioProfile.isMuted ? 0 : Math.round(audioProfile.masterVolume * 100)}
+            onChange={(e) => handleUpdateAudio({ masterVolume: parseFloat(e.target.value) / 100 })}
+            className="w-full accent-purple-500 cursor-pointer disabled:opacity-40"
+          />
+        </div>
+
+        {/* Audio Feature Toggles */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+          <label className="flex items-center gap-2 p-2 rounded-lg bg-pos-bg border border-pos-border cursor-pointer">
+            <input
+              type="checkbox"
+              checked={audioProfile.enableScanBeep}
+              onChange={(e) => handleUpdateAudio({ enableScanBeep: e.target.checked })}
+              className="w-3.5 h-3.5 accent-purple-500 rounded cursor-pointer"
+            />
+            <span className="text-pos-text font-medium">Bip Lecture Code-barres</span>
+          </label>
+          <label className="flex items-center gap-2 p-2 rounded-lg bg-pos-bg border border-pos-border cursor-pointer">
+            <input
+              type="checkbox"
+              checked={audioProfile.enableCashChime}
+              onChange={(e) => handleUpdateAudio({ enableCashChime: e.target.checked })}
+              className="w-3.5 h-3.5 accent-purple-500 rounded cursor-pointer"
+            />
+            <span className="text-pos-text font-medium">Carillon Paiement & Caisse</span>
+          </label>
+        </div>
+
+        <div className="pt-1">
+          <p className="text-[11px] text-pos-muted mb-2">Test des signaux sonores du poste :</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => soundEngine.playKeyBeep?.()}
+              className="px-3 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-xs text-pos-text font-medium transition cursor-pointer"
+            >
+              Bip Clavier
+            </button>
+            <button
+              type="button"
+              onClick={() => soundEngine.playSuccess?.()}
+              className="px-3 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-xs text-emerald-300 font-medium transition cursor-pointer flex items-center gap-1"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Vente Réussie
+            </button>
+            <button
+              type="button"
+              onClick={() => soundEngine.playError?.()}
+              className="px-3 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-xs text-red-300 font-medium transition cursor-pointer flex items-center gap-1"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 text-red-400" /> Alerte Erreur
+            </button>
+            <button
+              type="button"
+              onClick={() => soundEngine.playCashDrawer?.()}
+              className="px-3 py-1.5 rounded-lg bg-pos-bg hover:bg-pos-hover border border-pos-border text-xs text-amber-300 font-medium transition cursor-pointer flex items-center gap-1"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-400" /> Clic Tiroir
+            </button>
+          </div>
         </div>
       </div>
     </div>

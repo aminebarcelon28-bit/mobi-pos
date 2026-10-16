@@ -37,6 +37,7 @@ import { getStableDeviceId } from '../../sync/device';
 import { useSyncStatus } from '../../hooks/useSyncStatus';
 import { usePosStore } from '../../store/usePosStore';
 import { useToast } from '../ui/Toast';
+import { getGatewayBaseUrl, setGatewayBaseUrl } from '../../api/syncGateway';
 
 export const CloudSyncPanel: React.FC = () => {
   const sync = useSyncStatus();
@@ -48,6 +49,8 @@ export const CloudSyncPanel: React.FC = () => {
   const [showToken, setShowToken] = useState(false);
   const [hasStoredCreds, setHasStoredCreds] = useState(false);
   const [copiedPairing, setCopiedPairing] = useState(false);
+  const [gatewayUrl, setGatewayUrl] = useState('');
+  const [isSavingGateway, setIsSavingGateway] = useState(false);
 
   // Stable-per-mount pairing payload via the shared builder (single
   // normalization; the copied text always equals the displayed QR).
@@ -98,7 +101,7 @@ export const CloudSyncPanel: React.FC = () => {
     }
   }, []);
 
-  // Load existing credentials on mount
+  // Load existing credentials and gateway URL on mount
   useEffect(() => {
     (async () => {
       const creds = await getCloudCredentials();
@@ -108,8 +111,37 @@ export const CloudSyncPanel: React.FC = () => {
         setHasStoredCreds(true);
         void loadStorageReport();
       }
+      const gw = await getGatewayBaseUrl();
+      if (gw) {
+        setGatewayUrl(gw);
+      }
     })();
   }, [loadStorageReport]);
+
+  const handleSaveGateway = async () => {
+    setIsSavingGateway(true);
+    try {
+      await setGatewayBaseUrl(gatewayUrl.trim() || null);
+      showToast(gatewayUrl.trim() ? 'Passerelle marchand enregistrée avec succès' : 'Passerelle désactivée', 'success');
+    } catch {
+      showToast("Erreur lors de l'enregistrement de la passerelle", 'error');
+    } finally {
+      setIsSavingGateway(false);
+    }
+  };
+
+  const handleClearGateway = async () => {
+    setIsSavingGateway(true);
+    try {
+      await setGatewayBaseUrl(null);
+      setGatewayUrl('');
+      showToast('Passerelle marchand désactivée (voie signée en veille)', 'info');
+    } catch {
+      showToast("Erreur lors de la désactivation de la passerelle", 'error');
+    } finally {
+      setIsSavingGateway(false);
+    }
+  };
 
   const handleTestConnection = async () => {
     setIsTesting(true);
@@ -689,6 +721,67 @@ export const CloudSyncPanel: React.FC = () => {
             )}
           </div>
         )}
+      </div>
+
+      {/* ══════════════════════════════════════════════════════════════ */}
+      {/* SIGNED GATEWAY DRAIN LANE CONFIGURATION (TIER B) */}
+      {/* ══════════════════════════════════════════════════════════════ */}
+      <div className="bg-pos-card border border-pos-border rounded-2xl p-5 space-y-4 shadow-sm">
+        <div className="flex items-center justify-between border-b border-pos-border pb-3">
+          <div className="flex items-center gap-2">
+            <Unplug className="w-4 h-4 text-emerald-400" />
+            <h4 className="text-sm font-bold text-pos-text uppercase tracking-wider">
+              Passerelle Marchand Signée (Voie HTTP / sync.gateway_url)
+            </h4>
+          </div>
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+            gatewayUrl.trim()
+              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+              : 'bg-pos-muted/10 text-pos-muted border-pos-border'
+          }`}>
+            {gatewayUrl.trim() ? 'Voie Signée Active' : 'En veille (Non configurée)'}
+          </span>
+        </div>
+
+        <p className="text-xs text-pos-muted leading-relaxed">
+          Configure l'adresse de votre passerelle marchande dédiée pour le traitement et le drain en continu des transactions signées cryptographiquement (Tier B). Si vide, la voie signée reste en veille et le transport cloud standard Turso assure la réplication.
+        </p>
+
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          <div className="flex-1 relative">
+            <input
+              type="url"
+              value={gatewayUrl}
+              onChange={(e) => setGatewayUrl(e.target.value)}
+              placeholder="https://gateway.votre-boutique.dz ou http://localhost:8080"
+              className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-mono text-pos-text placeholder-pos-muted focus:outline-none focus:border-emerald-400"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleSaveGateway}
+              disabled={isSavingGateway}
+              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+            >
+              {isSavingGateway ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+              <span>Enregistrer la Passerelle</span>
+            </button>
+
+            {gatewayUrl && (
+              <button
+                type="button"
+                onClick={handleClearGateway}
+                disabled={isSavingGateway}
+                className="px-3 py-2 rounded-xl bg-pos-bg hover:bg-pos-hover border border-pos-border text-xs font-bold text-pos-muted hover:text-red-400 transition cursor-pointer"
+                title="Désactiver et effacer la passerelle"
+              >
+                Effacer
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* ══════════════════════════════════════════════════════════════ */}

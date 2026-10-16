@@ -63,6 +63,26 @@ export async function getGatewayBaseUrl(): Promise<string | null> {
   }
 }
 
+/** Sets or clears the merchant gateway base URL (`app_settings sync.gateway_url`). */
+export async function setGatewayBaseUrl(url: string | null): Promise<void> {
+  try {
+    const { getLocalDb } = await import('../db/sqlPluginAdapter');
+    const db = await getLocalDb();
+    if (!url || !url.trim()) {
+      await db.execute("DELETE FROM app_settings WHERE key = 'sync.gateway_url'").catch(() => {});
+    } else {
+      const trimmed = url.trim().replace(/\/+$/, '');
+      await db.execute(
+        `INSERT INTO app_settings (key, value_json, updated_at) VALUES ('sync.gateway_url', $1, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+         ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at;`,
+        [JSON.stringify(trimmed)]
+      ).catch(() => {});
+    }
+  } catch (err) {
+    console.warn('[syncGateway] Failed to update gateway URL in app_settings:', err);
+  }
+}
+
 function parseGatewayResponse(raw: unknown): SyncGatewayResponse {
   const r = raw as Record<string, unknown>;
   if (!r || !Array.isArray(r.ackSeqNos) || !r.ackSeqNos.every((n) => Number.isInteger(n))) {
