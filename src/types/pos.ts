@@ -152,6 +152,8 @@ export interface CartItem {
   lineProfit?: number;
   fifoAllocations?: FifoAllocation[];
   isReturn?: boolean; // When true, represents a returned/exchanged item (re-stocks and subtracts from cart total)
+  /** Binds items sold together as a kitting bundle. Removing one member revokes the bundle discount. */
+  bundleGroupId?: string;
   /**
    * Warranty term in months, frozen at checkout and persisted on the order line
    * as `warranty_months_at_sale`.
@@ -1697,6 +1699,7 @@ export interface CashSession {
   openingNote?: string;
   closingNote?: string | null;
   denominations?: DenominationCount | null;
+  closingDenominations?: DenominationCount | null;
   movements?: CashMovement[];
   updatedAt?: string;
   deviceId?: string;

@@ -85,7 +85,7 @@ export interface CartSlice {
   heldSales: HeldSale[];
 
   addToCart: (product: Product, overridePin?: boolean, quantity?: number, isReturn?: boolean) => { success: boolean; reason?: string };
-  toggleCartItemReturn: (productId: string) => void;
+  toggleCartItemReturn: (productId: string, managerApproved?: boolean) => { success: boolean; reason?: string };
   updateCartQty: (productId: string, delta: number) => void;
   setCartItemQty: (productId: string, quantity: number) => void;
   removeFromCart: (productId: string) => void;

@@ -204,7 +204,7 @@ async function main() {
     console.log(deployOutput);
 
     // Extract worker URL
-    const urlMatch = deployOutput.match(/https:\/\/[a-zA-Z0-9_\-\.]+\.workers\.dev/);
+    const urlMatch = deployOutput.match(/https:\/\/[a-zA-Z0-9_\-.]+\.workers\.dev/);
     const deployedUrl = urlMatch ? urlMatch[0] : null;
 
     if (deployedUrl) {

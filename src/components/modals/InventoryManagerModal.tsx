@@ -16,12 +16,15 @@ import {
   AlertTriangle,
   Minus,
   Check,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { soundEngine } from '../../utils/audioFeedback';
 import { useToast } from '../ui/Toast';
 import { Kbd } from '../../design-system/desktop/Kbd';
+import { useInventoryValuation } from '../../hooks/useInventoryValuation';
 
 type ViewMode = 'catalog' | 'stocktake';
 type StocktakeFilter = 'all' | 'discrepancies' | 'counted';
@@ -37,6 +40,7 @@ export const InventoryManagerModal: React.FC = () => {
   } = usePosStore();
 
   const { showToast } = useToast();
+  const valuation = useInventoryValuation(products);
 
   const [mode, setMode] = useState<ViewMode>('catalog');
   const [managerSearch, setManagerSearch] = useState('');
@@ -53,6 +57,7 @@ export const InventoryManagerModal: React.FC = () => {
   const [stocktakeFilter, setStocktakeFilter] = useState<StocktakeFilter>('all');
   const [lastScannedFeedback, setLastScannedFeedback] = useState<string | null>(null);
   const [isCommitting, setIsCommitting] = useState(false);
+  const [isBlindStocktake, setIsBlindStocktake] = useState(false);
 
   const scannerInputRef = useRef<HTMLInputElement>(null);
 
@@ -141,11 +146,15 @@ export const InventoryManagerModal: React.FC = () => {
       const nextCount = currentCount + 1;
       setAuditCounts((prev) => ({ ...prev, [found.id]: nextCount }));
       soundEngine.playScan();
-      const variance = nextCount - found.stock;
-      const sign = variance > 0 ? `+${variance}` : `${variance}`;
-      setLastScannedFeedback(
-        `✓ +1 "${found.title}" (Scanné: ${nextCount}, Théorique: ${found.stock}, Écart: ${sign})`
-      );
+      if (isBlindStocktake) {
+        setLastScannedFeedback(`✓ +1 "${found.title}" (Total scanné : ${nextCount})`);
+      } else {
+        const variance = nextCount - found.stock;
+        const sign = variance > 0 ? `+${variance}` : `${variance}`;
+        setLastScannedFeedback(
+          `✓ +1 "${found.title}" (Scanné: ${nextCount}, Théorique: ${found.stock}, Écart: ${sign})`
+        );
+      }
     } else {
       soundEngine.playError();
       setLastScannedFeedback(`❌ Code inconnu: "${scannerInput.trim()}"`);
@@ -356,10 +365,10 @@ export const InventoryManagerModal: React.FC = () => {
             <div className="p-2 sm:p-3 bg-pos-card/60 border-b border-pos-border grid grid-cols-2 lg:grid-cols-4 gap-2 shrink-0">
               <div className="bg-pos-bg border border-pos-border p-2 sm:p-2.5 rounded-xl">
                 <span className="text-[8px] sm:text-[9px] font-bold uppercase text-pos-muted block truncate">
-                  Valeur Stock au Coût
+                  Valeur Stock au Coût (FIFO)
                 </span>
                 <p className="text-xs sm:text-sm font-black font-mono text-pos-text mt-0.5 truncate num">
-                  {formatDZD((products || []).reduce((sum, p) => sum + (p.stock || 0) * (p.costPrice || 0), 0))}
+                  {formatDZD(valuation.costValue)}
                 </p>
               </div>
 
@@ -368,7 +377,7 @@ export const InventoryManagerModal: React.FC = () => {
                   Valeur Marchande
                 </span>
                 <p className="text-xs sm:text-sm font-black font-mono text-emerald-400 mt-0.5 truncate num">
-                  {formatDZD((products || []).reduce((sum, p) => sum + (p.stock || 0) * p.price, 0))}
+                  {formatDZD(valuation.retailValue)}
                 </p>
               </div>
 
@@ -377,9 +386,7 @@ export const InventoryManagerModal: React.FC = () => {
                   Marge Latente
                 </span>
                 <p className="text-xs sm:text-sm font-black font-mono text-cyan-400 mt-0.5 truncate num">
-                  {formatDZD(
-                    (products || []).reduce((sum, p) => sum + (p.stock || 0) * (p.price - (p.costPrice || 0)), 0)
-                  )}
+                  {formatDZD(Math.max(0, valuation.retailValue - valuation.costValue))}
                 </p>
               </div>
 
@@ -388,7 +395,7 @@ export const InventoryManagerModal: React.FC = () => {
                   Volume Pièces
                 </span>
                 <p className="text-xs sm:text-sm font-black font-mono text-amber-400 mt-0.5 truncate num">
-                  {(products || []).reduce((sum, p) => sum + (p.stock || 0), 0)} un. ({(products || []).length} réf.)
+                  {valuation.units} un. ({(products || []).length} réf.)
                 </p>
               </div>
             </div>
@@ -644,9 +651,19 @@ export const InventoryManagerModal: React.FC = () => {
                   Écart Net en Pièces
                 </span>
                 <p className={`text-xs sm:text-sm font-black font-mono mt-0.5 ${
-                  totalVarianceUnits < 0 ? 'text-red-400' : totalVarianceUnits > 0 ? 'text-cyan-300' : 'text-emerald-400'
+                  isBlindStocktake
+                    ? 'text-pos-muted'
+                    : totalVarianceUnits < 0
+                    ? 'text-red-400'
+                    : totalVarianceUnits > 0
+                    ? 'text-cyan-300'
+                    : 'text-emerald-400'
                 }`}>
-                  {totalVarianceUnits > 0 ? `+${totalVarianceUnits}` : totalVarianceUnits} pièces
+                  {isBlindStocktake
+                    ? '•••• (Masqué)'
+                    : totalVarianceUnits > 0
+                    ? `+${totalVarianceUnits} pièces`
+                    : `${totalVarianceUnits} pièces`}
                 </p>
               </div>
 
@@ -655,14 +672,24 @@ export const InventoryManagerModal: React.FC = () => {
                   Impact Coût Global
                 </span>
                 <p className={`text-xs sm:text-sm font-black font-mono mt-0.5 ${
-                  totalFinancialVariance < 0 ? 'text-red-400' : totalFinancialVariance > 0 ? 'text-cyan-300' : 'text-emerald-400'
+                  isBlindStocktake
+                    ? 'text-pos-muted'
+                    : totalFinancialVariance < 0
+                    ? 'text-red-400'
+                    : totalFinancialVariance > 0
+                    ? 'text-cyan-300'
+                    : 'text-emerald-400'
                 }`}>
-                  {totalFinancialVariance > 0 ? `+${formatDZD(totalFinancialVariance)}` : formatDZD(totalFinancialVariance)}
+                  {isBlindStocktake
+                    ? '•••• (Masqué)'
+                    : totalFinancialVariance > 0
+                    ? `+${formatDZD(totalFinancialVariance)}`
+                    : formatDZD(totalFinancialVariance)}
                 </p>
               </div>
             </div>
 
-            {/* Hands-Free Scanner Bar */}
+            {/* Hands-Free Scanner Bar & Controls */}
             <div className="p-3 bg-pos-card border-b border-pos-border flex flex-col sm:flex-row items-center gap-2 shrink-0">
               <form onSubmit={handleScannerSubmit} className="relative flex-1 w-full flex items-center">
                 <BarcodeIcon className="w-5 h-5 absolute left-3 text-cyan-400 animate-pulse pointer-events-none" />
@@ -682,8 +709,24 @@ export const InventoryManagerModal: React.FC = () => {
                 </button>
               </form>
 
-              {/* Filter Tabs */}
-              <div className="flex items-center gap-1 bg-pos-bg p-1 rounded-xl border border-pos-border shrink-0 w-full sm:w-auto justify-center">
+              {/* Mode Aveugle Toggle & Filter Tabs */}
+              <div className="flex flex-wrap items-center gap-1.5 bg-pos-bg p-1 rounded-xl border border-pos-border shrink-0 w-full sm:w-auto justify-center">
+                <button
+                  type="button"
+                  onClick={() => setIsBlindStocktake(!isBlindStocktake)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                    isBlindStocktake
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
+                      : 'bg-pos-card text-pos-muted hover:text-pos-text border border-pos-border'
+                  }`}
+                  title="Masquer le stock théorique et les écarts pour forcer un comptage physique strict"
+                >
+                  {isBlindStocktake ? <EyeOff className="w-3.5 h-3.5 text-amber-400" /> : <Eye className="w-3.5 h-3.5" />}
+                  <span>Mode Aveugle {isBlindStocktake ? 'Actif' : ''}</span>
+                </button>
+
+                <div className="h-4 w-px bg-pos-border mx-0.5" />
+
                 <button
                   type="button"
                   onClick={() => setStocktakeFilter('all')}
@@ -705,7 +748,7 @@ export const InventoryManagerModal: React.FC = () => {
                   }`}
                 >
                   <AlertTriangle className="w-3 h-3 text-amber-400" />
-                  <span>Écarts ({discrepancyCount})</span>
+                  <span>Écarts ({isBlindStocktake ? '•••' : discrepancyCount})</span>
                 </button>
                 <button
                   type="button"
@@ -798,6 +841,10 @@ export const InventoryManagerModal: React.FC = () => {
                               <span className="text-[10px] text-pos-muted italic bg-pos-bg px-2 py-0.5 rounded-full border border-pos-border">
                                 Non vérifié
                               </span>
+                            ) : isBlindStocktake ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-800">
+                                Saisi ({counted} un.)
+                              </span>
                             ) : variance === 0 ? (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
                                 <Check className="w-3 h-3" /> Conforme (0)
@@ -818,18 +865,22 @@ export const InventoryManagerModal: React.FC = () => {
                         <div className="grid grid-cols-2 gap-2 bg-pos-bg/80 p-2 rounded-lg border border-pos-border/60 text-xs">
                           <div>
                             <span className="text-[9px] uppercase font-bold text-pos-muted block">Stock Théorique</span>
-                            <span className="font-mono font-bold text-pos-muted">{product.stock} un.</span>
+                            <span className="font-mono font-bold text-pos-muted">
+                              {isBlindStocktake ? '•••• (Masqué)' : `${product.stock} un.`}
+                            </span>
                           </div>
                           <div className="text-right">
                             <span className="text-[9px] uppercase font-bold text-pos-muted block">Impact Coût</span>
                             <span className={`font-mono font-bold ${
-                              !isCounted || variance === 0
+                              isBlindStocktake || !isCounted || variance === 0
                                 ? 'text-pos-muted'
                                 : financialDiff < 0
                                 ? 'text-rose-400'
                                 : 'text-cyan-400'
                             }`}>
-                              {!isCounted || variance === 0
+                              {isBlindStocktake
+                                ? '••••'
+                                : !isCounted || variance === 0
                                 ? '0 DA'
                                 : financialDiff < 0
                                 ? formatDZD(financialDiff)
@@ -843,7 +894,7 @@ export const InventoryManagerModal: React.FC = () => {
                           <div className="inline-flex items-center bg-pos-bg border border-pos-border rounded-xl p-1 gap-1">
                             <button
                               type="button"
-                              onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) - 1)}
+                              onClick={() => updateCount(product.id, (auditCounts[product.id] ?? (isBlindStocktake ? 1 : product.stock)) - 1)}
                               className="w-10 h-10 rounded-lg bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition active:scale-95"
                               aria-label={`Diminuer le comptage de ${product.title}`}
                             >
@@ -853,14 +904,14 @@ export const InventoryManagerModal: React.FC = () => {
                               type="number"
                               min="0"
                               value={isCounted ? counted : ''}
-                              placeholder={String(product.stock)}
+                              placeholder={isBlindStocktake ? 'Qté' : String(product.stock)}
                               onChange={(e) => updateCount(product.id, parseInt(e.target.value) || 0)}
                               className="w-14 h-10 text-center text-sm font-black font-mono bg-transparent text-pos-text focus:outline-none"
                               aria-label={`Comptage pour ${product.title}`}
                             />
                             <button
                               type="button"
-                              onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) + 1)}
+                              onClick={() => updateCount(product.id, (auditCounts[product.id] ?? (isBlindStocktake ? 0 : product.stock)) + 1)}
                               className="w-10 h-10 rounded-lg bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition active:scale-95"
                               aria-label={`Augmenter le comptage de ${product.title}`}
                             >
@@ -868,15 +919,17 @@ export const InventoryManagerModal: React.FC = () => {
                             </button>
                           </div>
 
-                          <button
-                            type="button"
-                            onClick={() => updateCount(product.id, product.stock)}
-                            className="min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-bold bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer active:scale-95 flex items-center gap-1.5"
-                            title="Marquer comme conforme au stock théorique"
-                          >
-                            <Check className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
-                            <span>= Conforme</span>
-                          </button>
+                          {!isBlindStocktake && (
+                            <button
+                              type="button"
+                              onClick={() => updateCount(product.id, product.stock)}
+                              className="min-h-[44px] px-3.5 py-2 rounded-xl text-xs font-bold bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer active:scale-95 flex items-center gap-1.5"
+                              title="Marquer comme conforme au stock théorique"
+                            >
+                              <Check className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" />
+                              <span>= Conforme</span>
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -889,7 +942,7 @@ export const InventoryManagerModal: React.FC = () => {
                 <thead className="bg-pos-card border-b border-pos-border text-pos-muted sticky top-0 uppercase tracking-wider text-[10px]">
                   <tr>
                     <th className="p-3">Article & Code-barres</th>
-                    <th className="p-3 text-center">Stock Système</th>
+                    <th className="p-3 text-center">Stock Système {isBlindStocktake ? '(Masqué)' : ''}</th>
                     <th className="p-3 text-center">Stock Compté (Douchette)</th>
                     <th className="p-3 text-center">Écart (Variance)</th>
                     <th className="p-3 text-right">Impact au Coût</th>
@@ -924,6 +977,8 @@ export const InventoryManagerModal: React.FC = () => {
                               className={`transition group ${
                                 !isCounted
                                   ? 'hover:bg-pos-hover/40'
+                                  : isBlindStocktake
+                                  ? 'bg-cyan-500/[0.02] hover:bg-cyan-500/[0.05]'
                                   : variance === 0
                                   ? 'bg-emerald-500/[0.02] hover:bg-emerald-500/[0.05]'
                                   : variance < 0
@@ -942,7 +997,7 @@ export const InventoryManagerModal: React.FC = () => {
 
                               {/* Theoretical Stock */}
                               <td className="p-3 text-center font-mono font-bold text-pos-muted">
-                                {product.stock} un.
+                                {isBlindStocktake ? '••••' : `${product.stock} un.`}
                               </td>
 
                               {/* Counted Quantity with Stepper */}
@@ -950,7 +1005,7 @@ export const InventoryManagerModal: React.FC = () => {
                                 <div className="inline-flex items-center gap-1 bg-pos-bg border border-pos-border rounded-lg p-0.5">
                                   <button
                                     type="button"
-                                    onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) - 1)}
+                                    onClick={() => updateCount(product.id, (auditCounts[product.id] ?? (isBlindStocktake ? 1 : product.stock)) - 1)}
                                     className="w-6 h-6 rounded bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition"
                                   >
                                     <Minus className="w-3 h-3" />
@@ -959,13 +1014,13 @@ export const InventoryManagerModal: React.FC = () => {
                                     type="number"
                                     min="0"
                                     value={isCounted ? counted : ''}
-                                    placeholder={String(product.stock)}
+                                    placeholder={isBlindStocktake ? 'Qté' : String(product.stock)}
                                     onChange={(e) => updateCount(product.id, parseInt(e.target.value) || 0)}
                                     className="w-12 h-6 text-center text-xs font-black font-mono bg-transparent text-pos-text focus:outline-none"
                                   />
                                   <button
                                     type="button"
-                                    onClick={() => updateCount(product.id, (auditCounts[product.id] ?? product.stock) + 1)}
+                                    onClick={() => updateCount(product.id, (auditCounts[product.id] ?? (isBlindStocktake ? 0 : product.stock)) + 1)}
                                     className="w-6 h-6 rounded bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text flex items-center justify-center transition"
                                   >
                                     <Plus className="w-3 h-3" />
@@ -977,6 +1032,10 @@ export const InventoryManagerModal: React.FC = () => {
                               <td className="p-3 text-center">
                                 {!isCounted ? (
                                   <span className="text-[10px] text-pos-muted font-italic">Non vérifié</span>
+                                ) : isBlindStocktake ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-800">
+                                    Saisi ({counted} un.)
+                                  </span>
                                 ) : variance === 0 ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
                                     <Check className="w-3 h-3" /> Conforme (0)
@@ -994,7 +1053,9 @@ export const InventoryManagerModal: React.FC = () => {
 
                               {/* Financial Impact */}
                               <td className="p-3 text-right font-mono font-bold">
-                                {!isCounted || variance === 0 ? (
+                                {isBlindStocktake ? (
+                                  <span className="text-pos-muted">••••</span>
+                                ) : !isCounted || variance === 0 ? (
                                   <span className="text-pos-muted">0 DA</span>
                                 ) : financialDiff < 0 ? (
                                   <span className="text-rose-400">{formatDZD(financialDiff)}</span>
@@ -1005,14 +1066,18 @@ export const InventoryManagerModal: React.FC = () => {
 
                               {/* Match Theoretical Action */}
                               <td className="p-3 text-center">
-                                <button
-                                  type="button"
-                                  onClick={() => updateCount(product.id, product.stock)}
-                                  className="px-2 py-1 rounded text-[10px] font-bold bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
-                                  title="Marquer comme conforme au stock théorique"
-                                >
-                                  = Conforme
-                                </button>
+                                {isBlindStocktake ? (
+                                  <span className="text-[10px] text-pos-muted italic">—</span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => updateCount(product.id, product.stock)}
+                                    className="px-2 py-1 rounded text-[10px] font-bold bg-pos-card hover:bg-pos-hover border border-pos-border text-pos-muted hover:text-pos-text transition cursor-pointer"
+                                    title="Marquer comme conforme au stock théorique"
+                                  >
+                                    = Conforme
+                                  </button>
+                                )}
                               </td>
                             </tr>
                           );

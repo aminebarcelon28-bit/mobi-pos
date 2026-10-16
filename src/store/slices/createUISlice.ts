@@ -764,6 +764,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     const bundleDiscountTotal = Math.max(0, regularSum - bundle.bundlePrice);
 
     const updatedCart = [...cart];
+    const bundleGroupId = newId('bundle-grp');
 
     // B-038: last line absorbs the rounding residue so the charged total
     // equals bundle.bundlePrice exactly (249 vs 250 class of drift).
@@ -782,6 +783,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           ...updatedCart[existingIndex],
           quantity: updatedCart[existingIndex].quantity + 1,
           discount: updatedCart[existingIndex].discount + itemDiscount,
+          bundleGroupId,
         };
       } else {
         updatedCart.push({
@@ -790,6 +792,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           discount: itemDiscount,
           appliedPrice: childProd.price,
           imeiNumber: childProd.isSerialized ? '' : undefined,
+          bundleGroupId,
         });
       }
     });

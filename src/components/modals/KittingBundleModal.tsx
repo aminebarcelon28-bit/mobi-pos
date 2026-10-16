@@ -140,13 +140,11 @@ export const KittingBundleModal: React.FC = () => {
     setBarcode(preset.barcode);
     setBundlePrice(preset.suggestedPrice);
     
-    // Find matching SKUs or pick available ones
+    // Find matching SKUs from the catalog
     const matchingSkus = preset.skus.filter(s => products.some(p => p.sku === s));
-    if (matchingSkus.length > 0) {
-      setSelectedSkus(matchingSkus);
-    } else {
-      // Pick first 2 available products
-      setSelectedSkus((products || []).slice(0, 2).map(p => p.sku));
+    setSelectedSkus(matchingSkus);
+    if (matchingSkus.length < 2) {
+      showError(`Les articles du modèle "${preset.title}" doivent être ajoutés ou configurés manuellement.`);
     }
   };
 

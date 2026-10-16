@@ -227,8 +227,22 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
     return { success: true };
   },
 
-  toggleCartItemReturn: (productId) => {
-    const { cart } = get();
+  toggleCartItemReturn: (productId, managerApproved = false) => {
+    const { cart, logSecurityAction, activeShift } = get();
+    const target = cart.find((item) => item.product.id === productId);
+    if (!target) return { success: false, reason: 'ITEM_NOT_FOUND' };
+
+    // Anti-theft gate: switching an item to return mode (cashout / credit liability)
+    // strictly requires an active shift and manager PIN authorization.
+    if (!target.isReturn) {
+      if (!activeShift) {
+        return { success: false, reason: 'SHIFT_NOT_ACTIVE' };
+      }
+      if (!managerApproved) {
+        return { success: false, reason: 'MANAGER_PIN_REQUIRED' };
+      }
+    }
+
     const updated = cart.map((item) => {
       if (item.product.id === productId) {
         return { ...item, isReturn: !item.isReturn };
@@ -236,12 +250,22 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
       return item;
     });
     set({ cart: updated });
+    logSecurityAction(
+      target.isReturn ? 'Annulation Retour Panier' : 'Autorisation Retour Panier (isReturn)',
+      `Article: ${target.product.title} • Qty: ${target.quantity}`,
+      'Manager',
+      false
+    );
     audioBus.emit('scan');
+    return { success: true };
   },
 
   updateCartQty: (productId, delta) => {
     const { cart, pricingTier } = get();
-    const updated = cart
+    const targetItem = cart.find((item) => item.product.id === productId);
+    const bundleGroupId = targetItem?.bundleGroupId;
+
+    let updated = cart
       .map((item) => {
         if (item.product.id === productId) {
           if (item.product.isSerialized && delta > 0) {
@@ -260,33 +284,84 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
           ) {
             return item; // Do not exceed available physical stock on sales
           }
-          return refreshCartItemPricing(item, newQty, pricingTier);
+          const refreshed = refreshCartItemPricing(item, newQty, pricingTier);
+          // Modifying a bundle item's quantity breaks the preset ratio
+          if (bundleGroupId) {
+            return { ...refreshed, bundleGroupId: undefined, discount: 0 };
+          }
+          return refreshed;
         }
         return item;
       })
       .filter((item): item is CartItem => item !== null);
+
+    // If a bundle was broken by quantity adjustment, clear bundle discount on remaining members
+    if (bundleGroupId) {
+      updated = updated.map((item) => {
+        if (item.bundleGroupId === bundleGroupId) {
+          return { ...item, bundleGroupId: undefined, discount: 0 };
+        }
+        return item;
+      });
+    }
+
     set({ cart: updated });
   },
 
   setCartItemQty: (productId, quantity) => {
     const { cart, pricingTier } = get();
+    const targetItem = cart.find((item) => item.product.id === productId);
+    const bundleGroupId = targetItem?.bundleGroupId;
     const safeQty = Math.max(1, isNaN(quantity) ? 1 : Math.floor(quantity));
-    const updated = cart.map((item) => {
+
+    let updated = cart.map((item) => {
       if (item.product.id === productId) {
         if (item.product.isSerialized) {
           return item; // Serialized items stay 1
         }
         const clampedQty = item.isReturn ? safeQty : Math.min(item.product.stock, safeQty);
-        return refreshCartItemPricing(item, clampedQty, pricingTier);
+        const refreshed = refreshCartItemPricing(item, clampedQty, pricingTier);
+        if (bundleGroupId) {
+          return { ...refreshed, bundleGroupId: undefined, discount: 0 };
+        }
+        return refreshed;
       }
       return item;
     });
+
+    if (bundleGroupId) {
+      updated = updated.map((item) => {
+        if (item.bundleGroupId === bundleGroupId) {
+          return { ...item, bundleGroupId: undefined, discount: 0 };
+        }
+        return item;
+      });
+    }
+
     set({ cart: updated });
   },
 
   removeFromCart: (productId) => {
     const { cart } = get();
-    set({ cart: cart.filter((item) => item.product.id !== productId) });
+    const removedItem = cart.find((item) => item.product.id === productId);
+    const bundleGroupId = removedItem?.bundleGroupId;
+
+    let updated = cart.filter((item) => item.product.id !== productId);
+    if (bundleGroupId) {
+      // Removing one member revokes the bundle discount on the remaining items of that bundle
+      updated = updated.map((item) => {
+        if (item.bundleGroupId === bundleGroupId) {
+          return {
+            ...item,
+            discount: 0,
+            bundleGroupId: undefined,
+          };
+        }
+        return item;
+      });
+    }
+
+    set({ cart: updated });
     // Cart discard safety: dropping a SAV line purges its linkage —
     // the repair stays 'Prêt / Terminé', never auto-delivers.
     if (productId.startsWith('repair-balance-')) {

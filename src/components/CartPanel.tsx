@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X, ShoppingBag, AlertTriangle, ArrowLeftRight, RotateCcw, Layers, RefreshCw, Pencil, Barcode } from 'lucide-react';
+import { Trash2, Plus, Minus, Tag, Banknote, Percent, ChevronDown, ChevronUp, Sparkles, Gift, Star, User, UserCheck, X, ShoppingBag, AlertTriangle, ArrowLeftRight, RotateCcw, Layers, RefreshCw, Pencil, Barcode, ShieldAlert } from 'lucide-react';
 import { usePosStore } from '../store/usePosStore';
 import { formatDZD } from '../types/pos';
 import type { PricingTier } from '../types/pos';
@@ -258,6 +258,10 @@ export const CartPanel: React.FC = () => {
   const [overridePriceInput, setOverridePriceInput] = useState<number>(0);
   const [managerPinInput, setManagerPinInput] = useState<string>('');
   const [overrideError, setOverrideError] = useState<string | null>(null);
+
+  const [returnPinPromptProductId, setReturnPinPromptProductId] = useState<string | null>(null);
+  const [returnManagerPin, setReturnManagerPin] = useState<string>('');
+  const [returnPinError, setReturnPinError] = useState<string | null>(null);
   // Double-submit guard: quick-cash + Encaisser stay disabled while a payment
   // is in flight so a double-tap cannot fire processPayment twice.
   const [isProcessing, setIsProcessing] = useState(false);
@@ -384,6 +388,33 @@ export const CartPanel: React.FC = () => {
     setOverridePriceInput(0);
     setManagerPinInput('');
     setOverrideError(null);
+  };
+
+  const handleConfirmReturnPin = async () => {
+    if (!returnManagerPin.trim()) {
+      setReturnPinError('Code PIN Manager requis');
+      return;
+    }
+    const gate = await verifyManagerGate(returnManagerPin, { allowWeakFallback: true });
+    if (!gate.ok) {
+      setReturnPinError(
+        gate.locked
+          ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+          : 'Code PIN Manager incorrect.'
+      );
+      return;
+    }
+    if (returnPinPromptProductId) {
+      const res = toggleCartItemReturn(returnPinPromptProductId, true);
+      if (!res.success) {
+        setReturnPinError(res.reason === 'SHIFT_NOT_ACTIVE' ? 'Aucune session de caisse active' : 'Erreur autorisation');
+        return;
+      }
+    }
+    setReturnPinPromptProductId(null);
+    setReturnManagerPin('');
+    setReturnPinError(null);
+    soundEngine.playSuccess?.();
   };
 
   // Keyboard navigation for cart items (ArrowUp / ArrowDown / + / - / Delete).
@@ -1292,14 +1323,20 @@ export const CartPanel: React.FC = () => {
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleCartItemReturn(item.product.id);
+                          if (item.isReturn) {
+                            toggleCartItemReturn(item.product.id, true);
+                          } else {
+                            setReturnPinPromptProductId(item.product.id);
+                            setReturnManagerPin('');
+                            setReturnPinError(null);
+                          }
                         }}
                         className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold transition cursor-pointer border ${
                           item.isReturn
                             ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
                             : 'bg-pos-card hover:bg-pos-hover text-pos-muted hover:text-pos-text border-pos-border/60'
                         }`}
-                        title={item.isReturn ? 'Annuler le mode retour' : 'Passer cet article en retour / échange client'}
+                        title={item.isReturn ? 'Annuler le mode retour' : 'Passer cet article en retour / échange client (PIN Manager)'}
                       >
                         <ArrowLeftRight className="w-2.5 h-2.5" aria-hidden="true" />
                         <span>{item.isReturn ? 'Retour' : 'Échange'}</span>
@@ -1721,6 +1758,70 @@ export const CartPanel: React.FC = () => {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Return Manager PIN Gate Modal */}
+      {returnPinPromptProductId && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-pos-card border border-pos-border rounded-2xl p-5 max-w-sm w-full space-y-4 shadow-2xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-black text-pos-text flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-amber-400" />
+                <span>Autorisation Retour / Échange</span>
+              </h4>
+              <button
+                type="button"
+                onClick={() => setReturnPinPromptProductId(null)}
+                className="text-pos-muted hover:text-pos-text p-1 cursor-pointer"
+                aria-label="Fermer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-pos-muted">
+              Le basculement d'un article en mode Retour / Avoir client nécessite la validation par code PIN Manager.
+            </p>
+            {returnPinError && (
+              <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs font-bold">
+                {returnPinError}
+              </div>
+            )}
+            <div>
+              <label className="text-[10px] font-bold uppercase text-pos-muted block mb-1">
+                Code PIN Manager
+              </label>
+              <input
+                type="password"
+                autoFocus
+                value={returnManagerPin}
+                onChange={(e) => setReturnManagerPin(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    void handleConfirmReturnPin();
+                  }
+                }}
+                placeholder="••••"
+                className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-center text-lg font-mono font-black text-pos-text focus:outline-none focus:border-amber-400"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setReturnPinPromptProductId(null)}
+                className="flex-1 py-2 rounded-xl bg-pos-bg hover:bg-pos-hover text-pos-muted font-bold text-xs cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmReturnPin()}
+                className="flex-1 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs cursor-pointer"
+              >
+                Autoriser
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

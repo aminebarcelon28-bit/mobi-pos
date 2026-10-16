@@ -1126,6 +1126,41 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         if (!mirrored.ok) {
           noteWarning('Ticket enregistré (vente durable) mais index local à revérifier.');
         }
+
+        // Restitute FIFO stock_batches in Dexie mirror for return/exchange items
+        const returnItems = frozenCartItems.filter((ci) => Boolean(ci.isReturn));
+        if (returnItems.length > 0) {
+          try {
+            const { db: dexieDb } = await import('../../db/database');
+            const now = new Date().toISOString();
+            for (const [rIdx, rItem] of returnItems.entries()) {
+              const pId = rItem.product.id;
+              const lineQty = Math.max(1, Math.round(Number(rItem.quantity) || 1));
+              const lineCost = Math.max(0, Math.round(Number(rItem.unitCostPrice ?? rItem.product.costPrice ?? 0)));
+              const existingBatch = await dexieDb.stockBatches.where('productId').equals(pId).first();
+              if (existingBatch) {
+                await dexieDb.stockBatches.update(existingBatch.batchId, {
+                  quantityRemaining: (existingBatch.quantityRemaining || 0) + lineQty,
+                  updatedAt: now,
+                });
+              } else {
+                await dexieDb.stockBatches.put({
+                  batchId: `batch-exchange-${transactionId}-${rIdx}`,
+                  productId: pId,
+                  quantityRemaining: lineQty,
+                  unitCost: lineCost,
+                  receivedAt: now,
+                  purchaseOrderId: 'EXCHANGE',
+                  createdAt: now,
+                  updatedAt: now,
+                });
+              }
+            }
+          } catch (batchMirrorErr) {
+            console.warn('[checkout] Dexie return batch restitution skipped:', batchMirrorErr);
+          }
+        }
+
         // Voucher capture — ONLY here, after the order row is durable, and
         // only via the atomic conditional decrement. Pre-write validation
         // above already rejected bad vouchers, so a failure here means a

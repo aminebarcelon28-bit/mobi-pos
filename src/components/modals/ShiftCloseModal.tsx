@@ -406,7 +406,8 @@ export const ShiftCloseModal: React.FC = () => {
         physicalCount,
         closingNote.trim() || undefined,
         cashierName.trim() || undefined,
-        needsManagerPin ? managerPinInput.trim() : undefined
+        needsManagerPin ? managerPinInput.trim() : undefined,
+        useDenom ? denominations : undefined
       );
 
       if (closeShiftResult.success) {

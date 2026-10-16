@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { X, Ticket, Plus, Search, Printer, CheckCircle2, Copy } from 'lucide-react';
+import { X, Ticket, Plus, Search, Printer, CheckCircle2, Copy, ShieldAlert } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
 import type { CreditVoucher } from '../../types/pos';
@@ -11,6 +11,7 @@ import { isMobileDevice } from '../../utils/platform';
 import { MoneyInput } from '../ui/MoneyInput';
 import { DzPhoneInput } from '../ui/DzPhoneInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
+import { verifyManagerGate } from '../../utils/pinGate';
 
 export const VoucherModal: React.FC = () => {
   const {
@@ -21,6 +22,7 @@ export const VoucherModal: React.FC = () => {
     fetchCreditVouchers,
     receiptSettings,
     activeShift,
+    logCashMovement,
   } = usePosStore();
   // Part 1 seller rule for the voucher slip (shift opener, never fallback).
   const voucherSeller =
@@ -35,6 +37,11 @@ export const VoucherModal: React.FC = () => {
   const [notes, setNotes] = useState('');
   const [validityDays, setValidityDays] = useState<number>(60);
   const [issuedVoucher, setIssuedVoucher] = useState<CreditVoucher | null>(null);
+
+  const [managerPin, setManagerPin] = useState('');
+  const [fundingSource, setFundingSource] = useState<'CASH' | 'COURTESY'>('CASH');
+  const [pinError, setPinError] = useState<string | null>(null);
+  const previewBarcodeRef = useRef<HTMLCanvasElement>(null);
 
   // List search & filter
   const [searchQuery, setSearchQuery] = useState('');
@@ -53,6 +60,8 @@ export const VoucherModal: React.FC = () => {
       setCustomerName('');
       setCustomerPhone('');
       setNotes('');
+      setManagerPin('');
+      setPinError(null);
       setIssuedVoucher(null);
       setSearchQuery('');
     }
@@ -86,6 +95,15 @@ export const VoucherModal: React.FC = () => {
     }
   }, [printingVoucher]);
 
+  useEffect(() => {
+    if (issuedVoucher && previewBarcodeRef.current) {
+      renderBarcodeToCanvas(previewBarcodeRef.current, issuedVoucher.code, 'code128', {
+        height: 48,
+        showText: false,
+      });
+    }
+  }, [issuedVoucher]);
+
   useEffect(() => { if (activeModal !== 'credit_voucher') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
   useEffect(() => {
@@ -114,6 +132,37 @@ export const VoucherModal: React.FC = () => {
       return;
     }
 
+    if (!managerPin.trim()) {
+      setPinError('Le code PIN Manager est obligatoire pour émettre un bon d\'avoir.');
+      return;
+    }
+
+    const gate = await verifyManagerGate(managerPin, { allowWeakFallback: true });
+    if (!gate.ok) {
+      setPinError(
+        gate.locked
+          ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
+          : 'Code PIN Manager incorrect.'
+      );
+      return;
+    }
+
+    if (fundingSource === 'CASH') {
+      if (!activeShift) {
+        setPinError('Une session de caisse doit être active pour enregistrer l\'apport en espèces.');
+        return;
+      }
+      try {
+        await logCashMovement(
+          amount,
+          'DEPOSIT',
+          `Encaissement pour émission bon d'avoir: ${customerName.trim() || 'Client sans nom'}`
+        );
+      } catch (e) {
+        console.warn('Failed to log cash movement for voucher:', e);
+      }
+    }
+
     try {
       const newVoucher = await createCreditVoucher({
         initialAmount: amount,
@@ -124,6 +173,8 @@ export const VoucherModal: React.FC = () => {
       });
 
       setIssuedVoucher(newVoucher);
+      setManagerPin('');
+      setPinError(null);
       soundEngine.playSuccess();
     } catch (err) {
       console.error('Failed to create credit voucher:', err);
@@ -329,6 +380,65 @@ export const VoucherModal: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Funding Source & Manager Authorization */}
+                <div className="bg-pos-card/50 border border-pos-border rounded-xl p-3 space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-pos-text">
+                    <ShieldAlert className="w-4 h-4 text-amber-400" />
+                    <span>Contrôle Anti-Fraude & Financement</span>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-pos-muted block mb-1">
+                      Origine des Fonds / Contrepartie
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFundingSource('CASH')}
+                        className={`p-2 rounded-lg text-xs font-bold border text-left transition cursor-pointer ${
+                          fundingSource === 'CASH'
+                            ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                            : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
+                        }`}
+                      >
+                        <p className="font-bold">Encaissement Caisse</p>
+                        <p className="text-[10px] opacity-75">Apport espèces tiroir</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFundingSource('COURTESY')}
+                        className={`p-2 rounded-lg text-xs font-bold border text-left transition cursor-pointer ${
+                          fundingSource === 'COURTESY'
+                            ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                            : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
+                        }`}
+                      >
+                        <p className="font-bold">Geste Commercial</p>
+                        <p className="text-[10px] opacity-75">Avoir accordé par Manager</p>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-bold uppercase text-pos-muted block mb-1">
+                      Validation Code PIN Manager <span className="text-rose-400">*</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={managerPin}
+                      onChange={(e) => {
+                        setManagerPin(e.target.value);
+                        setPinError(null);
+                      }}
+                      placeholder="Code PIN Manager requis"
+                      className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-sm font-mono text-pos-text focus:outline-none focus:border-purple-500"
+                    />
+                    {pinError && (
+                      <p className="text-[11px] font-bold text-rose-400 mt-1">{pinError}</p>
+                    )}
+                  </div>
+                </div>
+
                 <div className="pt-2">
                   <button
                     type="button"
@@ -362,7 +472,7 @@ export const VoucherModal: React.FC = () => {
                     <div className="text-2xl font-black tracking-widest text-purple-900 my-1">
                       {issuedVoucher.code}
                     </div>
-                    <div className="text-xs text-slate-400 tracking-widest">||| | |||| | ||| || |||</div>
+                    <canvas ref={previewBarcodeRef} className="mx-auto my-2 max-w-full h-12" />
                   </div>
 
                   <div className="py-2 border-t border-b border-slate-200 space-y-1 text-xs">

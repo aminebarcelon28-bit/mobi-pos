@@ -202,10 +202,8 @@ export const ShiftZReportModal: React.FC = () => {
       showToast('Veuillez saisir un montant de transfert supérieur à 0 DA.', 'warning');
       return;
     }
-    if (expectedCash > 0 && validDrop > expectedCash) {
-      if (!window.confirm(`⚠️ Attention : Le montant du dépôt (${formatDZD(validDrop)}) est supérieur au solde de caisse théorique (${formatDZD(expectedCash)}). Souhaitez-vous confirmer ce transfert ?`)) {
-        return;
-      }
+    if (!window.confirm(`Confirmer l’enregistrement du dépôt coffre-fort de ${formatDZD(validDrop)} ?`)) {
+      return;
     }
     addCashDrop({
       amount: validDrop,
@@ -248,7 +246,18 @@ export const ShiftZReportModal: React.FC = () => {
         {/* Scrollable Body */}
         {/* Scrollable Body (screen only — print uses the dedicated doc below) */}
         <div className="print-zreport-target p-5 overflow-y-auto overscroll-contain space-y-5 flex-1 print:hidden">
-          {/* Shift Cash Summary Cards */}
+          {/* Shift Cash Summary Cards — Concealed until blind count is validated */}
+          {!isBlindRevealed ? (
+            <div className="bg-pos-card border border-dashed border-pos-border rounded-xl p-6 text-center space-y-2">
+              <ShieldAlert className="w-8 h-8 text-amber-500 mx-auto" />
+              <h4 className="text-xs font-bold text-pos-text uppercase tracking-wider">
+                Comptage Physique à l'Aveugle
+              </h4>
+              <p className="text-[11px] text-pos-muted max-w-md mx-auto">
+                Les totaux d'encaissement et le solde théorique sont masqués jusqu'à la validation du montant physique réel compté dans le tiroir-caisse.
+              </p>
+            </div>
+          ) : (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <div className="bg-pos-card border border-pos-border p-3 rounded-xl">
               <span className="text-[10px] text-pos-muted uppercase font-bold">Fond Initial</span>
@@ -338,6 +347,7 @@ export const ShiftZReportModal: React.FC = () => {
               <p className="text-sm font-bold text-red-400 mt-0.5">-{formatDZD(totalPayouts)}</p>
             </div>
           </div>
+          )}
 
           {/* Blind Till Reconciliation Section */}
           <div className="bg-pos-card border border-emerald-500/30 p-4 rounded-xl space-y-3">
@@ -356,29 +366,32 @@ export const ShiftZReportModal: React.FC = () => {
                   valueMinor={dinarsToMinor(actualCountedCash || 0)}
                   onChangeMinor={(minor) => {
                     setActualCountedCash(toLegacyReal(minor));
-                    // The FIRST keystroke reveals the theoretical balance and the
-                    // variance — the collusion surface of a blind count — and it
-                    // was written with NO audit trail at all. Journal it here,
-                    // before the figure is on screen, with no monetary value in
-                    // the entry (see `blindRevealAuditDetail`).
-                    //
-                    // Not awaited on purpose: `logSecurityAction` never re-throws
-                    // (createUISlice — audit is a side-effect of the primary
-                    // action), and an awaited write would stall the money input
-                    // that produced it.
-                    if (!blindRevealAuditedRef.current) {
-                      blindRevealAuditedRef.current = true;
-                      void logSecurityAction(
-                        'Révolution du solde théorique — Z à Aveugle',
-                        blindRevealAuditDetail({ zNumber, cashier: lockScreenCashier }),
-                        lockScreenCashier
-                      );
-                    }
-                    setIsBlindRevealed(true);
                   }}
+                  disabled={isBlindRevealed}
                   placeholder="ex: 31 305 DA"
-                  className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-base font-bold text-emerald-400 focus:border-emerald-400 focus:outline-none"
+                  className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2 text-base font-bold text-emerald-400 focus:border-emerald-400 focus:outline-none disabled:opacity-75"
                 />
+                {!isBlindRevealed && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!blindRevealAuditedRef.current) {
+                        blindRevealAuditedRef.current = true;
+                        void logSecurityAction(
+                          'Révélation du solde théorique — Z à Aveugle',
+                          blindRevealAuditDetail({ zNumber, cashier: lockScreenCashier }),
+                          lockScreenCashier
+                        );
+                      }
+                      setIsBlindRevealed(true);
+                      showToast('Comptage verrouillé. Écarts et solde théorique révélés.', 'info');
+                    }}
+                    className="mt-2.5 w-full py-2 px-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-lg transition active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Valider et Révéler le Solde Théorique</span>
+                  </button>
+                )}
               </div>
 
               {isBlindRevealed ? (
@@ -468,6 +481,37 @@ export const ShiftZReportModal: React.FC = () => {
             >
               Annuler
             </button>
+            {activeShift && activeShift.status === 'OPEN' && (
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!isBlindRevealed) {
+                    showToast("Veuillez d'abord valider le comptage physique à l'aveugle.", 'warning');
+                    return;
+                  }
+                  try {
+                    const res = await (usePosStore.getState().closeShift as any)(
+                      actualCountedCash,
+                      'Clôture directe depuis rapport Z',
+                      lockScreenCashier
+                    );
+                    if (res?.success) {
+                      showToast('Session de caisse clôturée avec succès.', 'success');
+                      handlePrintZReport();
+                      closeModal();
+                    } else {
+                      showToast(res?.reason || 'Erreur lors de la clôture', 'error');
+                    }
+                  } catch (err: unknown) {
+                    showToast(err instanceof Error ? err.message : 'Erreur clôture', 'error');
+                  }
+                }}
+                className="flex-2 sm:flex-none min-h-[44px] px-4 sm:px-5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-rose-600/20 active:scale-95 transition cursor-pointer"
+              >
+                <ShieldAlert className="w-4 h-4" aria-hidden="true" />
+                <span>Clôturer Session & Imprimer Z</span>
+              </button>
+            )}
             <button
               onClick={handlePrintZReport}
               aria-label="Imprimer Rapport Z (F9) — imprimer le ticket de clôture 80mm"

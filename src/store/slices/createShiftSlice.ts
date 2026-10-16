@@ -18,7 +18,8 @@ export type CloseShiftWithPin = (
   blindCount: number,
   closingNote?: string,
   cashierName?: string,
-  managerPin?: string
+  managerPin?: string,
+  closingDenominations?: DenominationCount
 ) => Promise<{ success: boolean; session?: CashSession; reason?: string }>;
 
 export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set, get) => ({
@@ -123,11 +124,8 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
     }
   },
 
-  // NOTE: 4th param `managerPin` is intentionally extra vs the shared
-  // ShiftSlice type (store/types.ts, owned by another agent): callers pass it
-  // positionally and the adapter enforces the variance gate. Extra trailing
-  // OPTIONAL params keep this implementation assignable to the declared type.
-  closeShift: async (blindCount, closingNote, cashierName, managerPin?: string) => {
+  // NOTE: trailing params `managerPin` and `closingDenominations` are extra vs shared type
+  closeShift: async (blindCount, closingNote, cashierName, managerPin?: string, closingDenominations?: any) => {
     const { activeShift, logSecurityAction } = get();
     try {
       const closedSession = await (await getSqlite()).closeShift(
@@ -135,7 +133,8 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
         closingNote,
         cashierName,
         activeShift?.id,
-        managerPin
+        managerPin,
+        closingDenominations
       );
       const allShifts = await (await getSqlite()).getAllShifts();
       const inventoryValuation = await (await getSqlite()).getInventoryValuation();

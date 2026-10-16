@@ -16,12 +16,14 @@ function readLockScreenCashierName(): string {
 }
 
 export const ShiftMovementModal: React.FC = () => {
-  const { activeModal, closeModal, activeShift, logCashMovement } = usePosStore();
+  const { activeModal, closeModal, activeShift, logCashMovement, addStoreExpense } = usePosStore();
   const { showToast } = useToast();
 
   const [type, setType] = useState<'EXPENSE' | 'MANUAL_DEPOSIT'>('EXPENSE');
   const [amount, setAmount] = useState<number>(0);
   const [reason, setReason] = useState<string>('');
+  const [linkStoreExpense, setLinkStoreExpense] = useState<boolean>(true);
+  const [expenseCategory, setExpenseCategory] = useState<string>('Fournitures');
   const [cashierName, setCashierName] = useState<string>(
     () => activeShift?.cashierName || readLockScreenCashierName()
   );
@@ -52,25 +54,40 @@ export const ShiftMovementModal: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      // Standalone-movement tag: this modal is the only writer of movements
-      // WITHOUT a source-table twin, and Reports counts exactly the tagged
-      // rows (cashTerms standalone helpers). Twin writers never carry the
-      // tag, so tagged rows can never double-count.
-      const movementResult = await logCashMovement(
-        validAmount,
-        type,
-        `${reason.trim()} ${MANUAL_MOVEMENT_TAG}`,
-        cashierName.trim() || undefined
-      );
-
-      if (movementResult.success) {
+      if (type === 'EXPENSE' && linkStoreExpense) {
+        await addStoreExpense({
+          title: reason.trim(),
+          category: expenseCategory,
+          amount: validAmount,
+          paymentMethod: 'Espèces',
+          recordedBy: cashierName.trim() || undefined,
+        });
         showToast(
-          `${type === 'EXPENSE' ? 'Dépense' : 'Apport'} de ${formatDZD(validAmount)} enregistré avec succès.`,
+          `Dépense de ${formatDZD(validAmount)} enregistrée et déduite de la caisse.`,
           'success'
         );
         closeModal();
       } else {
-        showToast(movementResult.reason || 'Erreur enregistrement mouvement', 'error');
+        // Standalone-movement tag: this modal is the only writer of movements
+        // WITHOUT a source-table twin, and Reports counts exactly the tagged
+        // rows (cashTerms standalone helpers). Twin writers never carry the
+        // tag, so tagged rows can never double-count.
+        const movementResult = await logCashMovement(
+          validAmount,
+          type,
+          `${reason.trim()} ${MANUAL_MOVEMENT_TAG}`,
+          cashierName.trim() || undefined
+        );
+
+        if (movementResult.success) {
+          showToast(
+            `${type === 'EXPENSE' ? 'Dépense' : 'Apport'} de ${formatDZD(validAmount)} enregistré avec succès.`,
+            'success'
+          );
+          closeModal();
+        } else {
+          showToast(movementResult.reason || 'Erreur enregistrement mouvement', 'error');
+        }
       }
     } finally {
       setIsSubmitting(false);
@@ -189,6 +206,42 @@ export const ShiftMovementModal: React.FC = () => {
               />
             </div>
           </div>
+
+          {/* StoreExpense linkage option for EXPENSE movements */}
+          {type === 'EXPENSE' && (
+            <div className="bg-pos-card border border-pos-border rounded-xl p-3 space-y-2.5">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={linkStoreExpense}
+                  onChange={(e) => setLinkStoreExpense(e.target.checked)}
+                  className="rounded border-pos-border text-emerald-500 focus:ring-emerald-500"
+                />
+                <span className="text-xs font-semibold text-pos-text">
+                  Enregistrer comme charge d'exploitation magasin (StoreExpense)
+                </span>
+              </label>
+              {linkStoreExpense && (
+                <div>
+                  <label className="text-[10px] text-pos-muted uppercase font-bold block mb-1">
+                    Catégorie de dépense
+                  </label>
+                  <select
+                    value={expenseCategory}
+                    onChange={(e) => setExpenseCategory(e.target.value)}
+                    className="w-full bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1.5 text-xs text-pos-text focus:outline-none focus:border-pos-border-focus"
+                  >
+                    <option value="Fournitures">Fournitures & Outillage</option>
+                    <option value="Loyer / Charges">Loyer & Électricité / Eau</option>
+                    <option value="Transport / Déplacement">Transport / Déplacement</option>
+                    <option value="Restauration">Collation / Restauration équipe</option>
+                    <option value="Maintenance">Maintenance & Réparations matériel</option>
+                    <option value="Autre">Autre dépense diverse</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Impact Alert */}
           <div className="bg-pos-bg border border-pos-border p-3 rounded-xl flex items-start gap-2.5 text-[11px] text-pos-muted">

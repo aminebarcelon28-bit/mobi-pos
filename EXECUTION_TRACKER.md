@@ -105,6 +105,15 @@
   - Integrated `@tanstack/react-virtual` in `CustomersModal.tsx` (pair-row virtualization) and `InventoryManagerModal.tsx` (table spacer rows for Catalog and Stocktake modes).
   - Eliminated all `react(set-state-in-effect)` cascading render warnings across the entire codebase using React Compiler render-time state synchronization, async IIFE promise cancellation, and deferred timing.
   - Enhanced `ModalShell.tsx` with WCAG 2.1.2 focus trapping (`Tab`/`Shift+Tab` cycling) and `Escape` key dismissal.
-- [ ] **Task 5.3 — Blind Shift Close, Blind Stocktake & Manager PIN Hardening:**
-  - Conceal expected cash KPIs in `ShiftZReportModal.tsx:261-349` until blind count submission and wire shift close; persist opening/closing DZD denomination breakdowns in `ShiftOpenModal` / `ShiftCloseModal`; add Blind Stocktake mode to `InventoryManagerModal.tsx:728-925`; require Manager PIN + cash/wallet movement to mint standalone vouchers in `VoucherModal.tsx:86-108` or add in-cart returns (`createCartSlice.ts:368-378`).
+- [x] **Task 5.3 — Blind Shift Close, Blind Stocktake & Manager PIN Hardening:**
+  - Concealed expected cash KPIs in `ShiftZReportModal.tsx` behind locked blind physical count and wired direct shift closure and Z-ticket printing; persisted full DZD opening & closing denomination billetage in `ShiftOpenModal` / `ShiftCloseModal` (`closingDenominations` serialized to `cash_sessions` SQLite + Dexie).
+  - Added option on `EXPENSE` drawer movements in `ShiftMovementModal.tsx` to auto-record linked `StoreExpense` (`paymentMethod: 'Espèces'`).
+  - Added Manager-controlled "Blind Count / Inventaire à l'aveugle" mode in `InventoryManagerModal.tsx` concealing theoretical stock, variance, impact and `= Conforme` button until count submission, and upgraded header inventory valuation to compute FIFO `stock_batches` (`quantityRemaining * unitCost`).
+  - Protected standalone `CreditVoucher` issuance in `VoucherModal.tsx` behind Manager PIN verification (`verifyManagerGate`) with drawer cash intake (`DEPOSIT` movement) or courtesy funding, and rendered real `<canvas>` barcode on preview ticket card.
+  - Required Manager PIN on in-cart returns (`toggleCartItemReturn`), and restituted FIFO `stock_batches` in SQLite and Dexie on return cart items (`createOrderSlice.ts`).
+  - Removed arbitrary SKU fallback in `KittingBundleModal.tsx` and locked bundle items in cart with `bundleGroupId` so removing or modifying a member revokes bundle discounts.
+- [ ] **Task 5.4 — Customer Display Route, Supplier AP & Final Audit Verification:**
+  - Add `/customer-display` BroadcastChannel route in `src/App.tsx` and wire `hardware_update_vfd`.
+  - Fix supplier expense tracking & credit PO balance in `PurchaseOrderModal.tsx`, persist `VendorDisputeModal.tsx` to DB with real phone lookup, and fix analytics date filters and FIFO unit costs in `ReportsModal.tsx` and `SalesAnalyticsCharts.tsx`.
+  - Execute full verification battery (`tsc`, `oxlint`, `cargo test`, `test:money`, `test:audit`, `test:sync-e2e`), update `EXECUTION_TRACKER.md` to 100%, and update `AUDIT_AND_ROADMAP_REPORT.md` with Post-Remediation Final Scorecard.
 

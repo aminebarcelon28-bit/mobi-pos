@@ -615,7 +615,8 @@ export const shiftAdapter = {
     closingNote?: string,
     _cashierName?: string,
     sessionId?: string,
-    managerPin?: string
+    managerPin?: string,
+    closingDenominations?: DenominationCount
   ): Promise<CashSession> {
     const openSession = sessionId
       ? await dexieDb.cashSessions.get(sessionId)
@@ -857,6 +858,7 @@ export const shiftAdapter = {
       // preview shows (`totalSaleMargins - operatingExpenses`).
       dailyNetProfit: toWholeDa(totalProfits - operatingExpenses),
       closingNote: closingNote || '',
+      closingDenominations: closingDenominations || null,
       movements,
       updatedAt: closeNowIso,
     };
