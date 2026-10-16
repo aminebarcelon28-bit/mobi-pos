@@ -140,5 +140,47 @@ const localShim = (db: DatabaseSync) => ({
   remote.close();
 }
 
+// ── 4. Wedged remote heals: KV-shaped sale_batch_allocations + v10 pending
+//    (fresh remotes first synced in the 2026-10-16 138fcb2 window, where the
+//    generic KV creator pre-created the STRICT table and v10's index build on
+//    `sale_id` threw before recording). ──
+{
+  const remote = new DatabaseSync(':memory:');
+  const client = {
+    execute: async (q: string | { sql: string; args?: unknown[] }) => {
+      const sql = typeof q === 'string' ? q : q.sql;
+      const args = (typeof q === 'string' ? [] : q.args ?? []) as never[];
+      if (/^\s*select/i.test(sql)) {
+        const st = remote.prepare(sql);
+        return { rows: st.all(...args) as Record<string, unknown>[] };
+      }
+      remote.prepare(sql).run(...args);
+      return { rows: [] as Record<string, unknown>[] };
+    },
+  };
+  await applyRemoteMigrations(client as never); // full correct schema first
+  // Simulate the wedged state: KV-shaped table, v10..13 unapplied.
+  remote.exec('DROP TABLE sale_batch_allocations');
+  remote.exec(`CREATE TABLE sale_batch_allocations (
+    id TEXT PRIMARY KEY, data_json TEXT NOT NULL DEFAULT '{}', device_id TEXT NOT NULL DEFAULT '',
+    idempotency_key TEXT NOT NULL UNIQUE, sync_status TEXT NOT NULL DEFAULT 'synced',
+    version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0);`);
+  remote.prepare('DELETE FROM schema_migrations WHERE version >= 10').run();
+
+  const healedCount = await applyRemoteMigrations(client as never);
+  const ver = (remote.prepare('SELECT MAX(version) AS v FROM schema_migrations').get() as { v: number }).v;
+  check('wedged remote heals back to LATEST', ver >= LATEST_REMOTE_VERSION && healedCount > 0);
+  const cols = new Set(
+    (remote.prepare("SELECT name FROM pragma_table_info('sale_batch_allocations')").all() as Array<{ name: string }>).map((c) => c.name)
+  );
+  check(
+    'heal adds sale_id/batch_id/qty_consumed/unit_cost_at_sale/created_at',
+    ['sale_id', 'batch_id', 'qty_consumed', 'unit_cost_at_sale', 'created_at'].every((c) => cols.has(c))
+  );
+  const allocIdx = (remote.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='index' AND name='idx_alloc_sale'").get() as { n: number }).n;
+  check('idx_alloc_sale built after heal', allocIdx === 1);
+  remote.close();
+}
+
 console.log(`SCHEMA-HEAL: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

@@ -171,7 +171,11 @@ export const REMOTE_MIGRATIONS: RemoteMigration[] = [
       `CREATE INDEX IF NOT EXISTS idx_inv_ledger_updated ON inventory_ledger(updated_at, id)`,
       `CREATE INDEX IF NOT EXISTS idx_inv_ledger_product ON inventory_ledger(product_id, created_at)`,
 
-      ...GENERIC_SYNC_TABLES.flatMap((table) => [
+      // sale_batch_allocations is STRICT-shaped (v10 owns its DDL): a KV
+      // pre-create here would shadow v10's CREATE and wedge its index build
+      // on `sale_id` for every fresh remote. The remaining generic tables are
+      // KV-shaped by contract.
+      ...GENERIC_SYNC_TABLES.filter((t) => t !== 'sale_batch_allocations').flatMap((table) => [
         `CREATE TABLE IF NOT EXISTS ${table} (
           id TEXT PRIMARY KEY,
           data_json TEXT NOT NULL DEFAULT '{}',
@@ -200,9 +204,11 @@ export const REMOTE_MIGRATIONS: RemoteMigration[] = [
   {
     version: 3,
     description: 'Add optimistic concurrency version column to all generic sync tables',
-    statements: GENERIC_SYNC_TABLES.map(
-      (table) => `ALTER TABLE ${table} ADD COLUMN version INTEGER NOT NULL DEFAULT 1;`
-    ),
+    statements: GENERIC_SYNC_TABLES
+      // v10 creates sale_batch_allocations with `version` already; it must not
+      // be ALTERed before its own CREATE (no such table on fresh remotes).
+      .filter((t) => t !== 'sale_batch_allocations')
+      .map((table) => `ALTER TABLE ${table} ADD COLUMN version INTEGER NOT NULL DEFAULT 1;`),
   },
   {
     version: 4,
@@ -330,6 +336,18 @@ export const REMOTE_MIGRATIONS: RemoteMigration[] = [
         updated_at TEXT NOT NULL,
         deleted INTEGER NOT NULL DEFAULT 0
       )`,
+      // Idempotent strict-column completion: a remote first synced in the
+      // brief window (2026-10-16, commit 138fcb2) when the generic KV creator
+      // still pre-created this table got the KV shape; complete it in place so
+      // the index build below can never fail on `sale_id` again. Duplicates on
+      // freshly created tables are tolerated by the runner.
+      `ALTER TABLE sale_batch_allocations ADD COLUMN sale_id TEXT;`,
+      `ALTER TABLE sale_batch_allocations ADD COLUMN batch_id TEXT;`,
+      `ALTER TABLE sale_batch_allocations ADD COLUMN qty_consumed INTEGER NOT NULL DEFAULT 0;`,
+      `ALTER TABLE sale_batch_allocations ADD COLUMN unit_cost_at_sale REAL NOT NULL DEFAULT 0;`,
+      `ALTER TABLE sale_batch_allocations ADD COLUMN created_at TEXT;`,
+      `ALTER TABLE sale_batch_allocations ADD COLUMN product_id TEXT;`,
+      `ALTER TABLE sale_batch_allocations ADD COLUMN sale_item_id TEXT;`,
       `CREATE INDEX IF NOT EXISTS idx_alloc_sale ON sale_batch_allocations(sale_id)`,
       `CREATE INDEX IF NOT EXISTS idx_alloc_batch ON sale_batch_allocations(batch_id)`,
       `CREATE INDEX IF NOT EXISTS idx_alloc_updated ON sale_batch_allocations(updated_at, id)`,
