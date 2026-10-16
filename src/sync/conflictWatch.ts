@@ -296,3 +296,69 @@ export async function observeVersionConflict(
     return 'skipped';
   }
 }
+
+export interface SyncConflictRecord {
+  id: string;
+  table_name: string;
+  row_id: string;
+  local_version: number;
+  incoming_version: number;
+  local_device: string;
+  incoming_device: string;
+  local_fp: string;
+  incoming_fp: string;
+  winner: string;
+  detected_at: string;
+  resolved: number;
+  note: string | null;
+}
+
+export async function listSyncConflicts(
+  db: ConflictDb,
+  includeResolved = false
+): Promise<SyncConflictRecord[]> {
+  try {
+    await ensureConflictTable(db);
+    const sql = includeResolved
+      ? `SELECT id, table_name, row_id, local_version, incoming_version, local_device, incoming_device, local_fp, incoming_fp, winner, detected_at, resolved, note FROM sync_conflicts ORDER BY detected_at DESC LIMIT 100`
+      : `SELECT id, table_name, row_id, local_version, incoming_version, local_device, incoming_device, local_fp, incoming_fp, winner, detected_at, resolved, note FROM sync_conflicts WHERE resolved = 0 ORDER BY detected_at DESC LIMIT 100`;
+    const rows = (await db.select(sql)) as SyncConflictRecord[];
+    return Array.isArray(rows) ? rows : [];
+  } catch (err) {
+    console.warn('[sync:conflict] listSyncConflicts failed:', err);
+    return [];
+  }
+}
+
+export async function resolveSyncConflict(
+  db: ConflictDb,
+  conflictId: string,
+  resolution: 'local' | 'incoming' | 'manual',
+  note?: string
+): Promise<boolean> {
+  try {
+    await ensureConflictTable(db);
+    const resolvedNote = note || `Résolution manuelle : version ${resolution} conservée.`;
+    await db.execute(
+      `UPDATE sync_conflicts SET resolved = 1, note = $1 WHERE id = $2`,
+      [resolvedNote, conflictId]
+    );
+    return true;
+  } catch (err) {
+    console.warn('[sync:conflict] resolveSyncConflict failed:', err);
+    return false;
+  }
+}
+
+export async function resolveAllSyncConflicts(db: ConflictDb): Promise<number> {
+  try {
+    await ensureConflictTable(db);
+    await db.execute(
+      `UPDATE sync_conflicts SET resolved = 1, note = 'Résolution globale : gagnants déterministes A3 appliqués' WHERE resolved = 0`
+    );
+    return 1;
+  } catch (err) {
+    console.warn('[sync:conflict] resolveAllSyncConflicts failed:', err);
+    return 0;
+  }
+}

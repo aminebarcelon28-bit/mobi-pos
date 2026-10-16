@@ -76,6 +76,7 @@ export type ActiveModalType =
   | 'cloud_pairing'
   | 'custom_item'
   | 'command_palette'
+  | 'conflict_resolution'
   | null;
 
 export interface CartSlice {

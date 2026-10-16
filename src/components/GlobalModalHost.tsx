@@ -43,6 +43,7 @@ const MobileSimulatorModal = React.lazy(() => import('./mobile/MobileSimulatorMo
 const CloudPairingModal = React.lazy(() => import('./modals/CloudPairingModal').then(m => ({ default: m.CloudPairingModal })));
 const CustomItemModal = React.lazy(() => import('./modals/CustomItemModal').then(m => ({ default: m.CustomItemModal })));
 const CommandPalette = React.lazy(() => import('./CommandPalette').then(m => ({ default: m.CommandPalette })));
+const ConflictResolutionModal = React.lazy(() => import('./modals/ConflictResolutionModal').then(m => ({ default: m.ConflictResolutionModal })));
 
 export const GlobalModalHost: React.FC = () => {
   const activeModal = usePosStore((state) => state.activeModal);
@@ -94,6 +95,7 @@ export const GlobalModalHost: React.FC = () => {
         {activeModal === 'cloud_pairing' && <CloudPairingModal />}
         {activeModal === 'custom_item' && <CustomItemModal />}
         {activeModal === 'command_palette' && <CommandPalette isOpen onClose={closeModal} />}
+        {activeModal === 'conflict_resolution' && <ConflictResolutionModal />}
       </ErrorBoundary>
     </Suspense>
   );

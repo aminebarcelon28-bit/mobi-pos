@@ -490,7 +490,8 @@ mod tests {
                 id TEXT PRIMARY KEY, sku TEXT NOT NULL, barcode TEXT NOT NULL,
                 title TEXT NOT NULL, cost_price REAL DEFAULT 0,
                 stock INTEGER DEFAULT 0, updated_at TEXT DEFAULT '',
-                deleted INTEGER DEFAULT 0
+                deleted INTEGER DEFAULT 0, version INTEGER DEFAULT 1,
+                sync_status TEXT DEFAULT 'pending'
             );
             CREATE TABLE stock_batches (
                 batch_id TEXT PRIMARY KEY,
@@ -517,6 +518,18 @@ mod tests {
                 updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 deleted INTEGER NOT NULL DEFAULT 0,
                 version INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE sync_outbox (
+                idempotency_key TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                device_id TEXT,
+                seq_no INTEGER
             );
             "#,
         )

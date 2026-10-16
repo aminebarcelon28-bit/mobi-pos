@@ -23,6 +23,7 @@ import {
   Copy,
   Check,
   Sparkles,
+  GitCompare,
 } from 'lucide-react';
 import { QRCodeImage } from '../ui/QRCodeImage';
 import { pairingMinutesLeft, usePairingPayload } from '../../utils/pairingPayload';
@@ -388,6 +389,15 @@ export const CloudSyncPanel: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => openModal('conflict_resolution')}
+              className="px-3.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-xs font-bold text-amber-300 flex items-center gap-1.5 transition cursor-pointer shadow-sm"
+              title="Inspecter et arbitrer les conflits de synchronisation"
+            >
+              <GitCompare className="w-3.5 h-3.5 text-amber-400" />
+              Arbitrage Conflits
+            </button>
             <button
               type="button"
               onClick={() => openModal('cloud_pairing')}

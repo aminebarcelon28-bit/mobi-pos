@@ -365,6 +365,8 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("commit_stock_batch", Capability::OperationalWrites),
     // MOBI-DEFECT-F: native atomic refund barrier (single Immediate txn).
     ("refund_sale_atomic", Capability::OperationalWrites),
+    // MOBI-P0: native atomic checkout engine (single Immediate txn).
+    ("checkout_sale_atomic", Capability::OperationalWrites),
     // TIER-B: public device credentials for the boot handshake (id + pubkey
     // only — the seed never crosses IPC). Same plane as the refund it arms.
     ("get_device_identity_info", Capability::OperationalWrites),
@@ -1126,6 +1128,7 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "process_raw_scan",
     "commit_stock_batch",
     "refund_sale_atomic",
+    "checkout_sale_atomic",
     "get_device_identity_info",
     "ingest_signed_server_time",
     "fetch_next_outbox_batch",

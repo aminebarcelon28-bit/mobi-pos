@@ -88,8 +88,8 @@
   - Add an unsold `imei_records` dropdown/autocomplete in `CartPanel.tsx:1218-1240` and `PaymentModal.tsx:1118-1140`, and add IMEI capture + `supplierInvoiceNo` / `discrepancyReasons` persistence in `CommandTicketDashboardModal.tsx:356-361, 1096-1158`.
 - [x] **Task 4.5 — Unified Customer 360 View & Credit Limit (`debtLimit`) Controls:**
   - Link `RepairOrder` to `customerId`, add tabs in `CustomersModal.tsx:754-923` for Repairs, Trade-Ins, Vouchers, Debt Ledger, and Loyalty Ledger, expose `debtLimit` editing (`lines 1184-1219`), and wire UI buttons for `issueStoreCredit`, `redeemLoyaltyPoints`, and `adjustCustomerPoints`.
-- [ ] **Task 4.6 — Interactive Sync Conflict Resolution Modal & Bulk Label Queue:**
-  - Build `src/components/modals/ConflictResolutionModal.tsx` wired to `sync_conflicts`, and upgrade `LabelPrinterModal.tsx` to support multi-SKU batch label printing queues.
+- [x] **Task 4.6 — Interactive Sync Conflict Resolution Modal & Bulk Label Queue:**
+  - Build `src/components/modals/ConflictResolutionModal.tsx` wired to `sync_conflicts` with side-by-side diffing, tiebreak status, single & batch arbitration, and filter controls. Added backend helpers in `src/sync/conflictWatch.ts`, registered modal in `GlobalModalHost.tsx`, and wired launcher button in `CloudSyncPanel.tsx`. Upgraded `LabelPrinterModal.tsx` to support multi-SKU batch label queues with quantity steppers, per-SKU removal, live queue counter, single vs queue mode toggling, and automated batch print loop.
 
 ---
 

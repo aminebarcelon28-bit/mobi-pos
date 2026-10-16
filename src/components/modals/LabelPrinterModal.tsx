@@ -1,8 +1,11 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { X, Printer, Barcode, Search, Filter, Check, Tag, Sparkles, Sliders, Layers } from 'lucide-react';
+import {
+  X, Printer, Barcode, Search, Filter, Check, Tag, Sparkles, Sliders, Layers,
+  ListPlus, Trash2, Plus, Minus, PackagePlus, ArrowRight
+} from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
-import type { CategoryType } from '../../types/pos';
+import type { CategoryType, Product } from '../../types/pos';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
 import { resolvePrinterForDocument } from '../../utils/printerRoutingEngine';
 import { directPrintProductLabels } from '../../utils/escpos';
@@ -11,6 +14,11 @@ import { isMobileDevice } from '../../utils/platform';
 import { useToast } from '../../components/ui/Toast';
 
 type LabelSize = '50x25' | '60x40' | '100x50';
+
+export interface LabelQueueItem {
+  product: Product;
+  quantity: number;
+}
 
 const foldForSearch = (s: string | undefined | null): string =>
   (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -31,6 +39,8 @@ export const LabelPrinterModal: React.FC = () => {
   const targetPrinter = resolvePrinterForDocument('label', receiptSettings.printerRouting);
   const [selectedProductId, setSelectedProductId] = useState<string>('');
   const [isPrinting, setIsPrinting] = useState<boolean>(false);
+  const [printMode, setPrintMode] = useState<'single' | 'queue'>('single');
+  const [labelQueue, setLabelQueue] = useState<LabelQueueItem[]>([]);
   const [searchQuery, setSearchQuery] = useState<string>('');
   // Debounced scan input: instant field, filtered list follows 200ms later.
   const [debouncedSearch, setDebouncedSearch] = useState<string>('');
@@ -102,9 +112,57 @@ export const LabelPrinterModal: React.FC = () => {
     }
   }, [selectedProduct, labelSize, activeModal]);
 
+  const totalQueueLabels = useMemo(() => {
+    return labelQueue.reduce((acc, item) => acc + item.quantity, 0);
+  }, [labelQueue]);
+
   useEffect(() => { if (activeModal !== 'label_printer') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
   if (activeModal !== 'label_printer') return null;
+
+  const addToQueue = (product: Product, quantity = 10) => {
+    const safeQty = Math.max(1, Math.min(1000, isNaN(quantity) ? 1 : quantity));
+    setLabelQueue((prev) => {
+      const idx = prev.findIndex((item) => item.product.id === product.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = {
+          ...copy[idx],
+          quantity: Math.min(1000, copy[idx].quantity + safeQty),
+        };
+        return copy;
+      }
+      return [...prev, { product, quantity: safeQty }];
+    });
+    showToast(`Produit ajouté à la file : ${product.title} (+${safeQty})`, 'info');
+  };
+
+  const removeFromQueue = (productId: string) => {
+    setLabelQueue((prev) => prev.filter((item) => item.product.id !== productId));
+  };
+
+  const updateQueueQuantity = (productId: string, delta: number) => {
+    setLabelQueue((prev) =>
+      prev.map((item) => {
+        if (item.product.id !== productId) return item;
+        return { ...item, quantity: Math.max(1, Math.min(1000, item.quantity + delta)) };
+      })
+    );
+  };
+
+  const setQueueItemQuantity = (productId: string, quantity: number) => {
+    const safe = Math.max(1, Math.min(1000, isNaN(quantity) ? 1 : quantity));
+    setLabelQueue((prev) =>
+      prev.map((item) => {
+        if (item.product.id !== productId) return item;
+        return { ...item, quantity: safe };
+      })
+    );
+  };
+
+  const clearQueue = () => {
+    setLabelQueue([]);
+  };
 
   const handlePrintLabels = async () => {
     if (!selectedProduct) return;
@@ -156,8 +214,9 @@ export const LabelPrinterModal: React.FC = () => {
     }
   };
 
-  const handleMobileLabelPrint = async (quantity: number) => {
-    if (!selectedProduct) return;
+  const handleMobileLabelPrint = async (quantity: number, productOverride?: Product) => {
+    const targetProduct = productOverride || selectedProduct;
+    if (!targetProduct) return;
     setIsPrinting(true);
     try {
       // Priority 1: configured Wi-Fi/Bluetooth printer — raw label language
@@ -166,7 +225,7 @@ export const LabelPrinterModal: React.FC = () => {
       const mobileConfig = loadMobilePrinter();
       if (mobileConfig.enabled) {
         const { ProductLabelBuilder } = await import('../../utils/productLabelBuilder');
-        const raw = ProductLabelBuilder.build(selectedProduct, {
+        const raw = ProductLabelBuilder.build(targetProduct, {
           format: mobileConfig.labelProtocol,
           protocol: mobileConfig.labelProtocol,
           size: labelSize,
@@ -189,7 +248,7 @@ export const LabelPrinterModal: React.FC = () => {
       // The native sheet renders one label page per copy (capped at 200).
       const copies = Math.max(1, Math.min(200, quantity));
       const { widthMm, heightMm } = labelSizeToMm(labelSize);
-      const canvas = renderLabelToCanvas(selectedProduct, {
+      const canvas = renderLabelToCanvas(targetProduct, {
         widthMm,
         heightMm,
         showStoreName,
@@ -201,7 +260,7 @@ export const LabelPrinterModal: React.FC = () => {
       const { printLabelImageNative, sharePngFile } = await import('../../utils/phoneUtils');
 
       const opened = await printLabelImageNative({
-        title: `Étiquette ${selectedProduct.title}`,
+        title: `Étiquette ${targetProduct.title}`,
         imageBase64: dataUrl,
         widthMm,
         heightMm,
@@ -214,10 +273,10 @@ export const LabelPrinterModal: React.FC = () => {
       // No native bridge (old APK, iOS, browser): hand the PNG to the OS
       // share sheet so it can reach a printer app, or download it.
       const shared = await sharePngFile(
-        `etiquette-${selectedProduct.sku || selectedProduct.id}.png`,
+        `etiquette-${targetProduct.sku || targetProduct.id}.png`,
         dataUrl,
         'Étiquette produit',
-        `${copies}× ${selectedProduct.title} — ${formatDZD(selectedProduct.price)}`
+        `${copies}× ${targetProduct.title} — ${formatDZD(targetProduct.price)}`
       );
       if (shared) {
         showToast('📤 Étiquette partagée — envoyez-la vers votre imprimante.', 'success');
@@ -227,6 +286,49 @@ export const LabelPrinterModal: React.FC = () => {
     } catch (err) {
       console.error('[Mobile Label Print Error]', err);
       showToast(`Échec de l'impression mobile des étiquettes.`, 'error');
+    } finally {
+      setIsPrinting(false);
+    }
+  };
+
+  const handlePrintBatchQueue = async () => {
+    if (labelQueue.length === 0) return;
+    setIsPrinting(true);
+    let printedCount = 0;
+    try {
+      for (const item of labelQueue) {
+        const safeQty = Math.max(1, Math.min(500, item.quantity));
+        if (isMobileDevice()) {
+          await handleMobileLabelPrint(safeQty, item.product);
+        } else {
+          const protocol = /zebra|zpl|dymo|brother/i.test(targetPrinter.printerName || targetPrinter.protocol || '')
+            ? 'ZPL'
+            : /tsc|tspl|tsp|godex|rongta|gprinter|gx-|da200|ttp-|da220|te200/i.test(targetPrinter.printerName || targetPrinter.protocol || '')
+              ? 'TSPL'
+              : 'ESCPOS';
+          await directPrintProductLabels(
+            item.product,
+            {
+              format: protocol,
+              protocol,
+              size: labelSize,
+              quantity: safeQty,
+              showPrice,
+              showStoreName,
+              showModel,
+              storeName: receiptSettings?.storeName || 'MOBI-POS',
+            },
+            receiptSettings?.printerRouting
+          );
+        }
+        printedCount += safeQty;
+      }
+      showToast(`🖨️ Lot terminé : ${printedCount} étiquette(s) envoyée(s) (${labelQueue.length} SKU).`, 'success');
+      setLabelQueue([]);
+      setPrintMode('single');
+    } catch (err) {
+      console.error('[Batch Label Print Error]', err);
+      showToast(`Erreur lors de l'impression du lot d'étiquettes.`, 'error');
     } finally {
       setIsPrinting(false);
     }
@@ -252,12 +354,50 @@ export const LabelPrinterModal: React.FC = () => {
 
         {/* Header */}
         <div className="p-3.5 sm:p-4 border-b border-pos-border flex items-center justify-between bg-pos-card shrink-0 gap-2">
-          <div className="flex items-center gap-2 text-emerald-400 min-w-0">
-            <Barcode className="w-5 h-5 shrink-0" />
-            <h2 className="text-sm sm:text-base font-extrabold text-pos-text truncate">
-              Studio d'Étiquettes <span className="hidden sm:inline">Code-Barres & Prix</span>
-            </h2>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex items-center gap-2 text-emerald-400 min-w-0">
+              <Barcode className="w-5 h-5 shrink-0" />
+              <h2 className="text-sm sm:text-base font-extrabold text-pos-text truncate">
+                Studio d'Étiquettes <span className="hidden sm:inline">Code-Barres & Prix</span>
+              </h2>
+            </div>
+
+            {/* Mode Switcher Tabs */}
+            <div className="flex items-center bg-pos-bg border border-pos-border rounded-xl p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setPrintMode('single')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  printMode === 'single'
+                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                    : 'text-pos-muted hover:text-pos-text'
+                }`}
+              >
+                <Tag className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>Unitaire</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPrintMode('queue')}
+                className={`px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  printMode === 'queue'
+                    ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                    : 'text-pos-muted hover:text-pos-text'
+                }`}
+              >
+                <ListPlus className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>File de lot</span>
+                {labelQueue.length > 0 && (
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
+                    printMode === 'queue' ? 'bg-slate-950 text-emerald-400' : 'bg-emerald-500/20 text-emerald-400'
+                  }`}>
+                    {labelQueue.length}
+                  </span>
+                )}
+              </button>
+            </div>
           </div>
+
           <button
             type="button"
             onClick={closeModal}
@@ -340,6 +480,7 @@ export const LabelPrinterModal: React.FC = () => {
               ) : (
                 (filteredProducts || []).map((p) => {
                   const isSelected = p.id === selectedProduct?.id;
+                  const inQueue = labelQueue.find((q) => q.product.id === p.id);
                   return (
                     <div
                       key={p.id}
@@ -366,9 +507,27 @@ export const LabelPrinterModal: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="text-right shrink-0">
-                        <span className="text-xs font-black text-emerald-400 block">{formatDZD(p.price)}</span>
-                        <span className="text-[9px] text-pos-muted">Stock: {p.stock}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <div className="text-right">
+                          <span className="text-xs font-black text-emerald-400 block">{formatDZD(p.price)}</span>
+                          <span className="text-[9px] text-pos-muted">Stock: {p.stock}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            addToQueue(p, labelQuantity);
+                          }}
+                          className={`p-2 rounded-lg border transition active:scale-95 cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center ${
+                            inQueue
+                              ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-sm'
+                              : 'bg-pos-panel hover:bg-emerald-500/20 text-pos-muted hover:text-emerald-400 border-pos-border hover:border-emerald-500/40'
+                          }`}
+                          aria-label={`Ajouter à la file — ${p.title}`}
+                          title={inQueue ? `Dans la file (${inQueue.quantity}) — Cliquez pour ajouter +${labelQuantity}` : "Ajouter à la file"}
+                        >
+                          <PackagePlus className="w-4 h-4" aria-hidden="true" />
+                        </button>
                       </div>
                     </div>
                   );
@@ -377,13 +536,18 @@ export const LabelPrinterModal: React.FC = () => {
             </div>
           </div>
 
-          {/* Right Panel: Label Configuration & Live Studio Preview */}
+          {/* Right Panel: Single Preview OR Queue Management Studio */}
           <div className="w-full lg:w-5/12 flex-1 lg:flex-initial flex flex-col p-3 sm:p-5 bg-pos-panel space-y-3 sm:space-y-4 overflow-y-auto overscroll-contain">
             
-            {/* Format & Quantity Controls */}
-            <div className="space-y-3 bg-pos-card border border-pos-border p-3.5 rounded-xl">
-              <h3 className="text-xs font-bold text-pos-text flex items-center gap-1.5">
-                <Sliders className="w-4 h-4 text-emerald-400" /> Paramètres d'Impression
+            {/* Format & Quantity Controls (Always accessible) */}
+            <div className="space-y-3 bg-pos-card border border-pos-border p-3.5 rounded-xl shrink-0">
+              <h3 className="text-xs font-bold text-pos-text flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Sliders className="w-4 h-4 text-emerald-400" /> Paramètres d'Impression
+                </span>
+                <span className="text-[10px] text-pos-muted font-normal">
+                  {targetPrinter.printerName ? `Imprimante : ${targetPrinter.printerName}` : 'Imprimante par défaut'}
+                </span>
               </h3>
 
               <div className="grid grid-cols-2 gap-3">
@@ -400,44 +564,68 @@ export const LabelPrinterModal: React.FC = () => {
                   </select>
                 </div>
 
-                <div>
-                  <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Nombre d'Étiquettes</label>
-                  <div className="flex gap-1.5 items-center">
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min="1"
-                      max="1000"
-                      value={labelQuantity}
-                      onChange={(e) => setLabelQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1.5 text-base sm:text-xs font-black text-emerald-400 focus:border-emerald-400 focus:outline-none"
-                    />
+                {printMode === 'single' ? (
+                  <div>
+                    <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Nombre d'Étiquettes</label>
+                    <div className="flex gap-1.5 items-center">
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min="1"
+                        max="1000"
+                        value={labelQuantity}
+                        onChange={(e) => setLabelQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1.5 text-base sm:text-xs font-black text-emerald-400 focus:border-emerald-400 focus:outline-none"
+                      />
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div>
+                    <label className="text-[11px] text-pos-muted block mb-1 font-semibold">Total du Lot</label>
+                    <div className="min-h-[48px] bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1.5 flex items-center justify-between text-emerald-400 font-black text-sm">
+                      <span>{totalQueueLabels} étiquettes</span>
+                      <span className="text-pos-muted text-xs font-normal">({labelQueue.length} SKU)</span>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Preset Quantity Buttons */}
-              <div className="flex items-center gap-1.5 pt-1 overflow-x-auto no-scrollbar">
-                <span className="text-[10px] text-pos-muted font-semibold shrink-0">Presets:</span>
-                {[1, 5, 10, 20, 50, 100].map((qty) => (
-                  <button
-                    key={qty}
-                    type="button"
-                    onClick={() => setLabelQuantity(qty)}
-                    className={`min-h-[44px] min-w-[42px] px-2.5 py-1.5 rounded-lg text-xs font-bold border transition active:scale-95 shrink-0 cursor-pointer ${
-                      labelQuantity === qty
-                        ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-black shadow-sm'
-                        : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
-                    }`}
-                  >
-                    {qty}
-                  </button>
-                ))}
-              </div>
+              {/* Preset Quantity Buttons (in single mode) */}
+              {printMode === 'single' && (
+                <div className="flex items-center gap-1.5 pt-1 overflow-x-auto no-scrollbar">
+                  <span className="text-[10px] text-pos-muted font-semibold shrink-0">Presets:</span>
+                  {[1, 5, 10, 20, 50, 100].map((qty) => (
+                    <button
+                      key={qty}
+                      type="button"
+                      onClick={() => setLabelQuantity(qty)}
+                      className={`min-h-[44px] min-w-[42px] px-2.5 py-1.5 rounded-lg text-xs font-bold border transition active:scale-95 shrink-0 cursor-pointer ${
+                        labelQuantity === qty
+                          ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-black shadow-sm'
+                          : 'bg-pos-bg border-pos-border text-pos-muted hover:text-pos-text'
+                      }`}
+                    >
+                      {qty}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Add to batch queue button from single config */}
+              {printMode === 'single' && selectedProduct && (
+                <button
+                  type="button"
+                  onClick={() => addToQueue(selectedProduct, labelQuantity)}
+                  className="w-full mt-2 py-2 px-3 rounded-lg bg-pos-panel hover:bg-emerald-500/10 border border-pos-border hover:border-emerald-500/40 text-emerald-400 text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                >
+                  <PackagePlus className="w-4 h-4" aria-hidden="true" />
+                  <span>Ajouter cet article à la file (+{labelQuantity})</span>
+                </button>
+              )}
             </div>
 
             {/* Element Display Toggles */}
-            <div className="bg-pos-card border border-pos-border p-3.5 rounded-xl space-y-2">
+            <div className="bg-pos-card border border-pos-border p-3.5 rounded-xl space-y-2 shrink-0">
               <h3 className="text-xs font-bold text-pos-text flex items-center gap-1.5">
                 <Layers className="w-4 h-4 text-cyan-400" /> Éléments sur l'Étiquette
               </h3>
@@ -446,7 +634,7 @@ export const LabelPrinterModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowStoreName(!showStoreName)}
-                  className={`min-h-[44px] px-2 py-2 rounded-lg border text-[10px] font-bold transition flex items-center justify-center gap-1 active:scale-95 ${
+                  className={`min-h-[44px] px-2 py-2 rounded-lg border text-[10px] font-bold transition flex items-center justify-center gap-1 active:scale-95 cursor-pointer ${
                     showStoreName ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' : 'bg-pos-bg border-pos-border text-pos-muted'
                   }`}
                 >
@@ -456,7 +644,7 @@ export const LabelPrinterModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowPrice(!showPrice)}
-                  className={`min-h-[44px] px-2 py-2 rounded-lg border text-[10px] font-bold transition flex items-center justify-center gap-1 active:scale-95 ${
+                  className={`min-h-[44px] px-2 py-2 rounded-lg border text-[10px] font-bold transition flex items-center justify-center gap-1 active:scale-95 cursor-pointer ${
                     showPrice ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' : 'bg-pos-bg border-pos-border text-pos-muted'
                   }`}
                 >
@@ -466,7 +654,7 @@ export const LabelPrinterModal: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowModel(!showModel)}
-                  className={`min-h-[44px] px-2 py-2 rounded-lg border text-[10px] font-bold transition flex items-center justify-center gap-1 active:scale-95 ${
+                  className={`min-h-[44px] px-2 py-2 rounded-lg border text-[10px] font-bold transition flex items-center justify-center gap-1 active:scale-95 cursor-pointer ${
                     showModel ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400' : 'bg-pos-bg border-pos-border text-pos-muted'
                   }`}
                 >
@@ -475,58 +663,156 @@ export const LabelPrinterModal: React.FC = () => {
               </div>
             </div>
 
-            {/* Live Studio Tag Preview Box */}
-            <div className="flex-1 bg-slate-950 p-4 rounded-xl border border-pos-border flex flex-col items-center justify-center relative overflow-hidden min-h-[220px]">
-              <span className="absolute top-2 left-2 text-[9px] font-bold text-pos-muted uppercase tracking-wider flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-emerald-400" /> Aperçu Étiquette Thermique
-              </span>
+            {/* DYNAMIC VIEW: Single Live Preview OR Batch Queue Manager */}
+            {printMode === 'single' ? (
+              /* Live Studio Tag Preview Box */
+              <div className="flex-1 bg-slate-950 p-4 rounded-xl border border-pos-border flex flex-col items-center justify-center relative overflow-hidden min-h-[220px]">
+                <span className="absolute top-2 left-2 text-[9px] font-bold text-pos-muted uppercase tracking-wider flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-emerald-400" /> Aperçu Étiquette Thermique
+                </span>
 
-              {selectedProduct ? (
-                <div className={`print-label-target bg-white text-black shadow-2xl rounded flex flex-col justify-between border border-gray-300 font-sans transition-all ${getLabelDimensions()}`}>
-                  {/* Header */}
-                  <div className="flex justify-between items-start">
-                    {showStoreName ? (
-                      <span className="text-[9px] font-extrabold uppercase tracking-wider text-gray-800 truncate max-w-[140px]">
-                        {receiptSettings.storeName || 'ACCESSOIRES MOBI'}
+                {selectedProduct ? (
+                  <div className={`print-label-target bg-white text-black shadow-2xl rounded flex flex-col justify-between border border-gray-300 font-sans transition-all ${getLabelDimensions()}`}>
+                    {/* Header */}
+                    <div className="flex justify-between items-start">
+                      {showStoreName ? (
+                        <span className="text-[9px] font-extrabold uppercase tracking-wider text-gray-800 truncate max-w-[140px]">
+                          {receiptSettings.storeName || 'ACCESSOIRES MOBI'}
+                        </span>
+                      ) : <span />}
+                      <span className="text-[8px] font-bold text-gray-700 bg-gray-200 px-1 rounded-full">
+                        {selectedProduct.brand}
                       </span>
-                    ) : <span />}
-                    <span className="text-[8px] font-bold text-gray-700 bg-gray-200 px-1 rounded-full">
-                      {selectedProduct.brand}
+                    </div>
+
+                    {/* Title & Compatible Model */}
+                    <div className="my-1 flex-1">
+                      <p className="text-[10px] font-bold leading-tight text-gray-900 line-clamp-2">
+                        {selectedProduct.title}
+                      </p>
+                      {showModel && selectedProduct.compatibleModel && (
+                        <p className="text-[8px] text-gray-600 mt-0.5">Comp: {selectedProduct.compatibleModel}</p>
+                      )}
+                    </div>
+
+                    {/* Price */}
+                    {showPrice && (
+                      <div className="text-right my-0.5">
+                        <span className="text-sm font-black text-black tracking-tight">
+                          {formatDZD(selectedProduct.price)}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Barcode Canvas */}
+                    <div className="text-center pt-1 border-t border-gray-300 flex flex-col items-center">
+                      <canvas ref={barcodeCanvasRef} className="max-w-full mix-blend-multiply" />
+                      <div className="flex justify-between w-full text-[7px] font-mono text-gray-700 mt-0.5">
+                        <span>SKU: {selectedProduct.sku}</span>
+                        <span>EAN: {selectedProduct.barcode}</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-pos-muted">Aucun produit sélectionné</p>
+                )}
+              </div>
+            ) : (
+              /* Batch Queue List */
+              <div className="flex-1 bg-pos-card rounded-xl border border-pos-border flex flex-col overflow-hidden min-h-[260px]">
+                <div className="p-3 border-b border-pos-border bg-pos-bg flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-2">
+                    <ListPlus className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-bold text-pos-text">
+                      File d'attente ({labelQueue.length} SKU • {totalQueueLabels} étiquettes)
                     </span>
                   </div>
-
-                  {/* Title & Compatible Model */}
-                  <div className="my-1 flex-1">
-                    <p className="text-[10px] font-bold leading-tight text-gray-900 line-clamp-2">
-                      {selectedProduct.title}
-                    </p>
-                    {showModel && selectedProduct.compatibleModel && (
-                      <p className="text-[8px] text-gray-600 mt-0.5">Comp: {selectedProduct.compatibleModel}</p>
-                    )}
-                  </div>
-
-                  {/* Price */}
-                  {showPrice && (
-                    <div className="text-right my-0.5">
-                      <span className="text-sm font-black text-black tracking-tight">
-                        {formatDZD(selectedProduct.price)}
-                      </span>
-                    </div>
+                  {labelQueue.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={clearQueue}
+                      className="text-xs text-rose-400 hover:text-rose-300 flex items-center gap-1 font-semibold cursor-pointer active:scale-95"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Vider la file</span>
+                    </button>
                   )}
-
-                  {/* Barcode Canvas */}
-                  <div className="text-center pt-1 border-t border-gray-300 flex flex-col items-center">
-                    <canvas ref={barcodeCanvasRef} className="max-w-full mix-blend-multiply" />
-                    <div className="flex justify-between w-full text-[7px] font-mono text-gray-700 mt-0.5">
-                      <span>SKU: {selectedProduct.sku}</span>
-                      <span>EAN: {selectedProduct.barcode}</span>
-                    </div>
-                  </div>
                 </div>
-              ) : (
-                <p className="text-xs text-pos-muted">Aucun produit sélectionné</p>
-              )}
-            </div>
+
+                <div className="flex-1 overflow-y-auto overscroll-contain p-2 space-y-2">
+                  {labelQueue.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center p-6 text-center text-pos-muted space-y-2">
+                      <ListPlus className="w-10 h-10 opacity-30 text-emerald-400 mb-1" />
+                      <p className="text-xs font-bold text-pos-text">La file d'attente est vide</p>
+                      <p className="text-[11px] max-w-xs text-pos-muted">
+                        Ajoutez des articles depuis le catalogue à gauche en cliquant sur l'icône d'ajout pour composer un lot d'impression groupé.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setPrintMode('single')}
+                        className="mt-2 px-3 py-1.5 rounded-lg bg-pos-panel border border-pos-border text-xs font-semibold text-emerald-400 hover:bg-pos-hover cursor-pointer"
+                      >
+                        Passer en mode unitaire
+                      </button>
+                    </div>
+                  ) : (
+                    labelQueue.map((item) => (
+                      <div
+                        key={item.product.id}
+                        className="p-2.5 rounded-lg bg-pos-bg border border-pos-border flex items-center justify-between gap-2"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <h5 className="text-xs font-bold text-pos-text truncate">{item.product.title}</h5>
+                          <div className="flex items-center gap-2 text-[10px] text-pos-muted mt-0.5">
+                            <span className="font-semibold text-emerald-400">{formatDZD(item.product.price)}</span>
+                            <span>•</span>
+                            <span>SKU: {item.product.sku}</span>
+                          </div>
+                        </div>
+
+                        {/* Stepper Controls */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => updateQueueQuantity(item.product.id, -1)}
+                            className="w-8 h-8 rounded-lg bg-pos-card border border-pos-border flex items-center justify-center text-pos-muted hover:text-pos-text cursor-pointer active:scale-95"
+                            aria-label={`Diminuer la quantité — ${item.product.title}`}
+                          >
+                            <Minus className="w-3.5 h-3.5" aria-hidden="true" />
+                          </button>
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            min="1"
+                            max="1000"
+                            value={item.quantity}
+                            onChange={(e) => setQueueItemQuantity(item.product.id, parseInt(e.target.value) || 1)}
+                            className="w-12 h-8 text-center bg-pos-card border border-pos-border rounded-lg text-xs font-black text-emerald-400 focus:outline-none"
+                            aria-label={`Quantité d'étiquettes — ${item.product.title}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => updateQueueQuantity(item.product.id, 1)}
+                            className="w-8 h-8 rounded-lg bg-pos-card border border-pos-border flex items-center justify-center text-pos-muted hover:text-pos-text cursor-pointer active:scale-95"
+                            aria-label={`Augmenter la quantité — ${item.product.title}`}
+                          >
+                            <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeFromQueue(item.product.id)}
+                            className="w-8 h-8 ml-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center cursor-pointer active:scale-95"
+                            aria-label={`Supprimer de la file — ${item.product.title}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
 
           </div>
         </div>
@@ -535,29 +821,59 @@ export const LabelPrinterModal: React.FC = () => {
         <div className="p-3 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 shrink-0">
           <div className="text-xs text-pos-muted flex items-center gap-2 truncate">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-            <span className="truncate">
-              Impression : <strong className="text-pos-text">{labelQuantity}× {selectedProduct?.title || 'Étiquette'}</strong> ({labelSize} mm)
-            </span>
+            {printMode === 'single' ? (
+              <span className="truncate">
+                Impression : <strong className="text-pos-text">{labelQuantity}× {selectedProduct?.title || 'Étiquette'}</strong> ({labelSize} mm)
+                {labelQueue.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setPrintMode('queue')}
+                    className="ml-2 font-bold text-emerald-400 hover:underline cursor-pointer inline-flex items-center gap-1"
+                  >
+                    <span>Voir la file ({labelQueue.length} SKU)</span>
+                    <ArrowRight className="w-3 h-3" aria-hidden="true" />
+                  </button>
+                )}
+              </span>
+            ) : (
+              <span className="truncate">
+                Lot groupé : <strong className="text-pos-text">{totalQueueLabels} étiquettes au total</strong> ({labelQueue.length} SKU • {labelSize} mm)
+              </span>
+            )}
           </div>
 
           <div className="flex gap-2 items-center">
             <button
               onClick={closeModal}
-              className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition-colors min-h-[44px] flex items-center justify-center active-press"
+              className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl text-xs font-semibold text-pos-muted hover:text-pos-text transition-colors min-h-[44px] flex items-center justify-center active-press cursor-pointer"
             >
               Annuler
             </button>
-            <button
-              onClick={handlePrintLabels}
-              disabled={isPrinting}
-              className={`flex-1 sm:flex-initial px-6 py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all min-h-[44px] active-press ${
-                isPrinting
-                  ? 'bg-emerald-500/50 text-slate-900 cursor-not-allowed'
-                  : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20 cursor-pointer'
-              }`}
-            >
-              <Printer className="w-4 h-4" /> {isPrinting ? 'Impression...' : `Imprimer (${labelQuantity})`}
-            </button>
+            {printMode === 'single' ? (
+              <button
+                onClick={handlePrintLabels}
+                disabled={isPrinting || !selectedProduct}
+                className={`flex-1 sm:flex-initial px-6 py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all min-h-[44px] active-press ${
+                  isPrinting || !selectedProduct
+                    ? 'bg-emerald-500/50 text-slate-900 cursor-not-allowed'
+                    : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20 cursor-pointer'
+                }`}
+              >
+                <Printer className="w-4 h-4" /> {isPrinting ? 'Impression...' : `Imprimer (${labelQuantity})`}
+              </button>
+            ) : (
+              <button
+                onClick={handlePrintBatchQueue}
+                disabled={isPrinting || labelQueue.length === 0}
+                className={`flex-1 sm:flex-initial px-6 py-2.5 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all min-h-[44px] active-press ${
+                  isPrinting || labelQueue.length === 0
+                    ? 'bg-emerald-500/50 text-slate-900 cursor-not-allowed'
+                    : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20 cursor-pointer'
+                }`}
+              >
+                <Printer className="w-4 h-4" /> {isPrinting ? 'Impression du lot...' : `Imprimer le Lot (${totalQueueLabels})`}
+              </button>
+            )}
           </div>
         </div>
       </div>
