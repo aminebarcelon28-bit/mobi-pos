@@ -386,7 +386,7 @@ export const CustomersModal: React.FC = () => {
   const customerRowVirtualizer = useVirtualizer({
     count: customerRows.length,
     getScrollElement: () => contentBodyRef.current,
-    estimateSize: () => 180,
+    estimateSize: () => 200,
     overscan: 6,
   });
 
@@ -1439,8 +1439,6 @@ export const CustomersModal: React.FC = () => {
                     return (
                       <div
                         key={virtualRow.key}
-                        data-index={virtualRow.index}
-                        ref={customerRowVirtualizer.measureElement}
                         style={{
                           position: 'absolute',
                           top: 0,
@@ -2085,9 +2083,9 @@ export const CustomersModal: React.FC = () => {
                     role="menuitem"
                     onClick={() => { setProfileMenuOpen(false); handleEditClick(curCustomer); }}
                     className="w-full min-h-[44px] px-4 py-2.5 flex items-center gap-2 text-xs font-bold text-pos-text hover:bg-pos-hover transition text-left cursor-pointer"
-                    aria-label={`Modifier ${curCustomer.name}`}
+                    aria-label={`Modifier le Profil — ${curCustomer.name}`}
                   >
-                    <Edit2 className="w-4 h-4 shrink-0 text-sky-400" /> Modifier le Profil
+                    <Edit2 className="w-4 h-4 shrink-0 text-sky-400" aria-hidden="true" /> Modifier le Profil
                   </button>
                   <button
                     type="button"
