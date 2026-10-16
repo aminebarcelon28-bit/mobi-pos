@@ -25,6 +25,7 @@ import {
   Download,
   Eye,
   MoreHorizontal,
+  CreditCard,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
@@ -81,6 +82,10 @@ export const PurchaseOrderModal: React.FC = () => {
   const [autoRecordExpense, setAutoRecordExpense] = useState<boolean>(true);
   const [expensePaymentMethod, setExpensePaymentMethod] = useState<PaymentMethodType>('Espèces');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [paidCash, setPaidCash] = useState<number>(0);
+  const [paidBank, setPaidBank] = useState<number>(0);
+  const [supplierDebt, setSupplierDebt] = useState<number>(0);
+  const [customSettlementEdited, setCustomSettlementEdited] = useState<boolean>(false);
 
   // Newest-first ordering (creation timestamp DESC) — newest PO at the top.
   const byCreatedDesc = (a: PurchaseOrder, b: PurchaseOrder) => {
@@ -126,6 +131,7 @@ export const PurchaseOrderModal: React.FC = () => {
     setVerifiedCostMap(initCost);
     setDiscrepancyReasons(initReasons);
     setImeisMap({});
+    setCustomSettlementEdited(false);
     setActiveTab('active_po');
   }, []);
 
@@ -157,6 +163,9 @@ export const PurchaseOrderModal: React.FC = () => {
       verifiedItems,
       recordExpense: autoRecordExpense,
       expensePaymentMethod,
+      paidCash,
+      paidBank,
+      supplierDebt,
     });
 
     setIsProcessing(false);
@@ -176,6 +185,12 @@ export const PurchaseOrderModal: React.FC = () => {
 
       if (autoRecordExpense && poReceiptResult.totalReceivedCost > 0) {
         showToast(`💶 Dépense fournisseur de ${formatDZD(poReceiptResult.totalReceivedCost)} enregistrée avec succès.`, 'success');
+      }
+      if (paidCash > 0) {
+        showToast(`💵 Sortie de caisse (${formatDZD(paidCash)}) enregistrée pour le fournisseur.`, 'info');
+      }
+      if (supplierDebt > 0) {
+        showToast(`📋 Dette fournisseur enregistrée : ${formatDZD(supplierDebt)}.`, 'info');
       }
 
       setInspectingPO(null);
@@ -277,6 +292,24 @@ export const PurchaseOrderModal: React.FC = () => {
         return acc + qty * cost;
       }, 0)
     : 0;
+
+  useEffect(() => {
+    if (!customSettlementEdited) {
+      if (!autoRecordExpense) {
+        setPaidCash(0);
+        setPaidBank(0);
+        setSupplierDebt(totalVerifiedCostAmount);
+      } else if (expensePaymentMethod === 'Espèces') {
+        setPaidCash(totalVerifiedCostAmount);
+        setPaidBank(0);
+        setSupplierDebt(0);
+      } else {
+        setPaidCash(0);
+        setPaidBank(totalVerifiedCostAmount);
+        setSupplierDebt(0);
+      }
+    }
+  }, [totalVerifiedCostAmount, expensePaymentMethod, autoRecordExpense, customSettlementEdited]);
 
   const existingVendors = useMemo(() => {
     return Array.from(
@@ -1527,34 +1560,164 @@ export const PurchaseOrderModal: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-3 bg-pos-bg p-3 rounded-xl border border-pos-border">
-                  <label className="flex items-center gap-2.5 text-xs text-pos-text font-bold cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={autoRecordExpense}
-                      onChange={(e) => setAutoRecordExpense(e.target.checked)}
-                      className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
-                    />
-                    <span>
-                      Enregistrer automatiquement comme Charge / Dépense Fournisseur (EBITDA & Sortie de Caisse)
+                {/* Settlement & AP Breakdown */}
+                <div className="bg-pos-bg p-3.5 rounded-xl border border-pos-border space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-pos-border/60 pb-2.5">
+                    <span className="text-xs uppercase font-bold text-pos-text flex items-center gap-1.5">
+                      <CreditCard className="w-4 h-4 text-emerald-400" />
+                      Règlement Fournisseur & Comptes Payables (AP)
                     </span>
-                  </label>
-
-                  {autoRecordExpense && (
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="text-pos-muted font-bold text-[11px]">Mode de Règlement :</span>
-                      <select
-                        value={expensePaymentMethod}
-                        onChange={(e) => setExpensePaymentMethod(e.target.value as PaymentMethodType)}
-                        className="bg-pos-card border border-pos-border rounded-lg px-2.5 py-1 text-xs font-bold text-pos-text focus:outline-none focus:border-emerald-400 cursor-pointer"
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPaidCash(totalVerifiedCostAmount);
+                          setPaidBank(0);
+                          setSupplierDebt(0);
+                          setExpensePaymentMethod('Espèces');
+                          setAutoRecordExpense(true);
+                          setCustomSettlementEdited(true);
+                        }}
+                        className="px-2 py-1 rounded bg-pos-card hover:bg-pos-hover border border-pos-border text-[11px] font-bold text-pos-text transition cursor-pointer"
                       >
-                        <option value="Espèces">Espèces (Sortie Caisse Directe)</option>
-                        <option value="BaridiMob">BaridiMob (Virement)</option>
-                        <option value="Chèque">Chèque Commercial</option>
-                        <option value="Autre">Autre Moyen</option>
-                      </select>
+                        100% Espèces
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPaidCash(0);
+                          setPaidBank(totalVerifiedCostAmount);
+                          setSupplierDebt(0);
+                          setExpensePaymentMethod('BaridiMob');
+                          setAutoRecordExpense(true);
+                          setCustomSettlementEdited(true);
+                        }}
+                        className="px-2 py-1 rounded bg-pos-card hover:bg-pos-hover border border-pos-border text-[11px] font-bold text-pos-text transition cursor-pointer"
+                      >
+                        100% Virement
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPaidCash(0);
+                          setPaidBank(0);
+                          setSupplierDebt(totalVerifiedCostAmount);
+                          setAutoRecordExpense(false);
+                          setCustomSettlementEdited(true);
+                        }}
+                        className="px-2 py-1 rounded bg-pos-card hover:bg-pos-hover border border-pos-border text-[11px] font-bold text-pos-text transition cursor-pointer"
+                      >
+                        100% À Crédit
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-[11px] font-bold text-pos-muted block mb-1">
+                        💵 Espèces (Sortie Caisse)
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          min={0}
+                          max={totalVerifiedCostAmount}
+                          value={paidCash || ''}
+                          onChange={(e) => {
+                            const val = Math.max(0, parseFloat(e.target.value) || 0);
+                            setPaidCash(val);
+                            setSupplierDebt(Math.max(0, totalVerifiedCostAmount - val - paidBank));
+                            setCustomSettlementEdited(true);
+                          }}
+                          placeholder="0"
+                          className="w-full bg-pos-card border border-pos-border rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400"
+                        />
+                        <span className="absolute right-2 top-2 text-[10px] text-pos-muted font-bold">DA</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-bold text-pos-muted block mb-1">
+                        💳 Virement / Chèque
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          min={0}
+                          max={totalVerifiedCostAmount}
+                          value={paidBank || ''}
+                          onChange={(e) => {
+                            const val = Math.max(0, parseFloat(e.target.value) || 0);
+                            setPaidBank(val);
+                            setSupplierDebt(Math.max(0, totalVerifiedCostAmount - paidCash - val));
+                            setCustomSettlementEdited(true);
+                          }}
+                          placeholder="0"
+                          className="w-full bg-pos-card border border-pos-border rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-400"
+                        />
+                        <span className="absolute right-2 top-2 text-[10px] text-pos-muted font-bold">DA</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-bold text-amber-400 block mb-1">
+                        📋 Dette Fournisseur (Crédit)
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          min={0}
+                          value={supplierDebt || ''}
+                          onChange={(e) => {
+                            const val = Math.max(0, parseFloat(e.target.value) || 0);
+                            setSupplierDebt(val);
+                            setCustomSettlementEdited(true);
+                          }}
+                          placeholder="0"
+                          className="w-full bg-pos-card border border-amber-500/40 rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-amber-300 focus:outline-none focus:border-amber-400"
+                        />
+                        <span className="absolute right-2 top-2 text-[10px] text-amber-500/80 font-bold">DA</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Balancing validation check */}
+                  {paidCash + paidBank + supplierDebt !== totalVerifiedCostAmount && (
+                    <div className="flex items-center gap-1.5 text-[11px] text-amber-400 font-bold bg-amber-500/10 px-2.5 py-1.5 rounded-lg border border-amber-500/20">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        Attention : La somme ventilée ({formatDZD(paidCash + paidBank + supplierDebt)}) diffère du montant réceptionné ({formatDZD(totalVerifiedCostAmount)}).
+                      </span>
                     </div>
                   )}
+
+                  <div className="flex items-center justify-between pt-1 border-t border-pos-border/40 text-[11px]">
+                    <label className="flex items-center gap-2 text-pos-text cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={autoRecordExpense}
+                        onChange={(e) => setAutoRecordExpense(e.target.checked)}
+                        className="w-3.5 h-3.5 accent-emerald-500 rounded cursor-pointer"
+                      />
+                      <span>Enregistrer la dépense comptable globale (EBITDA)</span>
+                    </label>
+
+                    {autoRecordExpense && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-pos-muted">Mode comptable :</span>
+                        <select
+                          value={expensePaymentMethod}
+                          onChange={(e) => setExpensePaymentMethod(e.target.value as PaymentMethodType)}
+                          className="bg-pos-card border border-pos-border rounded px-2 py-0.5 text-[11px] font-bold text-pos-text focus:outline-none focus:border-emerald-400 cursor-pointer"
+                        >
+                          <option value="Espèces">Espèces</option>
+                          <option value="BaridiMob">BaridiMob (Virement)</option>
+                          <option value="Chèque">Chèque Commercial</option>
+                          <option value="Autre">Autre</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex justify-end items-center gap-3 pt-2">

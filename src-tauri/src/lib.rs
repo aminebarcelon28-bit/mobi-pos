@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 116;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 117;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -1815,6 +1815,38 @@ fn base_schema_migrations() -> Vec<Migration> {
             );
             CREATE INDEX IF NOT EXISTS idx_defective_product ON defective_returns(product_id);
             CREATE INDEX IF NOT EXISTS idx_defective_refund ON defective_returns(refund_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v117 — Vendor disputes persistence in SQLite
+            version: 117,
+            description: "Add vendor_disputes table for durable PO dispute records",
+            sql: r#"
+            CREATE TABLE IF NOT EXISTS vendor_disputes (
+                id TEXT PRIMARY KEY,
+                po_id TEXT,
+                supplier_name TEXT NOT NULL,
+                supplier_phone TEXT,
+                invoice_number TEXT,
+                invoice_date TEXT,
+                original_reported_total REAL NOT NULL DEFAULT 0,
+                total_claim_amount REAL NOT NULL DEFAULT 0,
+                adjusted_payable_total REAL NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'DRAFT',
+                items_count INTEGER NOT NULL DEFAULT 0,
+                json_payload TEXT NOT NULL,
+                device_id TEXT NOT NULL DEFAULT 'local',
+                idempotency_key TEXT UNIQUE,
+                sync_status TEXT DEFAULT 'pending',
+                version INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                deleted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_vendor_disputes_supplier ON vendor_disputes(supplier_name);
+            CREATE INDEX IF NOT EXISTS idx_vendor_disputes_po ON vendor_disputes(po_id);
+            CREATE INDEX IF NOT EXISTS idx_vendor_disputes_created ON vendor_disputes(created_at DESC);
             "#,
             kind: MigrationKind::Up,
         },

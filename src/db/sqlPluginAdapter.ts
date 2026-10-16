@@ -549,6 +549,33 @@ export async function ensureShiftLedgerV113(db: Database): Promise<void> {
     ],
     ['idx_defective_product', 'CREATE INDEX IF NOT EXISTS idx_defective_product ON defective_returns(product_id);'],
     ['idx_defective_refund', 'CREATE INDEX IF NOT EXISTS idx_defective_refund ON defective_returns(refund_id);'],
+    [
+      'vendor_disputes table',
+      `CREATE TABLE IF NOT EXISTS vendor_disputes (
+        id TEXT PRIMARY KEY,
+        po_id TEXT,
+        supplier_name TEXT NOT NULL,
+        supplier_phone TEXT,
+        invoice_number TEXT,
+        invoice_date TEXT,
+        original_reported_total REAL NOT NULL DEFAULT 0,
+        total_claim_amount REAL NOT NULL DEFAULT 0,
+        adjusted_payable_total REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'DRAFT',
+        items_count INTEGER NOT NULL DEFAULT 0,
+        json_payload TEXT NOT NULL,
+        device_id TEXT NOT NULL DEFAULT 'local',
+        idempotency_key TEXT UNIQUE,
+        sync_status TEXT DEFAULT 'pending',
+        version INTEGER DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        deleted INTEGER NOT NULL DEFAULT 0
+      );`,
+    ],
+    ['idx_vendor_disputes_supplier', 'CREATE INDEX IF NOT EXISTS idx_vendor_disputes_supplier ON vendor_disputes(supplier_name);'],
+    ['idx_vendor_disputes_po', 'CREATE INDEX IF NOT EXISTS idx_vendor_disputes_po ON vendor_disputes(po_id);'],
+    ['idx_vendor_disputes_created', 'CREATE INDEX IF NOT EXISTS idx_vendor_disputes_created ON vendor_disputes(created_at DESC);'],
   ];
   const failures: string[] = [];
   for (const [label, sql] of steps) {
@@ -5555,4 +5582,99 @@ export async function recordDefectiveReturn(entry: {
     console.warn('[defective_returns] Failed to record defective return:', e);
   }
 }
+
+export interface StoredVendorDisputeInput {
+  id: string;
+  poId?: string;
+  supplierName: string;
+  supplierPhone?: string;
+  invoiceNumber?: string;
+  invoiceDate?: string;
+  originalReportedTotal?: number;
+  totalClaimAmount?: number;
+  adjustedPayableTotal?: number;
+  status?: string;
+  itemsCount?: number;
+  items?: Array<unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export async function saveVendorDispute(dispute: StoredVendorDisputeInput): Promise<void> {
+  if (!isTauriEnv()) return;
+  try {
+    const db = await getLocalDb();
+    const now = utcNowIso();
+    await withBusyRetry(
+      () =>
+        db.execute(
+          `INSERT INTO vendor_disputes (
+            id, po_id, supplier_name, supplier_phone, invoice_number, invoice_date,
+            original_reported_total, total_claim_amount, adjusted_payable_total,
+            status, items_count, json_payload, device_id, idempotency_key, sync_status,
+            version, created_at, updated_at, deleted
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'local', $1, 'pending', 1, $13, $14, 0)
+          ON CONFLICT(id) DO UPDATE SET
+            status=excluded.status,
+            supplier_phone=excluded.supplier_phone,
+            total_claim_amount=excluded.total_claim_amount,
+            adjusted_payable_total=excluded.adjusted_payable_total,
+            items_count=excluded.items_count,
+            json_payload=excluded.json_payload,
+            updated_at=excluded.updated_at,
+            version=vendor_disputes.version + 1;`,
+          [
+            dispute.id,
+            dispute.poId ?? null,
+            dispute.supplierName,
+            dispute.supplierPhone ?? null,
+            dispute.invoiceNumber ?? null,
+            dispute.invoiceDate ?? null,
+            dispute.originalReportedTotal ?? 0,
+            dispute.totalClaimAmount ?? 0,
+            dispute.adjustedPayableTotal ?? 0,
+            dispute.status ?? 'DRAFT',
+            dispute.itemsCount ?? (dispute.items ? dispute.items.length : 0),
+            JSON.stringify(dispute),
+            dispute.createdAt ?? now,
+            dispute.updatedAt ?? now,
+          ]
+        ),
+      { attempts: 3, baseDelayMs: 50, label: 'save-vendor-dispute' }
+    );
+  } catch (e) {
+    console.warn('[vendor_disputes] Failed to save vendor dispute:', e);
+  }
+}
+
+export async function getVendorDisputes<T = unknown>(supplierName?: string): Promise<T[]> {
+  if (!isTauriEnv()) return [];
+  try {
+    const db = await getLocalDb();
+    const query = supplierName
+      ? `SELECT json_payload FROM vendor_disputes WHERE supplier_name = $1 AND deleted = 0 ORDER BY created_at DESC;`
+      : `SELECT json_payload FROM vendor_disputes WHERE deleted = 0 ORDER BY created_at DESC;`;
+    const params = supplierName ? [supplierName] : [];
+    const rows = await withBusyRetry(
+      () => db.select<Array<{ json_payload: string }>>(query, params),
+      { attempts: 2, baseDelayMs: 50, label: 'get-vendor-disputes' }
+    );
+    const list: T[] = [];
+    for (const row of rows || []) {
+      try {
+        const parsed = JSON.parse(row.json_payload);
+        if (parsed && typeof parsed.id === 'string') {
+          list.push(parsed as T);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return list;
+  } catch (e) {
+    console.warn('[vendor_disputes] Failed to read vendor disputes:', e);
+    return [];
+  }
+}
+
 

@@ -24,6 +24,7 @@ export interface DisputeItem {
 }
 
 export interface DisputeBrief {
+  poId?: string;
   supplierName: string;
   supplierPhone: string;
   invoiceDate: string;
@@ -53,6 +54,7 @@ export interface CatalogReferenceItem {
  * math state, and catalog reference prices.
  */
 export function generateVendorDisputeBrief(params: {
+  poId?: string;
   supplierName: string;
   supplierPhone?: string;
   invoiceNumber?: string;
@@ -65,6 +67,7 @@ export function generateVendorDisputeBrief(params: {
   catalogMap: Map<string, CatalogReferenceItem>;
 }): DisputeBrief {
   const {
+    poId,
     supplierName,
     supplierPhone = '',
     invoiceNumber = 'BL-' + new Date().toISOString().slice(0, 10).replace(/-/g, ''),
@@ -183,6 +186,7 @@ ${items.length > 0 ? items.map((it) => `• *${it.description}* (الكمية ${
   const whatsAppUrlFr = buildWhatsAppUrl(cleanPhone, whatsAppTextFr);
 
   return {
+    poId,
     supplierName,
     supplierPhone,
     invoiceDate,

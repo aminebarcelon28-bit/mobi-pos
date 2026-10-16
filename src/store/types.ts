@@ -320,6 +320,9 @@ export interface ProcurementSlice {
     expensePaymentMethod?: PaymentMethodType;
     supplierInvoiceNo?: string;
     notes?: string;
+    paidCash?: number;
+    paidBank?: number;
+    supplierDebt?: number;
   }) => Promise<{ success: boolean; isPartial: boolean; totalReceivedCost: number; reason?: string }>;
   cancelPO: (poId: string, reason?: string) => Promise<void>;
   deletePO: (poId: string) => Promise<void>;

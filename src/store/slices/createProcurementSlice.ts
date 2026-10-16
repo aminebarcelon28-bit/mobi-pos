@@ -377,7 +377,17 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
   },
 
   validateAndReceivePO: async (payload) => {
-    const { poId, verifiedItems, recordExpense = true, expensePaymentMethod = 'Espèces', notes, supplierInvoiceNo } = payload;
+    const {
+      poId,
+      verifiedItems,
+      recordExpense = true,
+      expensePaymentMethod = 'Espèces',
+      notes,
+      supplierInvoiceNo,
+      paidCash,
+      paidBank,
+      supplierDebt,
+    } = payload;
     const { purchaseOrders, products, logSecurityAction, addStoreExpense } = get();
 
     const targetPO = purchaseOrders.find((p) => p.id === poId);
@@ -546,6 +556,10 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
     // Determine Final PO Status
     const newStatus: PurchaseOrder['status'] = allItemsFullyReceived ? 'Completed' : 'Partially Received';
 
+    const effectivePaidCash = paidCash !== undefined ? Math.max(0, Math.round(paidCash)) : (expensePaymentMethod === 'Espèces' && recordExpense ? totalReceivedCost : 0);
+    const effectivePaidBank = paidBank !== undefined ? Math.max(0, Math.round(paidBank)) : (expensePaymentMethod !== 'Espèces' && recordExpense ? totalReceivedCost : 0);
+    const effectiveDebt = supplierDebt !== undefined ? Math.max(0, Math.round(supplierDebt)) : Math.max(0, totalReceivedCost - effectivePaidCash - effectivePaidBank);
+
     const updatedPO: PurchaseOrder = {
       ...targetPO,
       items: updatedLineItems,
@@ -556,6 +570,9 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
       notes: notes || targetPO.notes,
       supplierInvoiceNo: supplierInvoiceNo || targetPO.supplierInvoiceNo,
       expenseRecorded: recordExpense ? true : targetPO.expenseRecorded,
+      paidCash: (targetPO.paidCash || 0) + effectivePaidCash,
+      paidBank: (targetPO.paidBank || 0) + effectivePaidBank,
+      supplierDebt: (targetPO.supplierDebt || 0) + effectiveDebt,
     };
 
     const updatedPOs = purchaseOrders.map((p) => (p.id === poId ? updatedPO : p));
@@ -652,15 +669,33 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
       return { success: false, isPartial: false, totalReceivedCost: 0, reason: 'PO_PERSISTENCE_FAILED' };
     }
 
-    // 3. Automated Financial Expense Recording (Linked to EBITDA Reports & Cash Movements)
+    // 3. Automated Financial Settlement & Cash Movements
+    // If physical cash was paid out of the drawer for the PO, log cash movement directly
+    // with category 'FOURNISSEUR_ACHAT' so drawer expectedCash is debited without polluting operating expenses
+    if (effectivePaidCash > 0 && get().activeShift) {
+      await get().logCashMovement(
+        effectivePaidCash,
+        'EXPENSE',
+        `FOURNISSEUR_ACHAT: ${targetPO.vendorName} (Bon #${targetPO.poNumber})`,
+        undefined,
+        undefined,
+        'FOURNISSEUR_ACHAT',
+        'PURCHASE_ORDER',
+        targetPO.id
+      );
+    }
+
     if (recordExpense && totalReceivedCost > 0) {
+      // If effectivePaidCash was already debited directly via FOURNISSEUR_ACHAT above,
+      // pass paymentMethod 'Autre' to addStoreExpense so it doesn't trigger a duplicate drawer cash deduction
+      const storeExpensePaymentMethod = effectivePaidCash > 0 ? 'Autre' : expensePaymentMethod;
       await addStoreExpense({
         category: 'Achat Marchandises / Fournisseur',
         title: `Achat Fournisseur : ${targetPO.vendorName} (Bon #${targetPO.poNumber})`,
         amount: totalReceivedCost,
-        paymentMethod: expensePaymentMethod,
+        paymentMethod: storeExpensePaymentMethod,
         paidTo: targetPO.vendorName,
-        notes: `Réception marchandise validée (+${totalReceivedUnits} unités) - Statut: ${
+        notes: `Réception marchandise validée (+${totalReceivedUnits} unités) - Espèces: ${formatDZD(effectivePaidCash)}, Banque: ${formatDZD(effectivePaidBank)}, Dette: ${formatDZD(effectiveDebt)} - Statut: ${
           newStatus === 'Completed' ? 'Complète' : 'Partielle'
         }`,
         recordedBy: 'Admin (Réception Stock)',

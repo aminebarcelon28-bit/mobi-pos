@@ -675,6 +675,9 @@ export interface PurchaseOrder {
   expenseId?: string;
   supplierInvoiceNo?: string;
   notes?: string;
+  paidCash?: number;
+  paidBank?: number;
+  supplierDebt?: number;
 }
 
 export interface ConditionChecklist {

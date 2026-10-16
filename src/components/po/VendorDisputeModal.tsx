@@ -16,6 +16,7 @@ import type { DisputeBrief } from '../../utils/disputeGenerator';
 
 export interface StoredVendorDispute {
   id: string;
+  poId?: string;
   supplierName: string;
   supplierPhone: string;
   invoiceNumber: string;
@@ -59,6 +60,9 @@ export function saveStoredDispute(dispute: StoredVendorDispute): void {
     import('../../db/database').then(({ dexieDb }) => {
       dexieDb.appSettings.put({ key: `dispute_${dispute.id}`, value: JSON.stringify(dispute) }).catch(() => {});
     }).catch(() => {});
+    import('../../db/sqlPluginAdapter').then(({ saveVendorDispute }) => {
+      saveVendorDispute(dispute).catch(() => {});
+    }).catch(() => {});
   } catch (e) {
     console.warn('[VendorDispute] Failed to persist dispute:', e);
   }
@@ -97,6 +101,7 @@ export const VendorDisputeModal: React.FC<VendorDisputeModalProps> = ({
   useEffect(() => {
     const claimRecord: StoredVendorDispute = {
       id: disputeId,
+      poId: brief.poId,
       supplierName: brief.supplierName,
       supplierPhone: phoneNumber,
       invoiceNumber: brief.invoiceNumber || 'S/N',
