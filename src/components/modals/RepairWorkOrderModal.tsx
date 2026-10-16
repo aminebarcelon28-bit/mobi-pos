@@ -425,9 +425,26 @@ export const RepairWorkOrderModal: React.FC = () => {
 
   // Debounced warranty lookup. Delegates to the SAME resolver the Inspector
   // uses — one authority, one answer per identifier.
-  const runWarrantyLookup = (value: string, mode: DeviceIdentifierMode = imeiKind) => {
+  const runWarrantyLookup = async (value: string, mode: DeviceIdentifierMode = imeiKind) => {
+    // UPGRADE-01 safety rail: merge the device's sales read straight from
+    // SQLite (idx_txn_items_imei) into the resolver deps — the store window is
+    // bounded to the newest 200 tickets and would hide older purchases.
+    let txns = transactions;
+    if (mode !== 'manual') {
+      try {
+        const { sqliteAdapter } = await import('../../db/sqliteAdapter');
+        const hits = await sqliteAdapter.findTransactionsByImei(value);
+        if (hits.length > 0) {
+          const seen = new Set((transactions || []).map((t) => t.id));
+          const extra = hits.filter((t) => !seen.has(t.id));
+          if (extra.length > 0) txns = [...extra, ...(transactions || [])];
+        }
+      } catch (lookupErr) {
+        console.warn('[sav-intake] direct IMEI read failed:', lookupErr);
+      }
+    }
     const res = resolveWarrantyDossier(value, mode, {
-      transactions,
+      transactions: txns,
       products,
       imeiRecords,
       repairOrders,

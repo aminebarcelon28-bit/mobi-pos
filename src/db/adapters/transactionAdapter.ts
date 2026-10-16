@@ -1,8 +1,10 @@
 import type {
+  CartItem,
   Product,
   Customer,
   SaleTransaction,
   SecurityAuditLogEntry,
+  TransactionWindowCursor,
 } from '../../types/pos';
 import { db as dexieDb } from '../database';
 import { sortTransactionsNewestFirst } from '../../utils/dateUtils';
@@ -13,6 +15,7 @@ import { withBusyRetry, isBusyError } from '../busyRetry';
 import { physicalCashTendered, cashDisbursedOf, clampCashRefund } from '../../utils/cashTerms';
 import { refundableValueOf } from '../../utils/receiptMath';
 import { offlineRefundVerdict } from '../../sync/refundLockPolicy';
+import { normalizeDeviceKey } from '../../utils/deviceIdCodec';
 
 /**
  * Independent execution policy for processRefundAtomic (defense in depth).
@@ -108,6 +111,241 @@ async function enrichAuditTelemetry(
   }
 }
 
+// ── UPGRADE-01: windowed history + index-direct safety reads ────────────────
+//
+// Boot and every post-pull refresh load a bounded newest-first window of
+// transactions (`getTransactionsWindow`); older history pages on demand via
+// `loadMoreTransactions`. Money-critical consumers (shift close / Z snapshot /
+// X report, reports & exports, refunds, receipt reprints, IMEI search) must
+// never trust that RAM window: they read SQLite directly by index
+// (idx_transactions_created_at / idx_transactions_receipt /
+// idx_txn_items_imei) and map payload-first exactly like backfill.ts does, so
+// a ticket outside the window can never be missed for money or warranty.
+
+/**
+ * Tolerant json_payload parse. Some legacy writers double-encoded the payload
+ * (a JSON string holding a JSON string — see sqlPluginAdapter's
+ * `parsed.json_payload` handling), so parse twice when the first parse yields
+ * a string. Never throws — an unreadable blob maps to an empty envelope and
+ * the scalar columns still carry the money fields.
+ */
+function parseTxPayloadLoose(raw: unknown): Record<string, unknown> {
+  let obj: unknown = raw;
+  for (let i = 0; i < 2 && typeof obj === 'string'; i++) {
+    try {
+      obj = JSON.parse(obj);
+    } catch {
+      return {};
+    }
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+  return obj as Record<string, unknown>;
+}
+
+function toFiniteNumber(value: unknown, fallback: unknown = 0): number {
+  const n = Number(value ?? fallback ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Map raw SQLite `transactions` rows (+ a `transaction_items` fallback for
+ * rows without embedded items) to `SaleTransaction` objects. Field-for-field
+ * mirror of backfill.ts so windowed and full-history readers can never
+ * disagree on the money fields.
+ */
+async function mapTxRowsToSaleTransactions(
+  rows: Array<Record<string, unknown>>
+): Promise<SaleTransaction[]> {
+  if (!rows || rows.length === 0) return [];
+  const parsedById = new Map<string, Record<string, unknown>>();
+  const productIds = new Set<string>();
+  const customerIds = new Set<string>();
+  const rowsNeedingItems: Array<Record<string, unknown>> = [];
+  for (const r of rows) {
+    const id = String(r.id ?? '');
+    const parsed = parseTxPayloadLoose(r.json_payload);
+    parsedById.set(id, parsed);
+    if (r.customer_id) customerIds.add(String(r.customer_id));
+    const embedded = Array.isArray(parsed.items) ? (parsed.items as unknown[]) : [];
+    if (embedded.length === 0) rowsNeedingItems.push(r);
+    for (const it of embedded) {
+      const pid = (it as { product?: { id?: unknown } } | null)?.product?.id;
+      if (pid) productIds.add(String(pid));
+    }
+  }
+  const itemsByTxnId = new Map<string, Array<Record<string, unknown>>>();
+  if (rowsNeedingItems.length > 0) {
+    try {
+      const db = await getLocalDb();
+      const ids = rowsNeedingItems.map((r) => String(r.id ?? ''));
+      for (let i = 0; i < ids.length; i += 500) {
+        const chunk = ids.slice(i, i + 500);
+        const part = (await db
+          .select(
+            `SELECT * FROM transaction_items WHERE transaction_id IN (${chunk.map(() => '?').join(',')}) AND (deleted = 0 OR deleted IS NULL)`,
+            chunk
+          )
+          .catch(() => [])) as Array<Record<string, unknown>>;
+        for (const it of part) {
+          const txnId = String(it.transaction_id ?? '');
+          if (!txnId) continue;
+          const list = itemsByTxnId.get(txnId) ?? [];
+          list.push(it);
+          itemsByTxnId.set(txnId, list);
+          if (it.product_id) productIds.add(String(it.product_id));
+        }
+      }
+    } catch (err) {
+      console.warn('[db:tx-read] transaction_items fallback unavailable:', err);
+    }
+  }
+  const [prodList, custList] = await Promise.all([
+    productIds.size > 0 ? dexieDb.products.bulkGet([...productIds]).catch(() => []) : Promise.resolve([]),
+    customerIds.size > 0 ? dexieDb.customers.bulkGet([...customerIds]).catch(() => []) : Promise.resolve([]),
+  ]);
+  const productMap = new Map<string, Product>();
+  for (const p of prodList) if (p) productMap.set(p.id, p);
+  const customerMap = new Map<string, Customer>();
+  for (const c of custList) if (c) customerMap.set(c.id, c);
+
+  const out: SaleTransaction[] = [];
+  for (const r of rows) {
+    const parsed = parsedById.get(String(r.id ?? '')) ?? {};
+    let items: CartItem[] = [];
+    if (Array.isArray(parsed.items) && (parsed.items as unknown[]).length > 0) {
+      items = parsed.items as CartItem[];
+    } else {
+      for (const it of itemsByTxnId.get(String(r.id ?? '')) ?? []) {
+        const prod = productMap.get(String(it.product_id ?? ''));
+        const rowUnitCost = toFiniteNumber(it.unit_cost_at_sale ?? it.cost_price);
+        const rowCharged = toFiniteNumber(it.unit_price_charged ?? it.applied_price);
+        items.push({
+          product: prod ?? {
+            id: String(it.product_id ?? ''),
+            title: 'Article',
+            sku: '',
+            barcode: '',
+            price: toFiniteNumber(it.applied_price),
+            wholesalePrice: toFiniteNumber(it.applied_price),
+            costPrice: toFiniteNumber(it.cost_price),
+            category: 'Tous les produits',
+            brand: 'Autre',
+            stock: 0,
+            imageUrl: '',
+            vendorName: 'Général',
+            leadTimeDays: 7,
+            dailySalesVelocity: 0,
+            reorderPoint: 5,
+            compatibleModel: '',
+          },
+          quantity: toFiniteNumber(it.quantity, 1),
+          discount: toFiniteNumber(it.discount),
+          appliedPrice: toFiniteNumber(it.applied_price),
+          unitCostPrice: rowUnitCost,
+          unitCostAtSale: rowUnitCost,
+          unitPriceCharged: rowCharged,
+          discountAmount: toFiniteNumber(it.discount_amount),
+          lineProfit: toFiniteNumber(
+            it.line_profit,
+            (rowCharged - rowUnitCost) * toFiniteNumber(it.quantity, 1)
+          ),
+          imeiNumber: (it.imei_number as string) ?? undefined,
+        } as unknown as CartItem);
+      }
+    }
+    let customerObj: Customer | null = (parsed.customer as Customer) || null;
+    if (!customerObj && r.customer_id) {
+      customerObj = customerMap.get(String(r.customer_id)) ?? null;
+    }
+    out.push({
+      ...parsed,
+      id: String(r.id ?? ''),
+      receiptNumber:
+        (r.receipt_number as string) ??
+        (parsed.receiptNumber as string) ??
+        (parsed.receipt_number as string) ??
+        String(r.id ?? ''),
+      items,
+      customer: customerObj,
+      subtotal: toFiniteNumber(r.subtotal ?? parsed.subtotal, r.total ?? 0),
+      discountTotal: toFiniteNumber(r.discount_total ?? parsed.discountTotal),
+      total: toFiniteNumber(r.total ?? parsed.total),
+      costTotal: toFiniteNumber(r.cost_total ?? parsed.costTotal),
+      profit: toFiniteNumber(r.profit ?? parsed.profit),
+      profitMargin: toFiniteNumber(r.profit_margin ?? parsed.profitMargin),
+      // v105 ATOMIC MATERIALIZATION: finite column value wins, then the
+      // receipt-JSON envelope; absent stays absent (legacy row = unknown).
+      ...(() => {
+        const rawLedger =
+          (r.ledger_cogs_total as unknown) ??
+          (parsed.ledgerCogsTotal as unknown) ??
+          (parsed.ledger_cogs_total as unknown);
+        const v = Number(rawLedger);
+        return Number.isFinite(v) && v >= 0 ? { ledgerCogsTotal: Math.round(v) } : {};
+      })(),
+      pricingTier:
+        (r.pricing_tier as SaleTransaction['pricingTier']) ??
+        (parsed.pricingTier as SaleTransaction['pricingTier']) ??
+        'Retail',
+      paymentMethod:
+        (r.payment_method as SaleTransaction['paymentMethod']) ??
+        (parsed.paymentMethod as SaleTransaction['paymentMethod']) ??
+        'Espèces',
+      cashTendered: toFiniteNumber(r.cash_tendered ?? parsed.cashTendered),
+      changeDue: toFiniteNumber(r.change_due ?? parsed.changeDue),
+      status:
+        (r.status as SaleTransaction['status']) ??
+        (parsed.status as SaleTransaction['status']) ??
+        'COMPLETED',
+      createdAt: ((typeof r.created_at === 'string' && r.created_at) ||
+        (parsed.createdAt as string) ||
+        '') as string,
+      tenders: (parsed.tenders as SaleTransaction['tenders']) ?? [],
+      ...(r.shift_id && !parsed.shiftId ? { shiftId: String(r.shift_id) } : {}),
+    } as SaleTransaction);
+  }
+  return out;
+}
+
+/** SQLite range read (bounded by optional from/to) + payload mapping, with a
+ * Dexie-scan fallback for web preview (no SQLite authority there). */
+async function readTransactionsByRange(opts: {
+  from?: string | null;
+  to?: string | null;
+}): Promise<SaleTransaction[]> {
+  const from = opts.from ?? null;
+  const to = opts.to ?? null;
+  if (isTauriEnv()) {
+    try {
+      const db = await getLocalDb();
+      const where: string[] = ['(deleted = 0 OR deleted IS NULL)'];
+      const params: unknown[] = [];
+      if (from) {
+        params.push(from);
+        where.push(`created_at >= $${params.length}`);
+      }
+      if (to) {
+        params.push(to);
+        where.push(`created_at <= $${params.length}`);
+      }
+      const rows = (await db.select(
+        `SELECT * FROM transactions WHERE ${where.join(' AND ')} ORDER BY created_at DESC, id DESC`,
+        params
+      )) as Array<Record<string, unknown>>;
+      return await mapTxRowsToSaleTransactions(rows);
+    } catch (err) {
+      console.warn('[db:tx-read] SQLite range read failed, falling back to Dexie:', err);
+    }
+  }
+  const all = sortTransactionsNewestFirst(await dexieDb.transactions.toArray());
+  return all.filter((t) => {
+    const at = String(t.createdAt ?? '');
+    if (from && at < from) return false;
+    if (to && at > to) return false;
+    return true;
+  });
+}
+
 export const transactionAdapter = {
   async processSaleTransactionAtomic(
     transaction: SaleTransaction,
@@ -142,6 +380,243 @@ export const transactionAdapter = {
       return sortTransactionsNewestFirst(await dexieDb.transactions.toArray());
     }
   },
+
+  /**
+   * UPGRADE-01 — keyset-paginated window over the Dexie mirror (the
+   * transaction display authority; complete in Tauri builds via backfill +
+   * post-pull mirror repairs, and the only store in web preview).
+   *
+   * Order is `createdAt DESC, id DESC` with a strict cursor: rows equal on
+   * `createdAt` continue by descending id, so no row is duplicated or skipped
+   * across pages. Boot and every post-pull refresh take page 1 (LIMIT 200 by
+   * default); older history loads on demand through the store's
+   * `loadMoreTransactions()`.
+   */
+  async getTransactionsWindow(opts?: {
+    cursor?: TransactionWindowCursor | null;
+    limit?: number;
+  }): Promise<{ items: SaleTransaction[]; nextCursor: TransactionWindowCursor | null; hasMore: boolean }> {
+    const limit = Math.min(Math.max(1, Math.floor(opts?.limit ?? 200)), 1000);
+    const cursor = opts?.cursor ?? null;
+    try {
+      let page: SaleTransaction[];
+      if (!cursor) {
+        page = await dexieDb.transactions.orderBy('createdAt').reverse().limit(limit + 1).toArray();
+      } else {
+        page = await dexieDb.transactions
+          .where('createdAt')
+          .belowOrEqual(cursor.createdAt)
+          .reverse()
+          .filter(
+            (t) => !(String(t.createdAt ?? '') === cursor.createdAt && String(t.id) >= cursor.id)
+          )
+          .limit(limit + 1)
+          .toArray();
+      }
+      const hasMore = page.length > limit;
+      const items = page.slice(0, limit);
+      const tail = items[items.length - 1];
+      return {
+        items,
+        nextCursor:
+          hasMore && tail
+            ? { createdAt: String(tail.createdAt ?? ''), id: String(tail.id) }
+            : null,
+        hasMore,
+      };
+    } catch (err) {
+      console.warn('[db:tx-window] Dexie keyset read failed, falling back to full scan:', err);
+      const all = sortTransactionsNewestFirst(await dexieDb.transactions.toArray());
+      const start = cursor
+        ? all.findIndex(
+            (t) => String(t.createdAt ?? '') === cursor.createdAt && String(t.id) === cursor.id
+          ) + 1
+        : 0;
+      const fromIdx = Math.max(0, start);
+      const slice = all.slice(fromIdx, fromIdx + limit);
+      const hasMore = fromIdx + limit < all.length;
+      const tail = slice[slice.length - 1];
+      return {
+        items: slice,
+        nextCursor:
+          hasMore && tail
+            ? { createdAt: String(tail.createdAt ?? ''), id: String(tail.id) }
+            : null,
+        hasMore,
+      };
+    }
+  },
+
+  /**
+   * UPGRADE-01 safety rail — receipt lookup straight to SQLite by
+   * `idx_transactions_receipt`. A ticket older than the RAM window must stay
+   * reprintable/refundable by scanning its barcode.
+   */
+  async getTransactionByReceipt(receipt: string): Promise<SaleTransaction | undefined> {
+    const clean = String(receipt ?? '').trim();
+    if (!clean) return undefined;
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const rows = (await db.select(
+          'SELECT * FROM transactions WHERE (deleted = 0 OR deleted IS NULL) AND receipt_number = $1 ORDER BY created_at DESC LIMIT 1',
+          [clean]
+        )) as Array<Record<string, unknown>>;
+        const mapped = await mapTxRowsToSaleTransactions(rows);
+        if (mapped.length > 0) return mapped[0];
+      } catch (err) {
+        console.warn('[db:tx-read] receipt read failed, falling back to Dexie:', err);
+      }
+    }
+    try {
+      const hits = await dexieDb.transactions.where('receiptNumber').equals(clean).toArray();
+      return sortTransactionsNewestFirst(hits)[0];
+    } catch {
+      return undefined;
+    }
+  },
+
+  /** UPGRADE-01 safety rail — direct PK read (receipt barcodes carry the id too). */
+  async getTransactionById(id: string): Promise<SaleTransaction | undefined> {
+    const clean = String(id ?? '').trim();
+    if (!clean) return undefined;
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const rows = (await db.select(
+          'SELECT * FROM transactions WHERE (deleted = 0 OR deleted IS NULL) AND id = $1 LIMIT 1',
+          [clean]
+        )) as Array<Record<string, unknown>>;
+        const mapped = await mapTxRowsToSaleTransactions(rows);
+        if (mapped.length > 0) return mapped[0];
+      } catch (err) {
+        console.warn('[db:tx-read] id read failed, falling back to Dexie:', err);
+      }
+    }
+    return await dexieDb.transactions.get(clean).catch(() => undefined);
+  },
+
+  /**
+   * UPGRADE-01 safety rail — shift-scoped complete read (SQLite authority,
+   * `idx_transactions_created_at`). Shift close, the Z snapshot and the
+   * interim X report must never undercount a busy shift just because the UI
+   * window holds only the newest 200 tickets.
+   */
+  async getTransactionsByShiftWindow(
+    openedAt: string | null,
+    closedAt?: string | null
+  ): Promise<SaleTransaction[]> {
+    return await readTransactionsByRange({ from: openedAt ?? null, to: closedAt ?? null });
+  },
+
+  /**
+   * UPGRADE-01 safety rail — date-range complete read for reports, exports
+   * and full-history management views (on-demand; never part of boot).
+   */
+  async getTransactionsByDateRange(opts?: {
+    from?: string | null;
+    to?: string | null;
+  }): Promise<SaleTransaction[]> {
+    return await readTransactionsByRange({ from: opts?.from ?? null, to: opts?.to ?? null });
+  },
+
+  /** UPGRADE-01 — honest total for diagnostics (the store holds a window only). */
+  async getTransactionsCount(): Promise<number> {
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const rows = (await db.select(
+          'SELECT COUNT(*) AS c FROM transactions WHERE deleted = 0 OR deleted IS NULL'
+        )) as Array<{ c?: number }>;
+        const n = Number(rows?.[0]?.c);
+        if (Number.isFinite(n)) return n;
+      } catch (err) {
+        console.warn('[db:tx-read] count read failed, falling back to Dexie:', err);
+      }
+    }
+    return await dexieDb.transactions.count().catch(() => 0);
+  },
+
+  /**
+   * UPGRADE-01 safety rail — IMEI → sale history straight to SQLite via
+   * `idx_txn_items_imei`. The SQL probe uses the stored form plus a
+   * digits-only pass; final equality is normalized in JS so mixed-format
+   * legacy rows can never hide a device's sale.
+   */
+  async findTransactionsByImei(imei: string): Promise<SaleTransaction[]> {
+    const needle = normalizeDeviceKey(imei);
+    if (!needle) return [];
+    const raw = String(imei ?? '').trim();
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const ids = new Set<string>();
+        const collect = (rows: unknown[]) => {
+          for (const r of rows as Array<{ transaction_id?: unknown }>) {
+            if (r?.transaction_id) ids.add(String(r.transaction_id));
+          }
+        };
+        collect(
+          (await db
+            .select(
+              'SELECT DISTINCT transaction_id FROM transaction_items WHERE imei_number = $1 LIMIT 200',
+              [raw]
+            )
+            .catch(() => [])) as unknown[]
+        );
+        if (needle !== raw) {
+          collect(
+            (await db
+              .select(
+                'SELECT DISTINCT transaction_id FROM transaction_items WHERE imei_number = $1 LIMIT 200',
+                [needle]
+              )
+              .catch(() => [])) as unknown[]
+          );
+        }
+        if (ids.size === 0 && needle.length >= 6) {
+          collect(
+            (await db
+              .select(
+                "SELECT DISTINCT transaction_id FROM transaction_items WHERE imei_number LIKE '%' || $1 || '%' LIMIT 200",
+                [needle]
+              )
+              .catch(() => [])) as unknown[]
+          );
+        }
+        if (ids.size > 0) {
+          const idList = [...ids];
+          const rows: Array<Record<string, unknown>> = [];
+          for (let i = 0; i < idList.length; i += 200) {
+            const chunk = idList.slice(i, i + 200);
+            const part = (await db.select(
+              `SELECT * FROM transactions WHERE id IN (${chunk.map(() => '?').join(',')}) AND (deleted = 0 OR deleted IS NULL)`,
+              chunk
+            )) as Array<Record<string, unknown>>;
+            rows.push(...part);
+          }
+          const mapped = await mapTxRowsToSaleTransactions(rows);
+          const hits = mapped.filter((t) =>
+            (t.items || []).some((it) => normalizeDeviceKey(it.imeiNumber ?? '') === needle)
+          );
+          if (hits.length > 0) return sortTransactionsNewestFirst(hits);
+        }
+      } catch (err) {
+        console.warn('[db:tx-read] IMEI read failed, falling back to Dexie scan:', err);
+      }
+    }
+    try {
+      const hits = await dexieDb.transactions
+        .filter((t) =>
+          (t.items || []).some((it) => normalizeDeviceKey(it.imeiNumber ?? '') === needle)
+        )
+        .toArray();
+      return sortTransactionsNewestFirst(hits);
+    } catch {
+      return [];
+    }
+  },
+
 
   async voidTransactionAtomic(
     _transactionId: string,

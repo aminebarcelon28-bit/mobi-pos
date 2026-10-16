@@ -11,6 +11,10 @@ async function getSqlite() {
   return sqliteAdapter;
 }
 
+// UPGRADE-01: shift history hydration is bounded (exact counts come from
+// getShiftStats — never from a windowed array length).
+const SHIFTS_WINDOW_SIZE = 200;
+
 // Call-shape of closeShift INCLUDING the 4th managerPin passthrough (kept
 // out of the shared ShiftSlice type — owned by another agent — so modals
 // cast to this instead of widening the interface themselves).
@@ -25,6 +29,7 @@ export type CloseShiftWithPin = (
 export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set, get) => ({
   activeShift: null,
   allShifts: [],
+  shiftStats: { total: 0, closed: 0 },
   shiftFloat: 20000,
   cashDrops: [],
   payouts: [],
@@ -72,7 +77,10 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
         denominations,
         lockScreenCashier || effectiveCashier
       );
-      const allShifts = await (await getSqlite()).getAllShifts();
+      const [allShifts, shiftStats] = await Promise.all([
+        (await getSqlite()).getAllShifts({ limit: SHIFTS_WINDOW_SIZE }),
+        (await getSqlite()).getShiftStats(),
+      ]);
       logSecurityAction(
         'Ouverture Session Caisse (Shift Open)',
         `Fond de caisse initial: ${openingFloat} DA • Caissier: ${effectiveCashier} • ID: ${session.id}`,
@@ -83,6 +91,7 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
       set({
         activeShift: session,
         allShifts,
+        shiftStats,
         shiftFloat: openingFloat,
         activeModal: null,
       });
@@ -135,8 +144,11 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
         managerPin,
         closingDenominations
       );
-      const allShifts = await (await getSqlite()).getAllShifts();
-      const inventoryValuation = await (await getSqlite()).getInventoryValuation();
+      const [allShifts, shiftStats, inventoryValuation] = await Promise.all([
+        (await getSqlite()).getAllShifts({ limit: SHIFTS_WINDOW_SIZE }),
+        (await getSqlite()).getShiftStats(),
+        (await getSqlite()).getInventoryValuation(),
+      ]);
 
       logSecurityAction(
         'Clôture Caisse & Rapport Z (Blind Count)',
@@ -149,6 +161,7 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
       set({
         activeShift: null,
         allShifts,
+        shiftStats,
         inventoryValuation,
       });
       return { success: true, session: closedSession };
@@ -206,27 +219,47 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
 
   fetchAllShifts: async () => {
     try {
-      const allShifts = await (await getSqlite()).getAllShifts();
-      set({ allShifts });
+      const [allShifts, shiftStats] = await Promise.all([
+        (await getSqlite()).getAllShifts({ limit: SHIFTS_WINDOW_SIZE }),
+        (await getSqlite()).getShiftStats(),
+      ]);
+      set({ allShifts, shiftStats });
     } catch (e) {
       console.warn('Failed to fetch all shifts:', e);
     }
   },
 
+  /** UPGRADE-01: exact counts for Z-ticket numbering, without reloading rows. */
+  refreshShiftStats: async () => {
+    try {
+      set({ shiftStats: await (await getSqlite()).getShiftStats() });
+    } catch (e) {
+      console.warn('Failed to fetch shift stats:', e);
+    }
+  },
+
   printXReport: async () => {
-    const { activeShift, receiptSettings, logSecurityAction, transactions, repairOrders } = get();
+    const { activeShift, receiptSettings, logSecurityAction, repairOrders } = get();
     if (!activeShift) {
       return false;
     }
     try {
       const { buildZSnapshot } = await import('../../utils/zReportSnapshot');
+      // UPGRADE-01 safety rail: the X report certifies drawer cash from the
+      // COMPLETE shift window (SQLite by created_at index) — never the bounded
+      // RAM window — and the matching expense/stats lanes are read alongside.
+      const [shiftTxns, shiftExpenses, shiftStats] = await Promise.all([
+        (await getSqlite()).getTransactionsByShiftWindow(activeShift.openedAt ?? null, null),
+        (await getSqlite()).getAllStoreExpenses({ from: activeShift.openedAt ?? null }),
+        (await getSqlite()).getShiftStats(),
+      ]);
       const zSnap = buildZSnapshot({
         settings: receiptSettings,
         shift: activeShift,
         shiftFloat: activeShift.openingFloat,
-        transactions,
+        transactions: shiftTxns,
         customerDebts: get().customerDebts || [],
-        storeExpenses: get().storeExpenses || [],
+        storeExpenses: shiftExpenses,
         repairOrders: repairOrders || [],
         tradeIns: get().tradeIns || [],
         cashDrops: get().cashDrops || [],
@@ -234,7 +267,7 @@ export const createShiftSlice: StateCreator<PosState, [], [], ShiftSlice> = (set
         countedCash: activeShift.actualCash ?? activeShift.openingFloat,
         blindCountPerformed: false,
         closedAtISO: new Date().toISOString(),
-        closedShiftCount: (get().allShifts || []).length,
+        closedShiftCount: shiftStats.total,
       });
 
       const enrichedShift = {

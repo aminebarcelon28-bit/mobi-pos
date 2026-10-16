@@ -36,8 +36,12 @@ export const transactionRepository = {
   },
 
   async findByReceipt(receiptNumber: string): Promise<SaleTransaction | undefined> {
-    const txns = await (await getSqlite()).getAllTransactions();
-    return txns.find((t) => t.receiptNumber.trim() === receiptNumber.trim());
+    // UPGRADE-01 safety rail: index-direct receipt lookup
+    // (idx_transactions_receipt). Scanning the store's bounded window would
+    // silently miss a receipt older than the newest 200 tickets.
+    const clean = String(receiptNumber ?? '').trim();
+    if (!clean) return undefined;
+    return await (await getSqlite()).getTransactionByReceipt(clean);
   },
 
   async voidTransaction(

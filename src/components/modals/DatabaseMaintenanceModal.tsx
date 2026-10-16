@@ -46,6 +46,8 @@ export const DatabaseMaintenanceModal: React.FC = () => {
   const { showToast } = useToast();
 
   const [stats, setStats] = useState<DbStats | null>(null);
+  // UPGRADE-01: honest transaction total (store window is bounded to 200).
+  const [txnCount, setTxnCount] = useState<number | null>(null);
   const [integrity, setIntegrity] = useState<IntegrityReport | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [actionOutput, setActionOutput] = useState<string>('');
@@ -82,6 +84,13 @@ export const DatabaseMaintenanceModal: React.FC = () => {
       const rep = await maintenanceService.runDatabaseIntegrityCheck();
       setIntegrity(rep);
       await loadSnapshots();
+      // UPGRADE-01: entity volume must reflect the DB, not the RAM window.
+      try {
+        const { sqliteAdapter } = await import('../../db/sqliteAdapter');
+        setTxnCount(await sqliteAdapter.getTransactionsCount());
+      } catch (countErr) {
+        console.warn('[db_maintenance] transaction count read failed:', countErr);
+      }
     } catch (e) {
       console.error('Failed to load DB stats:', e);
     }
@@ -604,7 +613,7 @@ export const DatabaseMaintenanceModal: React.FC = () => {
               </div>
               <div className="bg-pos-bg p-2.5 rounded-xl border border-pos-border flex justify-between items-center">
                 <span className="text-pos-muted">Ventes & Tickets :</span>
-                <span className="font-black text-pos-text">{transactions?.length || 0}</span>
+                <span className="font-black text-pos-text">{txnCount ?? (transactions?.length || 0)}</span>
               </div>
               <div className="bg-pos-bg p-2.5 rounded-xl border border-pos-border flex justify-between items-center">
                 <span className="text-pos-muted">Réparations SAV :</span>

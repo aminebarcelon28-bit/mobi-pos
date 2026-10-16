@@ -303,32 +303,64 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
     return `${yy}-${mm}-${dd}`;
   }, [activeRange.days, todayDateStr]);
 
+  // UPGRADE-01: the feed and its period totals must cover the COMPLETE selected
+  // range (SQLite by created_at index), not the bounded 200-row store window.
+  // Refetches when the window changes so a new sale lands in the live feed.
+  const [rangeTxns, setRangeTxns] = useState<SaleTransaction[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const fromISO = (() => {
+      if (!minDayKey) return null;
+      const parts = minDayKey.split('-').map(Number);
+      const y = parts[0] ?? 0;
+      const m = parts[1] ?? 0;
+      const d = parts[2] ?? 0;
+      if (!y || !m || !d) return null;
+      // Local midnight of the first day in range, minus a 12 h grace for
+      // wall-clock/ISO skew (the day-key filter trims the surplus).
+      return new Date(new Date(y, m - 1, d).getTime() - 12 * 3600 * 1000).toISOString();
+    })();
+    (async () => {
+      try {
+        const { sqliteAdapter } = await import('../../../db/sqliteAdapter');
+        const list = await sqliteAdapter.getTransactionsByDateRange({ from: fromISO });
+        if (alive) setRangeTxns(list);
+      } catch (e) {
+        console.warn('[live-activity] range read failed, using window:', e);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // transactions: refresh the range right after a sale / sync pull lands.
+  }, [minDayKey, transactions]);
+
   // Prédicat pur (niveau module : voir isDayKeyInRange) appliqué ici via les
   // clés mémoïsées — pas de fonction mémoïsée, le compilateur React reste
   // capable de prouver la mémoïsation des filtres ci-dessous.
   const todayOnly = rangeKey === 'today';
 
   const periodSales = useMemo(() => {
-    return (transactions || []).filter(
+    return (rangeTxns ?? transactions ?? []).filter(
       (t) =>
         isDayKeyInRange(toLocalDayKey(t.createdAt), minDayKey, todayDateStr, todayOnly) &&
         t.status !== 'VOIDED' &&
         !t.isRefund
     );
-  }, [transactions, minDayKey, todayDateStr, todayOnly]);
+  }, [rangeTxns, transactions, minDayKey, todayDateStr, todayOnly]);
 
   const periodRefunds = useMemo(() => {
     // Unified refund definition (shared with Desktop ReportsModal + Excel):
     // isRefund vouchers only — a REFUNDED status on the ORIGINAL sale must
     // NOT count, the voucher already subtracts it (double-count overstated
     // refunds and understated net).
-    return (transactions || []).filter(
+    return (rangeTxns ?? transactions ?? []).filter(
       (t) =>
         isDayKeyInRange(toLocalDayKey(t.createdAt), minDayKey, todayDateStr, todayOnly) &&
         Boolean(t.isRefund) &&
         t.status !== 'VOIDED'
     );
-  }, [transactions, minDayKey, todayDateStr, todayOnly]);
+  }, [rangeTxns, transactions, minDayKey, todayDateStr, todayOnly]);
 
   // Financial calculations — canonical unified metrics (same formula as
   // Desktop ReportsModal): CA Net = Σ net(valid) − Σ refunds, profit =
@@ -398,11 +430,11 @@ export const LiveActivityTab: React.FC<LiveActivityTabProps> = ({ onSelectSale }
   // Transactions de la période, plus récentes d'abord (plafond par période
   // pour rester fluide sur mobile même à 90 jours / toute la période).
   const recentFeed = useMemo(() => {
-    return (transactions || [])
+    return (rangeTxns ?? transactions ?? [])
       .filter((t) => isDayKeyInRange(toLocalDayKey(t.createdAt), minDayKey, todayDateStr, todayOnly))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       .slice(0, activeRange.feedLimit);
-  }, [transactions, minDayKey, todayDateStr, todayOnly, activeRange.feedLimit]);
+  }, [rangeTxns, transactions, minDayKey, todayDateStr, todayOnly, activeRange.feedLimit]);
 
   const refreshRef = useRef(handleManualRefresh);
   useEffect(() => {

@@ -212,7 +212,7 @@ const WHITELIST = new Set([
   'src/sync/genericApply.ts:624',
   'src/sync/genericApply.ts:630',
   'src/sync/genericApply.ts:631',
-  'src/store/slices/createOrderSlice.ts:480',
+  'src/store/slices/createOrderSlice.ts:483',
   'src/sync/payloadHygiene.ts:37',
   'src/sync/SyncManager.ts:134',
   'src/utils/receiptMath.ts:241',

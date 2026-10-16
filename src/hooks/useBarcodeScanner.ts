@@ -159,7 +159,7 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
     entries: [],
   });
 
-  const processScan = useCallback((rawCode: string) => {
+  const processScan = useCallback(async (rawCode: string): Promise<void> => {
     const code = rawCode.trim();
     if (!code) return;
 
@@ -250,7 +250,7 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
     const effectiveDigits = effectiveCode.replace(/[^0-9]/g, '');
 
     // Check if code matches a Receipt / Transaction barcode (e.g. REC-..., TXN-..., or direct receiptNumber / transaction.id)
-    const txnMatch = (store.transactions || []).find(
+    let txnMatch = (store.transactions || []).find(
       (t) =>
         t.id === effectiveCode ||
         t.receiptNumber === effectiveCode ||
@@ -260,6 +260,25 @@ export function useBarcodeScanner(): { lastScannedCode: string | null; scannerAc
             t.receiptNumber?.includes(effectiveCode) ||
             t.id.includes(effectiveCode)))
     );
+    // UPGRADE-01 safety rail: receipts older than the store's 200-ticket
+    // window must still resolve (SQLite by idx_transactions_receipt / PK)
+    // before the scan falls through to product/customer matching.
+    if (
+      !txnMatch &&
+      (effectiveCode.startsWith('REC-') ||
+        effectiveCode.startsWith('TXN-') ||
+        effectiveCode.startsWith('REF-') ||
+        effectiveCode.length >= 8)
+    ) {
+      try {
+        const { sqliteAdapter } = await import('../db/sqliteAdapter');
+        txnMatch =
+          (await sqliteAdapter.getTransactionByReceipt(effectiveCode)) ??
+          (await sqliteAdapter.getTransactionById(effectiveCode));
+      } catch (lookupErr) {
+        console.warn('[scanner] direct receipt lookup failed:', lookupErr);
+      }
+    }
     if (txnMatch) {
       soundEngine.playSuccess();
       store.setSelectedTransactionForRefund(txnMatch);

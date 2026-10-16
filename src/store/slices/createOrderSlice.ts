@@ -252,6 +252,9 @@ async function printReceipt(transaction: SaleTransaction, settings: ReceiptSetti
 
 export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set, get) => ({
   transactions: [],
+  transactionsCursor: null,
+  transactionsHasMore: false,
+  transactionsLoadingMore: false,
   lastTransaction: null,
   cashTendered: 0,
   paymentMethod: 'Espèces',

@@ -21,10 +21,15 @@ Fix any failure or boundary pin immediately → mark `[x]` → atomic commit `fe
 
 ## Sprint A — Performance & Data Model Scalability
 
-- [ ] **UPGRADE-01 — Windowed Boot Hydration & Lazy Lanes** (M)
+- [x] **UPGRADE-01 — Windowed Boot Hydration & Lazy Lanes** (M)
   - Keyset-paginated windowed state `{ items, cursor, hasMore, loadMore() }`, `LIMIT 200`, `(created_at DESC, id DESC) WHERE deleted = 0`.
   - Audit / expenses / shifts / valuation → bounded on-demand lanes.
   - Safety: `ShiftCloseModal`, `buildZSnapshot`, `ReportsModal`, `RefundModal`, `transactionRepository.ts:38-41`, IMEI search (`createUISlice.ts:1564-1578`) query SQLite directly by shift/date/receipt/IMEI index.
+  - **Landed:** boot/pull hydrate `transactions` via keyset window + `loadMoreTransactions` (id-dedupe); `allShifts` windowed (200) with exact `getShiftStats()` counts for Z-numbering; `storeExpenses` boot window (300) + on-demand full/range reads; `inventoryValuation` dropped from boot lanes (still set on shift open/close).
+  - **Safety consumers now SQLite-direct:** shift close + interim Z (complete shift-window txns + range expenses + exact counts), mid-shift X (`printXReport`), ReportsModal (`reportTxns` range read, honest tab count, on-open expense/shift refresh), RefundModal (direct receipt/id lookup on scan + typed search fallback + load-more wiring), barcode scanner hook, `transactionRepository.findByReceipt` (idx_transactions_receipt), IMEI inspector (dossier resolver merged with direct `findTransactionsByImei` + certificate invoice direct read), SAV intake warranty resolver (same merge), CustomersModal (full-history open read), mobile Management/LiveActivity (range reads), diagnostics + DB maintenance honest counts via `getTransactionsCount()`.
+  - **Audit lane:** verified already bounded (`LIMIT 300`, `operationsAdapter.ts:410`) — unchanged.
+  - **Residuals (accepted):** RefundModal prior-refund preview stays store-scoped by documented design; submit re-verifies against durable rows (slice unions Dexie full mirror). Repair-intake lookup direct-merge landed (see above). Web preview falls back to Dexie readers (no SQLite).
+  - No migration: all needed indexes pre-existed (118 reserved for UPGRADE-02). Zero-tax pin moved `createOrderSlice.ts:480 → :483` (3-line window-field insert, comment preserved).
 - [ ] **UPGRADE-02 — SQLite Engine & Payload Hygiene Pack** (M)
   - `tune(conn)` helper on every per-invoke connection (`synchronous=NORMAL`, `cache_size=-16000`, `temp_store=MEMORY`).
   - One-shot de-double-encode `json_payload`; stop `products.json_payload` rewrite in stock heal.
@@ -55,7 +60,7 @@ Fix any failure or boundary pin immediately → mark `[x]` → atomic commit `fe
 
 | Upgrade | Status | Commit | tsc | oxlint | cargo | test:all | Notes |
 |---|---|---|---|---|---|---|---|
-| 01 | pending | — | — | — | — | — | |
+| 01 | done | feat(upgrade-01) | ✓ | ✓ | ✓ | ✓ | 200-row keyset window + on-demand lanes; money-critical reads SQLite-direct by index; zero-tax pin :480→:483; no migration (indexes pre-existing) |
 | 02 | pending | — | — | — | — | — | |
 | 03 | pending | — | — | — | — | — | |
 | 04 | pending | — | — | — | — | — | |

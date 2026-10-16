@@ -110,6 +110,14 @@ export const ExpenseManagerModal: React.FC = () => {
 
   useEffect(() => { if (activeModal !== 'expense_manager') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
+  // UPGRADE-01: boot carries a bounded expense window — management surfaces
+  // load the COMPLETE list when they open (delete targets beyond the window
+  // must be visible, Month/list totals must be exact).
+  useEffect(() => {
+    if (activeModal !== 'expense_manager') return;
+    void usePosStore.getState().refreshStoreExpenses();
+  }, [activeModal]);
+
   if (activeModal !== 'expense_manager') return null;
 
   // ══════════════════════════════════════════════════════════════

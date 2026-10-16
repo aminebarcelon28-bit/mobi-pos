@@ -493,6 +493,15 @@ export interface ProcessRefundPayload {
   supervisorUserId?: string;
 }
 
+/**
+ * UPGRADE-01: keyset cursor for windowed transaction-history reads
+ * (`createdAt DESC, id DESC`). `null` starts a fresh window.
+ */
+export interface TransactionWindowCursor {
+  createdAt: string;
+  id: string;
+}
+
 export interface SaleTransaction {
   id: string;
   receiptNumber: string;

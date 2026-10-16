@@ -13,6 +13,7 @@ import type {
   CashierUser,
   HeldSale,
   IMEIRecord,
+  SaleTransaction,
 } from '../../types/pos';
 import { migrateRepairOrder } from '../../types/pos';
 import { newId } from '../../utils/ids';
@@ -179,9 +180,16 @@ const DEFAULT_HARDWARE_STATUS: HardwareStatus = {
 
 // P11.3: resolves the SQLite adapter on first use; keeps the dexie/libsql graph
 // out of the entry chunk (cold start) without changing call-site semantics.
-// Type alias so `typeof sqliteAdapter.X` refs keep working without a static import.
-import type { sqliteAdapter as SqliteAdapterInstance } from '../../db/sqliteAdapter';
-type SqliteAdapter = typeof SqliteAdapterInstance;
+
+// ── UPGRADE-01 window sizing ───────────────────────────────────────────────
+// Boot and post-pull hydration are bounded; older data loads on demand
+// (loadMoreTransactions, refreshStoreExpenses, per-modal range reads). The
+// money-critical consumers never read these windows: shift close / Z report /
+// X report / reports / refunds / receipts / IMEI lookups go straight to SQLite
+// by index (see transactionAdapter + shiftAdapter).
+const TRANSACTIONS_WINDOW_SIZE = 200;
+const SHIFTS_WINDOW_SIZE = 200;
+const EXPENSES_BOOT_WINDOW = 300;
 
 async function getSqlite() {
   const { sqliteAdapter } = await import('../../db/sqliteAdapter');
@@ -1475,7 +1483,19 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
   deleteStoreExpense: async (id) => {
     try {
       const { storeExpenses, activeShift, allShifts, logSecurityAction, logCashMovement } = get();
-      const target = (storeExpenses || []).find((e) => e.id === id);
+      let target = (storeExpenses || []).find((e) => e.id === id);
+      // UPGRADE-01: the boot lane carries a bounded window; a delete targeting
+      // an expense outside it must hydrate the full list (on-demand) instead of
+      // failing NOT_FOUND, then re-resolve the target.
+      if (!target) {
+        try {
+          const full = await (await getSqlite()).getAllStoreExpenses();
+          set({ storeExpenses: full });
+          target = full.find((e) => e.id === id);
+        } catch (hydrateErr) {
+          console.warn('[deleteStoreExpense] full expense hydrate failed:', hydrateErr);
+        }
+      }
       if (!target) return { success: false as const, reason: 'NOT_FOUND' };
       let compensated = false;
       // Cash expenses moved real drawer money: addStoreExpense writes an
@@ -1512,7 +1532,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         if (!comp.success) return { success: false as const, reason: 'COMPENSATION_FAILED' };
         compensated = true;
       }
-      const updated = (storeExpenses || []).filter((e) => e.id !== id);
+      const updated = (get().storeExpenses || []).filter((e) => e.id !== id);
       await (await getSqlite()).deleteStoreExpense(id);
       // Deletes were previously silent — an EBITDA alteration with no audit
       // trail. Now every delete is logged, with compensation noted.
@@ -1527,6 +1547,19 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     } catch (error) {
       console.error('Failed to delete store expense:', error);
       return { success: false as const, reason: 'DB_SAVE_FAILED' };
+    }
+  },
+
+  /**
+   * UPGRADE-01: on-demand FULL expense reload for management surfaces (expense
+   * manager, reports, shift Z reprints) — boot carries only a bounded window.
+   */
+  refreshStoreExpenses: async () => {
+    try {
+      const full = await (await getSqlite()).getAllStoreExpenses();
+      set({ storeExpenses: full });
+    } catch (e) {
+      console.warn('[refreshStoreExpenses] full expense read failed:', e);
     }
   },
 
@@ -1561,7 +1594,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     return { valid: true };
   },
 
-  searchByIMEI: (imei) => {
+  searchByIMEI: async (imei) => {
     const { products, purchaseOrders, transactions } = get();
     const key = normalizeDeviceKey(imei);
     const product = products.find((p) => normalizeDeviceKey(p.imeiNumber ?? '') === key);
@@ -1571,9 +1604,21 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       ? purchaseOrders.find((p) => p.id === product.purchaseOrderId)
       : undefined;
 
-    const transaction = transactions.find((t) =>
-      t.items.some((item) => normalizeDeviceKey(item.imeiNumber ?? '') === key)
-    );
+    // UPGRADE-01 safety rail: the in-RAM window must never hide a device's
+    // sale history — the adapter probes SQLite's idx_txn_items_imei first and
+    // only then falls back to a full mirror scan.
+    let transaction: SaleTransaction | undefined;
+    try {
+      const hits = await (await getSqlite()).findTransactionsByImei(imei);
+      transaction = hits[0];
+    } catch (err) {
+      console.warn('[searchByIMEI] SQLite-direct read failed, using window:', err);
+    }
+    if (!transaction) {
+      transaction = transactions.find((t) =>
+        t.items.some((item) => normalizeDeviceKey(item.imeiNumber ?? '') === key)
+      );
+    }
 
     return { product, po, transaction };
   },
@@ -1779,7 +1824,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         try {
           const [
             customers,
-            transactions,
+            txWindow,
             repairOrders,
             purchaseOrders,
             tradeIns,
@@ -1790,11 +1835,13 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
             customerDebts,
             storeExpenses,
             allShifts,
-            inventoryValuation,
+            shiftStats,
             auditLogs,
           ] = await Promise.all([
             sqlite.getAllCustomers(),
-            sqlite.getAllTransactions(),
+            // UPGRADE-01: bounded newest-first window. Older history pages on
+            // demand (loadMoreTransactions); money-critical reads go SQLite-direct.
+            sqlite.getTransactionsWindow({ limit: TRANSACTIONS_WINDOW_SIZE }),
             sqlite.getAllRepairOrders(),
             sqlite.getAllPurchaseOrders(),
             sqlite.getAllTradeIns(),
@@ -1803,16 +1850,19 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
             sqlite.getCashDrops(true),
             sqlite.getAllBundles(),
             sqlite.getAllCustomerDebts(),
-            sqlite.getAllStoreExpenses(),
-            sqlite.getAllShifts(),
-            sqlite.getInventoryValuation(),
+            sqlite.getAllStoreExpenses({ limit: EXPENSES_BOOT_WINDOW }),
+            sqlite.getAllShifts({ limit: SHIFTS_WINDOW_SIZE }),
+            sqlite.getShiftStats(),
             sqlite.getAllAuditLogs(),
           ]);
           set({
             customers,
             // Store invariant: newest-first (adapter already sorts; the
             // helper keeps boot immune to any unsorted producer).
-            transactions: sortedTransactions(transactions),
+            transactions: sortedTransactions(txWindow.items),
+            transactionsCursor: txWindow.nextCursor,
+            transactionsHasMore: txWindow.hasMore,
+            transactionsLoadingMore: false,
             repairOrders: repairOrders.map((r) => migrateRepairOrder(r)),
             purchaseOrders,
             tradeIns,
@@ -1823,7 +1873,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
             customerDebts,
             storeExpenses,
             allShifts,
-            inventoryValuation,
+            shiftStats,
             securityAuditLog: auditLogs && auditLogs.length > 0 ? auditLogs : get().securityAuditLog,
           });
           markBoot('init:wave2-data');
@@ -1858,10 +1908,13 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           console.warn('[refreshAfterPull] Product mirror sync error:', syncErr);
         }
       }
+      // UPGRADE-01: single alias — the per-lane `(await getSqlite())` fan-out
+      // was pure verbosity, and windowed lanes keep the pull refresh bounded.
+      const sqlite = await getSqlite();
       const [
         products,
         customers,
-        transactions,
+        txWindow,
         repairOrders,
         purchaseOrders,
         tradeIns,
@@ -1873,25 +1926,25 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         storeExpenses,
         activeShift,
         allShifts,
-        inventoryValuation,
+        shiftStats,
         auditLogs,
       ] = await Promise.all([
-        (await getSqlite()).getAllProducts(),
-        (await getSqlite()).getAllCustomers(),
-        (await getSqlite()).getAllTransactions(),
-        (await getSqlite()).getAllRepairOrders(),
-        (await getSqlite()).getAllPurchaseOrders(),
-        (await getSqlite()).getAllTradeIns(),
-        (await getSqlite()).getAllIMEIRecords(),
-        (await getSqlite()).getCashDrops(false),
-        (await getSqlite()).getCashDrops(true),
-        (await getSqlite()).getAllBundles(),
-        (await getSqlite()).getAllCustomerDebts(),
-        (await getSqlite()).getAllStoreExpenses(),
-        (await getSqlite()).getActiveShift(),
-        (await getSqlite()).getAllShifts(),
-        (await getSqlite()).getInventoryValuation(),
-        (await getSqlite()).getAllAuditLogs(),
+        sqlite.getAllProducts(),
+        sqlite.getAllCustomers(),
+        sqlite.getTransactionsWindow({ limit: TRANSACTIONS_WINDOW_SIZE }),
+        sqlite.getAllRepairOrders(),
+        sqlite.getAllPurchaseOrders(),
+        sqlite.getAllTradeIns(),
+        sqlite.getAllIMEIRecords(),
+        sqlite.getCashDrops(false),
+        sqlite.getCashDrops(true),
+        sqlite.getAllBundles(),
+        sqlite.getAllCustomerDebts(),
+        sqlite.getAllStoreExpenses({ limit: EXPENSES_BOOT_WINDOW }),
+        sqlite.getActiveShift(),
+        sqlite.getAllShifts({ limit: SHIFTS_WINDOW_SIZE }),
+        sqlite.getShiftStats(),
+        sqlite.getAllAuditLogs(),
       ]);
       const receiptSettings = await loadReceiptSettings();
       // Team precision: cashier roster + manager PIN arrive via the settings
@@ -1912,7 +1965,10 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         customers,
         // Post-pull invariant: newest-first (sync lands rows in cursor
         // order; the helper restores recency before paint).
-        transactions: sortedTransactions(transactions),
+        transactions: sortedTransactions(txWindow.items),
+        transactionsCursor: txWindow.nextCursor,
+        transactionsHasMore: txWindow.hasMore,
+        transactionsLoadingMore: false,
         repairOrders: repairOrders.map((r) => migrateRepairOrder(r)),
         purchaseOrders,
         tradeIns,
@@ -1924,7 +1980,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         storeExpenses,
         activeShift,
         allShifts,
-        inventoryValuation,
+        shiftStats,
         securityAuditLog: auditLogs && auditLogs.length > 0 ? auditLogs : get().securityAuditLog,
         receiptSettings,
         currentCustomer,
@@ -1972,7 +2028,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         });
         return;
       }
-      const next: { products?: Product[]; transactions?: Awaited<ReturnType<SqliteAdapter['getAllTransactions']>>; customers?: Awaited<ReturnType<SqliteAdapter['getAllCustomers']>>; currentCustomer?: Awaited<ReturnType<SqliteAdapter['getAllCustomers']>>[number] } = {};
+      const next: Partial<PosState> = {};
       if (wantsProducts) {
         if (productIds.length > 0 && productIds.length <= 200) {
           const subset = await (await getSqlite()).getProductsByIds(productIds);
@@ -1991,11 +2047,16 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         }
       }
       if (wantsTransactions) {
-        const [transactions, customers] = await Promise.all([
-          (await getSqlite()).getAllTransactions(),
+        // UPGRADE-01: the pull lane takes page 1 of the window; the rest of
+        // history stays a query away (never re-materialized on every pull).
+        const [txWindow, customers] = await Promise.all([
+          (await getSqlite()).getTransactionsWindow({ limit: TRANSACTIONS_WINDOW_SIZE }),
           (await getSqlite()).getAllCustomers(),
         ]);
-        next.transactions = sortedTransactions(transactions);
+        next.transactions = sortedTransactions(txWindow.items);
+        next.transactionsCursor = txWindow.nextCursor;
+        next.transactionsHasMore = txWindow.hasMore;
+        next.transactionsLoadingMore = false;
         next.customers = customers;
         const selected = get().currentCustomer;
         if (selected) {
@@ -2011,6 +2072,38 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       } catch (fallbackErr) {
         console.warn('Post-pull refresh skipped:', fallbackErr);
       }
+    }
+  },
+
+  /**
+   * UPGRADE-01: append the next older page of transaction history. Keyset
+   * cursor (`createdAt DESC, id DESC`) with id-dedupe so a concurrent prepend
+   * (new sale) or a row deleted between pages can never duplicate an entry.
+   */
+  loadMoreTransactions: async () => {
+    const { transactionsLoadingMore, transactionsHasMore, transactionsCursor } = get();
+    if (transactionsLoadingMore || !transactionsHasMore) return;
+    set({ transactionsLoadingMore: true });
+    try {
+      const win = await (await getSqlite()).getTransactionsWindow({
+        cursor: transactionsCursor,
+        limit: TRANSACTIONS_WINDOW_SIZE,
+      });
+      const current = get().transactions;
+      const seen = new Set(current.map((t) => t.id));
+      const merged = [...current];
+      for (const t of win.items) {
+        if (!seen.has(t.id)) merged.push(t);
+      }
+      set({
+        transactions: sortedTransactions(merged),
+        transactionsCursor: win.nextCursor,
+        transactionsHasMore: win.hasMore,
+        transactionsLoadingMore: false,
+      });
+    } catch (e) {
+      console.warn('[db:tx-window] loadMoreTransactions failed:', e);
+      set({ transactionsLoadingMore: false });
     }
   },
 

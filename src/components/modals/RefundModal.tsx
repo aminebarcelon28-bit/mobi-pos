@@ -156,6 +156,46 @@ export const RefundModal: React.FC = () => {
     });
   }, [eligibleTransactionsMemo, debouncedSearch]);
 
+  // UPGRADE-01 safety rail: a typed receipt/id that found nothing in the RAM
+  // window resolves through SQLite (idx_transactions_receipt / PK) and is
+  // offered like any windowed ticket — subject to the same eligibility gates.
+  const [manualTxnHits, setManualTxnHits] = useState<SaleTransaction[]>([]);
+  useEffect(() => {
+    if (activeModal !== 'refund' || debouncedSearch.trim().length < 8) {
+      setManualTxnHits([]);
+      return;
+    }
+    if (filteredTransactionsMemo.length > 0) {
+      setManualTxnHits([]);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      try {
+        const { sqliteAdapter } = await import('../../db/sqliteAdapter');
+        const q = debouncedSearch.trim();
+        const hit =
+          (await sqliteAdapter.getTransactionByReceipt(q)) ??
+          (await sqliteAdapter.getTransactionById(q));
+        if (!alive) return;
+        const eligible = Boolean(
+          hit &&
+            hit.status !== 'VOIDED' &&
+            hit.status !== 'REFUNDED' &&
+            !hit.isRefund &&
+            refundableValueOf(hit, transactions) > 0
+        );
+        setManualTxnHits(eligible && hit ? [hit] : []);
+      } catch (lookupErr) {
+        console.warn('[refund] direct receipt search failed:', lookupErr);
+        if (alive) setManualTxnHits([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [activeModal, debouncedSearch, filteredTransactionsMemo.length, transactions]);
+
   const initializeRefundState = useCallback((txn: SaleTransaction) => {
     const initialSelected: Record<string, boolean> = {};
     const initialQty: Record<string, number> = {};
@@ -211,12 +251,12 @@ export const RefundModal: React.FC = () => {
   useEffect(() => {
     if (activeModal !== 'refund') return;
 
-    const handleRefundBarcodeScanned = (e: Event) => {
+    const handleRefundBarcodeScanned = async (e: Event) => {
       const customEvent = e as CustomEvent<{ code: string }>;
       const code = customEvent.detail?.code?.trim();
       if (!code) return;
 
-      const matchedTxn = (transactions || []).find(
+      let matchedTxn = (transactions || []).find(
         (t) =>
           t.id === code ||
           t.receiptNumber === code ||
@@ -226,6 +266,27 @@ export const RefundModal: React.FC = () => {
               t.receiptNumber?.includes(code) ||
               t.id.includes(code)))
       );
+
+      // UPGRADE-01 safety rail: the RAM window holds the newest 200 tickets; a
+      // receipt scan for anything older must still load straight from SQLite
+      // (idx_transactions_receipt / PK) instead of falling through to
+      // "not found".
+      if (
+        !matchedTxn &&
+        (code.startsWith('REC-') ||
+          code.startsWith('TXN-') ||
+          code.startsWith('REF-') ||
+          code.length >= 8)
+      ) {
+        try {
+          const { sqliteAdapter } = await import('../../db/sqliteAdapter');
+          matchedTxn =
+            (await sqliteAdapter.getTransactionByReceipt(code)) ??
+            (await sqliteAdapter.getTransactionById(code));
+        } catch (lookupErr) {
+          console.warn('[refund] direct receipt lookup failed:', lookupErr);
+        }
+      }
 
       if (matchedTxn) {
         setSelectedTxn(matchedTxn);
@@ -250,7 +311,10 @@ export const RefundModal: React.FC = () => {
 
   // Eligible transactions (exclude already voided or fully refunded)
 
-  const filteredTransactions = filteredTransactionsMemo;
+  const filteredTransactions =
+    manualTxnHits.length > 0 && filteredTransactionsMemo.length === 0
+      ? manualTxnHits
+      : filteredTransactionsMemo;
 
   const handleSelectTransaction = (txn: SaleTransaction) => {
     setSelectedTxn(txn);
@@ -607,7 +671,19 @@ export const RefundModal: React.FC = () => {
               {filteredTransactions.length > visibleCount && (
                 <button
                   type="button"
-                  onClick={() => setVisibleCount((c) => c + REFUND_PAGE_SIZE)}
+                  onClick={() => {
+                    setVisibleCount((c) => c + REFUND_PAGE_SIZE);
+                    // UPGRADE-01: keep the underlying window ahead of the
+                    // viewport — once the user nears its end, fetch the next
+                    // older page (keyset) so older tickets stay reachable.
+                    const st = usePosStore.getState();
+                    if (
+                      st.transactionsHasMore &&
+                      visibleCount + REFUND_PAGE_SIZE >= (st.transactions || []).length
+                    ) {
+                      void st.loadMoreTransactions();
+                    }
+                  }}
                   className="w-full p-2.5 mt-1 text-xs font-bold text-purple-300 bg-purple-500/10 border border-purple-500/30 rounded-xl hover:bg-purple-500/20 transition cursor-pointer"
                 >
                   Afficher plus ({filteredTransactions.length - visibleCount} restants)

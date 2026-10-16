@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, Printer, ShieldAlert, CheckCircle2, ArrowDownCircle } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import { formatDZD } from '../../types/pos';
+import { formatDZD, type SaleTransaction, type StoreExpense } from '../../types/pos';
 import { useToast } from '../../components/ui/Toast';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
@@ -27,7 +27,7 @@ export const ShiftZReportModal: React.FC = () => {
     closeModal,
     shiftFloat,
     activeShift,
-    allShifts,
+    shiftStats,
     transactions,
     cashDrops,
     payouts,
@@ -57,6 +57,36 @@ export const ShiftZReportModal: React.FC = () => {
 
   useEffect(() => { if (activeModal !== 'shift_zreport') return; blindRevealAuditedRef.current = false; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
 
+  // UPGRADE-01: interim Z must audit the COMPLETE shift window (SQLite by
+  // created_at index), not the bounded 200-row RAM window; totals below feed a
+  // money surface and the printed ticket.
+  const [authoritativeTxns, setAuthoritativeTxns] = useState<SaleTransaction[] | null>(null);
+  const [authoritativeExpenses, setAuthoritativeExpenses] = useState<StoreExpense[] | null>(null);
+  useEffect(() => {
+    if (activeModal !== 'shift_zreport') return;
+    void usePosStore.getState().refreshShiftStats();
+    const openedAt = activeShift?.openedAt ?? null;
+    if (!openedAt) return;
+    let alive = true;
+    (async () => {
+      try {
+        const { sqliteAdapter } = await import('../../db/sqliteAdapter');
+        const [txns, expenses] = await Promise.all([
+          sqliteAdapter.getTransactionsByShiftWindow(openedAt, null),
+          sqliteAdapter.getAllStoreExpenses({ from: openedAt }),
+        ]);
+        if (!alive) return;
+        setAuthoritativeTxns(txns);
+        setAuthoritativeExpenses(expenses);
+      } catch (e) {
+        console.warn('[shift_zreport] authoritative shift-window read failed:', e);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [activeModal, activeShift?.openedAt]);
+
   if (activeModal !== 'shift_zreport') return null;
 
   // Financial Shift Auditing (Strict zero-variance accounting).
@@ -74,7 +104,7 @@ export const ShiftZReportModal: React.FC = () => {
     if (!iso) return true;
     return iso >= openedAt;
   };
-  const safeTransactions = transactions || [];
+  const safeTransactions = authoritativeTxns ?? (transactions || []);
   const shiftTxns = openedAt
     ? safeTransactions.filter((t) =>
         isTxInCloseScope(t, { id: activeShift?.id, openedAt })
@@ -87,7 +117,7 @@ export const ShiftZReportModal: React.FC = () => {
     .filter((d) => d.type === 'PAYMENT_SETTLED' && d.paymentMethod === 'Espèces' && inShiftWindow(d.createdAt))
     .reduce((acc, d) => acc + (d.amount || 0), 0);
 
-  const todayCashExpenses = (storeExpenses || [])
+  const todayCashExpenses = (authoritativeExpenses ?? storeExpenses ?? [])
     .filter((e) => e.paymentMethod === 'Espèces' && inShiftWindow(e.createdAt))
     .reduce((acc, e) => acc + (e.amount || 0), 0);
 
@@ -95,7 +125,7 @@ export const ShiftZReportModal: React.FC = () => {
   // trade-in payouts — both were missing here, understating and overstating
   // expected cash respectively. Settled balances are informational only
   // (cash already inside cashSalesFromTxns — never added to expected cash).
-  const closedShiftCount = (allShifts || []).filter((s) => s.status === 'CLOSED').length;
+  const closedShiftCount = shiftStats?.closed ?? 0;
   const zNumber = zTicketNumber(closedShiftCount);
   const tradeInCashOut = (tradeIns || [])
     .filter((t) => !t.creditToWallet && inShiftWindow(t.createdAt))
@@ -125,7 +155,7 @@ export const ShiftZReportModal: React.FC = () => {
     shiftFloat,
     transactions: safeTransactions,
     customerDebts: customerDebts || [],
-    storeExpenses: storeExpenses || [],
+    storeExpenses: authoritativeExpenses ?? (storeExpenses || []),
     repairOrders: repairOrders || [],
     tradeIns: tradeIns || [],
     cashDrops: cashDrops || [],

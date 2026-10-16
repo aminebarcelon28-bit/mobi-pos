@@ -51,6 +51,7 @@ import { soundEngine } from '../../../utils/audioFeedback';
 import { useToast } from '../../ui/Toast';
 import { MoneyDisplay } from '../../ui/MoneyDisplay';
 import { useAppUpdater } from '../../../hooks/useAppUpdater';
+import type { SaleTransaction } from '../../../types/pos';
 import { APP_VERSION } from '../../../types/pos';
 import { todayLocalKey, toLocalDayKey } from '../../../utils/dateUtils';
 import { computeSalesMetrics } from '../../../utils/receiptMath';
@@ -189,16 +190,41 @@ export const ManagementTab: React.FC<ManagementTabProps> = ({
     };
   }, []);
 
+  // UPGRADE-01: today's till metrics must count the COMPLETE day, not the
+  // newest 200 tickets — read today's range from SQLite (display authority for
+  // the window stays the store). Refetches when the window identity changes
+  // (new sale, pull) so the morning read can't go stale.
+  const [todayTxns, setTodayTxns] = useState<SaleTransaction[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    (async () => {
+      try {
+        const { sqliteAdapter } = await import('../../../db/sqliteAdapter');
+        const list = await sqliteAdapter.getTransactionsByDateRange({
+          from: new Date(from.getTime() - 12 * 3600 * 1000).toISOString(),
+        });
+        if (alive) setTodayTxns(list);
+      } catch (e) {
+        console.warn('[management] today range read failed, using window:', e);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [transactions]);
+
   // Today's summary — canonical unified metrics (same formula as Desktop
   // ReportsModal + LiveActivityTab): CA Net = Σ net(valid) − Σ refunds.
   // The previous code summed Σ total(valid) without subtracting refund
   // vouchers, overstating today's CA whenever a refund exists.
   const todayTransactions = useMemo(() => {
     const today = todayLocalKey();
-    return (transactions || []).filter(
+    return (todayTxns ?? transactions ?? []).filter(
       (tx) => toLocalDayKey(tx.createdAt || '') === today && tx.status !== 'VOIDED',
     );
-  }, [transactions]);
+  }, [todayTxns, transactions]);
 
   // STRICT FIFO LEDGER (v104): frozen allocation COGS wins per sale.
   const { allocCogsBySaleId } = useAllocationCogs();

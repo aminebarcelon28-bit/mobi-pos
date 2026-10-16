@@ -390,11 +390,37 @@ export const shiftAdapter = {
     void fireSync('store_expense', expense.id, expense);
   },
 
-  async getAllStoreExpenses(): Promise<StoreExpense[]> {
+  /**
+   * UPGRADE-01: bounded/on-demand expense lane. Boot and post-pull refreshes
+   * pass `{ limit }`; report/expense modals load the full list (or a shift /
+   * date range) explicitly when opened — expense history must never be part of
+   * the unbounded boot tail.
+   */
+  async getAllStoreExpenses(opts?: {
+    limit?: number;
+    from?: string | null;
+    to?: string | null;
+  }): Promise<StoreExpense[]> {
+    const from = opts?.from && opts.from.length > 0 ? opts.from : null;
+    const to = opts?.to && opts.to.length > 0 ? opts.to : null;
+    const limit = opts?.limit && opts.limit > 0 ? Math.floor(opts.limit) : undefined;
     if (isTauriEnv()) {
       try {
         const db = await getLocalDb();
-        const rows = (await db.select('SELECT json_payload FROM store_expenses ORDER BY created_at DESC')) as Array<{ json_payload: string }>;
+        const where: string[] = [];
+        const params: unknown[] = [];
+        if (from) {
+          params.push(from);
+          where.push(`created_at >= $${params.length}`);
+        }
+        if (to) {
+          params.push(to);
+          where.push(`created_at <= $${params.length}`);
+        }
+        const rows = (await db.select(
+          `SELECT json_payload FROM store_expenses ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY created_at DESC${limit !== undefined ? ` LIMIT ${limit}` : ''}`,
+          params
+        )) as Array<{ json_payload: string }>;
         if (rows && rows.length > 0) {
           const list = rows
             .map((r) => {
@@ -414,7 +440,11 @@ export const shiftAdapter = {
         console.warn('[shiftAdapter] SQLite getAllStoreExpenses failed, fallback to Dexie:', err);
       }
     }
-    return await dexieDb.storeExpenses.toArray();
+    let list = await dexieDb.storeExpenses.orderBy('createdAt').reverse().toArray();
+    if (from) list = list.filter((e) => String(e.createdAt ?? '') >= from);
+    if (to) list = list.filter((e) => String(e.createdAt ?? '') <= to);
+    if (limit !== undefined) list = list.slice(0, limit);
+    return list;
   },
 
   async deleteStoreExpense(id: string): Promise<void> {
@@ -972,8 +1002,30 @@ export const shiftAdapter = {
     return { ...open, movements };
   },
 
-  async getAllShifts(): Promise<CashSession[]> {
-    return await dexieDb.cashSessions.orderBy('openedAt').reverse().toArray();
+  /**
+   * UPGRADE-01: windowed shift history (newest first). Pass `{ limit }` for
+   * the bounded boot/pull lane; omit it for full, on-demand reads. Exact counts
+   * that feed the Z-ticket sequence come from `getShiftStats()` — never from a
+   * windowed array length.
+   */
+  async getAllShifts(opts?: { limit?: number }): Promise<CashSession[]> {
+    const limit = opts?.limit && opts.limit > 0 ? Math.floor(opts.limit) : undefined;
+    const collection = dexieDb.cashSessions.orderBy('openedAt').reverse();
+    if (limit !== undefined) return await collection.limit(limit).toArray();
+    return await collection.toArray();
+  },
+
+  /**
+   * UPGRADE-01 safety rail: exact closed/total shift counts for Z-ticket
+   * numbering, computed by indexed count (cashSessions: 'id, status,
+   * openedAt') instead of materializing every session row.
+   */
+  async getShiftStats(): Promise<{ total: number; closed: number }> {
+    const [total, closed] = await Promise.all([
+      dexieDb.cashSessions.count(),
+      dexieDb.cashSessions.where('status').equals('CLOSED').count(),
+    ]);
+    return { total, closed };
   },
 
   async getShiftDetails(sessionId: string): Promise<CashSession | null> {

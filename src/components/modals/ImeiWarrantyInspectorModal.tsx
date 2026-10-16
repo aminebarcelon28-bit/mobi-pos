@@ -18,7 +18,7 @@ import {
   Pencil,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
-import type { CartItem, ImeiLifecycleDossier, WarrantyDossierSnapshot } from '../../types/pos';
+import type { CartItem, ImeiLifecycleDossier, SaleTransaction, WarrantyDossierSnapshot } from '../../types/pos';
 import { soundEngine } from '../../utils/audioFeedback';
 import { useToast } from '../ui/Toast';
 import ModalShell from '../ui/ModalShell';
@@ -135,6 +135,35 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
     [transactions, products, imeiRecords, repairOrders]
   );
 
+  /**
+   * UPGRADE-01 safety rail: the pure resolver scans the store's bounded
+   * 200-row window — merge in the device's sales read straight from SQLite
+   * (idx_txn_items_imei) so an older device's warranty still resolves.
+   */
+  const resolveWithDirect = useCallback(
+    async (raw: string, mode: DeviceIdentifierMode) => {
+      if (mode === 'manual') return resolveWarrantyDossier(raw, mode, lookupDeps);
+      try {
+        const { sqliteAdapter } = await import('../../db/sqliteAdapter');
+        const hits = await sqliteAdapter.findTransactionsByImei(raw);
+        if (hits.length > 0) {
+          const seen = new Set((lookupDeps.transactions || []).map((t) => t.id));
+          const extra = hits.filter((t) => !seen.has(t.id));
+          if (extra.length > 0) {
+            return resolveWarrantyDossier(raw, mode, {
+              ...lookupDeps,
+              transactions: [...extra, ...(lookupDeps.transactions || [])],
+            });
+          }
+        }
+      } catch (lookupErr) {
+        console.warn('[inspector] direct IMEI read failed:', lookupErr);
+      }
+      return resolveWarrantyDossier(raw, mode, lookupDeps);
+    },
+    [lookupDeps]
+  );
+
   // Warranty certificate print for the inspected dossier: resolves the
   // original sale + line item so the orphaned builder finally has a caller.
   const handlePrintCertificate = async (dossier: ImeiLifecycleDossier) => {
@@ -143,13 +172,37 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
     // certificate printer report "facture introuvable" for every device whose
     // receipt line predates canonical ingestion.
     const needle = normalizeDeviceKey(dossier.imei);
-    const tx = (transactions || []).find(
-      (t) =>
-        t.receiptNumber === dossier.originalReceiptNumber ||
-        (t.items || []).some(
-          (i: CartItem) => normalizeDeviceKey(i.imeiNumber ?? '') === needle
-        )
-    );
+    // UPGRADE-01 safety rail: the RAM window holds the newest 200 tickets —
+    // an older device's original invoice must resolve through SQLite
+    // (idx_transactions_receipt / idx_txn_items_imei) first.
+    let tx: SaleTransaction | undefined;
+    try {
+      const { sqliteAdapter } = await import('../../db/sqliteAdapter');
+      if (dossier.originalReceiptNumber) {
+        tx = await sqliteAdapter.getTransactionByReceipt(dossier.originalReceiptNumber);
+      }
+      if (!tx) {
+        const hits = await sqliteAdapter.findTransactionsByImei(dossier.imei);
+        tx =
+          hits.find((t) =>
+            (t.items || []).some(
+              (i: CartItem) => normalizeDeviceKey(i.imeiNumber ?? '') === needle
+            )
+          ) ?? hits[0];
+      }
+    } catch (lookupErr) {
+      console.warn('[inspector] direct invoice lookup failed:', lookupErr);
+    }
+    if (!tx) {
+      // Defensive window scan (web preview / lookup failure).
+      tx = (transactions || []).find(
+        (t) =>
+          t.receiptNumber === dossier.originalReceiptNumber ||
+          (t.items || []).some(
+            (i: CartItem) => normalizeDeviceKey(i.imeiNumber ?? '') === needle
+          )
+      );
+    }
     if (!tx) {
       showToast('Facture d’origine introuvable — certificat indisponible pour ce dossier.', 'warning');
       return;
@@ -195,7 +248,7 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
    * order in this component, which is what guarantees the Inspector and the
    * SAV intake agree for the same identifier.
    */
-  const handleLookup = (raw: string, mode: DeviceIdentifierMode = idMode) => {
+  const handleLookup = async (raw: string, mode: DeviceIdentifierMode = idMode) => {
     if (mode === 'manual') {
       setSearchedDossier(null);
       setActiveImeiDossier(null);
@@ -204,7 +257,7 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
       return;
     }
     soundEngine.playKeyBeep?.();
-    const res = resolveWarrantyDossier(raw, mode, lookupDeps);
+    const res = await resolveWithDirect(raw, mode);
     if (!res.ok || !res.snapshot) {
       setSearchedDossier(null);
       setActiveImeiDossier(null);
@@ -235,7 +288,7 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
    * meant the ticket could disagree with the screen it was opened from whenever
    * the underlying rows changed in between.
    */
-  const handleCreateSavIntake = () => {
+  const handleCreateSavIntake = async () => {
     // The only fallback is a dossier resolved outside this modal's own lookup
     // (e.g. opened directly from the list). It re-resolves in the mode the
     // operator actually selected — never a hardcoded 'imei'.
@@ -245,7 +298,9 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
         ? 'imei'
         : 'serial'
       : idMode;
-    const snap = frozen ?? resolveWarrantyDossier(currentDossier?.imei || inputImei, fallbackMode, lookupDeps).snapshot;
+    const snap =
+      frozen ??
+      (await resolveWithDirect(currentDossier?.imei || inputImei, fallbackMode)).snapshot;
 
     if (!snap) {
       showToast(

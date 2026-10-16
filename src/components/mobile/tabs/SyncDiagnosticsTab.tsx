@@ -243,6 +243,19 @@ export const SyncDiagnosticsTab: React.FC<SyncDiagnosticsTabProps> = ({ onBack }
     }
   };
 
+  // UPGRADE-01: honest transaction total for the summary card — the store
+  // carries a bounded 200-row window, so a length display would lie on a
+  // mature install.
+  const [txnCount, setTxnCount] = useState<number | null>(null);
+  const loadTxnCount = async () => {
+    try {
+      const { sqliteAdapter } = await import('../../../db/sqliteAdapter');
+      setTxnCount(await sqliteAdapter.getTransactionsCount());
+    } catch (e) {
+      console.warn('[diagnostics] transaction count read failed:', e);
+    }
+  };
+
   useEffect(() => {
     const unsub = syncManager.subscribe((s) => {
       setSyncStatus(s);
@@ -254,6 +267,7 @@ export const SyncDiagnosticsTab: React.FC<SyncDiagnosticsTabProps> = ({ onBack }
     void loadDeviceIdentity();
     void handleCloudPing();
     void refreshSyncHealth();
+    void loadTxnCount();
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1102,7 +1116,7 @@ export const SyncDiagnosticsTab: React.FC<SyncDiagnosticsTabProps> = ({ onBack }
                 {locale === 'ar' ? t.activity.validatedSalesKpiLabel : 'Ventes'}
               </span>
               <Bdi mono className="text-sm font-black text-pos-text mt-0.5 block">
-                {transactions?.length || 0}
+                {txnCount ?? (transactions?.length || 0)}
               </Bdi>
             </div>
 

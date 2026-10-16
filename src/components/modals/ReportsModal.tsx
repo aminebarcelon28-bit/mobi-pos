@@ -69,6 +69,7 @@ export const ReportsModal: React.FC = () => {
     activeShift,
     activeCashier,
     allShifts,
+    shiftStats,
     repairOrders,
     tradeIns,
     cashDrops,
@@ -177,9 +178,56 @@ export const ReportsModal: React.FC = () => {
     }
   };
 
+  // UPGRADE-01: on-demand COMPLETE range dataset. The SQLite read is a
+  // superset of the memo filter (grace margins cover clock skew); `null` means
+  // "fall back to the store window" (web preview / fetch failure).
+  const [reportTxns, setReportTxns] = useState<SaleTransaction[] | null>(null);
+  const reportRangeFrom = useMemo(() => {
+    if (dateRangeFilter === 'all') return null;
+    const now = Date.now();
+    if (dateRangeFilter === 'today') {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      // 12h grace: stored ISO instants vs wall-computed midnight can skew.
+      return new Date(d.getTime() - 12 * 3600 * 1000).toISOString();
+    }
+    if (dateRangeFilter === '7days') return new Date(now - 8 * 86400000).toISOString();
+    if (dateRangeFilter === '30days') return new Date(now - 31 * 86400000).toISOString();
+    return null;
+  }, [dateRangeFilter]);
+
+  useEffect(() => {
+    if (activeModal !== 'reports') return;
+    let alive = true;
+    (async () => {
+      try {
+        const { sqliteAdapter } = await import('../../db/sqliteAdapter');
+        const list = await sqliteAdapter.getTransactionsByDateRange({ from: reportRangeFrom });
+        if (alive) setReportTxns(list);
+      } catch (e) {
+        console.warn('[reports] range read failed, using store window:', e);
+        if (alive) setReportTxns(null);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [activeModal, reportRangeFrom]);
+
+  useEffect(() => {
+    if (activeModal !== 'reports') return;
+    // Management surfaces load exact lanes on demand: the full expense list
+    // (boot carries a window) and exact shift counts for Z numbering.
+    void usePosStore.getState().refreshStoreExpenses();
+    void usePosStore.getState().refreshShiftStats();
+  }, [activeModal]);
+
   // Financial KPI Metrics (excludes voided transactions and accounts for refunds)
   const dateFilteredTransactions = useMemo(() => {
-    const list = transactions || [];
+    // UPGRADE-01: prefer the on-demand COMPLETE range dataset (SQLite by
+    // created_at index) over the bounded store window, so KPIs, history,
+    // exports and the Z preview can never miss tickets outside the newest 200.
+    const list = reportTxns ?? (transactions || []);
     if (dateRangeFilter === 'all') return list;
     const now = new Date();
 
@@ -200,7 +248,7 @@ export const ReportsModal: React.FC = () => {
       }
       return true;
     });
-  }, [transactions, dateRangeFilter]);
+  }, [reportTxns, transactions, dateRangeFilter]);
 
   const validSales = (dateFilteredTransactions || []).filter((t) => t.status !== 'VOIDED' && !t.isRefund);
   // Canonical unified metrics (shared with Mobile LiveActivityTab /
@@ -351,7 +399,7 @@ export const ReportsModal: React.FC = () => {
       countedCash: actualCountedCash ?? 0,
       blindCountPerformed: actualCountedCash !== null,
       closedAtISO: new Date().toISOString(),
-      closedShiftCount: allShifts?.length || 0,
+      closedShiftCount: shiftStats?.total ?? 0,
     });
   }, [
     receiptSettings,
@@ -365,7 +413,7 @@ export const ReportsModal: React.FC = () => {
     cashDrops,
     payouts,
     actualCountedCash,
-    allShifts?.length,
+    shiftStats?.total,
     dateInRange,
   ]);
 
@@ -802,7 +850,7 @@ export const ReportsModal: React.FC = () => {
                   }`}
                 >
                   <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
-                  <span>Historique<span className="hidden sm:inline"> Transactions</span> ({(transactions || []).length})</span>
+                  <span>Historique<span className="hidden sm:inline"> Transactions</span> ({(dateFilteredTransactions || []).length})</span>
                 </button>
 
                 <button

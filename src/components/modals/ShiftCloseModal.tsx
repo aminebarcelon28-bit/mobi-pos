@@ -17,7 +17,7 @@ import { ZReportPaper, type ZReportSnapshot } from '../receipt/ZReportPaper';
 import { buildZSnapshot } from '../../utils/zReportSnapshot';
 import type { CloseShiftWithPin } from '../../store/slices/createShiftSlice';
 import { SHIFT_VARIANCE_MANAGER_PIN_THRESHOLD } from '../../db/adapters/shiftAdapter';
-import { formatDZD, type DenominationCount } from '../../types/pos';
+import { formatDZD, type DenominationCount, type SaleTransaction, type StoreExpense } from '../../types/pos';
 import { useToast } from '../ui/Toast';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
@@ -97,6 +97,40 @@ export const ShiftCloseModal: React.FC = () => {
   // view so the `z_report` channel always has a mounted target.
   const [zSnapshot, setZSnapshot] = useState<ZReportSnapshot | null>(null);
 
+  // UPGRADE-01: the close certifies money, so the live totals and the Z
+  // snapshot must come from the COMPLETE shift window (SQLite by created_at
+  // index), never the bounded 200-row RAM window. Fetched when the modal
+  // opens; deliberately NOT cleared when the slice nulls the session on
+  // success, because both print paths build their snapshot after the close.
+  const [authoritativeTxns, setAuthoritativeTxns] = useState<SaleTransaction[] | null>(null);
+  const [authoritativeExpenses, setAuthoritativeExpenses] = useState<StoreExpense[] | null>(null);
+
+  useEffect(() => {
+    if (activeModal !== 'shift_close') return;
+    // Z-ticket numbering uses exact counts; refresh them for this opening.
+    void usePosStore.getState().refreshShiftStats();
+    const openedAt = activeShift?.openedAt ?? null;
+    if (!openedAt) return;
+    let alive = true;
+    (async () => {
+      try {
+        const { sqliteAdapter } = await import('../../db/sqliteAdapter');
+        const [txns, expenses] = await Promise.all([
+          sqliteAdapter.getTransactionsByShiftWindow(openedAt, null),
+          sqliteAdapter.getAllStoreExpenses({ from: openedAt }),
+        ]);
+        if (!alive) return;
+        setAuthoritativeTxns(txns);
+        setAuthoritativeExpenses(expenses);
+      } catch (e) {
+        console.warn('[shift_close] authoritative shift-window read failed:', e);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [activeModal, activeShift?.openedAt]);
+
   const [denominations, setDenominations] = useState<DenominationCount>({
     qty2000: 0,
     qty1000: 0,
@@ -132,24 +166,26 @@ export const ShiftCloseModal: React.FC = () => {
   const openedAt = activeShift?.openedAt || new Date().toISOString();
 
   const sessionTxns = useMemo(() => {
-    return transactions.filter((t) => {
+    const source = authoritativeTxns ?? transactions;
+    return source.filter((t) => {
       return (
         t.status !== 'VOIDED' &&
         !t.isRefund &&
         (!openedAt || t.createdAt >= openedAt)
       );
     });
-  }, [transactions, openedAt]);
+  }, [authoritativeTxns, transactions, openedAt]);
 
   const sessionRefunds = useMemo(() => {
-    return transactions.filter((t) => {
+    const source = authoritativeTxns ?? transactions;
+    return source.filter((t) => {
       return (
         t.status !== 'VOIDED' &&
         t.isRefund &&
         (!openedAt || t.createdAt >= openedAt)
       );
     });
-  }, [transactions, openedAt]);
+  }, [authoritativeTxns, transactions, openedAt]);
 
   const totalCashRefunds = useMemo(() => {
     return sessionRefunds.reduce((sum, t) => {
@@ -407,9 +443,9 @@ export const ShiftCloseModal: React.FC = () => {
     // B3 blank-page fix: freeze the Z identity BEFORE the slice nulls the
     // session + modal on success (zNumber, opener, counted, closed-at).
     const shiftBefore = activeShift;
-    const preClosedCount = (usePosStore.getState().allShifts || []).filter(
-      (s) => s.status === 'CLOSED'
-    ).length;
+    // UPGRADE-01: exact pre-close CLOSED count (indexed COUNT) — a windowed
+    // allShifts array would misnumber the Z ticket once history exceeds 200.
+    const preClosedCount = usePosStore.getState().shiftStats?.closed ?? 0;
     const closedAtISO = new Date().toISOString();
     try {
       const closeShiftResult = await (closeShift as CloseShiftWithPin)(
@@ -439,16 +475,16 @@ export const ShiftCloseModal: React.FC = () => {
             settings: st.receiptSettings,
             shift: activeShift,
             shiftFloat: openingFloat,
-            transactions,
+            transactions: authoritativeTxns ?? transactions,
             customerDebts: st.customerDebts || [],
-            storeExpenses: st.storeExpenses || [],
+            storeExpenses: authoritativeExpenses ?? st.storeExpenses ?? [],
             repairOrders: st.repairOrders || [],
             tradeIns: st.tradeIns || [],
             cashDrops: st.cashDrops || [],
             payouts: st.payouts || [],
             countedCash: physicalCount,
             closedAtISO: new Date().toISOString(),
-            closedShiftCount: (st.allShifts || []).length,
+            closedShiftCount: st.shiftStats?.total ?? 0,
             fallbackCashier: cashierName,
             closingDenominations: useDenom ? denominations : undefined,
             openingDenominations: activeShift?.denominations,
@@ -489,9 +525,9 @@ export const ShiftCloseModal: React.FC = () => {
               settings: st.receiptSettings,
               shift: shiftBefore,
               shiftFloat: st.shiftFloat ?? openingFloat,
-              transactions: st.transactions,
+              transactions: authoritativeTxns ?? st.transactions,
               customerDebts: st.customerDebts ?? [],
-              storeExpenses: st.storeExpenses ?? [],
+              storeExpenses: authoritativeExpenses ?? st.storeExpenses ?? [],
               repairOrders: st.repairOrders ?? [],
               tradeIns: st.tradeIns ?? [],
               cashDrops: st.cashDrops ?? [],

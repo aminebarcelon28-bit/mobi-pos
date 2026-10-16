@@ -32,6 +32,7 @@ import type {
   ImeiLifecycleDossier,
   CashierUser,
   CreditVoucher,
+  TransactionWindowCursor,
 } from '../types/pos';
 import type { PullTouchSummary } from '../sync/types';
 
@@ -164,6 +165,12 @@ export interface CustomerSlice {
 export interface ShiftSlice {
   activeShift: CashSession | null;
   allShifts: CashSession[];
+  /**
+   * UPGRADE-01: exact shift counts (indexed COUNT, never a window length) for
+   * Z-ticket numbering — closed shifts feed `zTicketNumber(closed)`, total
+   * feeds the call sites that used `allShifts.length`.
+   */
+  shiftStats: { total: number; closed: number };
   shiftFloat: number;
   cashDrops: CashDropEntry[];
   payouts: CashDropEntry[];
@@ -196,6 +203,8 @@ export interface ShiftSlice {
   fetchActiveShift: () => Promise<void>;
   fetchInventoryValuation: () => Promise<void>;
   fetchAllShifts: () => Promise<void>;
+  /** UPGRADE-01: refresh the exact shift counts without reloading sessions. */
+  refreshShiftStats: () => Promise<void>;
   printXReport: () => Promise<boolean>;
   // Mid-shift drawer handover: re-points the OPEN session's currentCashier
   // without closing the session. Called fire-and-forget by switchCashier.
@@ -203,7 +212,18 @@ export interface ShiftSlice {
 }
 
 export interface OrderSlice {
+  /**
+   * UPGRADE-01: the newest window of transaction history (LIMIT 200 at boot;
+   * grown on demand via `loadMoreTransactions`). Money-critical consumers read
+   * SQLite directly by index — never this window.
+   */
   transactions: SaleTransaction[];
+  /** Keyset cursor of the last window page (`createdAt DESC, id DESC`). */
+  transactionsCursor: TransactionWindowCursor | null;
+  /** More history exists beyond `transactionsCursor`. */
+  transactionsHasMore: boolean;
+  /** Guard so a double "load more" can't issue two page reads. */
+  transactionsLoadingMore: boolean;
   lastTransaction: SaleTransaction | null;
   cashTendered: number;
   paymentMethod: 'Espèces';
@@ -469,9 +489,22 @@ export interface UISlice {
   >;
   addStoreExpense: (expense: Omit<StoreExpense, 'id' | 'createdAt'>) => Promise<void>;
   deleteStoreExpense: (id: string) => Promise<{ success: boolean; reason?: string; compensated?: boolean }>;
+  /**
+   * UPGRADE-01: on-demand FULL expense reload for management surfaces (boot
+   * carries only a bounded window). Safe to call on modal open.
+   */
+  refreshStoreExpenses: () => Promise<void>;
+  /** UPGRADE-01: fetch + append the next older page of transaction history. */
+  loadMoreTransactions: () => Promise<void>;
 
   validateIMEI: (imei: string) => { valid: boolean; reason?: string };
-  searchByIMEI: (imei: string) => { product?: Product; po?: PurchaseOrder; transaction?: SaleTransaction } | null;
+  /**
+   * UPGRADE-01: async + SQLite-index-direct (idx_txn_items_imei). The RAM
+   * window can never hide a device's sale history from a warranty lookup.
+   */
+  searchByIMEI: (
+    imei: string
+  ) => Promise<{ product?: Product; po?: PurchaseOrder; transaction?: SaleTransaction } | null>;
 
   initDatabase: () => Promise<void>;
   refreshAfterPull: () => Promise<void>;

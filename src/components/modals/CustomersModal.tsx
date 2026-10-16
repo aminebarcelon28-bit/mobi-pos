@@ -234,6 +234,30 @@ export const CustomersModal: React.FC = () => {
     return () => document.removeEventListener('keydown', onKey);
   }, [activeModal, whatsappDebtCustomer, debtPaymentCustomer, cardMenuId, profileMenuOpen, closeModal]);
 
+  // UPGRADE-01: full-history read on open — per-customer money stats must not
+  // silently shrink to the newest 200 tickets. One read per modal opening
+  // (released on close); never part of the boot/pull lane.
+  const [allTxns, setAllTxns] = useState<SaleTransaction[] | null>(null);
+  useEffect(() => {
+    if (activeModal !== 'customers') {
+      setAllTxns(null);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      try {
+        const { sqliteAdapter } = await import('../../db/sqliteAdapter');
+        const list = await sqliteAdapter.getTransactionsByDateRange({});
+        if (alive) setAllTxns(list);
+      } catch (e) {
+        console.warn('[customers] full history read failed, using window:', e);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [activeModal]);
+
   // Pre-calculate customer metrics lookup map once to avoid O(N * M) recalculation during render
   const customerMetricsMap = useMemo(() => {
     const map = new Map<string, {
@@ -243,9 +267,10 @@ export const CustomersModal: React.FC = () => {
       lastPurchase: string | null;
       transactions: typeof transactions;
     }>();
-    if (!transactions) return map;
+    const source = allTxns ?? transactions;
+    if (!source) return map;
 
-    for (const t of transactions) {
+    for (const t of source) {
       const custId = t.customer?.id;
       if (!custId) continue;
       let entry = map.get(custId);
@@ -268,7 +293,7 @@ export const CustomersModal: React.FC = () => {
     }
 
     return map;
-  }, [transactions]);
+  }, [allTxns, transactions]);
 
   const defaultMetrics = useMemo(() => ({
     totalSpent: 0,
@@ -290,12 +315,12 @@ export const CustomersModal: React.FC = () => {
 
   const customerPurchases = useMemo(() => {
     if (!activeProfile) return [];
-    return (transactions || [])
+    return (allTxns ?? transactions ?? [])
       .filter(
         t => t.customer?.id === activeProfile.id || (activeProfile.phone && t.customer?.phone === activeProfile.phone)
       )
       .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-  }, [transactions, activeProfile]);
+  }, [allTxns, transactions, activeProfile]);
 
   const customerRepairs = useMemo(() => {
     if (!activeProfile) return [];
