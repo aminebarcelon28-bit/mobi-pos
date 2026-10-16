@@ -46,12 +46,17 @@ copyFileSync(join(SRC_SYNC, 'genericApply.ts'), join(SHIM, 'lane', 'genericApply
 // (the IMEI-anchor column probe). It is a pure module with no runtime deps, so
 // the REAL source is copied next to the stubs — no behaviour is faked.
 copyFileSync(join(ROOT, 'src', 'db', 'imeiAnchorSchema.ts'), join(SHIM, 'db', 'imeiAnchorSchema.ts'));
+// cb65393 added `../utils/isoInstant` to genericApply.ts (pure module, no
+// runtime deps) — same treatment as the IMEI-anchor probe above.
+mkdirSync(join(SHIM, 'utils'), { recursive: true });
+copyFileSync(join(ROOT, 'src', 'utils', 'isoInstant.ts'), join(SHIM, 'utils', 'isoInstant.ts'));
 {
   const p = join(SHIM, 'lane', 'genericApply.ts');
   let t = readFileSync(p, 'utf8');
   t = t.replace(/from '\.\.\/db\/database'/g, "from '../db/database.js'")
        .replace(/from '\.\.\/db\/sqlPluginAdapter'/g, "from '../db/sqlPluginAdapter.js'")
-       .replace(/from '\.\.\/db\/imeiAnchorSchema'/g, "from '../db/imeiAnchorSchema.ts'");
+       .replace(/from '\.\.\/db\/imeiAnchorSchema'/g, "from '../db/imeiAnchorSchema.ts'")
+       .replace(/from '\.\.\/utils\/isoInstant'/g, "from '../utils/isoInstant.ts'");
   writeFileSync(p, t);
 }
 
