@@ -18,6 +18,7 @@ import {
   FileText,
   RefreshCw,
   Pencil,
+  Gift,
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
 import { AppTabContent } from '../AppScreenLayout';
@@ -34,6 +35,7 @@ import { soundEngine } from '../../../utils/audioFeedback';
 import { useToast } from '../../ui/Toast';
 import { MobileCameraScanner } from '../MobileCameraScanner';
 import { getEffectiveDebtLimit } from '../../../store/slices/createCustomerSlice';
+import { calculateMaxAllowedCredit } from '../../../utils/loyaltyEngine';
 import { openWhatsApp } from '../../../utils/phoneUtils';
 import { verifyManagerGate } from '../../../utils/pinGate';
 import { CustomerPickerSheet } from '../checkout/CustomerPickerSheet';
@@ -68,6 +70,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     heldSales,
     holdSale,
     storeCreditApplied,
+    setStoreCreditApplied,
     logSecurityAction,
     activeCashier,
     // Phase 2/3: two-way exchange staging (memory-only until checkout).
@@ -661,6 +664,74 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     }
   };
 
+  const handleCheckoutTender = async (method: 'CIB / Edahabia' | 'BaridiMob' | 'Chèque') => {
+    if (cart.length === 0 || isSubmitting) return;
+
+    const missingImei = cart.find((i) => i.product?.isSerialized && !(i.imeiNumber || '').trim());
+    if (missingImei) {
+      soundEngine.playError?.();
+      showToast(
+        `IMEI manquant : "${missingImei.product?.title || 'article sérialisé'}" exige son IMEI.`,
+        'warning',
+      );
+      return;
+    }
+
+    const live = usePosStore.getState();
+    const liveVoucherCredit = Math.max(
+      0,
+      Math.round(Number((live as unknown as { voucherCreditApplied?: number }).voucherCreditApplied) || 0),
+    );
+    const liveTradeInForCredit = Math.max(0, Math.round(Number(live.stagedTradeIn?.buybackValue) || 0));
+    const mobileAvoirCredit = Math.max(0, Math.round(Number(live.storeCreditApplied) || 0));
+    const submitNet = computeCartTotals(live.cart, {
+      pricingTier: live.pricingTier,
+      storeCreditApplied: live.storeCreditApplied,
+      voucherCreditApplied: liveVoucherCredit,
+      tradeInCredit: liveTradeInForCredit,
+    }).total;
+
+    setIsSubmitting(true);
+    try {
+      const res = (await processPayment([
+        { method, amount: submitNet },
+        ...(mobileAvoirCredit > 0 ? [{ method: 'Avoir Client' as const, amount: mobileAvoirCredit }] : []),
+        ...(liveTradeInForCredit > 0 ? [{ method: 'Reprise' as const, amount: liveTradeInForCredit }] : []),
+      ])) as unknown as {
+        success: boolean;
+        reason?: string;
+        warnings?: string[];
+        recoveryQueued?: boolean;
+      };
+      if (res && res.success) {
+        soundEngine.playSuccess?.();
+        for (const w of res.warnings ?? []) {
+          showToast(w, 'warning', 5000);
+        }
+        const lastTx = usePosStore.getState().lastTransaction;
+        setSaleCelebrationData({
+          receiptNumber: lastTx?.receiptNumber || 'OK',
+          netTotal: submitNet,
+          tendered: submitNet,
+          changeDue: 0,
+          customerName: currentCustomer?.name,
+          customerPhone: currentCustomer?.phone,
+          items: [...cart],
+        });
+        setWhatsAppPhoneInput(currentCustomer?.phone || '');
+      } else {
+        soundEngine.playError?.();
+        const reason = (res as unknown as { reason?: string } | undefined)?.reason;
+        showToast(reason || 'Erreur lors du paiement.', 'error');
+      }
+    } catch (err) {
+      console.error(`Mobile checkout ${method} error:`, err);
+      soundEngine.playError?.();
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleSendWhatsAppReceipt = async () => {
     if (!saleCelebrationData) return;
     const phone = whatsAppPhoneInput.trim();
@@ -863,6 +934,85 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                       </span>
                     </div>
                   )}
+                  {/* Interactive Store Credit, Voucher & Trade-In Quick Controls */}
+                  <div className="flex flex-wrap gap-1.5 py-1.5 border-t border-pos-border/40">
+                    {currentCustomer && (currentCustomer.storeCredit || 0) > 0 && (
+                      (storeCreditApplied || 0) > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setStoreCreditApplied(0)}
+                          className="px-2 py-1 rounded-lg bg-purple-500/20 text-purple-700 dark:text-purple-300 border border-purple-500/30 text-[10.5px] font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>Avoir : -{formatDZD(storeCreditApplied)}</span>
+                          <X className="w-3 h-3 text-rose-500" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const cartCogs = cart.reduce((acc, item) => {
+                              const unitCost = item.unitCostAtSale ?? item.unitCostPrice ?? item.product?.costPrice ?? 0;
+                              return acc + Math.max(0, Number(unitCost) || 0) * Math.abs(Number(item.quantity) || 0);
+                            }, 0);
+                            const { maxAllowedCredit } = calculateMaxAllowedCredit(
+                              Math.max(0, totals.subtotalAfterDiscount - voucherCreditApplied),
+                              cartCogs,
+                              currentCustomer.storeCredit,
+                              50
+                            );
+                            setStoreCreditApplied(maxAllowedCredit);
+                          }}
+                          className="px-2 py-1 rounded-lg bg-purple-500/15 text-purple-700 dark:text-purple-300 border border-purple-500/30 text-[10.5px] font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Gift className="w-3 h-3" />
+                          <span>Appliquer Avoir ({formatDZD(currentCustomer.storeCredit)})</span>
+                        </button>
+                      )
+                    )}
+
+                    {voucherCreditApplied > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          usePosStore.setState({ voucherCreditApplied: 0, voucherCode: null } as unknown as Partial<typeof usePosStore>);
+                        }}
+                        className="px-2 py-1 rounded-lg bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30 text-[10.5px] font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <span>Bon : -{formatDZD(voucherCreditApplied)}</span>
+                        <X className="w-3 h-3 text-rose-500" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => openModal('voucher')}
+                        className="px-2 py-1 rounded-lg bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border border-indigo-500/20 text-[10.5px] font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Tag className="w-3 h-3" />
+                        <span>+ Bon d&apos;Avoir</span>
+                      </button>
+                    )}
+
+                    {stagedTradeIn ? (
+                      <button
+                        type="button"
+                        onClick={() => clearStagedTradeIn()}
+                        className="px-2 py-1 rounded-lg bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-[10.5px] font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <span>Reprise : -{formatDZD(stagedTradeIn.buybackValue)}</span>
+                        <X className="w-3 h-3 text-rose-500" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => openTradeInExchange()}
+                        className="px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 text-[10.5px] font-bold flex items-center gap-1 cursor-pointer"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>+ Reprise Appareil</span>
+                      </button>
+                    )}
+                  </div>
+
                   {(storeCreditApplied || 0) > 0 && (
                     <div className="flex justify-between text-purple-800 dark:text-purple-300 font-medium">
                       <span>{t.checkout.storeCreditApplied}</span>
@@ -914,27 +1064,59 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   </div>
                 </div>
 
-                {/* Checkout Action Buttons — Ergonomic Bottom Dock */}
-                <div className="grid grid-cols-2 gap-2.5 pt-1">
-                  <button
-                    type="button"
-                    disabled={isSubmitting}
-                    onClick={handleOpenCashTender}
-                    className="py-3 px-3 min-h-[52px] rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 active-press text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer disabled:opacity-50"
-                  >
-                    <Coins className="w-4 h-4" aria-hidden="true" />
-                    <span>{t.checkout.payCashButton}</span>
-                  </button>
+                {/* Checkout Action Buttons — Ergonomic Multi-Tender Dock */}
+                <div className="space-y-1.5 pt-1">
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={handleOpenCashTender}
+                      className="py-3 px-3 min-h-[50px] rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 active-press text-slate-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/25 transition cursor-pointer disabled:opacity-50"
+                    >
+                      <Coins className="w-4 h-4" aria-hidden="true" />
+                      <span>{t.checkout.payCashButton}</span>
+                    </button>
 
-                  <button
-                    type="button"
-                    disabled={isSubmitting}
-                    onClick={handleCheckoutCredit}
-                    className="py-3 px-3 min-h-[52px] rounded-xl bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 active-press text-amber-800 dark:text-amber-400 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 shadow-xs"
-                  >
-                    <CreditCard className="w-4 h-4" aria-hidden="true" />
-                    <span>{t.checkout.payKredyButton}</span>
-                  </button>
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={handleCheckoutCredit}
+                      className="py-3 px-3 min-h-[50px] rounded-xl bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 active-press text-amber-800 dark:text-amber-400 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 shadow-xs"
+                    >
+                      <CreditCard className="w-4 h-4" aria-hidden="true" />
+                      <span>{t.checkout.payKredyButton}</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={() => handleCheckoutTender('CIB / Edahabia')}
+                      className="py-2.5 px-1.5 min-h-[44px] rounded-xl bg-blue-500/15 border border-blue-500/30 hover:bg-blue-500/25 active-press text-blue-700 dark:text-blue-300 font-bold text-[11px] flex items-center justify-center gap-1 transition cursor-pointer disabled:opacity-50 shadow-xs"
+                    >
+                      <CreditCard className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Carte CIB</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={() => handleCheckoutTender('BaridiMob')}
+                      className="py-2.5 px-1.5 min-h-[44px] rounded-xl bg-amber-500/15 border border-amber-500/30 hover:bg-amber-500/25 active-press text-amber-700 dark:text-amber-300 font-bold text-[11px] flex items-center justify-center gap-1 transition cursor-pointer disabled:opacity-50 shadow-xs"
+                    >
+                      <Smartphone className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>BaridiMob</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={() => handleCheckoutTender('Chèque')}
+                      className="py-2.5 px-1.5 min-h-[44px] rounded-xl bg-indigo-500/15 border border-indigo-500/30 hover:bg-indigo-500/25 active-press text-indigo-700 dark:text-indigo-300 font-bold text-[11px] flex items-center justify-center gap-1 transition cursor-pointer disabled:opacity-50 shadow-xs"
+                    >
+                      <FileText className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Chèque</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

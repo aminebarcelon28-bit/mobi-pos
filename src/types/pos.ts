@@ -436,7 +436,7 @@ export interface HeldSale {
   voucherCreditApplied?: number;
 }
 
-export type PaymentMethodType = 'Espèces' | 'Avoir Client' | 'BaridiMob' | 'Chèque' | 'Crédit Client' | 'Reprise' | 'Autre';
+export type PaymentMethodType = 'Espèces' | 'Avoir Client' | 'BaridiMob' | 'Chèque' | 'Crédit Client' | 'Reprise' | 'CIB / Edahabia' | 'Autre';
 
 export type TransactionStatus = 'COMPLETED' | 'VOIDED' | 'REFUNDED' | 'PARTIALLY_REFUNDED';
 

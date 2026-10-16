@@ -15,6 +15,9 @@ import {
   RotateCcw,
   RefreshCw,
   Wallet,
+  CreditCard,
+  Smartphone,
+  Receipt,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
@@ -64,6 +67,7 @@ export const PaymentModal: React.FC = () => {
   const [voucherInput, setVoucherInput] = useState('');
   const [voucherBusy, setVoucherBusy] = useState(false);
   const [voucherError, setVoucherError] = useState<string | null>(null);
+  const [transactionRef, setTransactionRef] = useState('');
 
   // Runtime-staged voucher credit + VAT rate (owned by other agents' types).
   const voucherCreditApplied =
@@ -379,6 +383,16 @@ export const PaymentModal: React.FC = () => {
         // 100% Credit sale for remaining net
         finalTenders.push({ method: 'Crédit Client', amount: submitNet });
       }
+    } else if (
+      selectedMethod === 'CIB / Edahabia' ||
+      selectedMethod === 'BaridiMob' ||
+      selectedMethod === 'Chèque'
+    ) {
+      finalTenders.push({
+        method: selectedMethod,
+        amount: submitNet,
+        reference: transactionRef.trim() || undefined,
+      });
     } else {
       // Cash payment
       const cashAmount = submitCash > 0 ? submitCash : submitNet;
@@ -897,30 +911,66 @@ export const PaymentModal: React.FC = () => {
           ) : (
             <>
               {/* Payment Method Selector Tabs */}
-              <div className="grid grid-cols-2 gap-2 bg-pos-bg p-1 rounded-xl border border-pos-border">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 bg-pos-bg p-1 rounded-xl border border-pos-border">
                 <button
                   type="button"
                   onClick={() => setSelectedMethod('Espèces')}
-                  className={`py-2 px-3 rounded-lg text-xs font-black flex items-center justify-center gap-2 transition cursor-pointer ${
+                  className={`py-2 px-2 rounded-lg text-[11px] font-black flex items-center justify-center gap-1.5 transition cursor-pointer ${
                     selectedMethod === 'Espèces'
                       ? 'bg-emerald-500 text-slate-950 shadow-md'
                       : 'text-pos-muted hover:text-pos-text'
                   }`}
                 >
-                  <Banknote className="w-4 h-4" />
-                  <span>Espèces (Cash)</span>
+                  <Banknote className="w-3.5 h-3.5" />
+                  <span>Espèces</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMethod('CIB / Edahabia')}
+                  className={`py-2 px-2 rounded-lg text-[11px] font-black flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                    selectedMethod === 'CIB / Edahabia'
+                      ? 'bg-blue-500 text-white shadow-md'
+                      : 'text-pos-muted hover:text-pos-text'
+                  }`}
+                >
+                  <CreditCard className="w-3.5 h-3.5" />
+                  <span>CIB / Carte</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMethod('BaridiMob')}
+                  className={`py-2 px-2 rounded-lg text-[11px] font-black flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                    selectedMethod === 'BaridiMob'
+                      ? 'bg-amber-400 text-slate-950 shadow-md'
+                      : 'text-pos-muted hover:text-pos-text'
+                  }`}
+                >
+                  <Smartphone className="w-3.5 h-3.5" />
+                  <span>BaridiMob</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMethod('Chèque')}
+                  className={`py-2 px-2 rounded-lg text-[11px] font-black flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                    selectedMethod === 'Chèque'
+                      ? 'bg-indigo-500 text-white shadow-md'
+                      : 'text-pos-muted hover:text-pos-text'
+                  }`}
+                >
+                  <Receipt className="w-3.5 h-3.5" />
+                  <span>Chèque</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setSelectedMethod('Crédit Client')}
-                  className={`py-2 px-3 rounded-lg text-xs font-black flex items-center justify-center gap-2 transition cursor-pointer ${
+                  className={`py-2 px-2 rounded-lg text-[11px] font-black flex items-center justify-center gap-1.5 transition cursor-pointer ${
                     selectedMethod === 'Crédit Client'
                       ? 'bg-amber-500 text-slate-950 shadow-md'
                       : 'text-pos-muted hover:text-pos-text'
                   }`}
                 >
-                  <FileText className="w-4 h-4" />
-                  <span>Carnet de Dettes (Kredy)</span>
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Crédit</span>
                 </button>
               </div>
 
@@ -1038,6 +1088,59 @@ export const PaymentModal: React.FC = () => {
                       </button>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Mode 3: Electronic & Cheque Payments */}
+              {['CIB / Edahabia', 'BaridiMob', 'Chèque'].includes(selectedMethod) && (
+                <div className="space-y-4 animate-in fade-in">
+                  <div className="p-4 rounded-2xl border bg-gradient-to-br from-indigo-950/60 to-blue-950/60 border-indigo-500/50 text-indigo-200 shadow-lg">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-black uppercase tracking-wider block">
+                          Règlement {selectedMethod}
+                        </span>
+                        <span className="text-[11px] opacity-80">
+                          {selectedMethod === 'Chèque'
+                            ? 'Paiement par chèque bancaire'
+                            : selectedMethod === 'BaridiMob'
+                            ? 'Virement postal BaridiMob'
+                            : 'Paiement TPE par Carte CIB / Edahabia'}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-2xl font-black font-mono text-indigo-300">
+                          {formatDZD(netToPay)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-xl border border-pos-border bg-pos-card space-y-3">
+                    <label className="text-xs font-bold text-pos-text block">
+                      {selectedMethod === 'Chèque'
+                        ? 'N° de Chèque & Banque Émettrice (optionnel)'
+                        : selectedMethod === 'BaridiMob'
+                        ? 'Réf. Transaction / RIP BaridiMob (optionnel)'
+                        : 'N° Autorisation TPE / Réf. Ticket (optionnel)'}
+                    </label>
+                    <input
+                      type="text"
+                      value={transactionRef}
+                      onChange={(e) => setTransactionRef(e.target.value)}
+                      placeholder={
+                        selectedMethod === 'Chèque'
+                          ? 'Ex: CHQ-984210 / BNA'
+                          : selectedMethod === 'BaridiMob'
+                          ? 'Ex: Réf 12948271'
+                          : 'Ex: TPE-0042918'
+                      }
+                      className="w-full px-3 py-2.5 rounded-lg bg-pos-bg border border-pos-border text-sm text-pos-text focus:outline-none focus:border-indigo-500 transition font-mono"
+                    />
+                    <p className="text-[11px] text-pos-muted">
+                      Le montant intégral de <strong className="text-pos-text font-mono">{formatDZD(netToPay)}</strong> sera enregistré sous le tender <strong className="text-pos-text">{selectedMethod}</strong>.
+                    </p>
+                  </div>
                 </div>
               )}
 
@@ -1174,6 +1277,12 @@ export const PaymentModal: React.FC = () => {
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 shadow-purple-600/25'
                 : selectedMethod === 'Crédit Client'
                 ? 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 shadow-amber-600/25'
+                : selectedMethod === 'CIB / Edahabia'
+                ? 'bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 shadow-blue-600/25'
+                : selectedMethod === 'BaridiMob'
+                ? 'bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 hover:from-amber-400 hover:to-yellow-400 shadow-amber-500/25'
+                : selectedMethod === 'Chèque'
+                ? 'bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 shadow-indigo-600/25'
                 : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-emerald-600/25'
             }`}
           >
@@ -1185,6 +1294,12 @@ export const PaymentModal: React.FC = () => {
                 ? 'Valider Paiement Avoir (100%)'
                 : selectedMethod === 'Crédit Client'
                 ? 'Valider Vente à Crédit'
+                : selectedMethod === 'CIB / Edahabia'
+                ? `Valider Carte CIB (${formatDZD(netToPay)})`
+                : selectedMethod === 'BaridiMob'
+                ? `Valider BaridiMob (${formatDZD(netToPay)})`
+                : selectedMethod === 'Chèque'
+                ? `Valider Chèque (${formatDZD(netToPay)})`
                 : 'Valider & Imprimer Reçu'}
             </span>
             <span className="hidden sm:inline bg-black/40 text-emerald-200 border border-white/20 px-2 py-0.5 rounded text-xs font-mono">
