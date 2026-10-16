@@ -40,7 +40,7 @@ import { generateProfessionalExcelXml } from '../../utils/excelExporter';
 import { useInventoryValuation } from '../../hooks/useInventoryValuation';
 import { useAllocationCogs } from '../../hooks/useAllocationCogs';
 import { useReceiptLedgerCogs } from '../../hooks/useReceiptLedgerCogs';
-import { computeSalesMetrics, grossFromTransaction, isExchangeSaleTx } from '../../utils/receiptMath';
+import { computeSalesMetrics, grossFromTransaction, isExchangeSaleTx, lineProfitNet } from '../../utils/receiptMath';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { todayLocalKey, toLocalDayKey, sortTransactionsNewestFirst } from '../../utils/dateUtils';
@@ -1959,14 +1959,31 @@ export const ReportsModal: React.FC = () => {
                         item.unitCostAtSale ??
                         inspectorLedgerAvgUnit ??
                         (isMaterializedReceipt ? 0 : item.product?.costPrice ?? 0);
+                      // Line-total remise (cart/promo discount); per-unit
+                      // markdowns already live in the charged price (B-025).
+                      const lineDiscount = Math.max(0, Math.round(Number(item.discount ?? 0)));
                       const lineProfit = lineCostPending
                         ? null
                         : (item.unitCostAtSale !== undefined || inspectorLedgerAvgUnit !== undefined)
-                        ? (itemPrice - unitCost) * item.quantity
+                        ? lineProfitNet({
+                            unitPriceCharged: itemPrice,
+                            unitCostAtSale: unitCost,
+                            quantity: item.quantity,
+                            discount: lineDiscount,
+                            isReturn: item.isReturn,
+                          })
                         : item.lineProfit !== undefined
                         ? item.lineProfit
-                        : (itemPrice - unitCost) * item.quantity;
-                      const lineTotal = itemPrice * item.quantity;
+                        : lineProfitNet({
+                            unitPriceCharged: itemPrice,
+                            unitCostAtSale: unitCost,
+                            quantity: item.quantity,
+                            discount: lineDiscount,
+                            isReturn: item.isReturn,
+                          });
+                      // Net of the line remise — matches the ticket total and
+                      // makes the margin percentage honest.
+                      const lineTotal = itemPrice * item.quantity - lineDiscount;
                       const discountAmount = item.discountAmount ?? (defaultPrice > itemPrice ? defaultPrice - itemPrice : 0);
                       const marginText =
                         lineProfit === null
@@ -1996,9 +2013,9 @@ export const ReportsModal: React.FC = () => {
                                   <span className="text-pos-muted">Coût FIFO: …</span>
                                 </>
                               )}
-                              {discountAmount > 0 && (
+                              {(lineDiscount > 0 || discountAmount > 0) && (
                                 <span className="text-amber-400 font-semibold">
-                                  (Remise: -{formatDZD(discountAmount)}/u)
+                                  (Remise: -{formatDZD(lineDiscount > 0 ? lineDiscount : discountAmount)}{lineDiscount > 0 ? '' : '/u'})
                                 </span>
                               )}
                             </div>

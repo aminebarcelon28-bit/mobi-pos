@@ -57,7 +57,7 @@ import {
   getEffectiveCostPrice,
   calculateProfit,
 } from '../../utils/pricingEngine';
-import { computeCartTotals, computeRefundFundingSplit, computeTradeInSettlement, computeTradeRestoreQuota, refundableValueOf } from '../../utils/receiptMath';
+import { computeCartTotals, computeRefundFundingSplit, computeTradeInSettlement, computeTradeRestoreQuota, lineProfitNet, refundableValueOf } from '../../utils/receiptMath';
 import {
   cashSalesFromTxns,
   cashRefundsFromTxns,
@@ -621,7 +621,24 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // When the FIFO preview resolved, recompute from it so cost and
         // profit stay consistent (a stale latest-cost lineProfit would pair
         // a 450 cost with a 400-based profit). Otherwise legacy behavior.
-        const lineProfit = fifoPreview ? ((unitPriceCharged - cost) * item.quantity) : (item.lineProfit ?? ((unitPriceCharged - cost) * item.quantity));
+        // Canonical formula: receiptMath.lineProfitNet — nets line discounts
+        // and signs return lines exactly like the durable checkout twins.
+        const lineProfit = fifoPreview
+          ? lineProfitNet({
+              unitPriceCharged,
+              unitCostAtSale: cost,
+              quantity: item.quantity,
+              discount: item.discount,
+              isReturn: item.isReturn,
+            })
+          : (item.lineProfit ??
+            lineProfitNet({
+              unitPriceCharged,
+              unitCostAtSale: cost,
+              quantity: item.quantity,
+              discount: item.discount,
+              isReturn: item.isReturn,
+            }));
         return {
           ...item,
           unitCostPrice: cost,

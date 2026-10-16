@@ -417,6 +417,42 @@ export function computeCartTotals(lines: CartItem[], opts: CartTotalsOptions = {
   };
 }
 
+/**
+ * One line's contribution to the ticket profit — THE canonical line-profit
+ * formula. Rust twin: `line_profit_net` in src-tauri/src/checkout.rs; the TS
+ * twin (sqlPluginAdapter), the ledger repairs and the shadow reconciliation
+ * all call THIS function so the invariants can never drift again:
+ *
+ *   (unitPriceCharged − unitCostAtSale) × signedQty − signed line discount
+ *
+ * Why the discount is netted here (2026-10-16): ticket totals are stored net
+ * of discounts, so a gross line profit left Σ per-line ≠ ticket profit (one
+ * 200 DA remise alone made the inspector's line sum overshoot the stored
+ * per-sale profits by exactly that 200). Return lines follow
+ * computeCartTotals' sign contract: signedQty is negative AND their line
+ * discount shrinks the refund, never grows it (OBS-A1).
+ *
+ * Cart-level percent discounts and store/voucher credits are NOT attributed
+ * per line (no live caller produces a cart-% discount; credits are a funding
+ * settlement, not a line price) — ticket totals remain the authority.
+ */
+export function lineProfitNet(input: {
+  unitPriceCharged: number;
+  unitCostAtSale: number;
+  quantity: number;
+  discount?: number | null;
+  isReturn?: boolean;
+}): number {
+  const charged = toInt(input.unitPriceCharged);
+  const unitCost = toInt(input.unitCostAtSale);
+  const qty = toInt(input.quantity);
+  const isReturn = Boolean(input.isReturn);
+  const signedQty = isReturn ? -Math.abs(qty) : Math.abs(qty);
+  const lineDiscount = Math.max(0, toInt(input.discount));
+  const signedDiscount = isReturn ? -lineDiscount : lineDiscount;
+  return (charged - unitCost) * signedQty - signedDiscount;
+}
+
 /** Funding sources of an original sale, for refund reversal. */
 export interface RefundFundingInput {
   total?: number;

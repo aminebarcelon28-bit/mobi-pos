@@ -197,6 +197,36 @@ fn map_rusqlite(context: &str, e: rusqlite::Error) -> TrustError {
     TrustError::op_failed(format!("{context}: {e}"))
 }
 
+/// One line's contribution to the ticket profit — THE canonical formula,
+/// mirror of `lineProfitNet` in `src/utils/receiptMath.ts` (the TS twin,
+/// the ledger repairs and the shadow reconciliation all call that single
+/// function; this must never drift from it).
+///
+///   (unit_price_charged − unit_cost_at_sale) × signed_qty − signed discount
+///
+/// The line discount is netted because ticket totals are stored net of
+/// discounts (a gross line profit left Σ per-line ≠ ticket profit — the
+/// 2026-10-16 reconciliation incident). Return lines follow
+/// `computeCartTotals`' sign contract: signed_qty is negative and their
+/// line discount shrinks the refund, never grows it (OBS-A1).
+fn line_profit_net(
+    unit_price_charged: f64,
+    unit_cost_at_sale: i64,
+    qty: f64,
+    discount: f64,
+    is_return: bool,
+) -> i64 {
+    let magnitude = (qty.round() as i64).abs();
+    let signed_qty = if is_return { -magnitude } else { magnitude };
+    let line_discount = discount.round().max(0.0) as i64;
+    let signed_discount = if is_return {
+        -line_discount
+    } else {
+        line_discount
+    };
+    (unit_price_charged.round() as i64 - unit_cost_at_sale) * signed_qty - signed_discount
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -846,7 +876,15 @@ pub fn apply_checkout_in_txn(
         }
 
         let signed_qty = if is_return { -(qty.round() as i64) } else { qty.round() as i64 };
-        let line_profit = (unit_price_charged.round() as i64 - unit_cost_at_sale) * signed_qty;
+        // Canonical line profit (mirror of receiptMath.lineProfitNet) — nets
+        // the line discount so Σ per-line equals the discounted ticket.
+        let line_profit = line_profit_net(
+            unit_price_charged,
+            unit_cost_at_sale,
+            qty,
+            item.discount.unwrap_or(0.0),
+            is_return,
+        );
         total_fifo_cost += unit_cost_at_sale * signed_qty;
 
         // Persist sale_batch_allocations
@@ -1046,6 +1084,34 @@ pub fn apply_checkout_in_txn(
             serde_json::Value::Number(lc.into()),
         );
     }
+    // Version parity with the TS twin's canonical receipt (payload.version
+    // feeds the remote row version on the guarded order lane).
+    receipt_obj.insert(
+        "version".to_string(),
+        serde_json::Value::from(next_version),
+    );
+    // P1 (2026-10-16): adopt the FIFO line resolutions INTO the receipt items
+    // — mirror of the TS twin's "Canonical receipt JSON" patch
+    // (sqlPluginAdapter.ts). Without this the receipt kept the pre-FIFO
+    // caller snapshots, and Desktop/Mobile mirrors rebuilt from it disagreed
+    // on every line margin while ticket totals were already exact.
+    if let Some(serde_json::Value::Array(items)) = receipt_obj.get_mut("items") {
+        for (ri_idx, ri) in items.iter_mut().enumerate() {
+            let Some(res) = fifo_item_resolutions.get(ri_idx) else {
+                continue;
+            };
+            let Some(obj) = ri.as_object_mut() else {
+                continue;
+            };
+            let cost = serde_json::Value::Number(res.unit_cost_at_sale.into());
+            let profit = serde_json::Value::Number(res.line_profit.into());
+            obj.insert("unitCostAtSale".to_string(), cost.clone());
+            obj.insert("unitCostPrice".to_string(), cost.clone());
+            obj.insert("unit_cost_at_sale".to_string(), cost);
+            obj.insert("lineProfit".to_string(), profit.clone());
+            obj.insert("line_profit".to_string(), profit);
+        }
+    }
     let receipt_json = serde_json::to_string(&receipt_obj).unwrap_or_default();
 
     // 6. Upsert transactions table
@@ -1139,7 +1205,16 @@ pub fn apply_checkout_in_txn(
             .unwrap_or_else(|| (default_price - unit_price_charged).max(0.0));
         let fallback_cost = item.cost_price.unwrap_or(0.0);
 
+        // Full line payload (mirror of the TS twin's enrichedPayload): the
+        // 5-key stub this replaced starved the push lane — the remote row was
+        // materialized with zeroed pricing columns (applied_price 0, quantity
+        // 1) and the pull echo then zeroed the same columns locally
+        // (2026-10-16 incident). Raw request fields first, resolved FIFO
+        // values after; `extra` keeps any future payload keys.
         let mut item_obj = serde_json::Map::new();
+        for (k, v) in &item.extra {
+            item_obj.insert(k.clone(), v.clone());
+        }
         item_obj.insert("id".into(), serde_json::Value::String(item_id.clone()));
         item_obj.insert(
             "transaction_id".into(),
@@ -1149,6 +1224,31 @@ pub fn apply_checkout_in_txn(
             "product_id".into(),
             serde_json::Value::String(prod_id.clone()),
         );
+        item_obj.insert("quantity".into(), serde_json::json!(qty));
+        item_obj.insert("applied_price".into(), serde_json::json!(applied_price));
+        item_obj.insert(
+            "unit_price_charged".into(),
+            serde_json::json!(unit_price_charged),
+        );
+        item_obj.insert("default_price".into(), serde_json::json!(default_price));
+        item_obj.insert("discount".into(), serde_json::json!(discount));
+        item_obj.insert(
+            "discount_amount".into(),
+            serde_json::json!(discount_amount),
+        );
+        item_obj.insert("cost_price".into(), serde_json::json!(fallback_cost));
+        item_obj.insert(
+            "is_return".into(),
+            serde_json::json!(item.is_return.unwrap_or(false)),
+        );
+        item_obj.insert("imei_number".into(), serde_json::json!(item.imei_number));
+        if let Some(w) = item.warranty_months_at_sale {
+            item_obj.insert("warranty_months_at_sale".into(), serde_json::json!(w));
+        }
+        item_obj.insert(
+            "idempotency_key".into(),
+            serde_json::Value::String(item_key.clone()),
+        );
         item_obj.insert(
             "unit_cost_at_sale".into(),
             serde_json::Value::Number(res.unit_cost_at_sale.into()),
@@ -1156,6 +1256,21 @@ pub fn apply_checkout_in_txn(
         item_obj.insert(
             "line_profit".into(),
             serde_json::Value::Number(res.line_profit.into()),
+        );
+        item_obj.insert(
+            "fifo_allocations".into(),
+            serde_json::Value::Array(
+                res.fifo_allocations
+                    .iter()
+                    .map(|a| {
+                        serde_json::json!({
+                            "batchId": a.batch_id,
+                            "quantity": a.quantity,
+                            "unitCost": a.unit_cost,
+                        })
+                    })
+                    .collect(),
+            ),
         );
         let item_json = serde_json::to_string(&item_obj).unwrap_or_default();
 
@@ -1354,6 +1469,22 @@ pub fn checkout_sale_atomic(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_profit_nets_discount_and_signs_returns() {
+        // Gross-vs-net regression (2026-10-16): (2416−1336)×1 − 200 = 880,
+        // matching the stored ticket profit — not the gross 1080.
+        assert_eq!(line_profit_net(2416.0, 1336, 1.0, 200.0, false), 880);
+        // Multi-unit with no line discount: (400−1605)×2 = −2410.
+        assert_eq!(line_profit_net(400.0, 1605, 2.0, 0.0, false), -2410);
+        // Return line: signed qty negative AND the discount shrinks the
+        // refund: −((500−380)×2) + 100 = −140.
+        assert_eq!(line_profit_net(500.0, 380, -2.0, 100.0, true), -140);
+        // Sale-line discount always nets as a subtraction.
+        assert_eq!(line_profit_net(1000.0, 600, 1.0, 50.0, false), 350);
+        // Fractional qty rounds; negative discounts clamp at 0.
+        assert_eq!(line_profit_net(1000.5, 600, 2.4, -25.0, false), 802);
+    }
 
     fn setup_test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();

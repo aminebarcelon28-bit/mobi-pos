@@ -95,7 +95,7 @@ console.log('\n--- Rule 3: money-path float registry (Stage E expiry) ---');
     'src/utils/fifoPreview.ts': 5,
     'src/utils/inventoryValuation.ts': 2,
     'src/utils/zReportSnapshot.ts': 0,
-    'src/db/sqlPluginAdapter.ts': 50,
+    'src/db/sqlPluginAdapter.ts': 49,
     'src/store/slices/createOrderSlice.ts': 38,
     'src/store/slices/createCartSlice.ts': 8,
     'src/components/PoReviewScreen.tsx': 55,

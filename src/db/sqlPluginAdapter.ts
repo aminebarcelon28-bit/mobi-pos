@@ -16,6 +16,7 @@ import { backfillExistingProducts } from '../sync/snapshotBackfill.ts';
 import type { HeldSale, Product } from '../types/pos';
 import { newId } from '../utils/ids';
 import { toLocalDayKey } from '../utils/dateUtils';
+import { lineProfitNet } from '../utils/receiptMath';
 import { withWriteLock } from './writeMutex';
 import { buildImeiAnchorUpsert, imeiAnchorColumnsPresent } from './imeiAnchorSchema';
 // Phase 4.5 WP2c: NO static import of './benchHook' — it must stay out of
@@ -1814,7 +1815,15 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
       const callerUnitCost = Number(it.unit_cost_at_sale ?? it.unitCostAtSale ?? blendedUnitCost);
       const unitCostAtSale = fifoAuthoritativeCost ?? callerUnitCost;
       const signedQty = isReturnLine ? -Math.abs(qtySold) : Math.abs(qtySold);
-      const lineProfit = (unitPriceCharged - unitCostAtSale) * signedQty;
+      // Canonical line profit (receiptMath.lineProfitNet) — nets the line
+      // discount so Σ per-line equals the discounted ticket profit.
+      const lineProfit = lineProfitNet({
+        unitPriceCharged,
+        unitCostAtSale,
+        quantity: qtySold,
+        discount: Number(it.discount ?? 0),
+        isReturn: isReturnLine,
+      });
       if (fifoAuthoritativeCost !== null) {
         fifoResolvedAny = true;
       }
@@ -4586,9 +4595,14 @@ export async function repairSaleCogsFromLedger(saleId: string): Promise<{
       const qty = Math.round(Number(line.quantity ?? 0));
       const charged = toIntMoney(line.unit_price_charged ?? line.applied_price ?? 0);
       let lineAllocUnit: number | null = null;
+      let lineDiscount = 0;
+      let lineIsReturn = false;
       try {
         const parsed = JSON.parse(String(line.json_payload ?? '{}')) as {
           fifo_allocations?: Array<{ quantity?: number; unitCost?: number }>;
+          discount?: number;
+          is_return?: boolean;
+          isReturn?: boolean;
         };
         const arr = Array.isArray(parsed.fifo_allocations) ? parsed.fifo_allocations : [];
         const aQty = arr.reduce((acc, a) => acc + Math.max(0, Math.floor(Number(a?.quantity ?? 0))), 0);
@@ -4597,9 +4611,19 @@ export async function repairSaleCogsFromLedger(saleId: string): Promise<{
           0
         );
         if (aQty > 0) lineAllocUnit = toIntMoney(aCost / aQty);
+        lineDiscount = Math.max(0, toIntMoney(parsed.discount));
+        lineIsReturn = Boolean(parsed.is_return ?? parsed.isReturn ?? false);
       } catch {}
       if (lineAllocUnit === null) lineAllocUnit = toIntMoney(avgCostPerUnit);
-      const lineProfit = toIntMoney((charged - lineAllocUnit) * qty);
+      // Canonical line profit (receiptMath.lineProfitNet): nets the line
+      // discount so the repaired Σ per-line stays equal to the net ticket.
+      const lineProfit = lineProfitNet({
+        unitPriceCharged: charged,
+        unitCostAtSale: lineAllocUnit,
+        quantity: qty,
+        discount: lineDiscount,
+        isReturn: lineIsReturn,
+      });
       newCostTotal += lineAllocUnit * qty;
       linePatches.set(lineId, { unit: lineAllocUnit, profit: lineProfit });
       let patchedLineJson = String(line.json_payload ?? '{}');
@@ -5043,16 +5067,33 @@ export async function reconcileShadowBatches(targetProductId?: string): Promise<
           const charged = defaultNumber(line.unit_price_charged ?? line.applied_price, 0);
           const oldUnit = defaultNumber(line.unit_cost_at_sale, 0);
           const newUnit = toIntMoney((oldUnit * lineQty - shadowUnit * ctx.qty + takenCost) / lineQty);
-          const newLineProfit = toIntMoney((charged - newUnit) * lineQty);
-          const diffCogs = newUnit * lineQty - oldUnit * lineQty;
 
           let priorAllocs: Array<{ batchId?: string }> = [];
+          let lineDiscount = 0;
+          let lineIsReturn = false;
           try {
-            const p = JSON.parse(String(line.json_payload ?? '{}')) as { fifo_allocations?: Array<{ batchId?: string }> };
+            const p = JSON.parse(String(line.json_payload ?? '{}')) as {
+              fifo_allocations?: Array<{ batchId?: string }>;
+              discount?: number;
+              is_return?: boolean;
+              isReturn?: boolean;
+            };
             priorAllocs = Array.isArray(p.fifo_allocations) ? p.fifo_allocations : [];
+            lineDiscount = Math.max(0, toIntMoney(p.discount));
+            lineIsReturn = Boolean(p.is_return ?? p.isReturn ?? false);
           } catch {
             priorAllocs = [];
           }
+          // Canonical line profit (receiptMath.lineProfitNet) — the line
+          // discount is netted so Σ per-line stays equal to the ticket.
+          const newLineProfit = lineProfitNet({
+            unitPriceCharged: charged,
+            unitCostAtSale: newUnit,
+            quantity: lineQty,
+            discount: lineDiscount,
+            isReturn: lineIsReturn,
+          });
+          const diffCogs = newUnit * lineQty - oldUnit * lineQty;
           const mergedAllocs = [
             ...priorAllocs.filter((a) => a?.batchId !== sh.batch_id && a?.batchId !== 'unbatched'),
             ...takes,

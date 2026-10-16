@@ -2700,8 +2700,31 @@ class SyncManager {
       sparse = !r.sku || !r.barcode || !r.title;
     } else if (table === 'transactions') {
       sparse = !r.json_payload && r.total == null && r.subtotal == null;
-    } else if (table === 'transaction_items' || table === 'inventory_ledger') {
+    } else if (table === 'inventory_ledger') {
       sparse = r.product_id == null;
+    } else if (table === 'transaction_items') {
+      // P0-1b (2026-10-16): the native checkout's 5-key order_item payload
+      // (id/transaction_id/product_id/unit_cost_at_sale/line_profit) was
+      // materialized into the remote row with column defaults
+      // (applied_price 0, unit_price_charged 0, cost_price 0, quantity 1),
+      // so `product_id == null` alone let the equal-version echo zero good
+      // local pricing columns through `?? 0` on pull. The row's OWN payload
+      // is the authority: an item whose payload never carried its pricing
+      // (quantity / applied_price / unit_price_charged) is thin no matter
+      // what defaults the columns materialized.
+      let priced = false;
+      try {
+        const j = JSON.parse(String(r.json_payload ?? '{}')) as Record<string, unknown>;
+        priced =
+          j.quantity != null ||
+          j.applied_price != null ||
+          j.appliedPrice != null ||
+          j.unit_price_charged != null ||
+          j.unitPriceCharged != null;
+      } catch {
+        priced = false;
+      }
+      sparse = r.product_id == null || !priced;
     }
     if (!sparse) return false;
     try {
