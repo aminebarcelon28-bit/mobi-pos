@@ -385,7 +385,14 @@ export async function ensureRemoteSchemaColumns(client: Client): Promise<void> {
     'ALTER TABLE stock_batches ADD COLUMN shadow_item_id TEXT',
     'ALTER TABLE stock_batches ADD COLUMN shadow_qty REAL NOT NULL DEFAULT 0',
     'ALTER TABLE stock_batches ADD COLUMN shadow_resolved INTEGER NOT NULL DEFAULT 0',
-    'ALTER TABLE transactions ADD COLUMN ledger_cogs_total REAL'
+    'ALTER TABLE transactions ADD COLUMN ledger_cogs_total REAL',
+    'ALTER TABLE sale_batch_allocations ADD COLUMN sale_id TEXT',
+    'ALTER TABLE sale_batch_allocations ADD COLUMN batch_id TEXT',
+    'ALTER TABLE sale_batch_allocations ADD COLUMN qty_consumed INTEGER NOT NULL DEFAULT 0',
+    'ALTER TABLE sale_batch_allocations ADD COLUMN unit_cost_at_sale REAL NOT NULL DEFAULT 0',
+    'ALTER TABLE sale_batch_allocations ADD COLUMN created_at TEXT',
+    'ALTER TABLE sale_batch_allocations ADD COLUMN product_id TEXT',
+    'ALTER TABLE sale_batch_allocations ADD COLUMN sale_item_id TEXT'
   );
   for (const stmt of alterStatements) {
     try {

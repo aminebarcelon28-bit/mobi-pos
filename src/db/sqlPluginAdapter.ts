@@ -3302,7 +3302,8 @@ export function syncProductDelete(id: string): Promise<void> {
 export type GenericEntity =
   | 'customer' | 'repair_order' | 'purchase_order' | 'trade_in' | 'imei' | 'audit_log'
   | 'cash_drop' | 'bundle' | 'customer_debt' | 'store_expense'
-  | 'cash_session' | 'cash_movement' | 'setting' | 'credit_voucher' | 'stock_batches';
+  | 'cash_session' | 'cash_movement' | 'setting' | 'credit_voucher' | 'stock_batches'
+  | 'sale_batch_allocations' | 'sale_batch_allocation';
 
 /**
  * H9-generalized: monotonic version clock for a (entity, id) pair.

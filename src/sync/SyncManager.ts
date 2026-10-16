@@ -136,6 +136,7 @@ const PULL_COLUMNS: Record<string, string> = {
   transactions: 'id, receipt_number, customer_id, subtotal, discount_total, total, cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, change_due, status, json_payload, device_id, idempotency_key, version, created_at, updated_at, deleted, shift_id',
   transaction_items: 'id, transaction_id, product_id, quantity, applied_price, discount, imei_number, cost_price, unit_price_charged, unit_cost_at_sale, discount_amount, line_profit, json_payload, device_id, idempotency_key, version, created_at, updated_at, deleted',
   inventory_ledger: 'id, product_id, delta, reason, ref_type, ref_id, device_id, idempotency_key, version, created_at, updated_at, deleted',
+  sale_batch_allocations: 'id, sale_id, batch_id, qty_consumed, unit_cost_at_sale, product_id, sale_item_id, device_id, idempotency_key, version, created_at, updated_at, deleted',
 };
 
 const GENERIC_PULL_COLUMNS = 'id, data_json, version, updated_at, deleted';
@@ -1339,7 +1340,7 @@ class SyncManager {
       const rank: Record<string, number> = {
         product: 0, customer: 0, stock_batches: 0,
         order: 1, credit_voucher: 1,
-        order_item: 2, ledger: 2, customer_debt: 2,
+        order_item: 2, ledger: 2, customer_debt: 2, sale_batch_allocations: 2, sale_batch_allocation: 2,
         repair_order: 3, purchase_order: 3, trade_in: 3, imei: 3, audit_log: 3,
         cash_drop: 3, bundle: 3, store_expense: 3, cash_session: 3, setting: 3,
         cash_movement: 4,
@@ -1998,6 +1999,48 @@ class SyncManager {
           v(batchId),
           v(toBoundedSyncJson(payload ?? {})),
           v(batchDeleted),
+        ],
+      };
+    }
+
+    if (op.entity_type === 'sale_batch_allocations' || op.entity_type === 'sale_batch_allocation') {
+      assertValidSyncTable('sale_batch_allocations');
+      const allocId = String(payload.id ?? op.entity_id ?? '');
+      const isDelete = op.operation === 'DELETE' || Number(payload.deleted ?? 0) === 1;
+      return {
+        sql: `INSERT INTO sale_batch_allocations (
+          id, sale_id, batch_id, qty_consumed, unit_cost_at_sale,
+          created_at, product_id, sale_item_id, device_id,
+          idempotency_key, sync_status, version, updated_at, deleted
+        ) VALUES (?,?,?,?,?,?,?,?,?,'synced',?,?,?)
+        ON CONFLICT(id) DO UPDATE SET
+          sale_id = excluded.sale_id,
+          batch_id = excluded.batch_id,
+          qty_consumed = excluded.qty_consumed,
+          unit_cost_at_sale = excluded.unit_cost_at_sale,
+          product_id = excluded.product_id,
+          sale_item_id = excluded.sale_item_id,
+          device_id = excluded.device_id,
+          idempotency_key = excluded.idempotency_key,
+          sync_status = 'synced',
+          version = excluded.version,
+          updated_at = excluded.updated_at,
+          deleted = excluded.deleted
+        WHERE ${tiedVersionGuardSql('sale_batch_allocations')}`,
+        args: [
+          v(allocId),
+          v(payload.sale_id ?? payload.saleId ?? ''),
+          v(payload.batch_id ?? payload.batchId ?? ''),
+          v(Number(payload.qty_consumed ?? payload.qtyConsumed ?? 0)),
+          v(Number(payload.unit_cost_at_sale ?? payload.unitCostAtSale ?? 0)),
+          v(payload.created_at ?? payload.createdAt ?? now),
+          v(payload.product_id ?? payload.productId ?? null),
+          v(payload.sale_item_id ?? payload.saleItemId ?? null),
+          v(payload.device_id ?? payload.deviceId ?? this.deviceId ?? 'default'),
+          v(op.idempotency_key ?? payload.idempotency_key ?? `idem-${allocId}`),
+          v(version || 1),
+          v(now),
+          v(isDelete ? 1 : 0),
         ],
       };
     }

@@ -5,7 +5,7 @@ export type SyncEntityType =
   | 'repair_order' | 'purchase_order' | 'trade_in' | 'imei' | 'audit_log'
   | 'cash_drop' | 'bundle' | 'customer_debt' | 'store_expense'
   | 'cash_session' | 'cash_movement' | 'setting' | 'credit_voucher'
-  | 'stock_batches';
+  | 'stock_batches' | 'sale_batch_allocations' | 'sale_batch_allocation';
 
 export type OutboxStatus = 'pending' | 'inflight' | 'synced' | 'failed';
 

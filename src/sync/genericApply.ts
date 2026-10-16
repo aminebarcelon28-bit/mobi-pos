@@ -44,6 +44,7 @@ export const GENERIC_TABLES: Record<string, string> = {
   stock_batches: 'stock_batches',
   credit_voucher: 'credit_vouchers',
   sale_batch_allocation: 'sale_batch_allocations',
+  sale_batch_allocations: 'sale_batch_allocations',
 };
 
 /** Plural remote KV table -> Dexie store. */
@@ -648,6 +649,45 @@ async function mirrorGenericToSqlite(
   } else if (table === 'cash_movements') {
     const { mirrorCashMovement } = await import('./cashMirror');
     await mirrorCashMovement(db, { id, data_json: JSON.stringify(payload), version }, payload);
+  } else if (table === 'sale_batch_allocations') {
+    const a = payload;
+    const now = utcNowIso();
+    await db.execute(
+      `INSERT INTO sale_batch_allocations (
+        id, sale_id, batch_id, qty_consumed, unit_cost_at_sale,
+        created_at, product_id, sale_item_id, device_id,
+        idempotency_key, sync_status, version, updated_at, deleted
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'synced',$11,$12,$13)
+      ON CONFLICT(id) DO UPDATE SET
+        sale_id=excluded.sale_id,
+        batch_id=excluded.batch_id,
+        qty_consumed=excluded.qty_consumed,
+        unit_cost_at_sale=excluded.unit_cost_at_sale,
+        product_id=excluded.product_id,
+        sale_item_id=excluded.sale_item_id,
+        device_id=excluded.device_id,
+        idempotency_key=excluded.idempotency_key,
+        sync_status='synced',
+        version=excluded.version,
+        updated_at=excluded.updated_at,
+        deleted=excluded.deleted
+      WHERE excluded.version >= sale_batch_allocations.version`,
+      [
+        id,
+        String(a.sale_id ?? a.saleId ?? ''),
+        String(a.batch_id ?? a.batchId ?? ''),
+        Number(a.qty_consumed ?? a.qtyConsumed ?? 0),
+        Number(a.unit_cost_at_sale ?? a.unitCostAtSale ?? 0),
+        String(a.created_at ?? a.createdAt ?? now),
+        (a.product_id ?? a.productId ?? null) as string | null,
+        (a.sale_item_id ?? a.saleItemId ?? null) as string | null,
+        String(a.device_id ?? a.deviceId ?? 'remote'),
+        String(a.idempotency_key ?? a.idempotencyKey ?? id),
+        version,
+        String(a.updated_at ?? a.updatedAt ?? now),
+        Number(a.deleted ?? 0),
+      ],
+    );
   }
 }
 
@@ -675,9 +715,13 @@ export async function applyGenericRemoteRow(
 
   let recordPayload: Record<string, unknown>;
   try {
-    recordPayload = sanitizeSyncPayload(
-      JSON.parse((row.data_json as string) ?? '{}') as Record<string, unknown>,
-    );
+    if (typeof row.data_json === 'string') {
+      recordPayload = sanitizeSyncPayload(
+        JSON.parse(row.data_json || '{}') as Record<string, unknown>,
+      );
+    } else {
+      recordPayload = sanitizeSyncPayload({ ...row });
+    }
   } catch {
     // Unparseable payload: nothing to apply. Not an error worth freezing the
     // cursor over — the row is corrupt, not missing.
@@ -818,6 +862,28 @@ export async function applyGenericRemoteRow(
         updatedAt: String(vc.updated_at ?? vc.updatedAt ?? utcNowIso()),
         expiresAt: (vc.expires_at ?? vc.expiresAt ?? undefined) as string | undefined,
       });
+    } else if (table === 'sale_batch_allocations') {
+      const a = recordPayload;
+      if (Number(row.deleted ?? a.deleted ?? 0) === 1) {
+        await dexieStoreFor(table)?.delete(id);
+      } else {
+        await dexieStoreFor(table)?.put({
+          id,
+          saleId: String(a.sale_id ?? a.saleId ?? ''),
+          batchId: String(a.batch_id ?? a.batchId ?? ''),
+          productId: String(a.product_id ?? a.productId ?? ''),
+          saleItemId: (a.sale_item_id ?? a.saleItemId ?? undefined) as string | undefined,
+          qtyConsumed: Number(a.qty_consumed ?? a.qtyConsumed ?? 0),
+          unitCostAtSale: Number(a.unit_cost_at_sale ?? a.unitCostAtSale ?? 0),
+          deviceId: String(a.device_id ?? a.deviceId ?? 'remote'),
+          idempotencyKey: String(a.idempotency_key ?? a.idempotencyKey ?? id),
+          syncStatus: 'synced',
+          version,
+          createdAt: String(a.created_at ?? a.createdAt ?? utcNowIso()),
+          updatedAt: String(a.updated_at ?? a.updatedAt ?? utcNowIso()),
+          deleted: 0,
+        });
+      }
     } else {
       const store = dexieStoreFor(table);
       if (table === 'app_settings') {
