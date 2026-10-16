@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect } from 'react';
 import {
   X,
   Banknote,
@@ -116,7 +116,6 @@ export const PaymentModal: React.FC = () => {
       setSelectedMethod('Espèces');
       setIsProcessing(false);
       setIsCustomCreditOpen(false);
-      setExchangeSoultePayout(null);
       const initialCredit = Math.min(
         currentCustomer?.storeCredit || 0,
         storeCreditApplied || 0,
@@ -127,6 +126,16 @@ export const PaymentModal: React.FC = () => {
       setCashTenderAmount(initialNet > 0 ? initialNet : 0);
     }
   }
+
+  // Soulte payout is a STORE write, so it must not run during render: Zustand
+  // notifies every subscriber mid-render (React: "Cannot update a component
+  // (`ThemeToggle`) while rendering a different component (`PaymentModal`)").
+  // Same open/cart/customer signal as the render block above, before paint.
+  useLayoutEffect(() => {
+    if (paymentModalSyncKey && cart.length > 0 && usePosStore.getState().exchangeSoultePayout) {
+      setExchangeSoultePayout(null);
+    }
+  }, [paymentModalSyncKey, cart.length, setExchangeSoultePayout]);
 
   // External side-effects: empty cart guardrail and input autofocus
   useEffect(() => {
