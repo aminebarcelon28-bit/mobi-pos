@@ -1,8 +1,8 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, CartSlice } from '../types';
-import type { CartItem, HeldSale, PricingTier } from '../../types/pos';
+import type { CartItem, HeldSale, PricingTier, ActivePriceBook, ActivePriceBookItem } from '../../types/pos';
 import { audioBus } from '../../utils/audioEvents';
-import { getProductPriceForTier, computeEffectiveUnitPrice } from '../../utils/pricingEngine';
+import { computeEffectiveUnitPrice, resolveBaseUnitPrice } from '../../utils/pricingEngine';
 import { clampStoreCreditAmount } from '../../utils/loyaltyEngine';
 import { computeCartTotals } from '../../utils/receiptMath';
 import { newId } from '../../utils/ids';
@@ -63,7 +63,12 @@ export function readVoucherStaging(s: PosState): { voucherCreditApplied: number;
   return { voucherCreditApplied: Math.max(0, Math.round(amount)), voucherCode: code };
 }
 
-function refreshCartItemPricing(item: CartItem, newQty: number, pricingTier?: PricingTier): CartItem {
+function refreshCartItemPricing(
+  item: CartItem,
+  newQty: number,
+  pricingTier?: PricingTier,
+  priceBookItems?: readonly ActivePriceBookItem[] | null
+): CartItem {
   // If the price was manually overridden by cashier/manager, keep the override
   const isManualPriceOverride =
     item.defaultPrice !== undefined &&
@@ -82,7 +87,7 @@ function refreshCartItemPricing(item: CartItem, newQty: number, pricingTier?: Pr
     };
   }
 
-  const effective = computeEffectiveUnitPrice(item.product, newQty, pricingTier);
+  const effective = computeEffectiveUnitPrice(item.product, newQty, pricingTier, undefined, priceBookItems);
   if (effective.isVolumeDiscount) {
     return {
       ...item,
@@ -171,7 +176,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
   ...stagingActions,
 
   addToCart: (product, overridePin = false, quantity = 1, isReturn = false) => {
-    const { cart, pricingTier, logSecurityAction } = get();
+    const { cart, pricingTier, logSecurityAction, customerPriceBook } = get();
 
     // Serialized products are locked to 1 per item row
     const addQty = product.isSerialized ? 1 : Math.max(1, isNaN(quantity) ? 1 : Math.floor(quantity));
@@ -201,10 +206,21 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
       const updated = [...cart];
       const targetItem = updated[existingIndex];
       const newQty = targetItem.quantity + addQty;
-      updated[existingIndex] = refreshCartItemPricing(targetItem, newQty, pricingTier);
+      updated[existingIndex] = refreshCartItemPricing(
+        targetItem,
+        newQty,
+        pricingTier,
+        customerPriceBook?.items ?? null
+      );
       set({ cart: updated });
     } else {
-      const effective = computeEffectiveUnitPrice(product, addQty, pricingTier);
+      const effective = computeEffectiveUnitPrice(
+        product,
+        addQty,
+        pricingTier,
+        undefined,
+        customerPriceBook?.items ?? null
+      );
       set({
         cart: [
           ...cart,
@@ -261,7 +277,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
   },
 
   updateCartQty: (productId, delta) => {
-    const { cart, pricingTier } = get();
+    const { cart, pricingTier, customerPriceBook } = get();
     const targetItem = cart.find((item) => item.product.id === productId);
     const bundleGroupId = targetItem?.bundleGroupId;
 
@@ -284,7 +300,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
           ) {
             return item; // Do not exceed available physical stock on sales
           }
-          const refreshed = refreshCartItemPricing(item, newQty, pricingTier);
+          const refreshed = refreshCartItemPricing(item, newQty, pricingTier, customerPriceBook?.items ?? null);
           // Modifying a bundle item's quantity breaks the preset ratio
           if (bundleGroupId) {
             return { ...refreshed, bundleGroupId: undefined, discount: 0 };
@@ -309,7 +325,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
   },
 
   setCartItemQty: (productId, quantity) => {
-    const { cart, pricingTier } = get();
+    const { cart, pricingTier, customerPriceBook } = get();
     const targetItem = cart.find((item) => item.product.id === productId);
     const bundleGroupId = targetItem?.bundleGroupId;
     const safeQty = Math.max(1, isNaN(quantity) ? 1 : Math.floor(quantity));
@@ -320,7 +336,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
           return item; // Serialized items stay 1
         }
         const clampedQty = item.isReturn ? safeQty : Math.min(item.product.stock, safeQty);
-        const refreshed = refreshCartItemPricing(item, clampedQty, pricingTier);
+        const refreshed = refreshCartItemPricing(item, clampedQty, pricingTier, customerPriceBook?.items ?? null);
         if (bundleGroupId) {
           return { ...refreshed, bundleGroupId: undefined, discount: 0 };
         }
@@ -392,14 +408,14 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
     if (safeDiscount > 0 && !managerApproved) {
       return { success: false, requiresPin: true, reason: 'Remise article : PIN Manager requis.' };
     }
-    const { cart, pricingTier } = get();
+    const { cart, pricingTier, customerPriceBook } = get();
     set({
       cart: cart.map((item) => {
         if (item.product.id !== productId) return item;
         const itemPrice =
           item.appliedPrice !== undefined
             ? item.appliedPrice
-            : getProductPriceForTier(item.product, pricingTier);
+            : resolveBaseUnitPrice(item.product, pricingTier, item.quantity, customerPriceBook?.items ?? null);
         const lineGrossTotal = itemPrice * Math.abs(item.quantity);
         return { ...item, discount: Math.min(lineGrossTotal, safeDiscount) };
       }),
@@ -413,10 +429,18 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
     if (safePercent > 10 && !managerApproved) {
       return { success: false, requiresPin: true, reason: 'Remise panier > 10 % : PIN Manager requis.' };
     }
-    const { cart, pricingTier } = get();
+    const { cart, pricingTier, customerPriceBook } = get();
     set({
       cart: cart.map((item) => {
-        const tierPrice = getProductPriceForTier(item.product, pricingTier);
+        // UPGRADE-04: the line base is the contract price when a price book
+        // applies, else the tier price. Never resets a contract line to the
+        // tier price (that would silently renegotiate the customer's deal).
+        const tierPrice = resolveBaseUnitPrice(
+          item.product,
+          pricingTier,
+          item.quantity,
+          customerPriceBook?.items ?? null
+        );
         // Preserve manager-approved appliedPrice overrides: the percent is
         // layered on top of the override price instead of resetting the line
         // to the tier price (which silently wiped approved markdowns).
@@ -560,6 +584,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
       heldSales: nextHolds,
       cart: [],
       currentCustomer: null,
+      customerPriceBook: null,
       storeCreditApplied: 0,
       voucherCreditApplied: 0,
       voucherCode: null,
@@ -568,7 +593,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
     return { success: true };
   },
 
-  retrieveSale: (saleId) => {
+  retrieveSale: async (saleId) => {
     const { heldSales, cart, currentCustomer, products } = get();
     const now = Date.now();
     // Auto-purge expired holds on every retrieve (default 48 h TTL).
@@ -616,6 +641,19 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
       }
       persistHeldSales(updatedHeldSales);
       const activeTier = target.customer ? target.customer.pricingTier : 'Retail';
+      // UPGRADE-04: resolve the held customer's contract price book BEFORE
+      // revalidation so the warning compares against the price that will
+      // actually apply (contract first, tier fallback) — a contract customer
+      // must not see a false "prix catalogue modifié" on every line.
+      let resumeBook: ActivePriceBook | null = null;
+      if (target.customer?.id) {
+        try {
+          const { getActivePriceBookForCustomer } = await import('../../db/adapters/priceBookAdapter');
+          resumeBook = await getActivePriceBookForCustomer(target.customer.id);
+        } catch {
+          resumeBook = null;
+        }
+      }
       // Revalidate hold prices against the CURRENT tier price: the hold price
       // is kept (merchant promise) but any catalog move is surfaced so the
       // cashier sees it instead of silently selling at a stale price.
@@ -635,8 +673,15 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
           return null;
         }
         const merged = { ...cartItem, product: currentProd };
-        const currentTierPrice = getProductPriceForTier(currentProd, activeTier);
-        const holdPrice = cartItem.appliedPrice ?? getProductPriceForTier(cartItem.product, activeTier);
+        const currentTierPrice = resolveBaseUnitPrice(
+          currentProd,
+          activeTier,
+          cartItem.quantity,
+          resumeBook?.items ?? null
+        );
+        const holdPrice =
+          cartItem.appliedPrice ??
+          resolveBaseUnitPrice(cartItem.product, activeTier, cartItem.quantity, resumeBook?.items ?? null);
         if (!cartItem.volumeTierApplied && holdPrice !== currentTierPrice) {
           warnings.push(
             `Prix catalogue modifié pour ${currentProd.title} : tenu à ${holdPrice} DA (actuel ${currentTierPrice} DA).`
@@ -654,6 +699,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
       setAny({
         cart: refreshedItems,
         currentCustomer: target.customer,
+        customerPriceBook: resumeBook,
         pricingTier: activeTier,
         heldSales: updatedHeldSales,
         activeModal: null,

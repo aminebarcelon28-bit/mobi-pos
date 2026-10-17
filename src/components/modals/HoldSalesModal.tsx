@@ -79,15 +79,12 @@ export const HoldSalesModal: React.FC = () => {
 
   if (activeModal !== 'hold') return null;
 
-  const handleRetrieve = (saleId: string) => {
+  const handleRetrieve = async (saleId: string) => {
     // retrieveSale purges expired holds, blocks double-restore and returns
     // price-revalidation warnings — surfaced here via the toast system.
-    const st = usePosStore.getState() as unknown as {
-      retrieveSale: (id: string) => { success: boolean; reason?: string; warnings?: string[] } | void;
-    };
-    const res = st.retrieveSale(saleId) as unknown as
-      | { success: boolean; reason?: string; warnings?: string[] }
-      | undefined;
+    // (Async since UPGRADE-04: it resolves the customer's contract price
+    // book before revalidating hold prices.)
+    const res = await usePosStore.getState().retrieveSale(saleId);
     if (!res || !res.success) {
       const reason = res?.reason;
       if (reason === 'HOLD_EXPIRED') {
@@ -237,7 +234,7 @@ export const HoldSalesModal: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleRetrieve(sale.id)}
+                    onClick={() => void handleRetrieve(sale.id)}
                     className="px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition shadow-md shadow-amber-500/20 min-h-[48px] active-press cursor-pointer"
                   >
                     <Play className="w-3.5 h-3.5 fill-slate-950" aria-hidden="true" /> Reprendre

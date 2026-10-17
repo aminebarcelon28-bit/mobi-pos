@@ -28,6 +28,23 @@ export interface VolumeDiscountTier {
   price: number;
 }
 
+/**
+ * UPGRADE-04 — a resolved contract-price line (`price_book_items`, already
+ * scoped to ONE active price book for the attached customer).
+ */
+export interface ActivePriceBookItem {
+  productId: string;
+  unitPrice: number;
+  minQty: number;
+}
+
+/** UPGRADE-04 — the single active price book for the attached customer. */
+export interface ActivePriceBook {
+  id: string;
+  name: string;
+  items: ActivePriceBookItem[];
+}
+
 export interface Product {
   id: string;
   sku: string;

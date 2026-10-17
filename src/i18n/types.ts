@@ -166,6 +166,8 @@ export interface TranslationDictionary {
     readonly tierRetail: string;
     readonly tierSemiWholesale: string;
     readonly tierWholesale: string;
+    readonly tierGateTitle: string;
+    readonly tierGateDescription: string;
     readonly assignedCustomerLabel: string;
     readonly walkInCustomer: string;
     readonly customerDebtPrefix: string;

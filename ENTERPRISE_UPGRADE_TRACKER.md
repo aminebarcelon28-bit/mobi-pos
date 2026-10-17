@@ -51,7 +51,15 @@ Fix any failure or boundary pin immediately → mark `[x]` → atomic commit `fe
 
 ## Sprint B — GSM / SAV / Wholesale Revenue Multipliers
 
-- [ ] **UPGRADE-04 — Customer Price Books + Tier-Switch PIN Guard + Volume-Break Nudges** (M)
+- [x] **UPGRADE-04 — Customer Price Books + Tier-Switch PIN Guard + Volume-Break Nudges** (M)
+  - Contract price books resolve **before** tier/volume ladders; manager `customBasePrice` override still outranks all; volume tier may undercut contract price (mirrors tier behavior).
+  - **Landed (engine):** `computeEffectiveUnitPrice(..., priceBookItems)` + `resolveBaseUnitPrice` + `getPriceBookUnitPrice` + `getNextVolumeTier` + `getVolumeBreakNudge`; `priceSource: 'CUSTOM'|'CONTRACT'|'TIER'`.
+  - **Landed (state):** `customerPriceBook: ActivePriceBook | null` + `refreshCustomerPriceBook()`; loaded on `setCurrentCustomer` and hold-restore (hold-resume revalidation resolves the book first so contract lines never false-flag "prix catalogue modifié"); cart reprices ONLY when book identity/content changes (no wiping of line discounts on plain re-attach).
+  - **Landed (slices):** `refreshCartItemPricing` + addToCart + qty setters + `setCartItemDiscount` + `applyCartDiscountPercent` + `setPricingTier` all contract-aware (contract price is the line base; percent discounts layer on it, never reset it); `clearCart`/`holdSale` clear the resolved book.
+  - **Landed (storage):** migration **v119** `price_books` + `price_book_items` (+3 indexes), `EXPECTED_MAX_DB_USER_VERSION` 118→119; `priceBookAdapter` ($-param plugin pattern, non-Tauri reads null/empty, writes fail loud); local-only (no outbox/sync lane).
+  - **Landed (UI):** `PriceBooksModal` (create/edit books: customer scope, validity window, priority, status; per-product negotiated prices with min-qty ladder; MoneyInput for every price) opened from a "Grilles Tarifaires" button in CustomersModal sub-tab row; tier switches on CartPanel + MobileCheckoutTab gated by `PinDialog` (native `pin_verify`, fail-closed) + `logSecurityAction('Changement Tarif', …)` audit row; volume-break nudge chips on both carts (display-only, tap never applies).
+  - **Residuals (accepted):** tier switches keep their documented reprice semantics (plain per-line discounts recomputed, manual price overrides preserved); WebView SQL residual unchanged (price books are merchant-local config, not trust tables).
+  - Zero-tax pin moved `receiptMath.ts:396 → :402` (CartTotalsOptions field insert).
 - [ ] **UPGRADE-05 — Technician Roster, Assignment, Time-on-Job & Commissions** (M)
 - [ ] **UPGRADE-06 — True SAV Economics: FIFO Cost-Basis Roll-Up + Supplier RMA Loop + Warranty/Redo Claims** (M)
 - [ ] **UPGRADE-07 — Freight Landed-Cost Allocation + Supplier Price History** (M)
@@ -73,7 +81,7 @@ Fix any failure or boundary pin immediately → mark `[x]` → atomic commit `fe
 | 01 | done | feat(upgrade-01) | ✓ | ✓ | ✓ | ✓ | 200-row keyset window + on-demand lanes; money-critical reads SQLite-direct by index; zero-tax pin :480→:483; no migration (indexes pre-existing) |
 | 02 | done | feat(upgrade-02) | ✓ | ✓ | ✓ | ✓ | `tune()` on 5 per-invoke opens; migration v118 (4 ORDER BY indexes, max version 118); latched payload de-double-encode boot heal (14 tables); stock-heal JSON rewrites removed; event_log 90-day prune fail-closed on missing sync marker; SQLite 3.45.0 bump deferred |
 | 03 | done | feat(upgrade-03) | ✓ | ✓ | ✓ | ✓ | `vec_index_product` / `vec_reindex_catalog` (latched `vec_index.backfill.v1`) / `checkout_suggest_accessories` + registry+handler wiring; save/delete/bulk/PO-receive population hooks; mobile chip strip + desktop drawer merge, tap-to-add only; cargo 293/293, zero-tax & boundary pins untouched (no migration) |
-| 04 | pending | — | — | — | — | — | |
+| 04 | done | feat(upgrade-04) | ✓ | ✓ | ✓ | ✓ | Contract price books resolve before tier ladder (custom override outranks all); migration v119 (`price_books`/`price_book_items`, max version 119); adapter + PriceBooksModal + CustomersModal entry; tier switches PIN-gated + `Changement Tarif` audit; volume nudges both carts; `retrieveSale` async (book resolved before hold-price revalidation); hold-price compare contract-aware; zero-tax pin :396→:402 |
 | 05 | pending | — | — | — | — | — | |
 | 06 | pending | — | — | — | — | — | |
 | 07 | pending | — | — | — | — | — | |

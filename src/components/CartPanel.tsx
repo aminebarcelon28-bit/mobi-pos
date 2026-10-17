@@ -6,10 +6,11 @@ import type { PricingTier } from '../types/pos';
 import { useToast } from './ui/Toast';
 import { canRedeemPoints, normalizeLoyaltyConfig, isEarnAllowed, isRedeemAllowed, calculateMaxAllowedCredit } from '../utils/loyaltyEngine';
 import { soundEngine } from '../utils/audioFeedback';
-import { getProductPriceForTier } from '../utils/pricingEngine';
+import { resolveBaseUnitPrice, getVolumeBreakNudge } from '../utils/pricingEngine';
 import { computeCartTotals, computeTradeInSettlement } from '../utils/receiptMath';
 import { toLegacyReal, dinarsToMinor } from '../utils/money';
 import { MoneyInput } from './ui/MoneyInput';
+import { PinDialog } from './ui/PinDialog';
 import { useFifoPreviewCosts } from '../hooks/useFifoPreviewCosts';
 import { useSemanticSuggestions } from '../hooks/useSemanticSuggestions';
 import { verifyManagerGate } from '../utils/pinGate';
@@ -21,6 +22,13 @@ const QTY_FALLBACK = 1;
 const QTY_MAX_DIGITS = 9;
 /** Ceiling for a line the store does not stock-bound (returns, stock 0). */
 const QTY_UNTRACKED_MAX = 9999;
+
+/** UPGRADE-04 — visible tier labels (single source for UI + audit copy). */
+const TIER_LABELS: Record<PricingTier, string> = {
+  Retail: 'Détail',
+  VIP: 'Demi-Gros',
+  Wholesale: 'Gros B2B',
+};
 
 /**
  * Quantity masking: digits only, leading zeros stripped ("0005" → 5). An
@@ -191,6 +199,8 @@ export const CartPanel: React.FC = () => {
   const openModal = usePosStore((s) => s.openModal);
   const pricingTier = usePosStore((s) => s.pricingTier);
   const setPricingTier = usePosStore((s) => s.setPricingTier);
+  // UPGRADE-04: attached customer's contract price book (null = tier ladder).
+  const customerPriceBook = usePosStore((s) => s.customerPriceBook);
   const products = usePosStore((s) => s.products);
   const toggleCartItemReturn = usePosStore((s) => s.toggleCartItemReturn);
   // UPGRADE-03: semantic accessory lane — nearest catalog neighbors of the
@@ -221,6 +231,9 @@ export const CartPanel: React.FC = () => {
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState(false);
   const [isSuggestionsOpen, setIsSuggestionsOpen] = useState(false);
   const [selectedCartIndex, setSelectedCartIndex] = useState<number | null>(null);
+  // UPGRADE-04: manual pricing-tier switching is manager-gated — this holds
+  // the requested tier while the PIN dialog is open (null = closed).
+  const [tierGateTarget, setTierGateTarget] = useState<PricingTier | null>(null);
   // Explicit-focus guard for cart keyboard shortcuts (Delete/Backspace/arrows):
   // destructive keys fire ONLY while focus sits inside the cart list itself.
   // Loose focus on body, toolbar buttons or unrelated selects must never
@@ -560,10 +573,10 @@ export const CartPanel: React.FC = () => {
     return () => window.removeEventListener('keydown', handleUndoKey);
   }, [lastAddedId, handleUndoLastAdded]);
 
-  // Calculate gross total based on active pricing tier
+  // Calculate gross total based on active pricing tier (contract book first)
   const getItemPrice = (item: typeof cart[0]) => {
     if (item.appliedPrice !== undefined) return item.appliedPrice;
-    return getProductPriceForTier(item.product, pricingTier);
+    return resolveBaseUnitPrice(item.product, pricingTier, item.quantity, customerPriceBook?.items ?? null);
   };
 
   // Canonical totals — the same computeCartTotals() base as PaymentModal,
@@ -576,6 +589,7 @@ export const CartPanel: React.FC = () => {
     storeCreditApplied,
     voucherCreditApplied,
     tradeInCredit,
+    priceBookItems: customerPriceBook?.items ?? null,
   });
   const grossTotal = totals.grossSubtotal;
   const totalDiscount = totals.discountTotal;
@@ -1082,7 +1096,12 @@ export const CartPanel: React.FC = () => {
                 <button
                   key={tier}
                   type="button"
-                  onClick={() => setPricingTier(tier)}
+                  onClick={() => {
+                    if (pricingTier === tier) return;
+                    // UPGRADE-04: manual tier switches manipulate every line
+                    // price silently — manager PIN + audit row required.
+                    setTierGateTarget(tier);
+                  }}
                   className={`flex-1 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
                     pricingTier === tier
                       ? tier === 'VIP'
@@ -1313,6 +1332,21 @@ export const CartPanel: React.FC = () => {
                       <span className="text-[10px] font-mono text-pos-muted shrink-0" title={`Prix unitaire: ${formatDZD(unitPrice)}`}>
                         × {formatDZD(unitPrice)}
                       </span>
+
+                      {/* UPGRADE-04: volume-break nudge — adding units unlocks
+                          a lower unit price (advisory chip, never blocking). */}
+                      {(() => {
+                        const nudge = getVolumeBreakNudge(item.product, item.quantity, unitPrice);
+                        if (!nudge) return null;
+                        return (
+                          <span
+                            className="text-[9px] font-bold px-1 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-400 shrink-0 whitespace-nowrap"
+                            title={`Ajouter ${nudge.missing} unité(s) pour atteindre ${nudge.minQty} u. à ${formatDZD(nudge.unitPrice)}/u (${formatDZD(nudge.savingsPerUnit)}/u économisés)`}
+                          >
+                            +{nudge.missing} → {formatDZD(nudge.unitPrice)}/u
+                          </span>
+                        );
+                      })()}
 
                       {(() => {
                         // STRICT LEDGER: fresh lines show the FIFO preview only.
@@ -1915,6 +1949,32 @@ export const CartPanel: React.FC = () => {
           </div>
         </div>
       )}
+      {/* UPGRADE-04: Manager PIN gate for manual pricing-tier switches.
+          Verification routes through PinDialog → native `pin_verify`
+          (fail-closed under Tauri; unavailable in the WebView preview). */}
+      <PinDialog
+        isOpen={tierGateTarget !== null}
+        title="Changement de tarif"
+        description={
+          tierGateTarget
+            ? `Passer au tarif ${TIER_LABELS[tierGateTarget]} (${cart.length} ligne(s) répricée(s)). PIN Manager requis.`
+            : undefined
+        }
+        onSuccess={() => {
+          const target = tierGateTarget;
+          setTierGateTarget(null);
+          if (!target || target === pricingTier) return;
+          void logSecurityAction(
+            'Changement Tarif',
+            `Tarif ${TIER_LABELS[pricingTier]} → ${TIER_LABELS[target]} (${cart.length} ligne(s))`,
+            operatorName(),
+            true
+          );
+          setPricingTier(target);
+          soundEngine.playSuccess?.();
+        }}
+        onCancel={() => setTierGateTarget(null)}
+      />
     </div>
   );
 };

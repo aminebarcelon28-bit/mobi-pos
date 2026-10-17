@@ -25,10 +25,11 @@ import { AppTabContent } from '../AppScreenLayout';
 import { AccessorySuggestions } from '../../AccessorySuggestions';
 import type { CartItem, Customer, PricingTier } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
-import { getProductPriceForTier } from '../../../utils/pricingEngine';
+import { resolveBaseUnitPrice, getVolumeBreakNudge } from '../../../utils/pricingEngine';
 import { computeCartTotals, computeTradeInSettlement } from '../../../utils/receiptMath';
 import { toLegacyReal, dinarsToMinor } from '../../../utils/money';
 import { MoneyInput } from '../../ui/MoneyInput';
+import { PinDialog } from '../../ui/PinDialog';
 import { useTranslation, Bdi } from '../../../i18n';
 import { useFifoPreviewCosts } from '../../../hooks/useFifoPreviewCosts';
 import { useRegisterMobileBackHandler } from '../../../hooks/useMobileBackNavigation';
@@ -60,6 +61,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     setPricingTier,
     currentCustomer,
     setCurrentCustomer,
+    customerPriceBook,
     customers,
     products,
     addToCart,
@@ -89,6 +91,9 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState('');
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  // UPGRADE-04: manual pricing-tier switching is manager-gated — holds the
+  // requested tier while the PIN dialog is open (null = closed).
+  const [tierGateTarget, setTierGateTarget] = useState<PricingTier | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isClearCartConfirmOpen, setIsClearCartConfirmOpen] = useState(false);
   const [creditCeilingAlert, setCreditCeilingAlert] = useState<{
@@ -159,6 +164,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     storeCreditApplied,
     voucherCreditApplied,
     tradeInCredit,
+    priceBookItems: customerPriceBook?.items ?? null,
   });
   const grossSubtotal = totals.grossSubtotal;
   const totalDiscount = totals.discountTotal;
@@ -282,7 +288,7 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
     const currentPrice =
       item.appliedPrice !== undefined
         ? item.appliedPrice
-        : getProductPriceForTier(item.product, pricingTier);
+        : resolveBaseUnitPrice(item.product, pricingTier, item.quantity, customerPriceBook?.items ?? null);
     setEditingItem(item);
     setOverridePriceInput(currentPrice);
     setManagerPinInput('');
@@ -847,8 +853,11 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                   role="radio"
                   aria-checked={pricingTier === tier}
                   onClick={() => {
+                    if (pricingTier === tier) return;
+                    // UPGRADE-04: manual tier switches manipulate every line
+                    // price silently — manager PIN + audit row required.
                     soundEngine.playKeyBeep?.();
-                    setPricingTier(tier);
+                    setTierGateTarget(tier);
                   }}
                   className={`flex-1 py-2 px-2 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer min-h-[48px] flex items-center justify-center active:scale-[0.98] ${
                     pricingTier === tier
@@ -1346,7 +1355,9 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
               const unitPrice =
                 item.appliedPrice !== undefined
                   ? item.appliedPrice
-                  : getProductPriceForTier(item.product, pricingTier);
+                  : resolveBaseUnitPrice(item.product, pricingTier, item.quantity, customerPriceBook?.items ?? null);
+              // UPGRADE-04: advisory volume-break nudge (never blocking).
+              const volumeNudge = getVolumeBreakNudge(item.product, item.quantity, unitPrice);
               const isOverridden = item.appliedPrice !== undefined && item.appliedPrice !== defaultPrice;
               const hasDiscount = (item.discount || 0) > 0;
               const itemTotal = unitPrice * item.quantity - (item.discount || 0);
@@ -1403,6 +1414,17 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
                         </span>
                       )}
                     </button>
+
+                    {/* UPGRADE-04: volume-break nudge — more units unlock a
+                        lower unit price (advisory chip, never blocking). */}
+                    {volumeNudge && (
+                      <span
+                        className="inline-flex items-center px-2 py-1 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-300 text-[9.5px] font-bold tabular-nums whitespace-nowrap"
+                        title={`Ajouter ${volumeNudge.missing} unité(s) pour atteindre ${volumeNudge.minQty} u. à ${formatDZD(volumeNudge.unitPrice)}/u`}
+                      >
+                        +{volumeNudge.missing} → <Bdi mono>{formatDZD(volumeNudge.unitPrice)}</Bdi>/u
+                      </span>
+                    )}
 
                     {/* Quantity Stepper with 48x48dp hitboxes & Direct Qty Tap */}
                     <div className="flex items-center gap-1 shrink-0 bg-pos-panel border border-pos-border rounded-xl p-1 ms-auto">
@@ -1661,6 +1683,34 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
         customQtyInput={customQtyInput}
         onCustomQtyChange={setCustomQtyInput}
         onApplyCustomQty={handleApplyCustomQty}
+      />
+
+      {/* UPGRADE-04: Manager PIN gate for manual pricing-tier switches.
+          Verification routes through PinDialog → native `pin_verify`. */}
+      <PinDialog
+        isOpen={tierGateTarget !== null}
+        title={t.checkout.tierGateTitle}
+        description={
+          tierGateTarget
+            ? `${t.checkout.tierGateDescription} ${tierGateTarget === 'Retail' ? t.checkout.tierRetail : tierGateTarget === 'VIP' ? t.checkout.tierSemiWholesale : t.checkout.tierWholesale}`
+            : undefined
+        }
+        onSuccess={() => {
+          const target = tierGateTarget;
+          setTierGateTarget(null);
+          if (!target || target === pricingTier) return;
+          const labelOf = (tier: PricingTier) =>
+            tier === 'Retail' ? t.checkout.tierRetail : tier === 'VIP' ? t.checkout.tierSemiWholesale : t.checkout.tierWholesale;
+          void logSecurityAction(
+            'Changement Tarif',
+            `Tarif ${labelOf(pricingTier)} → ${labelOf(target)} (${cart.length} ligne(s))`,
+            operatorName,
+            true
+          );
+          setPricingTier(target);
+          soundEngine.playSuccess?.();
+        }}
+        onCancel={() => setTierGateTarget(null)}
       />
     </>
   );

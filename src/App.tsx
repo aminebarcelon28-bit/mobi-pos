@@ -105,6 +105,7 @@ const CustomerDisplayBroadcaster: React.FC = () => {
   const cart = usePosStore((s) => s.cart);
   const currentCustomer = usePosStore((s) => s.currentCustomer);
   const pricingTier = usePosStore((s) => s.pricingTier);
+  const customerPriceBook = usePosStore((s) => s.customerPriceBook);
   const stagedTradeIn = usePosStore((s) => s.stagedTradeIn);
   const storeCreditApplied = usePosStore((s) => s.storeCreditApplied);
   const voucherCreditApplied = usePosStore((s) => s.voucherCreditApplied);
@@ -128,6 +129,7 @@ const CustomerDisplayBroadcaster: React.FC = () => {
             storeCreditApplied: s.storeCreditApplied,
             voucherCreditApplied: s.voucherCreditApplied,
             tradeInCredit,
+            priceBookItems: s.customerPriceBook?.items ?? null,
           });
           channel?.postMessage({
             type: 'SYNC_STATE',
@@ -162,6 +164,7 @@ const CustomerDisplayBroadcaster: React.FC = () => {
       storeCreditApplied,
       voucherCreditApplied,
       tradeInCredit,
+      priceBookItems: customerPriceBook?.items ?? null,
     });
 
     // 1. Broadcast to external monitor / tab

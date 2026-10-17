@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 118;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 119;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -1858,6 +1858,37 @@ fn base_schema_migrations() -> Vec<Migration> {
             CREATE INDEX IF NOT EXISTS idx_purchase_orders_created ON purchase_orders(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_trade_ins_created ON trade_ins(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_imei_records_received ON imei_records(received_at DESC);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 119,
+            description: "UPGRADE-04: customer price books (contract pricing)",
+            sql: r#"
+            CREATE TABLE IF NOT EXISTS price_books (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                customer_id TEXT,
+                valid_from TEXT,
+                valid_to TEXT,
+                priority INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'active',
+                notes TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_price_books_customer ON price_books(customer_id, status);
+            CREATE TABLE IF NOT EXISTS price_book_items (
+                id TEXT PRIMARY KEY,
+                book_id TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                unit_price REAL NOT NULL,
+                min_qty REAL NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_price_book_items_book ON price_book_items(book_id, product_id);
+            CREATE INDEX IF NOT EXISTS idx_price_book_items_product ON price_book_items(product_id);
             "#,
             kind: MigrationKind::Up,
         },

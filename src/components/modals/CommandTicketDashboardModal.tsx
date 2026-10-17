@@ -456,10 +456,11 @@ export const CommandTicketDashboardModal: React.FC = () => {
     }
   };
 
-  const handleRestoreHeldSaleClick = (saleId: string) => {
-    // retrieveSale returns { success, warnings } at runtime (expired /
-    // double-restore guards) — surface failures instead of toasting success.
-    const res = retrieveSale(saleId) as unknown as { success: boolean; reason?: string; warnings?: string[] };
+  const handleRestoreHeldSaleClick = async (saleId: string) => {
+    // retrieveSale returns { success, warnings } (expired / double-restore
+    // guards) — surface failures instead of toasting success. Async since
+    // UPGRADE-04 (contract price book resolved before revalidation).
+    const res = await retrieveSale(saleId);
     if (!res || res.success === false) {
       soundEngine.playError();
       const reason = res?.reason;
@@ -926,7 +927,7 @@ export const CommandTicketDashboardModal: React.FC = () => {
                             Supprimer
                           </button>
                             <button
-                              onClick={() => handleRestoreHeldSaleClick(hs.id)}
+                              onClick={() => void handleRestoreHeldSaleClick(hs.id)}
                               className="min-h-[44px] px-4 py-2 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-black text-xs rounded-lg flex items-center gap-1.5 shadow-md shadow-emerald-900/30 transition cursor-pointer"
                             >
                               <Play className="w-3.5 h-3.5" />

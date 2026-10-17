@@ -33,6 +33,7 @@ import type {
   CashierUser,
   CreditVoucher,
   TransactionWindowCursor,
+  ActivePriceBook,
 } from '../types/pos';
 import type { PullTouchSummary } from '../sync/types';
 
@@ -107,7 +108,7 @@ export interface CartSlice {
   ) => { success: boolean; requiresPin?: boolean; reason?: string };
 
   holdSale: () => { success: boolean; reason?: string };
-  retrieveSale: (saleId: string) => { success: boolean; reason?: string; warnings?: string[] };
+  retrieveSale: (saleId: string) => Promise<{ success: boolean; reason?: string; warnings?: string[] }>;
   deleteHeldSale: (saleId: string) => void;
 }
 
@@ -141,11 +142,19 @@ export interface CustomerSlice {
   customers: Customer[];
   currentCustomer: Customer | null;
   customerDebts: CustomerDebtEntry[];
+  /**
+   * UPGRADE-04 — the single ACTIVE contract price book resolved for the
+   * attached customer (highest priority, valid window). Null when no customer
+   * is attached or no book applies. Re-read on attach + after book edits.
+   */
+  customerPriceBook: ActivePriceBook | null;
 
   addCustomer: (customer: CustomerInput) => Promise<void>;
   updateCustomer: (id: string, updates: Partial<Customer>) => Promise<{ success: boolean; reason?: string }>;
   deleteCustomer: (id: string, opts?: { forfeitNote?: string }) => Promise<{ success: boolean; reason?: string }>;
   setCurrentCustomer: (customer: Customer | null) => void;
+  /** Re-resolve `customerPriceBook` for the attached customer and reprice the cart when it changed. */
+  refreshCustomerPriceBook: () => Promise<void>;
   issueStoreCredit: (
     customerId: string,
     amount: number,

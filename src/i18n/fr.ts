@@ -129,6 +129,8 @@ export const fr: TranslationDictionary = {
     tierRetail: 'Détail',
     tierSemiWholesale: 'Demi-Gros',
     tierWholesale: 'Gros',
+    tierGateTitle: 'Changement de tarif',
+    tierGateDescription: 'Changer la grille tarifaire reprice toutes les lignes du panier. PIN Manager requis.',
     assignedCustomerLabel: 'Client Assigné',
     walkInCustomer: 'Client Comptoir (Anonyme)',
     customerDebtPrefix: 'Créance : {amount}',

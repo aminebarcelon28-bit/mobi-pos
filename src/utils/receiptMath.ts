@@ -17,8 +17,8 @@
  */
 
 import type { SaleTransaction } from '../types/pos';
-import type { CartItem, PricingTier, TradeInDirection } from '../types/pos';
-import { getProductPriceForTier } from './pricingEngine';
+import type { CartItem, PricingTier, TradeInDirection, ActivePriceBookItem } from '../types/pos';
+import { resolveBaseUnitPrice } from './pricingEngine';
 
 /**
  * Gross catalog value of a transaction: sum of (unit price x qty) over all
@@ -256,6 +256,12 @@ export interface CartTotalsOptions {
    * cart line (corrupts gross + FIFO).
    */
   tradeInCredit?: number;
+  /**
+   * UPGRADE-04: the attached customer's contract price-book items. Only used
+   * for the legacy fallback (lines without `appliedPrice`) — priced lines
+   * already carry the resolved base in `appliedPrice`.
+   */
+  priceBookItems?: readonly ActivePriceBookItem[] | null;
 }
 
 /**
@@ -361,7 +367,7 @@ export function computeCartTotals(lines: CartItem[], opts: CartTotalsOptions = {
     const unit =
       line.appliedPrice !== undefined
         ? line.appliedPrice
-        : getProductPriceForTier(line.product, tier);
+        : resolveBaseUnitPrice(line.product, tier, line.quantity, opts.priceBookItems ?? null);
     const magnitude = Math.abs(toInt(line.quantity));
     const signedQty = line.isReturn ? -magnitude : magnitude;
     grossSubtotal += toInt(unit) * signedQty;

@@ -6,7 +6,7 @@ import {
   CheckCircle2, TrendingUp, ShoppingBag, CreditCard, Award,
   UserPlus, History, Crown, FileText, MessageSquare, DollarSign,
   ArrowDownLeft, ArrowUpRight, Copy, ExternalLink, MoreHorizontal,
-  Wrench, Smartphone, Ticket, AlertCircle, RefreshCw
+  Wrench, Smartphone, Ticket, AlertCircle, RefreshCw, Tag
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
@@ -18,6 +18,7 @@ import { MoneyInput } from '../ui/MoneyInput';
 import { DzPhoneInput } from '../ui/DzPhoneInput';
 import { useToast } from '../ui/Toast';
 import { Kbd } from '../../design-system/desktop/Kbd';
+import { PriceBooksModal } from './PriceBooksModal';
 
 const foldForSearch = (s: string | undefined | null): string =>
   (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -39,6 +40,8 @@ export const CustomersModal: React.FC = () => {
   } = usePosStore();
 
   const [mainTab, setMainTab] = useState<'directory' | 'debts'>('directory');
+  // UPGRADE-04: dedicated management surface for contract price books.
+  const [isPriceBooksOpen, setIsPriceBooksOpen] = useState(false);
   const [profileTab, setProfileTab] = useState<ProfileSubTab>('purchases');
   const [searchQuery, setSearchQuery] = useState('');
   // Debounced scan input: the text field stays instant, list filtering follows 200ms later.
@@ -783,6 +786,16 @@ export const CustomersModal: React.FC = () => {
                 {formatDZD(totalDebtOutstanding)}
               </span>
             )}
+          </button>
+
+          {/* UPGRADE-04: contract price books management (opens dedicated modal) */}
+          <button
+            onClick={() => { dismissMenus(); setIsPriceBooksOpen(true); }}
+            className="py-2.5 px-4 text-xs font-black border-b-2 border-transparent transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0 text-pos-muted hover:text-pos-text"
+            aria-haspopup="dialog"
+          >
+            <Tag className="w-4 h-4" aria-hidden="true" />
+            Grilles Tarifaires (Prix Négociés)
           </button>
         </div>
 
@@ -2534,6 +2547,9 @@ export const CustomersModal: React.FC = () => {
           </div>,
           document.body
         )}
+
+        {/* ═══ UPGRADE-04: Grilles Tarifaires (contract price books) ═══ */}
+        <PriceBooksModal isOpen={isPriceBooksOpen} onClose={() => setIsPriceBooksOpen(false)} />
 
         {/* ═══ Footer ═══ */}
         <div className="p-3 sm:p-4 pb-[max(1rem,var(--safe-bottom))] sm:pb-4 border-t border-pos-border bg-pos-card flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 text-xs text-pos-muted shrink-0">

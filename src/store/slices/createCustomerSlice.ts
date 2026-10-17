@@ -1,6 +1,6 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, CustomerSlice } from '../types';
-import type { Customer, CustomerDebtEntry } from '../../types/pos';
+import type { Customer, CustomerDebtEntry, ActivePriceBook } from '../../types/pos';
 import {
   convertPointsToCredit,
   createLedgerEntry,
@@ -40,6 +40,7 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
   customers: [],
   currentCustomer: null,
   customerDebts: [],
+  customerPriceBook: null,
 
   addCustomer: async (input) => {
     const { customers } = get();
@@ -159,6 +160,38 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
       set({ currentCustomer: customer, pricingTier: customer.pricingTier || 'Retail' });
     } else {
       set({ currentCustomer: null, pricingTier: 'Retail' });
+    }
+    // UPGRADE-04: resolve the attached customer's contract price book and
+    // reprice the cart when the resolved book actually changed. Fire-and-
+    // forget: a slow/absent SQLite read must never block the UI; on failure
+    // the book stays null (tier pricing — fail open to the standard ladder).
+    void get().refreshCustomerPriceBook();
+  },
+
+  refreshCustomerPriceBook: async () => {
+    const prev = get().customerPriceBook;
+    const customerId = get().currentCustomer?.id ?? null;
+    let next: ActivePriceBook | null = null;
+    if (customerId) {
+      try {
+        const { getActivePriceBookForCustomer } = await import('../../db/adapters/priceBookAdapter');
+        next = await getActivePriceBookForCustomer(customerId);
+      } catch {
+        next = null;
+      }
+    }
+    const keyOf = (book: ActivePriceBook | null): string =>
+      book
+        ? `${book.id}|${book.items.map((i) => `${i.productId}:${i.unitPrice}:${i.minQty}`).join(',')}`
+        : '';
+    const changed = keyOf(prev) !== keyOf(next);
+    set({ customerPriceBook: next });
+    if (changed) {
+      // Re-derive cart line prices against the new contract base. Same
+      // semantics as a tier switch: manual price overrides are preserved,
+      // plain per-line discounts are recomputed (setPricingTier is the one
+      // reprice lane — never a second pricing implementation).
+      get().setPricingTier(get().pricingTier);
     }
   },
 

@@ -217,7 +217,7 @@ const WHITELIST = new Set([
   'src/sync/SyncManager.ts:134',
   'src/utils/receiptMath.ts:241',
   'src/utils/receiptMath.ts:243',
-  'src/utils/receiptMath.ts:396',
+  'src/utils/receiptMath.ts:402',
   'src/utils/escpos.ts:279',
   'src/utils/escpos.ts:296',
   'src/utils/mobileDocPrint.ts:162',

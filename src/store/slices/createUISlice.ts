@@ -262,7 +262,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
   },
 
   setPricingTier: (tier) => {
-    const { cart } = get();
+    const { cart, customerPriceBook } = get();
     const updatedCart = cart.map((item) => {
       // If the cashier manually overridden the item's price (custom discount/override), keep it
       const isManualPriceOverride =
@@ -274,7 +274,15 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         return item;
       }
 
-      const effective = computeEffectiveUnitPrice(item.product, item.quantity, tier);
+      // UPGRADE-04: contract price books outrank the tier ladder — the
+      // reprice respects the attached customer's active book.
+      const effective = computeEffectiveUnitPrice(
+        item.product,
+        item.quantity,
+        tier,
+        undefined,
+        customerPriceBook?.items ?? null
+      );
       return {
         ...item,
         appliedPrice: effective.basePrice,

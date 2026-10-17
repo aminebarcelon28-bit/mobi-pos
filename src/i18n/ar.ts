@@ -165,6 +165,8 @@ export const ar: TranslationDictionary = {
     tierRetail: 'تجزئة',
     tierSemiWholesale: 'نصف جملة',
     tierWholesale: 'جملة',
+    tierGateTitle: 'تغيير التسعيرة',
+    tierGateDescription: 'تغيير فئة التسعير يعيد تسعير كل أسطر السلة. مطلوب رمز مدير.',
     assignedCustomerLabel: 'الزبون المحدد',
     walkInCustomer: 'زبون عابر (بدون حساب)',
     customerDebtPrefix: 'الدين : {amount}',
