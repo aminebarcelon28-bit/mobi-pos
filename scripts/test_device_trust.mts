@@ -303,7 +303,8 @@ const base: TradeInInspectionMarkers = {
 
 {
   const lib = src('src-tauri/src/lib.rs');
-  check('lib.rs: expected version bumped to 123', lib.includes('const EXPECTED_MAX_DB_USER_VERSION: u32 = 123;'));
+  // The ceiling pin re-bumps with each upgrade; UPGRADE-09 landed v124.
+  check('lib.rs: expected version bumped to 124', lib.includes('const EXPECTED_MAX_DB_USER_VERSION: u32 = 124;'));
   check('lib.rs: v123 migration present', norm(lib).includes('version: 123, description: "UPGRADE-08: trade_ins.inspection_json, blocked_imeis, imei_events"'));
 
   const v123Stmts = [

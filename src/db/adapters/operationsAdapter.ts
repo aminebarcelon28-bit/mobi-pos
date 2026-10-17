@@ -397,16 +397,47 @@ export const operationsAdapter = {
       requiresPin: Boolean(entry.requiresPin),
       deviceId,
       ipAddress,
+      ...(entry.actorId ? { actorId: entry.actorId } : {}),
     };
     await dexieDb.securityAuditLogs.put(safeEntry);
     if (isTauriEnv()) {
       try {
         const db = await getLocalDb();
-        await db.execute(
-          `INSERT OR REPLACE INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, device_id, ip_address)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [safeEntry.id, safeEntry.timestamp, safeEntry.user, safeEntry.action, safeEntry.details, safeEntry.requiresPin ? 1 : 0, safeEntry.deviceId || null, safeEntry.ipAddress || null],
-        );
+        const baseParams = [
+          safeEntry.id,
+          safeEntry.timestamp,
+          safeEntry.user,
+          safeEntry.action,
+          safeEntry.details,
+          safeEntry.requiresPin ? 1 : 0,
+          safeEntry.deviceId || null,
+          safeEntry.ipAddress || null,
+        ];
+        if (safeEntry.actorId) {
+          // UPGRADE-09: immutable actor id rides beside the display name. A
+          // pre-v124 shape (column not healed yet) degrades to the legacy
+          // INSERT instead of dropping the row — attribution-by-name only.
+          try {
+            await db.execute(
+              `INSERT OR REPLACE INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, device_id, ip_address, actor_id)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+              [...baseParams, safeEntry.actorId],
+            );
+          } catch (colErr) {
+            if (!/actor_id/i.test(String(colErr))) throw colErr;
+            await db.execute(
+              `INSERT OR REPLACE INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, device_id, ip_address)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+              baseParams,
+            );
+          }
+        } else {
+          await db.execute(
+            `INSERT OR REPLACE INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, device_id, ip_address)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            baseParams,
+          );
+        }
       } catch (err) {
         console.warn('[db:audit] Failed to persist audit log to SQLite:', err);
       }

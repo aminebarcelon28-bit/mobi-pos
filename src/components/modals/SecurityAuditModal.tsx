@@ -37,6 +37,7 @@ import {
 import { AuditSeverityChip } from '../audit/AuditSeverityChip';
 import { AuditRelativeTime } from '../audit/AuditRelativeTime';
 import { DenialSummaryStrip } from '../audit/DenialSummaryStrip';
+import { ExceptionIntelStrip } from '../audit/ExceptionIntelStrip';
 import { CommandFilter, type CommandOption } from '../audit/CommandFilter';
 import { AuditInspectionDrawer } from '../audit/AuditInspectionDrawer';
 import { AuditVerificationBanner } from '../audit/AuditVerificationBanner';
@@ -926,6 +927,11 @@ export const SecurityAuditModal: React.FC = () => {
           {/* Phase F denial dashboard: latest-per-window burst totals for the
               current filter set; gate chips drill down via the search box. */}
           <DenialSummaryStrip summary={denialSummary} onFilterGate={filterToDenialGate} />
+
+          {/* UPGRADE-09 EBR-lite: per-cashier exception rates (compute-on-read,
+              shrunk + minimum support), approval concentration and the
+              blind-close variance join. Expanded on demand only. */}
+          <ExceptionIntelStrip />
 
           {/* Terminal context + exports */}
           <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-pos-border/50">

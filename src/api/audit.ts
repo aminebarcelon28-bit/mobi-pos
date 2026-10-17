@@ -8,6 +8,11 @@ export interface NativeAuditAppendRequest {
   deviceId?: string;
   ipAddress?: string;
   /**
+   * UPGRADE-09: immutable cashier roster id alongside the display name.
+   * Auxiliary attribution (not chain-covered) — legacy rows map at read time.
+   */
+  actorId?: string;
+  /**
    * Optional caller-derived idempotency key (becomes the native event id).
    * Repeats with identical body replay the original receipt instead of
    * appending a second row + link; repeats with different body fail typed.

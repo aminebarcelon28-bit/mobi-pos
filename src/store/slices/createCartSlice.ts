@@ -408,7 +408,15 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
     if (safeDiscount > 0 && !managerApproved) {
       return { success: false, requiresPin: true, reason: 'Remise article : PIN Manager requis.' };
     }
-    const { cart, pricingTier, customerPriceBook } = get();
+    const { cart, pricingTier, customerPriceBook, logSecurityAction } = get();
+    const itemBefore = cart.find((item) => item.product.id === productId);
+    const beforePrice = itemBefore
+      ? itemBefore.appliedPrice !== undefined
+        ? itemBefore.appliedPrice
+        : resolveBaseUnitPrice(itemBefore.product, pricingTier, itemBefore.quantity, customerPriceBook?.items ?? null)
+      : 0;
+    const lineGross = beforePrice * Math.abs(itemBefore?.quantity ?? 0);
+    const effectiveDiscount = Math.min(lineGross, safeDiscount);
     set({
       cart: cart.map((item) => {
         if (item.product.id !== productId) return item;
@@ -420,6 +428,17 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
         return { ...item, discount: Math.min(lineGrossTotal, safeDiscount) };
       }),
     });
+    if (effectiveDiscount > 0) {
+      // UPGRADE-09: every APPLIED discount lands in the accountability ledger
+      // (the funnel binds the immutable actor id). Silent markdowns are a
+      // classic skimming lane — the exception analytics needs the signal.
+      logSecurityAction(
+        'Remise Article Appliquée',
+        `Article: ${itemBefore?.product.title ?? productId} — remise ${effectiveDiscount} DA sur ligne de ${lineGross} DA${managerApproved ? ' (Approuvé par PIN Manager)' : ''}`,
+        undefined,
+        managerApproved
+      );
+    }
     return { success: true };
   },
 
@@ -429,7 +448,8 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
     if (safePercent > 10 && !managerApproved) {
       return { success: false, requiresPin: true, reason: 'Remise panier > 10 % : PIN Manager requis.' };
     }
-    const { cart, pricingTier, customerPriceBook } = get();
+    const { cart, pricingTier, customerPriceBook, logSecurityAction } = get();
+    const lineCountBefore = cart.length;
     set({
       cart: cart.map((item) => {
         // UPGRADE-04: the line base is the contract price when a price book
@@ -462,6 +482,15 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
         return { ...item, discount: extra, appliedPrice: tierPrice };
       }),
     });
+    if (safePercent > 0 && lineCountBefore > 0) {
+      // UPGRADE-09: see setCartItemDiscount — one row per APPLIED discount.
+      logSecurityAction(
+        'Remise Panier Appliquée',
+        `Remise globale ${safePercent} % appliquée sur ${lineCountBefore} ligne(s)${managerApproved ? ' (Approuvé par PIN Manager)' : ''}`,
+        undefined,
+        managerApproved
+      );
+    }
     return { success: true };
   },
 

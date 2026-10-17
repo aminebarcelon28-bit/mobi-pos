@@ -90,9 +90,11 @@ const peerRow = (source: string) => ({
   check('statement is INSERT-only ON CONFLICT DO NOTHING', /ON CONFLICT\(id\) DO NOTHING/i.test(insertStmt));
   check('statement stamps literal peer provenance', insertStmt.includes("'peer'"));
   const params = db.paramLog.find((p) => String(p[0]) === 'AUD-PEER-1') ?? [];
+  // 10 params since UPGRADE-09 (v124): the immutable actor id rides last and
+  // stays empty when the envelope carries none. `source` remains a literal.
   check(
     'envelope source value never reaches SQL parameters',
-    !params.includes('local') && params.length === 9,
+    !params.includes('local') && params.length === 10 && params[9] === '',
     JSON.stringify(params)
   );
 }

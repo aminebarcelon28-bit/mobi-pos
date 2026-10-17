@@ -898,6 +898,7 @@ fn clock_anomaly_request(kind: &str, wall_now_ms: u64, anchor_ms: Option<u64>) -
         requires_pin: Some(false),
         device_id: None,
         ip_address: None,
+        actor_id: None,
         idempotency_key: None,
     }
 }

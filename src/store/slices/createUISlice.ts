@@ -25,6 +25,7 @@ import { luhnCheckImei, validateDeviceIdentifierForIntake, sanitizeDzPhone } fro
 import { normalizeDeviceKey } from '../../utils/warrantyResolver';
 import { isImeiAllocatedInCart } from '../../utils/tradeInExchange';
 import { maskNationalId, maskPhone, normalizeNationalIdType } from '../../utils/tradeInOrigin';
+import { resolveActorIdForWrite } from '../../utils/cashierExceptionRates';
 import { isTauriEnv } from '../../db/adapters/base';
 // P11.3: sqliteAdapter -> adapters -> dexie + libsql is the heaviest static chain
 // left in the entry. initDatabase() runs from a useEffect, so load it on demand.
@@ -448,6 +449,11 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
 
   logSecurityAction: async (action, details, user, requiresPin = false, idempotencyKey?: string) => {
     const effectiveUser = (user && user.trim()) || get().activeCashier?.name?.trim() || 'Admin';
+    // UPGRADE-09 — canonical actor attribution: bind the immutable roster id
+    // (cashier.id) alongside the display name. Resolution is write-time only;
+    // an unresolvable name stays NULL and the read-time fallback maps it
+    // deterministically (`legacy:<slug>`) — names never become keys by guess.
+    const actorId = resolveActorIdForWrite(effectiveUser, get().activeCashier, get().cashierUsers);
     const { securityAuditLog } = get();
     // Enterprise audit telemetry: every entry carries an ISO-8601 creation
     // timestamp (sortable + range-filterable) plus the originating
@@ -483,6 +489,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       source: 'local',
       ...(deviceId ? { deviceId } : {}),
       ...(ipAddress ? { ipAddress } : {}),
+      ...(actorId ? { actorId } : {}),
     };
     // P6/C6: persist BEFORE the in-memory append. saveAuditLog is an upsert,
     // so a same-ms duplicate id would silently overwrite the earlier audit
@@ -522,6 +529,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
             requiresPin,
             deviceId,
             ipAddress,
+            ...(actorId ? { actorId } : {}),
             ...(idempotencyKey && idempotencyKey.trim() ? { idempotencyKey: idempotencyKey.trim() } : {}),
           });
         } catch (nativeErr) {

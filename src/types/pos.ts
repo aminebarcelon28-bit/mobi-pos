@@ -1729,6 +1729,12 @@ export interface SecurityAuditLogEntry {
   deviceId?: string;
   ipAddress?: string;
   /**
+   * UPGRADE-09: immutable actor id (cashier roster id) bound at write time by
+   * the funnel. Absent on legacy rows — accountability analytics map those by
+   * name deterministically (`legacy:<slug>`), never by guessing twice.
+   */
+  actorId?: string;
+  /**
    * FT-06/C provenance. `'local'` (default) = written on this device through
    * the native chain; `'imported'` = merged from a backup envelope
    * (insert-only, carries no chain links). Absent (legacy rows) reads as

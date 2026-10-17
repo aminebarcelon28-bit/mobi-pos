@@ -22,3 +22,22 @@ export const CUSTOMER_DEBTS_COLUMN_HEAL_SQL: readonly string[] = [
 /** Canary probe: fails on pre-v8 tables so the full heal pass runs. */
 export const CUSTOMER_DEBTS_HEAL_PROBE_SQL =
   'SELECT updated_at FROM customer_debts LIMIT 0;';
+
+/**
+ * UPGRADE-09 (v124) — audit actor attribution.
+ *
+ * The audit funnel binds every new row to the immutable cashier id
+ * (`actor_id`) alongside the display name, so exception-intelligence
+ * analytics never depend on mutable names. Legacy rows stay NULL and map
+ * deterministically at read time (`legacy:<slug>`). Mirrors Rust v124
+ * verbatim; idempotent (duplicate column → ignored by the caller). Same lane
+ * rule as the v119–v123 heals: the stalled sqlx ledger may never run v124 on
+ * upgraded-shape DBs, so the boot probe forces the full idempotent pass.
+ */
+export const AUDIT_ACTOR_ID_HEAL_SQL: readonly string[] = [
+  'ALTER TABLE security_audit_logs ADD COLUMN actor_id TEXT;',
+];
+
+/** Canary probe: fails on pre-v124 tables so the full heal pass runs. */
+export const AUDIT_ACTOR_ID_HEAL_PROBE_SQL =
+  'SELECT actor_id FROM security_audit_logs LIMIT 0;';

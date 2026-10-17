@@ -40,7 +40,7 @@ function devBenchMark(label: string): void {
 }
 import { withBusyRetry, isBusyError, isStaleTxnError, isRetryableDbError } from './busyRetry';
 export { isRetryableDbError, isBusyError, isStaleTxnError, withBusyRetry };
-import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL, CUSTOMER_DEBTS_HEAL_PROBE_SQL } from './schemaHeal';
+import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL, CUSTOMER_DEBTS_HEAL_PROBE_SQL, AUDIT_ACTOR_ID_HEAL_SQL, AUDIT_ACTOR_ID_HEAL_PROBE_SQL } from './schemaHeal';
 import { markBoot } from '../utils/bootTimings';
 import { isTauriEnv } from './adapters/base';
 import { invokeCommand } from '../platform/invoke';
@@ -159,6 +159,10 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     await db.select('SELECT inspection_json FROM trade_ins LIMIT 0;');
     await db.select('SELECT imei, reason, source, added_at, active FROM blocked_imeis LIMIT 0;');
     await db.select('SELECT id, imei, kind, ref_type, ref_id, at, actor, note FROM imei_events LIMIT 0;');
+    // UPGRADE-09 (v124) — audit actor attribution. Same lane rule as v123: the
+    // stalled sqlx ledger never runs v124 on upgraded-shape DBs, so a missing
+    // column fails the probe and forces the idempotent full pass below.
+    await db.select(AUDIT_ACTOR_ID_HEAL_PROBE_SQL);
     return;
   } catch (probeErr) {
     // B-009: BUSY is transient lock contention, NOT a missing column —
@@ -510,6 +514,9 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
         note TEXT NOT NULL DEFAULT ''
       );`,
     'CREATE INDEX IF NOT EXISTS idx_imei_events_imei ON imei_events(imei, at DESC);',
+    // UPGRADE-09 (v124) — audit actor attribution; canonical DDL text lives in
+    // schemaHeal.ts so the parity oracle pins one string (lib.rs v124 = this).
+    ...AUDIT_ACTOR_ID_HEAL_SQL,
   ];
   // B-021: destructive service-ledger/stock DML gated behind a one-shot
   // app_settings flag — a failed probe for an unrelated reason must never

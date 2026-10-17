@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 123;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 124;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -865,6 +865,7 @@ fn decrypt_snapshot_for_recovery(
                 requires_pin: Some(true),
                 device_id: None,
                 ip_address: None,
+                actor_id: None,
                 idempotency_key: None,
             };
             if let Err(e) = crate::trust_core::audit_append::append_kernel_row(&app_dir, &row) {
@@ -2077,6 +2078,23 @@ fn base_schema_migrations() -> Vec<Migration> {
                 note TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_imei_events_imei ON imei_events(imei, at DESC);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v124 — UPGRADE-09: cashier exception intelligence (EBR-lite).
+            // `security_audit_logs.actor_id` binds every funnel-written audit
+            // row to the immutable cashier id alongside the display name
+            // (`user`), so accountability analytics never depend on mutable
+            // names. Legacy rows stay NULL and map deterministically at read
+            // time (`legacy:<slug>`). Compute-on-read: no new tables, no new
+            // trust surface; the column is written only through the native
+            // funnel (`audit_append`) or the pinned fallback writer
+            // (`saveAuditLog`) — never from a new writer.
+            version: 124,
+            description: "UPGRADE-09: security_audit_logs.actor_id (exception intelligence attribution)",
+            sql: r#"
+            ALTER TABLE security_audit_logs ADD COLUMN actor_id TEXT;
             "#,
             kind: MigrationKind::Up,
         },

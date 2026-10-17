@@ -1243,6 +1243,7 @@ fn apply_refund_in_txn(
         // Authorship is the enrolled id, never the client string.
         device_id: Some(identity.device_id().to_string()),
         ip_address: req.audit.ip_address.clone(),
+        actor_id: None,
         idempotency_key: None,
     };
     let event_id = format!("AUD-{}", req.refund_id);

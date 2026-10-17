@@ -201,17 +201,17 @@ const TAX_RE = /\btax(es)?\b|\bvatRate\b|\btva\b/i;
  */
 const WHITELIST = new Set([
   // Documented removals (comments recording what was deleted and why).
-  'src/db/sqlPluginAdapter.ts:1515',
-  'src/db/sqlPluginAdapter.ts:2326',
-  'src/db/sqlPluginAdapter.ts:2328',
+  'src/db/sqlPluginAdapter.ts:1522',
+  'src/db/sqlPluginAdapter.ts:2333',
+  'src/db/sqlPluginAdapter.ts:2335',
   // Legacy `vatRate` scrub on the settings lane (push strip + pull apply).
-  'src/db/sqlPluginAdapter.ts:3877',
-  'src/db/sqlPluginAdapter.ts:3878',
-  'src/db/sqlPluginAdapter.ts:3890',
-  'src/db/sqlPluginAdapter.ts:3891',
-  'src/sync/genericApply.ts:624',
-  'src/sync/genericApply.ts:630',
-  'src/sync/genericApply.ts:631',
+  'src/db/sqlPluginAdapter.ts:3884',
+  'src/db/sqlPluginAdapter.ts:3885',
+  'src/db/sqlPluginAdapter.ts:3897',
+  'src/db/sqlPluginAdapter.ts:3898',
+  'src/sync/genericApply.ts:629',
+  'src/sync/genericApply.ts:635',
+  'src/sync/genericApply.ts:636',
   'src/store/slices/createOrderSlice.ts:538',
   'src/sync/payloadHygiene.ts:37',
   'src/sync/SyncManager.ts:134',
@@ -234,11 +234,11 @@ const WHITELIST = new Set([
   // Local migration v108 + the vestigial creation column it removes on every
   // install (kept: the plugin migrator is transactional, so v1 must still
   // describe the pre-drop shape for v108 to drop; tracked in plan §13 R-5).
-  'src-tauri/src/lib.rs:1034',
-  'src-tauri/src/lib.rs:1608',
-  'src-tauri/src/lib.rs:1612',
-  'src-tauri/src/lib.rs:1622',
-  'src-tauri/src/lib.rs:1626',
+  'src-tauri/src/lib.rs:1035',
+  'src-tauri/src/lib.rs:1609',
+  'src-tauri/src/lib.rs:1613',
+  'src-tauri/src/lib.rs:1623',
+  'src-tauri/src/lib.rs:1627',
   // §10-B2 whitelist — supplier-OCR noise-skip, each carrying the
   // "noise-skip, not a tax feature" comment.
   'src-tauri/src/geometry.rs:61',

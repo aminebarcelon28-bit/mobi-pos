@@ -44,6 +44,10 @@ pub const MAX_USER_LEN: usize = 64;
 /// second row. Bounded like actions so a key can ride as `event_id`.
 pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 128;
 
+/// UPGRADE-09: ceiling for the immutable actor id (roster id) carried
+/// alongside the display name — same shape budget as the idempotency key.
+pub const MAX_ACTOR_ID_LEN: usize = 128;
+
 /// Chain domain label (see module docs).
 pub const AUDIT_SUBKEY_LABEL: &[u8] = b"MOBI-AUDIT-V1";
 const GENESIS_HASH: &str = "MOBI-AUDIT-GENESIS-V1";
@@ -57,6 +61,11 @@ pub struct AuditAppendRequest {
     pub requires_pin: Option<bool>,
     pub device_id: Option<String>,
     pub ip_address: Option<String>,
+    /// UPGRADE-09: immutable actor id (cashier roster id) alongside the
+    /// display name in `user`. Auxiliary attribution column — deliberately
+    /// NOT part of `canonical_bytes`, so every historical link keeps
+    /// verifying byte-for-byte and the chain semantic is unchanged.
+    pub actor_id: Option<String>,
     /// Optional caller-derived idempotency key. When present it IS the
     /// `event_id`: a repeat with identical body returns the original receipt
     /// (replay) instead of appending a second row + link. A repeat with a
@@ -97,6 +106,11 @@ fn validate(req: &AuditAppendRequest) -> Result<(), TrustError> {
                 reason: "audit idempotency key must be 1..128 chars",
             });
         }
+    }
+    if req.actor_id.as_deref().unwrap_or("").len() > MAX_ACTOR_ID_LEN {
+        return Err(TrustError::IPCProtocolError {
+            reason: "audit actor id exceeds 128 chars",
+        });
     }
     Ok(())
 }
@@ -224,6 +238,10 @@ pub fn append_audit_event(
         if cols.contains("ip_address") {
             names.push("ip_address");
             values.push(req.ip_address.clone().unwrap_or_default());
+        }
+        if cols.contains("actor_id") {
+            names.push("actor_id");
+            values.push(req.actor_id.clone().unwrap_or_default());
         }
         if cols.contains("version") {
             names.push("version");
@@ -380,6 +398,10 @@ pub fn append_in_tx(
     if cols.contains("ip_address") {
         names.push("ip_address");
         values.push(req.ip_address.clone().unwrap_or_default());
+    }
+    if cols.contains("actor_id") {
+        names.push("actor_id");
+        values.push(req.actor_id.clone().unwrap_or_default());
     }
     if cols.contains("version") {
         names.push("version");
@@ -1279,6 +1301,7 @@ mod tests {
             requires_pin: Some(false),
             device_id: Some("dev1".into()),
             ip_address: None,
+            actor_id: None,
             idempotency_key: None,
         }
     }
@@ -1363,6 +1386,52 @@ mod tests {
         // Unkeyed links are skipped by verification, not failed.
         let key = b"audit-test-key-32bytes!!!!!!!!".to_vec();
         assert_eq!(verify_audit_chain(&conn, &key).unwrap(), 0);
+    }
+
+    /// UPGRADE-09: `actor_id` is stored when the column exists and is NOT
+    /// part of the chained bytes — a v124 install and a pre-v124 install
+    /// both verify, and adding the column never rewrites history.
+    #[test]
+    fn actor_id_stored_when_column_present_and_never_chained() {
+        let _g = serial_test_lock();
+        let key = b"audit-test-key-32bytes!!!!!!!!".to_vec();
+        // Column present (v124 shape).
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE security_audit_logs (
+                id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, user TEXT NOT NULL,
+                action TEXT NOT NULL, details TEXT NOT NULL, requires_pin INTEGER DEFAULT 0,
+                device_id TEXT, version INTEGER DEFAULT 1, ip_address TEXT, actor_id TEXT);",
+        )
+        .unwrap();
+        let mut keyed = req("void");
+        keyed.actor_id = Some("cashier-7".into());
+        append_audit_event(&mut conn, Some(&key), &keyed, "EV-A", "2026-01-01T00:00:00Z").unwrap();
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT actor_id FROM security_audit_logs WHERE id = 'EV-A'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored.as_deref(), Some("cashier-7"));
+        assert_eq!(verify_audit_chain(&conn, &key).unwrap(), 1);
+        // Column absent (legacy shape): still appends, value simply dropped.
+        let mut legacy = fixture_conn();
+        let mut orphan = req("void");
+        orphan.actor_id = Some("cashier-9".into());
+        append_audit_event(&mut legacy, Some(&key), &orphan, "EV-B", "2026-01-01T00:00:00Z").unwrap();
+        assert_eq!(verify_audit_chain(&legacy, &key).unwrap(), 1);
+    }
+
+    #[test]
+    fn actor_id_over_128_chars_fails_typed() {
+        let mut r = req("void");
+        r.actor_id = Some("a".repeat(MAX_ACTOR_ID_LEN + 1));
+        assert!(matches!(
+            validate(&r),
+            Err(TrustError::IPCProtocolError { .. })
+        ));
     }
 
     /// Idempotent replay: same key + same body returns the ORIGINAL receipt

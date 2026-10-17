@@ -553,8 +553,8 @@ async function mirrorGenericToSqlite(
     const now = utcNowIso();
     try {
       await db.execute(
-        `INSERT INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, version, device_id, ip_address, source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'peer')
+        `INSERT INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, version, device_id, ip_address, source, actor_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'peer', $10)
          ON CONFLICT(id) DO NOTHING`,
         [
           id,
@@ -566,17 +566,21 @@ async function mirrorGenericToSqlite(
           version,
           String((a.deviceId as string) ?? ''),
           String((a.ipAddress as string) ?? ''),
+          // UPGRADE-09: peer rows carry their writer's immutable actor id;
+          // absent on legacy payloads (read-time mapping owns those).
+          String((a.actorId as string) ?? ''),
         ],
       );
     } catch (auditErr: unknown) {
       const errStr = String(auditErr);
-      if (errStr.includes('device_id') || errStr.includes('ip_address') || errStr.includes('source')) {
+      if (errStr.includes('device_id') || errStr.includes('ip_address') || errStr.includes('source') || errStr.includes('actor_id')) {
         await db.execute('ALTER TABLE security_audit_logs ADD COLUMN device_id TEXT;').catch(() => {});
         await db.execute('ALTER TABLE security_audit_logs ADD COLUMN ip_address TEXT;').catch(() => {});
         await db.execute("ALTER TABLE security_audit_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'local';").catch(() => {});
+        await db.execute('ALTER TABLE security_audit_logs ADD COLUMN actor_id TEXT;').catch(() => {});
         await db.execute(
-          `INSERT INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, version, device_id, ip_address, source)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'peer')
+          `INSERT INTO security_audit_logs (id, timestamp, user, action, details, requires_pin, version, device_id, ip_address, source, actor_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'peer', $10)
            ON CONFLICT(id) DO NOTHING`,
           [
             id,
@@ -588,6 +592,7 @@ async function mirrorGenericToSqlite(
             version,
             String((a.deviceId as string) ?? ''),
             String((a.ipAddress as string) ?? ''),
+            String((a.actorId as string) ?? ''),
           ],
         );
       } else {

@@ -188,8 +188,8 @@ const src = (p: string) => readFileSync(`${process.cwd()}/${p}`, 'utf8');
   const review = src('src/components/PoReviewScreen.tsx');
 
   check('migration v122 present', libRs.includes('version: 122,'));
-  // UPGRADE-08 bumped the ceiling to v123; the pin re-bumps with each upgrade.
-  check('EXPECTED_MAX_DB_USER_VERSION = 123', /EXPECTED_MAX_DB_USER_VERSION: u32 = 123;/.test(libRs));
+  // UPGRADE-09 bumped the ceiling to v124; the pin re-bumps with each upgrade.
+  check('EXPECTED_MAX_DB_USER_VERSION = 124', /EXPECTED_MAX_DB_USER_VERSION: u32 = 124;/.test(libRs));
   check('v122 adds freight_per_unit', libRs.includes('ALTER TABLE stock_batches ADD COLUMN freight_per_unit REAL NOT NULL DEFAULT 0;'));
   check('v122 creates po_freight', libRs.includes('CREATE TABLE IF NOT EXISTS po_freight'));
   check('v122 creates supplier_price_history', libRs.includes('CREATE TABLE IF NOT EXISTS supplier_price_history'));
