@@ -1202,7 +1202,27 @@ export interface RepairOrder {
   warrantyDossierSnapshot?: WarrantyDossierSnapshot;
   // Phase 4.6: enterprise-grade SAV enhancements.
   assignedTechnicianId?: string;
+  /**
+   * UPGRADE-05: the assigned technician's display name, frozen at assignment
+   * time. Print/display consumers prefer it over the id so slips always carry
+   * a human name even after a roster rename (and legacy free-text values keep
+   * rendering for pre-roster tickets).
+   */
+  assignedTechnicianName?: string;
   technicianNotes?: string;
+  /**
+   * UPGRADE-05: commission stamped ONCE at settlement (status → Livré) from
+   * the active commission rule for the assigned technician. Absent on tickets
+   * that were never settled or predate commissions — payroll reads treat a
+   * missing stamp as "not evaluated", never as zero owed by accident.
+   */
+  commissionComputedAt?: string;
+  commissionTechnicianId?: string;
+  commissionRuleId?: string;
+  commissionBasis?: 'labor' | 'total';
+  commissionBasisAmount?: number;
+  commissionRatePercent?: number;
+  commissionAmount?: number;
   /** @deprecated v1 field name. v2 writes `signatureCustomerIntake`. */
   signatureCustomer?: string;
   signatureTechnician?: string;

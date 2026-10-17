@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 119;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 120;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -1893,6 +1893,47 @@ fn base_schema_migrations() -> Vec<Migration> {
             );
             CREATE INDEX IF NOT EXISTS idx_price_book_items_book ON price_book_items(book_id, product_id);
             CREATE INDEX IF NOT EXISTS idx_price_book_items_product ON price_book_items(product_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v120 — UPGRADE-05: technician roster, time-on-job sessions and
+            // commission rules. Merchant-local operational tables (no outbox
+            // lane): roster + payroll inputs never leave the device; the
+            // evaluated commission result rides `repair_orders.json_payload`
+            // as additive optional fields on the synced ticket.
+            version: 120,
+            description: "UPGRADE-05: technicians, technician_time_log and commission_rules",
+            sql: r#"
+            CREATE TABLE IF NOT EXISTS technicians (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'Technicien',
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+            );
+            CREATE TABLE IF NOT EXISTS technician_time_log (
+                id TEXT PRIMARY KEY,
+                repair_id TEXT NOT NULL,
+                technician_id TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'work',
+                started_at TEXT NOT NULL,
+                ended_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_technician_time_log_repair ON technician_time_log(repair_id, started_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_technician_time_log_technician ON technician_time_log(technician_id, started_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_technician_time_log_open ON technician_time_log(ended_at);
+            CREATE TABLE IF NOT EXISTS commission_rules (
+                id TEXT PRIMARY KEY,
+                technician_id TEXT,
+                basis TEXT NOT NULL DEFAULT 'labor',
+                rate_percent REAL NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_commission_rules_technician ON commission_rules(technician_id, active);
             "#,
             kind: MigrationKind::Up,
         },

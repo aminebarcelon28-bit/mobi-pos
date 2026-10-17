@@ -275,6 +275,23 @@ export interface RepairSlice {
   createRepairOrder: (order: Omit<RepairOrder, 'id' | 'ticketNumber' | 'totalCost' | 'createdAt'>) => Promise<void>;
   updateRepairOrderStatus: (orderId: string, newStatus: RepairOrder['status']) => Promise<{ remainingBalance: number }>;
   updateRepairOrder: (orderId: string, updates: Partial<RepairOrder>) => Promise<void>;
+  /**
+   * UPGRADE-05: assign/reassign a technician with an append-only statusHistory
+   * note (reassignment is accountability evidence, not a silent field edit).
+   * Passing null unassigns. Late assignment on an already-delivered ticket
+   * evaluates the pending commission, exactly as at settlement.
+   */
+  assignRepairTechnician: (
+    orderId: string,
+    technicianId: string | null
+  ) => Promise<{ success: boolean; reason?: string }>;
+  /** UPGRADE-05: open a work session for the repair (one running session max). */
+  startRepairTimer: (
+    orderId: string,
+    technicianId: string
+  ) => Promise<{ success: boolean; reason?: string }>;
+  /** UPGRADE-05: close the repair's running session. Elapsed ms of the closed session. */
+  stopRepairTimer: (orderId: string) => Promise<{ success: boolean; elapsedMs?: number; reason?: string }>;
   setSelectedRepairOrderForNotification: (
     order: RepairOrder | null,
     template?: import('../types/pos').RepairNotificationType | null

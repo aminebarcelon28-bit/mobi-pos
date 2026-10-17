@@ -25,6 +25,10 @@ import {
   ClipboardCheck,
   Package,
   Trash2,
+  Users,
+  Play,
+  Square,
+  Timer,
 } from 'lucide-react';
 import { newId } from '../../utils/ids';
 import { usePosStore } from '../../store/usePosStore';
@@ -88,6 +92,15 @@ import { isMobileDevice } from '../../utils/platform';
 import { cancelSavPrints, enqueueSavPrint } from '../../utils/savPrintQueue';
 import { purgeSavPhotos, saveSavPhoto } from '../../utils/savAttachments';
 import { validateRepairIntake } from '../../store/slices/createRepairSlice';
+import {
+  isTechnicianStorageAvailable,
+  listTechnicians,
+  listOpenTimeLogs,
+  type TechnicianRecord,
+  type TimeLogRecord,
+} from '../../db/adapters/techniciansAdapter';
+import { formatDurationMs } from '../../utils/technicianCommission';
+import { TechniciansModal } from './TechniciansModal';
 import {
   formatDzPhoneDisplay,
   imeiCheckState,
@@ -154,6 +167,9 @@ export const RepairWorkOrderModal: React.FC = () => {
     createRepairOrder,
     updateRepairOrder,
     updateRepairOrderStatus,
+    assignRepairTechnician,
+    startRepairTimer,
+    stopRepairTimer,
     customers,
     receiptSettings,
     openModal,
@@ -281,6 +297,113 @@ export const RepairWorkOrderModal: React.FC = () => {
   const [checklist, setChecklist] = useState<LegacyConditionChecklist>(initialChecklist);
   const [postChecklist, setPostChecklist] = useState<LegacyConditionChecklist>(initialChecklist);
   const [printingOrder, setPrintingOrder] = useState<RepairOrder | null>(null);
+
+  // ── UPGRADE-05: workshop team (roster, bench timers, commissions) ────────
+  const [technicians, setTechnicians] = useState<TechnicianRecord[]>([]);
+  const [openSessionsByRepair, setOpenSessionsByRepair] = useState<Record<string, TimeLogRecord>>(
+    {}
+  );
+  const [teamModalOpen, setTeamModalOpen] = useState(false);
+  /** Minute-ish clock for running-session readouts (never a write poller). */
+  const [benchNowMs, setBenchNowMs] = useState<number>(() => Date.now());
+
+  const reloadWorkshopData = useCallback(async () => {
+    if (!isTechnicianStorageAvailable()) {
+      setTechnicians([]);
+      setOpenSessionsByRepair({});
+      return;
+    }
+    const [techs, openLogs] = await Promise.all([listTechnicians(), listOpenTimeLogs()]);
+    setTechnicians(techs);
+    const byRepair: Record<string, TimeLogRecord> = {};
+    for (const log of openLogs) byRepair[log.repairId] = log;
+    setOpenSessionsByRepair(byRepair);
+  }, []);
+
+  useEffect(() => {
+    if (activeModal !== 'repair_work_order') return;
+    void reloadWorkshopData();
+  }, [activeModal, reloadWorkshopData]);
+
+  // Refresh timer readouts every 30 s while the Historique tab shows at least
+  // one running session — display only, writes flow through the slice.
+  useEffect(() => {
+    if (activeTab !== 'Historique') return;
+    if (Object.keys(openSessionsByRepair).length === 0) return;
+    const t = window.setInterval(() => setBenchNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(t);
+  }, [activeTab, openSessionsByRepair]);
+
+  const technicianNameOf = (id: string | null | undefined): string => {
+    if (!id) return 'Technicien';
+    return technicians.find((t) => t.id === id)?.name ?? id;
+  };
+
+  const elapsedLabel = (log: TimeLogRecord): string =>
+    formatDurationMs(
+      (log.endedAt ? new Date(log.endedAt).getTime() : benchNowMs) -
+        new Date(log.startedAt).getTime()
+    );
+
+  const handleAssignTechnician = async (order: RepairOrder, technicianId: string | null) => {
+    const res = await assignRepairTechnician(order.id, technicianId);
+    if (!res.success) {
+      showToast(
+        res.reason === 'PERSISTENCE_FAILED'
+          ? 'Assignation impossible — écriture locale en échec.'
+          : 'Assignation impossible.',
+        'error'
+      );
+      return;
+    }
+    const name = technicianId ? technicians.find((t) => t.id === technicianId)?.name : null;
+    showToast(
+      technicianId
+        ? `Technicien assigné : ${name ?? technicianId}.`
+        : 'Technicien retiré du ticket.',
+      'success'
+    );
+  };
+
+  const handleStartTimer = async (order: RepairOrder) => {
+    if (!order.assignedTechnicianId) {
+      showToast("Assignez d'abord un technicien au ticket.", 'warning');
+      return;
+    }
+    const res = await startRepairTimer(order.id, order.assignedTechnicianId);
+    if (!res.success) {
+      showToast(
+        res.reason === 'ALREADY_RUNNING'
+          ? 'Chronomètre déjà en marche pour ce ticket.'
+          : res.reason === 'OTHER_SESSION_RUNNING'
+            ? "Une session est déjà en cours (autre technicien) — arrêtez-la d'abord."
+            : res.reason === 'TICKET_CLOSED'
+              ? 'Ticket clôturé — chronomètre indisponible.'
+              : 'Démarrage du chronomètre impossible.',
+        'warning'
+      );
+    }
+    await reloadWorkshopData();
+  };
+
+  const handleStopTimer = async (order: RepairOrder) => {
+    const res = await stopRepairTimer(order.id);
+    if (!res.success) {
+      showToast(
+        res.reason === 'NO_RUNNING_SESSION'
+          ? 'Aucune session en cours.'
+          : 'Arrêt du chronomètre impossible.',
+        'warning'
+      );
+    } else {
+      showToast(
+        `Session clôturée — ${formatDurationMs(res.elapsedMs ?? 0)} enregistrées.`,
+        'success'
+      );
+    }
+    await reloadWorkshopData();
+  };
+
   // Phase 3: intake validation + warranty auto-hook (warn-only, never blocks save).
   const [imeiTouched, setImeiTouched] = useState(false);
   /** Operator-facing explanation when blur rewrote the identifier. */
@@ -1051,7 +1174,7 @@ export const RepairWorkOrderModal: React.FC = () => {
       );
       const steps = [
         { kind: 'voucher' as const, medium: 'mobileSheet' as const, title: `Bon SAV ${order.ticketNumber}`, text: repairVoucherEscPosText(order, receiptSettings, savSeller) },
-        { kind: 'workshop' as const, medium: 'mobileSheet' as const, title: `Fiche Atelier ${order.ticketNumber}`, text: workshopSlipText(order, savSeller, order.assignedTechnicianId ?? null, receiptSettings) },
+        { kind: 'workshop' as const, medium: 'mobileSheet' as const, title: `Fiche Atelier ${order.ticketNumber}`, text: workshopSlipText(order, savSeller, order.assignedTechnicianName ?? order.assignedTechnicianId ?? null, receiptSettings) },
         { kind: 'chassisTag' as const, medium: 'mobileSheet' as const, title: `Étiquette ${order.ticketNumber}`, text: chassisTagEscPosText(order) },
       ];
       const outcomes: string[] = [];
@@ -2319,6 +2442,16 @@ export const RepairWorkOrderModal: React.FC = () => {
                     </button>
                   ))}
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => setTeamModalOpen(true)}
+                  title="Gérer l'équipe, les règles de commission et les temps"
+                  className="h-11 sm:h-10 px-3 shrink-0 rounded-lg bg-pos-bg border border-pos-border hover:border-emerald-500/40 text-pos-text text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <Users className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" /> Gérer
+                  l'équipe
+                </button>
               </div>
 
               {/* History Ticket Cards List */}
@@ -2328,7 +2461,9 @@ export const RepairWorkOrderModal: React.FC = () => {
                   <p className="font-semibold">Aucun ticket de réparation ne correspond à vos critères.</p>
                 </div>
               ) : (
-                (filteredOrders || []).map((order) => (
+                (filteredOrders || []).map((order) => {
+                  const openSession = openSessionsByRepair[order.id] ?? null;
+                  return (
                   <div key={order.id} className="bg-pos-card border border-pos-border p-4.5 rounded-2xl flex flex-col gap-3 text-xs shadow-sm hover:border-emerald-500/40 transition">
                     <div className="flex justify-between items-start">
                       <div>
@@ -2358,6 +2493,78 @@ export const RepairWorkOrderModal: React.FC = () => {
                       )}
                         <span className="text-[10px] text-pos-muted mt-0.5 block">{formatDateTime(order.createdAt)}</span>
                       </div>
+                    </div>
+
+                    {/* UPGRADE-05: technician assignment + bench timer + commission */}
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                      <div className="flex items-center gap-1.5">
+                        <label
+                          htmlFor={`tech-assign-${order.id}`}
+                          className="text-[10px] uppercase font-bold text-pos-muted"
+                        >
+                          Technicien
+                        </label>
+                        <select
+                          id={`tech-assign-${order.id}`}
+                          value={order.assignedTechnicianId ?? ''}
+                          onChange={(e) => void handleAssignTechnician(order, e.target.value || null)}
+                          className="text-base sm:text-xs font-medium px-2.5 py-1 rounded-lg bg-pos-bg border border-pos-border text-pos-text focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer max-w-[190px]"
+                        >
+                          <option value="">— Non assigné —</option>
+                          {technicians.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                              {t.active ? '' : ' (inactif)'}
+                            </option>
+                          ))}
+                          {order.assignedTechnicianId &&
+                            !technicians.some((t) => t.id === order.assignedTechnicianId) && (
+                              <option value={order.assignedTechnicianId}>
+                                {order.assignedTechnicianName ?? order.assignedTechnicianId}
+                              </option>
+                            )}
+                        </select>
+                      </div>
+                      {openSession ? (
+                        <button
+                          type="button"
+                          onClick={() => void handleStopTimer(order)}
+                          aria-label={`Arrêter le chronomètre — ticket ${order.ticketNumber}`}
+                          title="Arrêter le chronomètre"
+                          className="min-h-[32px] min-w-[32px] px-2 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/40 flex items-center justify-center transition cursor-pointer"
+                        >
+                          <Square className="w-3 h-3" aria-hidden="true" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void handleStartTimer(order)}
+                          disabled={
+                            !order.assignedTechnicianId ||
+                            order.status === 'Livré' ||
+                            order.status === 'Annulé'
+                          }
+                          aria-label={`Démarrer le chronomètre — ticket ${order.ticketNumber}`}
+                          title="Démarrer le chronomètre"
+                          className="min-h-[32px] min-w-[32px] px-2 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <Play className="w-3 h-3" aria-hidden="true" />
+                        </button>
+                      )}
+                      {openSession && (
+                        <span className="text-[10px] font-mono tabular-nums text-cyan-600 dark:text-cyan-400 font-bold flex items-center gap-1">
+                          <Timer className="w-3 h-3" aria-hidden="true" />
+                          {technicianNameOf(openSession.technicianId)} · {elapsedLabel(openSession)}
+                        </span>
+                      )}
+                      {order.commissionComputedAt && (
+                        <span
+                          className="px-2 py-1 rounded-lg text-[10px] font-bold bg-violet-500/10 text-violet-600 dark:text-violet-300 border border-violet-500/30 font-mono tabular-nums"
+                          title="Commission évaluée à la livraison du ticket"
+                        >
+                          Commission : {formatDZD(order.commissionAmount ?? 0)}
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex items-center justify-between pt-3 border-t border-pos-border">
@@ -2461,7 +2668,8 @@ export const RepairWorkOrderModal: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
           )}
@@ -2487,6 +2695,16 @@ export const RepairWorkOrderModal: React.FC = () => {
         </React.Suspense>
       )}
     </ModalShell>
+
+    {/* UPGRADE-05 — workshop team management (own portal + z-layer, so it can
+        never be clipped by the shell's overflow/transform stacking context). */}
+    <TechniciansModal
+      isOpen={teamModalOpen}
+      onClose={() => {
+        setTeamModalOpen(false);
+        void reloadWorkshopData();
+      }}
+    />
 
     {/* Dedicated SAV Repair Ticket Print Template — OUTSIDE the modal shell so
         it never participates in layout or the scroll container.

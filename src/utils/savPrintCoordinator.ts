@@ -70,7 +70,7 @@ export async function printWorkshopStep(
   const payload = SavTicketBuilder.buildWorkshopJobSlip(
     order,
     await shiftSeller(),
-    order.assignedTechnicianId ?? null
+    order.assignedTechnicianName ?? order.assignedTechnicianId ?? null
   );
   return MobilePosRoutingEngine.dispatchDocument('REPAIR_WORK_ORDER', payload);
 }

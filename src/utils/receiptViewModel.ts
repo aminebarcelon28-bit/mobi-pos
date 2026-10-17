@@ -286,7 +286,7 @@ export function buildSavViewModel(
     deliveredAt: formatReceiptDateTime(order.updatedAt || order.createdAt),
     validUntil: formatReceiptDateTime(validUntilDate.toISOString()),
     sellerName: (opts.seller || '').trim() || 'Caisse Principale',
-    technicianName: (opts.technician || order.assignedTechnicianId || '').trim(),
+    technicianName: (opts.technician || order.assignedTechnicianName || order.assignedTechnicianId || '').trim(),
     customerName: (order.customerName || 'Client Comptoir').trim() || 'Client Comptoir',
     customerPhone: (order.customerPhone || '').trim(),
     deviceModel: (order.deviceModel || '').trim(),

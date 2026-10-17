@@ -18,6 +18,10 @@ import {
   savCartProductIdFor,
 } from '../../utils/savSettlement';
 import { sanitizeDzPhone } from '../../utils/savValidation';
+import {
+  computeRepairCommission,
+  resolveActiveCommissionRule,
+} from '../../utils/technicianCommission';
 
 // Broadcast when a completed repair still has an unpaid balance, so the UI
 // can toast + route the cashier to an EXPLICIT caisse deposit
@@ -280,6 +284,36 @@ async function restoreSparePartsInventory(
   }
 }
 
+/**
+ * UPGRADE-05: stamp the commission evaluation ONCE per settled ticket.
+ * Resolves the assigned technician's active rule (specific beats default),
+ * computes integer-DZD commission, persists, then publishes to memory — a
+ * payroll projection must never fail or precede the settlement write.
+ * No-op when the ticket has no assignment or was already evaluated.
+ */
+async function stampCommissionIfDue(order: RepairOrder, nowIso: string): Promise<void> {
+  if (!order.assignedTechnicianId || order.commissionComputedAt) return;
+  try {
+    const { listCommissionRules } = await import('../../db/adapters/techniciansAdapter');
+    const rules = await listCommissionRules();
+    const rule = resolveActiveCommissionRule(rules, order.assignedTechnicianId);
+    const evaluation = computeRepairCommission(rule, order);
+    const fields = {
+      commissionComputedAt: nowIso,
+      commissionTechnicianId: order.assignedTechnicianId,
+      commissionRuleId: evaluation.ruleId ?? undefined,
+      commissionBasis: evaluation.basis,
+      commissionBasisAmount: evaluation.basisAmount,
+      commissionRatePercent: evaluation.ratePercent,
+      commissionAmount: evaluation.amount,
+    };
+    await (await getRepairRepo()).save({ ...order, ...fields });
+    Object.assign(order, fields);
+  } catch (err) {
+    console.warn('[UPGRADE-05] commission evaluation skipped:', err);
+  }
+}
+
 export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (set, get) => ({
   repairOrders: [],
   selectedRepairOrderForNotification: null,
@@ -472,6 +506,25 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
           }
         }
 
+        // UPGRADE-05: settlement hooks. Delivered = settled: stamp the
+        // commission ONCE (payroll basis, from the assigned technician's
+        // active rule) and end any running bench session. Cancelling ends
+        // the session too — an open row after Annulé would inflate payroll
+        // forever. Both are best-effort: bookkeeping must never block the
+        // status change itself.
+        if (newStatus === 'Livré') {
+          const finalOrder = updated.find((r) => r.id === orderId);
+          if (finalOrder) await stampCommissionIfDue(finalOrder, nowIso);
+        }
+        if (newStatus === 'Livré' || newStatus === 'Annulé') {
+          try {
+            const { closeOpenTimeLogsForRepair } = await import('../../db/adapters/techniciansAdapter');
+            await closeOpenTimeLogsForRepair(orderId, nowIso);
+          } catch {
+            /* timer close is best-effort — never blocks the status change */
+          }
+        }
+
         if (newStatus === 'Annulé' && target.status !== 'Annulé') {
           if (target.spareParts?.some((p) => p.isConsumed)) {
             const orderWithRestoredParts = await restoreSparePartsInventory(updatedOrder, get, set);
@@ -589,6 +642,21 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
           const idx = updated.findIndex((r) => r.id === orderId);
           if (idx !== -1) updated[idx] = orderWithDeductedParts;
         }
+
+        // UPGRADE-05: an edit landing the ticket on Livré (zero-balance
+        // correction path) settles commissions + bench time exactly like the
+        // status lane. Fresh reference: part consumption above may have
+        // replaced the object in `updated`.
+        if (target.status === 'Livré') {
+          const finalTarget = updated.find((r) => r.id === orderId);
+          if (finalTarget) await stampCommissionIfDue(finalTarget, new Date().toISOString());
+          try {
+            const { closeOpenTimeLogsForRepair } = await import('../../db/adapters/techniciansAdapter');
+            await closeOpenTimeLogsForRepair(orderId, new Date().toISOString());
+          } catch {
+            /* best-effort */
+          }
+        }
       } catch (err) {
         console.error(`Failed to update repair order [${orderId}]:`, err);
       }
@@ -644,6 +712,109 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
       return { success: true };
     } catch (err) {
       console.error(`Failed to delete repair order [${orderId}]:`, err);
+      return { success: false, reason: 'PERSISTENCE_FAILED' };
+    }
+  },
+
+  assignRepairTechnician: async (orderId, technicianId) => {
+    const { repairOrders } = get();
+    const target = repairOrders.find((r) => r.id === orderId);
+    if (!target) return { success: false, reason: 'NOT_FOUND' };
+    const current = target.assignedTechnicianId ?? null;
+    if ((technicianId ?? null) === current) return { success: true };
+
+    let name: string | undefined;
+    if (technicianId) {
+      try {
+        const { getTechnician } = await import('../../db/adapters/techniciansAdapter');
+        const tech = await getTechnician(technicianId);
+        if (!tech) return { success: false, reason: 'TECHNICIAN_NOT_FOUND' };
+        name = tech.name;
+      } catch {
+        return { success: false, reason: 'TECHNICIAN_LOOKUP_FAILED' };
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    const actor = get().activeCashier?.name || 'Caissier';
+    const updated = repairOrders.map((r) => {
+      if (r.id !== orderId) return r;
+      return {
+        ...r,
+        assignedTechnicianId: technicianId ?? undefined,
+        // Frozen display name — slips stay readable after a roster rename.
+        assignedTechnicianName: technicianId ? name : undefined,
+        updatedAt: nowIso,
+        // Reassignment is accountability evidence: append-only timeline note.
+        statusHistory: appendRepairStatusHistory(
+          r,
+          r.status,
+          actor,
+          technicianId ? `Technicien assigné : ${name}` : 'Technicien retiré'
+        ),
+      } as RepairOrder;
+    });
+    const nextOrder = updated.find((r) => r.id === orderId);
+    if (!nextOrder) return { success: false, reason: 'NOT_FOUND' };
+    try {
+      await (await getRepairRepo()).save(nextOrder);
+    } catch (err) {
+      console.error(`Failed to assign technician [${orderId}]:`, err);
+      return { success: false, reason: 'PERSISTENCE_FAILED' };
+    }
+    set({ repairOrders: updated });
+    // Late-assignment catch-up: a delivered ticket that never received its
+    // evaluation (assigned after delivery as a records correction) settles
+    // now, exactly as it would have at delivery.
+    if (technicianId && nextOrder.status === 'Livré') {
+      await stampCommissionIfDue(nextOrder, nowIso);
+    }
+    return { success: true };
+  },
+
+  startRepairTimer: async (orderId, technicianId) => {
+    const order = get().repairOrders.find((r) => r.id === orderId);
+    if (!order) return { success: false, reason: 'NOT_FOUND' };
+    if (order.status === 'Livré' || order.status === 'Annulé') {
+      return { success: false, reason: 'TICKET_CLOSED' };
+    }
+    try {
+      const { getOpenTimeLogForRepair, getTechnician, startTimeLog } = await import(
+        '../../db/adapters/techniciansAdapter'
+      );
+      const tech = await getTechnician(technicianId);
+      if (!tech) return { success: false, reason: 'TECHNICIAN_NOT_FOUND' };
+      const open = await getOpenTimeLogForRepair(orderId);
+      if (open) {
+        // One bench session per repair — a second concurrent row would
+        // double-pay the same wall-clock minutes.
+        return {
+          success: false,
+          reason: open.technicianId === technicianId ? 'ALREADY_RUNNING' : 'OTHER_SESSION_RUNNING',
+        };
+      }
+      const id = await startTimeLog(orderId, technicianId, 'work');
+      return id ? { success: true } : { success: false, reason: 'PERSISTENCE_FAILED' };
+    } catch (err) {
+      console.error(`Failed to start timer [${orderId}]:`, err);
+      return { success: false, reason: 'PERSISTENCE_FAILED' };
+    }
+  },
+
+  stopRepairTimer: async (orderId) => {
+    try {
+      const { closeOpenTimeLogsForRepair, getOpenTimeLogForRepair } = await import(
+        '../../db/adapters/techniciansAdapter'
+      );
+      const open = await getOpenTimeLogForRepair(orderId);
+      if (!open) return { success: false, reason: 'NO_RUNNING_SESSION' };
+      const endedAt = new Date().toISOString();
+      const closed = await closeOpenTimeLogsForRepair(orderId, endedAt);
+      if (closed <= 0) return { success: false, reason: 'PERSISTENCE_FAILED' };
+      const elapsedMs = Math.max(0, new Date(endedAt).getTime() - new Date(open.startedAt).getTime());
+      return { success: true, elapsedMs };
+    } catch (err) {
+      console.error(`Failed to stop timer [${orderId}]:`, err);
       return { success: false, reason: 'PERSISTENCE_FAILED' };
     }
   },

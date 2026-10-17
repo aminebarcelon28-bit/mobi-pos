@@ -117,8 +117,14 @@ export class SavTicketBuilder {
     if ((seller || '').trim()) {
       builder.text(`Vendeur (Caisse) : ${seller!.trim()}`).newline();
     }
-    if ((technician || order.assignedTechnicianId || '').trim()) {
-      builder.text(`Technicien : ${(technician || order.assignedTechnicianId || '').trim()}`).newline();
+    const technicianLabel = (
+      technician ||
+      order.assignedTechnicianName ||
+      order.assignedTechnicianId ||
+      ''
+    ).trim();
+    if (technicianLabel) {
+      builder.text(`Technicien : ${technicianLabel}`).newline();
     }
     builder.separator()
       .align('left')
