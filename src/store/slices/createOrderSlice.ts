@@ -200,6 +200,49 @@ async function findAlreadySoldImei(
   }
   return null;
 }
+
+/**
+ * UPGRADE-08 — blocked-device screen for the SALE half (fail-closed).
+ *
+ * A device on the merchant's blocked list is never sold, and there is no
+ * per-sale override: the audited manager path is the dossier unblock (one
+ * canonical audited action instead of scattered PIN prompts at the till).
+ * The staged trade-in leg (exchange) is different — it is an INTAKE, so a
+ * fresh one-shot manager grant captured on the Reprise screen lets it
+ * proceed; the grant itself is consumed by `commitStagedTradeInIntake` only
+ * after that intake persists. A read error under Tauri (`unknown`) denies
+ * too — a broken list is not a clean list. Outside Tauri the adapter answers
+ * `clear` (preview posture).
+ */
+async function checkoutDeviceTrustRefusal(
+  saleItems: CartItem[],
+  staged: { imei?: string } | null,
+  grants: Record<string, number>
+): Promise<string | null> {
+  const { checkImeiBlocked } = await import('../../db/adapters/deviceTrustAdapter');
+  for (const item of saleItems) {
+    const raw = (item.imeiNumber || '').trim();
+    if (!raw) continue;
+    const verdict = await checkImeiBlocked(raw);
+    if (verdict.status === 'unknown') return `DEVICE_CHECK_UNAVAILABLE:${verdict.detail}`;
+    if (verdict.status === 'blocked') return `DEVICE_BLOQUE:${verdict.imei}:${verdict.reason}`;
+  }
+  const stagedImei = String(staged?.imei ?? '').trim();
+  if (stagedImei) {
+    const verdict = await checkImeiBlocked(stagedImei);
+    if (verdict.status === 'unknown') return `DEVICE_CHECK_UNAVAILABLE:${verdict.detail}`;
+    if (verdict.status === 'blocked') {
+      const { hasFreshBlockedDeviceGrant, pruneBlockedDeviceGrants } = await import(
+        '../../utils/deviceTrust'
+      );
+      const fresh = pruneBlockedDeviceGrants(grants, Date.now());
+      if (!hasFreshBlockedDeviceGrant(fresh, verdict.imei, Date.now())) {
+        return `INTAKE_BLOQUE:${verdict.imei}:${verdict.reason}`;
+      }
+    }
+  }
+  return null;
+}
 // P11.3: receipt printing is fire-and-forget and desktop-only; the escpos
 // chain (spooler + serial + label builder) loads on first use, not at boot.
 // Exchange tickets (tradeInId present) print the revived net receipt
@@ -335,6 +378,18 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       const alreadySoldImei = await findAlreadySoldImei(saleSerializedItems, get);
       if (alreadySoldImei) {
         return { success: false, reason: `IMEI_ALREADY_SOLD:${alreadySoldImei}` };
+      }
+
+      // UPGRADE-08 — blocked-device screen (fail-closed): sale units are
+      // refused outright; the staged trade-in leg accepts a fresh manager
+      // grant (captured on the Reprise screen, audited there).
+      const trustRefusal = await checkoutDeviceTrustRefusal(
+        saleSerializedItems,
+        get().stagedTradeIn,
+        get().blockedDeviceGrants
+      );
+      if (trustRefusal) {
+        return { success: false, reason: trustRefusal };
       }
 
       // Canonical totals (single source: receiptMath.computeCartTotals):

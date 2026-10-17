@@ -218,6 +218,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
   tradeIns: [],
   imeiRecords: [],
   stagedTradeIn: null,
+  blockedDeviceGrants: {},
   tradeInExchangeRequest: null,
   tradeInEditRequest: null,
   exchangeSoultePayout: null,
@@ -879,6 +880,28 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       const duplicateKey = intake.key;
       const duplicateWarning = intake.warning ?? undefined;
 
+      // UPGRADE-08 — blocked-device screen (fail-closed). A device on the
+      // merchant's blocked list cannot be taken in without a fresh audited
+      // manager grant; under Tauri a read error is `unknown` and also denies
+      // (a broken list is not a clean list). The grant is one-shot and is
+      // burned only once the intake below has fully persisted.
+      const { checkImeiBlocked } = await import('../../db/adapters/deviceTrustAdapter');
+      const blockVerdict = await checkImeiBlocked(canonicalImei);
+      if (blockVerdict.status === 'unknown') {
+        return { success: false as const, reason: `DEVICE_CHECK_UNAVAILABLE:${blockVerdict.detail}` };
+      }
+      let blockedOverrideGranted = false;
+      let blockedGrantKey: string | null = null;
+      if (blockVerdict.status === 'blocked') {
+        const { hasFreshBlockedDeviceGrant, pruneBlockedDeviceGrants } = await import('../../utils/deviceTrust');
+        const grants = pruneBlockedDeviceGrants(get().blockedDeviceGrants, Date.now());
+        if (!hasFreshBlockedDeviceGrant(grants, blockVerdict.imei, Date.now())) {
+          return { success: false as const, reason: `DEVICE_BLOQUE:${blockVerdict.imei}:${blockVerdict.reason}` };
+        }
+        blockedOverrideGranted = true;
+        blockedGrantKey = blockVerdict.imei;
+      }
+
       const resalePrice = Math.round(tradeInput.buybackValue * (1 + (tradeInput.resaleMarginPercent || 0) / 100));
 
       // Generate genuine product barcode:
@@ -960,6 +983,27 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         await (await getSqlite()).saveIMEIRecord(imeiRecord);
       } catch (err) {
         console.warn('[processTradeIn] Failed to persist IMEI record:', err);
+      }
+
+      // UPGRADE-08 — ownership ledger: this intake made the shop the owner.
+      // Additive + idempotent (deterministic id); best-effort like the
+      // registry row above — a failed append is logged, never strands the
+      // buyback (the trade row stays the acquisition of record).
+      try {
+        const { appendImeiEvent } = await import('../../db/adapters/deviceTrustAdapter');
+        await appendImeiEvent({
+          imei: canonicalImei,
+          kind: 'TRADE_IN',
+          refType: 'trade_in',
+          refId: newTradeIn.id,
+          at: newTradeIn.createdAt,
+          actor: get().activeCashier?.name || 'Caissier',
+          note: blockedOverrideGranted
+            ? 'Rachat d’occasion — dérogation appareil bloqué'
+            : 'Rachat d’occasion',
+        });
+      } catch (err) {
+        console.warn('[processTradeIn] ownership ledger append skipped:', err);
       }
 
       // Phase 1 — FIFO foundation: mint a single-unit batch + ledger RECEIVE
@@ -1141,6 +1185,18 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         currentCustomer: updatedCurrentCustomer,
         activeModal: null,
       });
+      // UPGRADE-08 — the intake fully persisted: burn the one-shot blocked
+      // override grant now (a failed attempt above needed no re-grant).
+      if (blockedOverrideGranted && blockedGrantKey) {
+        const { consumeBlockedDeviceGrant } = await import('../../utils/deviceTrust');
+        set({
+          blockedDeviceGrants: consumeBlockedDeviceGrant(
+            get().blockedDeviceGrants,
+            blockedGrantKey,
+            Date.now()
+          ),
+        });
+      }
       // Backward compatible: historic callers ignore the return value (the
       // declared type stays Promise<void>, and any value is assignable to void).
       // `warning` is additive and optional: the duplicate-IMEI notice rides here
@@ -1160,6 +1216,46 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
 
   clearStagedTradeIn: () => {
     set({ stagedTradeIn: null });
+  },
+
+  grantBlockedDeviceOverride: async (identifier, managerPin) => {
+    // Canonical key: the lanes look the grant up under the same spelling the
+    // blocked row carries (both go through normalizeDeviceKey).
+    const canonical = normalizeDeviceKey(identifier) || String(identifier ?? '').trim();
+    if (!canonical) return { ok: false, reason: 'Identifiant vide.' };
+    const { verifyManagerGate } = await import('../../utils/pinGate');
+    const gate = await verifyManagerGate(managerPin, { allowWeakFallback: true });
+    if (!gate.ok) {
+      return {
+        ok: false,
+        reason: gate.locked
+          ? `PIN gérant verrouillé (${Math.ceil(gate.remainingMs / 1000)} s).`
+          : 'PIN gérant refusé.',
+      };
+    }
+    // Audit BEFORE the grant exists: an unaudited override is exactly what
+    // this gate exists to prevent (same rule as the seller-ID reveal).
+    try {
+      await get().logSecurityAction(
+        'Dérogation appareil bloqué',
+        `Identifiant ${canonical} — dérogation gérant accordée (reprise / SAV / échange).`,
+        get().activeCashier?.name || 'Gérant',
+        true
+      );
+    } catch {
+      return { ok: false, reason: 'Journalisation impossible — dérogation refusée (fail closed).' };
+    }
+    const { BLOCKED_DEVICE_OVERRIDE_TTL_MS, pruneBlockedDeviceGrants } = await import(
+      '../../utils/deviceTrust'
+    );
+    const grants = pruneBlockedDeviceGrants(get().blockedDeviceGrants, Date.now());
+    set({
+      blockedDeviceGrants: {
+        ...grants,
+        [canonical]: Date.now() + BLOCKED_DEVICE_OVERRIDE_TTL_MS,
+      },
+    });
+    return { ok: true };
   },
 
   openTradeInExchange: (initial) => {
@@ -1311,6 +1407,28 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         console.warn('[commitStagedTradeInIntake]', duplicateWarning);
       }
 
+      // UPGRADE-08 — blocked-device screen (fail-closed) for the exchange
+      // leg. The checkout pre-flight already refused a blocked device with no
+      // fresh manager grant; this lane re-checks at the write boundary (a
+      // future direct caller must not slip past) and the grant is burned only
+      // after the intake fully persists (end of this try).
+      const { checkImeiBlocked } = await import('../../db/adapters/deviceTrustAdapter');
+      const blockVerdict = await checkImeiBlocked(canonicalImei);
+      if (blockVerdict.status === 'unknown') {
+        return { success: false as const, reason: `DEVICE_CHECK_UNAVAILABLE:${blockVerdict.detail}` };
+      }
+      let blockedOverrideGranted = false;
+      let blockedGrantKey: string | null = null;
+      if (blockVerdict.status === 'blocked') {
+        const { hasFreshBlockedDeviceGrant, pruneBlockedDeviceGrants } = await import('../../utils/deviceTrust');
+        const grants = pruneBlockedDeviceGrants(get().blockedDeviceGrants, Date.now());
+        if (!hasFreshBlockedDeviceGrant(grants, blockVerdict.imei, Date.now())) {
+          return { success: false as const, reason: `INTAKE_BLOQUE:${blockVerdict.imei}:${blockVerdict.reason}` };
+        }
+        blockedOverrideGranted = true;
+        blockedGrantKey = blockVerdict.imei;
+      }
+
       const resalePrice = Math.round(buybackCost * (1 + (Number(staged.resaleMarginPercent) || 0) / 100));
       const realBarcode = staged.barcode?.trim()
         ? staged.barcode.trim()
@@ -1365,6 +1483,25 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         await (await getSqlite()).saveIMEIRecord(imeiRecord);
       } catch (err) {
         console.warn('[commitStagedTradeInIntake] Failed to persist IMEI record:', err);
+      }
+
+      // UPGRADE-08 — ownership ledger: the exchange intake makes the shop the
+      // owner (same additive best-effort posture as the standalone lane).
+      try {
+        const { appendImeiEvent } = await import('../../db/adapters/deviceTrustAdapter');
+        await appendImeiEvent({
+          imei: canonicalImei,
+          kind: 'TRADE_IN',
+          refType: 'trade_in',
+          refId: newTradeIn.id,
+          at: newTradeIn.createdAt,
+          actor: get().activeCashier?.name || 'Caissier',
+          note: blockedOverrideGranted
+            ? 'Rachat d’occasion (échange) — dérogation appareil bloqué'
+            : 'Rachat d’occasion (échange)',
+        });
+      } catch (err) {
+        console.warn('[commitStagedTradeInIntake] ownership ledger append skipped:', err);
       }
 
       const tradeBatchId = `batch-trade-${newTradeIn.id}`;
@@ -1441,6 +1578,18 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           ...(imeiRecords || []).filter((r) => normalizeDeviceKey(r.imei) !== duplicateKey),
         ],
       });
+      // UPGRADE-08 — the intake fully persisted: burn the one-shot blocked
+      // override grant now.
+      if (blockedOverrideGranted && blockedGrantKey) {
+        const { consumeBlockedDeviceGrant } = await import('../../utils/deviceTrust');
+        set({
+          blockedDeviceGrants: consumeBlockedDeviceGrant(
+            get().blockedDeviceGrants,
+            blockedGrantKey,
+            Date.now()
+          ),
+        });
+      }
       return { success: true as const, tradeId: newTradeIn.id, productId: convertedProduct.id };
     } catch (error) {
       console.error('Failed to commit staged trade-in intake:', error);

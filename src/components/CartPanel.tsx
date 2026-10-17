@@ -745,7 +745,11 @@ export const CartPanel: React.FC = () => {
               ? `Stock insuffisant : ${reason.slice('INSUFFICIENT_STOCK:'.length)}`
               : reason && reason.startsWith('IMEI_ALREADY_SOLD')
                 ? `IMEI déjà vendu : ${reason.slice('IMEI_ALREADY_SOLD:'.length)}`
-                : reason === 'PERSISTENCE_FAILED' || (reason && reason.startsWith('PERSISTENCE_FAILED'))
+                : reason && (reason.startsWith('DEVICE_BLOQUE') || reason.startsWith('INTAKE_BLOQUE'))
+                  ? `Appareil bloqué${reason.includes(':') ? ` (IMEI ${reason.split(':')[1] || ''})` : ''} — vente refusée. Débloquez depuis l'Inspecteur IMEI.`
+                  : reason && reason.startsWith('DEVICE_CHECK_UNAVAILABLE')
+                    ? 'Vérification appareil indisponible — vente refusée.'
+                    : reason === 'PERSISTENCE_FAILED' || (reason && reason.startsWith('PERSISTENCE_FAILED'))
                   ? `Erreur d'écriture base de données. Vente non enregistrée — panier conservé.${reason.includes(':') ? ` (${reason.slice('PERSISTENCE_FAILED:'.length, 'PERSISTENCE_FAILED:'.length + 120)})` : ''}`
                   : `Échec de l'encaissement rapide${reason ? ` (${reason})` : ''} — panier conservé.`,
           'error'

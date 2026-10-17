@@ -1416,6 +1416,21 @@ export interface PreOwnedInspectionChecklist {
   testedAt?: string;
 }
 
+/**
+ * UPGRADE-08 — Trade-In rubric markers (battery / screen / body / functional /
+ * water). Captured at buyback intake, persisted as `trade_ins.inspection_json`
+ * AND inside the synced `json_payload` (the SQL-side column is for reporting;
+ * the payload keeps the record portable). Advisory by design — the grade these
+ * markers suggest never silently overrides the operator's choice.
+ */
+export interface TradeInInspectionMarkers {
+  batteryHealthPercent: number; // 0–100
+  screen: 'intact' | 'micro_rayures' | 'fissure';
+  body: 'comme_neuf' | 'bon' | 'marque' | 'deforme';
+  functionalOk: boolean;
+  water: 'aucun' | 'suspecte' | 'constate';
+}
+
 export interface TradeInItem {
   id: string;
   deviceModel: string;
@@ -1424,6 +1439,8 @@ export interface TradeInItem {
   barcode?: string;
   brand: BrandName;
   conditionGrade: ConditionGrade;
+  /** UPGRADE-08 rubric markers (JSON-only side, plus trade_ins.inspection_json). */
+  inspectionMarkers?: TradeInInspectionMarkers;
   customerName: string;
   customerPhone?: string;
   customerId?: string;

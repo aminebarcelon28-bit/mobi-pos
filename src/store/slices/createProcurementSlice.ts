@@ -764,6 +764,35 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
           }
         }
 
+        // UPGRADE-08 — ownership ledger: every received device enters the
+        // shop here. Identity derives from the receipt nonce like the batch
+        // ids above: re-receiving the same PO mints fresh events (each
+        // receipt is a real acquisition event) while a BUSY retry under the
+        // same nonce converges via INSERT OR IGNORE. Best-effort — a ledger
+        // gap must never fail a receipt whose money legs (deltas, batches,
+        // freight evidence) already landed.
+        try {
+          const imeiLines = canonicalVerifiedItems.flatMap((vi) =>
+            (vi.imeis || []).map((rawImei) => String(rawImei ?? '').trim()).filter(Boolean)
+          );
+          if (imeiLines.length > 0) {
+            const { appendImeiEvents } = await import('../../db/adapters/deviceTrustAdapter');
+            await appendImeiEvents(
+              imeiLines.map((imei) => ({
+                imei,
+                kind: 'PO_RECEIVE' as const,
+                refType: 'purchase_order',
+                refId: `${poId}#${receiveNonce}`,
+                at: receivedAtIso,
+                actor: get().activeCashier?.name || 'Réception Stock',
+                note: `Réception ${targetPO.poNumber || poId}`,
+              }))
+            );
+          }
+        } catch (ledgerErr) {
+          console.warn('[procurement] ownership ledger append skipped:', ledgerErr);
+        }
+
         const { syncManager } = await import('../../sync/SyncManager');
         syncManager.notifyLocalWrite();
       }

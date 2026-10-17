@@ -10,6 +10,7 @@ import { db as dexieDb } from '../database';
 import { fireSync, fireSyncDelete, isTauriEnv } from './base';
 import { getLocalDb, isDeviceLocalSettingKey, stripDeviceLocalSettingValue } from '../sqlPluginAdapter';
 import { newId } from '../../utils/ids';
+import { buildTradeInInspectionJson } from '../../utils/deviceTrust';
 import {
   AUDIT_LEGACY_LIMIT,
   auditSelectParams,
@@ -230,9 +231,16 @@ export const operationsAdapter = {
       try {
         const db = await getLocalDb();
         const payload = JSON.stringify(trade);
+        // UPGRADE-08 — the trade-in rubric envelope (markers + verdict). The
+        // column is for SQL-side reporting; the json_payload above keeps the
+        // markers portable for peers. Pre-heal DBs (no column yet) fall into
+        // the existing catch → Dexie fallback below, same as any new column.
+        const inspectionJson = trade.inspectionMarkers
+          ? buildTradeInInspectionJson(trade.inspectionMarkers, trade.conditionGrade)
+          : null;
         await db.execute(
-          `INSERT INTO trade_ins (id, device_model, imei, brand, condition_grade, buyback_value, resale_margin_percent, resale_price, customer_name, customer_phone, customer_id, credit_to_wallet, created_at, json_payload)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          `INSERT INTO trade_ins (id, device_model, imei, brand, condition_grade, buyback_value, resale_margin_percent, resale_price, customer_name, customer_phone, customer_id, credit_to_wallet, created_at, json_payload, inspection_json)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
            ON CONFLICT(id) DO UPDATE SET
              device_model=excluded.device_model,
              imei=excluded.imei,
@@ -246,6 +254,7 @@ export const operationsAdapter = {
              customer_id=excluded.customer_id,
              credit_to_wallet=excluded.credit_to_wallet,
              json_payload=excluded.json_payload,
+             inspection_json=excluded.inspection_json,
              version=trade_ins.version + 1`,
           [
             trade.id,
@@ -262,6 +271,7 @@ export const operationsAdapter = {
             trade.creditToWallet ? 1 : 0,
             trade.createdAt || new Date().toISOString(),
             payload,
+            inspectionJson,
           ],
         );
       } catch (err) {

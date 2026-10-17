@@ -518,6 +518,10 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
               ? `Stock insuffisant : ${reason.slice('INSUFFICIENT_STOCK:'.length)}`
               : reason && reason.startsWith('IMEI_ALREADY_SOLD')
               ? `IMEI déjà vendu : ${reason.slice('IMEI_ALREADY_SOLD:'.length)}`
+              : reason && (reason.startsWith('DEVICE_BLOQUE') || reason.startsWith('INTAKE_BLOQUE'))
+              ? `Appareil bloqué — vente refusée. Débloquez depuis l'Inspecteur IMEI.`
+              : reason && reason.startsWith('DEVICE_CHECK_UNAVAILABLE')
+              ? 'Vérification appareil indisponible — vente refusée.'
               : reason === 'IMEI_REQUIRED' || reason === 'DUPLICATE_IMEI'
               ? 'IMEI invalide ou en double — vérifiez la saisie (terminal principal).'
               : reason === 'INSUFFICIENT_CASH'
@@ -650,6 +654,10 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
               ? `Stock insuffisant : ${reason.slice('INSUFFICIENT_STOCK:'.length)}`
               : reason && reason.startsWith('IMEI_ALREADY_SOLD')
               ? `IMEI déjà vendu : ${reason.slice('IMEI_ALREADY_SOLD:'.length)}`
+              : reason && (reason.startsWith('DEVICE_BLOQUE') || reason.startsWith('INTAKE_BLOQUE'))
+              ? `Appareil bloqué — vente refusée. Débloquez depuis l'Inspecteur IMEI.`
+              : reason && reason.startsWith('DEVICE_CHECK_UNAVAILABLE')
+              ? 'Vérification appareil indisponible — vente refusée.'
               : reason === 'IMEI_REQUIRED' || reason === 'DUPLICATE_IMEI'
               ? 'IMEI invalide ou en double — vérifiez la saisie (terminal principal).'
               : reason === 'CREDIT_LIMIT_EXCEEDED'

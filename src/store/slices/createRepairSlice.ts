@@ -400,6 +400,30 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
     if (!verdict.ok) {
       throw new Error(`Dossier SAV incomplet: ${verdict.reasons.join(' • ')}`);
     }
+
+    // UPGRADE-08 — blocked-device screen (fail-closed): intake of a flagged
+    // device requires a fresh audited manager grant, burned here once the
+    // ticket persists below. Under Tauri a read error denies too.
+    const intakeIdentifier = String(orderInput.imei ?? '').trim();
+    let blockedOverrideGranted = false;
+    let blockedGrantKey: string | null = null;
+    if (intakeIdentifier) {
+      const { checkImeiBlocked } = await import('../../db/adapters/deviceTrustAdapter');
+      const blockVerdict = await checkImeiBlocked(intakeIdentifier);
+      if (blockVerdict.status === 'unknown') {
+        throw new Error(`Vérification appareil impossible : ${blockVerdict.detail}`);
+      }
+      if (blockVerdict.status === 'blocked') {
+        const { hasFreshBlockedDeviceGrant, pruneBlockedDeviceGrants, BlockedDeviceError } =
+          await import('../../utils/deviceTrust');
+        const grants = pruneBlockedDeviceGrants(get().blockedDeviceGrants, Date.now());
+        if (!hasFreshBlockedDeviceGrant(grants, blockVerdict.imei, Date.now())) {
+          throw new BlockedDeviceError(blockVerdict.imei, blockVerdict.reason);
+        }
+        blockedOverrideGranted = true;
+        blockedGrantKey = blockVerdict.imei;
+      }
+    }
     const createdAt = new Date().toISOString();
     const cleanPhone = orderInput.customerPhone ? sanitizeDzPhone(orderInput.customerPhone) : '';
     const candidateCustomerId = orderInput.customerId ||
@@ -451,6 +475,40 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
     const entryModal = get().activeModal;
     try {
        await (await getRepairRepo()).save(newOrder);
+
+      // UPGRADE-08 — ownership ledger: the device entered the bench (custody
+      // event; the customer keeps ownership, but the trace starts here).
+      // Best-effort + idempotent, same posture as the trade-in lanes.
+      if (intakeIdentifier) {
+        try {
+          const { appendImeiEvent } = await import('../../db/adapters/deviceTrustAdapter');
+          await appendImeiEvent({
+            imei: intakeIdentifier,
+            kind: 'REPAIR_INTAKE',
+            refType: 'repair_order',
+            refId: newOrder.id,
+            at: createdAt,
+            actor: get().activeCashier?.name || 'Caissier',
+            note: blockedOverrideGranted
+              ? `Prise en charge SAV #${newOrder.ticketNumber} — dérogation appareil bloqué`
+              : `Prise en charge SAV #${newOrder.ticketNumber}`,
+          });
+        } catch (err) {
+          console.warn('[createRepairOrder] ownership ledger append skipped:', err);
+        }
+      }
+      // Grant consumption: burn the one-shot override once the ticket is on
+      // disk (a failed attempt above needed no re-grant).
+      if (blockedOverrideGranted && blockedGrantKey) {
+        const { consumeBlockedDeviceGrant } = await import('../../utils/deviceTrust');
+        set({
+          blockedDeviceGrants: consumeBlockedDeviceGrant(
+            get().blockedDeviceGrants,
+            blockedGrantKey,
+            Date.now()
+          ),
+        });
+      }
 
       // UPGRADE-06: a redo ticket opens its warranty claim right after the
       // ticket persists. Best-effort — the ticket itself is the legal record;

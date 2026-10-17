@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 122;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 123;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -2040,6 +2040,43 @@ fn base_schema_migrations() -> Vec<Migration> {
             );
             CREATE INDEX IF NOT EXISTS idx_supplier_price_product ON supplier_price_history(product_id, received_at DESC);
             CREATE INDEX IF NOT EXISTS idx_supplier_price_supplier ON supplier_price_history(supplier, received_at DESC);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v123 — UPGRADE-08: Device Trust Pack. Three pieces:
+            //  - `trade_ins.inspection_json`: the trade-in rubric markers
+            //    (battery / screen / body / functional / water) plus the
+            //    suggested-vs-chosen verdict, persisted at buyback intake.
+            //  - `blocked_imeis`: the merchant's stolen/blocked-device list.
+            //    Fail-closed screen at intake/buyback/sale with an audited
+            //    manager override; entries deactivate, never delete.
+            //  - `imei_events`: append-only ownership ledger (PO receive,
+            //    trade-in, sale, return, SAV intake), written from now on —
+            //    no backfill of history the system never recorded.
+            version: 123,
+            description: "UPGRADE-08: trade_ins.inspection_json, blocked_imeis, imei_events",
+            sql: r#"
+            ALTER TABLE trade_ins ADD COLUMN inspection_json TEXT;
+            CREATE TABLE IF NOT EXISTS blocked_imeis (
+                imei TEXT PRIMARY KEY NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                added_at TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE INDEX IF NOT EXISTS idx_blocked_imeis_active ON blocked_imeis(active);
+            CREATE TABLE IF NOT EXISTS imei_events (
+                id TEXT PRIMARY KEY NOT NULL,
+                imei TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                ref_type TEXT NOT NULL DEFAULT '',
+                ref_id TEXT NOT NULL DEFAULT '',
+                at TEXT NOT NULL,
+                actor TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_imei_events_imei ON imei_events(imei, at DESC);
             "#,
             kind: MigrationKind::Up,
         },

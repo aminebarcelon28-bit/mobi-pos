@@ -16,6 +16,7 @@ import {
   Eye,
   EyeOff,
   Pencil,
+  Ban,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import type { CartItem, ImeiLifecycleDossier, SaleTransaction, WarrantyDossierSnapshot } from '../../types/pos';
@@ -47,6 +48,9 @@ import {
   warrantyStateLabel,
 } from '../../utils/warrantyResolver';
 import type { DeviceIdentifierMode, WarrantyStatus } from '../../utils/warrantyResolver';
+import { IMEI_TRUST_EVENT_LABELS } from '../../utils/deviceTrust';
+import type { ImeiTrustEventKind } from '../../utils/deviceTrust';
+import type { ImeiTrustEventRow } from '../../db/adapters/deviceTrustAdapter';
 import {
   canRevealSellerId,
   deviceOriginFor,
@@ -128,6 +132,22 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
    * onto the next lookup.
    */
   const [sellerIdRevealed, setSellerIdRevealed] = useState(false);
+  /**
+   * UPGRADE-08 — device trust state: the merchant's blocked-flag for this
+   * device (null = not blocked / not loaded) and its append-only ownership
+   * ledger. Both load with the dossier; block/unblock is manager-only.
+   */
+  const [trustBlocked, setTrustBlocked] = useState<{
+    imei: string;
+    reason: string;
+    source: string;
+  } | null>(null);
+  const [trustEvents, setTrustEvents] = useState<ImeiTrustEventRow[]>([]);
+  const [trustLoaded, setTrustLoaded] = useState(false);
+  const [blockFormOpen, setBlockFormOpen] = useState(false);
+  const [blockReasonInput, setBlockReasonInput] = useState('');
+  const [trustPinInput, setTrustPinInput] = useState('');
+  const [trustBusy, setTrustBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const lookupDeps = useMemo(
@@ -357,6 +377,53 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
   );
   const originViewModel = originViewWithHistory(origin);
 
+  /**
+   * UPGRADE-08 — reload the trust panel for the current dossier: blocked flag
+   * (fail-closed list) + ownership ledger. Outside Tauri the adapter answers
+   * `clear`/empty (preview posture) — this panel is then simply quiet.
+   */
+  const refreshTrust = useCallback(async (identifier: string) => {
+    setTrustLoaded(false);
+    try {
+      const { checkImeiBlocked, listImeiEvents } = await import('../../db/adapters/deviceTrustAdapter');
+      const [verdict, events] = await Promise.all([
+        checkImeiBlocked(identifier),
+        listImeiEvents(identifier, 50),
+      ]);
+      setTrustBlocked(
+        verdict.status === 'blocked'
+          ? { imei: verdict.imei, reason: verdict.reason, source: verdict.source }
+          : null
+      );
+      setTrustEvents(events);
+    } catch (err) {
+      console.warn('[inspector] device trust read failed:', err);
+      setTrustBlocked(null);
+      setTrustEvents([]);
+    } finally {
+      setTrustLoaded(true);
+    }
+  }, []);
+
+  // Trust state is per-device, exactly like the seller reveal: a new lookup
+  // clears the previous device's flag/ledger and any half-typed block form.
+  useEffect(() => {
+    const identifier = currentDossier?.imei;
+    if (!identifier) {
+      setTrustBlocked(null);
+      setTrustEvents([]);
+      setTrustLoaded(false);
+      setBlockFormOpen(false);
+      setBlockReasonInput('');
+      setTrustPinInput('');
+      return;
+    }
+    setBlockFormOpen(false);
+    setBlockReasonInput('');
+    setTrustPinInput('');
+    void refreshTrust(identifier);
+  }, [currentDossier?.imei, refreshTrust]);
+
   // The reveal is per-device state: any lookup drops it.
   useEffect(() => {
     setSellerIdRevealed(false);
@@ -389,6 +456,76 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
       return;
     }
     setSellerIdRevealed(true);
+  };
+
+  /**
+   * UPGRADE-08 — manager block/unblock of THIS device from the dossier. The
+   * PIN is verified through the shared manager gate, the audit line is written
+   * FIRST (journalisation failure refuses the change — fail closed), and only
+   * then does the blocked list change. Unblock deactivates, never deletes.
+   */
+  const handleTrustMutation = async (action: 'block' | 'unblock') => {
+    const identifier = currentDossier?.imei;
+    if (!identifier) return;
+    const pin = trustPinInput.trim();
+    if (!/^\d{4,}$/.test(pin)) {
+      showToast('Saisissez le PIN gérant (4 chiffres minimum).', 'error');
+      return;
+    }
+    const reasonText = blockReasonInput.trim();
+    if (action === 'block' && !reasonText) {
+      showToast('Indiquez le motif de blocage.', 'error');
+      return;
+    }
+    setTrustBusy(true);
+    try {
+      const { verifyManagerGate } = await import('../../utils/pinGate');
+      const gate = await verifyManagerGate(pin, { allowWeakFallback: true });
+      if (!gate.ok) {
+        showToast(
+          gate.locked
+            ? `PIN gérant verrouillé (${Math.ceil(gate.remainingMs / 1000)} s).`
+            : 'PIN gérant refusé.',
+          'error',
+          9000
+        );
+        return;
+      }
+      try {
+        await logSecurityAction(
+          action === 'block' ? 'Blocage appareil' : 'Déblocage appareil',
+          `Appareil ${normalizeDeviceKey(identifier)} — ${
+            action === 'block' ? `bloqué (motif : ${reasonText})` : 'débloqué'
+          } depuis l'Inspecteur IMEI.`,
+          activeCashier?.name || 'Gérant',
+          true
+        );
+      } catch {
+        showToast('Journalisation impossible — modification refusée (fail closed).', 'warning');
+        return;
+      }
+      const { blockImeiDevice, unblockImeiDevice } = await import('../../db/adapters/deviceTrustAdapter');
+      if (action === 'block') {
+        await blockImeiDevice({ imei: identifier, reason: reasonText, source: 'inspecteur' });
+      } else {
+        await unblockImeiDevice(identifier);
+      }
+      await refreshTrust(identifier);
+      setBlockFormOpen(false);
+      setBlockReasonInput('');
+      setTrustPinInput('');
+      showToast(
+        action === 'block'
+          ? 'Appareil bloqué — ventes, reprises et prises en charge refusées.'
+          : 'Appareil débloqué — la trace de blocage reste au journal.',
+        'success'
+      );
+    } catch (err) {
+      console.warn('[inspector] device trust mutation failed:', err);
+      showToast('Opération impossible — vérifiez la base locale.', 'error');
+    } finally {
+      setTrustBusy(false);
+    }
   };
 
   // One renderer for the two warranty lines, so the STORE and REPAIR rows can
@@ -801,6 +938,140 @@ export const ImeiWarrantyInspectorModal: React.FC = () => {
               </p>
             </div>
           )}
+
+          {/* ── Confiance appareil (UPGRADE-08) ────────────────────────────
+              Blocked list (fail-closed at buyback / SAV intake / sale) plus
+              the append-only ownership ledger for this device. The manager
+              block/unblock path verifies the PIN and writes the audit line
+              BEFORE the change. Unblock deactivates, never deletes. */}
+          <div className="p-3 rounded-xl border border-pos-border bg-pos-bg space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-bold text-pos-muted uppercase tracking-wider flex items-center gap-1.5">
+                <ShieldAlert className="w-3.5 h-3.5" aria-hidden="true" /> Confiance appareil
+              </span>
+              {trustLoaded && (
+                trustBlocked ? (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/60 bg-rose-500/10 px-2 py-0.5 text-[10px] font-bold text-rose-600 dark:text-rose-300">
+                    <Ban className="w-3 h-3" aria-hidden="true" />
+                    BLOQUÉ
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/60 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-300">
+                    <ShieldCheck className="w-3 h-3" aria-hidden="true" />
+                    Non bloqué
+                  </span>
+                )
+              )}
+            </div>
+
+            {trustBlocked && (
+              <p className="text-xs font-medium text-rose-600 dark:text-rose-300">
+                Motif : {trustBlocked.reason || 'non précisé'}
+                {trustBlocked.source ? ` (source : ${trustBlocked.source})` : ''}
+              </p>
+            )}
+
+            {/* Ownership ledger timeline — append-only, newest first. */}
+            <div className="space-y-1">
+              <span className="text-[10px] text-pos-muted font-semibold">Journal de possession</span>
+              {trustEvents.length === 0 ? (
+                <p className="text-[10px] text-pos-muted">
+                  {trustLoaded
+                    ? 'Aucun événement enregistré pour cet appareil.'
+                    : 'Chargement…'}
+                </p>
+              ) : (
+                <ul className="space-y-0.5">
+                  {trustEvents.slice(0, 10).map((evt) => (
+                    <li key={evt.id} className="flex justify-between gap-2 text-[10px]">
+                      <span className="text-pos-text font-medium truncate">
+                        {IMEI_TRUST_EVENT_LABELS[evt.kind as ImeiTrustEventKind] ?? evt.kind}
+                        {evt.note ? ` — ${evt.note}` : ''}
+                      </span>
+                      <span className="text-pos-muted shrink-0">{formatWarrantyDate(evt.at)}</span>
+                    </li>
+                  ))}
+                  {trustEvents.length > 10 && (
+                    <li className="text-[10px] text-pos-muted">
+                      + {trustEvents.length - 10} événement(s) plus ancien(s)
+                    </li>
+                  )}
+                </ul>
+              )}
+            </div>
+
+            {/* Manager block/unblock (PIN + audit first, fail closed). */}
+            <div className="pt-1">
+              {!blockFormOpen ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBlockFormOpen(true);
+                    setTrustPinInput('');
+                    setBlockReasonInput('');
+                  }}
+                  className="h-9 px-2.5 rounded-lg border border-rose-500/50 bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 text-[11px] font-medium flex items-center gap-1.5 transition cursor-pointer active:scale-[0.98]"
+                >
+                  <Ban className="w-3.5 h-3.5" aria-hidden="true" />
+                  {trustBlocked ? 'Débloquer / Modifier le blocage' : 'Bloquer cet appareil'}
+                </button>
+              ) : (
+                <div className="space-y-2">
+                  {!trustBlocked && (
+                    <div>
+                      <label htmlFor="trust-block-reason" className="text-[10px] text-pos-muted block mb-1 font-semibold">
+                        Motif de blocage (ex : vol déclaré, litige client)
+                      </label>
+                      <input
+                        id="trust-block-reason"
+                        type="text"
+                        value={blockReasonInput}
+                        onChange={(e) => setBlockReasonInput(e.target.value)}
+                        className="w-full h-10 bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-base sm:text-xs text-pos-text focus:border-rose-400 focus:outline-none"
+                      />
+                    </div>
+                  )}
+                  <div>
+                    <label htmlFor="trust-manager-pin" className="text-[10px] text-pos-muted block mb-1 font-semibold">
+                      PIN Gérant
+                    </label>
+                    <input
+                      id="trust-manager-pin"
+                      type="password"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      autoComplete="off"
+                      value={trustPinInput}
+                      onChange={(e) => setTrustPinInput(e.target.value.replace(/\D/g, ''))}
+                      placeholder="Code PIN Manager"
+                      className="w-full h-10 bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 font-mono text-base sm:text-xs text-pos-text focus:border-rose-400 focus:outline-none"
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={trustBusy}
+                      onClick={() => void handleTrustMutation(trustBlocked ? 'unblock' : 'block')}
+                      className="h-9 px-3 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-rose-700 dark:text-rose-300 hover:text-slate-950 border border-rose-500/40 text-[11px] font-bold transition cursor-pointer active:scale-[0.98] disabled:opacity-60"
+                    >
+                      {trustBusy ? 'Vérification…' : trustBlocked ? 'Débloquer (audité)' : 'Bloquer (audité)'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBlockFormOpen(false);
+                        setTrustPinInput('');
+                        setBlockReasonInput('');
+                      }}
+                      className="h-9 px-3 rounded-lg border border-pos-border bg-pos-card hover:bg-pos-hover text-pos-text text-[11px] font-medium transition cursor-pointer active:scale-[0.98]"
+                    >
+                      Annuler
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       ) : (
         <div className="space-y-2">

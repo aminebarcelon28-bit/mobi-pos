@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime, faitALine } from '../../types/pos';
-import type { BrandName, ConditionGrade, TradeInItem, StagedTradeIn } from '../../types/pos';
+import type { BrandName, ConditionGrade, TradeInItem, StagedTradeIn, TradeInInspectionMarkers } from '../../types/pos';
 import { newId } from '../../utils/ids';
 import { policeRegistryFolio, SELLER_SWORN_STATEMENT } from '../../utils/tradeInVoucherBuilder';
 import { printCoordinator } from '../../utils/printCoordinator';
@@ -28,6 +28,13 @@ import { isMobileDevice } from '../../utils/platform';
 import { MoneyInput } from '../ui/MoneyInput';
 import { DzPhoneInput } from '../ui/DzPhoneInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
+import {
+  deriveTradeInGrade,
+  INSPECTION_BODY_LABELS,
+  INSPECTION_SCREEN_LABELS,
+  INSPECTION_WATER_LABELS,
+  parseBlockedRefusal,
+} from '../../utils/deviceTrust';
 
 const DEVICE_PRESETS = [
   { model: 'iPhone 15 Pro Max', brand: 'Apple' as BrandName },
@@ -60,6 +67,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
     activeModal, closeModal, processTradeIn, tradeIns, customers, receiptSettings,
     products, imeiRecords, setStagedTradeIn, tradeInExchangeRequest, clearTradeInExchangeRequest,
     tradeInEditRequest, clearTradeInEditRequest, updateTradeInIdentity,
+    grantBlockedDeviceOverride,
     cart,
   } = usePosStore();
   const { showToast } = useToast();
@@ -88,6 +96,26 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
   // gain; the merchant-facing label below says Majoration honestly.
   const [resaleMarginPercent, setResaleMarginPercent] = useState<number>(30);
   const [creditToWallet, setCreditToWallet] = useState<boolean>(false);
+
+  // UPGRADE-08 — rubric markers (battery / screen / body / functional / water).
+  // Advisory by design: the derived suggestion below never auto-applies; the
+  // envelope travels with the trade (inspection_json + voucher).
+  const [inspection, setInspection] = useState<TradeInInspectionMarkers>({
+    batteryHealthPercent: 90,
+    screen: 'intact',
+    body: 'comme_neuf',
+    functionalOk: true,
+    water: 'aucun',
+  });
+  // Blocked-device override flow: armed when the intake refuses because the
+  // device is on the merchant's blocked list; a manager PIN grants a one-shot
+  // audited override (store action) and the operator re-submits.
+  const [blockedOverride, setBlockedOverride] = useState<{
+    identifier: string;
+    reasonText: string;
+  } | null>(null);
+  const [overridePin, setOverridePin] = useState('');
+  const [overrideBusy, setOverrideBusy] = useState(false);
 
   // Live Barcode Scanner auto-fill when Trade-In modal is open
   useEffect(() => {
@@ -200,6 +228,9 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
 
   const suggestedSellingPrice = Math.round(buybackValue * (1 + resaleMarginPercent / 100));
   const estimatedProfit = suggestedSellingPrice - buybackValue;
+  // Pure + cheap: no useMemo (this sits after the early return above, where a
+  // hook would be a conditional-hook violation).
+  const gradeVerdict = deriveTradeInGrade(inspection, grade);
 
   const showSuccess = (msg: string) => {
     setSuccessMsg(msg);
@@ -220,6 +251,9 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
     setBuybackValue(0);
     setResaleMarginPercent(30);
     setCreditToWallet(false);
+    setInspection({ batteryHealthPercent: 90, screen: 'intact', body: 'comme_neuf', functionalOk: true, water: 'aucun' });
+    setBlockedOverride(null);
+    setOverridePin('');
   };
 
   const handleSelectCustomer = (customerId: string) => {
@@ -352,6 +386,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
         buybackValue: Math.round(buybackValue),
         resaleMarginPercent,
         creditToWallet: false,
+        inspectionMarkers: inspection,
       };
       (props.onStaged ?? setStagedTradeIn)(staged);
       clearTradeInExchangeRequest();
@@ -375,13 +410,29 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
       buybackValue: Math.round(buybackValue),
       walletCreditAmount: creditToWallet ? finalBuybackValue : undefined,
       resaleMarginPercent,
-      creditToWallet
+      creditToWallet,
+      inspectionMarkers: inspection,
     });
 
     if (res && typeof res === 'object' && 'success' in res && res.success === false) {
       const reason = String((res as { reason?: string }).reason || '');
+      // UPGRADE-08 — blocked-device screen: the lane refused BEFORE any write.
+      // Arm the audited one-shot override panel instead of a dead-end message.
+      const blocked = parseBlockedRefusal(reason);
+      if (blocked) {
+        setBlockedOverride(blocked);
+        setOverridePin('');
+        showToast(
+          'Appareil bloqué — dérogation gérant requise pour enregistrer la reprise.',
+          'error',
+          9000
+        );
+        return;
+      }
       showSuccess(
-        reason.startsWith('IMEI_INVALIDE')
+        reason.startsWith('DEVICE_CHECK_UNAVAILABLE')
+          ? 'Vérification appareil indisponible (liste locale illisible) — reprise refusée.'
+          : reason.startsWith('IMEI_INVALIDE')
           ? 'IMEI refusé : checksum Luhn invalide. Vérifiez la saisie ou utilisez un numéro de série.'
           : reason === 'NO_CREDIT_TARGET'
           ? 'Crédit wallet impossible — sélectionnez d\'abord un client (aucun crédit portefeuille appliqué).'
@@ -430,6 +481,36 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
       }
     } catch (e) {
       console.warn('[trade-in] voucher print skipped:', e);
+    }
+  };
+
+  // UPGRADE-08 — audited one-shot override for a blocked device. The grant
+  // action verifies the manager PIN natively and journalises the decision
+  // (audit failure refuses the grant); the intake lane consumes it on a
+  // successful write, so the operator simply re-submits.
+  const handleGrantBlockedOverride = async () => {
+    if (!blockedOverride) return;
+    const pin = overridePin.trim();
+    if (!/^\d{4,}$/.test(pin)) {
+      showToast('Saisissez le PIN gérant (4 chiffres minimum).', 'error');
+      return;
+    }
+    setOverrideBusy(true);
+    try {
+      const res = await grantBlockedDeviceOverride(blockedOverride.identifier, pin);
+      if (!res.ok) {
+        showToast(res.reason || 'Dérogation refusée.', 'error', 9000);
+        return;
+      }
+      setBlockedOverride(null);
+      setOverridePin('');
+      showToast(
+        'Dérogation gérant accordée — relancez l’enregistrement de la reprise.',
+        'success',
+        9000
+      );
+    } finally {
+      setOverrideBusy(false);
     }
   };
 
@@ -803,6 +884,132 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
               </div>
               </fieldset>
 
+              {/* UPGRADE-08 — Inspection rubric (battery / screen / body /
+                  functional / water). Deterministic suggestion, ADVISORY: the
+                  operator's grade always wins; a disagreement is recorded in
+                  the persisted envelope and flagged here. */}
+              <fieldset disabled={isIdentityEdit} className="contents">
+              <div className="bg-pos-bg border border-pos-border rounded-xl p-3 sm:p-3.5 space-y-3">
+                <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+                  <span className="text-[11px] text-pos-muted font-bold">Inspection Référentielle de Reprise</span>
+                  <span
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold self-start sm:self-auto ${
+                      gradeVerdict.inconsistent
+                        ? 'border-amber-500/60 bg-amber-500/10 text-amber-300'
+                        : 'border-emerald-500/60 bg-emerald-500/10 text-emerald-300'
+                    }`}
+                  >
+                    Grade suggéré : {gradeVerdict.suggestedGrade}
+                    {gradeVerdict.inconsistent ? ' — différent du grade retenu' : ' — conforme'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <div>
+                    <label htmlFor="tradein-battery" className="text-[10px] text-pos-muted block mb-1 font-semibold">
+                      Santé Batterie (%)
+                    </label>
+                    <input
+                      id="tradein-battery"
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      max={100}
+                      step={5}
+                      value={inspection.batteryHealthPercent}
+                      onChange={(e) =>
+                        setInspection((m) => ({
+                          ...m,
+                          batteryHealthPercent: Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)),
+                        }))
+                      }
+                      className="w-full min-h-[44px] bg-pos-card border border-pos-border rounded-lg px-2.5 py-2 text-sm sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="tradein-screen" className="text-[10px] text-pos-muted block mb-1 font-semibold">
+                      Écran
+                    </label>
+                    <select
+                      id="tradein-screen"
+                      value={inspection.screen}
+                      onChange={(e) =>
+                        setInspection((m) => ({ ...m, screen: e.target.value as TradeInInspectionMarkers['screen'] }))
+                      }
+                      className="w-full min-h-[44px] bg-pos-card border border-pos-border rounded-lg px-2.5 py-2 text-sm sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer"
+                    >
+                      {Object.entries(INSPECTION_SCREEN_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="tradein-body" className="text-[10px] text-pos-muted block mb-1 font-semibold">
+                      Châssis
+                    </label>
+                    <select
+                      id="tradein-body"
+                      value={inspection.body}
+                      onChange={(e) =>
+                        setInspection((m) => ({ ...m, body: e.target.value as TradeInInspectionMarkers['body'] }))
+                      }
+                      className="w-full min-h-[44px] bg-pos-card border border-pos-border rounded-lg px-2.5 py-2 text-sm sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer"
+                    >
+                      {Object.entries(INSPECTION_BODY_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="tradein-water" className="text-[10px] text-pos-muted block mb-1 font-semibold">
+                      Traces d&apos;Eau
+                    </label>
+                    <select
+                      id="tradein-water"
+                      value={inspection.water}
+                      onChange={(e) =>
+                        setInspection((m) => ({ ...m, water: e.target.value as TradeInInspectionMarkers['water'] }))
+                      }
+                      className="w-full min-h-[44px] bg-pos-card border border-pos-border rounded-lg px-2.5 py-2 text-sm sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none cursor-pointer"
+                    >
+                      {Object.entries(INSPECTION_WATER_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-pos-text min-h-[44px]">
+                    <input
+                      type="checkbox"
+                      checked={inspection.functionalOk}
+                      onChange={(e) => setInspection((m) => ({ ...m, functionalOk: e.target.checked }))}
+                      className="w-5 h-5 shrink-0 text-emerald-500 rounded border-pos-border bg-pos-card cursor-pointer"
+                    />
+                    <span>Fonctions testées OK (appel, réseau, capteurs)</span>
+                  </label>
+                  {gradeVerdict.inconsistent && (
+                    <button
+                      type="button"
+                      onClick={() => setGrade(gradeVerdict.suggestedGrade)}
+                      className="min-h-[44px] px-3 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500 text-emerald-400 hover:text-slate-950 border border-emerald-500/30 text-[11px] font-bold transition cursor-pointer active:scale-95"
+                    >
+                      Appliquer le grade suggéré
+                    </button>
+                  )}
+                </div>
+
+                {gradeVerdict.reasons.length > 0 && (
+                  <ul className="text-[10px] text-amber-300/90 space-y-0.5">
+                    {gradeVerdict.reasons.map((r) => (
+                      <li key={r}>• {r}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              </fieldset>
+
               {/* Financial Valuation Engine */}
               <fieldset disabled={isIdentityEdit} className="contents">
               <div className="bg-pos-bg border border-pos-border rounded-xl p-3 sm:p-3.5 space-y-3">
@@ -861,6 +1068,48 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                 )}
               </div>
               </fieldset>
+
+              {/* UPGRADE-08 — blocked-device override panel. Armed by a
+                  fail-closed refusal from the intake lane; the manager PIN
+                  path is verified + audited in the store action and grants a
+                  one-shot, TTL-bounded override the lane consumes on success. */}
+              {blockedOverride && (
+                <div className="rounded-xl border border-rose-500/60 bg-rose-500/10 p-3 sm:p-3.5 space-y-2.5">
+                  <p className="text-xs font-bold text-rose-300">
+                    Appareil BLOQUÉ — {blockedOverride.reasonText || 'motif non précisé'} (IMEI {blockedOverride.identifier})
+                  </p>
+                  <p className="text-[10px] text-pos-muted">
+                    La liste de blocage est fail-closed : la reprise reste refusée tant qu&apos;un gérant
+                    n&apos;accorde pas une dérogation unique et journalisée.
+                  </p>
+                  <div className="flex flex-col sm:flex-row sm:items-end gap-2">
+                    <div className="flex-1">
+                      <label htmlFor="tradein-override-pin" className="text-[10px] text-pos-muted block mb-1 font-semibold">
+                        PIN Gérant (dérogation)
+                      </label>
+                      <input
+                        id="tradein-override-pin"
+                        type="password"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        autoComplete="off"
+                        value={overridePin}
+                        onChange={(e) => setOverridePin(e.target.value.replace(/\D/g, ''))}
+                        placeholder="Code PIN Manager"
+                        className="w-full min-h-[44px] bg-pos-card border border-rose-500/40 rounded-lg px-3 py-2 text-sm sm:text-xs font-mono font-bold text-pos-text focus:border-rose-400 focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleGrantBlockedOverride}
+                      disabled={overrideBusy}
+                      className="w-full sm:w-auto min-h-[44px] px-4 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-slate-950 border border-rose-500/40 text-xs font-bold transition cursor-pointer active:scale-95 disabled:opacity-60"
+                    >
+                      {overrideBusy ? 'Vérification…' : 'Accorder la dérogation'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Final Submit & Stock Injection Card — sticky so the CTA stays
                   above the mobile virtual keyboard (Phase 2 responsive). */}

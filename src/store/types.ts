@@ -486,6 +486,23 @@ export interface UISlice {
   setStagedTradeIn: (staged: StagedTradeIn | null) => void;
   clearStagedTradeIn: () => void;
   /**
+   * UPGRADE-08 — one-shot manager grants for blocked-device overrides
+   * (standalone buyback / exchange intake / SAV intake). In-memory ONLY and
+   * TTL-bounded: a grant is consumed by the lane that writes the intake, and
+   * it dies with the session — a stale override can never be replayed.
+   * Canonical identifier → expiry epoch ms.
+   */
+  blockedDeviceGrants: Record<string, number>;
+  /**
+   * Verifies the manager PIN natively, writes the audit line FIRST (audit
+   * failure refuses the grant — fail closed), then arms the TTL grant for the
+   * identifier. The caller retries its intake; the intake lane consumes it.
+   */
+  grantBlockedDeviceOverride: (
+    identifier: string,
+    managerPin: string
+  ) => Promise<{ ok: boolean; reason?: string }>;
+  /**
    * Modal request bus for mode="exchange": opener stashes initial data +
    * nonce here, then opens 'trade_in_buyback'. The modal reads it to
    * prefill and to decide exchange vs standalone when no direct prop wins.

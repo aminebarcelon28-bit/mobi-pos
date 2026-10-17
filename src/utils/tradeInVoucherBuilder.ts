@@ -7,6 +7,11 @@ import { faitALine, formatDZD } from '../types/pos';
 import { EscPosBuilder } from './escpos';
 import { grossFromTransaction } from './receiptMath';
 import { STORE_RETURN_POLICY, formatReceiptDateTime } from './receiptViewModel';
+import {
+  INSPECTION_BODY_LABELS,
+  INSPECTION_SCREEN_LABELS,
+  INSPECTION_WATER_LABELS,
+} from './deviceTrust';
 
 /**
  * Sequential police-registry folio (Livre de Police) derived deterministically
@@ -100,6 +105,21 @@ export class TradeInVoucherBuilder {
     if (tradeIn.inspectionChecklist) {
       builder
         .text(`Santé Batterie : ${tradeIn.inspectionChecklist.batteryHealthPercent}%`)
+        .newline();
+    }
+
+    // UPGRADE-08 — the rubric markers this buyback actually captured (the
+    // legacy checklist above was never set by the form; this one is).
+    if (tradeIn.inspectionMarkers) {
+      const m = tradeIn.inspectionMarkers;
+      builder
+        .text(
+          `Inspection : Batterie ${m.batteryHealthPercent}% • Écran ${INSPECTION_SCREEN_LABELS[m.screen]} • Châssis ${INSPECTION_BODY_LABELS[m.body]}`
+        )
+        .newline()
+        .text(
+          `Eau : ${INSPECTION_WATER_LABELS[m.water]} • Fonctions : ${m.functionalOk ? 'Validées' : 'Non validées'}`
+        )
         .newline();
     }
 

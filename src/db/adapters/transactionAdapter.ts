@@ -16,6 +16,7 @@ import { physicalCashTendered, cashDisbursedOf, clampCashRefund } from '../../ut
 import { refundableValueOf } from '../../utils/receiptMath';
 import { offlineRefundVerdict } from '../../sync/refundLockPolicy';
 import { normalizeDeviceKey } from '../../utils/deviceIdCodec';
+import { imeiTrustEventId } from '../../utils/deviceTrust';
 
 /**
  * Independent execution policy for processRefundAtomic (defense in depth).
@@ -719,6 +720,24 @@ export const transactionAdapter = {
               console.warn(msg, imeiErr);
               warnings.push(msg);
             }
+            // UPGRADE-08 — ownership ledger: the void returned this unit to
+            // the shop. Best-effort + idempotent: a ledger gap must not turn a
+            // void into a degraded-warning path, so failures are logged only.
+            try {
+              await db.execute(
+                `INSERT OR IGNORE INTO imei_events (id, imei, kind, ref_type, ref_id, at, actor, note)
+                 VALUES ($1, $2, 'RETURN_IN', 'order', $3, $4, '', $5)`,
+                [
+                  imeiTrustEventId('RETURN_IN', 'order', voidedTransaction.id, imei),
+                  imei,
+                  voidedTransaction.id,
+                  new Date().toISOString(),
+                  'Annulation de vente',
+                ]
+              );
+            } catch (evtErr) {
+              console.warn('[db:void] ownership ledger append skipped:', evtErr);
+            }
           }
           if (useTxn) {
             await db.execute('COMMIT;');
@@ -964,6 +983,24 @@ export const transactionAdapter = {
               const msg = `[db:refund] IMEI ${imei} resté 'sold' dans SQLite (miroir Dexie libéré) — re-synchroniser manuellement.`;
               console.warn(msg, imeiErr);
               warnings.push(msg);
+            }
+            // UPGRADE-08 — ownership ledger: the refund returned this unit to
+            // the shop. Best-effort + idempotent (logged only, never pushed to
+            // `warnings` — the money-path guarantee is the sold-state reset).
+            try {
+              await db.execute(
+                `INSERT OR IGNORE INTO imei_events (id, imei, kind, ref_type, ref_id, at, actor, note)
+                 VALUES ($1, $2, 'RETURN_IN', 'order', $3, $4, '', $5)`,
+                [
+                  imeiTrustEventId('RETURN_IN', 'order', refundTransaction.id, imei),
+                  imei,
+                  refundTransaction.id,
+                  new Date().toISOString(),
+                  'Retour en stock (remboursement)',
+                ]
+              );
+            } catch (evtErr) {
+              console.warn('[db:refund] ownership ledger append skipped:', evtErr);
             }
           }
           if (useTxn) {

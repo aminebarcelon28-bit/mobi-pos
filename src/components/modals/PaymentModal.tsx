@@ -482,6 +482,29 @@ export const PaymentModal: React.FC = () => {
         );
       } else if (result.reason?.startsWith('INTAKE_FAILED')) {
         showToast(`Échec d’enregistrement de la reprise (${result.reason}) — vente annulée, panier conservé.`, 'error');
+      } else if (result.reason?.startsWith('DEVICE_BLOQUE') || result.reason?.startsWith('INTAKE_BLOQUE')) {
+        // UPGRADE-08 — blocked-device screen (fail-closed). Sale units have no
+        // per-sale override; the audited manager path is the Inspector unblock.
+        // A blocked exchange intake needs a one-shot grant from the Reprise
+        // screen and then simply re-submitting the payment.
+        const parts = result.reason.split(':');
+        const imei = parts[1] || '';
+        const why = parts.slice(2).join(':');
+        showToast(
+          `${result.reason.startsWith('INTAKE_BLOQUE') ? 'Reprise refusée' : 'Vente refusée'} : appareil bloqué${imei ? ` (IMEI ${imei})` : ''}${why ? ` — ${why}` : ''}. ${
+            result.reason.startsWith('INTAKE_BLOQUE')
+              ? 'Accordez une dérogation gérant depuis la fenêtre Reprise puis re-validez.'
+              : 'Débloquez-le depuis l’Inspecteur IMEI.'
+          }`,
+          'error',
+          12000
+        );
+      } else if (result.reason?.startsWith('DEVICE_CHECK_UNAVAILABLE')) {
+        showToast(
+          'Vérification appareil indisponible (liste de blocage illisible) — vente refusée.',
+          'error',
+          9000
+        );
       } else if (result.reason?.startsWith('IMEI_REQUIRED')) {
         showToast('Veuillez saisir les numéros IMEI pour tous les articles sérialisés.', 'warning');
       } else if (result.reason === 'PERSISTENCE_FAILED' || result.reason?.startsWith('PERSISTENCE_FAILED')) {

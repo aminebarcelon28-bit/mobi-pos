@@ -19,6 +19,7 @@ import { toLocalDayKey } from '../utils/dateUtils';
 import { lineProfitNet } from '../utils/receiptMath';
 import { withWriteLock } from './writeMutex';
 import { buildImeiAnchorUpsert, imeiAnchorColumnsPresent } from './imeiAnchorSchema';
+import { imeiTrustEventId } from '../utils/deviceTrust';
 // Phase 4.5 WP2c: NO static import of './benchHook' — it must stay out of
 // release bundles entirely (bundle-inspected by test_bench_hook.mjs). Timing
 // marks go through devBenchMark below: a DEV-guarded lazy import that Vite
@@ -151,6 +152,13 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     await db.select('SELECT freight_per_unit FROM stock_batches LIMIT 0;');
     await db.select('SELECT id, po_id, amount, method FROM po_freight LIMIT 0;');
     await db.select('SELECT id, product_id, supplier, unit_cost, quantity, batch_id FROM supplier_price_history LIMIT 0;');
+    // UPGRADE-08 (v123) — trade-in rubric markers, blocked-IMEI screen list,
+    // append-only IMEI ownership ledger. Same rule as v122: the stalled sqlx
+    // ledger never runs v123 on upgraded-shape DBs, so a missing piece fails
+    // the probe and forces the idempotent full pass below.
+    await db.select('SELECT inspection_json FROM trade_ins LIMIT 0;');
+    await db.select('SELECT imei, reason, source, added_at, active FROM blocked_imeis LIMIT 0;');
+    await db.select('SELECT id, imei, kind, ref_type, ref_id, at, actor, note FROM imei_events LIMIT 0;');
     return;
   } catch (probeErr) {
     // B-009: BUSY is transient lock contention, NOT a missing column —
@@ -480,6 +488,28 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
       );`,
     'CREATE INDEX IF NOT EXISTS idx_supplier_price_product ON supplier_price_history(product_id, received_at DESC);',
     'CREATE INDEX IF NOT EXISTS idx_supplier_price_supplier ON supplier_price_history(supplier, received_at DESC);',
+    // UPGRADE-08 (v123) — Device Trust Pack. Same tolerance as v122: the
+    // runner swallows "duplicate column" on databases that already healed.
+    'ALTER TABLE trade_ins ADD COLUMN inspection_json TEXT;',
+    `CREATE TABLE IF NOT EXISTS blocked_imeis (
+        imei TEXT PRIMARY KEY NOT NULL,
+        reason TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT '',
+        added_at TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1
+      );`,
+    'CREATE INDEX IF NOT EXISTS idx_blocked_imeis_active ON blocked_imeis(active);',
+    `CREATE TABLE IF NOT EXISTS imei_events (
+        id TEXT PRIMARY KEY NOT NULL,
+        imei TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        ref_type TEXT NOT NULL DEFAULT '',
+        ref_id TEXT NOT NULL DEFAULT '',
+        at TEXT NOT NULL,
+        actor TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT ''
+      );`,
+    'CREATE INDEX IF NOT EXISTS idx_imei_events_imei ON imei_events(imei, at DESC);',
   ];
   // B-021: destructive service-ledger/stock DML gated behind a one-shot
   // app_settings flag — a failed probe for an unrelated reason must never
@@ -2587,6 +2617,24 @@ const imeiData = {
             } catch (e: unknown) {
               console.warn('[db:imei] IMEI table record write skipped:', e);
             }
+          }
+          // UPGRADE-08 — ownership ledger (append-only device history): the
+          // sale stamp above just moved this unit to the customer, so the
+          // event is appended in the same lane. Deterministic id +
+          // INSERT OR IGNORE keeps BUSY retries / recovery replays
+          // convergent; a pre-heal table or any non-BUSY error is
+          // loud-but-non-fatal (the transaction row remains the sale of
+          // record), while BUSY rethrows so the checkout retry re-runs the
+          // whole lane.
+          try {
+            await db.execute(
+              `INSERT OR IGNORE INTO imei_events (id, imei, kind, ref_type, ref_id, at, actor, note)
+               VALUES ($1, $2, 'SALE', 'order', $3, $4, '', '')`,
+              [imeiTrustEventId('SALE', 'order', txId, pit.imeiNum), pit.imeiNum, txId, now]
+            );
+          } catch (ledgerErr) {
+            if (isBusyError(ledgerErr)) throw ledgerErr;
+            console.warn('[db:imei] ownership ledger append skipped (sale):', ledgerErr);
           }
         await db.execute(
           `INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status)

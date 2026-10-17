@@ -201,18 +201,18 @@ const TAX_RE = /\btax(es)?\b|\bvatRate\b|\btva\b/i;
  */
 const WHITELIST = new Set([
   // Documented removals (comments recording what was deleted and why).
-  'src/db/sqlPluginAdapter.ts:1485',
-  'src/db/sqlPluginAdapter.ts:2296',
-  'src/db/sqlPluginAdapter.ts:2298',
+  'src/db/sqlPluginAdapter.ts:1515',
+  'src/db/sqlPluginAdapter.ts:2326',
+  'src/db/sqlPluginAdapter.ts:2328',
   // Legacy `vatRate` scrub on the settings lane (push strip + pull apply).
-  'src/db/sqlPluginAdapter.ts:3829',
-  'src/db/sqlPluginAdapter.ts:3830',
-  'src/db/sqlPluginAdapter.ts:3842',
-  'src/db/sqlPluginAdapter.ts:3843',
+  'src/db/sqlPluginAdapter.ts:3877',
+  'src/db/sqlPluginAdapter.ts:3878',
+  'src/db/sqlPluginAdapter.ts:3890',
+  'src/db/sqlPluginAdapter.ts:3891',
   'src/sync/genericApply.ts:624',
   'src/sync/genericApply.ts:630',
   'src/sync/genericApply.ts:631',
-  'src/store/slices/createOrderSlice.ts:483',
+  'src/store/slices/createOrderSlice.ts:538',
   'src/sync/payloadHygiene.ts:37',
   'src/sync/SyncManager.ts:134',
   'src/utils/receiptMath.ts:241',

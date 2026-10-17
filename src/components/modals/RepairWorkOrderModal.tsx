@@ -31,6 +31,7 @@ import {
   Timer,
 } from 'lucide-react';
 import { newId } from '../../utils/ids';
+import { BlockedDeviceError } from '../../utils/deviceTrust';
 import { usePosStore } from '../../store/usePosStore';
 import { REPAIR_BALANCE_DUE_EVENT, REPAIR_DELIVERED_EVENT } from '../../store/slices/createRepairSlice';
 import {
@@ -166,6 +167,7 @@ export const RepairWorkOrderModal: React.FC = () => {
     closeModal,
     repairOrders,
     createRepairOrder,
+    grantBlockedDeviceOverride,
     updateRepairOrder,
     updateRepairOrderStatus,
     assignRepairTechnician,
@@ -295,6 +297,15 @@ export const RepairWorkOrderModal: React.FC = () => {
   const [depositAmount, setDepositAmount] = useState<number>(0);
   const [estimatedDate, setEstimatedDate] = useState('');
   const [status, setStatus] = useState<RepairOrder['status']>('Diagnostic');
+  // UPGRADE-08 — blocked-device override: armed when createRepairOrder throws
+  // a BlockedDeviceError; a manager PIN grants a one-shot audited override the
+  // slice consumes on the next (successful) save attempt.
+  const [blockedIntake, setBlockedIntake] = useState<{
+    identifier: string;
+    reasonText: string;
+  } | null>(null);
+  const [blockedPin, setBlockedPin] = useState('');
+  const [blockedBusy, setBlockedBusy] = useState(false);
   const [checklist, setChecklist] = useState<LegacyConditionChecklist>(initialChecklist);
   const [postChecklist, setPostChecklist] = useState<LegacyConditionChecklist>(initialChecklist);
   const [printingOrder, setPrintingOrder] = useState<RepairOrder | null>(null);
@@ -763,6 +774,9 @@ export const RepairWorkOrderModal: React.FC = () => {
     setPartQty(1);
     // UPGRADE-06: a fresh intake never inherits the previous ticket's redo link.
     setReworkLinkId('');
+    // UPGRADE-08: nor the previous device's blocked-override panel.
+    setBlockedIntake(null);
+    setBlockedPin('');
   };
 
   /** Attach intake photos (filesystem + SHA-256, never inline bytes). */
@@ -1103,6 +1117,15 @@ export const RepairWorkOrderModal: React.FC = () => {
         ...(reworkLinkId ? { reworkOfRepairId: reworkLinkId } : {}),
       } as Omit<RepairOrder, 'id' | 'ticketNumber' | 'totalCost' | 'createdAt' | 'schemaVersion'>);
     } catch (err) {
+      // UPGRADE-08 — a blocked device arms the audited override panel instead
+      // of a dead-end toast: the store action verifies the manager PIN and
+      // journals the decision; the slice consumes the grant on retry.
+      if (err instanceof BlockedDeviceError) {
+        setBlockedIntake({ identifier: err.identifier, reasonText: err.blockReason });
+        setBlockedPin('');
+        showToast(err.message, 'warning', 12000);
+        return;
+      }
       // The slice re-validates at the write boundary and throws; surface it as a
       // toast instead of an unhandled rejection, and keep the form filled so
       // the technician can fix the gap without retyping the ticket.
@@ -1117,6 +1140,35 @@ export const RepairWorkOrderModal: React.FC = () => {
     showSuccess('Nouvelle Fiche de Réparation créée !');
     clearIntakeDraft();
     resetForm();
+  };
+
+  // UPGRADE-08 — audited one-shot override for a blocked device (SAV intake).
+  // The grant is verified + journalled in the store action; the slice consumes
+  // it after the ticket persists, so the operator simply re-submits the form.
+  const handleGrantBlockedOverride = async () => {
+    if (!blockedIntake) return;
+    const pin = blockedPin.trim();
+    if (!/^\d{4,}$/.test(pin)) {
+      showToast('Saisissez le PIN gérant (4 chiffres minimum).', 'error');
+      return;
+    }
+    setBlockedBusy(true);
+    try {
+      const res = await grantBlockedDeviceOverride(blockedIntake.identifier, pin);
+      if (!res.ok) {
+        showToast(res.reason || 'Dérogation refusée.', 'error', 9000);
+        return;
+      }
+      setBlockedIntake(null);
+      setBlockedPin('');
+      showToast(
+        'Dérogation gérant accordée — relancez l’enregistrement du ticket SAV.',
+        'success',
+        9000
+      );
+    } finally {
+      setBlockedBusy(false);
+    }
   };
 
   const handleEditClick = (order: RepairOrder) => {
@@ -1437,7 +1489,47 @@ export const RepairWorkOrderModal: React.FC = () => {
       }
       footer={
         activeTab === 'Nouveau' ? (
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2 sm:gap-3">
+          <div className="flex flex-col gap-2">
+            {/* UPGRADE-08 — blocked-device override panel (armed by the slice's
+                fail-closed refusal). Manager PIN + audit happen in the store
+                action; the operator re-submits once granted. */}
+            {blockedIntake && (
+              <div className="w-full rounded-xl border border-rose-500/60 bg-rose-500/10 p-2.5 space-y-2">
+                <p className="text-[11px] font-bold text-rose-700 dark:text-rose-300">
+                  Appareil BLOQUÉ — {blockedIntake.reasonText || 'motif non précisé'} (identifiant {blockedIntake.identifier})
+                </p>
+                <div className="flex flex-col sm:flex-row sm:items-end gap-2">
+                  <div className="flex-1">
+                    <label htmlFor="sav-override-pin" className="text-[10px] text-pos-muted block mb-1 font-semibold">
+                      PIN Gérant (dérogation)
+                    </label>
+                    <input
+                      id="sav-override-pin"
+                      type="password"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      autoComplete="off"
+                      value={blockedPin}
+                      onChange={(e) => setBlockedPin(e.target.value.replace(/\D/g, ''))}
+                      placeholder="Code PIN Manager"
+                      className="w-full min-h-[40px] bg-pos-card border border-rose-500/40 rounded-lg px-3 py-1.5 font-mono text-base sm:text-xs text-pos-text focus:border-rose-400 focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleGrantBlockedOverride}
+                    disabled={blockedBusy}
+                    className="min-h-[40px] px-3 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-rose-700 dark:text-rose-300 hover:text-slate-950 border border-rose-500/40 text-[11px] font-bold transition cursor-pointer active:scale-[0.98] disabled:opacity-60"
+                  >
+                    {blockedBusy ? 'Vérification…' : 'Accorder la dérogation'}
+                  </button>
+                </div>
+                <p className="text-[10px] text-pos-muted">
+                  Une fois la dérogation accordée, cliquez à nouveau sur « Enregistrer le Ticket SAV ».
+                </p>
+              </div>
+            )}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2 sm:gap-3">
             {isLegacyEdit && (
               <span className="inline-flex items-center gap-1.5 self-start sm:self-auto px-2 py-1 rounded-full bg-slate-100 dark:bg-slate-500/15 border border-slate-600/30 dark:border-slate-500/40 text-slate-700 dark:text-slate-300 text-[10px] font-semibold uppercase tracking-wider">
                 {LEGACY_DOSSIER_PILL}
@@ -1469,6 +1561,7 @@ export const RepairWorkOrderModal: React.FC = () => {
               <CheckCircle2 className="w-5 h-5 sm:w-4 sm:h-4" aria-hidden="true" />{' '}
               {editingId ? 'Mettre à jour Ticket' : 'Enregistrer le Ticket SAV'}
             </button>
+            </div>
           </div>
         ) : null
       }
