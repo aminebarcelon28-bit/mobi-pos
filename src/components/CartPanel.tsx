@@ -11,6 +11,7 @@ import { computeCartTotals, computeTradeInSettlement } from '../utils/receiptMat
 import { toLegacyReal, dinarsToMinor } from '../utils/money';
 import { MoneyInput } from './ui/MoneyInput';
 import { useFifoPreviewCosts } from '../hooks/useFifoPreviewCosts';
+import { useSemanticSuggestions } from '../hooks/useSemanticSuggestions';
 import { verifyManagerGate } from '../utils/pinGate';
 import { Kbd } from '../design-system/desktop/Kbd';
 
@@ -192,6 +193,11 @@ export const CartPanel: React.FC = () => {
   const setPricingTier = usePosStore((s) => s.setPricingTier);
   const products = usePosStore((s) => s.products);
   const toggleCartItemReturn = usePosStore((s) => s.toggleCartItemReturn);
+  // UPGRADE-03: semantic accessory lane — nearest catalog neighbors of the
+  // cart's most recent line (advisory; merged into the suggestions drawer).
+  const semanticSuggestions = useSemanticSuggestions(
+    cart.length > 0 ? (cart[cart.length - 1]?.product?.id ?? null) : null
+  );
   const currentCustomer = usePosStore((s) => s.currentCustomer);
   const setCurrentCustomer = usePosStore((s) => s.setCurrentCustomer);
   const redeemLoyaltyPoints = usePosStore((s) => s.redeemLoyaltyPoints);
@@ -647,8 +653,19 @@ export const CartPanel: React.FC = () => {
       ? products.filter(p => p.compatibleModel === mainModel && !cartProductIds.has(p.id) && p.stock > 0).slice(0, 4)
       : [];
 
-    return { primaryModel: mainModel, recommendedProducts: recs };
-  }, [cart, products]);
+    // UPGRADE-03: append the semantic lane (sqlite-vec neighbors) to the
+    // compatibility heuristic — same drawer, same tap-to-add rule, deduped.
+    const merged = [...recs];
+    const seen = new Set(recs.map(p => p.id));
+    for (const p of semanticSuggestions) {
+      if (seen.has(p.id) || cartProductIds.has(p.id) || p.stock <= 0) continue;
+      seen.add(p.id);
+      merged.push(p);
+      if (merged.length >= 4) break;
+    }
+
+    return { primaryModel: mainModel, recommendedProducts: merged };
+  }, [cart, products, semanticSuggestions]);
 
   const runGlobalDiscount = (pct: number, approved = false) => {
     const fn = applyCartDiscountPercent as unknown as (
@@ -1796,7 +1813,7 @@ export const CartPanel: React.FC = () => {
           >
             <div className="flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5" />
-              <span className="text-[10.5px] uppercase tracking-wide">Suggérés ({primaryModel})</span>
+              <span className="text-[10.5px] uppercase tracking-wide">Suggérés{primaryModel ? ` (${primaryModel})` : ''}</span>
               <span className="bg-emerald-500/20 text-emerald-400 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
                 {recommendedProducts.length}
               </span>

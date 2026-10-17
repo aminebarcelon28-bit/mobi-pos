@@ -1,5 +1,6 @@
 import type { Product } from '../../types/pos';
 import { db as dexieDb } from '../database';
+import { isTauriEnv } from './base';
 
 let sqlAdapterPromise: Promise<typeof import('../sqlPluginAdapter')> | null = null;
 let syncManagerPromise: Promise<typeof import('../../sync/SyncManager')> | null = null;
@@ -13,6 +14,49 @@ const getSyncManager = () => {
   if (!syncManagerPromise) syncManagerPromise = import('../../sync/SyncManager');
   return syncManagerPromise;
 };
+
+/**
+ * UPGRADE-03: keep the native semantic index (sqlite-vec `vec_products`) warm
+ * from the catalog lane. All three helpers are fire-and-forget projections —
+ * an absent native side (web preview) or a slow index write must never fail
+ * or delay a catalog mutation.
+ */
+async function indexProductForSuggestions(product: Product): Promise<void> {
+  try {
+    if (!isTauriEnv()) return;
+    const name = [product.title, product.brand, product.compatibleModel]
+      .map((part) => String(part ?? '').trim())
+      .filter(Boolean)
+      .join(' ');
+    const { invokeCommand } = await import('../../platform/invoke');
+    await invokeCommand('vec_index_product', { productId: product.id, name });
+  } catch {
+    /* advisory index — absence never blocks catalog writes */
+  }
+}
+
+async function unindexProductForSuggestions(productId: string): Promise<void> {
+  try {
+    if (!isTauriEnv()) return;
+    const { invokeCommand } = await import('../../platform/invoke');
+    await invokeCommand('vec_index_product', { productId, name: '' });
+  } catch {
+    /* advisory index — absence never blocks catalog deletes */
+  }
+}
+
+async function refreshSuggestionsIndex(force: boolean): Promise<void> {
+  try {
+    if (!isTauriEnv()) return;
+    const { invokeCommand } = await import('../../platform/invoke');
+    await invokeCommand('vec_reindex_catalog', force ? { force: true } : {});
+  } catch {
+    /* advisory index — retried on the next catalog read */
+  }
+}
+
+/** One backfill attempt per session — the native latch makes it a no-op after. */
+let vecBackfillFired = false;
 function mapSqlRowToProduct(r: Record<string, unknown>): Product {
   let base: Record<string, unknown> = {};
   try {
@@ -79,6 +123,7 @@ export const productAdapter = {
     } catch (err) {
       console.warn('Product sync enqueue skipped:', err);
     }
+    void indexProductForSuggestions(cleanProduct);
   },
 
   async bulkSaveProducts(products: Product[]): Promise<void> {
@@ -114,10 +159,11 @@ export const productAdapter = {
     } catch (err) {
       console.warn('Bulk product sync enqueue skipped:', err);
     }
+    // Bulk imports can outrun the per-save hook — force one idempotent rebuild.
+    void refreshSuggestionsIndex(true);
   },
 
   async getAllProducts(): Promise<Product[]> {
-    const { isTauriEnv } = await import('./base');
     if (isTauriEnv()) {
       try {
         const [{ getLocalDb }] = await Promise.all([getSqlAdapter()]);
@@ -125,6 +171,13 @@ export const productAdapter = {
         const rows = (await db.select('SELECT * FROM products WHERE deleted = 0')) as Array<Record<string, unknown>>;
         if (rows && rows.length > 0) {
           const products = rows.map(mapSqlRowToProduct);
+          // UPGRADE-03: seed the semantic index for the whole catalog once
+          // per session (latched natively; fire-and-forget) so accessory
+          // suggestions work on installs that predate the index.
+          if (!vecBackfillFired) {
+            vecBackfillFired = true;
+            void refreshSuggestionsIndex(false);
+          }
           // Keep Dexie mirror in sync and purge any stale ghost records asynchronously
           void (async () => {
             try {
@@ -219,6 +272,7 @@ export const productAdapter = {
     } catch (err) {
       console.warn('Product delete sync skipped:', err);
     }
+    void unindexProductForSuggestions(id);
   },
 };
 

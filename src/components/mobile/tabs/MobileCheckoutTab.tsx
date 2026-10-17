@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { usePosStore } from '../../../store/usePosStore';
 import { AppTabContent } from '../AppScreenLayout';
+import { AccessorySuggestions } from '../../AccessorySuggestions';
 import type { CartItem, Customer, PricingTier } from '../../../types/pos';
 import { formatDZD } from '../../../types/pos';
 import { getProductPriceForTier } from '../../../utils/pricingEngine';
@@ -1451,6 +1452,9 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
               );
             })
           )}
+
+          {/* UPGRADE-03 — suggestions accessoires (advisory, tap = add) */}
+          <AccessorySuggestions />
         </div>
       </AppTabContent>
 

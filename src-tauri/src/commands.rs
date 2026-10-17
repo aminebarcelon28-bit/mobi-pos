@@ -26,8 +26,9 @@ use crate::trust_core::{
     capability_policy::Capability,
     ipc_authorizer::{authorize_and_execute, global_kernel, TrustError},
 };
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::OnceLock;
 use tauri::Manager;
 
@@ -440,6 +441,34 @@ fn commit_batch_inner(
     global_kernel().ensure_generation_unchanged(entry_generation)?;
 
     tx.commit().map_err(|e| e.to_string())?;
+
+    // UPGRADE-03: keep the semantic index warm for products this receipt
+    // touched. Suggestions-only surface: an indexing failure is logged and
+    // swallowed — an advisory index must never fail a committed receipt.
+    let mut indexed_products: HashSet<&str> = HashSet::new();
+    for item in &payload.items {
+        if !indexed_products.insert(item.product_id.as_str()) {
+            continue;
+        }
+        let fields: Option<(String, String, String)> = conn
+            .query_row(
+                "SELECT title, COALESCE(brand, ''), COALESCE(compatible_model, '') \
+                 FROM products WHERE id = ?1 AND COALESCE(deleted, 0) = 0",
+                params![item.product_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()
+            .unwrap_or(None);
+        if let Some((title, brand, compat)) = fields {
+            let composed = compose_index_text(&title, &brand, &compat);
+            if !composed.is_empty() {
+                if let Err(err) = resolver().index_product(conn, &item.product_id, &composed) {
+                    eprintln!("[vec] product {} index skipped: {err}", item.product_id);
+                }
+            }
+        }
+    }
+
     Ok(payload.items.len())
 }
 
@@ -475,6 +504,291 @@ pub fn commit_stock_batch(
     payload: CommitStockBatchRequest,
 ) -> Result<usize, TrustError> {
     po_commit_stock_batch(app, payload)
+}
+
+// ---------------------------------------------------------------------------
+// UPGRADE-03 — semantic accessory suggestions (sqlite-vec Tier-2, advisory)
+// ---------------------------------------------------------------------------
+
+/// Advisory suggestion row: a catalog neighbor of the cart's seed product.
+/// Suggestions are display-only — the native side NEVER applies them to a
+/// cart or a sale; only an explicit operator tap on the UI chip does.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessorySuggestion {
+    pub id: String,
+    pub sku: String,
+    pub title: String,
+    pub price: f64,
+    pub stock: f64,
+    pub distance: f64,
+}
+
+/// The composition indexed into `vec_products` — the SAME string is embedded
+/// for the seed product at suggestion time, so self-similarity is maximal.
+fn compose_index_text(title: &str, brand: &str, compatible_model: &str) -> String {
+    let mut parts: Vec<&str> = Vec::with_capacity(3);
+    for part in [title, brand, compatible_model] {
+        let trimmed = part.trim();
+        if !trimmed.is_empty() {
+            parts.push(trimmed);
+        }
+    }
+    parts.join(" ")
+}
+
+/// Advisory threshold: with the deterministic fallback embeddings, related
+/// accessories land well under this; orthogonal strings sit near 1.0. The
+/// cut only filters noise — it never gates a sale path.
+const SUGGESTION_MAX_DISTANCE: f64 = 0.9;
+
+fn suggest_inner(
+    conn: &Connection,
+    seed_product_id: &str,
+    k: u32,
+) -> Result<Vec<AccessorySuggestion>, TrustError> {
+    let k = k.clamp(1, 8) as usize;
+    if seed_product_id.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Nothing indexed yet → no suggestions. The latched catalog rebuild
+    // (`vec_reindex_catalog`) fills the index; suggesting without index rows
+    // would be fabrication, not recall.
+    let indexed: i64 = conn
+        .query_row("SELECT COUNT(*) FROM vec_products", [], |r| r.get(0))
+        .unwrap_or(0);
+    if indexed == 0 {
+        return Ok(Vec::new());
+    }
+
+    let seed_fields: Option<(String, String, String)> = conn
+        .query_row(
+            "SELECT title, COALESCE(brand, ''), COALESCE(compatible_model, '') \
+             FROM products WHERE id = ?1 AND COALESCE(deleted, 0) = 0",
+            params![seed_product_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| TrustError::op_failed(e.to_string()))?;
+    let Some((title, brand, compat)) = seed_fields else {
+        return Ok(Vec::new());
+    };
+    let seed_text = compose_index_text(&title, &brand, &compat);
+    if seed_text.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let vector = resolver().embed_string(&seed_text);
+    debug_assert_eq!(vector.len(), 384);
+    let query_bytes: &[u8] = bytemuck::cast_slice(&vector);
+
+    // KNN (fetch k+1 so the seed itself can be dropped without shrinking the
+    // result), then a lookup per hit — same two-step shape as `resolve_line`
+    // (no virtual-table JOINs).
+    let fetch_k = (k + 1) as i64;
+    let knn_rows: Vec<(String, f64)> = {
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT product_tid, distance
+                FROM vec_products
+                WHERE embedding MATCH ?1 AND k = ?2
+                ORDER BY distance
+                "#,
+            )
+            .map_err(|e| TrustError::op_failed(e.to_string()))?;
+        let mapped = stmt
+            .query_map(params![query_bytes, fetch_k], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
+            })
+            .map_err(|e| TrustError::op_failed(e.to_string()))?;
+        mapped
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| TrustError::op_failed(e.to_string()))?
+    };
+
+    let mut out: Vec<AccessorySuggestion> = Vec::with_capacity(k);
+    for (tid, distance) in knn_rows {
+        if tid == seed_product_id || distance > SUGGESTION_MAX_DISTANCE {
+            continue;
+        }
+        let found: Option<AccessorySuggestion> = conn
+            .query_row(
+                "SELECT sku, title, price, stock FROM products \
+                 WHERE id = ?1 AND COALESCE(deleted, 0) = 0",
+                params![tid],
+                |r| {
+                    Ok(AccessorySuggestion {
+                        id: tid.clone(),
+                        sku: r.get(0)?,
+                        title: r.get(1)?,
+                        price: r.get(2)?,
+                        stock: r.get(3)?,
+                        distance,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| TrustError::op_failed(e.to_string()))?;
+        if let Some(found) = found {
+            out.push(found);
+        }
+        if out.len() >= k {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// One-shot catalog rebuild (latched; `force` re-runs it after bulk imports).
+/// Idempotent: every product upserts by `product_tid`. The latch lives in
+/// `app_settings` (best-effort — a lost latch only costs one extra pass).
+fn reindex_catalog_inner(conn: &Connection, force: bool) -> Result<usize, TrustError> {
+    if !force {
+        let latched: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM app_settings WHERE key = 'vec_index.backfill.v1' LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        if latched.is_some() {
+            return Ok(0);
+        }
+    }
+
+    let mut total = 0usize;
+    let mut last_id = String::new();
+    loop {
+        let rows: Vec<(String, String, String, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, title, COALESCE(brand, ''), COALESCE(compatible_model, '') \
+                     FROM products WHERE COALESCE(deleted, 0) = 0 AND id > ?1 \
+                     ORDER BY id LIMIT 500",
+                )
+                .map_err(|e| TrustError::op_failed(e.to_string()))?;
+            let mapped = stmt
+                .query_map(params![last_id], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })
+                .map_err(|e| TrustError::op_failed(e.to_string()))?;
+            mapped
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| TrustError::op_failed(e.to_string()))?
+        };
+        if rows.is_empty() {
+            break;
+        }
+        for (id, title, brand, compat) in &rows {
+            let text = compose_index_text(title, brand, compat);
+            if text.is_empty() {
+                continue;
+            }
+            resolver()
+                .index_product(conn, id, &text)
+                .map_err(|e| TrustError::op_failed(e.to_string()))?;
+            total += 1;
+        }
+        let last = rows.last().map(|r| r.0.clone()).unwrap_or_default();
+        let exhausted = rows.len() < 500;
+        last_id = last;
+        if exhausted {
+            break;
+        }
+    }
+
+    // Latch, best-effort, shape-tolerant (`id` presence decides the column
+    // set; DELETE+INSERT avoids depending on a UNIQUE constraint).
+    let now = chrono_iso8601_utc();
+    let latch_value = serde_json::json!({ "done": true, "indexed": total }).to_string();
+    let has_id_col: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('app_settings') WHERE name = 'id'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let latch_result = if has_id_col > 0 {
+        let _ = conn.execute(
+            "DELETE FROM app_settings WHERE id = 'vec_index.backfill.v1' OR key = 'vec_index.backfill.v1'",
+            [],
+        );
+        conn.execute(
+            "INSERT INTO app_settings (id, key, value_json, updated_at, version) \
+             VALUES ('vec_index.backfill.v1', 'vec_index.backfill.v1', ?1, ?2, 1)",
+            params![latch_value, now],
+        )
+    } else {
+        let _ = conn.execute(
+            "DELETE FROM app_settings WHERE key = 'vec_index.backfill.v1'",
+            [],
+        );
+        conn.execute(
+            "INSERT INTO app_settings (key, value_json, updated_at, version) \
+             VALUES ('vec_index.backfill.v1', ?1, ?2, 1)",
+            params![latch_value, now],
+        )
+    };
+    let _ = latch_result;
+
+    Ok(total)
+}
+
+/// Advisory accessory suggestions for the cart's seed product. Read-only:
+/// opening the DB also ensures the lazily-created vec table exists.
+#[tauri::command]
+pub fn checkout_suggest_accessories(
+    app: tauri::AppHandle,
+    seed_product_id: String,
+    k: Option<u32>,
+) -> Result<Vec<AccessorySuggestion>, TrustError> {
+    authorize_and_execute(
+        "checkout_suggest_accessories",
+        Capability::ReadOperationalData,
+        |_ctx| {
+            let conn = open_live_db(&app).map_err(TrustError::op_failed)?;
+            suggest_inner(&conn, &seed_product_id, k.unwrap_or(4))
+        },
+    )
+}
+
+/// (Re-)index one product: `name` = title‖brand‖compat (empty = remove).
+/// Called on catalog save/delete; also covers renames in one shot.
+#[tauri::command]
+pub fn vec_index_product(
+    app: tauri::AppHandle,
+    product_id: String,
+    name: String,
+) -> Result<(), TrustError> {
+    authorize_and_execute("vec_index_product", Capability::OperationalWrites, |_ctx| {
+        let conn = open_live_db(&app).map_err(TrustError::op_failed)?;
+        if name.trim().is_empty() {
+            conn.execute(
+                "DELETE FROM vec_products WHERE product_tid = ?1",
+                params![product_id],
+            )
+            .map_err(|e| TrustError::op_failed(e.to_string()))?;
+            return Ok(());
+        }
+        resolver()
+            .index_product(&conn, &product_id, &name)
+            .map_err(|e| TrustError::op_failed(e.to_string()))?;
+        Ok(())
+    })
+}
+
+/// Latched catalog rebuild for existing installs (`force` after bulk import).
+#[tauri::command]
+pub fn vec_reindex_catalog(
+    app: tauri::AppHandle,
+    force: Option<bool>,
+) -> Result<usize, TrustError> {
+    authorize_and_execute("vec_reindex_catalog", Capability::OperationalWrites, |_ctx| {
+        let conn = open_live_db(&app).map_err(TrustError::op_failed)?;
+        reindex_catalog_inner(&conn, force.unwrap_or(false))
+    })
 }
 
 #[cfg(test)]
@@ -661,5 +975,119 @@ mod tests {
                 "expected ISO-8601 UTC, got {stamped}"
             );
         }
+    }
+
+    /// UPGRADE-03 schema add-on for the semantic-index tests: the minimal
+    /// products columns those queries touch + the app_settings latch table.
+    fn add_vec_test_schema(conn: &Connection) {
+        conn.execute_batch(
+            r#"
+            ALTER TABLE products ADD COLUMN brand TEXT DEFAULT '';
+            ALTER TABLE products ADD COLUMN compatible_model TEXT DEFAULT '';
+            ALTER TABLE products ADD COLUMN price REAL DEFAULT 0;
+            CREATE TABLE app_settings (
+                id TEXT PRIMARY KEY, key TEXT, value_json TEXT,
+                updated_at TEXT, version INTEGER NOT NULL DEFAULT 1
+            );
+            "#,
+        )
+        .unwrap();
+    }
+
+    fn seed_three_products(conn: &Connection) {
+        for (id, title, brand, compat, price) in [
+            ("prod-a", "iPhone 13 128Go", "Apple", "iPhone 13", 90000.0),
+            ("prod-b", "Coque iPhone 13", "", "iPhone 13", 1200.0),
+            ("prod-c", "Chargeur Samsung A54", "Samsung", "Galaxy A54", 2500.0),
+        ] {
+            conn.execute(
+                "INSERT INTO products(id, sku, barcode, title, brand, compatible_model, price, cost_price, stock) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 5)",
+                params![id, format!("SKU-{id}"), format!("BC-{id}"), title, brand, compat, price],
+            )
+            .unwrap();
+        }
+    }
+
+    /// UPGRADE-03: rebuild indexes once, latches, and `force` re-runs the
+    /// idempotent upsert without duplicating rows.
+    #[test]
+    fn test_vec_reindex_catalog_indexes_and_latches() {
+        let conn = open_test_db();
+        add_vec_test_schema(&conn);
+        seed_three_products(&conn);
+
+        assert_eq!(reindex_catalog_inner(&conn, false).unwrap(), 3);
+        let indexed: i64 = conn
+            .query_row("SELECT count(*) FROM vec_products", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(indexed, 3);
+
+        // Latched: the default pass is a cheap no-op …
+        assert_eq!(reindex_catalog_inner(&conn, false).unwrap(), 0);
+        // … while `force` (bulk-import hook) re-runs the rebuild idempotently.
+        assert_eq!(reindex_catalog_inner(&conn, true).unwrap(), 3);
+        let still: i64 = conn
+            .query_row("SELECT count(*) FROM vec_products", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(still, 3, "upsert must not duplicate rows");
+    }
+
+    /// UPGRADE-03: suggestions recall token neighbors, never the seed itself,
+    /// and never fabricate while the index is empty.
+    #[test]
+    fn test_checkout_suggest_accessories_neighbors() {
+        let conn = open_test_db();
+        add_vec_test_schema(&conn);
+        seed_three_products(&conn);
+
+        // Nothing indexed yet → empty, no fabrication.
+        assert!(suggest_inner(&conn, "prod-a", 4).unwrap().is_empty());
+
+        assert_eq!(reindex_catalog_inner(&conn, true).unwrap(), 3);
+        let out = suggest_inner(&conn, "prod-a", 4).unwrap();
+        assert!(
+            out.iter().any(|s| s.id == "prod-b"),
+            "expected the iPhone 13 neighbor, got {:?}",
+            out.iter().map(|s| s.id.as_str()).collect::<Vec<_>>()
+        );
+        assert!(
+            out.iter().all(|s| s.id != "prod-a"),
+            "the seed must never suggest itself"
+        );
+        let coque = out.iter().find(|s| s.id == "prod-b").unwrap();
+        assert!((coque.price - 1200.0).abs() < 1e-9, "price must ride the row");
+    }
+
+    /// UPGRADE-03: a PO receipt keeps the semantic index warm for the
+    /// products it touched (advisory projection — never fails the commit).
+    #[test]
+    fn test_commit_indexes_received_products() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = open_test_db();
+        add_vec_test_schema(&conn);
+        conn.execute(
+            "INSERT INTO products(id, sku, barcode, title, brand, compatible_model, price, cost_price, stock) \
+             VALUES ('p1','SKU1','BC1','Coque iPhone 13','','iPhone 13',1200.0,400.0,5)",
+            [],
+        )
+        .unwrap();
+        let payload = CommitStockBatchRequest {
+            supplier_name: "ACME".into(),
+            items: vec![CommitItem {
+                product_id: "p1".into(),
+                quantity: 2.0,
+                unit_cost: 500.0,
+                raw_supplier_name: "Coque".into(),
+                save_as_alias: false,
+            }],
+            user_id: None,
+        };
+        let (_, entry_gen) = global_kernel().get();
+        assert_eq!(commit_batch_inner(&mut conn, &payload, entry_gen).unwrap(), 1);
+        let indexed: i64 = conn
+            .query_row("SELECT count(*) FROM vec_products", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(indexed, 1, "received product must land in the semantic index");
     }
 }

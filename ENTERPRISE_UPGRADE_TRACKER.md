@@ -40,9 +40,14 @@ Fix any failure or boundary pin immediately → mark `[x]` → atomic commit `fe
   - **event_log prune:** `pruneStaleEventLog` deletes only rows with a positive sync marker (`synced_to_cloud = 1`) older than 90 days. FAIL CLOSED — the production v100 shape has no sync column, so its rows are left untouched rather than guessed about.
   - **Audit (decision):** bundled SQLite = 3.45.0 (`libsqlite3-sys 0.28.0` / rusqlite 0.31) < 3.51.3 → bump deferred (crosses 6 rusqlite minors: API migration + dependency approval; WAL-reset window needs crash-during-reset). Tracked as open. `transactions.tax` already dropped by v108 (v1 must keep the pre-drop shape for the frozen pin; plugin migrator is transactional) — verified-existing. WebView plugin pool pragmas remain sqlx defaults by design (patched plugin rejects pragma setters from JS).
   - **Deferred (documented):** "json_payload holds non-scalars only" rule — a coordinated reader migration across 14 tables; the one-shot pass removes the corruption surface meanwhile.
-- [ ] **UPGRADE-03 — Activate sqlite-vec Semantic Matching** (M–L)
+- [x] **UPGRADE-03 — Activate sqlite-vec Semantic Matching** (M–L)
   - `index_product` wired on product save + PO receive; `vec_products` populated.
   - `checkout_suggest_accessories(seedProductId, k)` + non-intrusive UI suggestions.
+  - **Landed (native):** `vec_index_product` (upsert; empty name = delete), `checkout_suggest_accessories` (k clamped 1–8, seed self-exclusion, advisory 0.9 distance cut, re-joins live non-deleted products), `vec_reindex_catalog` (latched rebuild, flag `vec_index.backfill.v1` in `app_settings`, keyset-batched 500/page, `force` re-run after bulk imports). All three registered in `COMMAND_REGISTRY` (index writes = `OperationalWrites` → fail-closed while locked; suggestions = `ReadOperationalData`) + `ALL_COMMAND_FNS_IN_TESTS` + both `generate_handler![]` blocks.
+  - **Population:** `saveProduct` fires `vec_index_product` (title‖brand‖compat), `deleteProduct` fires removal, `bulkSaveProducts` forces one idempotent rebuild, `getAllProducts` boot fires the latched backfill once per session — all fire-and-forget: the advisory projection never blocks or fails a catalog write. PO receive indexes touched products after `tx.commit()` in `commit_batch_inner` (best-effort, logged, never fails a committed receipt).
+  - **UI:** `useSemanticSuggestions` hook (250 ms debounce, seq-guarded, stock>0) + `AccessorySuggestions` chip strip in `MobileCheckoutTab`; desktop `CartPanel` merges the semantic lane into the existing suggested-products drawer (deduped, header falls back to `Suggérés` without a model). Tap-to-add only — nothing ever auto-applies; chip failures surface a toast.
+  - **Audit (decision):** no migration — `vec_products` is lazily created by native `ensure_po_recon_tables` (plugin v106 stays plain-table-only; sqlx cannot load vec0). Default build keeps deterministic token-hash embeddings (`po-embed` OFF): exact/token neighbors only; enabling `po-embed` upgrades recall with no further wiring.
+  - **Residuals (accepted):** vec rows for deleted products linger until the next rebuild (filtered at query time); a lost latch only re-runs the idempotent rebuild; suggestions are advisory-only (operator tap is the sole commit path, routing through normal `addToCart` rules).
 
 ## Sprint B — GSM / SAV / Wholesale Revenue Multipliers
 
@@ -67,7 +72,7 @@ Fix any failure or boundary pin immediately → mark `[x]` → atomic commit `fe
 |---|---|---|---|---|---|---|---|
 | 01 | done | feat(upgrade-01) | ✓ | ✓ | ✓ | ✓ | 200-row keyset window + on-demand lanes; money-critical reads SQLite-direct by index; zero-tax pin :480→:483; no migration (indexes pre-existing) |
 | 02 | done | feat(upgrade-02) | ✓ | ✓ | ✓ | ✓ | `tune()` on 5 per-invoke opens; migration v118 (4 ORDER BY indexes, max version 118); latched payload de-double-encode boot heal (14 tables); stock-heal JSON rewrites removed; event_log 90-day prune fail-closed on missing sync marker; SQLite 3.45.0 bump deferred |
-| 03 | pending | — | — | — | — | — | |
+| 03 | done | feat(upgrade-03) | ✓ | ✓ | ✓ | ✓ | `vec_index_product` / `vec_reindex_catalog` (latched `vec_index.backfill.v1`) / `checkout_suggest_accessories` + registry+handler wiring; save/delete/bulk/PO-receive population hooks; mobile chip strip + desktop drawer merge, tap-to-add only; cargo 293/293, zero-tax & boundary pins untouched (no migration) |
 | 04 | pending | — | — | — | — | — | |
 | 05 | pending | — | — | — | — | — | |
 | 06 | pending | — | — | — | — | — | |

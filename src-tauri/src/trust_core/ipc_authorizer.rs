@@ -363,6 +363,13 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("process_raw_scan", Capability::OperationalWrites),
     ("po_commit_stock_batch", Capability::OperationalWrites),
     ("commit_stock_batch", Capability::OperationalWrites),
+    // UPGRADE-03: semantic product index (sqlite-vec). The index is a
+    // projection of the catalog used ONLY for advisory accessory suggestions;
+    // suggestions read under ReadOperationalData, index writes mirror the
+    // catalog-write plane (denied while locked — fail closed).
+    ("vec_index_product", Capability::OperationalWrites),
+    ("vec_reindex_catalog", Capability::OperationalWrites),
+    ("checkout_suggest_accessories", Capability::ReadOperationalData),
     // MOBI-DEFECT-F: native atomic refund barrier (single Immediate txn).
     ("refund_sale_atomic", Capability::OperationalWrites),
     // MOBI-P0: native atomic checkout engine (single Immediate txn).
@@ -1127,6 +1134,9 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "po_commit_stock_batch",
     "process_raw_scan",
     "commit_stock_batch",
+    "checkout_suggest_accessories",
+    "vec_index_product",
+    "vec_reindex_catalog",
     "refund_sale_atomic",
     "checkout_sale_atomic",
     "get_device_identity_info",
