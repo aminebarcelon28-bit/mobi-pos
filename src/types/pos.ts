@@ -396,7 +396,19 @@ export interface Customer {
   barcode?: string;
   currentDebt?: number;
   debtLimit?: number;
+  /** UPGRADE-11 (v126): WhatsApp consent — staged/manual launches refuse without it. */
+  whatsappOptIn?: boolean;
+  /**
+   * UPGRADE-11 (v126): stored reliability score (0–100) + its stamp. The
+   * factor breakdown is recomputed on the fly (`utils/kredyEngine.ts`) —
+   * never persisted.
+   */
+  creditScore?: number | null;
+  creditScoreAt?: string | null;
 }
+
+/** UPGRADE-11 (v126): debt-ledger row kind; '' = legacy (pre-v126) rows. */
+export type CustomerDebtKind = 'ACHAT' | 'VERSEMENT' | 'CORRECTION';
 
 export interface CustomerDebtEntry {
   id: string;
@@ -410,6 +422,12 @@ export interface CustomerDebtEntry {
   notes?: string;
   createdAt: string;
   recordedBy?: string;
+  /** UPGRADE-11 (v126): credit-sale due date (aging buckets); null = legacy. */
+  dueDate?: string | null;
+  /** UPGRADE-11 (v126): row kind — '' = legacy (pre-v126) rows. */
+  kind?: CustomerDebtKind | '';
+  /** UPGRADE-11 (v126): FIFO waterfall attribution of a settled payment. */
+  allocations?: Array<{ debtId: string; amount: number }>;
 }
 
 export type ExpenseCategory =

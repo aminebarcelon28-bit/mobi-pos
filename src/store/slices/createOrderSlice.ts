@@ -74,6 +74,7 @@ import { isTxInCloseScope } from '../../db/adapters/shiftAdapter';
 import { formatDZD } from '../../types/pos';
 import { DRAWER_REASON_PREFIXES } from '../../constants/index';
 import { DEFAULT_CREDIT_LIMIT } from './createCustomerSlice';
+import { addDaysIso, assertCreditAllowed, KREDY_DEFAULT_TERM_DAYS } from '../../utils/kredyEngine';
 import { readVoucherStaging } from './createCartSlice';
 import { audioBus } from '../../utils/audioEvents';
 import { canonicalDeviceId, normalizeDeviceKey, resolveWarrantyWithFallback, warrantyAnchorFor } from '../../utils/warrantyResolver';
@@ -613,10 +614,16 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         if (!currentCustomer) {
           return { success: false, reason: 'CUSTOMER_REQUIRED_FOR_CREDIT' };
         }
-        const debtLimit = currentCustomer.debtLimit ?? DEFAULT_CREDIT_LIMIT;
-        const projectedDebt = (currentCustomer.currentDebt || 0) + creditDebtAmount;
-        if (projectedDebt > debtLimit) {
-          return { success: false, reason: `CREDIT_LIMIT_EXCEEDED:${debtLimit}` };
+        // UPGRADE-11: ONE credit gate shared with mobile
+        // (`assertCreditAllowed` — same boundary both shipped call sites
+        // agreed on: strictly above the ceiling refuses; exactly-at stays).
+        const verdict = assertCreditAllowed({
+          currentDebt: currentCustomer.currentDebt,
+          debtLimit: currentCustomer.debtLimit ?? DEFAULT_CREDIT_LIMIT,
+          creditAmount: creditDebtAmount,
+        });
+        if (!verdict.allowed) {
+          return { success: false, reason: `CREDIT_LIMIT_EXCEEDED:${verdict.debtLimit}` };
         }
       }
 
@@ -883,17 +890,23 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         };
 
         if (creditDebtAmount > 0) {
+          // UPGRADE-11 (v126): a credit sale is due in 30 days by default —
+          // the aging ladder (30/60/90) reads this. One clock read keeps the
+          // createdAt stamp and the due date consistent.
+          const debtCreatedAt = new Date().toISOString();
           debtEntry = {
              id: newId('DEBT'),
             customerId: currentCustomer.id,
             customerName: currentCustomer.name,
             type: 'DEBT_ACQUIRED',
+            kind: 'ACHAT',
             amount: creditDebtAmount,
             balanceAfter: newDebt,
             receiptNumber,
             paymentMethod: 'Crédit Client',
             notes: `Vente à Crédit #${receiptNumber} - Transaction #${transactionId}`,
-            createdAt: new Date().toISOString(),
+            createdAt: debtCreatedAt,
+            dueDate: addDaysIso(debtCreatedAt, KREDY_DEFAULT_TERM_DAYS),
             // Attribution follows mid-shift handovers: currentCashier (set via
             // setShiftCashier) wins when present, cashierName is the fallback.
             recordedBy:
@@ -1779,6 +1792,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           customerId: cust.id,
           customerName: cust.name,
           type: 'PAYMENT_SETTLED',
+          kind: 'CORRECTION',
           amount: creditDebtAmount,
           balanceAfter: newDebt,
           receiptNumber: txn.receiptNumber,

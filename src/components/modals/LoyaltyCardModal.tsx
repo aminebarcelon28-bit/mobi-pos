@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Printer, Award, CreditCard, Sparkles, QrCode, Smartphone, Check, ShieldCheck } from 'lucide-react';
+import { X, Printer, Award, CreditCard, Sparkles, Smartphone, Check, ShieldCheck } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { calculateCustomerTier, calculateNextTierProgress, normalizeLoyaltyConfig } from '../../utils/loyaltyEngine';
 import { useToast } from '../ui/Toast';
 import { renderBarcodeToCanvas } from '../../utils/barcodeGenerator';
+import { QRCodeImage } from '../ui/QRCodeImage';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { isMobileDevice, isTauriEnvironment } from '../../utils/platform';
 
@@ -225,7 +226,12 @@ export const LoyaltyCardModal: React.FC = () => {
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 font-semibold block uppercase">Valeur Avoir</span>
-                    <span className="text-xl font-black text-emerald-400">{formatDZD((customer.loyaltyPoints || 0) * 10)}</span>
+                    <span className="text-xl font-black text-emerald-400">
+                      {formatDZD((customer.loyaltyPoints || 0) * (loyaltyCfg.pointRedemptionRate || 10))}
+                    </span>
+                    <span className="text-[9px] text-slate-500 font-medium block">
+                      1 pt = {formatDZD(loyaltyCfg.pointRedemptionRate || 10)}
+                    </span>
                   </div>
                 </div>
 
@@ -245,9 +251,9 @@ export const LoyaltyCardModal: React.FC = () => {
                   )}
                 </div>
 
-                {/* QR Code Container */}
+                {/* QR Code Container — real scannable QR (UPGRADE-11) */}
                 <div className="bg-white p-3 rounded-2xl flex flex-col items-center justify-center border border-gray-300 text-black">
-                  <QrCode className="w-24 h-24 text-slate-950" />
+                  <QRCodeImage value={cardCode} size={128} alt={`Code QR — ${cardCode}`} />
                   <span className="text-[9px] font-mono font-bold text-gray-700 mt-1">{cardCode}</span>
                 </div>
 

@@ -150,7 +150,8 @@ await local.execute(`CREATE TABLE customer_debts (
   amount REAL NOT NULL DEFAULT 0, balance_after REAL NOT NULL DEFAULT 0, receipt_number TEXT,
   payment_method TEXT, notes TEXT, recorded_by TEXT, created_at TEXT NOT NULL,
   json_payload TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL,
-  deleted INTEGER NOT NULL DEFAULT 0)`);
+  deleted INTEGER NOT NULL DEFAULT 0,
+  due_date TEXT, kind TEXT NOT NULL DEFAULT '')`);
 await local.execute(`CREATE TABLE entity_keys (
   entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
   version INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (entity_type, entity_id))`);

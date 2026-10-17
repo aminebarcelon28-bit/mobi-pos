@@ -201,19 +201,19 @@ const TAX_RE = /\btax(es)?\b|\bvatRate\b|\btva\b/i;
  */
 const WHITELIST = new Set([
   // Documented removals (comments recording what was deleted and why).
-  // Re-pinned +25 on the UPGRADE-10 (v125) heal-lane + cycle-count repo insertion.
-  'src/db/sqlPluginAdapter.ts:1547',
-  'src/db/sqlPluginAdapter.ts:2358',
-  'src/db/sqlPluginAdapter.ts:2360',
+  // Re-pinned on the UPGRADE-11 (v126) Kredy heal-lane + repo insertion.
+  'src/db/sqlPluginAdapter.ts:1571',
+  'src/db/sqlPluginAdapter.ts:2382',
+  'src/db/sqlPluginAdapter.ts:2384',
   // Legacy `vatRate` scrub on the settings lane (push strip + pull apply).
-  'src/db/sqlPluginAdapter.ts:3909',
-  'src/db/sqlPluginAdapter.ts:3910',
-  'src/db/sqlPluginAdapter.ts:3922',
-  'src/db/sqlPluginAdapter.ts:3923',
-  'src/sync/genericApply.ts:629',
-  'src/sync/genericApply.ts:635',
-  'src/sync/genericApply.ts:636',
-  'src/store/slices/createOrderSlice.ts:538',
+  'src/db/sqlPluginAdapter.ts:3933',
+  'src/db/sqlPluginAdapter.ts:3934',
+  'src/db/sqlPluginAdapter.ts:3946',
+  'src/db/sqlPluginAdapter.ts:3947',
+  'src/sync/genericApply.ts:633',
+  'src/sync/genericApply.ts:639',
+  'src/sync/genericApply.ts:640',
+  'src/store/slices/createOrderSlice.ts:539',
   'src/sync/payloadHygiene.ts:37',
   'src/sync/SyncManager.ts:134',
   'src/utils/receiptMath.ts:241',

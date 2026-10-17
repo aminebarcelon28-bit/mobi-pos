@@ -435,6 +435,17 @@ export interface TranslationDictionary {
     readonly recentEntriesHeading: string;
     readonly defaultCounterNote: string;
     readonly overpaymentWarningBody: string;
+    // UPGRADE-11 (v126): Kredy collection & risk surfaces.
+    readonly agingStripTitle: string;
+    readonly creditScoreChip: string;
+    readonly scoreBreakdownTitle: string;
+    readonly whatsappOptInLabel: string;
+    readonly dunningRelanceButton: string;
+    readonly planSectionTitle: string;
+    readonly planAmountLabel: string;
+    readonly planInstallmentsLabel: string;
+    readonly planIntervalLabel: string;
+    readonly planCreateButton: string;
   };
   readonly management: {
     readonly sectionsNavAria: string;

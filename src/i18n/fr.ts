@@ -398,6 +398,17 @@ export const fr: TranslationDictionary = {
     recentEntriesHeading: 'Dernières écritures ({count})',
     defaultCounterNote: 'Règlement direct au comptoir',
     overpaymentWarningBody: 'Le montant saisi dépasse le solde dû ({debt}). Un avoir de {credit} sera crédité au compte.',
+    // UPGRADE-11 (v126): Kredy collection & risk surfaces.
+    agingStripTitle: 'Échéancier des créances',
+    creditScoreChip: 'Score : {score}/100',
+    scoreBreakdownTitle: 'Détail du score de fiabilité',
+    whatsappOptInLabel: 'Autoriser les relances WhatsApp',
+    dunningRelanceButton: 'Relancer ({stage})',
+    planSectionTitle: 'Plan de paiement 0 % (sans frais)',
+    planAmountLabel: 'Montant du plan (DA)',
+    planInstallmentsLabel: 'Nombre de versements',
+    planIntervalLabel: 'Intervalle (jours)',
+    planCreateButton: 'Créer le plan',
   },
   management: {
     sectionsNavAria: 'Sections de gestion',

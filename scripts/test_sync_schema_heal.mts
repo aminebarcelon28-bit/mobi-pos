@@ -4,7 +4,7 @@
 //  2. Pulled customers + debts land without idempotency_key UNIQUE collisions.
 //  3. Empty cloud DB migrates to LATEST_REMOTE_VERSION idempotently.
 import { DatabaseSync } from 'node:sqlite';
-import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL } from '../src/utils/../db/schemaHeal.ts';
+import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL, KREDY_V126_HEAL_SQL } from '../src/utils/../db/schemaHeal.ts';
 import { applyRemoteMigrations, LATEST_REMOTE_VERSION } from '../src/sync/remoteSchema.ts';
 import { applyGenericRemoteRow } from '../src/sync/genericApply.ts';
 
@@ -82,6 +82,12 @@ const localShim = (db: DatabaseSync) => ({
   const db = makeLocalDb();
   const shim = localShim(db) as never;
   for (const stmt of CUSTOMER_DEBTS_COLUMN_HEAL_SQL) {
+    await (shim as { execute: (s: string) => Promise<unknown> }).execute(stmt).catch(() => undefined);
+  }
+  // Production boot also applies the v126 heal lane (the same combined array
+  // in `sqlPluginAdapter`): without it the apply upsert's `due_date`/`kind`
+  // columns would not exist on this fixture.
+  for (const stmt of KREDY_V126_HEAL_SQL) {
     await (shim as { execute: (s: string) => Promise<unknown> }).execute(stmt).catch(() => undefined);
   }
   const custRow = (over: Record<string, unknown> = {}) => ({

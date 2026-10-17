@@ -294,18 +294,21 @@ async function mirrorImportCustomerAuthority(parsed: BackupPayload): Promise<voi
     );
     await db.execute(
       `INSERT INTO customer_debts (id, customer_id, customer_name, type, amount, balance_after,
-         receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0)
+         receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted,
+         due_date, kind)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16)
        ON CONFLICT(id) DO UPDATE SET customer_id=excluded.customer_id, customer_name=excluded.customer_name,
          type=excluded.type, amount=excluded.amount, balance_after=excluded.balance_after,
          receipt_number=excluded.receipt_number, payment_method=excluded.payment_method,
          notes=excluded.notes, recorded_by=excluded.recorded_by, created_at=excluded.created_at,
          json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
+         due_date=excluded.due_date, kind=excluded.kind,
        version = excluded.version
        WHERE excluded.version >= customer_debts.version`,
       [d.id, d.customerId, d.customerName || 'Client', d.type, intDzd(d.amount), intDzd(d.balanceAfter),
         d.receiptNumber ?? null, d.paymentMethod ?? null, d.notes ?? null, d.recordedBy ?? null,
-        d.createdAt ?? now, JSON.stringify({ ...d, version: nextVersion }), nextVersion, now],
+        d.createdAt ?? now, JSON.stringify({ ...d, version: nextVersion }), nextVersion, now,
+        d.dueDate ?? null, d.kind || ''],
     );
     // Outbox intentionally left to the shared H28 mirror (single clock bump).
   }

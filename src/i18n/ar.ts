@@ -438,6 +438,17 @@ export const ar: TranslationDictionary = {
     recentEntriesHeading: 'العمليات الأخيرة ({count})',
     defaultCounterNote: 'تسديد مباشر في المحل',
     overpaymentWarningBody: 'المبلغ المدخل يتجاوز الدين المستحق ({debt}). سيتم تسجيل فارق {credit} كرصيد دائن للزبون.',
+    // UPGRADE-11 (v126): Kredy collection & risk surfaces.
+    agingStripTitle: 'جدول استحقاق الديون',
+    creditScoreChip: 'الموثوقية: {score}/100',
+    scoreBreakdownTitle: 'تفاصيل درجة الموثوقية',
+    whatsappOptInLabel: 'السماح بتذكيرات واتساب',
+    dunningRelanceButton: 'تذكير ({stage})',
+    planSectionTitle: 'خطة دفع بدون فوائد (0 %)',
+    planAmountLabel: 'مبلغ الخطة (دج)',
+    planInstallmentsLabel: 'عدد الأقساط',
+    planIntervalLabel: 'الفاصل الزمني (أيام)',
+    planCreateButton: 'إنشاء الخطة',
   },
 
   // [needs-native-review] Section: management — Management & Operational Hub (S13)

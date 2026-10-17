@@ -37,6 +37,7 @@ import { soundEngine } from '../../../utils/audioFeedback';
 import { useToast } from '../../ui/Toast';
 import { MobileCameraScanner } from '../MobileCameraScanner';
 import { getEffectiveDebtLimit } from '../../../store/slices/createCustomerSlice';
+import { assertCreditAllowed } from '../../../utils/kredyEngine';
 import { calculateMaxAllowedCredit } from '../../../utils/loyaltyEngine';
 import { openWhatsApp } from '../../../utils/phoneUtils';
 import { verifyManagerGate } from '../../../utils/pinGate';
@@ -578,18 +579,24 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
       tradeInCredit: liveTradeInForCredit,
     }).total;
 
-    const currentDebt = currentCustomer.currentDebt || 0;
-    const debtLimit = getEffectiveDebtLimit(currentCustomer);
-    if (currentDebt + submitNet > debtLimit) {
+    // UPGRADE-11: the SAME gate the desktop lane runs (`assertCreditAllowed`)
+    // — one shared boundary instead of two divergent copies. Boundary
+    // preserved exactly: strictly-above the ceiling refuses, exactly-at stays.
+    const verdict = assertCreditAllowed({
+      currentDebt: currentCustomer.currentDebt,
+      debtLimit: getEffectiveDebtLimit(currentCustomer),
+      creditAmount: submitNet,
+    });
+    if (!verdict.allowed) {
       setCreditCeilingAlert({
         customerName: currentCustomer.name,
-        currentDebt,
-        debtLimit,
+        currentDebt: verdict.currentDebt,
+        debtLimit: verdict.debtLimit,
       });
       showToast(
         `Plafond de crédit dépassé pour ${currentCustomer.name} ! Dette actuelle : ${formatDZD(
-          currentDebt,
-        )}, Plafond max : ${formatDZD(debtLimit)}`,
+          verdict.currentDebt,
+        )}, Plafond max : ${formatDZD(verdict.debtLimit)}`,
         'error',
         5000,
       );

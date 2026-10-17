@@ -25,10 +25,23 @@ import { AppTabContent } from '../AppScreenLayout';
 import type { Customer, CustomerDebtEntry, PaymentMethodType } from '../../../types/pos';
 import { formatDZD, formatDateTime } from '../../../types/pos';
 import { soundEngine } from '../../../utils/audioFeedback';
-import { normalizeAlgerianPhone, openDialer, openWhatsApp } from '../../../utils/phoneUtils';
+import { normalizeAlgerianPhone, openDialer } from '../../../utils/phoneUtils';
 import { useToast } from '../../ui/Toast';
 import { MoneyInput } from '../../ui/MoneyInput';
 import { dinarsToMinor, toLegacyReal } from '../../../utils/money';
+import {
+  agingBucketFor,
+  agingBucketRank,
+  computeReliabilityScore,
+  daysOverdue,
+  DUNNING_STAGES,
+  KREDY_AGING_BUCKETS,
+  nextDunningStage,
+  outstandingItemsFromEntries,
+  toIntDzd,
+  type KredyAgingBucket,
+  type KredyScore,
+} from '../../../utils/kredyEngine';
 import { useTranslation, Bdi } from '../../../i18n';
 import { useRegisterMobileBackHandler } from '../../../hooks/useMobileBackNavigation';
 
@@ -45,9 +58,25 @@ interface CustomerDebtMeta {
   recentEntries: CustomerDebtEntry[];
 }
 
+/** UPGRADE-11 (v126): ladder state row for the per-customer dunning chips. */
+interface DunningStateRow {
+  stage: string;
+  status: string;
+  launchedAt: string | null;
+}
+
 export const KredyTab: React.FC = () => {
-  const { customers, customerDebts, receiptSettings, openModal, recordCustomerDebtPayment } =
-    usePosStore();
+  const {
+    customers,
+    customerDebts,
+    openModal,
+    recordCustomerDebtPayment,
+    // UPGRADE-11 (v126): Kredy collection & risk actions — opt-in gate,
+    // honest launch log, laddered relances and 0 % installment plans.
+    launchDebtReminder,
+    setWhatsappOptIn,
+    createInstallmentPlan,
+  } = usePosStore();
   const { showToast } = useToast();
   const { t } = useTranslation();
 
@@ -118,6 +147,103 @@ export const KredyTab: React.FC = () => {
     }
     return map;
   }, [customerDebts, referenceTime]);
+
+  // UPGRADE-11 (v126): every pure Kredy calculator gets the SAME frozen
+  // reference instant this tab already uses — no wall-clock reads in render.
+  const nowIso = useMemo(() => new Date(referenceTime).toISOString(), [referenceTime]);
+
+  // Per-customer risk summary: due-date aging (engine buckets), the pure
+  // reliability score and the outstanding items; bucket totals ride along for
+  // the header strip. All amounts stay integer DZD.
+  const kredyOverview = useMemo(() => {
+    const entriesByCustomer = new Map<string, CustomerDebtEntry[]>();
+    for (const entry of customerDebts || []) {
+      const bucket = entriesByCustomer.get(entry.customerId);
+      if (bucket) bucket.push(entry);
+      else entriesByCustomer.set(entry.customerId, [entry]);
+    }
+    const agingTotals: Record<KredyAgingBucket, number> = {
+      'Courant': 0,
+      '1–30j': 0,
+      '31–60j': 0,
+      '61–90j': 0,
+      '90j+': 0,
+    };
+    const riskByCustomer = new Map<
+      string,
+      { worstBucket: KredyAgingBucket; overdueDays: number; score: KredyScore; outstandingCount: number }
+    >();
+    for (const c of customers || []) {
+      if ((c.currentDebt || 0) <= 0) continue;
+      const entries = entriesByCustomer.get(c.id) || [];
+      const outstanding = outstandingItemsFromEntries(entries).filter((it) => it.remaining > 0);
+      let worstBucket: KredyAgingBucket = 'Courant';
+      let overdueDays = 0;
+      for (const item of outstanding) {
+        const bucket = agingBucketFor(item.dueDate, nowIso);
+        if (agingBucketRank(bucket) > agingBucketRank(worstBucket)) worstBucket = bucket;
+        overdueDays = Math.max(overdueDays, daysOverdue(item.dueDate, nowIso));
+        agingTotals[bucket] += item.remaining;
+      }
+      riskByCustomer.set(c.id, {
+        worstBucket,
+        overdueDays,
+        outstandingCount: outstanding.length,
+        score: computeReliabilityScore({
+          nowIso,
+          currentDebt: c.currentDebt || 0,
+          debtLimit: c.debtLimit ?? DEFAULT_CREDIT_LIMIT,
+          entries,
+        }),
+      });
+    }
+    return { riskByCustomer, agingTotals };
+  }, [customers, customerDebts, nowIso]);
+
+  // Ladder state per customer — ONE batch read for the whole list, refreshed
+  // only when the debtor set changes or a launch succeeds.
+  const debtorIdsKey = useMemo(
+    () =>
+      (customers || [])
+        .filter((c) => (c.currentDebt || 0) > 0)
+        .map((c) => c.id)
+        .sort()
+        .join('|'),
+    [customers],
+  );
+  const [dunningByCustomer, setDunningByCustomer] = useState<Map<string, DunningStateRow[]>>(new Map());
+  const refreshDunningRows = useCallback(async () => {
+    const ids = debtorIdsKey ? debtorIdsKey.split('|') : [];
+    if (ids.length === 0) {
+      setDunningByCustomer(new Map());
+      return;
+    }
+    const { listDunningRowsForCustomers } = await import('../../../db/sqlPluginAdapter');
+    const rows = await listDunningRowsForCustomers(ids);
+    const map = new Map<string, DunningStateRow[]>();
+    for (const row of rows) {
+      const item: DunningStateRow = { stage: row.stage, status: row.status, launchedAt: row.launchedAt };
+      const bucket = map.get(row.customerId);
+      if (bucket) bucket.push(item);
+      else map.set(row.customerId, [item]);
+    }
+    setDunningByCustomer(map);
+  }, [debtorIdsKey]);
+  useEffect(() => {
+    void refreshDunningRows();
+  }, [refreshDunningRows]);
+
+  // Plan-de-paiement form state (0 % — validated by engine + store).
+  const [planAmountMinor, setPlanAmountMinor] = useState(0);
+  const [planInstallments, setPlanInstallments] = useState('3');
+  const [planIntervalDays, setPlanIntervalDays] = useState('30');
+  const [isCreatingPlan, setIsCreatingPlan] = useState(false);
+  const planSubmittingRef = useRef(false);
+  useEffect(() => {
+    setPlanAmountMinor(0);
+    setPlanInstallments('3');
+    setPlanIntervalDays('30');
+  }, [expandedCustomerId]);
 
   // Métriques globales
   const totalOutstandingDebt = useMemo(() => {
@@ -243,58 +369,102 @@ export const KredyTab: React.FC = () => {
     }
   };
 
-  // Expédition instantanée de relevé de compte par WhatsApp
+  // UPGRADE-11 (v126): ONE WhatsApp launch path — manual relance (no stage)
+  // and laddered dunning (stage) share the store action: opt-in gate,
+  // single-claim ladder, quiet hours, and an honest log ('Lancé' only when the
+  // launch really opened; a blocked popup releases the claim and writes
+  // nothing).
+  const handleDunningLaunch = async (customer: Customer, stage?: 'R1' | 'R2' | 'R3') => {
+    soundEngine.playKeyBeep?.();
+    const result = await launchDebtReminder(customer.id, stage ? { stage } : undefined);
+    if (result.success) {
+      soundEngine.playSuccess?.();
+      showToast(
+        stage
+          ? `Relance ${stage} lancée pour ${customer.name} — statut : Lancé.`
+          : `Relance WhatsApp lancée pour ${customer.name} — statut : Lancé.`,
+        'success'
+      );
+      if (stage) void refreshDunningRows();
+      return;
+    }
+    soundEngine.playError?.();
+    const reasonMessages: Record<string, string> = {
+      WHATSAPP_OPT_IN_REQUIRED: `Aucun envoi : ${customer.name} n'a pas donné son accord WhatsApp.`,
+      QUIET_HOURS: "Relances suspendues entre 19h et 8h (heure d'Alger). Réessayez demain matin.",
+      CLOCK_UNAVAILABLE: 'Horloge illisible — relance bloquée par prudence.',
+      STAGE_ALREADY_LAUNCHED: 'Ce palier a déjà été relancé — jamais deux fois (anti-doublon).',
+      STAGE_NOT_ELIGIBLE:
+        "Palier non éligible : les paliers se suivent dans l'ordre et exigent leur ancienneté de retard.",
+      WHATSAPP_BLOCKED: "Impossible d'ouvrir WhatsApp sur cet appareil — vérifiez le bloqueur de fenêtres.",
+      NO_OUTSTANDING_DEBT: 'Aucun encours à relancer pour ce client.',
+    };
+    showToast(reasonMessages[result.reason || ''] || 'Relance impossible pour le moment.', 'error');
+  };
+
+  // Expédition instantanée de relevé de compte par WhatsApp (relance manuelle).
   const handleWhatsApp = async (customer: Customer, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    soundEngine.playKeyBeep?.();
     if (!customer.phone) {
       showToast(`Numéro de téléphone non renseigné pour ${customer.name}.`, 'warning');
       return;
     }
+    await handleDunningLaunch(customer);
+  };
 
-    const storeName = receiptSettings?.storeName || 'MobiPOS';
-    const storePhone = receiptSettings?.phone ? `\n📞 Contact boutique : ${receiptSettings.phone}` : '';
-    const debt = customer.currentDebt || 0;
-    const debtLimit = customer.debtLimit ?? DEFAULT_CREDIT_LIMIT;
-    const today = new Date().toLocaleDateString('fr-DZ', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    });
-
-    let message = '';
-    if (debt > 0) {
-      const meta = customerDebtMetaMap.get(customer.id);
-      const agingNotice =
-        meta?.daysSinceActivity && meta.daysSinceActivity >= 30
-          ? `\n⚠️ *Avis d'échéance :* Ce solde est en attente depuis ${meta.daysSinceActivity} jours.`
-          : '';
-
-      message =
-        `*RELEVÉ DE COMPTE CRÉANCE — ${storeName}*\n` +
-        `📅 Date : ${today}\n` +
-        `👤 Client : *${customer.name}*\n` +
-        `━━━━━━━━━━━━━━━━━━\n` +
-        `💰 *Solde Restant Dû :* *${formatDZD(debt)}*\n` +
-        `🛡️ Plafond autorisé : ${formatDZD(debtLimit)}` +
-        `${agingNotice}\n` +
-        `━━━━━━━━━━━━━━━━━━\n` +
-        `Merci de bien vouloir vous rapprocher de notre boutique pour régulariser votre compte.\n` +
-        `L'équipe ${storeName}${storePhone}`;
+  // UPGRADE-11 (v126): WhatsApp consent — every launch refuses without it.
+  const handleToggleOptIn = async (customer: Customer) => {
+    soundEngine.playKeyBeep?.();
+    const enabled = customer.whatsappOptIn !== true;
+    const res = await setWhatsappOptIn(customer.id, enabled);
+    if (res?.success) {
+      showToast(
+        enabled
+          ? `Relances WhatsApp autorisées pour ${customer.name}.`
+          : `Relances WhatsApp désactivées pour ${customer.name}.`,
+        'success'
+      );
     } else {
-      message =
-        `*ATTESTATION DE SOLDE À JOUR — ${storeName}*\n` +
-        `📅 Date : ${today}\n` +
-        `👤 Client : *${customer.name}*\n` +
-        `━━━━━━━━━━━━━━━━━━\n` +
-        `✅ *Votre compte est parfaitement à jour (Solde : 0 DA).*\n` +
-        `Merci pour votre confiance et votre fidélité !\n` +
-        `L'équipe ${storeName}${storePhone}`;
+      soundEngine.playError?.();
+      showToast('Échec de la mise à jour du consentement WhatsApp.', 'error');
     }
+  };
 
-    const ok = await openWhatsApp(customer.phone, message);
-    if (!ok) {
-      showToast("Impossible d'ouvrir WhatsApp sur cet appareil.", 'error');
+  // UPGRADE-11 (v126): 0 % / 0-fee installment plan, bounded by the outstanding
+  // debt — validation is the pure engine behind the store action.
+  const handleCreatePlan = async (customer: Customer) => {
+    if (planSubmittingRef.current) return;
+    planSubmittingRef.current = true;
+    setIsCreatingPlan(true);
+    try {
+      const res = await createInstallmentPlan(customer.id, {
+        totalAmount: toLegacyReal(planAmountMinor),
+        installments: toIntDzd(planInstallments),
+        intervalDays: toIntDzd(planIntervalDays),
+      });
+      if (res.success) {
+        soundEngine.playSuccess?.();
+        showToast(`Plan de paiement 0 % créé pour ${customer.name} — sans frais.`, 'success');
+        setPlanAmountMinor(0);
+      } else {
+        soundEngine.playError?.();
+        const reasonMessages: Record<string, string> = {
+          EXCEEDS_OUTSTANDING: "Le total du plan dépasse l'encours du client.",
+          ENTRY_BELOW_ONE_DA:
+            'Chaque versement doit valoir au moins 1 DA — ajustez le total ou le nombre de versements.',
+          INSTALLMENTS_RANGE: 'Nombre de versements hors limites (1 à 120).',
+          INTERVAL_RANGE: 'Intervalle hors limites (1 à 90 jours).',
+          NON_INTEGER_TOTAL: 'Montant invalide — dinars entiers uniquement.',
+          TOTAL_NEGATIVE: 'Montant du plan invalide.',
+          INVALID_START: "Date de départ invalide — réessayez.",
+          NO_OUTSTANDING_DEBT: 'Aucun encours à planifier pour ce client.',
+          DB_SAVE_FAILED: "Échec d'enregistrement du plan — réessayez.",
+        };
+        showToast(reasonMessages[res.reason || ''] || 'Plan refusé par la validation.', 'error');
+      }
+    } finally {
+      planSubmittingRef.current = false;
+      setIsCreatingPlan(false);
     }
   };
 
@@ -359,6 +529,34 @@ export const KredyTab: React.FC = () => {
                 {t.kredy.totalActiveReceivablesSubtitle}
               </span>
             </div>
+
+            {/* UPGRADE-11 (v126): échéancier par tranche — jours de retard réels
+                sur la date d'échéance du moteur (pas l'ancienneté d'activité). */}
+            {totalOutstandingDebt > 0 && (
+              <div className="pt-1 border-t border-amber-500/20">
+                <span className="text-[10px] font-black uppercase tracking-wider text-pos-muted block mb-1.5">
+                  {t.kredy.agingStripTitle}
+                </span>
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
+                  {KREDY_AGING_BUCKETS.map((bucket) => (
+                    <span
+                      key={bucket}
+                      className={`shrink-0 text-[10px] font-bold px-2 py-1 rounded-lg border ${
+                        bucket === '90j+'
+                          ? 'pos-status-danger'
+                          : bucket === '61–90j' || bucket === '31–60j'
+                            ? 'pos-status-warn'
+                            : 'bg-pos-panel text-pos-muted border-pos-border'
+                      }`}
+                    >
+                      <Bdi mono>
+                        {bucket} : {formatDZD(kredyOverview.agingTotals[bucket])}
+                      </Bdi>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Boutons d'accès rapide aux outils globaux */}
             <div className="grid grid-cols-2 gap-2 pt-1 border-t border-amber-500/20">
@@ -558,6 +756,18 @@ export const KredyTab: React.FC = () => {
             const isAgingOver15 = (meta?.daysSinceActivity ?? 0) >= 15 && hasDebt && !isAgingOver30;
             const isExpanded = expandedCustomerId === c.id;
 
+            // UPGRADE-11 (v126): due-date risk summary + ladder state — both
+            // precomputed in batch memos above, so render does zero queries.
+            const risk = kredyOverview.riskByCustomer.get(c.id);
+            const dunningRows = dunningByCustomer.get(c.id) || [];
+            const launchedStages = dunningRows
+              .filter((r) => r.status === 'LANCEE')
+              .map((r) => r.stage);
+            const nextStage =
+              hasDebt && risk
+                ? nextDunningStage({ launchedStages, daysOverdue: risk.overdueDays })
+                : null;
+
             const phoneInfo = c.phone ? normalizeAlgerianPhone(c.phone) : null;
 
             return (
@@ -683,6 +893,23 @@ export const KredyTab: React.FC = () => {
                           {t.kredy.accountUpToDateBadge}
                         </span>
                       ) : null}
+
+                      {/* UPGRADE-11 (v126): score de fiabilité + pire tranche
+                          d'échéance (moteur, calculés sur l'horloge de référence) */}
+                      {hasDebt && risk && (
+                        <span
+                          className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded bg-pos-panel border border-pos-border text-pos-muted"
+                          title={t.kredy.scoreBreakdownTitle}
+                        >
+                          <Bdi mono>{t('kredy.creditScoreChip', { score: risk.score.score })}</Bdi>
+                        </span>
+                      )}
+                      {hasDebt && risk && risk.worstBucket !== 'Courant' && (
+                        <span className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-800 dark:text-orange-300 border border-orange-500/40">
+                          <Clock className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+                          <Bdi mono>{risk.worstBucket}</Bdi>
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -721,6 +948,24 @@ export const KredyTab: React.FC = () => {
                     >
                       <DollarSign className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0" aria-hidden="true" />
                       <span className="truncate">{t.kredy.settleAction}</span>
+                    </button>
+                  )}
+
+                  {/* UPGRADE-11 (v126): relance paliérée — le magasin arbitre
+                      l'ordre, l'éligibilité et le claim unique ; le libellé
+                      affiche le palier réellement lancé (jamais deux fois). */}
+                  {hasDebt && nextStage && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleDunningLaunch(c, nextStage.id);
+                      }}
+                      aria-label={`${t('kredy.dunningRelanceButton', { stage: nextStage.id })} — ${c.name}`}
+                      className="min-h-[48px] min-w-0 px-3 rounded-xl bg-rose-500/15 border border-rose-500/40 hover:bg-rose-500/25 active:bg-rose-500/35 text-rose-800 dark:text-rose-300 text-xs font-bold flex items-center justify-center gap-1.5 transition active-press cursor-pointer shadow-xs sm:shrink-0"
+                    >
+                      <ShieldAlert className="w-4 h-4 shrink-0" aria-hidden="true" />
+                      <span className="truncate">{t('kredy.dunningRelanceButton', { stage: nextStage.id })}</span>
                     </button>
                   )}
 
@@ -846,6 +1091,147 @@ export const KredyTab: React.FC = () => {
                         </div>
                       ))}
                     </div>
+
+                    {/* UPGRADE-11 (v126): détail du score — calculé à la
+                        lecture, jamais persisté (seul le score l'est). */}
+                    {risk && (
+                      <div className="pt-2 border-t border-pos-border/40 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-pos-muted">
+                            {t.kredy.scoreBreakdownTitle}
+                          </span>
+                          <Bdi mono className="text-[10px] font-black text-pos-muted">
+                            {t('kredy.creditScoreChip', { score: risk.score.score })}
+                          </Bdi>
+                        </div>
+                        {risk.score.factors.map((factor) => (
+                          <div key={factor.key} className="flex items-center justify-between gap-2 text-[10px]">
+                            <span className="text-pos-muted truncate">
+                              {factor.label} · {factor.detail}
+                            </span>
+                            <Bdi
+                              mono
+                              className={`font-black shrink-0 ${
+                                factor.points >= 0
+                                  ? 'text-emerald-700 dark:text-emerald-400'
+                                  : 'text-rose-700 dark:text-rose-400'
+                              }`}
+                            >
+                              {factor.points > 0 ? '+' : ''}
+                              {factor.points}
+                            </Bdi>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* UPGRADE-11 (v126): consentement WhatsApp — sans lui,
+                        aucune relance (manuelle ou paliérée) ne part. */}
+                    <div className="pt-2 border-t border-pos-border/40 flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-[11px] font-bold text-pos-text">{t.kredy.whatsappOptInLabel}</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={c.whatsappOptIn === true}
+                        aria-label={`${t.kredy.whatsappOptInLabel} — ${c.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleToggleOptIn(c);
+                        }}
+                        className={`min-h-[48px] min-w-[76px] px-3 rounded-xl border text-sm font-black flex items-center justify-center transition cursor-pointer active-press ${
+                          c.whatsappOptIn === true
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-300'
+                            : 'bg-pos-panel border-pos-border text-pos-muted'
+                        }`}
+                      >
+                        <span aria-hidden="true">{c.whatsappOptIn === true ? '✓' : '—'}</span>
+                      </button>
+                    </div>
+
+                    {/* UPGRADE-11 (v126): paliers de relance déjà lancés. */}
+                    {dunningRows.length > 0 && (
+                      <div className="pt-2 border-t border-pos-border/40 flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-pos-muted">
+                          Relances :
+                        </span>
+                        {DUNNING_STAGES.map((stageDef) => {
+                          const launched = dunningRows.find(
+                            (r) => r.stage === stageDef.id && r.status === 'LANCEE'
+                          );
+                          return (
+                            <span
+                              key={stageDef.id}
+                              className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${
+                                launched
+                                  ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-300'
+                                  : 'bg-pos-panel border-pos-border text-pos-muted'
+                              }`}
+                            >
+                              {stageDef.id} {launched ? '✓' : '—'}
+                              {launched?.launchedAt ? ` · ${formatDateTime(launched.launchedAt)}` : ''}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* UPGRADE-11 (v126): plan de paiement 0 % borné par l'encours. */}
+                    {hasDebt && (
+                      <div className="pt-2 border-t border-pos-border/40 space-y-2">
+                        <span className="text-[11px] font-bold text-pos-text block">
+                          {t.kredy.planSectionTitle}
+                        </span>
+                        <div>
+                          <MoneyInput
+                            label={t.kredy.planAmountLabel}
+                            valueMinor={planAmountMinor}
+                            onChangeMinor={(minor) => setPlanAmountMinor(minor)}
+                            className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-base font-mono font-black text-pos-text focus:outline-none focus:border-amber-400"
+                            placeholder="0"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-[9px] uppercase font-bold text-pos-muted block mb-1">
+                              {t.kredy.planInstallmentsLabel}
+                            </span>
+                            <input
+                              type="number"
+                              min="1"
+                              max="120"
+                              value={planInstallments}
+                              onChange={(e) => setPlanInstallments(e.target.value)}
+                              className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-sm font-mono text-pos-text focus:outline-none focus:border-amber-400"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-[9px] uppercase font-bold text-pos-muted block mb-1">
+                              {t.kredy.planIntervalLabel}
+                            </span>
+                            <input
+                              type="number"
+                              min="1"
+                              max="90"
+                              value={planIntervalDays}
+                              onChange={(e) => setPlanIntervalDays(e.target.value)}
+                              className="w-full min-h-[48px] bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-sm font-mono text-pos-text focus:outline-none focus:border-amber-400"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleCreatePlan(c);
+                          }}
+                          disabled={isCreatingPlan || planAmountMinor <= 0}
+                          className="w-full min-h-[48px] px-4 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 transition active-press cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-4 h-4 shrink-0" aria-hidden="true" />
+                          <span>{t.kredy.planCreateButton}</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

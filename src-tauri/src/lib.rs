@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 125;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 126;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -2130,6 +2130,82 @@ fn base_schema_migrations() -> Vec<Migration> {
             CREATE UNIQUE INDEX IF NOT EXISTS idx_cct_open_product ON cycle_count_tasks(product_id) WHERE counted_at IS NULL AND deleted = 0;
             CREATE INDEX IF NOT EXISTS idx_cct_due ON cycle_count_tasks(counted_at, due_at);
             CREATE INDEX IF NOT EXISTS idx_cct_product_counted ON cycle_count_tasks(product_id, counted_at);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v126 — UPGRADE-11: Kredy collection & risk engine. The debt
+            // ledger gains `due_date`/`kind`; customers gain WhatsApp opt-in
+            // (`whatsapp_opt_in`) and the stored reliability score
+            // (`credit_score` / `credit_score_at`, recomputed on the fly with
+            // an explicit factor breakdown). `debt_plans` + `debt_plan_entries`
+            // are strictly 0 % / 0-fee integer-DZD installment schedules — no
+            // fee or interest column exists. `dunning_queue` +
+            // `whatsapp_launches` are LOCAL-ONLY operational tables: the
+            // unique (customer_id, stage) index enforces one launch per
+            // ladder stage, and the launch log records only launches that
+            // actually happened (`status` always exactly 'Lancé'). Mirrors
+            // `schemaHeal.ts` verbatim (parity oracle).
+            version: 126,
+            description: "UPGRADE-11: Kredy due dates, 0-fee plans, dunning ladder, honest launch log",
+            sql: r#"
+            ALTER TABLE customer_debts ADD COLUMN due_date TEXT;
+            ALTER TABLE customer_debts ADD COLUMN kind TEXT NOT NULL DEFAULT '';
+            ALTER TABLE customers ADD COLUMN whatsapp_opt_in INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE customers ADD COLUMN credit_score INTEGER;
+            ALTER TABLE customers ADD COLUMN credit_score_at TEXT;
+            CREATE TABLE IF NOT EXISTS debt_plans (
+              id TEXT PRIMARY KEY,
+              customer_id TEXT NOT NULL,
+              total_amount INTEGER NOT NULL CHECK (total_amount >= 0),
+              installments INTEGER NOT NULL CHECK (installments >= 1),
+              interval_days INTEGER NOT NULL CHECK (interval_days >= 1),
+              start_date TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'ACTIF' CHECK (status IN ('ACTIF','SOLDE','ANNULE')),
+              notes TEXT,
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+              deleted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_debt_plans_cust ON debt_plans(customer_id, status, created_at);
+            CREATE TABLE IF NOT EXISTS debt_plan_entries (
+              id TEXT PRIMARY KEY,
+              plan_id TEXT NOT NULL,
+              seq INTEGER NOT NULL,
+              due_date TEXT NOT NULL,
+              amount INTEGER NOT NULL CHECK (amount >= 0),
+              paid_amount INTEGER NOT NULL DEFAULT 0,
+              paid_at TEXT,
+              deleted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_dpe_plan_seq ON debt_plan_entries(plan_id, seq);
+            CREATE TABLE IF NOT EXISTS dunning_queue (
+              id TEXT PRIMARY KEY,
+              customer_id TEXT NOT NULL,
+              stage TEXT NOT NULL CHECK (stage IN ('R1','R2','R3')),
+              scheduled_at TEXT NOT NULL,
+              launched_at TEXT,
+              status TEXT NOT NULL DEFAULT 'PLANIFIEE' CHECK (status IN ('PLANIFIEE','LANCEE','ANNULEE')),
+              message_hash TEXT,
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+              deleted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_dunning_cust_stage ON dunning_queue(customer_id, stage);
+            CREATE INDEX IF NOT EXISTS idx_dunning_status ON dunning_queue(status, scheduled_at);
+            CREATE TABLE IF NOT EXISTS whatsapp_launches (
+              id TEXT PRIMARY KEY,
+              customer_id TEXT NOT NULL,
+              phone TEXT NOT NULL,
+              purpose TEXT NOT NULL,
+              stage TEXT,
+              message_preview TEXT,
+              status TEXT NOT NULL DEFAULT 'Lancé',
+              launched_at TEXT NOT NULL,
+              operator TEXT,
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+              deleted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_whatsapp_cust ON whatsapp_launches(customer_id, launched_at);
             "#,
             kind: MigrationKind::Up,
         },

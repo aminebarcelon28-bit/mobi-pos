@@ -1685,8 +1685,9 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
           return { success: false as const, reason: 'CLOSED_SESSION_IMMUTABLE' };
         }
         const expenseAmount = Math.max(0, Math.round(target.amount || 0));
-        // Preserve the operator's modal: logCashMovement closes it (sets
-        // activeModal null) as a side effect.
+        // I4 (UPGRADE-11): logCashMovement no longer closes the modal — it
+        // only refreshes the shift. The capture/restore below is kept as
+        // belt-and-braces for any future caller that does close modals.
         const prevModal = get().activeModal;
         const comp = await logCashMovement(
           expenseAmount,

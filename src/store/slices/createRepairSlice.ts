@@ -470,8 +470,9 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
       ],
     };
     const updated = [newOrder, ...repairOrders];
-    // logCashMovement resets activeModal:null on success — capture the entry
-    // modal so an intake-time deposit never slams the repair dossier shut.
+    // I4 (UPGRADE-11): logCashMovement no longer resets activeModal (it only
+    // refreshes the shift) — the capture below stays as belt-and-braces so an
+    // intake-time deposit can never slam the repair dossier shut.
     const entryModal = get().activeModal;
     try {
        await (await getRepairRepo()).save(newOrder);

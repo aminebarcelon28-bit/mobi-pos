@@ -40,7 +40,7 @@ function devBenchMark(label: string): void {
 }
 import { withBusyRetry, isBusyError, isStaleTxnError, isRetryableDbError } from './busyRetry';
 export { isRetryableDbError, isBusyError, isStaleTxnError, withBusyRetry };
-import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL, CUSTOMER_DEBTS_HEAL_PROBE_SQL, AUDIT_ACTOR_ID_HEAL_SQL, AUDIT_ACTOR_ID_HEAL_PROBE_SQL, CYCLE_COUNT_TASKS_HEAL_SQL, CYCLE_COUNT_TASKS_HEAL_PROBE_SQL } from './schemaHeal';
+import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL, CUSTOMER_DEBTS_HEAL_PROBE_SQL, AUDIT_ACTOR_ID_HEAL_SQL, AUDIT_ACTOR_ID_HEAL_PROBE_SQL, CYCLE_COUNT_TASKS_HEAL_SQL, CYCLE_COUNT_TASKS_HEAL_PROBE_SQL, KREDY_V126_HEAL_SQL, KREDY_V126_PROBE_CUSTOMER_DEBTS_SQL, KREDY_V126_PROBE_CUSTOMERS_SQL } from './schemaHeal';
 import {
   abcClassForProduct,
   computeVarianceQty,
@@ -60,6 +60,22 @@ import {
   CCT_TASK_BY_ID_SQL,
   buildLastCountedSql,
 } from './cycleCountSql';
+import { toIntDzd } from '../utils/kredyEngine';
+import {
+  buildKredyDunningByCustomersSql,
+  buildKredyPlanEntriesSql,
+  KREDY_DUNNING_BY_CUSTOMER_SQL,
+  KREDY_DUNNING_CLAIM_SQL,
+  KREDY_DUNNING_FINALIZE_SQL,
+  KREDY_DUNNING_RELEASE_SQL,
+  KREDY_ENTRY_PAY_UPDATE_SQL,
+  KREDY_PLAN_ENTRY_INSERT_SQL,
+  KREDY_PLAN_INSERT_SQL,
+  KREDY_PLAN_STATUS_UPDATE_SQL,
+  KREDY_PLANS_ACTIVE_BY_CUSTOMER_SQL,
+  KREDY_WHATSAPP_BY_CUSTOMER_SQL,
+  KREDY_WHATSAPP_LAUNCH_INSERT_SQL,
+} from './kredySql';
 import { markBoot } from '../utils/bootTimings';
 import { isTauriEnv } from './adapters/base';
 import { invokeCommand } from '../platform/invoke';
@@ -185,6 +201,11 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     // UPGRADE-10 (v125) — ABC micro-stocktake task table. Same lane rule as
     // v124: a missing table fails the probe and forces the idempotent pass.
     await db.select(CYCLE_COUNT_TASKS_HEAL_PROBE_SQL);
+    // UPGRADE-11 (v126) — Kredy due dates / opt-in / score columns plus the
+    // plans + dunning + launch-log tables. Same lane rule as v125: any missing
+    // piece fails a probe and forces the idempotent full pass below.
+    await db.select(KREDY_V126_PROBE_CUSTOMER_DEBTS_SQL);
+    await db.select(KREDY_V126_PROBE_CUSTOMERS_SQL);
     return;
   } catch (probeErr) {
     // B-009: BUSY is transient lock contention, NOT a missing column —
@@ -542,6 +563,9 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     // UPGRADE-10 (v125) — ABC micro-stocktake tasks; same single-source rule
     // (lib.rs v125 = schemaHeal constants = this spread).
     ...CYCLE_COUNT_TASKS_HEAL_SQL,
+    // UPGRADE-11 (v126) — Kredy collections & risk; same single-source rule
+    // (lib.rs v126 = schemaHeal constants = this spread).
+    ...KREDY_V126_HEAL_SQL,
   ];
   // B-021: destructive service-ledger/stock DML gated behind a one-shot
   // app_settings flag — a failed probe for an unrelated reason must never
@@ -6333,6 +6357,302 @@ export async function getVendorDisputes<T = unknown>(supplierName?: string): Pro
     console.warn('[vendor_disputes] Failed to read vendor disputes:', e);
     return [];
   }
+}
+
+// ── UPGRADE-11 (v126) — Kredy collection & risk (plans, dunning, launches) ─
+// Local-only operational tables. The SQL is pinned in `kredySql.ts`
+// (dependency-free) so `node:sqlite` oracles run the exact statements the app
+// does, including the EXPLAIN QUERY PLAN pins. Plans are strictly 0 % /
+// 0-fee integer DZD (Σ entries = total, enforced upstream by the pure
+// `utils/kredyEngine.ts`); the dunning claim is single-winner via the unique
+// `(customer_id, stage)` index; launch rows are written only after
+// `openWhatsApp` reported success, with `status` exactly 'Lancé'.
+
+export interface DebtPlanRow {
+  id: string;
+  customerId: string;
+  totalAmount: number;
+  installments: number;
+  intervalDays: number;
+  startDate: string;
+  status: string;
+  notes: string | null;
+  createdAt: string;
+}
+
+export interface DebtPlanEntryRow {
+  id: string;
+  planId: string;
+  seq: number;
+  dueDate: string;
+  amount: number;
+  paidAmount: number;
+  paidAt: string | null;
+}
+
+export interface KredyDunningRow {
+  id: string;
+  customerId: string;
+  stage: string;
+  status: string;
+  scheduledAt: string;
+  launchedAt: string | null;
+}
+
+export interface WhatsappLaunchRow {
+  id: string;
+  customerId: string;
+  phone: string;
+  purpose: string;
+  stage: string | null;
+  messagePreview: string | null;
+  status: string;
+  launchedAt: string;
+  operator: string | null;
+}
+
+function mapDebtPlanRow(r: Record<string, unknown>): DebtPlanRow {
+  return {
+    id: String(r?.id ?? ''),
+    customerId: String(r?.customer_id ?? ''),
+    totalAmount: toIntDzd(r?.total_amount),
+    installments: toIntDzd(r?.installments),
+    intervalDays: toIntDzd(r?.interval_days),
+    startDate: String(r?.start_date ?? ''),
+    status: String(r?.status ?? ''),
+    notes: r?.notes == null ? null : String(r.notes),
+    createdAt: String(r?.created_at ?? ''),
+  };
+}
+
+function mapDebtPlanEntryRow(r: Record<string, unknown>): DebtPlanEntryRow {
+  return {
+    id: String(r?.id ?? ''),
+    planId: String(r?.plan_id ?? ''),
+    seq: toIntDzd(r?.seq),
+    dueDate: String(r?.due_date ?? ''),
+    amount: toIntDzd(r?.amount),
+    paidAmount: toIntDzd(r?.paid_amount),
+    paidAt: r?.paid_at == null ? null : String(r.paid_at),
+  };
+}
+
+function mapKredyDunningRow(r: Record<string, unknown>): KredyDunningRow {
+  return {
+    id: String(r?.id ?? ''),
+    customerId: String(r?.customer_id ?? ''),
+    stage: String(r?.stage ?? ''),
+    status: String(r?.status ?? ''),
+    scheduledAt: String(r?.scheduled_at ?? ''),
+    launchedAt: r?.launched_at == null ? null : String(r.launched_at),
+  };
+}
+
+function mapWhatsappLaunchRow(r: Record<string, unknown>): WhatsappLaunchRow {
+  return {
+    id: String(r?.id ?? ''),
+    customerId: String(r?.customer_id ?? ''),
+    phone: String(r?.phone ?? ''),
+    purpose: String(r?.purpose ?? ''),
+    stage: r?.stage == null ? null : String(r.stage),
+    messagePreview: r?.message_preview == null ? null : String(r.message_preview),
+    status: String(r?.status ?? ''),
+    launchedAt: String(r?.launched_at ?? ''),
+    operator: r?.operator == null ? null : String(r.operator),
+  };
+}
+
+/** Active plans for one customer, oldest first. Read lane only. */
+export async function listActiveDebtPlansForCustomer(customerId: string): Promise<DebtPlanRow[]> {
+  const id = String(customerId ?? '');
+  if (!id) return [];
+  const db = await getLocalDb();
+  const rows = (await db
+    .select(KREDY_PLANS_ACTIVE_BY_CUSTOMER_SQL, [id])
+    .catch(() => [])) as Array<Record<string, unknown>>;
+  return (rows ?? []).map(mapDebtPlanRow).filter((p) => p.id !== '');
+}
+
+/** Entries for a batch of plans (keyword-batched IN-list). */
+export async function listDebtPlanEntries(planIds: readonly string[]): Promise<DebtPlanEntryRow[]> {
+  const ids = (planIds ?? []).filter((id) => typeof id === 'string' && id !== '');
+  if (ids.length === 0) return [];
+  const db = await getLocalDb();
+  const rows = (await db
+    .select(buildKredyPlanEntriesSql(ids.length), [...ids])
+    .catch(() => [])) as Array<Record<string, unknown>>;
+  return (rows ?? []).map(mapDebtPlanEntryRow).filter((e) => e.id !== '');
+}
+
+/**
+ * Persist a plan header + its entries. Entries land FIRST: a crash between
+ * the two loops leaves orphan entries that every read ignores (reads start
+ * from the header side) — never a header whose schedule is half-written.
+ * Both inserts are `ON CONFLICT(id) DO NOTHING`, so a retry converges.
+ */
+export async function insertDebtPlanWithEntries(
+  plan: {
+    id: string;
+    customerId: string;
+    totalAmount: number;
+    installments: number;
+    intervalDays: number;
+    startDate: string;
+    notes?: string | null;
+    createdAt: string;
+  },
+  entries: ReadonlyArray<{ id: string; seq: number; dueDate: string; amount: number }>
+): Promise<void> {
+  const db = await getLocalDb();
+  for (const entry of entries ?? []) {
+    await db.execute(KREDY_PLAN_ENTRY_INSERT_SQL, [
+      String(entry.id),
+      String(plan.id),
+      toIntDzd(entry.seq),
+      String(entry.dueDate ?? ''),
+      toIntDzd(entry.amount),
+    ]);
+  }
+  await db.execute(KREDY_PLAN_INSERT_SQL, [
+    String(plan.id),
+    String(plan.customerId),
+    toIntDzd(plan.totalAmount),
+    toIntDzd(plan.installments),
+    toIntDzd(plan.intervalDays),
+    String(plan.startDate ?? ''),
+    plan.notes == null ? null : String(plan.notes),
+    String(plan.createdAt ?? ''),
+  ]);
+}
+
+/** Entry fill updates (paid_amount always; paid_at only when fully paid). */
+export async function updateDebtPlanEntries(
+  updates: ReadonlyArray<{ id: string; paidAmount: number; paidAt?: string | null }>
+): Promise<void> {
+  if (!updates || updates.length === 0) return;
+  const db = await getLocalDb();
+  for (const u of updates) {
+    await db.execute(KREDY_ENTRY_PAY_UPDATE_SQL, [
+      String(u.id),
+      toIntDzd(u.paidAmount),
+      u.paidAt ?? null,
+    ]);
+  }
+}
+
+/** Close a plan (ACTIF → SOLDE/ANNULE) — single-claim, true when claimed. */
+export async function setDebtPlanStatus(
+  planId: string,
+  status: 'SOLDE' | 'ANNULE',
+  nowIso: string
+): Promise<boolean> {
+  const db = await getLocalDb();
+  const res = await db.execute(KREDY_PLAN_STATUS_UPDATE_SQL, [String(planId), status, nowIso]);
+  return Number(res?.rowsAffected ?? 0) === 1;
+}
+
+/**
+ * Single-winner dunning claim. `true` = this caller owns the launch (fresh
+ * insert or a stale crashed claim re-taken); `false` = the stage already
+ * launched (or another caller holds a live claim) — never launch twice.
+ */
+export async function claimDunningLaunch(input: {
+  id: string;
+  customerId: string;
+  stage: string;
+  nowIso: string;
+  staleBeforeIso: string;
+}): Promise<boolean> {
+  const db = await getLocalDb();
+  const res = await db.execute(KREDY_DUNNING_CLAIM_SQL, [
+    String(input.id),
+    String(input.customerId),
+    String(input.stage),
+    input.nowIso,
+    input.staleBeforeIso,
+  ]);
+  return Number(res?.rowsAffected ?? 0) === 1;
+}
+
+/** Claim → launched (called only after the launch itself succeeded). */
+export async function finalizeDunningLaunch(
+  customerId: string,
+  stage: string,
+  launchedAtIso: string
+): Promise<void> {
+  const db = await getLocalDb();
+  await db.execute(KREDY_DUNNING_FINALIZE_SQL, [String(customerId), String(stage), launchedAtIso]);
+}
+
+/** Claim → released (launch failed/blocked: the stage stays retryable). */
+export async function releaseDunningLaunchClaim(customerId: string, stage: string): Promise<void> {
+  const db = await getLocalDb();
+  await db.execute(KREDY_DUNNING_RELEASE_SQL, [String(customerId), String(stage)]);
+}
+
+/** Every claim/launch row for one customer (ladder state for the UI). */
+export async function listDunningRows(customerId: string): Promise<KredyDunningRow[]> {
+  const id = String(customerId ?? '');
+  if (!id) return [];
+  const db = await getLocalDb();
+  const rows = (await db.select(KREDY_DUNNING_BY_CUSTOMER_SQL, [id]).catch(() => [])) as Array<
+    Record<string, unknown>
+  >;
+  return (rows ?? []).map(mapKredyDunningRow).filter((r) => r.stage !== '');
+}
+
+/** Ladder state for a batch of customers (one read for a whole list view). */
+export async function listDunningRowsForCustomers(
+  customerIds: readonly string[]
+): Promise<KredyDunningRow[]> {
+  const ids = (customerIds ?? []).filter((id) => typeof id === 'string' && id !== '');
+  if (ids.length === 0) return [];
+  const db = await getLocalDb();
+  const rows = (await db
+    .select(buildKredyDunningByCustomersSql(ids.length), [...ids])
+    .catch(() => [])) as Array<Record<string, unknown>>;
+  return (rows ?? []).map(mapKredyDunningRow).filter((r) => r.stage !== '');
+}
+
+/**
+ * Honest launch log — the caller passes `status: KREDY_LAUNCH_STATUS`
+ * ('Lancé') and does so ONLY after `openWhatsApp` resolved `true`. A blocked
+ * popup writes no row, so the log never over-reports a relance.
+ */
+export async function recordWhatsappLaunch(row: {
+  id: string;
+  customerId: string;
+  phone: string;
+  purpose: string;
+  stage?: string | null;
+  messagePreview?: string | null;
+  status: string;
+  launchedAt: string;
+  operator?: string | null;
+}): Promise<void> {
+  const db = await getLocalDb();
+  await db.execute(KREDY_WHATSAPP_LAUNCH_INSERT_SQL, [
+    String(row.id),
+    String(row.customerId),
+    String(row.phone ?? ''),
+    String(row.purpose ?? ''),
+    row.stage == null ? null : String(row.stage),
+    row.messagePreview == null ? null : String(row.messagePreview),
+    String(row.status ?? ''),
+    String(row.launchedAt ?? ''),
+    row.operator == null ? null : String(row.operator),
+  ]);
+}
+
+/** Launch history for one customer, newest first. Read lane only. */
+export async function listWhatsappLaunches(customerId: string): Promise<WhatsappLaunchRow[]> {
+  const id = String(customerId ?? '');
+  if (!id) return [];
+  const db = await getLocalDb();
+  const rows = (await db.select(KREDY_WHATSAPP_BY_CUSTOMER_SQL, [id]).catch(() => [])) as Array<
+    Record<string, unknown>
+  >;
+  return (rows ?? []).map(mapWhatsappLaunchRow).filter((r) => r.id !== '');
 }
 
 

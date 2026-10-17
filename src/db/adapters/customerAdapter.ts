@@ -343,8 +343,17 @@ export const customerAdapter = {
         .select('SELECT version FROM customer_debts WHERE id=$1', [debt.id])
         .catch(() => [])) as Array<{ version: number }>;
       if (verRows && verRows.length > 0) nextVersion = Number(verRows[0].version) + 1;
-    } catch {
-      // SQLite unavailable (web mode) — keep the in-memory fallback above.
+    } catch (err) {
+      // I9 (UPGRADE-11): a bare catch made BUSY and real authority failures
+      // look like "web mode". Rethrow BUSY (retryable) and any Tauri failure
+      // (the caller must surface it); only non-Tauri environments skip
+      // SQLite silently.
+      if (isBusyError(err)) throw err;
+      if (isTauriEnv()) {
+        console.error('[customer-debt] SQLite version read failed:', err);
+        throw err;
+      }
+      // Non-Tauri (web) — keep the in-memory version fallback above.
     }
     const debtWithVersion = { ...debt, version: nextVersion };
     await dexieDb.customerDebts.put(debtWithVersion);
@@ -365,13 +374,15 @@ export const customerAdapter = {
       );
       await db.execute(
         `INSERT INTO customer_debts (id, customer_id, customer_name, type, amount, balance_after,
-           receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0)
+           receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted,
+           due_date, kind)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16)
          ON CONFLICT(id) DO UPDATE SET customer_id=excluded.customer_id, customer_name=excluded.customer_name,
            type=excluded.type, amount=excluded.amount, balance_after=excluded.balance_after,
            receipt_number=excluded.receipt_number, payment_method=excluded.payment_method,
            notes=excluded.notes, recorded_by=excluded.recorded_by, created_at=excluded.created_at,
            json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
+           due_date=excluded.due_date, kind=excluded.kind,
          version = excluded.version
          WHERE excluded.version >= customer_debts.version`,
         [
@@ -380,10 +391,19 @@ export const customerAdapter = {
           debt.receiptNumber || null, debt.paymentMethod || null,
           debt.notes || null, debt.recordedBy || null, debt.createdAt,
           JSON.stringify(debtWithVersion), nextVersion, utcNowIso(),
+          debt.dueDate ?? null, debt.kind || '',
         ],
       );
-    } catch {
-      // ignore web mode fallback
+    } catch (err) {
+      // I9 (UPGRADE-11): distinguish web mode from real authority failures —
+      // a Tauri write failure must never look like "web mode" (local SQLite
+      // durability is exactly what this mirror lane exists for).
+      if (isBusyError(err)) throw err;
+      if (isTauriEnv()) {
+        console.error('[customer-debt] SQLite mirror write failed:', err);
+        throw err;
+      }
+      // Non-Tauri (web) — Dexie + fireSync remain the only lanes.
     }
     void fireSync('customer_debt', debt.id, debtWithVersion);
   },

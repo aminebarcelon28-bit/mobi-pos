@@ -171,6 +171,27 @@ export interface CustomerSlice {
     notes?: string,
     opts?: { allowOverpayToCredit?: boolean; entryId?: string }
   ) => Promise<{ success: boolean; reason?: string; debtEntry?: CustomerDebtEntry; appliedAmount?: number; changeDue?: number; overpayConvertedToCredit?: number }>;
+  /**
+   * UPGRADE-11 (v126): create a strictly 0 % / 0-fee integer-DZD installment
+   * plan bounded by the outstanding debt (Σ entries === total ≤ currentDebt).
+   */
+  createInstallmentPlan: (
+    customerId: string,
+    input: { totalAmount: number; installments: number; intervalDays: number; notes?: string }
+  ) => Promise<{ success: boolean; reason?: string; planId?: string }>;
+  /**
+   * UPGRADE-11 (v126): WhatsApp relance. No stage = manual launch (logged);
+   * a stage = laddered dunning (quiet hours + one launch per stage). Refuses
+   * without WhatsApp opt-in; logs only launches that actually resolved.
+   */
+  launchDebtReminder: (
+    customerId: string,
+    opts?: { stage?: 'R1' | 'R2' | 'R3' }
+  ) => Promise<{ success: boolean; reason?: string; blocked?: boolean }>;
+  /** UPGRADE-11 (v126): WhatsApp consent toggle (launches refuse without it). */
+  setWhatsappOptIn: (customerId: string, optIn: boolean) => Promise<{ success: boolean; reason?: string }>;
+  /** UPGRADE-11 (v126): recompute + persist `creditScore`/`creditScoreAt`. */
+  refreshCreditScores: (customerIds?: string[]) => Promise<{ updated: number }>;
 }
 
 export interface ShiftSlice {

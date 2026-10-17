@@ -1,14 +1,13 @@
 # KREDY ledger (DebtLedgerModal) — defect register
 
-Status: **REPORTED**. Nine defects found while preparing
-`src/components/modals/DebtLedgerModal.tsx` for E2E coverage. None are
-fixed in the a11y/testability PR that accompanies this file: that PR adds
-`role`/`aria-*`/`data-testid` only, so **no predicate, counter, label or
-badge logic changed** (see the PR's review gate).
+Status: **FIXED (UPGRADE-11, v126)**. All nine findings landed in the
+UPGRADE-11 change; the characterization pin now lives in
+`scripts/test_kredy.mts` (`npm run test:kredy` — source pins for I1–I9 plus
+engine/SQL oracles). The earlier a11y/testability PR remains the one that
+added `role`/`aria-*`/`data-testid` only — **no predicate, counter, label or
+badge logic changed there**.
 
-These IDs are a contract. `tests/debt-ledger.spec.ts` pins current
-(shipped) behavior with a trailing `// I<n>` comment on every
-characterization assertion, so a future fix PR flips exactly one assertion
+These IDs are a contract. A future change flips exactly one pinned assertion
 per ID. Do not renumber — append.
 
 Scope: plain-SQLite local store + zustand, Dexie `MobiPosDB` in the browser
@@ -54,7 +53,10 @@ is verified against the store/adapter path, never a request.
   risk; (b) switch the predicate to `> 20000`, which also changes what the
   tab counts and what the row list shows. **Do not** pick this implicitly:
   it is a product-visible boundary decision.
-- **Status:** reported
+- **Fix (UPGRADE-11):** option (a) shipped — the tab now reads
+  `Dettes Élevées (≥ 20k DA) ({highDebtCount})`; the predicate stays the
+  inclusive `>= 20000`.
+- **Status:** fixed (UPGRADE-11)
 
 ## I2 — `Plafond Dépassé` treats "at the limit" as "over the limit"
 
@@ -76,7 +78,10 @@ is verified against the store/adapter path, never a request.
   (`Plafond Atteint / Dépassé`), or make all three sites strict `>` in one
   change. Prefer the relabel: `>=` is the safer money-flow predicate (a
   debtor exactly at the ceiling should stop borrowing).
-- **Status:** reported
+- **Fix (UPGRADE-11):** relabelled — tab and metric card now read
+  `Plafond Atteint / Dépassé`; the `>=` predicate is untouched at all three
+  sites (the safe money-flow boundary).
+- **Status:** fixed (UPGRADE-11)
 
 ## I3 — `Dettes Élevées` tab has no count badge
 
@@ -92,7 +97,9 @@ is verified against the store/adapter path, never a request.
 - **Recommended fix:** add a memoized `highDebtCount` mirroring
   `overLimitCount` and render it in the tab. One line of logic, purely
   additive to what is already shown.
-- **Status:** reported
+- **Fix (UPGRADE-11):** memoized `highDebtCount` added (same predicate as the
+  filter) and rendered as `({highDebtCount})` in the tab.
+- **Status:** fixed (UPGRADE-11)
 
 ## I4 — an `Espèces` settlement closes the ledger mid-payment
 
@@ -114,7 +121,12 @@ is verified against the store/adapter path, never a request.
   drop `activeModal: null` from it (it is a drawer-bookkeeping action) or
   have it restore/preserve the caller's modal. Needs an owner ruling because
   other flows may rely on the current close-as-side-effect.
-- **Status:** reported
+- **Fix (UPGRADE-11, companion PR):** `logCashMovement` no longer writes
+  `activeModal` at all — it only refreshes `activeShift`. The ledger (and the
+  repair intake, and the expense-delete compensation) stay mounted across a
+  cash settlement; the stale "closes it as a side effect" comments were
+  refreshed and the pin lives in `scripts/test_kredy.mts`.
+- **Status:** fixed (UPGRADE-11)
 
 ## I5 — the manager PIN field cannot accept an owner-set manager PIN
 
@@ -138,7 +150,11 @@ is verified against the store/adapter path, never a request.
   `reason: 'unavailable'` state instead of the wrong-PIN message. The
   no-fallback-outside-Tauri behaviour is **correct** fail-closed policy and
   must stay; only the messaging needs to change.
-- **Status:** reported
+- **Fix (UPGRADE-11):** the cap is 8 (≥ the 6-digit manager minimum) and the
+  gate's `reason: 'unavailable'` now shows its own honest message instead of
+  "Code PIN Manager incorrect."; the fail-closed no-fallback path is
+  unchanged.
+- **Status:** fixed (UPGRADE-11)
 
 ## I6 — no focus trap, no backdrop dismissal, no focus restoration
 
@@ -158,7 +174,12 @@ is verified against the store/adapter path, never a request.
   on open and focus restoration on close. Still open here: backdrop-click
   dismissal, and deciding whether Escape should target the innermost sub-modal
   instead of the whole stack.
-- **Status:** reported (partially addressed by the companion PR)
+- **Fix (UPGRADE-11):** complete. Escape now unwinds the innermost open panel
+  first (plafond/versement, most-recently-opened when both are mounted) and
+  only closes the stack when the ledger itself is topmost; all three overlay
+  layers dismiss on a direct backdrop press (`e.target === e.currentTarget`).
+  Focus trap + restoration came from the companion PR.
+- **Status:** fixed (UPGRADE-11)
 
 ## I7 — `openWhatsApp` can never report a blocked popup
 
@@ -177,7 +198,13 @@ is verified against the store/adapter path, never a request.
   branch on the `null` return (with the anchor path as fallback), so the
   error toast becomes reachable and the failure is never silent. Note this
   changes `phoneUtils`, which is outside the modal — hence reported, not fixed.
-- **Status:** reported
+- **Fix (UPGRADE-11):** the browser branch now uses
+  `window.open(waUrl, '_blank')` and returns `false` on a `null` handle
+  (blocked), severing `popup.opener` explicitly instead of passing `noopener`
+  as a window feature (which makes `window.open` return `null` even on
+  success). The anchor path survives only for engines that throw. The store's
+  launch action logs a row **only** on a `true` resolution.
+- **Status:** fixed (UPGRADE-11)
 
 ## I8 — debtor search has no phone normalization
 
@@ -196,7 +223,12 @@ is verified against the store/adapter path, never a request.
 - **Recommended fix:** run the phone branch through the same fold, or strip
   separators/`+213` before comparing. Reuse `normalizeAlgerianPhone`
   (`src/utils/phoneUtils.ts`) rather than adding a second normalizer.
-- **Status:** reported
+- **Fix (UPGRADE-11):** the phone branch runs through a `phoneMatchesSearch`
+  helper that normalizes the stored number via `normalizeAlgerianPhone` and
+  compares national cores (trunk `0`/`00213`/`213` stripped), so spaced, dotted
+  and international forms all find the debtor; ≥ 3 digits required before the
+  branch engages.
+- **Status:** fixed (UPGRADE-11)
 
 ## I9 — web-mode persistence failures are swallowed silently
 
@@ -218,7 +250,11 @@ is verified against the store/adapter path, never a request.
   distinguish it from other failures (e.g. log the non-Tauri rejection at
   `debug` and rethrow anything else, or record a one-shot warning). This is
   an adapter change outside the modal — reported, not fixed.
-- **Status:** reported
+- **Fix (UPGRADE-11):** both `saveCustomerDebt` catches now mirror the
+  `saveCustomer` B-016 posture — rethrow busy/authority failures, keep the
+  silent skip only for non-Tauri web mode; the `ignore web mode fallback`
+  comment is gone.
+- **Status:** fixed (UPGRADE-11)
 
 ---
 

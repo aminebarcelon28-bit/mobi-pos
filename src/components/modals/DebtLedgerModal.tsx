@@ -4,6 +4,26 @@ import { parseLocalizedAmount } from '../../utils/moneyInput';
 const foldForSearch = (s: string | undefined | null): string =>
   (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
+/**
+ * I8 (UPGRADE-11): phone-aware search. The stored number is normalized
+ * through `normalizeAlgerianPhone` (the ONE normalizer this repo owns) and
+ * compared on its national core without the trunk `0`; the query side accepts
+ * the shapes a cashier actually types — `0550 12 34 56`, `+213 550…`,
+ * `0550.12.34` — and needs at least 3 digits to count as a phone query
+ * (shorter inputs still match names / devices).
+ */
+const phoneMatchesSearch = (stored: string, rawQuery: string): boolean => {
+  const q = (rawQuery || '').trim();
+  if (!q) return false;
+  const storedRes = normalizeAlgerianPhone(stored);
+  const storedCore = (storedRes.isValid ? storedRes.local : storedRes.digitsOnly)
+    .replace(/\D/g, '')
+    .replace(/^0/, '');
+  if (!storedCore) return false;
+  const queryCore = normalizeAlgerianPhone(q).digitsOnly.replace(/^(00213|213)/, '').replace(/^0/, '');
+  return queryCore.length >= 3 && storedCore.includes(queryCore);
+};
+
 /** Tab candidates for the modal focus trap (defect I6). */
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -42,7 +62,7 @@ const resolveCustomerTierName = (customer: Customer): string => {
   }
 };
 import { useToast } from '../ui/Toast';
-import { openWhatsApp } from '../../utils/phoneUtils';
+import { normalizeAlgerianPhone } from '../../utils/phoneUtils';
 import { soundEngine } from '../../utils/audioFeedback';
 import { printCoordinator } from '../../utils/printCoordinator';
 import { isMobileDevice, isTauriEnvironment } from '../../utils/platform';
@@ -56,6 +76,7 @@ export const DebtLedgerModal: React.FC = () => {
     customers,
     customerDebts,
     recordCustomerDebtPayment,
+    launchDebtReminder,
     updateCustomer,
     // Phase 1: manager checks route through the native gate (no local
     // verifyManagerPin reads here — see utils/pinGate).
@@ -112,6 +133,12 @@ export const DebtLedgerModal: React.FC = () => {
   const totalOutstandingDebt = allIndebted.reduce((sum, c) => sum + (c.currentDebt || 0), 0);
   const totalCreditLimits = allIndebted.reduce((sum, c) => sum + (c.debtLimit ?? DEFAULT_CREDIT_LIMIT), 0);
   const overLimitCount = allIndebted.filter((c) => (c.currentDebt || 0) >= (c.debtLimit ?? DEFAULT_CREDIT_LIMIT)).length;
+  // I3 (UPGRADE-11): the elevated-debt tab gets its own memoized count so
+  // every filter tab can be sized before clicking (badge ↔ row-count parity).
+  const highDebtCount = useMemo(
+    () => allIndebted.filter((c) => (c.currentDebt || 0) >= 20000).length,
+    [allIndebted]
+  );
 
   // customerId -> history rows, built once per customerDebts identity.
   // Previously each rendered row ran a full filter over the ledger (O(rows*N)).
@@ -133,7 +160,7 @@ export const DebtLedgerModal: React.FC = () => {
       : allIndebted.filter(
           (c) =>
             foldForSearch(c.name).includes(q) ||
-            (c.phone || '').includes(debouncedSearch.trim()) ||
+            phoneMatchesSearch(c.phone, debouncedSearch) ||
             foldForSearch(c.registeredDevice).includes(q)
         );
 
@@ -146,7 +173,39 @@ export const DebtLedgerModal: React.FC = () => {
     return list.sort((a, b) => (b.currentDebt || 0) - (a.currentDebt || 0));
   }, [allIndebted, debouncedSearch, filterType]);
 
-  useEffect(() => { if (activeModal !== 'debt_ledger') return; const h = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal(); }; document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h); }, [activeModal, closeModal]);
+  // I6 (UPGRADE-11): Escape unwinds the INNERMOST panel first — a sub-modal
+  // swallows it (back to the ledger) instead of destroying the whole stack;
+  // only when the ledger itself is topmost does Escape close everything.
+  useEffect(() => {
+    if (activeModal !== 'debt_ledger') return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const versementOpen = !!payingCustomer;
+      const plafondOpen = !!adjustingCustomer;
+      if (versementOpen && plafondOpen) {
+        // Both mounted (rare): the most recently opened one unwinds first.
+        if (lastOpenedPanel.current === 'plafond') {
+          setAdjustingCustomer(null);
+          setManagerPin('');
+        } else {
+          setPayingCustomer(null);
+        }
+        return;
+      }
+      if (versementOpen) {
+        setPayingCustomer(null);
+        return;
+      }
+      if (plafondOpen) {
+        setAdjustingCustomer(null);
+        setManagerPin('');
+        return;
+      }
+      closeModal();
+    };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, [activeModal, closeModal, payingCustomer, adjustingCustomer]);
 
   // ══════════════════════════════════════════════════════════════
   // FOCUS MANAGEMENT (WCAG 2.4.3 — defect I6)
@@ -290,12 +349,25 @@ export const DebtLedgerModal: React.FC = () => {
   };
 
   const handleSendWhatsAppReminder = async (customer: Customer) => {
-    const debt = customer.currentDebt || 0;
-    const msg = `*RELEVÉ DE COMPTE CLIENT - MOBI POS*\n*Client :* ${customer.name}\n*Date :* ${new Date().toLocaleDateString('fr-DZ')}\n\nBonjour, nous vous informons que le solde de votre compte présente un encours de *${formatDZD(debt)}*.\n\nMerci de bien vouloir passer en boutique pour régulariser votre situation.\nCordialement,\n*L'Équipe MobiPOS*`;
-    const ok = await openWhatsApp(customer.phone, msg);
-    if (!ok) {
-      showToast("Impossible d'ouvrir WhatsApp", 'error');
+    // I7 consumer (UPGRADE-11): the launch routes through the store action so
+    // opt-in, the honest launch log ('Lancé' only when it really opened) and
+    // the blocked-popup signal all share ONE path (the slice owns the message
+    // builder; this handler owns only the feedback).
+    const result = await launchDebtReminder(customer.id);
+    if (result.success) {
+      soundEngine.playSuccess();
+      showToast(`Relance WhatsApp lancée pour ${customer.name} — statut : Lancé.`, 'success');
+      return;
     }
+    soundEngine.playError();
+    showToast(
+      result.reason === 'WHATSAPP_OPT_IN_REQUIRED'
+        ? `Aucun envoi : ${customer.name} n'a pas donné son accord WhatsApp (activez l'opt-in sur la fiche Kredy).`
+        : result.reason === 'NO_OUTSTANDING_DEBT'
+          ? 'Aucun encours à relancer pour ce client.'
+          : "Impossible d'ouvrir WhatsApp — vérifiez le bloqueur de fenêtres du navigateur.",
+      'error'
+    );
   };
 
   const handlePrintStatement = async (customer: Customer) => {
@@ -353,7 +425,12 @@ export const DebtLedgerModal: React.FC = () => {
       showToast(
         gate.locked
           ? `Verrouillé — réessayez dans ${Math.max(1, Math.ceil(gate.remainingMs / 1000))}s.`
-          : 'Code PIN Manager incorrect.',
+          : gate.reason === 'unavailable'
+            ? // I5 (UPGRADE-11): the gate's REAL reason — outside Tauri there
+              // is no native verifier and fail-closed is correct policy; the
+              // old wrong-PIN message lied about it.
+              'Vérification Manager indisponible sur cet appareil — utilisez un terminal principal.'
+            : 'Code PIN Manager incorrect.',
         'error'
       );
       soundEngine.playError();
@@ -392,6 +469,11 @@ export const DebtLedgerModal: React.FC = () => {
       aria-modal="true"
       aria-labelledby="kredy-modal-title"
       data-testid="kredy-modal"
+      // I6 (UPGRADE-11): backdrop-click dismissal — only a direct press on the
+      // backdrop itself (never a drag that started inside the panel).
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) closeModal();
+      }}
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6 pt-[max(0.5rem,var(--safe-top))] pb-0 sm:pb-6 bg-slate-900/50 backdrop-blur-sm select-none"
     >
       <div className="w-full max-w-5xl max-h-[94dvh] sm:max-h-[90vh] flex flex-col rounded-t-[28px] sm:rounded-2xl bg-pos-panel border border-pos-border shadow-2xl overflow-hidden animate-in slide-in-from-bottom-5 sm:zoom-in-95">
@@ -465,7 +547,7 @@ export const DebtLedgerModal: React.FC = () => {
           <div data-testid="kredy-card-plafond-depasse" className="bg-pos-card border border-pos-border rounded-xl p-3 flex items-center justify-between">
             <div>
               <span className="text-[10px] uppercase font-bold text-pos-muted tracking-wider block">
-                Plafond Dépassé
+                Plafond Atteint / Dépassé
               </span>
               <span className="text-xl font-black text-red-500 font-mono num">{overLimitCount}</span>
             </div>
@@ -512,7 +594,7 @@ export const DebtLedgerModal: React.FC = () => {
                   : 'bg-pos-card text-pos-muted hover:text-pos-text border-pos-border'
               }`}
             >
-              🚨 Plafond Dépassé ({overLimitCount})
+              🚨 Plafond Atteint / Dépassé ({overLimitCount})
             </button>
             <button
               data-testid="kredy-tab-elevees"
@@ -523,7 +605,7 @@ export const DebtLedgerModal: React.FC = () => {
                   : 'bg-pos-card text-pos-muted hover:text-pos-text border-pos-border'
               }`}
             >
-              ⏳ Dettes Élevées (&gt; 20k DA)
+              ⏳ Dettes Élevées (≥ 20k DA) ({highDebtCount})
             </button>
           </div>
 
@@ -735,6 +817,9 @@ export const DebtLedgerModal: React.FC = () => {
             aria-modal="true"
             aria-labelledby="kredy-versement-title"
             data-testid="kredy-versement-modal"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) setPayingCustomer(null);
+            }}
             className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4"
           >
             <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col">
@@ -862,6 +947,12 @@ export const DebtLedgerModal: React.FC = () => {
             role="dialog"
             aria-modal="true"
             aria-labelledby="kredy-plafond-title"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) {
+                setAdjustingCustomer(null);
+                setManagerPin('');
+              }
+            }}
             className="fixed inset-0 bg-black/90 backdrop-blur-md z-[60] flex items-center justify-center p-4"
           >
             <div className="bg-pos-panel border border-pos-border rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 flex flex-col">

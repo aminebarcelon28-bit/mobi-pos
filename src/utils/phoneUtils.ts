@@ -258,19 +258,37 @@ export async function openWhatsApp(phoneNumber: string, message: string): Promis
     }
   }
 
-  // Browser fallback
+  // Browser fallback — I7 (UPGRADE-11): the old anchor trick reported success
+  // even when the popup was silently blocked, so a launch that never opened
+  // was logged as "Lancé". `window.open` returns the window handle — or null
+  // when blocked — which is the honest signal. `noopener` is deliberately NOT
+  // a window feature here: it makes `window.open` return null even on success
+  // (a false "blocked"). The opener link is severed explicitly instead.
   try {
-    const a = document.createElement('a');
-    a.href = waUrl;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const popup = window.open(waUrl, '_blank');
+    if (!popup) return false;
+    try {
+      popup.opener = null;
+    } catch {
+      // Some engines throw on cross-origin opener writes; the navigation
+      // already happened, so the success signal stands.
+    }
     return true;
   } catch {
-    window.open(waUrl, '_blank', 'noopener,noreferrer');
-    return true;
+    // Engines that throw on window.open — last-resort anchor (fire and
+    // forget; callers still only log launches they can prove opened).
+    try {
+      const a = document.createElement('a');
+      a.href = waUrl;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

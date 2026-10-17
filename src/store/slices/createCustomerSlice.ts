@@ -10,6 +10,20 @@ import {
   isRedeemAllowed,
   STORE_CREDIT_PIN_THRESHOLD_DZD,
 } from '../../utils/loyaltyEngine';
+import {
+  allocateRepaymentFifo,
+  applyPaymentToPlanEntries,
+  buildInstallmentPlan,
+  computeReliabilityScore,
+  daysOverdue,
+  dunningLaunchGate,
+  DUNNING_STAGES,
+  KREDY_DUNNING_STALE_CLAIM_MS,
+  KREDY_LAUNCH_STATUS,
+  nextDunningStage,
+  outstandingItemsFromEntries,
+} from '../../utils/kredyEngine';
+import { DebtNotificationEngine } from '../../utils/debtNotificationEngine';
 import { audioBus } from '../../utils/audioEvents';
 import { newId, newReceiptNumber, debtDepositMovementId } from '../../utils/ids';
 import { verifyManagerGate } from '../../utils/pinGate';
@@ -436,6 +450,17 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
       // and the debt id had no sequence guard, so a same-ms double payment
       // silently overwrote the first ledger row (upsert, no error).
       const receiptNo = newReceiptNumber('VERS');
+      // Single clock read per recompute — the ledger row, the score stamp and
+      // the plan fill all carry the same instant.
+      const nowIso = new Date().toISOString();
+      // UPGRADE-11 (v126): FIFO repayment waterfall — settle the oldest due
+      // date first (nulls last), then the lowest id. Pure and clock-
+      // independent, so allocation ordering is stable across clock jumps; the
+      // trail rides the ledger row (`allocations`).
+      const waterfall = allocateRepaymentFifo(
+        outstandingItemsFromEntries(customerDebts.filter((d) => d.customerId === base.id)),
+        appliedAmount
+      );
       const debtEntry: CustomerDebtEntry = {
         // Deterministic when the caller passes entryId (refund debt-relief):
         // same logical relief converges instead of doubling across devices.
@@ -443,6 +468,7 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
         customerId: base.id,
         customerName: base.name,
         type: 'PAYMENT_SETTLED',
+        kind: 'VERSEMENT',
         amount: appliedAmount,
         balanceAfter: newDebt,
         receiptNumber: receiptNo,
@@ -455,8 +481,9 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
                 ? ` (surplus ${overpayConvertedToCredit} DA en avoir, confirmé client)`
                 : ` (monnaie rendue ${changeDue} DA)`
               : ''),
-        createdAt: new Date().toISOString(),
+        createdAt: nowIso,
         recordedBy: settlerName,
+        allocations: waterfall.allocations.length > 0 ? waterfall.allocations : undefined,
       };
 
       let newLedger = base.ledger || [];
@@ -473,11 +500,22 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
         newLedger = [creditLedgerEntry, ...newLedger];
       }
 
+      // UPGRADE-11 (v126): persist the reliability score alongside the new
+      // balance (the factor breakdown stays compute-on-read). Deterministic
+      // for a given clock + ledger, so a clock jump re-scores, never rewrites.
+      const score = computeReliabilityScore({
+        nowIso,
+        currentDebt: newDebt,
+        debtLimit: getEffectiveDebtLimit(base),
+        entries: [debtEntry, ...customerDebts.filter((d) => d.customerId === base.id)],
+      });
       const updatedCustomer: Customer = {
         ...base,
         currentDebt: newDebt,
         storeCredit: updatedStoreCredit,
         ledger: newLedger,
+        creditScore: score.score,
+        creditScoreAt: nowIso,
       };
       return { baseDebt, appliedAmount, changeDue, newDebt, overpayConvertedToCredit, receiptNo, debtEntry, updatedCustomer };
     };
@@ -507,6 +545,43 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
       const { sqliteAdapter } = await import('../../db/sqliteAdapter');
       await sqliteAdapter.saveCustomerDebt(built.debtEntry);
       await (await getCustomerRepo()).save(built.updatedCustomer);
+      // UPGRADE-11 (v126): fill the customer's ACTIF installment plans from the
+      // same applied amount (same write path as the balance update). Plan
+      // metadata LAGS the money trail — the ledger row and balance are already
+      // durable when this runs — so an aborted fill is continued by the next
+      // payment instead of double-counting. Never fails the settled payment.
+      try {
+        const kredy = await import('../../db/sqlPluginAdapter');
+        const plans = await kredy.listActiveDebtPlansForCustomer(built.debtEntry.customerId);
+        if (plans.length > 0) {
+          const planEntries = await kredy.listDebtPlanEntries(plans.map((p) => p.id));
+          let remainder = built.appliedAmount;
+          for (const plan of plans) {
+            if (remainder <= 0) break;
+            const applied = applyPaymentToPlanEntries(
+              planEntries
+                .filter((e) => e.planId === plan.id)
+                .map((e) => ({ id: e.id, seq: e.seq, amount: e.amount, paidAmount: e.paidAmount })),
+              remainder
+            );
+            remainder = applied.remaining;
+            if (applied.updates.length > 0) {
+              await kredy.updateDebtPlanEntries(
+                applied.updates.map((u) => ({
+                  id: u.id,
+                  paidAmount: u.paidAmount,
+                  paidAt: u.justPaid ? built.debtEntry.createdAt : null,
+                }))
+              );
+            }
+            if (applied.allPaid) {
+              await kredy.setDebtPlanStatus(plan.id, 'SOLDE', built.debtEntry.createdAt);
+            }
+          }
+        }
+      } catch (planErr) {
+        console.warn('[kredy] Plan fill after debt payment failed:', planErr);
+      }
     };
 
     try {
@@ -623,5 +698,201 @@ export const createCustomerSlice: StateCreator<PosState, [], [], CustomerSlice> 
     // Backward-compatible shape ({ success, debtEntry }) plus explicit
     // overpay info — old callers ignore the extra fields.
     return { success: true, debtEntry, appliedAmount, changeDue, overpayConvertedToCredit };
+  },
+
+  /**
+   * UPGRADE-11 (v126): strictly 0 % / 0-fee integer-DZD installment plan,
+   * bounded by the outstanding debt (Σ entries === total ≤ currentDebt).
+   * Validation is the pure `buildInstallmentPlan` — this action only
+   * persists. Plans are local-only operational rows (never synced).
+   */
+  createInstallmentPlan: async (customerId, input) => {
+    const { customers, logSecurityAction, activeCashier } = get();
+    const customer = customers.find((c) => c.id === customerId);
+    if (!customer) return { success: false, reason: 'CUSTOMER_NOT_FOUND' };
+    const outstanding = Math.max(0, Math.round(customer.currentDebt || 0));
+    if (outstanding <= 0) return { success: false, reason: 'NO_OUTSTANDING_DEBT' };
+    const nowIso = new Date().toISOString();
+    const built = buildInstallmentPlan({
+      totalAmount: input.totalAmount,
+      installments: input.installments,
+      intervalDays: input.intervalDays,
+      startIso: nowIso,
+      outstandingDebt: outstanding,
+    });
+    if (!built.ok) return { success: false, reason: built.reason };
+    const planId = newId('PLAN');
+    const entries = built.plan.entries.map((e) => ({
+      id: newId('DPE'),
+      seq: e.seq,
+      dueDate: e.dueDate,
+      amount: e.amount,
+    }));
+    try {
+      const { insertDebtPlanWithEntries } = await import('../../db/sqlPluginAdapter');
+      await insertDebtPlanWithEntries(
+        {
+          id: planId,
+          customerId: customer.id,
+          totalAmount: built.plan.totalAmount,
+          installments: built.plan.installments,
+          intervalDays: built.plan.intervalDays,
+          startDate: nowIso,
+          notes: input.notes ?? null,
+          createdAt: nowIso,
+        },
+        entries
+      );
+    } catch (err) {
+      console.error(`[kredy] Failed to persist installment plan for [${customerId}]:`, err);
+      return { success: false, reason: 'DB_SAVE_FAILED' };
+    }
+    const operator = activeCashier?.name || 'Caissier';
+    await logSecurityAction(
+      'Plan de Paiement Créé',
+      `Client: ${customer.name} — ${built.plan.installments} versement(s), total ${built.plan.totalAmount} DA, tous les ${built.plan.intervalDays} j — 0 % sans frais`,
+      operator,
+      false
+    );
+    return { success: true, planId };
+  },
+
+  /**
+   * UPGRADE-11 (v126): WhatsApp relance. `stage` = laddered dunning (quiet
+   * hours + single-claim per stage); no stage = manual launch. Both require
+   * the customer's WhatsApp opt-in. The launch log gets a row ONLY when the
+   * launch actually resolved (`status: 'Lancé'`); a blocked popup releases
+   * the claim and reports — the ledger never says "Envoyé".
+   */
+  launchDebtReminder: async (customerId, opts?: { stage?: 'R1' | 'R2' | 'R3' }) => {
+    const { customers, customerDebts, receiptSettings, activeCashier, logSecurityAction } = get();
+    const customer = customers.find((c) => c.id === customerId);
+    if (!customer) return { success: false, reason: 'CUSTOMER_NOT_FOUND' };
+    const debt = Math.max(0, Math.round(customer.currentDebt || 0));
+    if (debt <= 0) return { success: false, reason: 'NO_OUTSTANDING_DEBT' };
+    if (customer.whatsappOptIn !== true) {
+      return { success: false, reason: 'WHATSAPP_OPT_IN_REQUIRED', blocked: true };
+    }
+    const nowIso = new Date().toISOString();
+    const stage = opts?.stage;
+    const entries = customerDebts.filter((d) => d.customerId === customer.id);
+    if (stage) {
+      // Quiet hours (fail closed) + strict ladder: only the first un-launched
+      // stage may fire, and only once eligible for its overdue age.
+      const quiet = dunningLaunchGate(nowIso);
+      if (!quiet.allowed) {
+        return {
+          success: false,
+          reason: quiet.reason === 'INVALID_CLOCK' ? 'CLOCK_UNAVAILABLE' : 'QUIET_HOURS',
+          blocked: true,
+        };
+      }
+      const worstOverdue = outstandingItemsFromEntries(entries).reduce(
+        (max, it) => Math.max(max, daysOverdue(it.dueDate, nowIso)),
+        0
+      );
+      const kredy = await import('../../db/sqlPluginAdapter');
+      const rows = await kredy.listDunningRows(customer.id);
+      const launchedStages = rows.filter((r) => r.status === 'LANCEE').map((r) => r.stage);
+      const eligible = nextDunningStage({ launchedStages, daysOverdue: worstOverdue });
+      if (!eligible || eligible.id !== stage) {
+        return { success: false, reason: 'STAGE_NOT_ELIGIBLE', blocked: true };
+      }
+      // Single-claim BEFORE opening WhatsApp: two taps can never double-send.
+      const staleBeforeIso = new Date(Date.parse(nowIso) - KREDY_DUNNING_STALE_CLAIM_MS).toISOString();
+      const claimed = await kredy.claimDunningLaunch({
+        id: newId('DUN'),
+        customerId: customer.id,
+        stage,
+        nowIso,
+        staleBeforeIso,
+      });
+      if (!claimed) return { success: false, reason: 'STAGE_ALREADY_LAUNCHED', blocked: true };
+    }
+    const stageDef = stage ? DUNNING_STAGES.find((s) => s.id === stage) : null;
+    const baseMessage = DebtNotificationEngine.generateDebtStatementMessage(
+      customer,
+      entries.slice(0, 3),
+      receiptSettings
+    );
+    const message = stageDef ? `*${stageDef.label.toUpperCase()}*\n\n${baseMessage}` : baseMessage;
+    const { openWhatsApp } = await import('../../utils/phoneUtils');
+    const launchedOk = await openWhatsApp(customer.phone, message);
+    if (!launchedOk) {
+      if (stage) {
+        const kredy = await import('../../db/sqlPluginAdapter');
+        await kredy.releaseDunningLaunchClaim(customer.id, stage).catch(() => {});
+      }
+      return { success: false, reason: 'WHATSAPP_BLOCKED', blocked: true };
+    }
+    try {
+      const kredy = await import('../../db/sqlPluginAdapter');
+      if (stage) {
+        // Claim → launched, with one inline retry: a stranded PLANIFIEE row
+        // would re-allow the same stage after the staleness window.
+        await kredy.finalizeDunningLaunch(customer.id, stage, nowIso).catch(async () => {
+          await kredy.finalizeDunningLaunch(customer.id, stage, nowIso);
+        });
+      }
+      await kredy.recordWhatsappLaunch({
+        id: newId('WAL'),
+        customerId: customer.id,
+        phone: customer.phone || '',
+        purpose: stage ? 'RELANCE' : 'MANUEL',
+        stage: stage ?? null,
+        messagePreview: message.slice(0, 160),
+        status: KREDY_LAUNCH_STATUS,
+        launchedAt: nowIso,
+        operator: activeCashier?.name || 'Caissier',
+      });
+    } catch (logErr) {
+      // The message already left the device; never claim less than what
+      // happened, and never fail the launch over the log row.
+      console.warn('[kredy] Launch record failed after WhatsApp open:', logErr);
+    }
+    const operator = activeCashier?.name || 'Caissier';
+    await logSecurityAction(
+      stage ? 'Relance WhatsApp (palier)' : 'Relance WhatsApp (manuelle)',
+      `Client: ${customer.name} — encours ${debt} DA` +
+        (stage ? ` — palier ${stage}` : '') +
+        ` — statut ${KREDY_LAUNCH_STATUS}`,
+      operator,
+      false
+    );
+    return { success: true };
+  },
+
+  /** UPGRADE-11 (v126): WhatsApp consent toggle (launches refuse without it). */
+  setWhatsappOptIn: async (customerId: string, optIn: boolean) => {
+    return get().updateCustomer(customerId, { whatsappOptIn: optIn === true });
+  },
+
+  /**
+   * UPGRADE-11 (v126): recompute + persist `creditScore`/`creditScoreAt` for
+   * the given customers (default: every customer carrying debt). The pure
+   * scorer is deterministic per (clock, ledger), so re-running is a no-op in
+   * score terms; the factor breakdown is always compute-on-read.
+   */
+  refreshCreditScores: async (customerIds?: string[]) => {
+    const { customers, customerDebts, updateCustomer } = get();
+    const nowIso = new Date().toISOString();
+    const targets = (customers || []).filter(
+      (c) => (customerIds ? customerIds.includes(c.id) : true) && Math.round(c.currentDebt || 0) > 0
+    );
+    let updated = 0;
+    for (const customer of targets) {
+      const score = computeReliabilityScore({
+        nowIso,
+        currentDebt: customer.currentDebt || 0,
+        debtLimit: getEffectiveDebtLimit(customer),
+        entries: customerDebts.filter((d) => d.customerId === customer.id),
+      });
+      const res = await updateCustomer(customer.id, {
+        creditScore: score.score,
+        creditScoreAt: nowIso,
+      });
+      if (res?.success) updated += 1;
+    }
+    return { updated };
   },
 });
