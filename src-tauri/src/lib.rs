@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 121;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 122;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -1998,6 +1998,48 @@ fn base_schema_migrations() -> Vec<Migration> {
             CREATE INDEX IF NOT EXISTS idx_warranty_claims_original ON warranty_claims(original_repair_id);
             CREATE INDEX IF NOT EXISTS idx_warranty_claims_rework ON warranty_claims(rework_repair_id);
             CREATE INDEX IF NOT EXISTS idx_warranty_claims_status ON warranty_claims(status);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v122 — UPGRADE-07: freight landed-cost allocation + supplier
+            // price history. Freight is strictly the physical shipping/
+            // handling fee an invoice charges — NEVER a fiscal levy (no levy
+            // logic exists anywhere). The per-unit rate frozen at receive
+            // joins the FIFO composition (`unit_cost + freight_per_unit`),
+            // so COGS finally includes what delivery actually cost.
+            // `po_freight` is the allocation evidence; `supplier_price_history`
+            // records every received line for price-creep detection
+            // (>10% vs the last receipt from the same supplier).
+            version: 122,
+            description: "UPGRADE-07: stock_batches.freight_per_unit, po_freight, supplier_price_history",
+            sql: r#"
+            ALTER TABLE stock_batches ADD COLUMN freight_per_unit REAL NOT NULL DEFAULT 0;
+            CREATE TABLE IF NOT EXISTS po_freight (
+                id TEXT PRIMARY KEY,
+                po_id TEXT NOT NULL,
+                amount REAL NOT NULL DEFAULT 0,
+                method TEXT NOT NULL DEFAULT 'VALUE',
+                allocated_json TEXT NOT NULL DEFAULT '[]',
+                device_id TEXT NOT NULL DEFAULT 'local',
+                created_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_po_freight_po ON po_freight(po_id);
+            CREATE TABLE IF NOT EXISTS supplier_price_history (
+                id TEXT PRIMARY KEY,
+                product_id TEXT NOT NULL,
+                product_name TEXT,
+                supplier TEXT NOT NULL DEFAULT '',
+                invoice_no TEXT,
+                unit_cost REAL NOT NULL DEFAULT 0,
+                quantity REAL NOT NULL DEFAULT 0,
+                batch_id TEXT,
+                received_at TEXT NOT NULL,
+                device_id TEXT NOT NULL DEFAULT 'local',
+                created_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_supplier_price_product ON supplier_price_history(product_id, received_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_supplier_price_supplier ON supplier_price_history(supplier, received_at DESC);
             "#,
             kind: MigrationKind::Up,
         },

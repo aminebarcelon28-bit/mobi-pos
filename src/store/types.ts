@@ -369,7 +369,26 @@ export interface ProcurementSlice {
     paidCash?: number;
     paidBank?: number;
     supplierDebt?: number;
-  }) => Promise<{ success: boolean; isPartial: boolean; totalReceivedCost: number; reason?: string }>;
+    /** UPGRADE-07 — freight (integer DZD) + allocation method. Physical
+     *  shipping/handling only — never a fiscal levy. */
+    freightAmount?: number;
+    freightMethod?: 'VALUE' | 'QTY' | 'WEIGHT';
+  }) => Promise<{
+    success: boolean;
+    isPartial: boolean;
+    totalReceivedCost: number;
+    reason?: string;
+    /** Freight landed into batch costs by this receipt (integer DZD). */
+    freightAllocated?: number;
+    /** >10% upward price creep vs the last receipt from the same supplier. */
+    priceAlerts?: Array<{
+      productId: string;
+      productName?: string;
+      previousCost: number;
+      newCost: number;
+      variancePct: number;
+    }>;
+  }>;
   cancelPO: (poId: string, reason?: string) => Promise<void>;
   deletePO: (poId: string) => Promise<void>;
   directRestockVendor: (

@@ -32,6 +32,7 @@ import { commitStockBatch } from '../api/po';
 import { usePosStore } from '../store/usePosStore';
 import { newId } from '../utils/ids';
 import { toIntMoney } from '../utils/fifoPreview';
+import { allocateFreight, type FreightMethod } from '../utils/landedCost';
 import { extractScanAttributes } from '../utils/intelligentScanEngine';
 import { printCoordinator } from '../utils/printCoordinator';
 import { parseTextToBoundingBoxes } from '../utils/documentScanner';
@@ -46,6 +47,8 @@ import type { EditableReviewLine, ProcessRawScanResponse } from '../types/po';
 interface PoReviewScreenProps {
   supplierName: string;
   reportedFreight: number;
+  /** UPGRADE-07 — how the freight total apportions across lines. */
+  freightMethod: FreightMethod;
   reportedGrandTotal: number;
   scanData: ProcessRawScanResponse;
   onCommitSuccess: (count: number) => void;
@@ -60,6 +63,7 @@ type SortDirection = 'asc' | 'desc';
 export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
   supplierName,
   reportedFreight,
+  freightMethod,
   reportedGrandTotal,
   scanData,
   onCommitSuccess,
@@ -764,6 +768,19 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
       return;
     }
 
+    // UPGRADE-07 — freight lands in batch costs (integer DZD, largest
+    // remainder). Physical shipping/handling only — never a fiscal levy.
+    const freightDzd = toIntMoney(reportedFreight);
+    const freightAlloc = allocateFreight(
+      freightDzd,
+      freightMethod,
+      lines.map((l) => ({ qty: l.quantity, unitCost: l.unit_cost }))
+    );
+    if (freightDzd > 0 && !freightAlloc.ok) {
+      setErrorMessage('Répartition des frais de port impossible pour cette facture.');
+      return;
+    }
+
     try {
       setIsSubmitting(true);
       setErrorMessage(null);
@@ -771,13 +788,16 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
       const count = await commitStockBatch({
         supplier_name: supplierName,
         user_id: activeShift?.cashierName || 'local_user',
-        items: lines.map((l) => ({
+        items: lines.map((l, idx) => ({
           product_id: l.selected_product_id as string,
           quantity: l.quantity,
           unit_cost: l.unit_cost,
           raw_supplier_name: l.raw_description,
           save_as_alias: l.save_alias,
+          freight_per_unit: freightAlloc.ok ? freightAlloc.perUnitFreight[idx] ?? 0 : 0,
         })),
+        freight_amount: freightDzd,
+        freight_method: freightMethod,
       });
 
       try {
@@ -815,7 +835,7 @@ export const PoReviewScreen: React.FC<PoReviewScreenProps> = ({
     } finally {
       setIsSubmitting(false);
     }
-  }, [mathState.isBalanced, invalidQtyCount, unassignedCount, supplierName, activeShift, lines, onCommitSuccess, products]);
+  }, [mathState.isBalanced, invalidQtyCount, unassignedCount, supplierName, reportedFreight, freightMethod, activeShift, lines, onCommitSuccess, products]);
 
   // Keyboard Shortcuts (Ctrl+Enter to Commit, Ctrl+B to Auto-Balance)
   useEffect(() => {

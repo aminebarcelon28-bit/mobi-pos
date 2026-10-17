@@ -33,6 +33,7 @@ const receiveInFlight = new Map<string, number>();
 const RECEIVE_FLIGHT_TTL_MS = 10 * 60_000;
 import { getEffectiveCostPrice } from '../../utils/pricingEngine';
 import { resolveReferenceCost } from '../../utils/referenceCost';
+import { allocateFreight, computePriceAlerts, type FreightMethod } from '../../utils/landedCost';
 import { validateDeviceIdentifierForIntake } from '../../utils/savValidation';
 import type { LedgerDeltaInput } from '../../db/sqlPluginAdapter';
 import type { VendorDirectoryEntry } from '../../types/pos';
@@ -560,6 +561,55 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
     const effectivePaidBank = paidBank !== undefined ? Math.max(0, Math.round(paidBank)) : (expensePaymentMethod !== 'Espèces' && recordExpense ? totalReceivedCost : 0);
     const effectiveDebt = supplierDebt !== undefined ? Math.max(0, Math.round(supplierDebt)) : Math.max(0, totalReceivedCost - effectivePaidCash - effectivePaidBank);
 
+    // UPGRADE-07 — freight landed-cost plan (integer DZD, largest remainder).
+    // Freight is strictly the physical shipping/handling fee the invoice
+    // charges — never a fiscal levy. Allocation resolves BEFORE any persistence so a
+    // method that cannot be honored (WEIGHT without weights) aborts cleanly.
+    const freightAmountDzd = Math.max(0, Math.round(Number(payload.freightAmount) || 0));
+    const freightMethod: FreightMethod =
+      payload.freightMethod === 'QTY' || payload.freightMethod === 'WEIGHT'
+        ? payload.freightMethod
+        : 'VALUE';
+    const freightLines = verifiedItems
+      .filter((vi) => Math.max(0, vi.receivedQty) > 0)
+      .map((vi) => {
+        const lineCost = Math.max(
+          0,
+          Math.round(
+            vi.actualUnitCost !== undefined
+              ? vi.actualUnitCost
+              : targetPO.items.find((i) => i.productId === vi.productId)?.unitCost ?? 0
+          )
+        );
+        return { productId: vi.productId, qty: Math.max(0, vi.receivedQty), unitCost: lineCost };
+      });
+    const freightAlloc = allocateFreight(freightAmountDzd, freightMethod, freightLines);
+    if (freightAmountDzd > 0 && !freightAlloc.ok) {
+      audioBus.emit('error');
+      releaseReceiveFlight();
+      return {
+        success: false,
+        isPartial: false,
+        totalReceivedCost: 0,
+        reason: `FREIGHT_ALLOCATION_${freightAlloc.reason}`,
+      };
+    }
+    const freightPerUnitByProduct = new Map<string, number>();
+    for (let i = 0; i < freightLines.length; i++) {
+      freightPerUnitByProduct.set(
+        freightLines[i].productId,
+        freightAlloc.ok ? freightAlloc.perUnitFreight[i] ?? 0 : 0
+      );
+    }
+    let priceAlerts: Array<{
+      productId: string;
+      productName?: string;
+      previousCost: number;
+      newCost: number;
+      variancePct: number;
+    }> = [];
+    const receivedAtIso = new Date().toISOString();
+
     const updatedPO: PurchaseOrder = {
       ...targetPO,
       items: updatedLineItems,
@@ -574,6 +624,12 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
       paidBank: (targetPO.paidBank || 0) + effectivePaidBank,
       supplierDebt: (targetPO.supplierDebt || 0) + effectiveDebt,
     };
+    if (freightAmountDzd > 0) {
+      // Cumulative over partial receipts; the method records the latest
+      // allocation the operator chose.
+      updatedPO.freightAmount = (targetPO.freightAmount || 0) + freightAmountDzd;
+      updatedPO.freightMethod = freightMethod;
+    }
 
     const updatedPOs = purchaseOrders.map((p) => (p.id === poId ? updatedPO : p));
 
@@ -630,6 +686,7 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
               productId: vi.productId,
               quantityRemaining: vi.receivedQty,
               unitCost: actualCost,
+              freightPerUnit: freightPerUnitByProduct.get(vi.productId) ?? 0,
               purchaseOrderId: targetPO.id,
               idempotencyKey: `sb-${batchId}`,
             }).catch((err) => {
@@ -649,6 +706,61 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
             } catch (dexieErr) {
               console.warn('[procurement:batch] Failed to insert stock batch in Dexie:', dexieErr);
             }
+          }
+        }
+
+        // UPGRADE-07 — supplier price history + freight allocation evidence.
+        // Alerts compare against the LAST price from the same supplier BEFORE
+        // this receipt's rows append. Identities derive from the batch ids so
+        // a BUSY-retry converges via ON CONFLICT instead of duplicating
+        // evidence; a real failure lands in the catch below and fails the
+        // receipt closed (retryable under the same nonce).
+        if (freightLines.length > 0) {
+          const { insertPoFreightRecord, insertSupplierPriceRows, getLatestSupplierPrices } = await import(
+            '../../db/adapters/procurementCostAdapter'
+          );
+          const batchIdByProduct = new Map(
+            freightLines.map((l) => [l.productId, `batch-po-${poId}-${l.productId}-${receiveNonce}`])
+          );
+          const previousPrices = await getLatestSupplierPrices(
+            freightLines.map((l) => l.productId),
+            targetPO.vendorName
+          );
+          priceAlerts = computePriceAlerts(
+            freightLines.map((l) => ({
+              productId: l.productId,
+              productName: products.find((p) => p.id === l.productId)?.title ?? null,
+              unitCost: l.unitCost,
+            })),
+            previousPrices
+          );
+          await insertSupplierPriceRows(
+            freightLines.map((l) => ({
+              id: `sph-${batchIdByProduct.get(l.productId)}`,
+              productId: l.productId,
+              productName: products.find((p) => p.id === l.productId)?.title ?? null,
+              supplier: targetPO.vendorName,
+              invoiceNo: supplierInvoiceNo?.trim() || targetPO.supplierInvoiceNo || null,
+              unitCost: l.unitCost,
+              quantity: l.qty,
+              batchId: batchIdByProduct.get(l.productId) ?? null,
+              receivedAt: receivedAtIso,
+            }))
+          );
+          if (freightAmountDzd > 0 && freightAlloc.ok) {
+            await insertPoFreightRecord({
+              id: `freight-${poId}-${receiveNonce}`,
+              poId,
+              amount: freightAmountDzd,
+              method: freightMethod,
+              allocated: freightLines.map((l, i) => ({
+                productId: l.productId,
+                batchId: batchIdByProduct.get(l.productId) ?? null,
+                quantity: l.qty,
+                freightPerUnit: freightAlloc.perUnitFreight[i] ?? 0,
+                allocated: freightAlloc.perLineAmount[i] ?? 0,
+              })),
+            });
           }
         }
 
@@ -766,6 +878,8 @@ export const createProcurementSlice: StateCreator<PosState, [], [], ProcurementS
       success: true,
       isPartial: newStatus === 'Partially Received',
       totalReceivedCost,
+      freightAllocated: freightAmountDzd,
+      priceAlerts,
     };
   },
 

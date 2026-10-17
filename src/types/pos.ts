@@ -704,6 +704,11 @@ export interface PurchaseOrder {
   paidCash?: number;
   paidBank?: number;
   supplierDebt?: number;
+  /** UPGRADE-07 — freight allocated into batch landed costs at receive
+   *  (integer DZD, cumulative over partial receipts; physical shipping only,
+   *  never a fiscal levy). */
+  freightAmount?: number;
+  freightMethod?: 'VALUE' | 'QTY' | 'WEIGHT';
 }
 
 export interface ConditionChecklist {

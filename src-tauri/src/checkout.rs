@@ -616,6 +616,9 @@ pub fn apply_checkout_in_txn(
         batch_id: String,
         quantity_remaining: f64,
         unit_cost: f64,
+        /// UPGRADE-07 — freight landed per unit at receive (0 when the
+        /// receipt carried none). Joins the FIFO composition below.
+        freight_per_unit: f64,
     }
 
     for (idx, item) in req.items.iter().enumerate() {
@@ -641,7 +644,7 @@ pub fn apply_checkout_in_txn(
             if line_qty > 0 {
                 let earliest: Option<BatchRow> = tx
                     .query_row(
-                        "SELECT batch_id, quantity_remaining, unit_cost FROM stock_batches \
+                        "SELECT batch_id, quantity_remaining, unit_cost, freight_per_unit FROM stock_batches \
                          WHERE product_id = ?1 AND quantity_remaining > 0 AND deleted = 0 \
                            AND (purchase_order_id IS NULL OR purchase_order_id != 'SHADOW') \
                          ORDER BY received_at ASC, batch_id ASC LIMIT 1",
@@ -651,6 +654,7 @@ pub fn apply_checkout_in_txn(
                                 batch_id: r.get(0)?,
                                 quantity_remaining: r.get(1)?,
                                 unit_cost: r.get(2)?,
+                                freight_per_unit: r.get(3)?,
                             })
                         },
                     )
@@ -743,7 +747,7 @@ pub fn apply_checkout_in_txn(
             // Physical Sale: Deplete open batches in FIFO order
             let mut stmt = tx
                 .prepare(
-                    "SELECT batch_id, quantity_remaining, unit_cost FROM stock_batches \
+                    "SELECT batch_id, quantity_remaining, unit_cost, freight_per_unit FROM stock_batches \
                      WHERE product_id = ?1 AND quantity_remaining > 0 AND deleted = 0 \
                        AND (purchase_order_id IS NULL OR purchase_order_id != 'SHADOW') \
                      ORDER BY received_at ASC, batch_id ASC",
@@ -756,6 +760,7 @@ pub fn apply_checkout_in_txn(
                         batch_id: r.get(0)?,
                         quantity_remaining: r.get(1)?,
                         unit_cost: r.get(2)?,
+                        freight_per_unit: r.get(3)?,
                     })
                 })
                 .map_err(|e| map_rusqlite("query open batches", e))?
@@ -786,7 +791,13 @@ pub fn apply_checkout_in_txn(
 
                 needed -= take;
                 total_allocated_qty += take;
-                total_cost_accum += take * b.unit_cost;
+                // UPGRADE-07 — FIFO COGS carries the landed cost: the batch's
+                // freight rate joins its unit cost here, one rounding boundary
+                // per allocation below (the synced payload keeps the raw
+                // unit_cost — freight stays receipt-local until the remote
+                // schema carries it).
+                let landed_unit = b.unit_cost + b.freight_per_unit.max(0.0);
+                total_cost_accum += take * landed_unit;
 
                 let b_key = format!("sb-{}-{tx_id}", b.batch_id);
                 let b_payload = serde_json::json!({
@@ -810,7 +821,7 @@ pub fn apply_checkout_in_txn(
                 fifo_allocations.push(FifoAllocationOut {
                     batch_id: b.batch_id,
                     quantity: take,
-                    unit_cost: b.unit_cost.round() as i64,
+                    unit_cost: landed_unit.round() as i64,
                 });
             }
 
@@ -1533,6 +1544,7 @@ mod tests {
             CREATE TABLE stock_batches (
                 batch_id TEXT PRIMARY KEY, product_id TEXT NOT NULL,
                 quantity_remaining REAL NOT NULL DEFAULT 0, unit_cost REAL NOT NULL DEFAULT 0,
+                freight_per_unit REAL NOT NULL DEFAULT 0,
                 received_at TEXT NOT NULL, purchase_order_id TEXT,
                 device_id TEXT NOT NULL DEFAULT 'local', idempotency_key TEXT NOT NULL UNIQUE,
                 sync_status TEXT NOT NULL DEFAULT 'pending', version INTEGER NOT NULL DEFAULT 1,
@@ -1693,6 +1705,104 @@ mod tests {
             })
             .unwrap();
         assert_eq!(p_stock, 3.0);
+    }
+
+    /// UPGRADE-07: FIFO COGS includes each batch's landed freight rate.
+    /// B1 (5 @ 100 + 20 freight = 120 landed) then B2 (5 @ 200, no freight):
+    /// 5×120 + 2×200 = 1000 exact ledger; blended 1000/7 = 142.857 → 143;
+    /// line cost 7 × 143 = 1001.
+    #[test]
+    fn test_multi_batch_fifo_depletion_includes_freight() {
+        let mut conn = setup_test_db();
+
+        conn.execute(
+            "INSERT INTO products (id, title, stock) VALUES ('P1', 'Test Product', 10)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id, idempotency_key, created_at, updated_at) \
+             VALUES ('L1', 'P1', 10, 'SEED', 'init', '1', 'dev1', 'L1-key', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO stock_batches (batch_id, product_id, quantity_remaining, unit_cost, freight_per_unit, received_at, idempotency_key, created_at, updated_at) \
+             VALUES ('B1', 'P1', 5, 100, 20, '2026-01-01T00:00:00Z', 'key-B1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO stock_batches (batch_id, product_id, quantity_remaining, unit_cost, freight_per_unit, received_at, idempotency_key, created_at, updated_at) \
+             VALUES ('B2', 'P1', 5, 200, 0, '2026-01-02T00:00:00Z', 'key-B2', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z')",
+            [],
+        ).unwrap();
+
+        let req = CheckoutRequest {
+            order_row: CheckoutOrderIn {
+                id: "TXN-TEST-FR1".into(),
+                receipt_number: Some("REC-FR1".into()),
+                customer_id: None,
+                subtotal: Some(2100.0),
+                discount_total: Some(0.0),
+                total: Some(2100.0),
+                cost_total: None,
+                profit: None,
+                profit_margin: None,
+                pricing_tier: Some("Retail".into()),
+                payment_method: Some("Espèces".into()),
+                cash_tendered: Some(2100.0),
+                change_due: Some(0.0),
+                status: Some("COMPLETED".into()),
+                created_at: Some("2026-01-03T10:00:00Z".into()),
+                shift_id: Some("SHIFT-1".into()),
+                idempotency_key: Some("order-TXN-TEST-FR1".into()),
+                extra: HashMap::new(),
+            },
+            items: vec![CheckoutItemIn {
+                id: Some("ITEM-FR1".into()),
+                product_id: Some("P1".into()),
+                quantity: Some(7.0),
+                applied_price: Some(300.0),
+                unit_price_charged: Some(300.0),
+                default_price: Some(300.0),
+                discount_amount: Some(0.0),
+                discount: Some(0.0),
+                cost_price: Some(100.0),
+                unit_cost_at_sale: None,
+                line_profit: None,
+                imei_number: None,
+                is_return: Some(false),
+                warranty_months_at_sale: None,
+                idempotency_key: Some("key-ITEM-FR1".into()),
+                extra: HashMap::new(),
+            }],
+            deltas: vec![LedgerDeltaIn {
+                id: Some("DEL-FR1".into()),
+                product_id: Some("P1".into()),
+                delta: Some(-7.0),
+                reason: Some("SALE".into()),
+                ref_type: Some("order".into()),
+                ref_id: Some("TXN-TEST-FR1-0".into()),
+                idempotency_key: Some("delkey-fr1".into()),
+            }],
+            full_tx: None,
+            product_snapshots: None,
+        };
+
+        let res = apply_checkout(&mut conn, &req).unwrap();
+
+        assert_eq!(res.ledger_cogs_total, Some(1000)); // 5×120 + 2×200 landed
+        assert_eq!(res.fifo_cost_total, Some(1001)); // 7 × round(1000/7 = 142.857)
+        assert_eq!(res.fifo_profit, Some(2100 - 1001));
+
+        // The batch's frozen freight rate survives depletion unchanged.
+        let b1_freight: f64 = conn
+            .query_row(
+                "SELECT freight_per_unit FROM stock_batches WHERE batch_id = 'B1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(b1_freight, 20.0);
     }
 
     #[test]

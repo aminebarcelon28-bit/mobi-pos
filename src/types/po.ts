@@ -76,12 +76,18 @@ export interface CommitStockBatchItem {
   unit_cost: number;
   raw_supplier_name: string;
   save_as_alias: boolean;
+  /** UPGRADE-07 — landed freight per unit (integer-DZD share ÷ qty). */
+  freight_per_unit?: number;
 }
 
 export interface CommitStockBatchRequest {
   supplier_name: string;
   items: CommitStockBatchItem[];
   user_id?: string;
+  /** UPGRADE-07 — total freight (integer DZD; physical shipping only). */
+  freight_amount?: number;
+  freight_method?: string;
+  supplier_invoice_no?: string;
 }
 
 export interface EditableReviewLine {

@@ -182,6 +182,11 @@ pub struct CommitItem {
     pub unit_cost: f64,
     pub raw_supplier_name: String,
     pub save_as_alias: bool,
+    /// UPGRADE-07 — landed freight per unit (REAL rate; the integer-DZD
+    /// share is `freight_per_unit * quantity`). Serde-defaulted so older
+    /// WebView callers keep committing unchanged.
+    #[serde(default)]
+    pub freight_per_unit: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,6 +195,14 @@ pub struct CommitStockBatchRequest {
     pub items: Vec<CommitItem>,
     #[serde(default)]
     pub user_id: Option<String>,
+    /// UPGRADE-07 — total freight (integer DZD; physical shipping/handling
+    /// only, never a tax). Optional for backward compatibility.
+    #[serde(default)]
+    pub freight_amount: f64,
+    #[serde(default)]
+    pub freight_method: Option<String>,
+    #[serde(default)]
+    pub supplier_invoice_no: Option<String>,
 }
 
 fn commit_batch_inner(
@@ -218,9 +231,9 @@ fn commit_batch_inner(
             .prepare(
                 r#"
                 INSERT INTO stock_batches
-                  (batch_id, product_id, quantity_remaining, unit_cost, received_at,
-                   purchase_order_id, device_id, idempotency_key, sync_status, version, deleted)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'local', ?7, 'pending', 1, 0)
+                  (batch_id, product_id, quantity_remaining, unit_cost, freight_per_unit,
+                   received_at, purchase_order_id, device_id, idempotency_key, sync_status, version, deleted)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'local', ?8, 'pending', 1, 0)
                 "#,
             )
             .map_err(|e| e.to_string())?;
@@ -274,7 +287,11 @@ fn commit_batch_inner(
             )
             .map_err(|e| e.to_string())?;
 
-        for item in &payload.items {
+        // UPGRADE-07 — batch ids of this receipt, for the supplier price
+        // history rows written after the loop (index into payload.items).
+        let mut received_batches: Vec<(usize, String)> = Vec::new();
+
+        for (item_index, item) in payload.items.iter().enumerate() {
             if !item.quantity.is_finite() || item.quantity <= 0.0 {
                 return Err(TrustError::op_failed(format!(
                     "Invalid non-positive quantity for product {}",
@@ -284,6 +301,12 @@ fn commit_batch_inner(
             if !item.unit_cost.is_finite() || item.unit_cost < 0.0 {
                 return Err(TrustError::op_failed(format!(
                     "Invalid negative unit cost for product {}",
+                    item.product_id
+                )));
+            }
+            if !item.freight_per_unit.is_finite() || item.freight_per_unit < 0.0 {
+                return Err(TrustError::op_failed(format!(
+                    "Invalid freight per unit for product {}",
                     item.product_id
                 )));
             }
@@ -307,11 +330,13 @@ fn commit_batch_inner(
                     item.product_id,
                     item.quantity,
                     item.unit_cost,
+                    item.freight_per_unit,
                     ts,
                     group_id,
                     batch_key,
                 ])
                 .map_err(|e| e.to_string())?;
+            received_batches.push((item_index, batch_id.clone()));
 
             insert_ledger
                 .execute(params![
@@ -408,6 +433,73 @@ fn commit_batch_inner(
                 ])
                 .map_err(|e| e.to_string())?;
             }
+        }
+
+        // UPGRADE-07 — freight evidence + supplier price history, written in
+        // the SAME transaction as the batches: a committed receipt without its
+        // landed-cost record would silently understate COGS. Freight is the
+        // physical shipping/handling fee — never a tax.
+        let recorded_freight: f64 =
+            if payload.freight_amount.is_finite() && payload.freight_amount > 0.0 {
+                payload.freight_amount
+            } else {
+                payload
+                    .items
+                    .iter()
+                    .map(|it| it.freight_per_unit.max(0.0) * it.quantity)
+                    .sum()
+            };
+        if recorded_freight > 0.0 {
+            let method = payload
+                .freight_method
+                .as_deref()
+                .filter(|m| matches!(*m, "VALUE" | "QTY" | "WEIGHT"))
+                .unwrap_or("VALUE")
+                .to_string();
+            let allocated: Vec<serde_json::Value> = payload
+                .items
+                .iter()
+                .map(|it| {
+                    serde_json::json!({
+                        "product_id": it.product_id,
+                        "quantity": it.quantity,
+                        "unit_cost": it.unit_cost,
+                        "freight_per_unit": it.freight_per_unit,
+                        "allocated": ((it.freight_per_unit.max(0.0) * it.quantity) * 100.0).round() / 100.0,
+                    })
+                })
+                .collect();
+            tx.execute(
+                "INSERT INTO po_freight (id, po_id, amount, method, allocated_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    uuid::Uuid::new_v4().to_string(),
+                    group_id,
+                    recorded_freight,
+                    method,
+                    serde_json::Value::Array(allocated).to_string(),
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        for (item_index, batch_id) in &received_batches {
+            let item = &payload.items[*item_index];
+            tx.execute(
+                "INSERT INTO supplier_price_history \
+                 (id, product_id, supplier, invoice_no, unit_cost, quantity, batch_id, received_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    uuid::Uuid::new_v4().to_string(),
+                    item.product_id,
+                    payload.supplier_name,
+                    payload.supplier_invoice_no,
+                    item.unit_cost,
+                    item.quantity,
+                    batch_id,
+                    ts,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
         }
 
         let items_count = payload.items.len() as i64;
@@ -813,6 +905,7 @@ mod tests {
                 product_id TEXT NOT NULL REFERENCES products(id),
                 quantity_remaining REAL NOT NULL CHECK (quantity_remaining >= 0),
                 unit_cost REAL NOT NULL CHECK (unit_cost >= 0),
+                freight_per_unit REAL NOT NULL DEFAULT 0,
                 received_at TEXT NOT NULL,
                 purchase_order_id TEXT,
                 device_id TEXT NOT NULL DEFAULT 'local',
@@ -822,6 +915,28 @@ mod tests {
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                 deleted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE po_freight (
+                id TEXT PRIMARY KEY,
+                po_id TEXT NOT NULL,
+                amount REAL NOT NULL DEFAULT 0,
+                method TEXT NOT NULL DEFAULT 'VALUE',
+                allocated_json TEXT NOT NULL DEFAULT '[]',
+                device_id TEXT NOT NULL DEFAULT 'local',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+            CREATE TABLE supplier_price_history (
+                id TEXT PRIMARY KEY,
+                product_id TEXT NOT NULL,
+                product_name TEXT,
+                supplier TEXT NOT NULL DEFAULT '',
+                invoice_no TEXT,
+                unit_cost REAL NOT NULL DEFAULT 0,
+                quantity REAL NOT NULL DEFAULT 0,
+                batch_id TEXT,
+                received_at TEXT NOT NULL,
+                device_id TEXT NOT NULL DEFAULT 'local',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
             );
             CREATE TABLE inventory_ledger (
                 id TEXT PRIMARY KEY, product_id TEXT NOT NULL REFERENCES products(id),
@@ -872,12 +987,15 @@ mod tests {
         let payload = CommitStockBatchRequest {
             supplier_name: "ACME".into(),
             items: vec![
-                CommitItem { product_id: "p1".into(), quantity: 2.0, unit_cost: 10.0, raw_supplier_name: "Widget A".into(), save_as_alias: true },
-                CommitItem { product_id: "p2".into(), quantity: 1.0, unit_cost: 5.0, raw_supplier_name: "Widget B".into(), save_as_alias: false },
-                CommitItem { product_id: "p3".into(), quantity: 3.0, unit_cost: 7.0, raw_supplier_name: "Widget C".into(), save_as_alias: false },
-                CommitItem { product_id: "p1".into(), quantity: -5.0, unit_cost: 10.0, raw_supplier_name: "Widget A".into(), save_as_alias: false },
+                CommitItem { product_id: "p1".into(), quantity: 2.0, unit_cost: 10.0, raw_supplier_name: "Widget A".into(), save_as_alias: true, freight_per_unit: 0.0 },
+                CommitItem { product_id: "p2".into(), quantity: 1.0, unit_cost: 5.0, raw_supplier_name: "Widget B".into(), save_as_alias: false, freight_per_unit: 0.0 },
+                CommitItem { product_id: "p3".into(), quantity: 3.0, unit_cost: 7.0, raw_supplier_name: "Widget C".into(), save_as_alias: false, freight_per_unit: 0.0 },
+                CommitItem { product_id: "p1".into(), quantity: -5.0, unit_cost: 10.0, raw_supplier_name: "Widget A".into(), save_as_alias: false, freight_per_unit: 0.0 },
             ],
             user_id: Some("user_test".into()),
+            freight_amount: 0.0,
+            freight_method: None,
+            supplier_invoice_no: None,
         };
         let (_, entry_gen) = global_kernel().get();
         let err =
@@ -925,8 +1043,12 @@ mod tests {
                 unit_cost: 500.0, // must NOT reprice the 400 reference
                 raw_supplier_name: "Widget v2".into(),
                 save_as_alias: true,
+                freight_per_unit: 0.0,
             }],
             user_id: Some("user_agent_42".into()),
+            freight_amount: 0.0,
+            freight_method: None,
+            supplier_invoice_no: None,
         };
         let (_, entry_gen) = global_kernel().get();
         assert_eq!(commit_batch_inner(&mut conn, &payload, entry_gen).unwrap(), 1);
@@ -1080,8 +1202,12 @@ mod tests {
                 unit_cost: 500.0,
                 raw_supplier_name: "Coque".into(),
                 save_as_alias: false,
+                freight_per_unit: 0.0,
             }],
             user_id: None,
+            freight_amount: 0.0,
+            freight_method: None,
+            supplier_invoice_no: None,
         };
         let (_, entry_gen) = global_kernel().get();
         assert_eq!(commit_batch_inner(&mut conn, &payload, entry_gen).unwrap(), 1);
@@ -1089,5 +1215,72 @@ mod tests {
             .query_row("SELECT count(*) FROM vec_products", [], |r| r.get(0))
             .unwrap();
         assert_eq!(indexed, 1, "received product must land in the semantic index");
+    }
+
+    /// UPGRADE-07: freight lands on the batch row, records its allocation
+    /// evidence in `po_freight`, and every received line leaves a
+    /// `supplier_price_history` row — all inside the same transaction.
+    #[test]
+    fn test_commit_freight_landed_cost_and_price_history() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = open_test_db();
+        conn.execute(
+            "INSERT INTO products(id, sku, barcode, title, cost_price, stock) VALUES ('p1','SKU1','BC1','Widget',0,0)",
+            [],
+        )
+        .unwrap();
+        let payload = CommitStockBatchRequest {
+            supplier_name: "ACME".into(),
+            items: vec![CommitItem {
+                product_id: "p1".into(),
+                quantity: 4.0,
+                unit_cost: 500.0,
+                raw_supplier_name: "Widget".into(),
+                save_as_alias: false,
+                freight_per_unit: 25.0, // 100 DZD over 4 units
+            }],
+            user_id: None,
+            freight_amount: 100.0,
+            freight_method: Some("QTY".into()),
+            supplier_invoice_no: Some("FA-2026-001".into()),
+        };
+        let (_, entry_gen) = global_kernel().get();
+        assert_eq!(commit_batch_inner(&mut conn, &payload, entry_gen).unwrap(), 1);
+
+        let (batch_freight, batch_cost): (f64, f64) = conn
+            .query_row(
+                "SELECT freight_per_unit, unit_cost FROM stock_batches LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(
+            (batch_freight - 25.0).abs() < 1e-9,
+            "freight frozen on the batch, got {batch_freight}"
+        );
+        assert!((batch_cost - 500.0).abs() < 1e-9);
+
+        let (amount, method, allocated): (f64, String, String) = conn
+            .query_row(
+                "SELECT amount, method, allocated_json FROM po_freight LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert!((amount - 100.0).abs() < 1e-9);
+        assert_eq!(method, "QTY");
+        assert!(allocated.contains("\"freight_per_unit\":25.0"), "{allocated}");
+
+        let (count, supplier, invoice, unit_cost): (i64, String, String, f64) = conn
+            .query_row(
+                "SELECT count(*), supplier, invoice_no, unit_cost FROM supplier_price_history",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(supplier, "ACME");
+        assert_eq!(invoice, "FA-2026-001");
+        assert!((unit_cost - 500.0).abs() < 1e-9);
     }
 }

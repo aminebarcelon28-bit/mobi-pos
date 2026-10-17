@@ -35,6 +35,7 @@ import {
 import { PoReviewScreen } from '../PoReviewScreen';
 import type { Product, IMEIRecord } from '../../types/pos';
 import type { ProcessRawScanResponse } from '../../types/po';
+import type { FreightMethod } from '../../utils/landedCost';
 
 /**
  * Stable content hash for an import file: the slice derives delta + batch
@@ -100,6 +101,10 @@ export const InvoiceIngestionModal: React.FC = () => {
   // AI Recon & Invariant Scanner State
   const [supplierName, setSupplierName] = useState<string>('Grossiste Mobile Distribution');
   const [reportedFreight, setReportedFreight] = useState<number>(0);
+  // UPGRADE-07 — allocation method for the freight landed cost (physical
+  // shipping/handling only, never a fiscal levy). WEIGHT requires per-line weights
+  // the OCR lane does not collect yet, so the UI offers VALUE | QTY.
+  const [freightMethod, setFreightMethod] = useState<FreightMethod>('VALUE');
   const [reportedGrandTotal, setReportedGrandTotal] = useState<number>(0);
   const [rawOcrInput, setRawOcrInput] = useState<string>('');
   const [showDirectTextInput, setShowDirectTextInput] = useState(false);
@@ -490,6 +495,7 @@ export const InvoiceIngestionModal: React.FC = () => {
           <PoReviewScreen
             supplierName={supplierName}
             reportedFreight={reportedFreight}
+            freightMethod={freightMethod}
             reportedGrandTotal={
               reportedGrandTotal > 0
                 ? reportedGrandTotal
@@ -635,6 +641,21 @@ export const InvoiceIngestionModal: React.FC = () => {
                     onChangeMinor={(minor) => setReportedFreight(Math.max(0, toLegacyReal(minor)))}
                     className="w-full bg-pos-panel border border-pos-border rounded-xl px-2 py-1.5 text-xs text-pos-text text-center font-mono focus:outline-none focus:border-pos-accent min-h-[40px]"
                   />
+                  {/* UPGRADE-07 — physical shipping/handling fee; the method
+                      controls how the total lands on batch costs (FIFO). */}
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <span className="text-[9px] font-semibold text-pos-muted uppercase tracking-wider shrink-0">
+                      Répartition
+                    </span>
+                    <select
+                      value={freightMethod}
+                      onChange={(e) => setFreightMethod(e.target.value as FreightMethod)}
+                      className="flex-1 bg-pos-panel border border-pos-border rounded-lg px-2 py-1 text-[10px] font-bold text-pos-text focus:outline-none focus:border-pos-accent min-h-[32px] cursor-pointer"
+                    >
+                      <option value="VALUE">Valeur des lignes</option>
+                      <option value="QTY">Quantités reçues</option>
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>

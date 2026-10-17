@@ -144,6 +144,13 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     await db.select('SELECT id, supplier_name, status, credit_amount FROM part_rmas LIMIT 0;');
     await db.select('SELECT id, rma_id, product_id, quantity, unit_cost FROM part_rma_lines LIMIT 0;');
     await db.select('SELECT id, original_repair_id, rework_repair_id, status, labor_basis, parts_basis FROM warranty_claims LIMIT 0;');
+    // UPGRADE-07 (v122) — freight landed cost + supplier price history. Same
+    // rule as v121: the stalled sqlx ledger may never run v122 on
+    // upgraded-shape DBs, so a missing piece fails the probe and forces the
+    // idempotent full pass below.
+    await db.select('SELECT freight_per_unit FROM stock_batches LIMIT 0;');
+    await db.select('SELECT id, po_id, amount, method FROM po_freight LIMIT 0;');
+    await db.select('SELECT id, product_id, supplier, unit_cost, quantity, batch_id FROM supplier_price_history LIMIT 0;');
     return;
   } catch (probeErr) {
     // B-009: BUSY is transient lock contention, NOT a missing column —
@@ -444,6 +451,35 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     'CREATE INDEX IF NOT EXISTS idx_warranty_claims_original ON warranty_claims(original_repair_id);',
     'CREATE INDEX IF NOT EXISTS idx_warranty_claims_rework ON warranty_claims(rework_repair_id);',
     'CREATE INDEX IF NOT EXISTS idx_warranty_claims_status ON warranty_claims(status);',
+    // UPGRADE-07 (v122) — freight landed-cost + supplier price history. The
+    // ALTER must sit AFTER the stock_batches CREATE above; the runner
+    // tolerates "duplicate column" on databases that already healed.
+    'ALTER TABLE stock_batches ADD COLUMN freight_per_unit REAL NOT NULL DEFAULT 0;',
+    `CREATE TABLE IF NOT EXISTS po_freight (
+        id TEXT PRIMARY KEY,
+        po_id TEXT NOT NULL,
+        amount REAL NOT NULL DEFAULT 0,
+        method TEXT NOT NULL DEFAULT 'VALUE',
+        allocated_json TEXT NOT NULL DEFAULT '[]',
+        device_id TEXT NOT NULL DEFAULT 'local',
+        created_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+      );`,
+    'CREATE INDEX IF NOT EXISTS idx_po_freight_po ON po_freight(po_id);',
+    `CREATE TABLE IF NOT EXISTS supplier_price_history (
+        id TEXT PRIMARY KEY,
+        product_id TEXT NOT NULL,
+        product_name TEXT,
+        supplier TEXT NOT NULL DEFAULT '',
+        invoice_no TEXT,
+        unit_cost REAL NOT NULL DEFAULT 0,
+        quantity REAL NOT NULL DEFAULT 0,
+        batch_id TEXT,
+        received_at TEXT NOT NULL,
+        device_id TEXT NOT NULL DEFAULT 'local',
+        created_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+      );`,
+    'CREATE INDEX IF NOT EXISTS idx_supplier_price_product ON supplier_price_history(product_id, received_at DESC);',
+    'CREATE INDEX IF NOT EXISTS idx_supplier_price_supplier ON supplier_price_history(supplier, received_at DESC);',
   ];
   // B-021: destructive service-ledger/stock DML gated behind a one-shot
   // app_settings flag — a failed probe for an unrelated reason must never
@@ -1321,6 +1357,8 @@ interface FifoBatchRow {
   batch_id: string;
   quantity_remaining: number;
   unit_cost: number;
+  /** UPGRADE-07 — landed freight per unit (absent/0 on pre-v122 rows). */
+  freight_per_unit?: number;
   received_at?: string;
   purchase_order_id?: string | null;
   created_at?: string;
@@ -1999,7 +2037,7 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
         try {
           const availableBatches = (await db
             .select(
-              `SELECT batch_id, quantity_remaining, unit_cost, received_at, purchase_order_id, created_at
+              `SELECT batch_id, quantity_remaining, unit_cost, freight_per_unit, received_at, purchase_order_id, created_at
                FROM stock_batches
                WHERE product_id = $1 AND quantity_remaining > 0 AND deleted = 0
                  AND (purchase_order_id IS NULL OR purchase_order_id != 'SHADOW')
@@ -2038,11 +2076,15 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
             }
             needed -= take;
             totalAllocatedQty += take;
-            totalCostAccum += take * Number(batch.unit_cost);
+            // UPGRADE-07 — FIFO COGS carries the landed cost (unit_cost +
+            // frozen freight rate); one rounding boundary at the blended
+            // toIntMoney below. Synced payloads keep the raw unit_cost.
+            const landedUnit = Number(batch.unit_cost) + Math.max(0, Number(batch.freight_per_unit) || 0);
+            totalCostAccum += take * landedUnit;
             fifoAllocations.push({
               batchId: batch.batch_id,
               quantity: take,
-              unitCost: Number(batch.unit_cost),
+              unitCost: landedUnit,
             });
           }
 
@@ -4167,6 +4209,8 @@ export async function insertStockBatch(batch: {
   productId: string;
   quantityRemaining: number;
   unitCost: number;
+  /** UPGRADE-07 — landed freight per unit (REAL rate, integer-DZD share ÷ qty). */
+  freightPerUnit?: number;
   receivedAt?: string;
   purchaseOrderId?: string;
   idempotencyKey?: string;
@@ -4179,17 +4223,19 @@ export async function insertStockBatch(batch: {
   const idempotencyKey = newIdempotencyKey();
 
   await db.execute(
-    `INSERT INTO stock_batches (batch_id, product_id, quantity_remaining, unit_cost, received_at,
+    `INSERT INTO stock_batches (batch_id, product_id, quantity_remaining, unit_cost, freight_per_unit, received_at,
       purchase_order_id, device_id, idempotency_key, sync_status, version, created_at, updated_at, deleted)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', 1, $9, $9, 0)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', 1, $10, $10, 0)
      ON CONFLICT(batch_id) DO UPDATE SET quantity_remaining=excluded.quantity_remaining,
      version = version + 1,
-       unit_cost=excluded.unit_cost, updated_at=excluded.updated_at, sync_status='pending'`,
+       unit_cost=excluded.unit_cost, freight_per_unit=excluded.freight_per_unit,
+       updated_at=excluded.updated_at, sync_status='pending'`,
     [
       batchId,
       batch.productId,
       batch.quantityRemaining,
       batch.unitCost,
+      Math.max(0, Number(batch.freightPerUnit) || 0),
       receivedAt,
       batch.purchaseOrderId || null,
       deviceId,
@@ -4342,7 +4388,7 @@ async function depleteStockBatchesFifoInner(
     } catch {}
 
     const batches = (await db.select(
-      `SELECT batch_id, product_id, quantity_remaining, unit_cost, received_at, version, device_id, purchase_order_id, created_at, idempotency_key
+      `SELECT batch_id, product_id, quantity_remaining, unit_cost, freight_per_unit, received_at, version, device_id, purchase_order_id, created_at, idempotency_key
        FROM stock_batches
        WHERE product_id = $1 AND deleted = 0 AND quantity_remaining > 0
        ORDER BY received_at ASC, rowid ASC`,
@@ -4352,6 +4398,7 @@ async function depleteStockBatchesFifoInner(
       product_id: string;
       quantity_remaining: number;
       unit_cost: number;
+      freight_per_unit?: number;
       received_at: string;
       version?: number;
       device_id?: string;
@@ -4369,7 +4416,11 @@ async function depleteStockBatchesFifoInner(
       const rem = Number(b.quantity_remaining) || 0;
       if (rem <= 0) continue;
       const take = Math.min(rem, needed);
-      const unitCost = Math.max(0, toIntMoney(b.unit_cost));
+      // UPGRADE-07 — the detail ledger freezes the LANDED unit (batch cost +
+      // frozen freight rate); the synced payload below keeps the raw
+      // unit_cost so remote peers stay verbatim (freight is receipt-local).
+      const rawUnitCost = Math.max(0, toIntMoney(b.unit_cost));
+      const unitCost = Math.max(0, toIntMoney(Number(b.unit_cost) + Math.max(0, Number(b.freight_per_unit) || 0)));
 
       await db.execute(
         `UPDATE stock_batches
@@ -4408,7 +4459,7 @@ async function depleteStockBatchesFifoInner(
             batch_id: b.batch_id,
             product_id: item.productId,
             quantity_remaining: Number(br?.quantity_remaining ?? (rem - take)),
-            unit_cost: unitCost,
+            unit_cost: rawUnitCost,
             received_at: br?.received_at ?? b.received_at,
             purchase_order_id: br?.purchase_order_id ?? b.purchase_order_id ?? null,
             device_id: br?.device_id ?? b.device_id ?? deviceId,
@@ -4450,7 +4501,7 @@ export async function calculateInventoryValuation(productId?: string): Promise<n
   if (productId) {
     const res = (await db
       .select(
-        'SELECT COALESCE(SUM(quantity_remaining * unit_cost), 0) as val FROM stock_batches WHERE product_id = $1 AND deleted = 0 AND quantity_remaining > 0',
+        'SELECT COALESCE(SUM(quantity_remaining * (unit_cost + COALESCE(freight_per_unit, 0))), 0) as val FROM stock_batches WHERE product_id = $1 AND deleted = 0 AND quantity_remaining > 0',
         [productId]
       )
       .catch(() => [])) as Array<{ val: number }>;
@@ -4458,7 +4509,7 @@ export async function calculateInventoryValuation(productId?: string): Promise<n
   } else {
     const res = (await db
       .select(
-        'SELECT COALESCE(SUM(quantity_remaining * unit_cost), 0) as val FROM stock_batches WHERE deleted = 0 AND quantity_remaining > 0'
+        'SELECT COALESCE(SUM(quantity_remaining * (unit_cost + COALESCE(freight_per_unit, 0))), 0) as val FROM stock_batches WHERE deleted = 0 AND quantity_remaining > 0'
       )
       .catch(() => [])) as Array<{ val: number }>;
     return Number(res?.[0]?.val ?? 0);
@@ -5293,7 +5344,7 @@ export async function reconcileShadowBatches(targetProductId?: string): Promise<
           const depCtx = { prodId, deviceId, now, txId: `recon-${sh.batch_id}` };
           const live = (await db
             .select(
-              `SELECT batch_id, quantity_remaining, unit_cost, received_at, purchase_order_id, created_at
+              `SELECT batch_id, quantity_remaining, unit_cost, freight_per_unit, received_at, purchase_order_id, created_at
                FROM stock_batches
                WHERE product_id = $1 AND quantity_remaining > 0 AND deleted = 0
                  AND (purchase_order_id IS NULL OR purchase_order_id != 'SHADOW')

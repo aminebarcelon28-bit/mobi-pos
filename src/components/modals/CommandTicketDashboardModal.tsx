@@ -124,6 +124,11 @@ export const CommandTicketDashboardModal: React.FC = () => {
 
   // Receiving Sub-Modal State
   const [receivingPO, setReceivingPO] = useState<PurchaseOrder | null>(null);
+  // UPGRADE-07 — freight landed cost (physical shipping/handling only, never
+  // a fiscal levy). Amount is legacy-real DZD; the slice apportions it as
+  // integer DZD.
+  const [freightAmountDzd, setFreightAmountDzd] = useState<number>(0);
+  const [freightMethod, setFreightMethod] = useState<'VALUE' | 'QTY'>('VALUE');
   const [printingPO, setPrintingPO] = useState<PurchaseOrder | null>(null);
   const [previewingPO, setPreviewingPO] = useState<PurchaseOrder | null>(null);
   const [verifiedQtyMap, setVerifiedQtyMap] = useState<Record<string, number>>({});
@@ -320,6 +325,8 @@ export const CommandTicketDashboardModal: React.FC = () => {
     setReceivingPO(po);
     setSupplierInvoiceNo('');
     setReceptionSnapshot(null);
+    setFreightAmountDzd(0);
+    setFreightMethod('VALUE');
     const initQty: Record<string, number> = {};
     const initCost: Record<string, number> = {};
     const initReasons: Record<string, string> = {};
@@ -366,6 +373,8 @@ export const CommandTicketDashboardModal: React.FC = () => {
       recordExpense: autoRecordExpense,
       expensePaymentMethod,
       supplierInvoiceNo: supplierInvoiceNo.trim() || undefined,
+      freightAmount: Math.max(0, Math.round(freightAmountDzd)),
+      freightMethod: freightAmountDzd > 0 ? freightMethod : undefined,
     });
 
     setIsProcessing(false);
@@ -386,6 +395,25 @@ export const CommandTicketDashboardModal: React.FC = () => {
 
       if (autoRecordExpense && poReceiveResult.totalReceivedCost > 0) {
         showToast(`💶 Charge Fournisseur de ${formatDZD(poReceiveResult.totalReceivedCost)} liée à l'EBITDA.`, 'success');
+      }
+
+      // UPGRADE-07 — price-creep evidence: >10% vs the last receipt from the
+      // same supplier, caught at receive time.
+      const priceAlerts = poReceiveResult.priceAlerts ?? [];
+      if (priceAlerts.length > 0) {
+        const first = priceAlerts[0];
+        showToast(
+          `⚠️ Hausse de prix fournisseur : ${first.productName || first.productId} ${formatDZD(first.previousCost)} → ${formatDZD(first.newCost)} (+${first.variancePct.toFixed(1)}%)${
+            priceAlerts.length > 1 ? ` (+${priceAlerts.length - 1} autre(s) ligne(s))` : ''
+          }`,
+          'warning'
+        );
+      }
+      if (Math.round(freightAmountDzd) > 0) {
+        showToast(
+          `🚚 Frais de port répartis dans le coût de revient FIFO (${formatDZD(Math.round(freightAmountDzd))}).`,
+          'info'
+        );
       }
 
       setReceivingPO(null);
@@ -1249,6 +1277,33 @@ export const CommandTicketDashboardModal: React.FC = () => {
                       ))}
                     </div>
                   )}
+                </div>
+
+                {/* UPGRADE-07 — freight landed-cost (physical shipping only, never a fiscal levy) */}
+                <div className="bg-pos-card border border-pos-border rounded-xl p-3 space-y-2 text-xs">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="font-bold text-pos-text">🚚 Frais de port / manutention</span>
+                    <span className="text-[10px] text-pos-muted">Réparti sur le coût de revient FIFO — jamais une taxe</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <MoneyInput
+                      label="Frais de port (DA)"
+                      valueMinor={dinarsToMinor(freightAmountDzd || 0)}
+                      onChangeMinor={(minor) => setFreightAmountDzd(Math.max(0, toLegacyReal(minor)))}
+                      className="w-40 bg-pos-bg border border-pos-border rounded-lg px-2.5 py-1.5 text-xs font-mono font-bold text-pos-text focus:outline-none focus:border-emerald-500 min-h-[40px]"
+                    />
+                    <label className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-pos-muted font-bold">Répartition :</span>
+                      <select
+                        value={freightMethod}
+                        onChange={(e) => setFreightMethod(e.target.value as 'VALUE' | 'QTY')}
+                        className="bg-pos-bg border border-pos-border rounded-lg px-2 py-1.5 text-[11px] font-bold text-pos-text focus:outline-none focus:border-emerald-500 cursor-pointer min-h-[40px]"
+                      >
+                        <option value="VALUE">Valeur des lignes</option>
+                        <option value="QTY">Quantités reçues</option>
+                      </select>
+                    </label>
+                  </div>
                 </div>
               </div>
 
