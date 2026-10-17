@@ -41,3 +41,43 @@ export const AUDIT_ACTOR_ID_HEAL_SQL: readonly string[] = [
 /** Canary probe: fails on pre-v124 tables so the full heal pass runs. */
 export const AUDIT_ACTOR_ID_HEAL_PROBE_SQL =
   'SELECT actor_id FROM security_audit_logs LIMIT 0;';
+
+/**
+ * UPGRADE-10 (v125) — scheduled ABC micro-stocktakes.
+ *
+ * `cycle_count_tasks` freezes the expectation at open time
+ * (`snapshot_qty` + `opened_ledger_max_id`, the inventory_ledger rowid
+ * watermark); submit compares the physical count against
+ * snapshot + post-open movements (ADJUST corrections excluded) so sales
+ * between open and submit never book phantom variance. Operational table:
+ * local-only (never synced), written exclusively through the repo lane in
+ * `sqlPluginAdapter.ts`. Mirrors Rust v125 verbatim; idempotent (table/index
+ * creation is `IF NOT EXISTS`). Same lane rule as v119–v124 heals: the
+ * stalled sqlx ledger may never run v125 on upgraded-shape DBs, so the boot
+ * probe forces the full idempotent pass.
+ */
+export const CYCLE_COUNT_TASKS_HEAL_SQL: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS cycle_count_tasks (
+    id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL,
+    abc_class TEXT NOT NULL CHECK (abc_class IN ('A','B','C')),
+    due_at TEXT NOT NULL,
+    opened_at TEXT NOT NULL,
+    opened_ledger_max_id INTEGER NOT NULL DEFAULT 0,
+    snapshot_qty INTEGER NOT NULL DEFAULT 0,
+    counted_qty INTEGER,
+    expected_qty INTEGER,
+    counted_at TEXT,
+    operator TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    deleted INTEGER NOT NULL DEFAULT 0
+  );`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_cct_open_product ON cycle_count_tasks(product_id) WHERE counted_at IS NULL AND deleted = 0;',
+  'CREATE INDEX IF NOT EXISTS idx_cct_due ON cycle_count_tasks(counted_at, due_at);',
+  'CREATE INDEX IF NOT EXISTS idx_cct_product_counted ON cycle_count_tasks(product_id, counted_at);',
+];
+
+/** Canary probe: fails on pre-v125 schemas so the full heal pass runs. */
+export const CYCLE_COUNT_TASKS_HEAL_PROBE_SQL =
+  'SELECT opened_ledger_max_id, snapshot_qty FROM cycle_count_tasks LIMIT 0;';

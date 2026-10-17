@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 124;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 125;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -2095,6 +2095,41 @@ fn base_schema_migrations() -> Vec<Migration> {
             description: "UPGRADE-09: security_audit_logs.actor_id (exception intelligence attribution)",
             sql: r#"
             ALTER TABLE security_audit_logs ADD COLUMN actor_id TEXT;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v125 — UPGRADE-10: scheduled ABC micro-stocktakes.
+            // `cycle_count_tasks` freezes the expectation at open time
+            // (`snapshot_qty` + `opened_ledger_max_id` — the inventory_ledger
+            // rowid watermark); submit compares the physical count against
+            // snapshot + post-open movements (ADJUST corrections excluded),
+            // so a sale between open and submit never books phantom
+            // variance. Operational table: local-only (never synced), written
+            // exclusively through the repo lane; the partial unique index
+            // enforces one open task per product.
+            version: 125,
+            description: "UPGRADE-10: cycle_count_tasks (scheduled ABC micro-stocktakes)",
+            sql: r#"
+            CREATE TABLE IF NOT EXISTS cycle_count_tasks (
+              id TEXT PRIMARY KEY,
+              product_id TEXT NOT NULL,
+              abc_class TEXT NOT NULL CHECK (abc_class IN ('A','B','C')),
+              due_at TEXT NOT NULL,
+              opened_at TEXT NOT NULL,
+              opened_ledger_max_id INTEGER NOT NULL DEFAULT 0,
+              snapshot_qty INTEGER NOT NULL DEFAULT 0,
+              counted_qty INTEGER,
+              expected_qty INTEGER,
+              counted_at TEXT,
+              operator TEXT,
+              created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+              updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+              deleted INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_cct_open_product ON cycle_count_tasks(product_id) WHERE counted_at IS NULL AND deleted = 0;
+            CREATE INDEX IF NOT EXISTS idx_cct_due ON cycle_count_tasks(counted_at, due_at);
+            CREATE INDEX IF NOT EXISTS idx_cct_product_counted ON cycle_count_tasks(product_id, counted_at);
             "#,
             kind: MigrationKind::Up,
         },

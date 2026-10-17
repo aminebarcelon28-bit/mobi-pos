@@ -18,6 +18,7 @@ import {
   Check,
   Eye,
   EyeOff,
+  ClipboardList,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
@@ -25,6 +26,7 @@ import { soundEngine } from '../../utils/audioFeedback';
 import { useToast } from '../ui/Toast';
 import { Kbd } from '../../design-system/desktop/Kbd';
 import { useInventoryValuation } from '../../hooks/useInventoryValuation';
+import type { CycleCountTaskRow } from '../../db/sqlPluginAdapter';
 
 type ViewMode = 'catalog' | 'stocktake';
 type StocktakeFilter = 'all' | 'discrepancies' | 'counted';
@@ -37,6 +39,7 @@ export const InventoryManagerModal: React.FC = () => {
     setEditingProduct,
     deleteProduct,
     applyStocktakeAudit,
+    submitCycleCounts,
   } = usePosStore();
 
   const { showToast } = useToast();
@@ -59,6 +62,11 @@ export const InventoryManagerModal: React.FC = () => {
   const [isCommitting, setIsCommitting] = useState(false);
   const [isBlindStocktake, setIsBlindStocktake] = useState(false);
 
+  // ABC cycle-count state (UPGRADE-10): open tasks + per-task counted input.
+  const [cycleTasks, setCycleTasks] = useState<CycleCountTaskRow[]>([]);
+  const [cycleCounts, setCycleCounts] = useState<Record<string, string>>({});
+  const [isCycleBusy, setIsCycleBusy] = useState(false);
+
   const scannerInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-focus barcode scanner input when switching to stocktake mode
@@ -66,6 +74,26 @@ export const InventoryManagerModal: React.FC = () => {
     if (activeModal === 'inventory_manager' && mode === 'stocktake') {
       setTimeout(() => scannerInputRef.current?.focus(), 80);
     }
+  }, [activeModal, mode]);
+
+  // Load open ABC cycle-count tasks whenever the stocktake view opens
+  // (read-only lane, local table). Failures degrade to an empty panel —
+  // a task list must never block the manual audit flow.
+  useEffect(() => {
+    if (activeModal !== 'inventory_manager' || mode !== 'stocktake') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { listOpenCycleCountTasks } = await import('../../db/sqlPluginAdapter');
+        const tasks = await listOpenCycleCountTasks();
+        if (!cancelled) setCycleTasks(tasks);
+      } catch (err) {
+        console.warn('[inventory] cycle-count tasks unavailable:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [activeModal, mode]);
 
   // Memoized above the early return so typing does not rescan per keystroke.
@@ -262,6 +290,69 @@ export const InventoryManagerModal: React.FC = () => {
       showToast('Erreur lors de l\'enregistrement de l\'inventaire.', 'error');
     } finally {
       setIsCommitting(false);
+    }
+  };
+
+  // Open tasks for every reference whose ABC cadence elapsed (A=30d, B=90d,
+  // C=365d) and that has no open task yet. Opening freezes the expectation:
+  // ledger snapshot + rowid watermark.
+  const handleOpenDueCycleTasks = async () => {
+    if (isCycleBusy) return;
+    setIsCycleBusy(true);
+    try {
+      const { listDueCycleCountProducts, openCycleCountTasks, listOpenCycleCountTasks } = await import(
+        '../../db/sqlPluginAdapter'
+      );
+      const { due } = await listDueCycleCountProducts(products);
+      if (due.length === 0) {
+        showToast('Aucune référence due pour un comptage cyclique.', 'info');
+        return;
+      }
+      const res = await openCycleCountTasks(due.map((d) => ({ productId: d.productId, abcClass: d.abcClass })));
+      setCycleTasks(await listOpenCycleCountTasks());
+      showToast(`${res.opened} comptage(s) cyclique(s) ouvert(s) (${res.skipped} ignoré(s)).`, 'success');
+      soundEngine.playSuccess?.();
+    } catch (err) {
+      console.error('[inventory] open cycle-count tasks failed:', err);
+      showToast('Erreur lors de l\'ouverture des comptages cycliques.', 'error');
+    } finally {
+      setIsCycleBusy(false);
+    }
+  };
+
+  // Validate entered counts. The store action computes each task's expectation
+  // from the frozen snapshot + post-open movements, so a sale between open and
+  // submit books ZERO phantom variance; only real variances reach
+  // appendStocktakeAdjustments.
+  const handleSubmitCycleCounts = async () => {
+    const entries = cycleTasks
+      .map((t) => ({ taskId: t.id, raw: (cycleCounts[t.id] ?? '').trim() }))
+      .filter((e) => e.raw !== '');
+    if (entries.length === 0) {
+      showToast('Saisissez au moins une quantité comptée.', 'error');
+      return;
+    }
+    const counts = entries.map((e) => ({ taskId: e.taskId, countedQty: Math.max(0, Math.floor(Number(e.raw))) }));
+    if (counts.some((c) => !Number.isFinite(c.countedQty))) {
+      showToast('Quantité invalide — utilisez des nombres entiers.', 'error');
+      return;
+    }
+    setIsCycleBusy(true);
+    try {
+      const outcome = await submitCycleCounts(counts);
+      const { listOpenCycleCountTasks } = await import('../../db/sqlPluginAdapter');
+      setCycleTasks(await listOpenCycleCountTasks());
+      setCycleCounts({});
+      const variance = outcome && typeof outcome === 'object' && 'varianceUnits' in outcome ? outcome.varianceUnits : 0;
+      const sign = variance >= 0 ? `+${variance}` : `${variance}`;
+      showToast(`Comptages validés : écart net ${sign} pièce(s) vs attendu.`, 'success');
+      soundEngine.playSuccess?.();
+    } catch (err) {
+      console.error('[inventory] submit cycle-count failed:', err);
+      showToast('Erreur lors de la validation des comptages.', 'error');
+      soundEngine.playError?.();
+    } finally {
+      setIsCycleBusy(false);
     }
   };
 
@@ -702,6 +793,84 @@ export const InventoryManagerModal: React.FC = () => {
                     : formatDZD(totalFinancialVariance)}
                 </p>
               </div>
+            </div>
+
+            {/* ABC cycle-count strip (UPGRADE-10): scheduled micro-stocktakes
+                with open-time expectation snapshots. */}
+            <div className="px-3 py-2 bg-amber-500/5 border-b border-pos-border shrink-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                  <ClipboardList className="w-3.5 h-3.5" /> Comptages Cycliques ABC
+                </span>
+                <span className="text-[10px] font-bold text-pos-muted">
+                  {cycleTasks.length > 0
+                    ? `${cycleTasks.length} tâche(s) ouverte(s) — snapshot figé à l'ouverture`
+                    : 'Aucun comptage ouvert (A=30j · B=90j · C=365j)'}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleOpenDueCycleTasks}
+                  disabled={isCycleBusy}
+                  className="ml-auto px-2.5 py-1 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-bold hover:bg-amber-500/30 transition cursor-pointer disabled:opacity-50"
+                >
+                  Ouvrir les tâches dues
+                </button>
+              </div>
+              {cycleTasks.length > 0 && (
+                <div className="mt-1.5 space-y-1 max-h-44 overflow-y-auto">
+                  {cycleTasks.map((t) => {
+                    const p = products.find((x) => x.id === t.productId);
+                    const title = p ? p.title : t.productId;
+                    return (
+                      <div
+                        key={t.id}
+                        className="flex items-center gap-2 bg-pos-bg border border-pos-border rounded-lg px-2 py-1 text-[11px]"
+                      >
+                        <span
+                          className={`w-5 h-5 grid place-items-center rounded font-black text-[10px] shrink-0 ${
+                            t.abcClass === 'A'
+                              ? 'bg-red-500/20 text-red-300'
+                              : t.abcClass === 'B'
+                              ? 'bg-amber-500/20 text-amber-300'
+                              : 'bg-pos-card text-pos-muted'
+                          }`}
+                          title={`Classe ${t.abcClass}`}
+                        >
+                          {t.abcClass}
+                        </span>
+                        <span className="flex-1 truncate font-bold text-pos-text" title={title}>
+                          {title}
+                        </span>
+                        <span className="text-pos-muted font-mono shrink-0" title="Stock théorique figé à l'ouverture du comptage">
+                          Théo: {t.snapshotQty}
+                        </span>
+                        {!isBlindStocktake && (
+                          <span className="text-pos-muted font-mono shrink-0">Live: {p?.stock ?? '?'}</span>
+                        )}
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={cycleCounts[t.id] ?? ''}
+                          onChange={(e) =>
+                            setCycleCounts((prev) => ({ ...prev, [t.id]: e.target.value.replace(/[^0-9]/g, '') }))
+                          }
+                          placeholder="Compté"
+                          aria-label={`Compté — ${title}`}
+                          className="w-16 bg-pos-card border border-pos-border rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-pos-text placeholder-pos-muted focus:outline-none focus:border-cyan-400 shrink-0"
+                        />
+                      </div>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={handleSubmitCycleCounts}
+                    disabled={isCycleBusy}
+                    className="w-full mt-1 px-2.5 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-[11px] font-black transition cursor-pointer disabled:opacity-50"
+                  >
+                    Valider les comptages saisis
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Hands-Free Scanner Bar & Controls */}

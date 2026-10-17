@@ -36,6 +36,7 @@ import type {
   ActivePriceBook,
 } from '../types/pos';
 import type { PullTouchSummary } from '../sync/types';
+import type { CycleCountSubmitOutcome } from '../utils/cycleCount';
 
 export type ActiveModalType =
   | 'payment'
@@ -136,6 +137,7 @@ export interface CatalogSlice {
   ) => Promise<void>;
   bulkSaveProducts: (newProducts: Product[]) => Promise<void>;
   applyStocktakeAudit: (items: { productId: string; countedStock: number; previousStock: number }[]) => Promise<void>;
+  submitCycleCounts: (counts: { taskId: string; countedQty: number }[]) => Promise<CycleCountSubmitOutcome | void>;
 }
 
 export interface CustomerSlice {

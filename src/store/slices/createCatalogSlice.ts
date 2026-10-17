@@ -10,6 +10,7 @@ import {
 } from '../../utils/warrantyResolver';
 import { validateDeviceIdentifierForIntake } from '../../utils/savValidation';
 import { normalizeDeviceKey } from '../../utils/deviceIdCodec';
+import { selectBookingItems } from '../../utils/cycleCount';
 
 // P11.3: repositories pull sqliteAdapter -> dexie + libsql; catalog writes are
 // async user actions, so they resolve on first use, not at cold start.
@@ -582,5 +583,54 @@ export const createCatalogSlice: StateCreator<PosState, [], [], CatalogSlice> = 
       audioBus.emit('success');
       set({ products: nextProducts });
     }
+  },
+
+  submitCycleCounts: async (counts: { taskId: string; countedQty: number }[]) => {
+    const { products, logSecurityAction, activeCashier } = get();
+    const actor = activeCashier?.name?.trim() || 'Manager';
+    if (!counts || counts.length === 0) return { submitted: 0, skipped: 0, varianceUnits: 0, results: [] };
+
+    const { submitCycleCountCounts, appendStocktakeAdjustments } = await import('../../db/sqlPluginAdapter');
+    const res = await submitCycleCountCounts(counts, { operator: actor });
+
+    // Booking law (UPGRADE-10): the snapshot arithmetic already carries every
+    // movement that happened between task open and submit, so a sale mid-count
+    // yields variance 0 and books NOTHING (no phantom shrinkage). Only
+    // non-zero variances are booked — through appendStocktakeAdjustments, the
+    // single ledger writer (never a direct INSERT here).
+    const bookingItems = selectBookingItems(res.results);
+    if (bookingItems.length > 0) {
+      try {
+        const cycleCountId = newId('cyclecount');
+        await appendStocktakeAdjustments(
+          bookingItems.map((b) => ({ ...b, refId: cycleCountId })),
+          { refType: 'stocktake' }
+        );
+      } catch (adjErr) {
+        console.error('[catalog:cyclecount] Variances recorded but ledger adjustment deferred — recount to converge:', adjErr);
+      }
+    }
+
+    // Physical truth just won on the ledger: mirror it into the store so the
+    // settled tasks stop showing stale on-hand figures.
+    const countedByProduct = new Map<string, number>();
+    for (const r of res.results) countedByProduct.set(r.productId, r.countedQty);
+    if (countedByProduct.size > 0) {
+      set({
+        products: products.map((p) =>
+          countedByProduct.has(p.id) ? { ...p, stock: Math.max(0, countedByProduct.get(p.id) ?? p.stock) } : p
+        ),
+      });
+    }
+
+    const sign = res.varianceUnits >= 0 ? `+${res.varianceUnits}` : `${res.varianceUnits}`;
+    void logSecurityAction(
+      'Comptage Cycle ABC',
+      `${res.submitted} tâche(s) validée(s). Écart net vs attendu snapshot: ${sign} pièces`,
+      actor,
+      false
+    );
+    audioBus.emit('success');
+    return res;
   },
 });

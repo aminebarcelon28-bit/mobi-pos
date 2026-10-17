@@ -40,7 +40,26 @@ function devBenchMark(label: string): void {
 }
 import { withBusyRetry, isBusyError, isStaleTxnError, isRetryableDbError } from './busyRetry';
 export { isRetryableDbError, isBusyError, isStaleTxnError, withBusyRetry };
-import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL, CUSTOMER_DEBTS_HEAL_PROBE_SQL, AUDIT_ACTOR_ID_HEAL_SQL, AUDIT_ACTOR_ID_HEAL_PROBE_SQL } from './schemaHeal';
+import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL, CUSTOMER_DEBTS_HEAL_PROBE_SQL, AUDIT_ACTOR_ID_HEAL_SQL, AUDIT_ACTOR_ID_HEAL_PROBE_SQL, CYCLE_COUNT_TASKS_HEAL_SQL, CYCLE_COUNT_TASKS_HEAL_PROBE_SQL } from './schemaHeal';
+import {
+  abcClassForProduct,
+  computeVarianceQty,
+  expectedQtyFromMovedTotal,
+  nextDueIso,
+  normalizeAbcClass,
+  selectDueProducts,
+  toIntQty,
+  type AbcClass,
+} from '../utils/cycleCount';
+import {
+  CCT_LIST_OPEN_SQL,
+  CCT_MOVEMENTS_SUM_SQL,
+  CCT_OPEN_TASK_INSERT_SQL,
+  CCT_SNAPSHOT_READ_SQL,
+  CCT_SUBMIT_UPDATE_SQL,
+  CCT_TASK_BY_ID_SQL,
+  buildLastCountedSql,
+} from './cycleCountSql';
 import { markBoot } from '../utils/bootTimings';
 import { isTauriEnv } from './adapters/base';
 import { invokeCommand } from '../platform/invoke';
@@ -163,6 +182,9 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     // stalled sqlx ledger never runs v124 on upgraded-shape DBs, so a missing
     // column fails the probe and forces the idempotent full pass below.
     await db.select(AUDIT_ACTOR_ID_HEAL_PROBE_SQL);
+    // UPGRADE-10 (v125) — ABC micro-stocktake task table. Same lane rule as
+    // v124: a missing table fails the probe and forces the idempotent pass.
+    await db.select(CYCLE_COUNT_TASKS_HEAL_PROBE_SQL);
     return;
   } catch (probeErr) {
     // B-009: BUSY is transient lock contention, NOT a missing column —
@@ -517,6 +539,9 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     // UPGRADE-09 (v124) — audit actor attribution; canonical DDL text lives in
     // schemaHeal.ts so the parity oracle pins one string (lib.rs v124 = this).
     ...AUDIT_ACTOR_ID_HEAL_SQL,
+    // UPGRADE-10 (v125) — ABC micro-stocktake tasks; same single-source rule
+    // (lib.rs v125 = schemaHeal constants = this spread).
+    ...CYCLE_COUNT_TASKS_HEAL_SQL,
   ];
   // B-021: destructive service-ledger/stock DML gated behind a one-shot
   // app_settings flag — a failed probe for an unrelated reason must never
@@ -5840,6 +5865,218 @@ export async function appendStocktakeAdjustments(
     }
   }
   return { adjusted, skippedServices };
+}
+
+// ── UPGRADE-10 (v125) — scheduled ABC micro-stocktakes ─────────────────────
+// Operational table, local-only. The SQL is pinned in `cycleCountSql.ts`
+// (dependency-free) so `node:sqlite` oracles run the exact statements the app
+// does, including the EXPLAIN QUERY PLAN pins. Expectation arithmetic is pure
+// (`utils/cycleCount.ts`): expected = snapshot + post-watermark movements,
+// ADJUST corrections excluded.
+
+export interface CycleCountTaskRow {
+  id: string;
+  productId: string;
+  abcClass: AbcClass;
+  dueAt: string;
+  openedAt: string;
+  openedLedgerMaxId: number;
+  snapshotQty: number;
+  countedQty: number | null;
+  expectedQty: number | null;
+  countedAt: string | null;
+  operator: string | null;
+}
+
+function mapCycleCountTaskRow(r: Record<string, unknown>): CycleCountTaskRow {
+  const num = (v: unknown): number => toIntQty(v);
+  const optNum = (v: unknown): number | null => (v == null ? null : toIntQty(v));
+  return {
+    id: String(r?.id ?? ''),
+    productId: String(r?.product_id ?? ''),
+    abcClass: normalizeAbcClass(r?.abc_class),
+    dueAt: String(r?.due_at ?? ''),
+    openedAt: String(r?.opened_at ?? ''),
+    openedLedgerMaxId: num(r?.opened_ledger_max_id),
+    snapshotQty: num(r?.snapshot_qty),
+    countedQty: optNum(r?.counted_qty),
+    expectedQty: optNum(r?.expected_qty),
+    countedAt: r?.counted_at == null ? null : String(r.counted_at),
+    operator: r?.operator == null ? null : String(r.operator),
+  };
+}
+
+/** Open tasks, soonest due first. Read lane only — never mutates. */
+export async function listOpenCycleCountTasks(): Promise<CycleCountTaskRow[]> {
+  const db = await getLocalDb();
+  const rows = (await db.select(CCT_LIST_OPEN_SQL).catch(() => [])) as Array<Record<string, unknown>>;
+  return (rows ?? []).map(mapCycleCountTaskRow).filter((t) => t.id !== '');
+}
+
+/**
+ * Products whose cadence elapsed and that have no open task yet. Skips
+ * services (never counted physically) and `qt-` sentinels. Reads are
+ * keyword-batched so the IN-list stays under param limits.
+ */
+export async function listDueCycleCountProducts(
+  products: Array<{ id: string; price?: number | null; isSerialized?: boolean | null; category?: string | null }>,
+  opts?: { nowIso?: string }
+): Promise<{ due: Array<{ productId: string; abcClass: AbcClass; dueAt: string; lastCountedAt: string | null }> }> {
+  const nowIso = opts?.nowIso ?? utcNowIso();
+  const db = await getLocalDb();
+  const openRows = (await db.select(CCT_LIST_OPEN_SQL).catch(() => [])) as Array<Record<string, unknown>>;
+  const openTaskProductIds = new Set((openRows ?? []).map((r) => String(r.product_id ?? '')));
+  const candidates = (products ?? []).filter((p) => {
+    const id = String(p?.id ?? '');
+    if (!id || id.startsWith('qt-') || id.startsWith('prod-misc-')) return false;
+    return String(p?.category ?? '') !== 'Services';
+  });
+  const lastCounted = new Map<string, string>();
+  const ids = [...new Set(candidates.map((p) => String(p.id)))];
+  for (let i = 0; i < ids.length; i += 400) {
+    const chunk = ids.slice(i, i + 400);
+    if (chunk.length === 0) continue;
+    const rows = (await db.select(buildLastCountedSql(chunk.length), chunk).catch(() => [])) as Array<
+      Record<string, unknown>
+    >;
+    for (const r of rows ?? []) {
+      const pid = String(r?.product_id ?? '');
+      const at = r?.last_counted_at == null ? null : String(r.last_counted_at);
+      if (pid && at) lastCounted.set(pid, at);
+    }
+  }
+  const due = selectDueProducts(candidates, lastCounted, openTaskProductIds, nowIso).map((d) => ({
+    ...d,
+    lastCountedAt: lastCounted.get(d.productId) ?? null,
+  }));
+  return { due };
+}
+
+/**
+ * Open tasks for the dated products. One open task per product: the lane
+ * reads open tasks first (skip guard) and the partial unique index is the
+ * backstop. The snapshot (`ledger_sum`) and the rowid watermark are captured
+ * atomically in one read per product.
+ */
+export async function openCycleCountTasks(
+  items: Array<{ productId: string; abcClass?: AbcClass }>,
+  opts?: { nowIso?: string; products?: Array<{ id: string; price?: number | null; isSerialized?: boolean | null }> }
+): Promise<{ opened: number; skipped: number }> {
+  const nowIso = opts?.nowIso ?? utcNowIso();
+  const db = await getLocalDb();
+  const productById = new Map((opts?.products ?? []).map((p) => [String(p?.id ?? ''), p]));
+  const openRows = (await db.select(CCT_LIST_OPEN_SQL).catch(() => [])) as Array<Record<string, unknown>>;
+  const openTaskProductIds = new Set((openRows ?? []).map((r) => String(r.product_id ?? '')));
+  let opened = 0;
+  let skipped = 0;
+  const seen = new Set<string>();
+  for (const it of items ?? []) {
+    const pid = String(it?.productId ?? '');
+    if (!pid || openTaskProductIds.has(pid) || seen.has(pid)) {
+      skipped++;
+      continue;
+    }
+    seen.add(pid);
+    const known = productById.get(pid);
+    const cls: AbcClass = it?.abcClass
+      ? normalizeAbcClass(it.abcClass)
+      : abcClassForProduct({ price: known?.price, isSerialized: known?.isSerialized });
+    const snapRows = (await db.select(CCT_SNAPSHOT_READ_SQL, [pid]).catch(() => [])) as Array<Record<string, unknown>>;
+    const snapshotQty = toIntQty(snapRows?.[0]?.ledger_sum);
+    const watermark = toIntQty(snapRows?.[0]?.ledger_max_id);
+    const taskId = `CCT-${pid}-${nowIso}`;
+    try {
+      const res = await db.execute(CCT_OPEN_TASK_INSERT_SQL, [
+        taskId,
+        pid,
+        cls,
+        nextDueIso(nowIso, cls),
+        nowIso,
+        watermark,
+        snapshotQty,
+      ]);
+      if (Number(res?.rowsAffected ?? 0) > 0) {
+        opened++;
+        openTaskProductIds.add(pid);
+      } else {
+        skipped++;
+      }
+    } catch {
+      // Partial-index race: another open task for this product already exists.
+      skipped++;
+    }
+  }
+  return { opened, skipped };
+}
+
+/**
+ * Validate counts. Per task, in one flow: read the frozen snapshot +
+ * watermark, sum the post-open movements (ADJUST excluded), compute the
+ * expected quantity and the variance, then claim the task with
+ * `counted_at IS NULL` in the update predicate (a concurrent double-submit
+ * matches 0 rows and is skipped — single-claim).
+ *
+ * This function never writes inventory_ledger. A non-zero variance is booked
+ * by the caller through `appendStocktakeAdjustments` (single writer law) and
+ * only when `selectBookingItems` says so — a sale between open and submit is
+ * already inside `expectedQty`, so it books nothing.
+ */
+export async function submitCycleCountCounts(
+  counts: Array<{ taskId: string; countedQty: number }>,
+  opts?: { nowIso?: string; operator?: string }
+): Promise<{
+  submitted: number;
+  skipped: number;
+  varianceUnits: number;
+  results: Array<{ taskId: string; productId: string; countedQty: number; expectedQty: number; varianceQty: number }>;
+}> {
+  const nowIso = opts?.nowIso ?? utcNowIso();
+  const operator = String(opts?.operator ?? '').trim();
+  const db = await getLocalDb();
+  const results: Array<{
+    taskId: string;
+    productId: string;
+    countedQty: number;
+    expectedQty: number;
+    varianceQty: number;
+  }> = [];
+  let skipped = 0;
+  for (const c of counts ?? []) {
+    const taskId = String(c?.taskId ?? '');
+    const rawCounted = Number(c?.countedQty);
+    if (!taskId || !Number.isFinite(rawCounted)) {
+      skipped++;
+      continue;
+    }
+    const counted = Math.max(0, toIntQty(rawCounted));
+    const taskRows = (await db.select(CCT_TASK_BY_ID_SQL, [taskId]).catch(() => [])) as Array<Record<string, unknown>>;
+    const task = taskRows?.[0];
+    if (!task || task.counted_at != null) {
+      skipped++;
+      continue;
+    }
+    const productId = String(task.product_id ?? '');
+    if (!productId) {
+      skipped++;
+      continue;
+    }
+    const snapshotQty = toIntQty(task.snapshot_qty);
+    const watermark = toIntQty(task.opened_ledger_max_id);
+    const movedRows = (await db.select(CCT_MOVEMENTS_SUM_SQL, [productId, watermark]).catch(() => [])) as Array<
+      Record<string, unknown>
+    >;
+    const movedTotal = toIntQty(movedRows?.[0]?.moved);
+    const expectedQty = expectedQtyFromMovedTotal(snapshotQty, movedTotal);
+    const varianceQty = computeVarianceQty(counted, expectedQty);
+    const upd = await db.execute(CCT_SUBMIT_UPDATE_SQL, [taskId, counted, expectedQty, nowIso, operator]);
+    if (Number(upd?.rowsAffected ?? 0) !== 1) {
+      skipped++;
+      continue;
+    }
+    results.push({ taskId, productId, countedQty: counted, expectedQty, varianceQty });
+  }
+  const varianceUnits = results.reduce((acc, r) => acc + r.varianceQty, 0);
+  return { submitted: results.length, skipped, varianceUnits, results };
 }
 
 export async function previewFifoLineCosts(

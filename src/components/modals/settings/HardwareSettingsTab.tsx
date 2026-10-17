@@ -8,6 +8,7 @@ import type { ReceiptSettings, DiscoveredDevice, PrinterRoutingConfig } from '..
 import { scanHardwareDevices, openCashDrawer, updateCustomerDisplayVfd, printRawEscpos } from '../../../api/hardware';
 import { soundEngine } from '../../../utils/audioFeedback';
 import { useToast } from '../../ui/Toast';
+import { usePosStore } from '../../../store/usePosStore';
 
 interface HardwareSettingsTabProps {
   receiptDraft: ReceiptSettings;
@@ -108,15 +109,27 @@ export const HardwareSettingsTab: React.FC<HardwareSettingsTabProps> = ({
   }, []);
 
   const handleTestCashDrawer = async () => {
+    // UPGRADE-10: 100% drawer-pulse audit coverage — a drawer that opens
+    // unlogged (even from a settings test) is indistinguishable from an
+    // unreceipted sale. Both outcomes ride the funnel, so the pulse is
+    // chain-verified like every other no-sale event and carried to the
+    // merchant gateway by the normal audit lane.
+    const auditDrawerPulse = (details: string) => {
+      void usePosStore
+        .getState()
+        .logSecurityAction('Test Tiroir (Paramètres)', details, undefined, false);
+    };
     try {
       const printer = currentRouting.receiptPrinterName || receiptDraft.printerName || 'default';
       await openCashDrawer(printer);
       soundEngine.playCashDrawer?.();
       showToast('Commande d’ouverture du tiroir-caisse envoyée !', 'success');
+      auditDrawerPulse(`Test matériel réussi — tiroir ouvert depuis les paramètres (imprimante: ${printer}, sans vente)`);
     } catch (err) {
       console.error('[Cash Drawer Error]', err);
       soundEngine.playCashDrawer?.();
       showToast('Signal tiroir envoyé (simulation audio).', 'info');
+      auditDrawerPulse(`Test matériel en échec — repli audio local (${err instanceof Error ? err.message : String(err)})`);
     }
   };
 
