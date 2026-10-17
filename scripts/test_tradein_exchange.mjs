@@ -291,7 +291,7 @@ console.log('===================================================================
   const docSrc = fs.readFileSync(`${ROOT}/src/utils/mobileDocPrint.ts`, 'utf8');
   check('thermal receipt/X/Z carry reprise+soulte', docSrc.includes('Reprise deduite:') && docSrc.includes('Soulte échange:'));
   const zcSrc = fs.readFileSync(`${ROOT}/src/components/modals/ShiftCloseModal.tsx`, 'utf8');
-  check('close-modal Z feeds tradeIns + soulteOut', zcSrc.includes('tradeIns: tradeInCashOut') && zcSrc.includes('soulteOut: soulteCashOut'));
+  check('close-modal Z feeds tradeIns + soulteOut', zcSrc.includes('tradeIns: zSnap.tradeInCashOut') && zcSrc.includes('soulteOut: zSnap.soulteOut'));
 }
 
 console.log('\n========================================================================');
