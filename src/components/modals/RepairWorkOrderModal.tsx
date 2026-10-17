@@ -101,6 +101,7 @@ import {
 } from '../../db/adapters/techniciansAdapter';
 import { formatDurationMs } from '../../utils/technicianCommission';
 import { TechniciansModal } from './TechniciansModal';
+import { SavRmaModal } from './SavRmaModal';
 import {
   formatDzPhoneDisplay,
   imeiCheckState,
@@ -304,6 +305,10 @@ export const RepairWorkOrderModal: React.FC = () => {
     {}
   );
   const [teamModalOpen, setTeamModalOpen] = useState(false);
+  // UPGRADE-06: supplier RMA / warranty-claims surface + the create-only
+  // "reprise garantie" link on the intake form.
+  const [savRmaOpen, setSavRmaOpen] = useState(false);
+  const [reworkLinkId, setReworkLinkId] = useState('');
   /** Minute-ish clock for running-session readouts (never a write poller). */
   const [benchNowMs, setBenchNowMs] = useState<number>(() => Date.now());
 
@@ -756,6 +761,8 @@ export const RepairWorkOrderModal: React.FC = () => {
     setSpareParts([]);
     setPartSearch('');
     setPartQty(1);
+    // UPGRADE-06: a fresh intake never inherits the previous ticket's redo link.
+    setReworkLinkId('');
   };
 
   /** Attach intake photos (filesystem + SHA-256, never inline bytes). */
@@ -843,7 +850,16 @@ export const RepairWorkOrderModal: React.FC = () => {
       const nowIso = new Date().toISOString();
       const txnId = newId('TXN-SAV');
       const receiptNumber = newReceiptNumber('SAV');
-      const partsCost = Math.max(0, Number(order.partsCost) || 0);
+      // UPGRADE-06: COGS for the zero-balance delivery is the frozen parts cost
+      // basis when known — `order.partsCost` is the CHARGE (revenue), not the
+      // cost. Pre-06 tickets keep the legacy charge-as-cost value so their
+      // recorded history is never silently rewritten.
+      const chargeCost = Math.max(0, Number(order.partsCost) || 0);
+      const basisKnown =
+        (order.costingModel === 'fifo' || order.costingModel === 'mixed') &&
+        typeof order.partsCostBasis === 'number' &&
+        Number.isFinite(order.partsCostBasis);
+      const partsCost = basisKnown ? Math.max(0, order.partsCostBasis as number) : chargeCost;
       const totalCost = Math.max(0, Number(order.totalCost) || 0);
 
       const savTxn: SaleTransaction = {
@@ -1082,6 +1098,9 @@ export const RepairWorkOrderModal: React.FC = () => {
         legalTermsAcceptedAt: acceptedAt,
         warrantyTier,
         intakePhotos,
+        // UPGRADE-06: create-only warranty-redo link (the slice freezes the
+        // original ticket number and opens the claim after persistence).
+        ...(reworkLinkId ? { reworkOfRepairId: reworkLinkId } : {}),
       } as Omit<RepairOrder, 'id' | 'ticketNumber' | 'totalCost' | 'createdAt' | 'schemaVersion'>);
     } catch (err) {
       // The slice re-validates at the write boundary and throws; surface it as a
@@ -2138,6 +2157,44 @@ export const RepairWorkOrderModal: React.FC = () => {
                 </div>
               </details>
 
+              {/* UPGRADE-06: warranty redo link — create-only intake field.
+                  A linked ticket opens a claim (closed at delivery) and shows
+                  the reprise badge everywhere the ticket is listed. */}
+              {!editingId && (
+                <div className="bg-pos-bg p-3 rounded-xl border border-pos-border space-y-2">
+                  <h3 className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-pos-muted">
+                    Reprise garantie (optionnel)
+                  </h3>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                    <label htmlFor="sav-rework-link" className="text-xs font-medium text-pos-text">
+                      Ticket d&apos;origine :
+                    </label>
+                    <select
+                      id="sav-rework-link"
+                      value={reworkLinkId}
+                      onChange={(e) => setReworkLinkId(e.target.value)}
+                      className="flex-1 h-10 sm:h-9 bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-base sm:text-xs font-normal text-pos-text focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                    >
+                      <option value="">— Aucune (ticket standard) —</option>
+                      {safeRepairOrders
+                        .filter((o) => o.status === 'Livré')
+                        .slice(0, 30)
+                        .map((o) => (
+                          <option key={o.id} value={o.id}>
+                            {o.ticketNumber} — {o.deviceModel} — {o.customerName}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  {reworkLinkId && (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-300 font-medium">
+                      Ce ticket sera marqué comme reprise garantie ; la reprise s&apos;ouvre dans
+                      « Retours &amp; RMA » et se clôturera à la livraison.
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Financial Calculation & Deposit Engine */}
               <div className="bg-pos-bg p-3 rounded-xl border border-pos-border space-y-2.5">
                 <h3 className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-pos-muted">
@@ -2452,6 +2509,16 @@ export const RepairWorkOrderModal: React.FC = () => {
                   <Users className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" /> Gérer
                   l'équipe
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSavRmaOpen(true)}
+                  title="Retours défectueux, RMA fournisseur et reprises garantie"
+                  className="h-11 sm:h-10 px-3 shrink-0 rounded-lg bg-pos-bg border border-pos-border hover:border-emerald-500/40 text-pos-text text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <Package className="w-3.5 h-3.5 text-emerald-400" aria-hidden="true" /> Retours
+                  &amp; RMA
+                </button>
               </div>
 
               {/* History Ticket Cards List */}
@@ -2565,6 +2632,41 @@ export const RepairWorkOrderModal: React.FC = () => {
                           Commission : {formatDZD(order.commissionAmount ?? 0)}
                         </span>
                       )}
+                      {/* UPGRADE-06: warranty redo badge + frozen parts cost basis & margin */}
+                      {order.reworkOfRepairId && (
+                        <span
+                          className="px-2 py-1 rounded-lg text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-300 border border-amber-500/30"
+                          title="Ce ticket est une reprise garantie d'un ticket livré"
+                        >
+                          Reprise de {order.reworkOfTicketNumber ?? 'un ticket livré'}
+                        </span>
+                      )}
+                      {((order.spareParts?.length ?? 0) > 0 || (order.partsCost || 0) > 0) &&
+                        (order.costingModel ? (
+                          <>
+                            <span
+                              className="px-2 py-1 rounded-lg text-[10px] font-bold bg-pos-bg border border-pos-border text-pos-muted font-mono tabular-nums"
+                              title="Base de coût des pièces consommées (figée au montage, FIFO)"
+                            >
+                              Base pièces : {formatDZD(order.partsCostBasis ?? 0)}
+                              {order.costingModel === 'mixed' ? ' (partielle)' : ''}
+                            </span>
+                            <span
+                              className="px-2 py-1 rounded-lg text-[10px] font-bold bg-cyan-500/10 text-cyan-600 dark:text-cyan-300 border border-cyan-500/30 font-mono tabular-nums"
+                              title="Marge = total facturé − base de coût des pièces"
+                            >
+                              Marge :{' '}
+                              {formatDZD((order.totalCost || 0) - (order.partsCostBasis ?? 0))}
+                            </span>
+                          </>
+                        ) : (
+                          <span
+                            className="px-2 py-1 rounded-lg text-[10px] font-bold bg-pos-bg border border-dashed border-pos-border text-pos-muted"
+                            title="Ticket antérieur à la base de coût — jamais estimée"
+                          >
+                            Base pièces : inconnue
+                          </span>
+                        ))}
                     </div>
 
                     <div className="flex items-center justify-between pt-3 border-t border-pos-border">
@@ -2705,6 +2807,9 @@ export const RepairWorkOrderModal: React.FC = () => {
         void reloadWorkshopData();
       }}
     />
+
+    {/* UPGRADE-06 — supplier RMA / warranty-claims surface (own portal + z-layer). */}
+    <SavRmaModal isOpen={savRmaOpen} onClose={() => setSavRmaOpen(false)} />
 
     {/* Dedicated SAV Repair Ticket Print Template — OUTSIDE the modal shell so
         it never participates in layout or the scroll container.

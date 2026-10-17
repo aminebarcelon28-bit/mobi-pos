@@ -67,8 +67,8 @@ export const operationsAdapter = {
         const db = await getLocalDb();
         const payload = JSON.stringify(repair);
         await db.execute(
-          `INSERT INTO repair_orders (id, ticket_number, customer_name, customer_phone, customer_id, device_model, imei, status, labor_cost, parts_cost, total_cost, deposit_amount, created_at, updated_at, json_payload)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          `INSERT INTO repair_orders (id, ticket_number, customer_name, customer_phone, customer_id, device_model, imei, status, labor_cost, parts_cost, total_cost, deposit_amount, parts_cost_basis, costing_model, rework_of_repair_id, created_at, updated_at, json_payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
            ON CONFLICT(id) DO UPDATE SET
              ticket_number=excluded.ticket_number,
              customer_name=excluded.customer_name,
@@ -81,6 +81,9 @@ export const operationsAdapter = {
              parts_cost=excluded.parts_cost,
              total_cost=excluded.total_cost,
              deposit_amount=excluded.deposit_amount,
+             parts_cost_basis=excluded.parts_cost_basis,
+             costing_model=excluded.costing_model,
+             rework_of_repair_id=excluded.rework_of_repair_id,
              updated_at=excluded.updated_at,
              json_payload=excluded.json_payload,
              version=repair_orders.version + 1`,
@@ -97,6 +100,15 @@ export const operationsAdapter = {
             repair.partsCost || 0,
             repair.totalCost || 0,
             repair.depositAmount || 0,
+            // UPGRADE-06 mirrors of the json_payload fields. NULL on tickets
+            // whose parts were consumed before the basis existed — SQL readers
+            // treat NULL as "base inconnue", never as zero (the json_payload
+            // stays authoritative; these columns serve SQL-side reporting).
+            typeof repair.partsCostBasis === 'number' && Number.isFinite(repair.partsCostBasis)
+              ? repair.partsCostBasis
+              : null,
+            repair.costingModel || null,
+            repair.reworkOfRepairId || null,
             repair.createdAt || new Date().toISOString(),
             repair.updatedAt || new Date().toISOString(),
             payload,

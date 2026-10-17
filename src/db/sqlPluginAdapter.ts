@@ -135,6 +135,15 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     await db.select('SELECT id, name, active FROM technicians LIMIT 0;');
     await db.select('SELECT id, repair_id, technician_id, started_at, ended_at FROM technician_time_log LIMIT 0;');
     await db.select('SELECT id, technician_id, basis, rate_percent FROM commission_rules LIMIT 0;');
+    // UPGRADE-06 local-only schema (v121: frozen parts cost basis + rework
+    // link on repair_orders, supplier RMA loop, warranty claims). Same lane
+    // rule as v119/v120 — the stalled sqlx ledger never runs v121 on
+    // upgraded-shape DBs, so a missing piece fails the probe and forces the
+    // idempotent full pass below.
+    await db.select('SELECT parts_cost_basis, costing_model, rework_of_repair_id FROM repair_orders LIMIT 0;');
+    await db.select('SELECT id, supplier_name, status, credit_amount FROM part_rmas LIMIT 0;');
+    await db.select('SELECT id, rma_id, product_id, quantity, unit_cost FROM part_rma_lines LIMIT 0;');
+    await db.select('SELECT id, original_repair_id, rework_repair_id, status, labor_basis, parts_basis FROM warranty_claims LIMIT 0;');
     return;
   } catch (probeErr) {
     // B-009: BUSY is transient lock contention, NOT a missing column —
@@ -380,6 +389,61 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
       updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
     );`,
     'CREATE INDEX IF NOT EXISTS idx_commission_rules_technician ON commission_rules(technician_id, active);',
+    // UPGRADE-06 (v121 parity, local-only — no outbox lane): the frozen parts
+    // cost basis + rework link on repair_orders, the supplier RMA loop (the
+    // first reader of `defective_returns`) and warranty claims. Table shapes
+    // mirror the Rust v121 migration exactly — no second shape may exist.
+    // The per-statement guard below tolerates "duplicate column" on re-runs.
+    'ALTER TABLE repair_orders ADD COLUMN parts_cost_basis REAL;',
+    'ALTER TABLE repair_orders ADD COLUMN costing_model TEXT;',
+    'ALTER TABLE repair_orders ADD COLUMN rework_of_repair_id TEXT;',
+    `CREATE TABLE IF NOT EXISTS part_rmas (
+      id TEXT PRIMARY KEY,
+      supplier_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      vendor_dispute_id TEXT,
+      credit_amount REAL NOT NULL DEFAULT 0,
+      ap_reference TEXT,
+      notes TEXT,
+      opened_at TEXT NOT NULL,
+      sent_at TEXT,
+      closed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+    );`,
+    'CREATE INDEX IF NOT EXISTS idx_part_rmas_supplier ON part_rmas(supplier_name);',
+    'CREATE INDEX IF NOT EXISTS idx_part_rmas_status ON part_rmas(status);',
+    `CREATE TABLE IF NOT EXISTS part_rma_lines (
+      id TEXT PRIMARY KEY,
+      rma_id TEXT NOT NULL,
+      defective_return_id TEXT,
+      product_id TEXT NOT NULL,
+      product_name TEXT,
+      imei TEXT,
+      quantity REAL NOT NULL DEFAULT 1,
+      unit_cost REAL NOT NULL DEFAULT 0,
+      reason TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+    );`,
+    'CREATE INDEX IF NOT EXISTS idx_part_rma_lines_rma ON part_rma_lines(rma_id);',
+    'CREATE INDEX IF NOT EXISTS idx_part_rma_lines_return ON part_rma_lines(defective_return_id);',
+    `CREATE TABLE IF NOT EXISTS warranty_claims (
+      id TEXT PRIMARY KEY,
+      original_repair_id TEXT NOT NULL,
+      rework_repair_id TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      labor_basis REAL NOT NULL DEFAULT 0,
+      parts_basis REAL NOT NULL DEFAULT 0,
+      rma_id TEXT,
+      notes TEXT,
+      opened_at TEXT NOT NULL,
+      closed_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+    );`,
+    'CREATE INDEX IF NOT EXISTS idx_warranty_claims_original ON warranty_claims(original_repair_id);',
+    'CREATE INDEX IF NOT EXISTS idx_warranty_claims_rework ON warranty_claims(rework_repair_id);',
+    'CREATE INDEX IF NOT EXISTS idx_warranty_claims_status ON warranty_claims(status);',
   ];
   // B-021: destructive service-ledger/stock DML gated behind a one-shot
   // app_settings flag — a failed probe for an unrelated reason must never

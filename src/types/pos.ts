@@ -1223,6 +1223,29 @@ export interface RepairOrder {
   commissionBasisAmount?: number;
   commissionRatePercent?: number;
   commissionAmount?: number;
+  /**
+   * UPGRADE-06: the TRUE parts cost basis frozen when the spare parts were
+   * consumed (integer DZD, single rounding boundary at consume time) — the
+   * FIFO batch cost, never the sell price. Absent on tickets whose parts were
+   * consumed before the basis existed: reports/UI show "base inconnue" and
+   * NEVER re-derive a number. Mirrored to `repair_orders.parts_cost_basis`.
+   */
+  partsCostBasis?: number;
+  /**
+   * UPGRADE-06: quality label of `partsCostBasis`. `'fifo'` = every consumed
+   * part was priced from its batch allocations; `'mixed'` = at least one part
+   * used its frozen catalog cost (no batch trail) — the sum is then a
+   * labelled lower-bound quality, never silently presented as full FIFO.
+   * Absent = unknown (pre-06 ticket).
+   */
+  costingModel?: 'fifo' | 'mixed';
+  /** UPGRADE-06: this ticket is a warranty redo of an earlier delivered ticket. */
+  reworkOfRepairId?: string;
+  /**
+   * UPGRADE-06: the original ticket's number frozen at link time — display
+   * only, so the badge keeps its meaning even after renumbering.
+   */
+  reworkOfTicketNumber?: string;
   /** @deprecated v1 field name. v2 writes `signatureCustomerIntake`. */
   signatureCustomer?: string;
   signatureTechnician?: string;

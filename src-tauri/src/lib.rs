@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 120;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 121;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -1934,6 +1934,70 @@ fn base_schema_migrations() -> Vec<Migration> {
                 updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
             );
             CREATE INDEX IF NOT EXISTS idx_commission_rules_technician ON commission_rules(technician_id, active);
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v121 — UPGRADE-06: true SAV economics. The repair order gains the
+            // frozen parts cost basis + costing model (stamped at consume time
+            // from FIFO batch allocations) and the warranty-redo link; the
+            // supplier RMA loop + warranty claims tables make defective parts
+            // recoverable and the redo rate measurable. Merchant-local
+            // operational tables (no outbox lane — same posture as
+            // defective_returns, which the RMA lines finally read).
+            version: 121,
+            description: "UPGRADE-06: repair cost basis + rework link, part_rmas, warranty_claims",
+            sql: r#"
+            ALTER TABLE repair_orders ADD COLUMN parts_cost_basis REAL;
+            ALTER TABLE repair_orders ADD COLUMN costing_model TEXT;
+            ALTER TABLE repair_orders ADD COLUMN rework_of_repair_id TEXT;
+            CREATE TABLE IF NOT EXISTS part_rmas (
+                id TEXT PRIMARY KEY,
+                supplier_name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'draft',
+                vendor_dispute_id TEXT,
+                credit_amount REAL NOT NULL DEFAULT 0,
+                ap_reference TEXT,
+                notes TEXT,
+                opened_at TEXT NOT NULL,
+                sent_at TEXT,
+                closed_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_part_rmas_supplier ON part_rmas(supplier_name);
+            CREATE INDEX IF NOT EXISTS idx_part_rmas_status ON part_rmas(status);
+            CREATE TABLE IF NOT EXISTS part_rma_lines (
+                id TEXT PRIMARY KEY,
+                rma_id TEXT NOT NULL,
+                defective_return_id TEXT,
+                product_id TEXT NOT NULL,
+                product_name TEXT,
+                imei TEXT,
+                quantity REAL NOT NULL DEFAULT 1,
+                unit_cost REAL NOT NULL DEFAULT 0,
+                reason TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_part_rma_lines_rma ON part_rma_lines(rma_id);
+            CREATE INDEX IF NOT EXISTS idx_part_rma_lines_return ON part_rma_lines(defective_return_id);
+            CREATE TABLE IF NOT EXISTS warranty_claims (
+                id TEXT PRIMARY KEY,
+                original_repair_id TEXT NOT NULL,
+                rework_repair_id TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                labor_basis REAL NOT NULL DEFAULT 0,
+                parts_basis REAL NOT NULL DEFAULT 0,
+                rma_id TEXT,
+                notes TEXT,
+                opened_at TEXT NOT NULL,
+                closed_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_warranty_claims_original ON warranty_claims(original_repair_id);
+            CREATE INDEX IF NOT EXISTS idx_warranty_claims_rework ON warranty_claims(rework_repair_id);
+            CREATE INDEX IF NOT EXISTS idx_warranty_claims_status ON warranty_claims(status);
             "#,
             kind: MigrationKind::Up,
         },

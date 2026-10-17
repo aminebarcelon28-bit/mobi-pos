@@ -24,6 +24,16 @@ export function savCartProductIdFor(order: Pick<RepairOrder, 'id'>): string {
 
 export function buildSavBalanceProduct(order: RepairOrder): Product {
   const remaining = savBalanceOf(order);
+  // UPGRADE-06: the settlement line books the ticket's REAL parts cost basis
+  // as COGS — previously a hard 0 turned every SAV balance into pure profit in
+  // reports. The basis is integer DZD frozen at consume time (single rounding
+  // boundary); a pre-06 ticket (no costing model) keeps the legacy 0 rather
+  // than an invented number and is displayed as "base inconnue".
+  const costsKnown =
+    (order.costingModel === 'fifo' || order.costingModel === 'mixed') &&
+    typeof order.partsCostBasis === 'number' &&
+    Number.isFinite(order.partsCostBasis);
+  const partsCostBasis = costsKnown ? Math.max(0, order.partsCostBasis as number) : 0;
   return {
     id: savCartProductIdFor(order),
     sku: savSkuFor(order),
@@ -34,7 +44,7 @@ export function buildSavBalanceProduct(order: RepairOrder): Product {
     category: 'Services',
     price: remaining,
     wholesalePrice: remaining,
-    costPrice: 0,
+    costPrice: partsCostBasis,
     stock: Number.MAX_SAFE_INTEGER,
     vendorName: 'Atelier SAV',
     leadTimeDays: 0,

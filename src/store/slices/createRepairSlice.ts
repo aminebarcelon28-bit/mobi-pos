@@ -187,12 +187,35 @@ async function consumeSparePartsInventory(
 
     // Compute partsCost from actual FIFO batch cost basis (permitting manual markup/external parts if greater)
     const newPartsCost = Math.max(order.partsCost || 0, Math.round(totalFifoPartsCost));
+    // UPGRADE-06: freeze the TRUE cost basis alongside the charge. The basis
+    // only accepts cost-grade inputs (FIFO batch cost, or the catalog cost
+    // frozen at attach) — never the sell price. A part whose cost is unknown
+    // contributes nothing, and any part without a batch trail marks the whole
+    // basis 'mixed' (a lower bound, honestly labelled) — a fully FIFO-priced
+    // ticket stamps 'fifo'. Single Math.round at this boundary; integer DZD
+    // from here on, never re-derived later.
+    let basisTotal = 0;
+    let basisComplete = true;
+    let basisHasInput = false;
+    for (const p of updatedSpareParts) {
+      if (typeof p.unitCost === 'number' && Number.isFinite(p.unitCost)) {
+        basisHasInput = true;
+        basisTotal += p.unitCost * p.quantity;
+      } else {
+        basisComplete = false;
+      }
+      if ((p.batchAllocations?.length ?? 0) === 0) basisComplete = false;
+    }
+    const partsCostBasis = basisHasInput ? Math.round(basisTotal) : undefined;
+    const costingModel: RepairOrder['costingModel'] =
+      partsCostBasis === undefined ? undefined : (basisComplete ? 'fifo' : 'mixed');
     const totalCost = (order.laborCost || 0) + newPartsCost;
     const updatedOrder: RepairOrder = {
       ...order,
       spareParts: updatedSpareParts,
       partsCost: newPartsCost,
       totalCost,
+      ...(partsCostBasis !== undefined ? { partsCostBasis, costingModel } : {}),
     };
     await (await getRepairRepo()).save(updatedOrder);
     return updatedOrder;
@@ -275,7 +298,15 @@ async function restoreSparePartsInventory(
     set({ products: updatedLiveProducts });
 
     const updatedSpareParts = parts.map((p) => ({ ...p, isConsumed: false, batchAllocations: undefined }));
-    const updatedOrder = { ...order, spareParts: updatedSpareParts };
+    // UPGRADE-06: the consumption was reversed, so the frozen cost basis is no
+    // longer true and must not survive on a cancelled ticket — a later
+    // re-delivery re-consumes the parts and re-stamps it from scratch.
+    const updatedOrder = {
+      ...order,
+      spareParts: updatedSpareParts,
+      partsCostBasis: undefined,
+      costingModel: undefined,
+    };
     await (await getRepairRepo()).save(updatedOrder);
     return updatedOrder;
   } catch (err) {
@@ -383,6 +414,16 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
       // 4-random-digit form repeats every ~1e4 orders, which would silently
       // upsert-overwrite an existing repair ticket (C6).
       ticketNumber: newReceiptNumber('REP'),
+      // UPGRADE-06: freeze the original ticket's number when this ticket is a
+      // warranty redo — the badge must keep its meaning even if the original
+      // is renumbered later.
+      ...(orderInput.reworkOfRepairId
+        ? {
+            reworkOfTicketNumber:
+              repairOrders.find((r) => r.id === orderInput.reworkOfRepairId)?.ticketNumber ??
+              undefined,
+          }
+        : {}),
       laborCost: money.laborCost,
       partsCost: money.partsCost,
       depositAmount: money.depositAmount,
@@ -398,7 +439,9 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
           status: orderInput.status || 'Diagnostic',
           timestamp: createdAt,
           updatedBy: get().activeCashier?.name || 'Caissier',
-          note: 'Création du ticket SAV',
+          note:
+            'Création du ticket SAV' +
+            (orderInput.reworkOfRepairId ? ' — reprise garantie' : ''),
         },
       ],
     };
@@ -408,6 +451,18 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
     const entryModal = get().activeModal;
     try {
        await (await getRepairRepo()).save(newOrder);
+
+      // UPGRADE-06: a redo ticket opens its warranty claim right after the
+      // ticket persists. Best-effort — the ticket itself is the legal record;
+      // the claim row only makes the redo measurable (rate + absorbed bases).
+      if (newOrder.reworkOfRepairId) {
+        try {
+          const { openWarrantyClaimIfRework } = await import('../../db/adapters/savRmaAdapter');
+          await openWarrantyClaimIfRework(newOrder);
+        } catch {
+          /* claim bookkeeping is best-effort — never blocks intake */
+        }
+      }
 
       // Auto-record advance deposit in cash if shift is open
       const deposit = money.depositAmount;
@@ -515,6 +570,23 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
         if (newStatus === 'Livré') {
           const finalOrder = updated.find((r) => r.id === orderId);
           if (finalOrder) await stampCommissionIfDue(finalOrder, nowIso);
+          // UPGRADE-06: a redo ticket delivered closes its warranty claim with
+          // the absorbed bases — the labor it billed (0 on a fully-free redo)
+          // and its own frozen parts cost basis (the real cost of the parts
+          // the shop replaced under warranty). Best-effort: bookkeeping never
+          // blocks the delivery itself.
+          if (finalOrder?.reworkOfRepairId) {
+            try {
+              const { closeWarrantyClaimForRework } = await import('../../db/adapters/savRmaAdapter');
+              await closeWarrantyClaimForRework(finalOrder.id, {
+                laborBasis: Math.max(0, Number(finalOrder.laborCost) || 0),
+                partsBasis: Math.max(0, Number(finalOrder.partsCostBasis) || 0),
+                closedAt: nowIso,
+              });
+            } catch {
+              /* best-effort */
+            }
+          }
         }
         if (newStatus === 'Livré' || newStatus === 'Annulé') {
           try {
@@ -649,10 +721,25 @@ export const createRepairSlice: StateCreator<PosState, [], [], RepairSlice> = (s
         // replaced the object in `updated`.
         if (target.status === 'Livré') {
           const finalTarget = updated.find((r) => r.id === orderId);
-          if (finalTarget) await stampCommissionIfDue(finalTarget, new Date().toISOString());
+          const settledIso = new Date().toISOString();
+          if (finalTarget) await stampCommissionIfDue(finalTarget, settledIso);
+          // UPGRADE-06: same settlement semantics as the status lane — a redo
+          // ticket settled through an edit closes its warranty claim too.
+          if (finalTarget?.reworkOfRepairId) {
+            try {
+              const { closeWarrantyClaimForRework } = await import('../../db/adapters/savRmaAdapter');
+              await closeWarrantyClaimForRework(finalTarget.id, {
+                laborBasis: Math.max(0, Number(finalTarget.laborCost) || 0),
+                partsBasis: Math.max(0, Number(finalTarget.partsCostBasis) || 0),
+                closedAt: settledIso,
+              });
+            } catch {
+              /* best-effort */
+            }
+          }
           try {
             const { closeOpenTimeLogsForRepair } = await import('../../db/adapters/techniciansAdapter');
-            await closeOpenTimeLogsForRepair(orderId, new Date().toISOString());
+            await closeOpenTimeLogsForRepair(orderId, settledIso);
           } catch {
             /* best-effort */
           }
