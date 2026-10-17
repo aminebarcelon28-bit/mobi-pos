@@ -201,14 +201,14 @@ const TAX_RE = /\btax(es)?\b|\bvatRate\b|\btva\b/i;
  */
 const WHITELIST = new Set([
   // Documented removals (comments recording what was deleted and why).
-  'src/db/sqlPluginAdapter.ts:1313',
-  'src/db/sqlPluginAdapter.ts:2120',
-  'src/db/sqlPluginAdapter.ts:2122',
+  'src/db/sqlPluginAdapter.ts:1383',
+  'src/db/sqlPluginAdapter.ts:2190',
+  'src/db/sqlPluginAdapter.ts:2192',
   // Legacy `vatRate` scrub on the settings lane (push strip + pull apply).
-  'src/db/sqlPluginAdapter.ts:3653',
-  'src/db/sqlPluginAdapter.ts:3654',
-  'src/db/sqlPluginAdapter.ts:3666',
-  'src/db/sqlPluginAdapter.ts:3667',
+  'src/db/sqlPluginAdapter.ts:3723',
+  'src/db/sqlPluginAdapter.ts:3724',
+  'src/db/sqlPluginAdapter.ts:3736',
+  'src/db/sqlPluginAdapter.ts:3737',
   'src/sync/genericApply.ts:624',
   'src/sync/genericApply.ts:630',
   'src/sync/genericApply.ts:631',

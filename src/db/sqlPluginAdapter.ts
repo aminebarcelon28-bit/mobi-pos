@@ -126,6 +126,15 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
       "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'uq_one_live_shift_per_device'"
     );
     if (uqShift.length === 0) throw new Error('uq_one_live_shift_per_device missing');
+    // UPGRADE-04/-05 local-only tables (v119 price books, v120 workshop
+    // schema). Upgraded-shape DBs (lying sqlx ledger) never run those
+    // migrations, so this heal pass is the lane that lands them; a missing
+    // piece fails the probe and forces the idempotent full pass below.
+    await db.select('SELECT id, name, status FROM price_books LIMIT 0;');
+    await db.select('SELECT book_id, product_id, unit_price FROM price_book_items LIMIT 0;');
+    await db.select('SELECT id, name, active FROM technicians LIMIT 0;');
+    await db.select('SELECT id, repair_id, technician_id, started_at, ended_at FROM technician_time_log LIMIT 0;');
+    await db.select('SELECT id, technician_id, basis, rate_percent FROM commission_rules LIMIT 0;');
     return;
   } catch (probeErr) {
     // B-009: BUSY is transient lock contention, NOT a missing column —
@@ -310,6 +319,67 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     'ALTER TABLE sync_outbox ADD COLUMN envelope TEXT;',
     'UPDATE app_settings SET key = id WHERE key IS NULL AND id IS NOT NULL;',
     'UPDATE app_settings SET value_json = data_json WHERE value_json IS NULL AND data_json IS NOT NULL;',
+    // UPGRADE-04 price books (v119 parity, local-only — no outbox lane).
+    // Upgraded-shape DBs never run the Rust v119 migration (the sqlx ledger
+    // stalls below it), so the contract-pricing tables are created here.
+    // Table shapes mirror the Rust v119 migration exactly — no second shape
+    // may exist.
+    `CREATE TABLE IF NOT EXISTS price_books (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      customer_id TEXT,
+      valid_from TEXT,
+      valid_to TEXT,
+      priority INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+    );`,
+    'CREATE INDEX IF NOT EXISTS idx_price_books_customer ON price_books(customer_id, status);',
+    `CREATE TABLE IF NOT EXISTS price_book_items (
+      id TEXT PRIMARY KEY,
+      book_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      unit_price REAL NOT NULL,
+      min_qty REAL NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+    );`,
+    'CREATE INDEX IF NOT EXISTS idx_price_book_items_book ON price_book_items(book_id, product_id);',
+    'CREATE INDEX IF NOT EXISTS idx_price_book_items_product ON price_book_items(product_id);',
+    // UPGRADE-05 workshop schema (v120 parity, local-only): technician
+    // roster, time-on-job sessions and commission rules. Shapes mirror the
+    // Rust v120 migration exactly.
+    `CREATE TABLE IF NOT EXISTS technicians (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'Technicien',
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+    );`,
+    `CREATE TABLE IF NOT EXISTS technician_time_log (
+      id TEXT PRIMARY KEY,
+      repair_id TEXT NOT NULL,
+      technician_id TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'work',
+      started_at TEXT NOT NULL,
+      ended_at TEXT
+    );`,
+    'CREATE INDEX IF NOT EXISTS idx_technician_time_log_repair ON technician_time_log(repair_id, started_at DESC);',
+    'CREATE INDEX IF NOT EXISTS idx_technician_time_log_technician ON technician_time_log(technician_id, started_at DESC);',
+    'CREATE INDEX IF NOT EXISTS idx_technician_time_log_open ON technician_time_log(ended_at);',
+    `CREATE TABLE IF NOT EXISTS commission_rules (
+      id TEXT PRIMARY KEY,
+      technician_id TEXT,
+      basis TEXT NOT NULL DEFAULT 'labor',
+      rate_percent REAL NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now','utc')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now','utc'))
+    );`,
+    'CREATE INDEX IF NOT EXISTS idx_commission_rules_technician ON commission_rules(technician_id, active);',
   ];
   // B-021: destructive service-ledger/stock DML gated behind a one-shot
   // app_settings flag — a failed probe for an unrelated reason must never
