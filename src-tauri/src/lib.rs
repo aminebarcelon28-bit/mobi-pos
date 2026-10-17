@@ -1845,6 +1845,10 @@ fn base_schema_migrations() -> Vec<Migration> {
             );
             CREATE INDEX IF NOT EXISTS idx_vendor_disputes_supplier ON vendor_disputes(supplier_name);
             CREATE INDEX IF NOT EXISTS idx_vendor_disputes_po ON vendor_disputes(po_id);
+            CREATE INDEX IF NOT EXISTS idx_vendor_disputes_created ON vendor_disputes(created_at DESC);
+            "#,
+            kind: MigrationKind::Up,
+        },
         Migration {
             // v118 — UPGRADE-02 (SQLite engine & payload hygiene):
             // management-list ORDER BY indexes. The one-shot json_payload
@@ -2168,6 +2172,43 @@ mod tests {
     /// Fixed seal key for unit tests: production resolves the device key from
     /// the keychain/vault, which tests must never touch.
     const TEST_SEAL_KEY: [u8; 32] = [7u8; 32];
+
+    /// Migration-vec structural guard. Regression: an edit once dropped a
+    /// `"#,` terminator, silently swallowing the NEXT entry's Rust syntax into
+    /// the previous SQL body — valid Rust, invalid SQL, and a fresh boot fails
+    /// mid-migration while `cargo test` stays green. These assertions are the
+    /// cheap canaries for that class.
+    #[test]
+    fn base_schema_migrations_are_strictly_increasing_and_wellformed() {
+        let migrations = base_schema_migrations();
+        assert!(!migrations.is_empty(), "migration vec must not be empty");
+        assert_eq!(migrations[0].version, 1, "base schema migration must be version 1");
+        let mut prev: i64 = 0;
+        for m in &migrations {
+            assert!(
+                m.version > prev,
+                "migration versions must be strictly increasing: {} after {}",
+                m.version,
+                prev
+            );
+            prev = m.version;
+            assert!(
+                !m.description.is_empty(),
+                "migration {} must carry a description",
+                m.version
+            );
+            assert!(!m.sql.trim().is_empty(), "migration {} must carry SQL", m.version);
+            assert!(
+                !m.sql.contains("Migration {") && !m.sql.contains("kind: MigrationKind"),
+                "migration {} SQL swallowed a following entry's Rust syntax — check raw-string terminators",
+                m.version
+            );
+        }
+        assert_eq!(
+            prev, EXPECTED_MAX_DB_USER_VERSION as i64,
+            "EXPECTED_MAX_DB_USER_VERSION must equal the highest migration version"
+        );
+    }
 
     #[test]
     fn snapshot_id_shape_rejects_traversal_and_non_snapshots() {
