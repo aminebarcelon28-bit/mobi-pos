@@ -4,7 +4,10 @@
  * Bytes live on the local filesystem (written by the native
  * `sav_attachment_write` command); only a relative path + SHA-256 reach the
  * repair order. The checksum is what makes an intake photo usable as evidence
- * in a restitution dispute: any later modification changes it.
+ * in a restitution dispute: any later modification changes it. Since
+ * UPGRADE-12 the digest also covers the attachment stage (`intake` / `bench`
+ * / `delivery`), so re-classifying a photo without rewriting its bytes fails
+ * verification; legacy rows keep their bytes-only digest.
  *
  * FAIL CLOSED: there is deliberately no non-durable fallback. Off Tauri (web
  * preview, tests) `saveSavPhoto` refuses and returns `persisted: false` rather
@@ -12,7 +15,7 @@
  * evaporate with the tab. A ticket whose photo bytes cannot be stored must not
  * claim the evidence exists.
  */
-import type { IntakePhotoRef } from '../types/pos';
+import type { IntakePhotoRef, SavAttachmentKind } from '../types/pos';
 import { isTauriEnv } from '../db/adapters/base';
 
 export interface SavAttachmentResult extends IntakePhotoRef {
@@ -83,6 +86,12 @@ export interface SaveSavPhotoArgs {
   orderId: string;
   index: number;
   file: Blob;
+  /**
+   * Stage this photo documents (UPGRADE-12). REQUIRED: every new attachment
+   * is classified, and the native side binds the kind into the stored
+   * checksum — a later stage swap fails verification instead of passing.
+   */
+  kind: SavAttachmentKind;
   label?: string;
 }
 
@@ -96,6 +105,7 @@ export async function saveSavPhoto({
   orderId,
   index,
   file,
+  kind,
   label,
 }: SaveSavPhotoArgs): Promise<SavAttachmentResult> {
   const capturedAt = new Date().toISOString();
@@ -107,6 +117,7 @@ export async function saveSavPhoto({
       sha256: await sha256Hex(dataBase64),
       byteSize,
       capturedAt,
+      kind,
       ...(label ? { label } : {}),
       persisted: false,
     };
@@ -115,13 +126,14 @@ export async function saveSavPhoto({
   const { invokeCommand } = await import('../platform/invoke');
   const res = await invokeCommand<{ relative_path: string; sha256: string; byte_size: number }>(
     'sav_attachment_write',
-    { request: { orderId, index, dataBase64, extension: 'webp' } }
+    { request: { orderId, index, dataBase64, extension: 'webp', kind } }
   );
   return {
     relativePath: res.relative_path,
     sha256: res.sha256,
     byteSize: res.byte_size,
     capturedAt,
+    kind,
     ...(label ? { label } : {}),
     persisted: true,
   };
@@ -129,12 +141,14 @@ export async function saveSavPhoto({
 
 /** Read a photo back (native, checksum re-verified against the stored row). */
 export async function readSavPhoto(
-  relativePath: string
+  relativePath: string,
+  kind?: SavAttachmentKind
 ): Promise<{ dataUrl: string; sha256: string } | null> {
   if (!isTauriEnv()) return null;
   const { invokeCommand } = await import('../platform/invoke');
   const res = await invokeCommand<{ sha256: string; data_base64: string }>('sav_attachment_read', {
     relativePath,
+    kind: kind ?? null,
   });
   return {
     dataUrl: `data:image/webp;base64,${res.data_base64}`,
@@ -142,13 +156,19 @@ export async function readSavPhoto(
   };
 }
 
-/** Compare a stored checksum with a freshly-read one (dispute verification). */
+/**
+ * Compare a stored checksum with a freshly-read one (dispute verification).
+ * The row's `kind` is threaded through the native read, so the digest is
+ * recomputed over kind + bytes: a re-classified photo (kind edited, bytes
+ * untouched) FAILS here — the stage is part of what the checksum anchors.
+ */
 export async function verifySavPhoto(photo: IntakePhotoRef): Promise<boolean> {
   if (!isTauriEnv() || !photo.relativePath.startsWith('sav_attachments/')) return false;
   try {
     const { invokeCommand } = await import('../platform/invoke');
     const res = await invokeCommand<{ sha256: string }>('sav_attachment_read', {
       relativePath: photo.relativePath,
+      kind: photo.kind ?? null,
     });
     return res.sha256 === photo.sha256;
   } catch {

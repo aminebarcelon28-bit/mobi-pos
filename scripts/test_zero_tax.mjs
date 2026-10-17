@@ -202,14 +202,15 @@ const TAX_RE = /\btax(es)?\b|\bvatRate\b|\btva\b/i;
 const WHITELIST = new Set([
   // Documented removals (comments recording what was deleted and why).
   // Re-pinned on the UPGRADE-11 (v126) Kredy heal-lane + repo insertion.
-  'src/db/sqlPluginAdapter.ts:1571',
-  'src/db/sqlPluginAdapter.ts:2382',
-  'src/db/sqlPluginAdapter.ts:2384',
+  // Re-pinned again on UPGRADE-12 (held-claim import line).
+  'src/db/sqlPluginAdapter.ts:1572',
+  'src/db/sqlPluginAdapter.ts:2383',
+  'src/db/sqlPluginAdapter.ts:2385',
   // Legacy `vatRate` scrub on the settings lane (push strip + pull apply).
-  'src/db/sqlPluginAdapter.ts:3933',
   'src/db/sqlPluginAdapter.ts:3934',
-  'src/db/sqlPluginAdapter.ts:3946',
+  'src/db/sqlPluginAdapter.ts:3935',
   'src/db/sqlPluginAdapter.ts:3947',
+  'src/db/sqlPluginAdapter.ts:3948',
   'src/sync/genericApply.ts:633',
   'src/sync/genericApply.ts:639',
   'src/sync/genericApply.ts:640',

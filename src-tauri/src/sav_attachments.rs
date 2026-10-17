@@ -156,6 +156,31 @@ fn is_safe_component(raw: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// Closed set of attachment stages (UPGRADE-12). Anything else is refused:
+/// an attachment whose stage is not one of these cannot be classified
+/// evidence for a restitution dispute.
+fn is_valid_attachment_kind(kind: &str) -> bool {
+    matches!(kind, "intake" | "bench" | "delivery")
+}
+
+/// Digest of one attachment.
+///
+/// With a kind (UPGRADE-12 writes), the digest BINDS kind + bytes under the
+/// `sav-attachment-v2:` preimage: recomputing it from a re-classified row
+/// (kind edited, bytes untouched) yields a different value, so a stage swap
+/// is DETECTED as a checksum mismatch — an `intake` constat photo cannot
+/// later masquerade as `delivery` evidence. Without a kind (legacy pre-U12
+/// rows) the digest covers the bytes only, so existing evidence keeps
+/// verifying byte-for-byte.
+fn attachment_digest(kind: Option<&str>, bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    if let Some(kind) = kind {
+        hasher.update(format!("sav-attachment-v2:{kind}:").as_bytes());
+    }
+    hasher.update(bytes);
+    hex(&hasher.finalize())
+}
+
 fn attachments_dir(app: &tauri::AppHandle) -> Result<PathBuf, TrustError> {
     let dir = app
         .path()
@@ -177,6 +202,10 @@ pub struct SavAttachmentWriteRequest {
     pub data_base64: String,
     /// Fixed extension; only `webp` is accepted today.
     pub extension: String,
+    /// Attachment stage (`intake` / `bench` / `delivery`). Absent = legacy
+    /// caller: the digest covers the bytes only (pre-U12 shape).
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -204,6 +233,15 @@ pub fn sav_attachment_write(
                 reason: "unsupported attachment type",
             });
         }
+        let kind = match request.kind.as_deref() {
+            Some(kind) if is_valid_attachment_kind(kind) => Some(kind),
+            Some(_) => {
+                return Err(TrustError::IPCProtocolError {
+                    reason: "unsupported attachment kind",
+                });
+            }
+            None => None,
+        };
         let bytes = STANDARD
             .decode(request.data_base64.as_bytes())
             .map_err(|_| TrustError::IPCProtocolError {
@@ -228,7 +266,7 @@ pub fn sav_attachment_write(
 
         std::fs::write(&path, &bytes).map_err(|e| TrustError::op_failed(format!("write attachment: {e}")))?;
 
-        let digest = hex(&Sha256::digest(&bytes));
+        let digest = attachment_digest(kind, &bytes);
         Ok(SavAttachmentWriteResult {
             relative_path,
             sha256: digest,
@@ -247,10 +285,15 @@ pub struct SavAttachmentReadResult {
 /// Read one attachment back (display on the work order / dispute review) and
 /// re-verify the checksum so a corrupted or swapped file is DETECTED, not
 /// silently rendered.
+///
+/// `kind` (UPGRADE-12): when the caller passes the row's stage, the digest is
+/// recomputed over kind + bytes, so a re-classified row fails verification
+/// (see [`attachment_digest`]). Absent = legacy row: bytes-only digest.
 #[tauri::command]
 pub fn sav_attachment_read(
     app: tauri::AppHandle,
     relative_path: String,
+    kind: Option<String>,
 ) -> Result<SavAttachmentReadResult, TrustError> {
     authorize_and_execute("sav_attachment_read", Capability::ReadOperationalData, |_| {
         let rel = relative_path.trim();
@@ -265,10 +308,19 @@ pub fn sav_attachment_read(
                 reason: "invalid attachment name",
             });
         }
+        let kind = match kind.as_deref() {
+            Some(kind) if is_valid_attachment_kind(kind) => Some(kind),
+            Some(_) => {
+                return Err(TrustError::IPCProtocolError {
+                    reason: "unsupported attachment kind",
+                });
+            }
+            None => None,
+        };
         let path: PathBuf = attachments_dir(&app)?.join(name);
         let bytes =
             std::fs::read(&path).map_err(|e| TrustError::op_failed(format!("read attachment: {e}")))?;
-        let digest = hex(&Sha256::digest(&bytes));
+        let digest = attachment_digest(kind, &bytes);
         let byte_size = bytes.len();
         Ok(SavAttachmentReadResult {
             sha256: digest,
@@ -376,5 +428,45 @@ mod tests {
     #[test]
     fn hex_is_lowercase_fixed_width() {
         assert_eq!(hex(&[0x00, 0x0f, 0xff]), "000fff");
+    }
+
+    #[test]
+    fn attachment_kind_is_a_closed_set() {
+        for ok in ["intake", "bench", "delivery"] {
+            assert!(is_valid_attachment_kind(ok), "must accept: {ok:?}");
+        }
+        for bad in ["", "Intake", " intake", "intake ", "bench;drop", "delivery2", "v2"] {
+            assert!(!is_valid_attachment_kind(bad), "must reject: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn digest_v2_binds_kind_to_bytes() {
+        let bytes = b"fake-webp-bytes";
+        let intake = attachment_digest(Some("intake"), bytes);
+        let bench = attachment_digest(Some("bench"), bytes);
+        let delivery = attachment_digest(Some("delivery"), bytes);
+        // Re-classifying a row (kind edited, bytes untouched) must NOT
+        // recompute to the stored digest: the stage swap is detected.
+        assert_ne!(intake, bench);
+        assert_ne!(intake, delivery);
+        assert_ne!(bench, delivery);
+        // Legacy (no kind) keeps the bytes-only digest, so pre-U12 evidence
+        // keeps verifying byte-for-byte.
+        assert_eq!(attachment_digest(None, bytes), hex(&Sha256::digest(bytes)));
+        assert_ne!(attachment_digest(None, bytes), intake);
+    }
+
+    #[test]
+    fn digest_v2_preimage_is_pinned() {
+        // The exact seam the TS verifier mirrors. If this preimage ever
+        // changes, scripts/test_upgrade12.mts fails together with this test.
+        let mut hasher = Sha256::new();
+        hasher.update(b"sav-attachment-v2:intake:");
+        hasher.update(b"x");
+        assert_eq!(
+            attachment_digest(Some("intake"), b"x"),
+            hex(&hasher.finalize())
+        );
     }
 }

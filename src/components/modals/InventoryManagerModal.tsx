@@ -19,6 +19,7 @@ import {
   Eye,
   EyeOff,
   ClipboardList,
+  Camera,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
@@ -27,6 +28,12 @@ import { useToast } from '../ui/Toast';
 import { Kbd } from '../../design-system/desktop/Kbd';
 import { useInventoryValuation } from '../../hooks/useInventoryValuation';
 import type { CycleCountTaskRow } from '../../db/sqlPluginAdapter';
+
+// Lazy: the camera decoder chunk (ZXing) must not sit in the modal chunk
+// until the operator actually opens the camera stocktake (UPGRADE-12).
+const MobileCameraScanner = React.lazy(() =>
+  import('../mobile/MobileCameraScanner').then((m) => ({ default: m.MobileCameraScanner }))
+);
 
 type ViewMode = 'catalog' | 'stocktake';
 type StocktakeFilter = 'all' | 'discrepancies' | 'counted';
@@ -61,6 +68,9 @@ export const InventoryManagerModal: React.FC = () => {
   const [lastScannedFeedback, setLastScannedFeedback] = useState<string | null>(null);
   const [isCommitting, setIsCommitting] = useState(false);
   const [isBlindStocktake, setIsBlindStocktake] = useState(false);
+  // Camera stocktake (UPGRADE-12): the device camera feeds the SAME scan
+  // funnel as the USB douchette.
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   // ABC cycle-count state (UPGRADE-10): open tasks + per-task counted input.
   const [cycleTasks, setCycleTasks] = useState<CycleCountTaskRow[]>([]);
@@ -167,10 +177,13 @@ export const InventoryManagerModal: React.FC = () => {
   // Catalog filtered list
   const filteredCatalog = filteredCatalogMemo;
 
-  // Stocktake scan handler
-  const handleScannerSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const query = scannerInput.trim().toLowerCase();
+  // Stocktake scan funnel — the USB/keyboard douchette form and the camera
+  // stocktake (UPGRADE-12) both land here, so both share one match rule
+  // (barcode / SKU / id, exact) and one duplicate-scan policy: every accepted
+  // scan of a known code adds +1. The camera suppresses the same code within
+  // 2 s as a double-read guard; a deliberate re-scan after 2 s still counts.
+  const processScanCode = (raw: string) => {
+    const query = raw.trim().toLowerCase();
     if (!query) return;
 
     // Look for exact match by barcode, SKU or ID
@@ -197,8 +210,13 @@ export const InventoryManagerModal: React.FC = () => {
       }
     } else {
       soundEngine.playError();
-      setLastScannedFeedback(`❌ Code inconnu: "${scannerInput.trim()}"`);
+      setLastScannedFeedback(`❌ Code inconnu: "${raw.trim()}"`);
     }
+  };
+
+  const handleScannerSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    processScanCode(scannerInput);
 
     setScannerInput('');
     scannerInputRef.current?.focus();
@@ -893,6 +911,20 @@ export const InventoryManagerModal: React.FC = () => {
                 </button>
               </form>
 
+              <button
+                type="button"
+                onClick={() => setCameraOpen((v) => !v)}
+                aria-expanded={cameraOpen}
+                className={`min-h-[44px] px-3 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0 ${
+                  cameraOpen
+                    ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-500/20'
+                    : 'bg-pos-bg border-cyan-500/40 text-cyan-700 dark:text-cyan-300 hover:bg-cyan-500/10'
+                }`}
+              >
+                <Camera className="w-4 h-4" aria-hidden="true" />
+                <span>Caméra</span>
+              </button>
+
               {/* Mode Aveugle Toggle & Filter Tabs */}
               <div className="flex flex-wrap items-center gap-1.5 bg-pos-bg p-1 rounded-xl border border-pos-border shrink-0 w-full sm:w-auto justify-center">
                 <button
@@ -947,6 +979,32 @@ export const InventoryManagerModal: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            {/* Camera stocktake (UPGRADE-12): the phone becomes the counting
+                device — continuous label scanning feeding the same funnel as
+                the USB douchette (+1 per accepted scan, 2 s double-read
+                guard inside the scanner). */}
+            {cameraOpen && (
+              <div className="p-2.5 bg-pos-card border-b border-pos-border shrink-0">
+                <div className="h-64 sm:h-80 rounded-2xl overflow-hidden bg-black">
+                  <React.Suspense
+                    fallback={
+                      <div className="h-full grid place-items-center text-pos-muted text-xs">
+                        Ouverture de la caméra…
+                      </div>
+                    }
+                  >
+                    <MobileCameraScanner
+                      mode="stocktake"
+                      isActive={cameraOpen}
+                      hintText="Alignez le code-barres — chaque scan compte +1"
+                      onScan={processScanCode}
+                      onClose={() => setCameraOpen(false)}
+                    />
+                  </React.Suspense>
+                </div>
+              </div>
+            )}
 
             {/* Live Scan Audio & Text Feedback */}
             {lastScannedFeedback && (

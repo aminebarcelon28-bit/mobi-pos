@@ -91,6 +91,10 @@ export const HoldSalesModal: React.FC = () => {
         showToast('Vente expirée (48 h) — ticket supprimé.', 'warning');
       } else if (reason === 'ALREADY_RESTORED') {
         showToast('Ticket déjà repris en caisse.', 'warning');
+      } else if (reason === 'HOLD_ALREADY_CLAIMED') {
+        showToast('Ticket déjà repris (autre poste ou double-clic) — actualisez la liste.', 'warning');
+      } else if (reason === 'HOLD_CLAIM_FAILED') {
+        showToast('Reprise impossible : la vérification du ticket n\'a pas pu être verrouillée — réessayez.', 'error');
       } else if (reason === 'HOLD_ALL_LINES_REMOVED') {
         for (const w of res?.warnings ?? []) {
           showToast(w, 'warning', 5000);

@@ -76,6 +76,7 @@ import type {
   Product,
   Customer,
   RepairPartUsage,
+  SavAttachmentKind,
 } from '../../types/pos';
 import type { SaleTransaction } from '../../types/pos';
 import { printCoordinator } from '../../utils/printCoordinator';
@@ -151,6 +152,13 @@ const countOk = (c: LegacyConditionChecklist): number =>
   [c.screenOk, c.faceIdOk, c.cameraOk, c.chargingOk, c.bodyOk, c.batteryOk, c.audioOk].filter(
     Boolean
   ).length;
+
+/** Photo stages (UPGRADE-12): the selector label and the per-photo chip share one map. */
+const PHOTO_KIND_LABELS: Record<SavAttachmentKind, string> = {
+  intake: 'Réception',
+  bench: 'Atelier',
+  delivery: 'Livraison',
+};
 
 /**
  * Inspector dossiers carry an inventory suffix on the product title
@@ -432,6 +440,9 @@ export const RepairWorkOrderModal: React.FC = () => {
   const [suggestedTier, setSuggestedTier] = useState<WarrantyTier | null>(null);
   const [intakePhotos, setIntakePhotos] = useState<IntakePhotoRef[]>([]);
   const [photosBusy, setPhotosBusy] = useState(false);
+  // Stage attached to the NEXT photo (UPGRADE-12). Bound into the native
+  // checksum, so it is chosen per capture and never rewritten afterwards.
+  const [photoKind, setPhotoKind] = useState<SavAttachmentKind>('intake');
   /**
    * Id under which a NOT-YET-COMMITTED intake stages its photo bytes.
    *
@@ -795,7 +806,7 @@ export const RepairWorkOrderModal: React.FC = () => {
     for (const file of list) {
       if (!file.type.startsWith('image/')) continue;
       try {
-        const res = await saveSavPhoto({ orderId, index: intakePhotos.length + added.length, file });
+        const res = await saveSavPhoto({ orderId, index: intakePhotos.length + added.length, file, kind: photoKind });
         // Fail closed: a photo whose bytes are not on disk is not evidence.
         // Recording it anyway would put a path in the ticket that can never be
         // reopened, which is worse than no photo at all in a dispute.
@@ -1979,7 +1990,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                   {describeIntakeDamage(intakeDamage)}
                 </p>
 
-                {/* Photo evidence — filesystem + SHA-256 */}
+                {/* Photo evidence — filesystem + SHA-256, stage-bound (UPGRADE-12) */}
                 <div className="rounded-xl border border-pos-border bg-pos-bg p-3 space-y-2">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <span className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-wider text-pos-muted">
@@ -1994,6 +2005,32 @@ export const RepairWorkOrderModal: React.FC = () => {
                       <Camera className="w-3.5 h-3.5" aria-hidden="true" />
                       {photosBusy ? 'Compression…' : 'Ajouter une photo'}
                     </button>
+                  </div>
+                  {/* Stage of the NEXT capture — bound into the native
+                      checksum, so it is chosen before shooting and can
+                      never be re-classified afterwards without detection. */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-pos-muted">
+                      Étape :
+                    </span>
+                    {(Object.entries(PHOTO_KIND_LABELS) as Array<[SavAttachmentKind, string]>).map(
+                      ([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setPhotoKind(value)}
+                          disabled={isLegacyEdit}
+                          aria-pressed={photoKind === value}
+                          className={`min-h-[36px] px-2.5 rounded-lg text-[10px] font-bold border transition cursor-pointer disabled:opacity-50 ${
+                            photoKind === value
+                              ? 'bg-cyan-500/15 border-cyan-500/50 text-cyan-700 dark:text-cyan-300'
+                              : 'bg-pos-card border-pos-border text-pos-muted hover:text-pos-text'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      )
+                    )}
                   </div>
                   <input
                     ref={fileInputRef}
@@ -2011,7 +2048,13 @@ export const RepairWorkOrderModal: React.FC = () => {
                           key={p.relativePath}
                           className="flex items-center justify-between gap-2 text-[10px] text-pos-muted"
                         >
-                          <span className="font-mono truncate">Photo {i + 1} • {p.relativePath}</span>
+                          <span className="flex items-center gap-1.5 min-w-0">
+                            <span className="shrink-0 font-bold text-pos-text">Photo {i + 1}</span>
+                            <span className="shrink-0 px-1.5 py-0.5 rounded border border-pos-border bg-pos-card uppercase tracking-wide">
+                              {p.kind ? PHOTO_KIND_LABELS[p.kind] : 'hérité v1'}
+                            </span>
+                            <span className="font-mono truncate">{p.relativePath}</span>
+                          </span>
                           <span className="shrink-0 font-mono opacity-70">
                             SHA-256 {p.sha256.slice(0, 12)}…
                           </span>
@@ -2022,6 +2065,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                   <p className="text-[10px] text-pos-muted">
                     Les images sont stockées sur le disque local avec empreinte SHA-256 ; seuls le chemin
                     et le hash sont inscrits au dossier (preuve opposable en cas de litige de restitution).
+                    L&apos;étape choisie est liée à l&apos;empreinte : une reclassification ultérieure est détectée.
                   </p>
                 </div>
               </div>

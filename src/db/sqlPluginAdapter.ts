@@ -60,6 +60,7 @@ import {
   CCT_TASK_BY_ID_SQL,
   buildLastCountedSql,
 } from './cycleCountSql';
+import { HELD_ORDER_CLAIM_SQL, HELD_ORDER_RELEASE_SQL } from './heldOrdersSql';
 import { toIntDzd } from '../utils/kredyEngine';
 import {
   buildKredyDunningByCustomersSql,
@@ -6190,6 +6191,64 @@ export async function deleteHeldOrder(id: string): Promise<void> {
     );
   } catch (e) {
     console.warn('[held_orders] Failed to delete held order:', e);
+  }
+}
+
+/**
+ * UPGRADE-12 — outcome of a held-sale single-claim.
+ *
+ * `already_claimed` and `claim_failed` both REFUSE the restore; they are kept
+ * distinct so the operator-facing message is honest (someone else took it vs.
+ * the claim itself could not run — fail closed, never a silent proceed).
+ */
+export type HeldOrderClaimOutcome = 'claimed' | 'already_claimed' | 'claim_failed';
+
+/**
+ * UPGRADE-12 — single-claim a held sale BEFORE its cart loads.
+ *
+ * `deleted = 0` is the live predicate, so this UPDATE is a compare-and-swap:
+ * exactly one caller gets `rowsAffected === 1`. A second recall — double
+ * click, second window sharing the store, stale button — sees 0 and is told
+ * the hold is already claimed instead of double-loading the same cart.
+ *
+ * Fail closed: a claim that cannot run (DB busy past retries, error) reports
+ * `claim_failed`, never `claimed` — an unarbitrated restore must not proceed.
+ * Web preview has no shared store: the session `consumedHoldIds` Set is the
+ * only guard there, so the claim reports `claimed` and the caller keeps it.
+ */
+export async function claimHeldOrder(id: string): Promise<HeldOrderClaimOutcome> {
+  if (!isTauriEnv()) return 'claimed';
+  try {
+    const db = await getLocalDb();
+    const now = utcNowIso();
+    const res = await withBusyRetry(
+      () => db.execute(HELD_ORDER_CLAIM_SQL, [now, id]),
+      { attempts: 3, baseDelayMs: 50, label: 'claim-held-order' }
+    );
+    return Number(res?.rowsAffected ?? 0) === 1 ? 'claimed' : 'already_claimed';
+  } catch (e) {
+    console.warn('[held_orders] Failed to claim held order:', e);
+    return 'claim_failed';
+  }
+}
+
+/**
+ * UPGRADE-12 — undo a claim after a refused restore (`HOLD_ALL_LINES_REMOVED`):
+ * the hold was claimed but no cart loaded, so it must return to the pending
+ * list (previously the row was consumed even when the restore was refused).
+ * Only a claimed (`deleted = 1`) row is resurrected.
+ */
+export async function releaseHeldOrderClaim(id: string): Promise<void> {
+  if (!isTauriEnv()) return;
+  try {
+    const db = await getLocalDb();
+    const now = utcNowIso();
+    await withBusyRetry(
+      () => db.execute(HELD_ORDER_RELEASE_SQL, [now, id]),
+      { attempts: 3, baseDelayMs: 50, label: 'release-held-order-claim' }
+    );
+  } catch (e) {
+    console.warn('[held_orders] Failed to release held order claim:', e);
   }
 }
 

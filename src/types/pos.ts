@@ -990,16 +990,33 @@ export function repairFinancials(
   };
 }
 
+/**
+ * SAV attachment stage (UPGRADE-12): `intake` = drop-off constat, `bench` =
+ * repair-bench evidence, `delivery` = restitution handshake. The stage is
+ * BOUND INTO the stored checksum (`sav-attachment-v2:` preimage), so
+ * re-classifying a photo without rewriting its bytes fails verification.
+ */
+export type SavAttachmentKind = 'intake' | 'bench' | 'delivery';
+
 /** One intake photo: bytes live on the filesystem, only evidence lives here. */
 export interface IntakePhotoRef {
   /** Relative path under the attachment root — never an absolute path. */
   relativePath: string;
-  /** SHA-256 (hex) of the stored bytes; the tamper-evidence anchor. */
+  /**
+   * SHA-256 (hex) of the stored bytes; the tamper-evidence anchor. Photos
+   * written with a `kind` hash the kind + bytes together; legacy pre-U12
+   * rows hash the bytes only and are never re-classified.
+   */
   sha256: string;
   capturedAt: string;
   /** Free label shown on the work order ("écran", "connecteur"...). */
   label?: string;
   byteSize?: number;
+  /**
+   * Stage of the repair this photo documents. Absent = legacy evidence
+   * (pre-U12); a later save never attaches a kind to old bytes.
+   */
+  kind?: SavAttachmentKind;
 }
 
 export const REPAIR_STATUS_BADGE_TOKENS: Record<RepairStatus, string> = {

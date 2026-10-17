@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-// NOTE: jsQR is intentionally NOT statically imported (P3.1 cold-start) —
-// startCamera lazy-loads it via dynamic import below.
+// ZXing is intentionally lazy-loaded to keep the cold-start bundle small.
 import {
   Flashlight,
   FlashlightOff,
@@ -18,7 +17,14 @@ interface MobileCameraScannerProps {
   onError?: (err: string) => void;
   onClose?: () => void;
   isActive?: boolean;
-  mode?: 'barcode' | 'qr';
+  /**
+   * `barcode` / `qr` frame the viewfinder for product labels and pairing.
+   * `stocktake` (UPGRADE-12) is the floor-counting mode: same wide 1D
+   * viewfinder as `barcode`, continuous emits — the consumer keeps the
+   * scanner open and accumulates counts. The same code is suppressed for 2 s
+   * as a double-read guard, so deliberate re-scans after 2 s still count.
+   */
+  mode?: 'barcode' | 'qr' | 'stocktake';
   hintText?: string;
 }
 
@@ -31,6 +37,10 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
   hintText,
 }) => {
   const { t } = useTranslation();
+  // `stocktake` (UPGRADE-12) decodes product labels exactly like `barcode` —
+  // same ZXing/native decoder, same wide viewfinder — but lets a consumer
+  // pass count-specific copy and keep the loop open for many items.
+  const isWideViewfinder = mode === 'barcode' || mode === 'stocktake';
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -94,19 +104,9 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
     emitScanRef.current = emitScan;
   }, [onScan, onError, emitScan]);
 
-  // jsQR is lazy-loaded (P3.1) so its ~100 KB stays out of the eager boot
-  // chunk; decode frames are skipped until it arrives (first frames only).
-  // Structural type mirrors jsqr's d.ts (its export map defeats type queries);
-  // the dynamic import below stays the only runtime reference.
-  type JsQRDecode = (
-    data: Uint8ClampedArray,
-    width: number,
-    height: number,
-    providedOptions?: {
-      inversionAttempts?: 'dontInvert' | 'onlyInvert' | 'attemptBoth' | 'invertFirst';
-    },
-  ) => { data: string } | null;
-  const jsQRRef = useRef<null | JsQRDecode>(null);
+  // Keep the multi-format decoder out of the eager boot chunk. Product labels
+  // are 1D EAN/UPC or Code 128; QR is still needed for mobile pairing.
+  const decodeFrameRef = useRef<null | ((canvas: HTMLCanvasElement) => string | null)>(null);
   // Native barcode detector (Shape Detection API): EAN-13/UPC/Code128/QR in
   // one pass where the browser supports it (Chrome/Android). jsQR below stays
   // the fallback (QR only) so unsupported browsers keep working. Structural
@@ -243,9 +243,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
         barcodeDetectorRef.current = null;
       }
       try {
-        const loaded = (await import('jsqr')) as unknown as {
-          default?: JsQRDecode;
-        } & JsQRDecode;
+        const zxing = await import('@zxing/library');
         if (isStale()) {
           // Owner went away while the decoder chunk loaded: release the stream.
           stream.getTracks().forEach((track) => {
@@ -258,7 +256,37 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
           if (streamRef.current === stream) streamRef.current = null;
           return;
         }
-        jsQRRef.current = loaded.default ?? loaded;
+        const reader = new zxing.MultiFormatReader();
+        const hints = new Map();
+        hints.set(zxing.DecodeHintType.POSSIBLE_FORMATS, [
+          zxing.BarcodeFormat.EAN_13,
+          zxing.BarcodeFormat.EAN_8,
+          zxing.BarcodeFormat.UPC_A,
+          zxing.BarcodeFormat.UPC_E,
+          zxing.BarcodeFormat.CODE_128,
+          zxing.BarcodeFormat.CODE_39,
+          zxing.BarcodeFormat.QR_CODE,
+        ]);
+        hints.set(zxing.DecodeHintType.TRY_HARDER, true);
+        reader.setHints(hints);
+        decodeFrameRef.current = (canvas) => {
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          if (!ctx) return null;
+          const { width, height } = canvas;
+          const { data } = ctx.getImageData(0, 0, width, height);
+          const luminances = new Uint8ClampedArray(width * height);
+          for (let source = 0, target = 0; source < data.length; source += 4, target++) {
+            luminances[target] = (306 * data[source] + 601 * data[source + 1] + 117 * data[source + 2] + 0x200) >> 10;
+          }
+          const luminanceSource = new zxing.RGBLuminanceSource(luminances, width, height);
+          const bitmap = new zxing.BinaryBitmap(new zxing.HybridBinarizer(luminanceSource));
+          try {
+            return reader.decodeWithState(bitmap).getText();
+          } catch {
+            // No barcode in this frame is the normal scanning state.
+            return null;
+          }
+        };
       } catch {
         // Decoder unavailable — frames are skipped, camera preview still works.
         if (isStale()) {
@@ -308,13 +336,13 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
                   return;
                 }
               } catch {
-                // Fall through to jsQR below.
+                // Fall through to the multi-format decoder below.
               }
             }
 
-            // jsQR fallback (QR only): skipped until loaded, and skipped
-            // entirely on frames the native detector already claimed.
-            if (!jsQRRef.current) return;
+            // Multi-format fallback: skipped until loaded and on frames the
+            // native detector already claimed.
+            if (!decodeFrameRef.current) return;
             const canvas = canvasRef.current;
             if (!canvas) return;
 
@@ -328,18 +356,11 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
             if (!ctx) return;
 
             ctx.drawImage(video, 0, 0, width, height);
-            const imageData = ctx.getImageData(0, 0, width, height);
+            const content = decodeFrameRef.current(canvas)?.trim() || '';
 
-            // attemptBoth: glossy screens / harsh exposure often need inversion.
-            const decode = jsQRRef.current;
-            const code = decode
-              ? decode(imageData.data, imageData.width, imageData.height, {
-                  inversionAttempts: 'attemptBoth',
-                })
-              : null;
 
-            if (code && code.data && code.data.trim().length > 0) {
-              emitScanRef.current(code.data.trim());
+            if (content.length > 0) {
+              emitScanRef.current(content);
             }
           } finally {
             busyRef.current = false;
@@ -458,7 +479,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
           {/* Center scan row */}
           <div className="w-full flex items-center justify-center" dir="ltr">
             {/* Inline-start veil */}
-            <div className={`flex-1 ${mode === 'barcode' ? 'h-40' : 'h-64'} bg-black/60 backdrop-blur-[1px]`} />
+            <div className={`flex-1 ${isWideViewfinder ? 'h-40' : 'h-64'} bg-black/60 backdrop-blur-[1px]`} />
 
             {/* Viewfinder Target Frame (wide 288x160 for barcode, 256x256 for QR) */}
             <div
@@ -466,7 +487,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
                 isSuccessPulsing
                   ? 'border-emerald-400 bg-emerald-500/20 scale-105 shadow-[0_0_24px_#34d399]'
                   : 'border-cyan-400/40 bg-transparent scale-100'
-              } ${mode === 'barcode' ? 'w-72 h-40' : 'w-64 h-64'}`}
+              } ${isWideViewfinder ? 'w-72 h-40' : 'w-64 h-64'}`}
             >
               {/* Logical Corner Accents */}
               <div className="absolute top-0 start-0 w-6 h-6 border-t-4 border-s-4 border-cyan-400 rounded-ss-lg" />
@@ -482,7 +503,7 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
             </div>
 
             {/* Inline-end veil */}
-            <div className={`flex-1 ${mode === 'barcode' ? 'h-40' : 'h-64'} bg-black/60 backdrop-blur-[1px]`} />
+            <div className={`flex-1 ${isWideViewfinder ? 'h-40' : 'h-64'} bg-black/60 backdrop-blur-[1px]`} />
           </div>
 
           {/* Bottom dark veil with instruction hint */}
@@ -491,13 +512,13 @@ export const MobileCameraScanner: React.FC<MobileCameraScannerProps> = ({
               <Sparkles className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" aria-hidden="true" />
               <span>
                 {hintText ||
-                  (mode === 'barcode'
+                  (isWideViewfinder
                     ? t.scanner.alignBarcodeHint
                     : t.scanner.alignQrHint)}
               </span>
             </div>
             <p className="text-[11px] text-slate-200 mt-2 max-w-xs">
-              {mode === 'barcode'
+              {isWideViewfinder
                 ? t.scanner.barcodeFormatsHint
                 : t.scanner.pcPairingHint}
             </p>

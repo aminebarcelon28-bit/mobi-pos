@@ -15,6 +15,8 @@ const HOLD_TTL_MS = 48 * 60 * 60 * 1000; // 48 h default hold lifetime
 
 // A hold id restores exactly once per session: blocks double-restore when a
 // stale modal button or a double-tap replays retrieveSale for the same ticket.
+// UPGRADE-12: the durable single-claim (`claimHeldOrder`) is the primary
+// arbiter across windows; this Set remains the in-session/web-mode guard.
 const consumedHoldIds = new Set<string>();
 
 function holdExpiryOf(h: HeldSale): number | null {
@@ -649,9 +651,23 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
       const wasExpired = heldSales.some((h) => h.id === saleId);
       return { success: false, reason: wasExpired ? 'HOLD_EXPIRED' : 'HOLD_NOT_FOUND' };
     }
+    // UPGRADE-12 — atomic single-claim BEFORE the cart loads: exactly one
+    // caller flips a live row (`deleted 0 → 1`). A concurrent recall (second
+    // window on the same store, double click, stale button) is refused with
+    // HOLD_ALREADY_CLAIMED instead of double-loading the same cart; a claim
+    // that cannot run fails closed as HOLD_CLAIM_FAILED.
+    const claim = await import('../../db/sqlPluginAdapter').then(({ claimHeldOrder }) =>
+      claimHeldOrder(saleId)
+    );
+    if (claim !== 'claimed') {
+      audioBus.emit('error');
+      return {
+        success: false,
+        reason: claim === 'already_claimed' ? 'HOLD_ALREADY_CLAIMED' : 'HOLD_CLAIM_FAILED',
+      };
+    }
     consumedHoldIds.add(saleId);
     let updatedHeldSales = liveHolds.filter((h) => h.id !== saleId);
-    void import('../../db/sqlPluginAdapter').then(({ deleteHeldOrder }) => deleteHeldOrder(saleId));
       if (cart.length > 0) {
         const currentStagedTradeIn = (get() as unknown as { stagedTradeIn?: unknown }).stagedTradeIn ?? null;
         const currentVoucher = readVoucherStaging(get());
@@ -721,6 +737,12 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
       // Every line was catalog-deleted: refuse the resume instead of
       // presenting an empty ticket (the hold stays listed for inspection).
       if (refreshedItems.length === 0 && target.items.length > 0) {
+        // The hold was CLAIMED but no cart ever loaded: release it so it
+        // stays recallable. Before UPGRADE-12 the row was consumed even when
+        // the restore was refused, silently losing the ticket.
+        await import('../../db/sqlPluginAdapter').then(({ releaseHeldOrderClaim }) =>
+          releaseHeldOrderClaim(saleId)
+        );
         consumedHoldIds.delete(saleId);
         audioBus.emit('error');
         return { success: false, reason: 'HOLD_ALL_LINES_REMOVED', warnings };

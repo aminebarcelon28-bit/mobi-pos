@@ -499,6 +499,10 @@ export const CommandTicketDashboardModal: React.FC = () => {
           ? 'Ticket déjà restauré (double-clic ignoré).'
           : reason === 'HOLD_NOT_FOUND'
           ? 'Ticket en attente introuvable.'
+          : reason === 'HOLD_ALREADY_CLAIMED'
+          ? 'Ticket en attente déjà repris (autre poste ou double-clic) — actualisez la liste.'
+          : reason === 'HOLD_CLAIM_FAILED'
+          ? 'Reprise impossible : la vérification du ticket n\'a pas pu être verrouillée — réessayez.'
           : 'Restauration du panier impossible.',
         'error'
       );
