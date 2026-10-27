@@ -1,0 +1,7024 @@
+{
+ "source": "POS_EDGE_CASE_ENCYCLOPEDIA_and_LONG_SESSION.md",
+ "extractedAt": "2026-10-23T18:28:49.028Z",
+ "total": 687,
+ "invariants": 36,
+ "cases": [
+  {
+   "id": "MNY-01",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 175,
+   "title": "Price 0.01 DA, qty 1; 0.01 DA with a 10 % discount",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-02",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 176,
+   "title": "Rounding boundaries: x.005, x.015, x.025, x.035… (half-up vs half-even per rule)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-03",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 177,
+   "title": "3 × 33.33, 7 × 14.29, 0.1+0.2 style sums",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-04",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 178,
+   "title": "Per-line vs per-invoice rounding on a 20-line basket with mixed percentage discounts",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-05",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 179,
+   "title": "Weight item: qty 0.333 kg, 12.345 kg, 0.001 kg",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-06",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 180,
+   "title": "Max values: unit 999,999,999.99; qty 99,999; line total near i64/DB limits",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-07",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 181,
+   "title": "Zero-priced line (free gift) and negative line (return in same basket)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-11",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 182,
+   "title": "Cash rounding (if exists, e.g. to 5/10 DA) on cash only",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-16",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 183,
+   "title": "Currency formatting in fr/ar/en (space/NBSP/comma/point/Arabic-Indic digits, \"DA\"/\"د.ج\")",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-17",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 184,
+   "title": "Entering price with 3 decimals, comma, trailing spaces, pasted \"1 234,50\", letters",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-18",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 185,
+   "title": "Percentage with decimals (33.333%) and basis-point precision",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-19",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 186,
+   "title": "Σ of line totals vs invoice total vs payment total vs report total on 10,000 random baskets",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-20",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 187,
+   "title": "Daily Z totals summed over a month vs monthly report",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-21",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 188,
+   "title": "Display of negative amounts (refunds) in all 3 languages and on receipts",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-22",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 189,
+   "title": "Margin/profit calc: cost price with 4 decimals × qty, average cost updates",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-23",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 190,
+   "title": "Price history: price changed while item is in an open cart / parked sale",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-24",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 191,
+   "title": "Multi-currency/foreign cash (if supported): EUR/USD rate change mid-day",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-25",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 192,
+   "title": "Sale on instalments / تقسيط [if exists]: schedule rounding, last instalment takes the remainder, early payoff, late fee, refund mid-plan",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-26",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 193,
+   "title": "Everything at once: promo price + line discount + coupon + loyalty redemption + trade-in credit + cash rounding",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-27",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 194,
+   "title": "Sale below cost / negative margin (e.g. 100 DA typed instead of 100,000 DA)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-28",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 195,
+   "title": "Amount in words on the invoice (\"arrêtée la présente facture à la somme de …\" / المبلغ بالحروف): 21, 71, 80, 91, 100, 1,000, 1,000,000, centimes, zero, Arabic gender/tanwin forms",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-29",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 196,
+   "title": "Fat-finger magnitude: price or payment typed 100× or 1000× too large/small (misplaced separator, extra zero)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MNY-30",
+   "domain": "MNY",
+   "section": "MNY",
+   "line": 197,
+   "title": "Pack/bundle pricing where unit price × qty does not divide evenly",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-01",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 202,
+   "title": "1, 7, 50, 200, 1000 lines",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-02",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 203,
+   "title": "Same product added twice (merge vs separate lines)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-03",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 204,
+   "title": "Quantity 0, negative, decimal on integer-only item, huge",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-04",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 205,
+   "title": "Line discount % > 100, fixed > line, negative discount",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-05",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 206,
+   "title": "Stacked discounts (line + invoice + coupon + loyalty redemption) in every order the UI allows",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-06",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 207,
+   "title": "Invoice-level discount allocation across lines (needed for correct refunds)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-07",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 208,
+   "title": "Buy-X-get-Y / bundle / happy-hour promotion edge: qty exactly at threshold, threshold−1, +1, mixed items",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-08",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 209,
+   "title": "Price override by cashier vs manager",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-09",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 210,
+   "title": "Park/hold sale, resume next day after price/stock change",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-10",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 211,
+   "title": "Cancel sale after items added, after partial payment",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-11",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 212,
+   "title": "Barcode scan: unknown barcode, duplicate barcode on two products, scanner fast input (13 chars < 100 ms), prefix/suffix chars",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-12",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 213,
+   "title": "Product with 0 stock, negative-stock allowed/forbidden",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-13",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 214,
+   "title": "Deleting a product/customer referenced by old sales",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-14",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 215,
+   "title": "Serial/IMEI-tracked item sold without selecting a serial",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-15",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 216,
+   "title": "Add item while payment dialog open / double-click Add / hold-key repeat",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-16",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 217,
+   "title": "Shelf/label price differs from cart price (stale label, LBL-04)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-17",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 218,
+   "title": "Phone + accessories at one bundle price (e.g. free screen protector)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-18",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 219,
+   "title": "Same IMEI added to two carts (two cashiers, desktop + mobile) or twice in one cart",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-19",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 220,
+   "title": "Scan of a model/SKU barcode vs scan of the IMEI itself for an IMEI-tracked item",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-20",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 221,
+   "title": "Delete a line / undo after a discount, promotion or loyalty redemption was applied",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-21",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 222,
+   "title": "Park a cart on mobile, resume it on desktop (and reverse)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRT-22",
+   "domain": "CRT",
+   "section": "CRT",
+   "line": 223,
+   "title": "200-line cart on a low-RAM phone",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-01",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 228,
+   "title": "Cash exact / over (change) / under (blocked or partial per rule)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-02",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 229,
+   "title": "Tendered with Arabic-Indic digits/comma decimals/very large (1e9)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-03",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 230,
+   "title": "Split tender: cash+card, card+card, card+store credit, 3-way",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-04",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 231,
+   "title": "Overpay by card (card amount > due)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-05",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 232,
+   "title": "Gateway approve / decline / timeout / error / duplicate callback / late callback after cancel (SATIM/CIB/Edahabia/BaridiMob flows, mocked)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-06",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 233,
+   "title": "App killed after gateway approval but before DB commit",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-07",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 234,
+   "title": "Pay pressed twice / Enter held / double-tap on touch",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-08",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 235,
+   "title": "Payment while offline for tenders needing network",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-09",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 236,
+   "title": "Deposit/advance payment then final payment on same document",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-10",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 237,
+   "title": "Credit sale (\"dette\"/client account) [if exists]: limit exceeded, partial repayment, overpayment, write-off",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-11",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 238,
+   "title": "Store credit / gift card: partial use, expiry, refund to store credit, negative balance attempt",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-12",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 239,
+   "title": "Cheque/bank transfer tender [if exists]: unpaid cheque reversal",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-13",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 240,
+   "title": "Tip/service fee [if exists]",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-14",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 241,
+   "title": "Payment method disabled mid-day / terminal config changed during open cart",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-15",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 242,
+   "title": "Currency/amount sent to gateway in wrong unit (centimes vs DA ×100 error)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-16",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 243,
+   "title": "Manual card entry/\"approval code\" typed by cashier [if exists]",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-17",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 244,
+   "title": "Terminal/gateway payment started on mobile; network switch or backgrounding before approval",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-18",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 245,
+   "title": "Receipt printed or sent before payment is confirmed, then payment fails",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-19",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 246,
+   "title": "Cashier chose the wrong tender (card instead of cash) and wants to correct it",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-20",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 247,
+   "title": "Quick-cash buttons (1,000 / 2,000 / 5,000 DA) and \"exact\" button pressed, then a discount changes the total",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-21",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 248,
+   "title": "Payment taken while the drawer is closed, belongs to another cashier, or does not exist",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PAY-22",
+   "domain": "PAY",
+   "section": "PAY",
+   "line": 249,
+   "title": "Trade-in value used as one tender among cash/card in the same sale",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-01",
+   "domain": "REF",
+   "section": "REF",
+   "line": 254,
+   "title": "Full refund, same tender",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-02",
+   "domain": "REF",
+   "section": "REF",
+   "line": 255,
+   "title": "Partial refund by line, by qty, then second and third partial until fully refunded",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-03",
+   "domain": "REF",
+   "section": "REF",
+   "line": 256,
+   "title": "Refund line that had a share of invoice-level discount",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-05",
+   "domain": "REF",
+   "section": "REF",
+   "line": 257,
+   "title": "Refund > paid / cumulative refunds > paid / refund of an already-refunded line",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-06",
+   "domain": "REF",
+   "section": "REF",
+   "line": 258,
+   "title": "Refund when original paid by card/BaridiMob",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-07",
+   "domain": "REF",
+   "section": "REF",
+   "line": 259,
+   "title": "Cash refund when drawer lacks cash",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-08",
+   "domain": "REF",
+   "section": "REF",
+   "line": 260,
+   "title": "Refund after shift closed / next day / next month / after Z printed",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-09",
+   "domain": "REF",
+   "section": "REF",
+   "line": 261,
+   "title": "Refund with receipt missing (lookup by customer/phone/amount)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-10",
+   "domain": "REF",
+   "section": "REF",
+   "line": 262,
+   "title": "Refund of serial/IMEI item",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-11",
+   "domain": "REF",
+   "section": "REF",
+   "line": 263,
+   "title": "Refund of item whose stock was already adjusted/sold again",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-12",
+   "domain": "REF",
+   "section": "REF",
+   "line": 264,
+   "title": "Exchange (return A, buy B) with price difference both directions",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-13",
+   "domain": "REF",
+   "section": "REF",
+   "line": 265,
+   "title": "Void vs refund (same day pre-close)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-14",
+   "domain": "REF",
+   "section": "REF",
+   "line": 266,
+   "title": "Refund concurrency: two cashiers/devices refund same sale simultaneously",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-15",
+   "domain": "REF",
+   "section": "REF",
+   "line": 267,
+   "title": "Refund with loyalty points redeemed in original sale",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-16",
+   "domain": "REF",
+   "section": "REF",
+   "line": 268,
+   "title": "Refund of a cash-rounding adjustment [if cash rounding exists]",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-17",
+   "domain": "REF",
+   "section": "REF",
+   "line": 269,
+   "title": "Refund approval step-up PIN, wrong PIN, PIN lockout",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-18",
+   "domain": "REF",
+   "section": "REF",
+   "line": 270,
+   "title": "Refund receipt printed twice / reprint",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-19",
+   "domain": "REF",
+   "section": "REF",
+   "line": 271,
+   "title": "Refund reasons required; \"other\" free-text with Arabic/emoji/very long",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-20",
+   "domain": "REF",
+   "section": "REF",
+   "line": 272,
+   "title": "Goodwill flat refund not tied to a line",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-21",
+   "domain": "REF",
+   "section": "REF",
+   "line": 273,
+   "title": "Refund/return of a phone with an open or approved warranty claim",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-22",
+   "domain": "REF",
+   "section": "REF",
+   "line": 274,
+   "title": "Return of a phone whose IMEI differs from the one sold",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-23",
+   "domain": "REF",
+   "section": "REF",
+   "line": 275,
+   "title": "Refund by a different cashier than the seller, or by a cashier whose drawer is closed/none open",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-24",
+   "domain": "REF",
+   "section": "REF",
+   "line": 276,
+   "title": "Refund velocity: many small refunds, refunds just under the step-up threshold",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-25",
+   "domain": "REF",
+   "section": "REF",
+   "line": 277,
+   "title": "Return window by product class (sealed phone, opened phone, accessory, refurbished); day boundary and timezone",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-26",
+   "domain": "REF",
+   "section": "REF",
+   "line": 278,
+   "title": "Refund started on mobile while desktop closes the drawer; cash refund with no cash in this drawer",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-27",
+   "domain": "REF",
+   "section": "REF",
+   "line": 279,
+   "title": "Original sale paid by several tenders (cash + card + store credit); refund of one line or part of the invoice",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-28",
+   "domain": "REF",
+   "section": "REF",
+   "line": 280,
+   "title": "Refund of a sale that used line discount + invoice discount + coupon + loyalty redemption together",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-29",
+   "domain": "REF",
+   "section": "REF",
+   "line": 281,
+   "title": "Refund of a sale that was paid partly by earlier deposit/advance (repair deposit, reservation)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-30",
+   "domain": "REF",
+   "section": "REF",
+   "line": 282,
+   "title": "Cash sale where the customer handed more than due and received change",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-31",
+   "domain": "REF",
+   "section": "REF",
+   "line": 283,
+   "title": "Fractional quantities (0.333 kg, meters) refunded in parts",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-32",
+   "domain": "REF",
+   "section": "REF",
+   "line": 284,
+   "title": "Refund quantity input: 0, negative, decimal on an integer item, more than remaining after earlier refunds, Arabic digits, held key",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-33",
+   "domain": "REF",
+   "section": "REF",
+   "line": 285,
+   "title": "Refund of one item from a buy-X-get-Y / bundle promotion",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-34",
+   "domain": "REF",
+   "section": "REF",
+   "line": 286,
+   "title": "Refund of an item sold with a manual price override or a price below catalog",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-35",
+   "domain": "REF",
+   "section": "REF",
+   "line": 287,
+   "title": "Refund of a free-gift / zero-price line, or a line fully covered by points",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-36",
+   "domain": "REF",
+   "section": "REF",
+   "line": 288,
+   "title": "Returned item goes back to sellable stock vs defective/write-off vs supplier RMA",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-37",
+   "domain": "REF",
+   "section": "REF",
+   "line": 289,
+   "title": "Restocking fee / deduction (opened phone, missing accessories, damaged box)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-38",
+   "domain": "REF",
+   "section": "REF",
+   "line": 290,
+   "title": "Refund after the product's cost changed (average cost recalculated since the sale)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-39",
+   "domain": "REF",
+   "section": "REF",
+   "line": 291,
+   "title": "Refund after the product was deleted, merged, renamed or its barcode reassigned",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-40",
+   "domain": "REF",
+   "section": "REF",
+   "line": 292,
+   "title": "Refund after the customer was merged, deleted or anonymized",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-41",
+   "domain": "REF",
+   "section": "REF",
+   "line": 293,
+   "title": "Refund to store credit: issue, spend part, refund the same sale again, expiry, negative attempt",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-42",
+   "domain": "REF",
+   "section": "REF",
+   "line": 294,
+   "title": "Card refund impossible (card expired/closed, terminal offline, refund window passed, gateway declines)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-43",
+   "domain": "REF",
+   "section": "REF",
+   "line": 295,
+   "title": "Gateway refund result unknown (timeout, app killed, late callback)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-44",
+   "domain": "REF",
+   "section": "REF",
+   "line": 296,
+   "title": "Order of side effects on a cash refund: drawer kick, printing, gateway call, DB commit",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-45",
+   "domain": "REF",
+   "section": "REF",
+   "line": 297,
+   "title": "Refund of a sale created on another device that has not synced yet (or made offline on mobile)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-46",
+   "domain": "REF",
+   "section": "REF",
+   "line": 298,
+   "title": "Over-refund attempt through forged IPC/API, a second device, or a stale screen",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-47",
+   "domain": "REF",
+   "section": "REF",
+   "line": 299,
+   "title": "Same refund request replayed (retry after timeout, double-click, held Enter) vs a *new* request with a different key for the same lines",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-48",
+   "domain": "REF",
+   "section": "REF",
+   "line": 300,
+   "title": "Void or refund right after the receipt was printed and the customer left; card already captured",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-49",
+   "domain": "REF",
+   "section": "REF",
+   "line": 301,
+   "title": "Refund of a sale that included a trade-in credit",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-50",
+   "domain": "REF",
+   "section": "REF",
+   "line": 302,
+   "title": "Refund of a repair invoice (labor + parts), with deposit and used parts",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-51",
+   "domain": "REF",
+   "section": "REF",
+   "line": 303,
+   "title": "Cashier refund limits: per refund, per shift cumulative, just under the step-up threshold repeated, limit changed mid-shift",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-52",
+   "domain": "REF",
+   "section": "REF",
+   "line": 304,
+   "title": "Device clock wrong when refunding (before the original sale time, in a closed period, far future)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-53",
+   "domain": "REF",
+   "section": "REF",
+   "line": 305,
+   "title": "Extreme amounts: 0.01 DA refund, 999,999,999.99 DA refund, 10,000 partial refunds of 0.01 on one line, qty 3 × 100.00/3",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-54",
+   "domain": "REF",
+   "section": "REF",
+   "line": 306,
+   "title": "Refund of a sale whose total was 0 (fully discounted/points/free repair)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-55",
+   "domain": "REF",
+   "section": "REF",
+   "line": 307,
+   "title": "Return into a stock location that was removed/closed, or of an inactive/archived product",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-56",
+   "domain": "REF",
+   "section": "REF",
+   "line": 308,
+   "title": "Refund reporting: by day, cashier, tender, reason, product; refund of a previous-period sale",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-57",
+   "domain": "REF",
+   "section": "REF",
+   "line": 309,
+   "title": "Finding the sale to refund (at 5 M sales): receipt number with typo/transposed digits, Arabic digits, spaces, QR from another shop, IMEI, phone, name, amount + date",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-58",
+   "domain": "REF",
+   "section": "REF",
+   "line": 310,
+   "title": "Two refund screens open for the same sale (two tabs/devices), one completes first",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-59",
+   "domain": "REF",
+   "section": "REF",
+   "line": 311,
+   "title": "Mistaken refund needs undoing",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-60",
+   "domain": "REF",
+   "section": "REF",
+   "line": 312,
+   "title": "Exchange chain: A → B → C, then refund of B or of the whole chain",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-61",
+   "domain": "REF",
+   "section": "REF",
+   "line": 313,
+   "title": "One IMEI sold, returned, resold, returned again",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-62",
+   "domain": "REF",
+   "section": "REF",
+   "line": 314,
+   "title": "Refund interrupted by lock, auto-logout, app update restart, language switch or crash while the confirm dialog is open",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-63",
+   "domain": "REF",
+   "section": "REF",
+   "line": 315,
+   "title": "Refund of a sale older than the local history window, or moved to the archive",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-64",
+   "domain": "REF",
+   "section": "REF",
+   "line": 316,
+   "title": "Refund slip content: original receipt number, amounts per tender, reason, cashier (original and processor), copy marking, customer signature above a cash threshold",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-65",
+   "domain": "REF",
+   "section": "REF",
+   "line": 317,
+   "title": "Refund of a credit sale / client-account invoice [if exists] that is unpaid or only part-paid",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-66",
+   "domain": "REF",
+   "section": "REF",
+   "line": 318,
+   "title": "Refund inside an instalment plan [if exists]: after 1 of N instalments, after the last, on an overdue plan, with a late fee",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-67",
+   "domain": "REF",
+   "section": "REF",
+   "line": 319,
+   "title": "Sale paid by cheque or transfer [if exists]: refund asked before the cheque clears, after it bounced, after it cleared",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-68",
+   "domain": "REF",
+   "section": "REF",
+   "line": 320,
+   "title": "Gift-card / store-credit product sold, then refunded or partly used (selling the card itself, not paying with it)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-69",
+   "domain": "REF",
+   "section": "REF",
+   "line": 321,
+   "title": "Dispute/chargeback or issuer reversal arrives after the shop already refunded the same sale another way (cash or store credit)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-70",
+   "domain": "REF",
+   "section": "REF",
+   "line": 322,
+   "title": "Multi-shop [if exists]: a sale made in shop A is returned in shop B",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-71",
+   "domain": "REF",
+   "section": "REF",
+   "line": 323,
+   "title": "Negative-line loophole: a return rung as a negative line inside a *new* sale (MNY-07, REF-12) instead of a refund document",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-72",
+   "domain": "REF",
+   "section": "REF",
+   "line": 324,
+   "title": "Cash rounding (to 5/10 DA) with several partial refunds on one sale (MNY-11, REF-16)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-73",
+   "domain": "REF",
+   "section": "REF",
+   "line": 325,
+   "title": "Foreign-currency cash [if supported]: refund after the rate changed, partial refunds in the foreign currency, drawer holds no foreign cash",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-74",
+   "domain": "REF",
+   "section": "REF",
+   "line": 326,
+   "title": "Service/digital lines [if exists]: mobile top-up (Flexy/recharge), SIM activation, vouchers, licences, repair labor already performed",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-75",
+   "domain": "REF",
+   "section": "REF",
+   "line": 327,
+   "title": "Item sold before it became serial/IMEI-tracked (or tracking was switched off later)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-76",
+   "domain": "REF",
+   "section": "REF",
+   "line": 328,
+   "title": "Batch/expiry items [if relevant]: return of a perishable or date-limited item",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-77",
+   "domain": "REF",
+   "section": "REF",
+   "line": 329,
+   "title": "Return window expired but warranty still valid (or the reverse); customer asks for a refund where only repair/replacement applies",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-78",
+   "domain": "REF",
+   "section": "REF",
+   "line": 330,
+   "title": "Forged, photocopied or altered receipt: amounts or lines edited, valid receipt number with different items, the same paper copy presented twice",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-79",
+   "domain": "REF",
+   "section": "REF",
+   "line": 331,
+   "title": "Gift return: the person returning is not the buyer, or a gift receipt (no prices) is used",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-80",
+   "domain": "REF",
+   "section": "REF",
+   "line": 332,
+   "title": "Approver unavailable: manager's device offline, approval needed on mobile, approval at the edge of the offline window",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-81",
+   "domain": "REF",
+   "section": "REF",
+   "line": 333,
+   "title": "Acknowledged cash refund lost after a restore, power cut or sync rollback (cash left the drawer, slip printed, DB row gone)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-82",
+   "domain": "REF",
+   "section": "REF",
+   "line": 334,
+   "title": "Credit-note numbering: refunds created on several devices or offline, after a restore, after a reprint",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-83",
+   "domain": "REF",
+   "section": "REF",
+   "line": 335,
+   "title": "Loyalty rate, campaign, points value or expiry rule changed (or the points already expired) between sale and refund",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-84",
+   "domain": "REF",
+   "section": "REF",
+   "line": 336,
+   "title": "Sale made at a wrong price (100 DA instead of 100,000 DA) and discovered later",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-85",
+   "domain": "REF",
+   "section": "REF",
+   "line": 337,
+   "title": "Price-drop adjustment / price-match request after the sale",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-86",
+   "domain": "REF",
+   "section": "REF",
+   "line": 338,
+   "title": "Order-independence property: a sale with ≤ 8 lines (random qty, discounts, rounding); refund the same units in every permutation and chunking",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-87",
+   "domain": "REF",
+   "section": "REF",
+   "line": 339,
+   "title": "Overflow in the allocation maths: invoice discount × line amount at maximum values (MNY-06)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-88",
+   "domain": "REF",
+   "section": "REF",
+   "line": 340,
+   "title": "Refund guard under SQLite concurrency: read \"remaining refundable\", then write — two connections or devices at once",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-89",
+   "domain": "REF",
+   "section": "REF",
+   "line": 341,
+   "title": "Refund of a very large basket (200 lines; wholesale 5,000 lines)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-90",
+   "domain": "REF",
+   "section": "REF",
+   "line": 342,
+   "title": "Refund destination tampering: refund to another card, another BaridiMob account/phone, or a manually typed card (PAY-16) than the one that paid",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REF-91",
+   "domain": "REF",
+   "section": "REF",
+   "line": 343,
+   "title": "Serial returner / wardrobing: the same customer (phone, ID) with many refunds or repeated \"opened phone\" returns",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-01",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 348,
+   "title": "Earn points at tier boundaries (amount just below/at/above step), rounding of fractional points",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-02",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 349,
+   "title": "Points on discounted amount vs gross; on tips/fees or not",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-03",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 350,
+   "title": "Redeem points: exact balance, balance+1, more than order total, partial",
+   "priority": "P1",
+   "conditionalP0": true,
+   "retired": false
+  },
+  {
+   "id": "LOY-04",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 351,
+   "title": "Redeem + refund: full, partial, multi-quantity partial",
+   "priority": "P1",
+   "conditionalP0": true,
+   "retired": false
+  },
+  {
+   "id": "LOY-05",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 352,
+   "title": "Refund of a sale whose earned points were already spent",
+   "priority": "P1",
+   "conditionalP0": true,
+   "retired": false
+  },
+  {
+   "id": "LOY-06",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 353,
+   "title": "Campaign multiplier (x2/x3) sale then refund",
+   "priority": "P1",
+   "conditionalP0": true,
+   "retired": false
+  },
+  {
+   "id": "LOY-07",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 354,
+   "title": "Points expiry at boundary (day before/at/after) and timezone",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-08",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 355,
+   "title": "Tier upgrade/downgrade after refund drops spend below threshold",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-09",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 356,
+   "title": "Customer merge/duplicate phone numbers/typo phone",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-10",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 357,
+   "title": "Anonymous sale later attached to customer (retroactive points)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-11",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 358,
+   "title": "Same loyalty balance used on two devices offline then sync",
+   "priority": "P1",
+   "conditionalP0": true,
+   "retired": false
+  },
+  {
+   "id": "LOY-12",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 359,
+   "title": "Points transfer/adjust by manager",
+   "priority": "P1",
+   "conditionalP0": true,
+   "retired": false
+  },
+  {
+   "id": "LOY-13",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 360,
+   "title": "Loyalty disabled/enabled mid-day; program rule change",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-14",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 361,
+   "title": "Redeemed points + coupon + discount together producing total < 0 or 0",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-15",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 362,
+   "title": "Points display vs stored (fractions) in ar/fr/en",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-16",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 363,
+   "title": "Loyalty balance seen on mobile vs desktop right after a sale/redeem on the other device",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-17",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 364,
+   "title": "Points on warranty/free repair tickets and zero-revenue lines",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-18",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 365,
+   "title": "Customer merge with points, tiers and different expiry dates on both",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-19",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 366,
+   "title": "Campaign starts/ends at midnight; sale started before the boundary and paid after",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LOY-20",
+   "domain": "LOY",
+   "section": "LOY",
+   "line": 367,
+   "title": "Customer lookup for loyalty by phone/QR at 1 M customers",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-01",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 372,
+   "title": "IMEI validation: 15 digits, Luhn check, 14-digit, letters, spaces, dual-IMEI phones",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-02",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 373,
+   "title": "Same IMEI bought twice / already in stock / already sold by us",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-03",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 374,
+   "title": "IMEI blacklist/stolen check (local list or GSMA-type service, mocked): clean / blacklisted / service down / timeout",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-04",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 375,
+   "title": "Seller identity capture: ID number, name, address, ID photo/scan; retention",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-05",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 376,
+   "title": "Seller is a minor / ID expired / ID number reused with different name",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-06",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 377,
+   "title": "Condition grading changes quote after inspection",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-07",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 378,
+   "title": "Payout by cash: drawer expected cash decreases; payout over drawer balance; payout cap per day/customer",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-08",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 379,
+   "title": "Trade-in used as credit toward a new sale (net payment)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-09",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 380,
+   "title": "Trade-in cancelled after payout / seller returns money",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-10",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 381,
+   "title": "Trade-in device goes to refurbish → stock → sold: cost basis = purchase price + parts + labor",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-11",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 382,
+   "title": "Police/“sell-hold” on an IMEI (flag) [UNVERIFIED-LAW]",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-12",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 383,
+   "title": "Locked device (iCloud/Google FRP/MDM) flagged at intake",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-13",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 384,
+   "title": "Trade-in price edited after payout",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-14",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 385,
+   "title": "Printing the purchase contract/receipt for seller in ar/fr with IMEI + ID reference",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-15",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 386,
+   "title": "Bulk trade-in (10 devices one seller)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-16",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 387,
+   "title": "Seller ID photo/scan captured on mobile and sent to desktop for approval",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-17",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 388,
+   "title": "Same seller (ID/phone) brings many phones in a short period",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-18",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 389,
+   "title": "IMEI on box vs device screen (`*#06#`) vs tray vs system record mismatch",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-19",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 390,
+   "title": "Cash payout while the drawer is closed or belongs to another cashier; payout made from mobile",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-20",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 391,
+   "title": "Seller signature captured on tablet/phone and on the printed contract",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIN-21",
+   "domain": "TIN",
+   "section": "TIN",
+   "line": 392,
+   "title": "Quote validity (e.g. 24 h) vs price-list change; quote started on mobile, finished on desktop",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-01",
+   "domain": "REP",
+   "section": "REP",
+   "line": 397,
+   "title": "Ticket intake: device, IMEI (validated), accessories, condition checklist, photos, problem, estimate",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-02",
+   "domain": "REP",
+   "section": "REP",
+   "line": 398,
+   "title": "Status machine: allowed vs illegal transitions (e.g. Collected → Diagnosing), skipping states, going backward",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-03",
+   "domain": "REP",
+   "section": "REP",
+   "line": 399,
+   "title": "Deposit taken at intake; deposit > estimate; deposit then cancel",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-04",
+   "domain": "REP",
+   "section": "REP",
+   "line": 400,
+   "title": "Estimate approved then final cost exceeds estimate by X%",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-05",
+   "domain": "REP",
+   "section": "REP",
+   "line": 401,
+   "title": "Parts consumed: stock decrement exactly once; part swapped; part returned unused",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-06",
+   "domain": "REP",
+   "section": "REP",
+   "line": 402,
+   "title": "Part out of stock / ordered with deposit / arrives later",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-07",
+   "domain": "REP",
+   "section": "REP",
+   "line": 403,
+   "title": "Final payment: deposit + remaining by split tender; discount at pickup; unpaid pickup attempt",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-08",
+   "domain": "REP",
+   "section": "REP",
+   "line": 404,
+   "title": "Warranty: starts at \"Repaired/Completed\"; claim inside/at boundary/after expiry; claim on unpaid ticket; claim on different part",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-09",
+   "domain": "REP",
+   "section": "REP",
+   "line": 405,
+   "title": "Abandoned device after N days: reminders, storage policy [RULE?]",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-10",
+   "domain": "REP",
+   "section": "REP",
+   "line": 406,
+   "title": "Customer passcode / sensitive data on ticket",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-11",
+   "domain": "REP",
+   "section": "REP",
+   "line": 407,
+   "title": "IMEI changed/unreadable after board swap; device swapped with a different one at pickup",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-12",
+   "domain": "REP",
+   "section": "REP",
+   "line": 408,
+   "title": "Multi-device ticket; technician reassign; technician commission",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-13",
+   "domain": "REP",
+   "section": "REP",
+   "line": 409,
+   "title": "Edit ticket after invoice issued",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-14",
+   "domain": "REP",
+   "section": "REP",
+   "line": 410,
+   "title": "Ticket cancelled after parts used",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-15",
+   "domain": "REP",
+   "section": "REP",
+   "line": 411,
+   "title": "Repair of a device we sold (warranty vs paid) and of a trade-in stock device (internal job)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-16",
+   "domain": "REP",
+   "section": "REP",
+   "line": 412,
+   "title": "SMS/WhatsApp status notification [if exists]: duplicate send on retry, wrong number, ar/fr text",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-18",
+   "domain": "REP",
+   "section": "REP",
+   "line": 413,
+   "title": "Unclaimed-cash/forfeited deposit accounting",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-19",
+   "domain": "REP",
+   "section": "REP",
+   "line": 414,
+   "title": "Intake on mobile, work on desktop, pickup on mobile (attachments, deposit, status changes)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-20",
+   "domain": "REP",
+   "section": "REP",
+   "line": 415,
+   "title": "Customer approval link/SMS code [if exists]: replay, expiry, wrong number, approval after cancel",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-21",
+   "domain": "REP",
+   "section": "REP",
+   "line": 416,
+   "title": "Pickup by a third party",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-22",
+   "domain": "REP",
+   "section": "REP",
+   "line": 417,
+   "title": "Data-loss consent / backup-before-repair checkbox and liability text per language",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-23",
+   "domain": "REP",
+   "section": "REP",
+   "line": 418,
+   "title": "Repair price list per model/part changes mid-ticket",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-24",
+   "domain": "REP",
+   "section": "REP",
+   "line": 419,
+   "title": "Same IMEI returns within N days for the same defect",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "REP-25",
+   "domain": "REP",
+   "section": "REP",
+   "line": 420,
+   "title": "Scan a ticket QR/barcode on mobile for a ticket of another tenant, an old or cancelled ticket",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-01",
+   "domain": "INV",
+   "section": "INV",
+   "line": 425,
+   "title": "Concurrent sale of last unit on two terminals",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-02",
+   "domain": "INV",
+   "section": "INV",
+   "line": 426,
+   "title": "Stock adjustment (count) vs in-flight sales",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-03",
+   "domain": "INV",
+   "section": "INV",
+   "line": 427,
+   "title": "Purchase receipt: cost change, average-cost recalculation, partial receipt, supplier return",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-04",
+   "domain": "INV",
+   "section": "INV",
+   "line": 428,
+   "title": "Transfer between locations/shops [if exists]: in-transit state, receive partial",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-05",
+   "domain": "INV",
+   "section": "INV",
+   "line": 429,
+   "title": "Decimal-quantity items (weight, meters, liters) unit conversion (box ↔ pieces)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-06",
+   "domain": "INV",
+   "section": "INV",
+   "line": 430,
+   "title": "Phone variants (color/storage) each with own barcode/IMEI; duplicates",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-07",
+   "domain": "INV",
+   "section": "INV",
+   "line": 431,
+   "title": "Serial item lifecycle state machine: purchased → in stock → sold → returned → refurbished → sold",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-08",
+   "domain": "INV",
+   "section": "INV",
+   "line": 432,
+   "title": "Negative stock after refund-then-resale sequence",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-09",
+   "domain": "INV",
+   "section": "INV",
+   "line": 433,
+   "title": "Reorder alerts/low-stock notifications",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-10",
+   "domain": "INV",
+   "section": "INV",
+   "line": 434,
+   "title": "Product merge / barcode reassign",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-11",
+   "domain": "INV",
+   "section": "INV",
+   "line": 435,
+   "title": "Expiry/batch items [if relevant] FEFO",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-12",
+   "domain": "INV",
+   "section": "INV",
+   "line": 436,
+   "title": "Importing 10,000 products (CSV): bad rows, duplicates, Arabic names, price formats",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-13",
+   "domain": "INV",
+   "section": "INV",
+   "line": 437,
+   "title": "Receiving 500 phones from a supplier: scan IMEIs vs supplier file; missing, duplicate, extra, invalid IMEIs",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-14",
+   "domain": "INV",
+   "section": "INV",
+   "line": 438,
+   "title": "IMEI stocktake by mobile scanning (offline, 2,000 units, two counters at once)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-15",
+   "domain": "INV",
+   "section": "INV",
+   "line": 439,
+   "title": "Reservation/hold of a phone for a customer (with deposit), expiry",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-16",
+   "domain": "INV",
+   "section": "INV",
+   "line": 440,
+   "title": "Phone moved between sales floor, repair bench, supplier RMA, other shop",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "INV-17",
+   "domain": "INV",
+   "section": "INV",
+   "line": 441,
+   "title": "Same repair ticket's parts edited from two devices (double-decrement risk)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-01",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 446,
+   "title": "Arabic-only, French-only, mixed Arabic+French+numbers on one line, in ESC/POS text mode vs raster",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-02",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 447,
+   "title": "Paper widths 58 mm / 80 mm (32/42/48 chars) with long product names, long Arabic names, 30-char customer name",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-03",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 448,
+   "title": "Receipt with 1, 7, 50, 200 lines; very long receipt",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-04",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 449,
+   "title": "Required content present: shop identity, document number, date/time, cashier, payment lines, change",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-05",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 450,
+   "title": "Reprint: marked as copy; same number; no new sale",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-06",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 451,
+   "title": "Printer offline / paper out / cover open / buffer full mid-receipt",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-07",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 452,
+   "title": "Print queue: 20 receipts rapidly; app closed with jobs pending; printer reconnect",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-08",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 453,
+   "title": "Print call blocks UI (hung USB/Bluetooth/network printer)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-09",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 454,
+   "title": "Two printers (receipt + label + A4 invoice): wrong printer routing, printer renamed/removed",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-10",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 455,
+   "title": "Cash drawer kick pulse on cash sale, not on card-only; kick on \"no sale\" requires permission",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-11",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 456,
+   "title": "QR code/barcode on receipt (document number) scannable; fits width",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-12",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 457,
+   "title": "Logo/header image, footers, promo text in ar/fr; special characters (œ, é, ç, ً diacritics, Arabic punctuation)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-13",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 458,
+   "title": "Amount formats on paper: negative amounts, thousands separators, Arabic-Indic vs Latin digits",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-14",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 459,
+   "title": "A4/PDF invoice (if exists): page breaks with 100+ lines, totals on last page, RTL layout, fonts embedded",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-15",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 460,
+   "title": "Gift receipt (no prices), refund receipt, trade-in contract, repair intake slip, Z-report, deposit slip",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-16",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 461,
+   "title": "Date/time on paper vs DST/timezone/clock changes",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-17",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 462,
+   "title": "Printing from a second language than UI language (customer wants French receipt on Arabic UI)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-18",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 463,
+   "title": "Receipt header shows cashier name, drawer/register, device, reprint marker",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-19",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 464,
+   "title": "Same sale printed from desktop (USB) and from mobile (Bluetooth)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-20",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 465,
+   "title": "Receipt number assigned before print vs after commit; print fails",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-21",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 466,
+   "title": "Mixed-direction header line: \"Caissier: محمد\" and \"الكاشير: Mohamed\" in each receipt language",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-22",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 467,
+   "title": "IMEI/serial lines: 15–16 digits + barcode on 58 mm; two IMEIs; long serials",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-23",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 468,
+   "title": "Warranty terms footer variants (new / refurbished / as-is / extended) in ar and fr",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RCP-24",
+   "domain": "RCP",
+   "section": "RCP",
+   "line": 469,
+   "title": "Remote print jobs: mobile finalizes a sale, desktop prints it (or the reverse)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-01",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 474,
+   "title": "EAN-13 generation: check digit correct for every internal code; round-trip scan",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-02",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 475,
+   "title": "Code128/QR/DataMatrix for IMEI/serial/ticket numbers; very long values",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-03",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 476,
+   "title": "Label size/gap/offset calibration; different label rolls; printer dpi (203/300)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-04",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 477,
+   "title": "Price on label = DB price at print time; price changed afterwards → reprint prompt; label shows the final selling price",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-05",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 478,
+   "title": "Batch print 1, 50, 500 labels; copies > 1; abort midway; printer error mid-batch",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-06",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 479,
+   "title": "Long Arabic/French product names, mixed scripts, diacritics",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-07",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 480,
+   "title": "Variable-weight barcodes (price- or weight-embedded EAN) [if used]",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-08",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 481,
+   "title": "Duplicate barcodes across products / reused after product deletion",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-09",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 482,
+   "title": "Repair ticket label stuck on device: ticket no., IMEI barcode, date, name",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-10",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 483,
+   "title": "Label template editor [if any]: missing field, huge font, empty template",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-11",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 484,
+   "title": "Printing labels while a sale is in progress",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-12",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 485,
+   "title": "Shelf/price label for phones with IMEI last digits and warranty type",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "LBL-13",
+   "domain": "LBL",
+   "section": "LBL",
+   "line": 486,
+   "title": "Label job sent from mobile to the desktop's label printer",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-01",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 493,
+   "title": "Which mode? embedded replica (remote writes) vs offline-sync vs `turso.sync` push/pull; document and assert behaviour offline",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-02",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 494,
+   "title": "Two terminals generate receipt/invoice/ticket numbers while offline",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-03",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 495,
+   "title": "Same sale ID pushed twice (retry after timeout)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-04",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 496,
+   "title": "Edit-vs-edit conflict on a non-money row (product name, customer phone)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-05",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 497,
+   "title": "Conflict on money rows: same refund on two devices; same loyalty redemption on two devices; same last unit sold",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-06",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 498,
+   "title": "Stock as counter column vs ledger: two devices decrement offline",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-07",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 499,
+   "title": "Delete vs edit conflict (product deleted on A, sold on B)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-08",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 500,
+   "title": "Sync interrupted at 50% (kill app/network cut/laptop sleep)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-09",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 501,
+   "title": "Large backlog (5,000 offline sales) then reconnect",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-10",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 502,
+   "title": "Clock skew between devices (±5 min, ±1 day)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-11",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 503,
+   "title": "Schema/app version mismatch between devices (one updated, one not)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-12",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 504,
+   "title": "Auth token expired/revoked/offline for days",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-13",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 505,
+   "title": "`readYourWrites` on/off: sale then immediate refund lookup, immediate report",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-14",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 506,
+   "title": "Sync during checkout/payment/printing",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-15",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 507,
+   "title": "Backend returns errors (500/429/timeouts/partial JSON)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-16",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 508,
+   "title": "Restore an old backup on one device then sync",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-17",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 509,
+   "title": "Multi-shop: shop A cannot read/write shop B data; admin aggregation right",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-18",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 510,
+   "title": "Sync credentials/URL stored securely, not logged, not in e2e artifacts",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-19",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 511,
+   "title": "After all devices settle: G-12 convergence on ledger totals, row counts, hash-chain heads",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-20",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 512,
+   "title": "Database encrypted file + sync (if used) key rotation/loss",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-21",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 513,
+   "title": "Propagation SLA: time for a change to appear on another device (idle, under 1,000 sales/h, right after reconnect) for drawer state, ticket status, stock, customer edits",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-22",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 514,
+   "title": "Mutable state rows (drawer, ticket, inspection, claim status): two devices transition at once",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-23",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 515,
+   "title": "Tombstones and redirects: customer/product deleted or merged on A while B edits or sells",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-24",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 516,
+   "title": "Bandwidth/payload budget: initial sync, 1 M-row change set, photos",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-25",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 517,
+   "title": "Blobs: ID scans and inspection photos",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-26",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 518,
+   "title": "Replica exposure: what a phone's local DB contains",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-27",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 519,
+   "title": "Ordering of state rows and money rows by version/hybrid logical clock, not wall clock",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-28",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 520,
+   "title": "Echo/ping-pong: a device applies a remote change and its own triggers write again",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-29",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 521,
+   "title": "Schema migration while a device is offline for days; mixed versions on one backend",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SYN-30",
+   "domain": "SYN",
+   "section": "SYN",
+   "line": 522,
+   "title": "Per-device settings (language, theme, printer, last drawer) vs shop settings",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-01",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 527,
+   "title": "Open shift with float; close with exact / over / short cash",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-02",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 528,
+   "title": "Payout (supplier/trade-in/expense), drop, pay-in, no-sale open",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-03",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 529,
+   "title": "Close shift with unfinished/parked sale or pending gateway approval or pending print",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-04",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 530,
+   "title": "Two cashiers on one drawer / one cashier on two terminals",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-05",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 531,
+   "title": "Shift spans midnight / business-day vs calendar-day",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-06",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 532,
+   "title": "Z-report twice, after refunds, after backdated corrections",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-07",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 533,
+   "title": "App crash during close",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-08",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 534,
+   "title": "Close during Ramadan-style late-night operation (past midnight, long shifts > 12 h)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-09",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 535,
+   "title": "Currency count (denominations) input in ar/fr",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-10",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 536,
+   "title": "Handover between cashiers mid-day (blind count)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-11",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 537,
+   "title": "Payouts, trade-ins and refunds happen on mobile or on a second desktop",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-12",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 538,
+   "title": "Variance patterns: repeated shortages per cashier/day; variance exactly equal to a known sale/refund",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SHF-13",
+   "domain": "SHF",
+   "section": "SHF",
+   "line": 539,
+   "title": "Shift opened by one user, most sales rung by another after PIN switch",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-01",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 544,
+   "title": "Cashier attempts every manager-only action by UI and by direct IPC invoke",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-02",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 545,
+   "title": "PIN wrong ×N → lockout/throttle; lockout survives restart; timing",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-03",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 546,
+   "title": "Step-up PIN expiry window; reuse after window; step-up on exports/wipe/retention/PIN-role changes/restore",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-04",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 547,
+   "title": "Role change while logged in; user disabled while logged in",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-05",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 548,
+   "title": "Audit entry for every mutation (G-08); tamper one byte → verifier fails; delete a row → verifier fails",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-06",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 549,
+   "title": "Audit log growth, export, retention/purge with step-up",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-07",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 550,
+   "title": "PINs hashed with salt (no plaintext in DB, logs, memory dumps in e2e artifacts)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-08",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 551,
+   "title": "Customer personal data (phones, IDs, repair passcodes) not in logs/crash reports/e2e screenshots",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-09",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 552,
+   "title": "IPC surface: forged invoke args (negative qty, huge, wrong types, other user's IDs)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-10",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 553,
+   "title": "Webview content-security: no remote content, no eval; e2e tooling absent in release",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-11",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 554,
+   "title": "Inactivity auto-lock; lock during payment; unlock restores cart",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-12",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 555,
+   "title": "Backup file encrypted; restore requires step-up; restoring old backup flagged",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-13",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 556,
+   "title": "Licence/activation (if any): clock rollback, expired mid-sale",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-14",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 557,
+   "title": "Stolen/lost phone: token revocation, remote wipe, last-seen",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-15",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 558,
+   "title": "Sync token scope: mobile credentials limited to this shop and role; token in secure storage; rotation",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-16",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 559,
+   "title": "Device registration: PIN works only on registered devices",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-17",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 560,
+   "title": "Least-privilege data on role-limited devices (inspector phone)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-18",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 561,
+   "title": "Audit entries include user, device, drawer, app version and source (UI / IPC / sync) for every mutation",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-19",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 562,
+   "title": "Mass viewing/exfiltration: a cashier pages through the entire customer list, searches every letter, exports",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SEC-20",
+   "domain": "SEC",
+   "section": "SEC",
+   "line": 563,
+   "title": "Screen capture, screenshots, clipboard of customer PII on mobile; notification previews",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIM-01",
+   "domain": "TIM",
+   "section": "TIM",
+   "line": 568,
+   "title": "System clock moved backward/forward 1 h / 1 day / 1 year during session",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIM-02",
+   "domain": "TIM",
+   "section": "TIM",
+   "line": 569,
+   "title": "Timezone change on device (Algeria currently has no DST, but tablets/VMs change)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIM-03",
+   "domain": "TIM",
+   "section": "TIM",
+   "line": 570,
+   "title": "Date boundaries: 31 Dec→1 Jan, leap day 29 Feb, month-end reports, week start (Saturday/Sunday setting)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIM-04",
+   "domain": "TIM",
+   "section": "TIM",
+   "line": 571,
+   "title": "Hijri/Gregorian display if offered",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIM-05",
+   "domain": "TIM",
+   "section": "TIM",
+   "line": 572,
+   "title": "Loyalty/warranty/quote expiry exactly at boundary instant",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIM-06",
+   "domain": "TIM",
+   "section": "TIM",
+   "line": 573,
+   "title": "Scheduled jobs (expiry, reminders, backups) missed because app was closed/off for days",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIM-07",
+   "domain": "TIM",
+   "section": "TIM",
+   "line": 574,
+   "title": "NTP resync jump during a sale",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIM-08",
+   "domain": "TIM",
+   "section": "TIM",
+   "line": 575,
+   "title": "Business-day boundary across devices (drawer opened 22:00, sales after midnight on mobile)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIM-09",
+   "domain": "TIM",
+   "section": "TIM",
+   "line": 576,
+   "title": "Mobile in another timezone/VPN/roaming; warranty, quote and loyalty expiry",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "TIM-10",
+   "domain": "TIM",
+   "section": "TIM",
+   "line": 577,
+   "title": "Device asleep for days, then jobs and token refresh resume",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-01",
+   "domain": "I18",
+   "section": "I18",
+   "line": 582,
+   "title": "Switch ar↔fr↔en mid-sale, mid-payment, mid-ticket",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-02",
+   "domain": "I18",
+   "section": "I18",
+   "line": 583,
+   "title": "RTL layout: cart, dialogs, tables, numeric columns, icons, scroll bars, tooltips",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-03",
+   "domain": "I18",
+   "section": "I18",
+   "line": 584,
+   "title": "Mixed-direction strings (Arabic name + Latin model \"iPhone 15 Pro\" + digits) display/print/export",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-04",
+   "domain": "I18",
+   "section": "I18",
+   "line": 585,
+   "title": "Search: Arabic with/without diacritics, hamza/alef variants (أ/ا/إ), ta marbuta, Latin accents (é/e)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-05",
+   "domain": "I18",
+   "section": "I18",
+   "line": 586,
+   "title": "Numeric input with Arabic-Indic, Persian digits, comma/point, NBSP, RLM/LRM marks, paste",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-06",
+   "domain": "I18",
+   "section": "I18",
+   "line": 587,
+   "title": "Sorting/collation by language; case-insensitive Latin; Arabic order",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-07",
+   "domain": "I18",
+   "section": "I18",
+   "line": 588,
+   "title": "Very long strings, emoji, zero-width chars, RTL-override chars in names",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-08",
+   "domain": "I18",
+   "section": "I18",
+   "line": 589,
+   "title": "CSV/Excel export & import round-trip in each language (BOM/encoding, separators ; vs ,)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-09",
+   "domain": "I18",
+   "section": "I18",
+   "line": 590,
+   "title": "Keyboard layouts (AZERTY/Arabic) with scanner \"keyboard wedge\" input",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-10",
+   "domain": "I18",
+   "section": "I18",
+   "line": 591,
+   "title": "Translations complete: no missing keys, no key names visible, no overflow in any language",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-11",
+   "domain": "I18",
+   "section": "I18",
+   "line": 592,
+   "title": "Name-variant search: Mohamed/Mohammed/Muhammad/Mhamed/محمد/محمّد, Abdelkader/Abd El Kader/عبد القادر, Ben/Ibn/بن, hyphen vs space",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-12",
+   "domain": "I18",
+   "section": "I18",
+   "line": 593,
+   "title": "Name order and parts: family name first/last, single-name customers, titles, \"Ep.\"/\"Vve\"",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-13",
+   "domain": "I18",
+   "section": "I18",
+   "line": 594,
+   "title": "Phone formats: `0555…`, `+213 555…`, `00213…`, `(0)`, landlines `021…`, 9 vs 10 digits, Arabic-Indic digits, letters, extensions",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-14",
+   "domain": "I18",
+   "section": "I18",
+   "line": 595,
+   "title": "Mobile keyboards (Arabic/French) with autocorrect, suggestions, composition, voice input",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "I18-15",
+   "domain": "I18",
+   "section": "I18",
+   "line": 596,
+   "title": "Pasting from WhatsApp/Excel (invisible marks, NBSP, line breaks) into IMEI, phone, name, amount fields",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-01",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 601,
+   "title": "Kill process at random points during sale/refund/trade-in/ticket/close-shift (hundreds of times)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-02",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 602,
+   "title": "Power loss simulation (hard kill of process + OS-level where possible) with WAL on",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-03",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 603,
+   "title": "Disk full / read-only DB file / permission denied",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-04",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 604,
+   "title": "DB locked by concurrent writers (`busy_timeout`)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-05",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 605,
+   "title": "`PRAGMA foreign_keys` enabled on every connection (SQLite default is per-connection OFF)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-06",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 606,
+   "title": "Migrations: upgrade from each previous released schema with realistic data; downgrade attempt; interrupted migration",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-07",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 607,
+   "title": "Backup → restore on clean machine; restored numbering continues without collisions",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-08",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 608,
+   "title": "Auto-backup runs during heavy use; backup of a DB in WAL mode is consistent",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-09",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 609,
+   "title": "DB growth: 1M sale lines, 100k audit rows: query/report time, VACUUM, startup time",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-10",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 610,
+   "title": "Corrupt DB file at startup",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-11",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 611,
+   "title": "Two app instances on same DB (double-click launch)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-12",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 612,
+   "title": "Update/upgrade of the app while shift open",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-13",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 613,
+   "title": "Uninstall/reinstall keeps/handles data per policy",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-14",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 614,
+   "title": "Data retention/purge job (old audit, old tickets): does not delete rows needed for refunds/warranty",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-15",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 615,
+   "title": "Migration adds a column/index to a 1 M-row table, or rebuilds the table for a new constraint",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-16",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 616,
+   "title": "DB file placed in a cloud-synced/network folder (OneDrive, Dropbox, SMB) or antivirus locks `-wal`/`-shm`",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-17",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 617,
+   "title": "Wrong database opened (second Windows account, restored copy, test vs production data dir)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-18",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 618,
+   "title": "`VACUUM INTO`/backup while a write is in progress and sync is running",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-19",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 619,
+   "title": "Soft-delete accumulation (customers, products, tickets)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-20",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 620,
+   "title": "Durability settings audit: journal mode, `synchronous`, per-platform full-fsync, on every connection",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-21",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 621,
+   "title": "Acknowledged-but-lost test: harness logs every id the UI confirmed (success screen, printed slip, drawer kick) to a file outside the app, then hard power-offs a VM at random moments and relaunches",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-22",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 622,
+   "title": "Order of side effects: card charge, printing, drawer kick, SMS vs DB commit",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-23",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 623,
+   "title": "Hard power cut during WAL checkpoint, `VACUUM`, migration, backup, sync apply, bulk import",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-24",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 624,
+   "title": "`-wal`/`-shm` file deleted, quarantined by antivirus, or only the `.db` file copied (by hand, by a backup tool, by cloud sync)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-25",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 625,
+   "title": "Large transaction killed at 90 % (import of 1 M rows, mass edit, merge, purge)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-26",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 626,
+   "title": "Disk full during sale commit, WAL growth, backup, log write, photo save",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-27",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 627,
+   "title": "Failing disk/SD card, USB drive pulled, DB on a network share that drops, I/O errors on read",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-28",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 628,
+   "title": "Silent corruption detection: `quick_check` at startup and daily, hash-chain verify, ledger snapshot compare",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-29",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 629,
+   "title": "Corrupt DB at startup → recovery path",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-30",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 630,
+   "title": "Backup completeness: DB (consistent snapshot), attachments/photos/ID scans, settings, printer/template config, counters, audit chain, license",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-31",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 631,
+   "title": "Backup rotation: daily/weekly/monthly retention, destination full, clock rollback, same-second names",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-32",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 632,
+   "title": "Every backup is verified by restoring into a temp DB",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-33",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 633,
+   "title": "Off-machine copy: second disk, USB (drive letter changes), cloud; backup only on the same disk",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-34",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 634,
+   "title": "Encrypted backups and key loss",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-35",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 635,
+   "title": "Restore procedure on a live shop",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-36",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 636,
+   "title": "Disaster recovery from the sync backend, and the reverse: new PC pulls everything; backend lost and rebuilt from a device",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-37",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 637,
+   "title": "Measure RPO and RTO: lose the desktop at a random moment",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-38",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 638,
+   "title": "Automatic restore point before destructive operations: bulk price change, import, merge, purge, migration, factory reset",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-39",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 639,
+   "title": "Cascading deletes: deleting a customer, product, category, user, device or shop",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-40",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 640,
+   "title": "`INSERT OR REPLACE` / `REPLACE INTO` and upserts",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-41",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 641,
+   "title": "Row-id reuse: integer ids without `AUTOINCREMENT` can be reused after deleting the highest id",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-42",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 642,
+   "title": "Mass delete, \"delete all\", \"clear data\", factory reset",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-43",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 643,
+   "title": "Trash/soft-delete and recovery of products, customers, tickets",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-44",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 644,
+   "title": "CSV/Excel import that overwrites: empty cells wiping price/stock/phone, \"replace all\" mode, wrong file in the wrong screen, wrong column mapping",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-45",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 645,
+   "title": "Bulk edit mistakes: price × 100, wrong category for 100 k products",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-46",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 646,
+   "title": "Merge of customers/products/IMEIs picked wrongly",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-47",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 647,
+   "title": "Unsaved work: cart, parked sales, half-filled trade-in/repair intake, inspection notes and photos",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-48",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 648,
+   "title": "Two users edit the same note/ticket text/customer field",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-49",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 649,
+   "title": "Truncation and mangling on save: long names, emoji, newlines, zero-width characters, Arabic normalization",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-50",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 650,
+   "title": "Settings/config loss: printers, receipt templates, loyalty rules, users/PINs, shop identity",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-51",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 651,
+   "title": "App update and schema migration safety",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-52",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 652,
+   "title": "Uninstall, reinstall, \"clear app data\", moving the app folder, cloned disk, new Windows profile; Android uninstall",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-53",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 653,
+   "title": "OS protections and updates: Windows Controlled Folder Access blocking writes, antivirus quarantine, forced reboot or shutdown during a sale",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-54",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 654,
+   "title": "Ransomware, theft or fire of the shop PC",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-55",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 655,
+   "title": "Clock-driven deletion: wrong or far-future clock triggers retention purge or backup rotation",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-56",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 656,
+   "title": "Retention/purge job safety",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-57",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 657,
+   "title": "Export-before-delete",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-58",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 658,
+   "title": "Audit/log loss: log rotation, audit purge, audit write failure",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-59",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 659,
+   "title": "Connection-pool hygiene: error or panic in the middle of a transaction leaves a connection with an open transaction",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-60",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 660,
+   "title": "A sale written through several connections or statements outside one transaction; `SQLITE_BUSY` handling",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-61",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 661,
+   "title": "Sync causing loss: remote state overwrites local unsynced rows; replica re-bootstrap or \"reset\" with a non-empty local outbox",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-62",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 662,
+   "title": "Mass deletes or corrupted tombstones propagating to every device",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-63",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 663,
+   "title": "\"Last copy\" risk: one PC holds days of unsynced sales",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-64",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 664,
+   "title": "After any recovery (restore, salvage, resync): reconciliation",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-65",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 665,
+   "title": "Files outside the DB (photos, ID scans, PDFs): backup, restore on another machine, orphan cleanup",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-66",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 666,
+   "title": "Canary records: a synthetic sale/product with known id written daily",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-67",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 667,
+   "title": "Full export on demand (SQL dump or CSV, open format)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-68",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 668,
+   "title": "Backup destination limits: FAT32 USB stick (4 GB file limit), exFAT/NTFS, long paths, illegal characters (Arabic shop name), read-only or full stick, drive-letter change, network share offline",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-69",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 669,
+   "title": "Online backup of a busy DB: SQLite's backup API restarts when another connection writes; `VACUUM INTO` holds one long read snapshot",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-70",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 670,
+   "title": "Cross-version restore: backups made by every older release restored into the newest app; a newer backup restored into an older app",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-71",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 671,
+   "title": "Multi-file atomicity: audit log, outbox, archive or ledger kept in a separate database file (`ATTACH`)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-72",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 672,
+   "title": "External tools on the live DB: DB Browser for SQLite, `sqlite3` CLI, Excel/ODBC, backup agents, antivirus; a technician edits a row, runs `VACUUM`, changes `journal_mode` or leaves a transaction open",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-73",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 673,
+   "title": "Image-level copies: Windows VSS/Veeam-style backups, VM snapshots, hibernation, disk clones of a live DB",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-74",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 674,
+   "title": "Duplicate device identity: cloned disk/VM, restored PC image, copied app-data folder, Android restore → two devices with the same `device_id`/ID prefix",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-75",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 675,
+   "title": "Owner/admin lockout: forgotten owner PIN, lost recovery code, departed administrator, unreachable licence server",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-76",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 676,
+   "title": "Licence, subscription or backend lapses: licence expired/revoked, sync plan quota exceeded, billing failed, provider archives an inactive database [UNVERIFIED: check the provider's rules], token revoked, region outage",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-77",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 677,
+   "title": "Retention shorter than the longest offline period: tombstones, idempotency keys, outbox acknowledgements and deleted-row markers purged after N days while a device stays offline longer than N",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-78",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 678,
+   "title": "Selective restore: recover 5,000 deleted customers (or one day of edited products) from last night's backup without a full restore",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-79",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 679,
+   "title": "Near-zero RPO option: continuous copy of changes to another disk or the cloud, or the sync backend used as a hot replica",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-80",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 680,
+   "title": "External witnesses of lost sales: card-terminal/gateway settlement files, mobile-top-up provider statements, bank deposits, paper slips",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-81",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 681,
+   "title": "Mass wipe by update: a buggy migration, import or bulk edit on one device blanks or zeroes a column on 1 M rows and syncs",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-82",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 682,
+   "title": "Ledger immutability inside the database: an application bug or injected SQL runs `DELETE`/`UPDATE` without a proper `WHERE`, or a search/import string reaches SQL",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-83",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 683,
+   "title": "Destructive migrations: dropping or renaming a column or table that older clients, sync, reports or backups still use",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-84",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 684,
+   "title": "\"Data safety\" screen for the owner: last backup (age, verified, off-machine), last restore test, integrity result, unsynced count/age, free disk, WAL size, canary status, clock sanity",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-85",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 685,
+   "title": "Staff-error scenarios: closing the window mid-sale, pulling the plug, holding the reset button, Windows update reboot, laptop lid closed on battery, UPS low-battery shutdown",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-86",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 686,
+   "title": "Android-specific loss: \"clear storage\", cleaner apps, SD-card storage removed, factory reset, work-profile removal, MDM uninstall",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-87",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 687,
+   "title": "Bit rot and partial copies of backups: checksum mismatch, truncated cloud upload, silently corrupted backup disk",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-88",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 688,
+   "title": "Identifiers as text end to end: IMEI, phone, receipt/ticket numbers, ids above 2^53, dates",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DAT-89",
+   "domain": "DAT",
+   "section": "DAT",
+   "line": 689,
+   "title": "Gap finder: a \"what could be missing?\" report",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RPT-01",
+   "domain": "RPT",
+   "section": "RPT",
+   "line": 694,
+   "title": "Sales by day/product/cashier/tender/category all sum to the same grand total",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RPT-03",
+   "domain": "RPT",
+   "section": "RPT",
+   "line": 695,
+   "title": "Profit report with refunds, trade-in cost basis, repair labor/parts, discounts",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RPT-04",
+   "domain": "RPT",
+   "section": "RPT",
+   "line": 696,
+   "title": "Period filter boundaries (23:59:59/00:00:00, timezone, business day)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RPT-05",
+   "domain": "RPT",
+   "section": "RPT",
+   "line": 697,
+   "title": "Export (PDF/CSV/XLSX) equals screen; huge export (100k rows)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RPT-06",
+   "domain": "RPT",
+   "section": "RPT",
+   "line": 698,
+   "title": "Report while sync in progress / during sales",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RPT-07",
+   "domain": "RPT",
+   "section": "RPT",
+   "line": 699,
+   "title": "Customer statement (credit account, loyalty, repairs)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RPT-08",
+   "domain": "RPT",
+   "section": "RPT",
+   "line": 700,
+   "title": "Dashboard KPIs vs raw ledger",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RPT-09",
+   "domain": "RPT",
+   "section": "RPT",
+   "line": 701,
+   "title": "Sales/refunds per cashier equal the sum of documents bearing that cashier id; rename/merge/disable cashier",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RPT-10",
+   "domain": "RPT",
+   "section": "RPT",
+   "line": 702,
+   "title": "Drawer-session report: variance by cashier/drawer/device, handovers, force-closes",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RPT-11",
+   "domain": "RPT",
+   "section": "RPT",
+   "line": 703,
+   "title": "Warranty/inspection report and claim cost vs revenue",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RPT-12",
+   "domain": "RPT",
+   "section": "RPT",
+   "line": 704,
+   "title": "Same report on desktop and on mobile",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "RPT-13",
+   "domain": "RPT",
+   "section": "RPT",
+   "line": 705,
+   "title": "Customer segments (VIP, inactive, debtors) at 1 M rows",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRM-01",
+   "domain": "CRM",
+   "section": "CRM",
+   "line": 710,
+   "title": "Duplicate customers (same phone, different spelling), merge",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRM-02",
+   "domain": "CRM",
+   "section": "CRM",
+   "line": 711,
+   "title": "Phone number formats (+213, 0xx, spaces) normalization",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRM-03",
+   "domain": "CRM",
+   "section": "CRM",
+   "line": 712,
+   "title": "Customer deletion/GDPR-like erase vs legal retention of invoices",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRM-04",
+   "domain": "CRM",
+   "section": "CRM",
+   "line": 713,
+   "title": "Credit limit, aging, repayment allocation to oldest invoice first; overpay → credit",
+   "priority": "P1",
+   "conditionalP0": true,
+   "retired": false
+  },
+  {
+   "id": "CRM-05",
+   "domain": "CRM",
+   "section": "CRM",
+   "line": 714,
+   "title": "Blacklisted customer (fraud) blocked from trade-in/credit",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRM-06",
+   "domain": "CRM",
+   "section": "CRM",
+   "line": 715,
+   "title": "One phone shared by several customers (family)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRM-07",
+   "domain": "CRM",
+   "section": "CRM",
+   "line": 716,
+   "title": "Walk-in sale later given a phone/name matching an existing customer",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRM-08",
+   "domain": "CRM",
+   "section": "CRM",
+   "line": 717,
+   "title": "Customer merged on device A while device B adds a sale/repair/inspection to the merged-away customer",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRM-09",
+   "domain": "CRM",
+   "section": "CRM",
+   "line": 718,
+   "title": "Role-based customer visibility (cashier vs manager vs inspector): debts, ID numbers, notes",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRM-10",
+   "domain": "CRM",
+   "section": "CRM",
+   "line": 719,
+   "title": "Customer attachments (ID photo, signed contract)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRM-11",
+   "domain": "CRM",
+   "section": "CRM",
+   "line": 720,
+   "title": "Customer note/tag fields with Arabic/emoji/long text; free-text search in notes",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "CRM-12",
+   "domain": "CRM",
+   "section": "CRM",
+   "line": 721,
+   "title": "Customer created offline on 3 devices with the same phone, then sync",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PRF-01",
+   "domain": "PRF",
+   "section": "PRF",
+   "line": 726,
+   "title": "Add-to-cart latency with 100k products; search-as-you-type",
+   "priority": "P2",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PRF-02",
+   "domain": "PRF",
+   "section": "PRF",
+   "line": 727,
+   "title": "8-hour and 72-hour sessions: memory, handles, WebView leaks, DB size, log size",
+   "priority": "P2",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PRF-03",
+   "domain": "PRF",
+   "section": "PRF",
+   "line": 728,
+   "title": "Low-spec machine (2 GB RAM / old CPU) with throttling",
+   "priority": "P2",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PRF-04",
+   "domain": "PRF",
+   "section": "PRF",
+   "line": 729,
+   "title": "Low-end phone: 100 k customers scrolling, search and photo capture together",
+   "priority": "P2",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PRF-05",
+   "domain": "PRF",
+   "section": "PRF",
+   "line": 730,
+   "title": "Startup/restore time with 1 M customers on desktop and on mobile",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "PRF-06",
+   "domain": "PRF",
+   "section": "PRF",
+   "line": 731,
+   "title": "Sync of 1 M customer changes and of 5,000 sales at once on mobile data",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "HW-01",
+   "domain": "HW",
+   "section": "PRF",
+   "line": 732,
+   "title": "Barcode scanner: USB HID wedge vs serial; scan during modal; scan with trailing Enter vs Tab",
+   "priority": "P2",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "HW-02",
+   "domain": "HW",
+   "section": "PRF",
+   "line": 733,
+   "title": "Customer display / second screen [if any] shows same totals",
+   "priority": "P2",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "HW-03",
+   "domain": "HW",
+   "section": "PRF",
+   "line": 734,
+   "title": "Scale integration [if any]: unstable weight, zero, negative, unit g/kg",
+   "priority": "P2",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "HW-04",
+   "domain": "HW",
+   "section": "PRF",
+   "line": 735,
+   "title": "Hot-plug printer/scanner/drawer during a sale",
+   "priority": "P2",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "HW-05",
+   "domain": "HW",
+   "section": "PRF",
+   "line": 736,
+   "title": "Touch vs mouse vs keyboard-only operation; high-DPI; window resize/minimize/multi-monitor",
+   "priority": "P2",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "HW-06",
+   "domain": "HW",
+   "section": "PRF",
+   "line": 737,
+   "title": "Android USB-OTG/Bluetooth receipt and label printers; paired-device list changes",
+   "priority": "P2",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "HW-07",
+   "domain": "HW",
+   "section": "PRF",
+   "line": 738,
+   "title": "Phone camera as barcode scanner vs dedicated scanner: speed, double reads, torch, permission",
+   "priority": "P2",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "HW-08",
+   "domain": "HW",
+   "section": "PRF",
+   "line": 739,
+   "title": "Physical cash drawer attached to the desktop only; mobile asks the desktop to kick",
+   "priority": "P2",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-01",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 750,
+   "title": "Search-as-you-type by name and by phone at every fixture size",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-02",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 751,
+   "title": "`LIKE '%abc%'` / contains-search / phone-suffix search (\"last 4 digits\")",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-03",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 752,
+   "title": "Customer list pagination: page 1 vs page 20,000; rows inserted/deleted by another device while scrolling",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-04",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 753,
+   "title": "Virtualized list: scroll to the end, jump with scrollbar, select a row after fast scroll, keyboard Page-Down/End",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-05",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 754,
+   "title": "Total count display / \"N customers\" while typing",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-06",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 755,
+   "title": "Pathological queries: empty, 1 char (`م`, `a`, `0`), only spaces, `%`, `_`, `'`, `\\`, 5,000-char paste, query matching 50 k rows",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-07",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 756,
+   "title": "Create customer with same phone on two terminals at once at 1 M rows",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-08",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 757,
+   "title": "Bulk import 100 k customers (CSV, Arabic, bad rows, duplicates)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-09",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 758,
+   "title": "Bulk duplicate merge (10 k pairs)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-10",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 759,
+   "title": "Index health: every hot query has an index; indexes survive each migration; `ANALYZE`/`PRAGMA optimize` after bulk loads",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-11",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 760,
+   "title": "Customer detail screen for a customer with 5,000 sales / 300 repairs / 2,000 loyalty rows",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-12",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 761,
+   "title": "Customer picker inside sale / payment / trade-in / repair / warranty dialogs at 1 M rows",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-13",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 762,
+   "title": "Cold start and warm start with the 1 M DB; low-spec PC",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-14",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 763,
+   "title": "Long read (customer export, big report) while sales are committed",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-15",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 764,
+   "title": "DB growth: file size, free pages, `VACUUM`/auto-vacuum, page cache; backup/restore time at 1 M customers + 5 M lines",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-16",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 765,
+   "title": "New device bootstrap (new tablet/phone/PC joins sync) with 1 M customers + 2 M IMEIs",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-17",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 766,
+   "title": "A migration rewriting every customer row (e.g. phone normalization) on a replicated table",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-18",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 767,
+   "title": "Collation/sort: custom Arabic/French collation on 1 M rows; collation registered on every connection",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-19",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 768,
+   "title": "Export 1 M customers (CSV/XLSX); cancel midway; low RAM",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-20",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 769,
+   "title": "Aggregate screens: \"top customers\", \"customers with debt\", \"inactive 12 months\", loyalty leaderboard",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-21",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 770,
+   "title": "Erase/anonymize one customer in the 1 M DB",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-22",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 771,
+   "title": "Growth curve for other big tables: products 100 k, sale lines 5 M, IMEI table 2 M, audit 10 M, outbox 50 k",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-23",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 772,
+   "title": "IPC payload size: backend returns 100 k rows to the webview",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-24",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 773,
+   "title": "Reports on 1 M customers / 5 M sales (monthly, by customer, by cashier)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-25",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 774,
+   "title": "Search ranking at 100 k: exact phone first → exact name → prefix → fuzzy; transliteration variants",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-26",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 775,
+   "title": "Hot-row problem: the walk-in customer (or any customer) with a counter column (`total_spent`, `points`) updated on every sale",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-27",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 776,
+   "title": "Denormalized customer counters (`total_spent`, `visits`, `points_balance`, `last_visit`) after refunds, merges, imports, crash",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-28",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 777,
+   "title": "Customer table contains many soft-deleted/anonymized rows",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-29",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 778,
+   "title": "Sales history screen with filters (date range, receipt no., customer, cashier, tender, IMEI, amount) at 100 k / 1 M / 5 M sales",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-30",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 779,
+   "title": "Find one old sale for a refund/warranty claim by receipt no., QR/barcode scan, IMEI, phone, amount + date at 5 M sales",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-31",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 780,
+   "title": "Receipt-number input robustness: spaces, Arabic-Indic digits, leading zeros, lower/upper case, device prefix, pasted with line break",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-32",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 781,
+   "title": "Period reports (day / month / year / by cashier / by product / by tender) at 5 M sales and 10 M lines; late refund posted today against a closed month",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-33",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 782,
+   "title": "Product search by name, barcode, SKU, model, Arabic with/without diacritics at 100 k–500 k products; barcode scanned while typing",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-34",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 783,
+   "title": "Product images/attachments",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-35",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 784,
+   "title": "Variant explosion: 50 k products × 10 variants (color/storage), stock per variant per location",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-36",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 785,
+   "title": "Stock on hand from 10 M stock movements; a best-seller with 100 k movements; per-product history screen",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-37",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 786,
+   "title": "IMEI table with 2 M rows: lookup, state change, per-IMEI event history, duplicate-insert race",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-38",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 787,
+   "title": "Checkout commit time on the 1 M-sale DB with a 200-line cart",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-39",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 788,
+   "title": "FTS index maintenance: bulk update of 100 k product names/prices, crash during update, product deleted/merged",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-40",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 789,
+   "title": "Write amplification: each extra index slows inserts — commit latency and import throughput vs number of indexes",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-41",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 790,
+   "title": "Audit log with 10 M rows and hash chain: append latency, verify time, export, reading the last N entries",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-42",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 791,
+   "title": "Audit chain under concurrent writers/devices (20 writes/s)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-43",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 792,
+   "title": "Archiving old sales (e.g. older than 2 years) to an archive file/table",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-44",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 793,
+   "title": "Slow or cold storage: 5400 rpm HDD, SD card on Android, first query after reboot, small page cache",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-45",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 794,
+   "title": "Disk space preflight before VACUUM, backup, migration, export, import, sync bootstrap",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-46",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 795,
+   "title": "Cancelling a search/report/export and the connection pool under load",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-47",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 796,
+   "title": "Heavy query while the UI is used (Rust async runtime blocked, huge JSON serialized to the webview)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-48",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 797,
+   "title": "Document-number counters at scale and across devices (receipt, invoice, ticket)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-49",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 798,
+   "title": "Query-planner statistics and skew: no `sqlite_stat1`, stale stats after a 1 M import, 90 % of sales on the walk-in customer",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-50",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 799,
+   "title": "Very large `IN (...)` lists (40 k sale ids for a report/refund batch)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-51",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 800,
+   "title": "`ORDER BY` on a non-indexed column over 1 M rows (e.g. customers by total spent, products by margin)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-52",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 801,
+   "title": "Date filters: UTC-stored timestamps vs shop business day, \"today/this month\" screens, functions applied to the indexed column",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-53",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 802,
+   "title": "JSON/blob columns filtered in `WHERE` on hot paths",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-54",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 803,
+   "title": "Dashboard KPIs and counts opened repeatedly",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-55",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 804,
+   "title": "3-year projection fixture `scale-3y`: owner's sales/day × 365 × 3, lines/sale, products, IMEIs, customers added per month",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-56",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 805,
+   "title": "Mobile keeps only a recent window of history (e.g. last N months) and queries older data on demand",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-57",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 806,
+   "title": "Large IDs and totals crossing IPC/JSON to the webview: 64-bit ids, sums near 2^53 minor units, ULIDs",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-58",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 807,
+   "title": "Burst ingest: 5,000 offline sales arriving at once from sync or import",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-59",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 808,
+   "title": "Storage usage page and alerts: DB size, WAL size, attachments, free disk, growth per month",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-60",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 809,
+   "title": "Price history: 100 k products with many price changes; \"current price\" lookups and price-at-date queries",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-61",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 810,
+   "title": "Search normalization pipeline at 1 M: NFC vs NFD accents, Arabic presentation forms, tatweel, harakat, alef/yeh/teh-marbuta variants, Persian yeh/kaf (ی ک) vs Arabic (ي ك), digits — remembering that SQLite `LIKE`, `lower()` and `upper()` fold only ASCII by default",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-62",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 811,
+   "title": "FTS5 behaviour for names and phones: tokenizer choice (`unicode61` vs `trigram`, trigram needs SQLite ≥ 3.34), 1–2 character queries, Arabic marks, hyphens, `+213…`, and user text such as `Ben-Ali`, `C++`, `a:b`, quotes, `AND`/`OR`/`NOT`",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-63",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 812,
+   "title": "Searching encrypted fields: if ID-card numbers or phones are encrypted at rest, equality search and uniqueness need a keyed-hash (blind index) column",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-64",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 813,
+   "title": "Duplicate-detection job at 1 M customers",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-65",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 814,
+   "title": "Nightly jobs over 1 M customers: points expiry, tier recalculation, segment refresh",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-66",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 815,
+   "title": "Bulk SMS/WhatsApp campaign to 100 k customers [if exists]",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-67",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 816,
+   "title": "Import into a non-empty 1 M customer table (CSV whose phones already exist)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-68",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 817,
+   "title": "Bulk anonymize/erase of inactive customers (retention policy, 100 k at once)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-69",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 818,
+   "title": "The walk-in customer holding ~4.5 M sales",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-70",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 819,
+   "title": "Primary-key choice at scale: random UUIDv4/TEXT keys vs time-ordered ULID/UUIDv7 vs integers on the big tables (customers, sales, lines, movements, audit)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-71",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 820,
+   "title": "Catalog filters at 500 k products: category + brand + in-stock + price range + sort by name; category tree (recursive query depth); moving a category that holds 20 k products",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-72",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 821,
+   "title": "Barcode namespace collisions at 500 k products + 2 M IMEIs: EAN-13, internal codes, product aliases/multiple barcodes, 15-digit IMEIs, ticket and receipt numbers",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-73",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 822,
+   "title": "Full stocktake at 100 k SKUs (counts from 3 devices, partial counts, variances)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-74",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 823,
+   "title": "Reorder alerts and low-stock lists at 500 k SKUs",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-75",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 824,
+   "title": "Bulk price/cost change on 100 k products (supplier price list)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-76",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 825,
+   "title": "Accumulating transient data: 50 k parked carts, drafts, expired IMEI reservations, outbox rows",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-77",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 826,
+   "title": "`VACUUM`, table rebuilds and stored rowids: FTS external-content tables, sync/outbox cursors or any pointer saved as a bare rowid",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-78",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 827,
+   "title": "Column typing: SQLite is dynamically typed — a non-`STRICT` `INTEGER` column can hold text; audit `typeof()` on every money, quantity, id, date and IMEI column, also after CSV import and sync apply",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-79",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 828,
+   "title": "SQLite/libSQL feature and version matrix per platform (Windows desktop, Android, iOS) and per bundled build",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-80",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 829,
+   "title": "Scale pragmas and page settings (distinct from the durability pragmas of DAT-20): `page_size` (chosen when the DB is created; in WAL mode `VACUUM` cannot change it), `cache_size`, `mmap_size`, `temp_store`, `wal_autocheckpoint`, `journal_size_limit`, `PRAGMA optimize`/`analysis_limit`",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-81",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 830,
+   "title": "Where the space goes: per-table and per-index size (`dbstat` if compiled in, otherwise `sqlite3_analyzer`), free pages, FTS shadow tables, audit/outbox share",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-82",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 831,
+   "title": "`integrity_check` / `quick_check` / `foreign_key_check` duration on a 5–10 GB database",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-83",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 832,
+   "title": "Startup after a crash with a very large `-wal` (hundreds of MB to GB), and one giant write transaction",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-84",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 833,
+   "title": "Archive across attached databases in WAL mode (move old sales to `archive-YYYY.db`, delete from main)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-85",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 834,
+   "title": "N+1 and statement-count budget: open sales history, customer detail, product list, checkout and the refund screen on the 5 M fixture",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-86",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 835,
+   "title": "Summary and derived tables (daily/product/cashier summaries, stock balances, customer counters)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-87",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 836,
+   "title": "Backend quota and cost at 3-year volume (Turso/libSQL plan): database size, rows written/read, sync traffic, number of databases/tenants",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-88",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 837,
+   "title": "Wide-row hygiene: notes, JSON, attachment metadata and long descriptions on `customers`, `products`, `sales`",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "SCL-89",
+   "domain": "SCL",
+   "section": "SCL",
+   "line": 838,
+   "title": "Rebuild commands (FTS, stock balances, customer counters, summaries, planner statistics) on a 5 M DB",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-01",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 845,
+   "title": "Cashier A logs in with PIN on desktop and opens the drawer (float 50,000.00 DA)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-02",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 846,
+   "title": "Desktop closes the drawer (counted cash entered)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-03",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 847,
+   "title": "Open and close initiated from mobile",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-04",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 848,
+   "title": "Desktop and mobile press Open on the same drawer at the same instant (and again with a 2-device offline→online race)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-05",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 849,
+   "title": "Desktop and mobile press Close at the same instant with different counted amounts",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-06",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 850,
+   "title": "Drawer closed on desktop while mobile is offline and still shows open; mobile sells during that time",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-07",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 851,
+   "title": "Mobile offline/stale when desktop opens; mobile user tries to open its own",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-08",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 852,
+   "title": "Mobile app backgrounded or killed while desktop opens/closes; user returns",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-09",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 853,
+   "title": "State events arrive duplicated, delayed, out of order, or dropped (open event after close event)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-10",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 854,
+   "title": "Realtime channel down (WebSocket/SSE drop, captive portal, backend 429/500, push unavailable)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-11",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 855,
+   "title": "Mobile or desktop clock skewed ±5 min / ±1 day",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-12",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 856,
+   "title": "Cashier A opened the drawer; cashier B logs in with PIN on the same desktop",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-13",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 857,
+   "title": "A on desktop and B on mobile each hold their own open drawer; also A tries to open a second one on mobile",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-14",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 858,
+   "title": "Logout, auto-lock, PIN user-switch, app restart while drawer is open",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-15",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 859,
+   "title": "Manager force-closes a cashier's forgotten drawer from mobile or desktop",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-16",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 860,
+   "title": "Opening float: Arabic digits, 0, huge, negative, edit after open",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-17",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 861,
+   "title": "Physical cash-drawer kick vs session state: sale on mobile with no drawer attached; \"no sale\" kick; kick spam; kick on card-only",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-18",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 862,
+   "title": "Mobile shows live drawer totals while desktop sells (cash sales, refunds, payouts, expected cash)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-19",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 863,
+   "title": "Cash sale taken on mobile (no physical drawer)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-20",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 864,
+   "title": "Backend restarted, restored from an older backup, or a device restored an old DB while the drawer was open",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-21",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 865,
+   "title": "Several drawers/registers (desktop 1, desktop 2, mobile till); rename; remove a device",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-22",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 866,
+   "title": "Drawer left open for days / across business-day change / > 24 h",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-23",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 867,
+   "title": "Close barrier: another device still has unsynced/parked sales, unfinished payment or pending print when desktop closes",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-24",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 868,
+   "title": "Z-report after close printed on desktop, viewed on mobile, reprinted from mobile",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-25",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 869,
+   "title": "Audit of drawer events (open, close, force-close, handover, reopen, failed attempts)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-26",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 870,
+   "title": "Phone lost or user disabled while that phone holds the open drawer",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-27",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 871,
+   "title": "Mistaken close; reopen within N minutes",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-28",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 872,
+   "title": "Counting cash by denominations on mobile vs desktop, Arabic digits, small screens",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-29",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 873,
+   "title": "Two devices change the same drawer's metadata (note, float correction) at once",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "DRW-30",
+   "domain": "DRW",
+   "section": "DRW",
+   "line": 874,
+   "title": "Open a drawer while a gateway approval from the previous drawer is still pending",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-01",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 881,
+   "title": "PIN login → header shows user → open drawer → sale → receipt",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-02",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 882,
+   "title": "Two cashiers with the same display name (\"Mohamed\")",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-03",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 883,
+   "title": "Cashier renamed after sales",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-04",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 884,
+   "title": "Cashier disabled/deleted after sales",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-05",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 885,
+   "title": "PIN uniqueness: creating a PIN already used by another user",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-06",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 886,
+   "title": "A logs out and B logs in with a cart open; or B takes over A's cart",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-07",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 887,
+   "title": "Cashier names in Arabic, French, mixed, very long, diacritics, emoji, RTL marks on 58 mm and 80 mm receipts",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-08",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 888,
+   "title": "Reprint by another cashier; refund receipt; exchange",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-09",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 889,
+   "title": "Manager step-up approves a cashier's refund/discount",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-10",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 890,
+   "title": "Auto-lock then a different PIN is typed",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-11",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 891,
+   "title": "Wrong PIN ×N on desktop then immediately on mobile",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-12",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 892,
+   "title": "PIN changed or user disabled on desktop; mobile (online and offline)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-13",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 893,
+   "title": "PIN storage on mobile",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-14",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 894,
+   "title": "Who may open/close/force-close/hand over a drawer, per role",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-15",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 895,
+   "title": "Same cashier on desktop and mobile",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-16",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 896,
+   "title": "Client tries to send another `user_id`, `drawer_id` or `device_id` in a request (forged IPC/API)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-17",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 897,
+   "title": "Sale created offline on mobile by a user disabled meanwhile",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-18",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 898,
+   "title": "Cashier name on Z-report, handover sheet, trade-in contract, repair slip, warranty certificate, refund slip",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-19",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 899,
+   "title": "Commission/targets/refund counts per cashier; refund attributed to original seller vs processor",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-20",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 900,
+   "title": "Switch user fast (A → B → A) 50 times with sales in between",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-21",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 901,
+   "title": "Session on a device removed from the shop (revoked)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "IDN-22",
+   "domain": "IDN",
+   "section": "IDN",
+   "line": 902,
+   "title": "Display-name edge cases: leading/trailing spaces, duplicate after trim, name with only RTL marks",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-01",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 909,
+   "title": "Lookup by IMEI: sold by us / never sold / in stock / in repair / returned / sold twice",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-02",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 910,
+   "title": "IMEI input: 15 digits with Luhn, 14 digits, 16-digit IMEISV, MEID, spaces/dashes/slashes, Arabic-Indic digits, leading zeros, scanner suffix, dual-IMEI phones (either IMEI)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-03",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 911,
+   "title": "Warranty period boundaries: sold 23:59 vs 00:01; 12 months vs 365 days; sold 31 Jan + 1 month; 29 Feb; DST-less timezone vs UTC storage",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-04",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 912,
+   "title": "Warranty start event: sale date vs delivery vs activation vs \"repair completed\"",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-05",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 913,
+   "title": "Sale refunded/returned, then the device resold",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-06",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 914,
+   "title": "Trade-in device refurbished and resold; open-box/as-is items",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-07",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 915,
+   "title": "Extended/paid warranty plan: sold with the phone, sold later, refunded, overlapping plans",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-08",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 916,
+   "title": "Inspection checklist: physical damage, liquid-contact indicator, broken seals, screen cracks, unauthorized repair, rooted/jailbroken, battery-health threshold, locked account",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-09",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 917,
+   "title": "Manager overrides the inspector's decision; customer disputes; second inspection",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-10",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 918,
+   "title": "Claim limits: max claims per period, repeat claim for the same defect, claim exactly at expiry second, claim on a different component",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-11",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 919,
+   "title": "Approved claim creates a repair ticket linked to the original sale",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-12",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 920,
+   "title": "Replacement (DOA) under warranty: IMEI A returned to supplier/scrapped, IMEI B issued",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-13",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 921,
+   "title": "Device presented has a different IMEI than the sale (swapped, counterfeit, board swap, box vs device mismatch)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-14",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 922,
+   "title": "IMEI blacklist check at claim intake: clean / blacklisted / service down / timeout (mocked)",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-15",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 923,
+   "title": "No receipt: lookup by IMEI + customer phone/ID",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-16",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 924,
+   "title": "Inspector permissions",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-17",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 925,
+   "title": "Inspection photos on mobile: 5–10 MB each, 10 per inspection, offline, low storage, upload fails midway",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-18",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 926,
+   "title": "Inspection started on mobile, finished on desktop (and reverse); same inspection edited on both",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-19",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 927,
+   "title": "Inspector offline: lookup from local data; sale refunded or warranty voided on desktop meanwhile",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-20",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 928,
+   "title": "Warranty certificate/label: ar/fr, IMEI barcode, period, terms, shop identity, cashier/inspector name, QR",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-21",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 929,
+   "title": "Verification endpoint/QR for third parties [if exists]: IMEI enumeration, rate limits",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-22",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 930,
+   "title": "Warranty reports: expiring in 30 days, claims by model/supplier, warranty cost vs revenue",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-23",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 931,
+   "title": "Retention/purge job",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-24",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 932,
+   "title": "Dual-SIM phone: two IMEIs, one device; claim scanned with IMEI 2",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-25",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 933,
+   "title": "Accessories with their own warranty (charger, battery, screen)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-26",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 934,
+   "title": "2 M IMEIs: exact lookup, partial (last 6 digits) lookup",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-27",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 935,
+   "title": "Manufacturer coverage lookup [if used]: down, timeout, rate-limited, wrong region, cached result age",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-28",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 936,
+   "title": "Inspector decisions and photos in ar/fr/en; free-text notes with emoji, RTL, 5,000 chars",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-29",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 937,
+   "title": "Claim on a sale made by a now-disabled cashier or at another drawer/shop",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "WAR-30",
+   "domain": "WAR",
+   "section": "WAR",
+   "line": 938,
+   "title": "Concurrent claims for the same IMEI from two devices",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-01",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 945,
+   "title": "Same 10,000 random baskets computed by the desktop build and the mobile build",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-02",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 946,
+   "title": "App sent to background mid-sale, mid-payment, mid-print; return after 1 s / 5 min / 2 h",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-03",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 947,
+   "title": "OS kills the app (low memory, \"don't keep activities\", swipe-away) at random points",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-04",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 948,
+   "title": "Doze, battery saver, OEM background killers (Xiaomi/Huawei/Samsung \"sleeping apps\"), no Google services",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-05",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 949,
+   "title": "Network changes: Wi-Fi ↔ 4G ↔ none, captive portal, VPN, IPv6-only, shop router reboot; throttled to 2G/3G, 30 % packet loss, 5 s latency",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-06",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 950,
+   "title": "How the phone learns about changes: WebSocket, SSE, FCM push, polling",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-07",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 951,
+   "title": "User changes phone clock/timezone, disables automatic time, roams/VPN",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-08",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 952,
+   "title": "Phone storage full / photo storage full / DB write fails",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-09",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 953,
+   "title": "App update gap (desktop newer than mobile), forced-update gate; uninstall/reinstall; Android Auto Backup restoring an old DB onto a new phone",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-10",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 954,
+   "title": "Lost/stolen phone",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-11",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 955,
+   "title": "Layout: orientation change mid-entry, soft keyboard covering totals/pay button, font scale 200 %, 5-inch screens, notch/safe areas, RTL, tablet split view",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-12",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 956,
+   "title": "Camera scanning: IMEI barcode on box (several codes: IMEI1, IMEI2, serial, EID), EAN-13, QR; low light, glare, damaged label, permission denied/revoked mid-session",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-13",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 957,
+   "title": "Bluetooth printer: pairing lost, several paired, Android 12+ Bluetooth permissions, print while backgrounded, disconnect mid-receipt",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-14",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 958,
+   "title": "Outbox: 5,000 unsynced items, ordering, idempotency keys, app update/kill during upload",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-15",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 959,
+   "title": "Desktop changes data the mobile is currently showing: product price, customer name, stock, loyalty balance, promotion",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-16",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 960,
+   "title": "Concurrent writes: UI save + background sync worker + push handler hit the DB",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-17",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 961,
+   "title": "Session on phone: remember login, auto-lock, biometric/PIN re-entry, screenshots/screen recording of PII (secure flag), clipboard",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-18",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 962,
+   "title": "8-hour shift on a mid-range phone: memory, WebSocket keep-alive, wakelocks, battery drain, thermal throttling",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-19",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 963,
+   "title": "Mobile data use: first sync, photo uploads, metered connection",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-20",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 964,
+   "title": "Offline receipt/ticket/inspection numbers on mobile",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-21",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 965,
+   "title": "Low-end device (2 GB RAM, Android Go) with 100 k+ customers/products",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-22",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 966,
+   "title": "Permissions denied (camera, Bluetooth, notifications, storage): each independently",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-23",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 967,
+   "title": "Hardware scanner paired to the phone (BT HID keyboard wedge) vs on-screen keyboard (IME)",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-24",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 968,
+   "title": "Install/upgrade path: fresh install, upgrade over old version with unsynced data, schema migration on phone, downgrade attempt",
+   "priority": "P0",
+   "conditionalP0": false,
+   "retired": false
+  },
+  {
+   "id": "MOB-25",
+   "domain": "MOB",
+   "section": "MOB",
+   "line": 969,
+   "title": "iOS (if shipped): background limits (no long background tasks), push permission, Keychain, App Switcher snapshot",
+   "priority": "P1",
+   "conditionalP0": false,
+   "retired": false
+  }
+ ],
+ "gInvariants": [
+  {
+   "id": "G-01",
+   "text": "Ledger balance: Σ finalized sale totals − Σ refunds = Σ net tender movements (per tender type)."
+  },
+  {
+   "id": "G-02",
+   "text": "Cash drawer: expected cash = opening float + cash sales − cash refunds − payouts (incl. trade-in payouts, supplier cash) ± drops/pickups."
+  },
+  {
+   "id": "G-03",
+   "text": "Totals: per document Σ line totals − discounts = document total exactly; Σ document totals = report totals."
+  },
+  {
+   "id": "G-04",
+   "text": "Stock: opening + purchases − sold + returned (restocked) ± adjustments = on-hand, per product and per serial/IMEI; no negative stock unless oversell is allowed by rule."
+  },
+  {
+   "id": "G-05",
+   "text": "Serial uniqueness: each IMEI/serial exists in exactly one place/state (in stock, sold, in repair, with customer, returned to supplier)."
+  },
+  {
+   "id": "G-06",
+   "text": "Numbering: receipt/invoice/ticket numbers unique; sequence per rule (gapless or gaps logged)."
+  },
+  {
+   "id": "G-07",
+   "text": "Loyalty: balance = Σ earned − Σ redeemed − Σ reversed − Σ expired (≥ 0 unless the owner allows negative); no points from voided/refunded sales survive."
+  },
+  {
+   "id": "G-08",
+   "text": "Audit: every money/stock/loyalty/role mutation has an audit entry; hash chain verifies; entries immutable."
+  },
+  {
+   "id": "G-09",
+   "text": "Idempotency: replaying any request with the same idempotency key creates no second effect."
+  },
+  {
+   "id": "G-10",
+   "text": "Atomicity: after crash/kill at any point, each business transaction is fully present or fully absent (sale+lines+payments+stock+loyalty+audit together)."
+  },
+  {
+   "id": "G-11",
+   "text": "Three-way equality: UI value = stored value = printed/exported value = oracle value (integer minor units)."
+  },
+  {
+   "id": "G-12",
+   "text": "Sync convergence: after all devices sync and settle, every device has identical ledger totals and identical row sets for money tables."
+  },
+  {
+   "id": "G-13",
+   "text": "Referential integrity: `PRAGMA foreign_key_check` empty; `PRAGMA integrity_check` = ok."
+  },
+  {
+   "id": "G-14",
+   "text": "No float money: no non-integer value ever stored or computed for money/qty-in-milli."
+  },
+  {
+   "id": "G-15",
+   "text": "Permissions: no action succeeds for a role that must not have it (checked via attempted-forbidden actions in the random walk)."
+  },
+  {
+   "id": "G-16",
+   "text": "Resource budget: memory/handle/DB-size growth stays within budget; p95 latency not degrading > 2× from baseline."
+  },
+  {
+   "id": "G-17",
+   "text": "One open drawer session per drawer: at most one `open` session per drawer id across all devices; every open/close carries a monotonic version; opened-by user, float and times are identical on every device once settled."
+  },
+  {
+   "id": "G-18",
+   "text": "Cross-device freshness: drawer/shift/ticket status shown on any device equals the server state within the configured SLA while online; when it cannot be verified (offline or stale beyond a threshold) the UI says \"unknown, last synced HH:MM\" and blocks actions that need fresh state."
+  },
+  {
+   "id": "G-19",
+   "text": "Attribution: every document (sale, refund, payout, trade-in, ticket, inspection, drawer event) stores `user_id` + display-name snapshot + device + drawer taken from the authenticated session, never from client-supplied fields; the name printed/exported equals the stored snapshot."
+  },
+  {
+   "id": "G-20",
+   "text": "Session integrity: no mutation is accepted without a valid session; after logout, lock, user switch or disable, the next mutation is rejected or re-authenticated; an open cart never silently changes owner."
+  },
+  {
+   "id": "G-21",
+   "text": "Warranty: each active warranty is bound to exactly one device (all IMEIs of a dual-SIM phone) and one source document; eligibility = f(stored dates, policy stored at sale time, current claim count); claims never exceed the policy."
+  },
+  {
+   "id": "G-22",
+   "text": "Query-plan guard: every hot query (search, list page, lookup by IMEI/phone/ticket) uses an index (`EXPLAIN QUERY PLAN` shows no `SCAN` of a big table) and its latency stays within tolerance across the 1 k / 100 k / 1 M fixtures."
+  },
+  {
+   "id": "G-23",
+   "text": "Customer identity: the normalized phone is unique among active customers (or the duplicate is flagged); a merge leaves a `merged_into` redirect so late-arriving rows from other devices still land on the survivor."
+  },
+  {
+   "id": "G-24",
+   "text": "Outbox: every locally created, unsynced record sits in a persisted outbox with an idempotency key; the count is visible to the user; nothing is discarded from a device (logout, update, uninstall prompt) until the backend acknowledges it."
+  },
+  {
+   "id": "G-25",
+   "text": "Platform parity: the same inputs give identical money results, names and statuses on desktop and mobile builds (integer minor units)."
+  },
+  {
+   "id": "G-26",
+   "text": "Blob/reference integrity: every photo/scan reference resolves to a stored file or is explicitly \"pending upload\"; no orphan files or dangling references after settle."
+  },
+  {
+   "id": "G-27",
+   "text": "Acknowledged = durable: any sale, refund, payout or drawer event the user was told succeeded (screen confirmation, printed slip, cash out, card approval) survives `kill -9` and power loss, or the owner-accepted durability policy states exactly what can be lost."
+  },
+  {
+   "id": "G-28",
+   "text": "Recoverability: the newest backup restores into a DB that passes `integrity_check`, equals the source ledger totals at backup time and has a valid hash chain; backup age ≤ the owner's RPO; at least one copy is off the machine."
+  },
+  {
+   "id": "G-29",
+   "text": "Refund conservation: for every sale line Σ refunded qty ≤ sold qty and Σ refunded amount ≤ net paid share; for every tender Σ refunds ≤ amount paid with it; enforced in the database layer, not only in the UI."
+  },
+  {
+   "id": "G-30",
+   "text": "No destructive cascade: deleting or merging a customer/product/user/device never deletes or edits ledger rows (sales, lines, payments, refunds, stock moves, loyalty, audit); ledger rows are never rewritten or deleted except by the audited retention job."
+  },
+  {
+   "id": "G-31",
+   "text": "Scale budget: hot-path latency, DB size, WAL size and backup/restore time stay within owner-agreed budgets at the projected 3-year volume (customers, sales, lines, products, IMEIs, audit rows)."
+  },
+  {
+   "id": "G-32",
+   "text": "Account balance: per customer (credit sales, instalments, deposits, store credit) balance = Σ sales − Σ payments − Σ credit notes − Σ write-offs; a negative balance exists only as an explicit credit; equals the ledger oracle."
+  },
+  {
+   "id": "G-33",
+   "text": "Type discipline: money, quantity and counter columns hold integers; IMEI, phone, receipt/ticket numbers and ids hold TEXT; enforced by `STRICT` or `CHECK(typeof())`; a `typeof()` audit finds 0 violations after import, sync apply and migration."
+  },
+  {
+   "id": "G-34",
+   "text": "Derived data is rebuildable: every derived table or column (counters, stock balances, summaries, FTS, normalized search columns, refunded counters) can be rebuilt from ledger rows and equals the stored value."
+  },
+  {
+   "id": "G-35",
+   "text": "Destructive-change guard: an operation that deletes or overwrites more than N rows, or touches a ledger table, passes the guard (preview, restore point, step-up, audit) or fails; the same guard applies to sync-applied changes."
+  },
+  {
+   "id": "G-36",
+   "text": "Unique device identity: each live `device_id` appears once; ID and document-number ranges of different devices never overlap; a clone or restored image is detected and re-registered."
+  }
+ ]
+}

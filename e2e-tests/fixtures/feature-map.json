@@ -1,0 +1,266 @@
+{
+ "generatedAt": "2026-10-18T01:11:24.270Z",
+ "scannedFiles": 428,
+ "features": {
+  "loyalty points": {
+   "exists": true,
+   "evidence": [
+    "src/components/CartPanel.tsx:324",
+    "src/components/CustomerDisplayScreen.tsx:139",
+    "src/components/Header.tsx:776"
+   ]
+  },
+  "store credit / avoir client": {
+   "exists": true,
+   "evidence": [
+    "src/App.tsx:110",
+    "src/components/CartPanel.tsx:216",
+    "src/components/CustomerDisplayScreen.tsx:15"
+   ]
+  },
+  "voucher / bon achat": {
+   "exists": true,
+   "evidence": [
+    "src/App.tsx:111",
+    "src/components/CartPanel.tsx:321",
+    "src/components/CustomerDisplayScreen.tsx:16"
+   ]
+  },
+  "credit sales / debt": {
+   "exists": true,
+   "evidence": [
+    "src/components/modals/ShiftZReportModal.tsx:175",
+    "src/components/receipt/ZReportPaper.tsx:24",
+    "src/db/kredySql.ts:10"
+   ]
+  },
+  "repair module": {
+   "exists": true,
+   "evidence": [
+    "src/components/modals/DatabaseMaintenanceModal.tsx:54",
+    "src/utils/auditExport.ts:54",
+    "src/utils/mobileDocPrint.ts:408"
+   ]
+  },
+  "trade-in module": {
+   "exists": true,
+   "evidence": [
+    "src/App.tsx:109",
+    "src/components/CartPanel.tsx:10",
+    "src/components/CustomerDisplayScreen.tsx:14"
+   ]
+  },
+  "warranty inspector": {
+   "exists": true,
+   "evidence": [
+    "src/App.tsx:939",
+    "src/components/GlobalModalHost.tsx:37",
+    "src/components/Header.tsx:350"
+   ]
+  },
+  "label printing": {
+   "exists": true,
+   "evidence": [
+    "src/components/GlobalModalHost.tsx:15",
+    "src/components/mobile/tabs/ManagementTab.tsx:776",
+    "src/components/modals/LabelPrinterModal.tsx:36"
+   ]
+  },
+  "receipt printing": {
+   "exists": true,
+   "evidence": [
+    "src/api/hardware.ts:4",
+    "src/components/BottomBar.tsx:62",
+    "src/components/CommandPalette.tsx:77"
+   ]
+  },
+  "email receipt": {
+   "exists": true,
+   "evidence": [
+    "src/components/modals/CommandTicketDashboardModal.tsx:439",
+    "src/components/modals/PurchaseOrderA4Document.tsx:85",
+    "src/components/modals/PurchaseOrderModal.tsx:260"
+   ]
+  },
+  "SMS receipt": {
+   "exists": false,
+   "evidence": []
+  },
+  "cash rounding": {
+   "exists": true,
+   "evidence": [
+    "src/components/modals/ProductEditorModal.tsx:262",
+    "src/components/modals/ReportsModal.tsx:266",
+    "src/components/modals/SavRmaModal.tsx:15"
+   ]
+  },
+  "foreign currency": {
+   "exists": false,
+   "evidence": []
+  },
+  "card payment gateway (CIB/SATIM)": {
+   "exists": true,
+   "evidence": [
+    "src/App.tsx:629",
+    "src/components/mobile/tabs/MobileCheckoutTab.tsx:689",
+    "src/components/modals/PaymentModal.tsx:401"
+   ]
+  },
+  "mobile app (separate)": {
+   "exists": true,
+   "evidence": [
+    "src/components/CartPanel.tsx:583",
+    "src/components/mobile/CompanionShell.tsx:7",
+    "src/components/mobile/tabs/MobileCheckoutTab.tsx:50"
+   ]
+  },
+  "scale/weight input": {
+   "exists": true,
+   "evidence": [
+    "src/db/adapters/shiftAdapter.ts:51"
+   ]
+  },
+  "cash drawer hardware (kick)": {
+   "exists": true,
+   "evidence": [
+    "src/api/hardware.ts:9",
+    "src/components/Header.tsx:47",
+    "src/components/mobile/tabs/ManagementTab.tsx:61"
+   ]
+  },
+  "returns / refunds native kernel": {
+   "exists": true,
+   "evidence": [
+    "src/db/adapters/refundNative.ts:5",
+    "src/db/adapters/shiftSqlite.ts:94",
+    "src/db/sqlPluginAdapter.ts:280"
+   ]
+  },
+  "void sale": {
+   "exists": false,
+   "evidence": []
+  },
+  "held sales (park)": {
+   "exists": true,
+   "evidence": [
+    "src/components/BottomBar.tsx:59",
+    "src/components/CommandPalette.tsx:75",
+    "src/components/GlobalModalHost.tsx:7"
+   ]
+  },
+  "customer display": {
+   "exists": true,
+   "evidence": [
+    "src/App.tsx:35",
+    "src/components/CustomerDisplayScreen.tsx:22"
+   ]
+  },
+  "kitchen/printing multiple": {
+   "exists": false,
+   "evidence": []
+  },
+  "backup / restore": {
+   "exists": true,
+   "evidence": [
+    "src/components/modals/DatabaseMaintenanceModal.tsx:325",
+    "src/services/maintenanceService.ts:28",
+    "src-tauri/src/lib.rs:402"
+   ]
+  },
+  "audit log hash chain": {
+   "exists": true,
+   "evidence": [
+    "src/api/audit.ts:30",
+    "src/db/adapters/maintenanceAdapter.ts:97",
+    "src/db/adapters/operationsAdapter.ts:422"
+   ]
+  },
+  "sync outbox": {
+   "exists": true,
+   "evidence": [
+    "src/components/modals/settings/DiagnosticsSettingsTab.tsx:141",
+    "src/components/replenishment/ReplenishmentContainer.tsx:71",
+    "src/db/adapters/maintenanceAdapter.ts:531"
+   ]
+  },
+  "turso sync transport": {
+   "exists": true,
+   "evidence": [
+    "src/App.tsx:18",
+    "src/components/BottomBar.tsx:97",
+    "src/components/mobile/CompanionHeader.tsx:4"
+   ]
+  },
+  "purchase orders (PO)": {
+   "exists": true,
+   "evidence": [
+    "src/components/GlobalModalHost.tsx:24",
+    "src/components/Header.tsx:62",
+    "src/components/modals/CommandTicketDashboardModal.tsx:27"
+   ]
+  },
+  "IMEI / serialized stock": {
+   "exists": true,
+   "evidence": [
+    "src/components/CartPanel.tsx:227",
+    "src/components/CommandPalette.tsx:155",
+    "src/components/CustomerDisplayScreen.tsx:126"
+   ]
+  },
+  "G-33 type discipline (STRICT)": {
+   "exists": true,
+   "evidence": [
+    "src/api/pin.ts:75",
+    "src/components/CartPanel.tsx:1356",
+    "src/components/LockScreenOverlay.tsx:189"
+   ]
+  },
+  "FTS search": {
+   "exists": true,
+   "evidence": [
+    "src-tauri/src/db.rs:5",
+    "src-tauri/src/e2e.rs:126",
+    "src-tauri/src/lib.rs:1290"
+   ]
+  },
+  "sqlite-vec (vec0)": {
+   "exists": true,
+   "evidence": [
+    "src-tauri/src/db.rs:10",
+    "src-tauri/src/e2e.rs:74",
+    "src-tauri/src/lib.rs:1571"
+   ]
+  },
+  "i18n / RTL": {
+   "exists": true,
+   "evidence": [
+    "src/App.tsx:28",
+    "src/components/audit/AuditInspectionDrawer.tsx:438",
+    "src/components/audit/AuditRelativeTime.tsx:24"
+   ]
+  },
+  "theme light/dark": {
+   "exists": true,
+   "evidence": [
+    "src/components/audit/AuditSeverityChip.tsx:26",
+    "src/components/CommandPalette.tsx:72",
+    "src/components/Header.tsx:38"
+   ]
+  },
+  "manager PIN / roles": {
+   "exists": true,
+   "evidence": [
+    "src/App.tsx:234",
+    "src/components/modals/CustomersModal.tsx:2279",
+    "src/components/modals/RefundModal.tsx:542"
+   ]
+  },
+  "reports dashboard": {
+   "exists": true,
+   "evidence": [
+    "src/components/modals/ReportsModal.tsx:37",
+    "src/types/pos.ts:1279"
+   ]
+  }
+ }
+}
