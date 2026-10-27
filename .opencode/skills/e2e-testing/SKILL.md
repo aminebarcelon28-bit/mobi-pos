@@ -81,6 +81,10 @@ startup, WebView crash), never for an assertion you could weaken. The review dat
 here on purpose: if this exception is still being used after 2026-12-31, delete it and fix the
 cause.
 
+**Hard exclusion:** the exception never applies to a `HARNESS_*` failure. A harness bug is
+fixed at the source, never retried, never logged-and-continued — and `HARNESS_SCAN_DOUBLE_DISPATCH`
+in particular is terminal: read its dispatch/event counts (they name the culprit) and fix that.
+
 ### Gate 1 - Risk brief (five lines, written down)
 
 Name what changed, which domains it touches, the blast radius, and the invariant that would

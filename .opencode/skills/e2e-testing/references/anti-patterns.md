@@ -15,6 +15,7 @@ substitute that worked.
 | Force-killing the app first | a force-kill landing mid-VACUUM tore freelist pages; the snapshot had to be quarantined | graceful close, wait 15 s, then force (`scripts/e2e-clean.mjs`) |
 | Running two specs at once | one SQLite file, `maxInstances: 1`; the second run fights the first for the WAL | serialise, or use a second `POS_WDIO_SANDBOX` |
 | Committing `e2e-tests/` | hundreds of MB of logs, screenshots and sandbox residue | it stays untracked unless the owner asks |
+| Copying a real shop DB into specs, fixtures or evidence tables | a "baseline" pulled from a live terminal carried 34 real customers with phone numbers, real IPs, a manager PIN hash and an enrolled `sync.device_id` into the repo; its customer name then leaked into `CASE_INDEX.csv` and the vulnerability report | **never copy real shop data anywhere in the repo.** Fixtures are synthetic, or rebuilt locally from a device and gitignored (`e2e-tests/mobile/fixtures/`). Grep the exact values out of any evidence table before it is committed, and keep the runner failing closed (`BLOCKED_EXIT`, "rebuild from a device") when the fixture is absent |
 | Re-running a red test until it goes green | the failure was real and shipped | triage, classify, then fix |
 
 ## Assertions and evidence

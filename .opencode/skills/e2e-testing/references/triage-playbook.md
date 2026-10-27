@@ -36,7 +36,7 @@ test bug and (b) fixing the test for an app bug.
 | `TOO_LARGE` | export above 200 001 rows | intentional cap; assert the code, do not raise it |
 | `integrity_check` not `ok` | torn write, usually a force-kill mid-vacuum | quarantine the sandbox, re-run on a wiped one, report the incident |
 | test green but the feature is broken | assertion too low on the ladder, or a stale mirror | re-assert on the SQLite row / captured bytes; seed + `clearWebMirrors()` |
-| `[HARNESS-07]` cart is exactly 2x and two identical scan events | **fixed 2026-10-27**: the harness re-sent the scan (fallback 1.2 s after the real burst had already decoded) | `scanCode()` now waits on `pos:barcode-scanned` and throws `HARNESS_SCAN_DOUBLE_DISPATCH` on 2 events; a recurrence means the fix regressed — do not weaken the assertion |
+| `HARNESS_SCAN_DOUBLE_DISPATCH` (cart exactly 2x, two identical scan events) | **fixed 2026-10-27**; the throw is terminal, never retried. Read the counts in the message: **1 dispatch + 2 events = app bug** (the app handled one scan twice — a money bug: double line, double charge; file it, do not dedupe it in the test). **2 dispatches = harness** (the driver sent the code twice; fix `scanCode()`, never weaken the assertion). | `scanCode()` waits on `pos:barcode-scanned`, falls back only on zero events, and throws with both counts |
 
 ## Per-class playbook
 
