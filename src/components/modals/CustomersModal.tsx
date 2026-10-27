@@ -6,7 +6,7 @@ import {
   CheckCircle2, TrendingUp, ShoppingBag, CreditCard, Award,
   UserPlus, History, Crown, FileText, MessageSquare, DollarSign,
   ArrowDownLeft, ArrowUpRight, Copy, ExternalLink, MoreHorizontal,
-  Wrench, Smartphone, Ticket, AlertCircle, RefreshCw, Tag
+  Wrench, Smartphone, Ticket, AlertCircle, RefreshCw, Tag, Upload
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD, formatDateTime } from '../../types/pos';
@@ -1437,10 +1437,20 @@ export const CustomersModal: React.FC = () => {
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between gap-2">
                   <h3 className="text-xs font-bold text-pos-muted uppercase tracking-wider shrink-0">Liste des Clients</h3>
-                  <button onClick={() => { setFormOrigin({ view: 'list', profileId: null }); resetForm(); setViewMode('form'); }}
-                    className="px-4 py-2 min-h-[44px] bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-lg shadow-emerald-500/20 cursor-pointer shrink-0">
-                    <Plus className="w-4 h-4" /> Ajouter un Client
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openModal('smart_import')}
+                      className="px-3 py-2 min-h-[44px] bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-400 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shrink-0"
+                      title="Importer des clients depuis Excel, CSV, vCard, etc."
+                    >
+                      <Upload className="w-4 h-4" /> Importer
+                    </button>
+                    <button onClick={() => { setFormOrigin({ view: 'list', profileId: null }); resetForm(); setViewMode('form'); }}
+                      className="px-4 py-2 min-h-[44px] bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-lg shadow-emerald-500/20 cursor-pointer shrink-0">
+                      <Plus className="w-4 h-4" /> Ajouter un Client
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2">

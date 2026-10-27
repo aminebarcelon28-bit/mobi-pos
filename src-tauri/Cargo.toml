@@ -1,6 +1,6 @@
 [package]
 name = "mobi-pos"
-version = "1.6.8"
+version = "1.6.9"
 description = "Mobile Phone Accessories Point of Sale System"
 authors = ["Mobi Team"]
 edition = "2021"
@@ -55,6 +55,10 @@ bytemuck = "1.16"
 uuid = { version = "1.8", features = ["v4"] }
 regex = "1.10"
 thiserror = "1.0"
+# Smart Import (Slice 1) — Pure Rust Excel reader, character decoders & decompression guards
+calamine = "0.37"
+encoding_rs = "0.8"
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
 # Local ONNX embedding runtime (384-dim BGE-Small-EN). Optional + off by
 # default: `ort` (via fastembed) needs a C++ toolchain + ~100MB runtime and
 # would break mobile builds + `cargo test` offline. Default resolver uses

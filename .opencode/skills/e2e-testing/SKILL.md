@@ -147,11 +147,18 @@ this - it rewrites `COVERAGE.md` from stale buckets.
 ### Gate 4 - Run in order
 
 1. smoke (Gate 0), 2. the new spec, 3. adjacent specs from the Gate 1 table, 4. full suite
-only when shared code changed (`lib/`, `src/services/`, `src/db/`, `src-tauri/`).
+only when shared code changed (`lib/`, `src/services/`, `src/db/`, `src-tauri/`),
+5. delta against the baseline.
 
 ```powershell
 node .opencode/skills/e2e-testing/scripts/run.mjs --spec e2e-tests/specs/<file>.e2e.ts --wipe --tag <name>
+node .opencode/skills/e2e-testing/scripts/delta.mjs --results e2e-tests/results/<run>.json
 ```
+
+`delta.mjs` diffs the run's per-case verdicts against `e2e-tests/CASE_INDEX.csv` and prints
+**regressions / fixes / unchanged / not-run**. It exits non-zero **only on a regression**
+(a PASS or PASS-PARTIAL that is now FAIL). A fix or an unchanged case never fails the gate -
+that is what makes a full run safe to do on every shared-code change.
 
 Artifacts, in the order you should read them:
 
@@ -166,8 +173,8 @@ No video or WebDriver trace recording is configured in this harness. The four ar
 are the whole evidence set - if they do not answer the question, add a `console.log` with the
 case ID and re-run; do not guess.
 
-**Exit:** every run has a sidecar with spec + SHA + duration, and no failure is left
-unclassified.
+**Exit:** every run has a sidecar with spec + SHA + duration, no failure is left
+unclassified, and `delta.mjs` reports zero regressions against `CASE_INDEX.csv`.
 
 ### Gate 5 - Triage (never fix before classifying)
 
@@ -220,7 +227,14 @@ Dashboard invariants (current baseline, after the 27c SCL relabel):
 `687 = 178 PASS + 24 PASS-PARTIAL + 251 FAIL + 117 N/A + 0 REMAIN + 117 BLOCKED`.
 `CASE_INDEX.csv` has 697 data rows = 687 active + 10 owner-retired (`retired=1`, outside the
 687 and reported separately). `node .opencode/skills/e2e-testing/scripts/reconcile.mjs` prints
-the arithmetic, fails on any row it cannot place, and must exit 0 after any index change.
+the arithmetic, fails on any row it cannot place **and on any FAIL row with no root-cause
+cluster in `e2e-tests/FAIL-CLUSTERS.csv`**, and must exit 0 after any index change.
+
+**Report the delta, not the wall of numbers.** Every run that follows a baseline change closes
+with `delta.mjs`: regressions (a PASS/PASS-PARTIAL that is now FAIL), fixes (a FAIL that is now
+PASS/PASS-PARTIAL), unchanged, and not-run. The exit code is non-zero **only** for a regression,
+so "0 regressions, 3 fixes" is a passing report and "1 regression" is not. Never re-quote the
+full 687-row dashboard as if it were new information.
 
 **A feature is E2E-done when** all of these hold - not when the suite is green:
 - the happy path is asserted on state, not on the absence of an exception;

@@ -12,6 +12,7 @@ import {
   type QuickTouchItem,
 } from '../utils/quickTouchStorage';
 import { Kbd } from '../design-system/desktop/Kbd';
+import { matchProductSearch } from '../utils/catalogSearch';
 
 const CATEGORIES: CategoryType[] = [
   'Tous les produits',
@@ -38,6 +39,7 @@ const BRANDS: Array<{ label: string; value: 'Tous' | BrandName }> = [
 
 const SORT_OPTIONS: { label: string; value: SortOption }[] = [
   { label: 'Nom (A-Z)', value: 'name_asc' },
+  { label: 'Récemment ajoutés', value: 'recent' },
   { label: 'Prix croissant', value: 'price_asc' },
   { label: 'Prix décroissant', value: 'price_desc' },
   { label: 'Stock élevé', value: 'stock_desc' },
@@ -107,6 +109,11 @@ const ProductTile = React.memo(({
           <span className="text-[10px] md:text-[11px] font-bold text-pos-muted uppercase tracking-wider truncate">
             {product.brand} {product.compatibleModel ? `• ${product.compatibleModel}` : ''}
           </span>
+          {product.sku && (
+            <span className="shrink-0 text-[8px] font-mono font-bold bg-pos-bg/80 text-pos-muted px-1 py-0.5 rounded border border-pos-border/60" title={`SKU: ${product.sku}`}>
+              {product.sku}
+            </span>
+          )}
           {product.isMagSafe && (
             <span className="shrink-0 text-cyan-400" title="Compatible MagSafe">
               <Zap className="w-2.5 h-2.5 fill-cyan-400" />
@@ -400,6 +407,18 @@ export const ProductCatalog: React.FC = () => {
     return () => window.removeEventListener('mobi:quicktouches-change', handleStorageChange);
   }, []);
 
+  // Reset filters when import finishes or external reset is signaled
+  useEffect(() => {
+    const handleResetFilters = () => {
+      setSelectedCategory('Tous les produits');
+      setSelectedBrand('Tous');
+      setStockAlertOnly(false);
+      setMagsafeOnly(false);
+    };
+    window.addEventListener('mobi:catalog-reset-filters', handleResetFilters);
+    return () => window.removeEventListener('mobi:catalog-reset-filters', handleResetFilters);
+  }, []);
+
   // Reconcile catalog divergence between authoritative storage and store state
   useEffect(() => {
     let active = true;
@@ -407,9 +426,7 @@ export const ProductCatalog: React.FC = () => {
       try {
         const { productAdapter } = await import('../db/adapters/productAdapter');
         const reconciled = await productAdapter.getAllProducts();
-        const currentCount = usePosStore.getState().products.length;
-        if (active && reconciled.length > 0 && reconciled.length !== currentCount) {
-          console.info(`[Catalog] Divergence detected: store has ${currentCount}, authoritative has ${reconciled.length}. Reconciling...`);
+        if (active && reconciled && reconciled.length > 0) {
           usePosStore.setState({ products: reconciled });
         }
       } catch (err) {
@@ -419,24 +436,33 @@ export const ProductCatalog: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [products.length]);
+  }, []);
+
+  // Dynamic list of categories: base categories plus any custom categories in products
+  const displayCategories = useMemo(() => {
+    const set = new Set<string>(CATEGORIES);
+    products.forEach((p) => {
+      const cat = p.category?.trim();
+      if (cat && cat !== 'Tous les produits') {
+        set.add(cat);
+      }
+    });
+    return Array.from(set);
+  }, [products]);
 
   // Category counts map (strictly avoid double-counting items whose category is 'Tous les produits')
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     products.forEach((p) => {
-      if (p.category && p.category !== 'Tous les produits') {
-        counts[p.category] = (counts[p.category] || 0) + 1;
+      const cat = p.category?.trim();
+      if (cat && cat !== 'Tous les produits') {
+        counts[cat] = (counts[cat] || 0) + 1;
       }
     });
     counts['Tous les produits'] = products.length;
     return counts;
   }, [products]);
 
-  // Diacritic-insensitive fold: "écran" matches "ecran" (NFD strip). Sort untouched.
-  const normalizeForSearch = useCallback((s: string | undefined | null): string => {
-    return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  }, []);
 
   // Memoized low-stock count for the alert chip: the previous inline
   // `products.filter(...).length` in render ran O(n) on every keystroke.
@@ -447,26 +473,30 @@ export const ProductCatalog: React.FC = () => {
 
   // Memoized filter & sort of products
   const sortedProducts = useMemo(() => {
-    const q = normalizeForSearch(searchQuery.trim());
+    const q = searchQuery.trim();
     const filtered = products.filter((product) => {
-      const matchesCategory = selectedCategory === 'Tous les produits' || product.category === selectedCategory;
-      const matchesStockAlert = !stockAlertOnly || product.stock <= (product.reorderPoint || 10);
-      const matchesBrand = selectedBrand === 'Tous' || product.brand === selectedBrand;
-      const matchesMagsafe = !magsafeOnly || product.isMagSafe === true;
+      // When actively searching via the search bar, search globally across all categories & brands & alert filters
+      const matchesCategory = !q
+        ? selectedCategory === 'Tous les produits' || (product.category?.trim() || 'Tous les produits') === selectedCategory
+        : true;
+      const matchesBrand = !q
+        ? selectedBrand === 'Tous' || product.brand === selectedBrand
+        : true;
+      const matchesStockAlert = !q ? (!stockAlertOnly || product.stock <= (product.reorderPoint || 10)) : true;
+      const matchesMagsafe = !q ? (!magsafeOnly || product.isMagSafe === true) : true;
 
       if (!matchesCategory || !matchesStockAlert || !matchesBrand || !matchesMagsafe) return false;
       if (!q) return true;
-      return (
-        normalizeForSearch(product.title).includes(q) ||
-        normalizeForSearch(product.sku).includes(q) ||
-        normalizeForSearch(product.barcode).includes(q) ||
-        (product.imeiNumber && normalizeForSearch(product.imeiNumber).includes(q)) ||
-        normalizeForSearch(product.brand).includes(q) ||
-        normalizeForSearch(product.compatibleModel).includes(q)
-      );
+
+      return matchProductSearch(product, q);
     });
 
     return [...filtered].sort((a, b) => {
+      if (sortOption === 'recent') {
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return dateB - dateA;
+      }
       if (sortOption === 'name_asc') return a.title.localeCompare(b.title);
       if (sortOption === 'price_asc') return a.price - b.price;
       if (sortOption === 'price_desc') return b.price - a.price;
@@ -474,7 +504,7 @@ export const ProductCatalog: React.FC = () => {
       if (sortOption === 'brand_asc') return a.brand.localeCompare(b.brand);
       return 0;
     });
-  }, [products, selectedCategory, searchQuery, sortOption, stockAlertOnly, selectedBrand, magsafeOnly, normalizeForSearch]);
+  }, [products, selectedCategory, searchQuery, sortOption, stockAlertOnly, selectedBrand, magsafeOnly]);
 
   const showFeedback = (message: string, type: 'success' | 'error') => {
     setFeedback({ message, type });
@@ -541,12 +571,12 @@ export const ProductCatalog: React.FC = () => {
         <div className="flex items-center justify-between gap-2">
           <div className="relative min-w-0 flex-1 max-w-[62vw]">
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 pr-6 scrollbar-none" role="tablist" aria-label="Catégories du catalogue">
-            {CATEGORIES.map((cat) => {
+            {displayCategories.map((cat) => {
               const count = categoryCounts[cat] || 0;
               return (
                 <button
                   key={cat}
-                  onClick={() => setSelectedCategory(cat)}
+                  onClick={() => setSelectedCategory(cat as CategoryType)}
                   role="tab"
                   aria-selected={selectedCategory === cat}
                   className={`relative px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all motion-reduce:transition-none flex items-center gap-1.5 cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${

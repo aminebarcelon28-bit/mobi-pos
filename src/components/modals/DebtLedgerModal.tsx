@@ -781,7 +781,7 @@ export const DebtLedgerModal: React.FC = () => {
                                   {h.type === 'DEBT_ACQUIRED' ? '➕ Achat à Crédit' : '➖ Versement / Remboursement'}
                                 </span>
                                 <span className="text-[10px] text-pos-muted block font-sans">
-                                  {formatDateTime(h.createdAt)} • {h.notes || 'Sans note'}
+                                  {formatDateTime(h.createdAt)} • {h.origin === 'imported_history' ? 'Historique importé' : h.notes || 'Sans note'}
                                 </span>
                               </div>
                               <div className="text-right">

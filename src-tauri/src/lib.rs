@@ -27,7 +27,7 @@ pub mod trust_core;
 // *commands* (the IPC surface) exist only under
 // `any(debug_assertions, feature = "e2e")` and are registered in the handler
 // only on the same cfg — production binaries expose no `e2e_*` IPC.
-pub mod e2e;
+pub mod e2e; pub mod import;
 
 use crate::trust_core::{
     capability_policy::Capability,
@@ -291,7 +291,7 @@ fn delete_cloud_credentials(app_handle: tauri::AppHandle) -> Result<(), TrustErr
 /// largest `version` in `base_schema_migrations()` below. A DB stamped above
 /// this means a NEWER app wrote it — opening it here could silently skip
 /// migrations it depends on, so startup refuses instead (contract C6).
-const EXPECTED_MAX_DB_USER_VERSION: u32 = 126;
+const EXPECTED_MAX_DB_USER_VERSION: u32 = 127;
 
 /// SQLite file header magic: first 16 bytes are always "SQLite format 3\0".
 const SQLITE_HEADER_MAGIC: &[u8; 16] = b"SQLite format 3\0";
@@ -2209,6 +2209,59 @@ fn base_schema_migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            // v127 — Refund engine rebuild (MOBI-REFUND-ROOT): line identity,
+            // recovered COGS, customer debt aggregate, IMEI release state.
+            // `transaction_items.sale_item_id` pins every refund line to its
+            // original sale line (same derivation `${txnId}-item-${idx}` that
+            // `sale_batch_allocations.sale_item_id` already uses).
+            // `transactions.restored_cogs` carries the RESTOCKED-only cost
+            // credited back by a refund — never inferred from legacy rows
+            // (NULL = no credit, the pre-rebuild semantics).
+            // `customers.current_debt` is the aggregate the native refund
+            // recomputes from `customer_debts` in the same transaction, so
+            // the read-back hydration has a single authority instead of the
+            // Dexie-only projection.
+            // `imei_records.status` records the release state ('in_stock' /
+            // 'defective') alongside `sale_transaction_id`/`sold_at` NULLing.
+            // Mirrors the TS heal list (`ensureShiftLedgerV113` steps)
+            // verbatim (parity oracle).
+            version: 127,
+            description: "Refund rebuild: line identity, restored cogs, customer debt aggregate, IMEI release state",
+            sql: r#"
+            ALTER TABLE transaction_items ADD COLUMN sale_item_id TEXT;
+            ALTER TABLE transactions ADD COLUMN restored_cogs REAL;
+            ALTER TABLE customers ADD COLUMN current_debt INTEGER;
+            ALTER TABLE imei_records ADD COLUMN status TEXT;
+            "#,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            // v128 — Imported customer-debt provenance and durable source
+            // identity for replay-safe destination imports.
+            version: 128,
+            description: "Smart Import: debt origin and source identity crosswalk",
+            sql: r#"
+            ALTER TABLE customer_debts
+              ADD COLUMN origin TEXT NOT NULL DEFAULT 'operational'
+              CHECK (origin IN ('operational', 'imported_history'));
+            CREATE TABLE IF NOT EXISTS import_source_identity (
+              destination TEXT NOT NULL,
+              source_namespace TEXT NOT NULL,
+              source_record_id TEXT NOT NULL,
+              target_id TEXT NOT NULL,
+              payload_hash TEXT NOT NULL,
+              source_file_hash TEXT NOT NULL,
+              sheet_index INTEGER,
+              row_index INTEGER,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (destination, source_namespace, source_record_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_import_source_identity_target
+              ON import_source_identity(destination, target_id);
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 
@@ -2398,6 +2451,11 @@ pub fn run() {
             sync_outbox::reap_stale_in_flight,
             trust_core::time_anchor::ingest_signed_server_time,
             scanner::mobile_scan_document,
+            import::commands::import_inspect_file,
+            import::commands::import_stage_file,
+            import::commands::import_commit_batch,
+            import::commands::import_get_staged_batch,
+            import::commands::import_list_batches,
             e2e::e2e_reset_db,
             e2e::e2e_seed_state,
             e2e::e2e_reset_and_seed,
@@ -2406,6 +2464,7 @@ pub fn run() {
             e2e::e2e_get_printed,
             e2e::e2e_build_info,
             e2e::e2e_get_db_state,
+            e2e::e2e_get_import_probe,
             e2e::e2e_get_sale,
             e2e::e2e_get_product_stock,
             e2e::e2e_get_customer_ledger,
@@ -2470,7 +2529,12 @@ pub fn run() {
             sync_outbox::mark_outbox_synced,
             sync_outbox::reap_stale_in_flight,
             trust_core::time_anchor::ingest_signed_server_time,
-            scanner::mobile_scan_document
+            scanner::mobile_scan_document,
+            import::commands::import_inspect_file,
+            import::commands::import_stage_file,
+            import::commands::import_commit_batch,
+            import::commands::import_get_staged_batch,
+            import::commands::import_list_batches
         ]);
 
     if let Err(err) = builder.run(tauri::generate_context!()) {

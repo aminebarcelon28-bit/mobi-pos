@@ -28,6 +28,50 @@ import { isOwnShiftTicket } from '../../sync/refundLockPolicy';
 import { verifyManagerGate } from '../../utils/pinGate';
 import { Kbd } from '../../design-system/desktop/Kbd';
 
+/**
+ * Per-line refundable remainder for a ticket, keyed `${productId}_${lineIdx}`
+ * (the modal's itemKey format). Consumption is read from every refund row of
+ * the ticket via `saleItemId` (`${txnId}-item-${idx}`) so partial refunds of
+ * a same-SKU sibling line never mask the other line; legacy identity-less
+ * rows fall back to consuming their product's lines FIFO (conservative —
+ * can only under-offer, never over-refund).
+ */
+function computeRefundableRemaining(
+  txn: SaleTransaction,
+  transactions: SaleTransaction[] | undefined
+): Map<string, number> {
+  const refundedByLine = new Map<string, number>();
+  const legacyByProduct = new Map<string, number>();
+  for (const t of transactions || []) {
+    if (!t.isRefund || t.originalTransactionId !== txn.id) continue;
+    for (const ri of t.refundedItems || []) {
+      if (ri.saleItemId) {
+        refundedByLine.set(ri.saleItemId, (refundedByLine.get(ri.saleItemId) || 0) + ri.quantity);
+      } else {
+        legacyByProduct.set(ri.productId, (legacyByProduct.get(ri.productId) || 0) + ri.quantity);
+      }
+    }
+  }
+  const remainingByKey = new Map<string, number>();
+  txn.items.forEach((item, idx) => {
+    const itemKey = `${item.product.id}_${idx}`;
+    const sid = `${txn.id}-item-${idx}`;
+    remainingByKey.set(itemKey, Math.max(0, item.quantity - (refundedByLine.get(sid) || 0)));
+  });
+  for (const [productId, legacyQty] of legacyByProduct) {
+    let left = legacyQty;
+    txn.items.forEach((item, idx) => {
+      if (left <= 0 || item.product.id !== productId) return;
+      const itemKey = `${item.product.id}_${idx}`;
+      const cur = remainingByKey.get(itemKey) || 0;
+      const take = Math.min(cur, left);
+      remainingByKey.set(itemKey, cur - take);
+      left -= take;
+    });
+  }
+  return remainingByKey;
+}
+
 export const RefundModal: React.FC = () => {
   const {
     activeModal,
@@ -201,20 +245,14 @@ export const RefundModal: React.FC = () => {
     const initialQty: Record<string, number> = {};
     const initialRestock: Record<string, boolean> = {};
 
-    // Quantities must be bounded by what is STILL refundable: a ticket that was
-    // already partially refunded would otherwise offer the original purchased
-    // quantity again and the write path would have to refuse it at submit time.
-    const alreadyRefunded = new Map<string, number>();
-    for (const t of transactions) {
-      if (t.isRefund && t.originalTransactionId === txn.id) {
-        for (const ri of t.refundedItems || []) {
-          alreadyRefunded.set(ri.productId, (alreadyRefunded.get(ri.productId) || 0) + ri.quantity);
-        }
-      }
-    }
+    // Quantities must be bounded by what is STILL refundable — PER ORIGINAL
+    // LINE (see computeRefundableRemaining): refunding IMEI-A1 of a
+    // dual-IMEI SKU no longer masks the A2 line, and one line can never
+    // exceed its purchased quantity across partials.
+    const remainingByKey = computeRefundableRemaining(txn, transactions);
     txn.items.forEach((item, idx) => {
       const itemKey = `${item.product.id}_${idx}`;
-      const remaining = Math.max(0, item.quantity - (alreadyRefunded.get(item.product.id) || 0));
+      const remaining = remainingByKey.get(itemKey) || 0;
       initialSelected[itemKey] = remaining > 0;
       initialQty[itemKey] = remaining;
       initialRestock[itemKey] = true;
@@ -306,6 +344,15 @@ export const RefundModal: React.FC = () => {
       window.removeEventListener('pos:barcode-scanned', handleRefundBarcodeScanned);
     };
   }, [activeModal, transactions, setSelectedTransactionForRefund, showToast, initializeRefundState]);
+
+  // Live per-line refundable remainder driving the steppers' max: the same
+  // union the slice + native quota enforce, so the UI can never offer a
+  // quantity the write path would refuse (dual-IMEI SKU included).
+  const remainingByItemKey = useMemo(
+    () =>
+      selectedTxn ? computeRefundableRemaining(selectedTxn, transactions) : new Map<string, number>(),
+    [selectedTxn, transactions]
+  );
 
   if (activeModal !== 'refund') return null;
 
@@ -750,7 +797,10 @@ export const RefundModal: React.FC = () => {
                         const itemKey = `${item.product.id}_${idx}`;
                         const isChecked = Boolean(selectedItemIds[itemKey]);
                         const isRestocked = Boolean(restockMap[itemKey]);
-                        const qty = refundQuantities[itemKey] || item.quantity;
+                        // Stepper max = what this LINE still owes (per-line
+                        // identity), never the original quantity.
+                        const maxQty = Math.max(1, remainingByItemKey.get(itemKey) ?? item.quantity);
+                        const qty = Math.min(maxQty, refundQuantities[itemKey] || maxQty);
                         const unitPrice = item.appliedPrice || item.product.price;
                         const discountPerUnit = item.discount > 0 && item.quantity > 0 ? item.discount / item.quantity : 0;
                         const netUnitPrice = Math.max(0, unitPrice - discountPerUnit);
@@ -794,7 +844,7 @@ export const RefundModal: React.FC = () => {
                                   type="button"
                                   data-testid={`refund-dec-${itemKey}`}
                                   disabled={!isChecked || qty <= 1}
-                                  onClick={() => handleQuantityChange(itemKey, qty - 1, item.quantity)}
+                                  onClick={() => handleQuantityChange(itemKey, qty - 1, maxQty)}
                                   className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-pos-card border border-pos-border text-pos-text font-bold disabled:opacity-30 cursor-pointer active:scale-95"
                                   aria-label={`Diminuer quantité ${item.product.title}`}
                                 >
@@ -804,14 +854,14 @@ export const RefundModal: React.FC = () => {
                                 <button
                                   type="button"
                                   data-testid={`refund-inc-${itemKey}`}
-                                  disabled={!isChecked || qty >= item.quantity}
-                                  onClick={() => handleQuantityChange(itemKey, qty + 1, item.quantity)}
+                                  disabled={!isChecked || qty >= maxQty}
+                                  onClick={() => handleQuantityChange(itemKey, qty + 1, maxQty)}
                                   className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg bg-pos-card border border-pos-border text-pos-text font-bold disabled:opacity-30 cursor-pointer active:scale-95"
                                   aria-label={`Augmenter quantité ${item.product.title}`}
                                 >
                                   <span aria-hidden="true">+</span>
                                 </button>
-                                <span className="text-[10px] text-pos-muted pr-1.5">(max {item.quantity})</span>
+                                <span className="text-[10px] text-pos-muted pr-1.5">(max {maxQty})</span>
                               </div>
 
                               <button
@@ -859,7 +909,9 @@ export const RefundModal: React.FC = () => {
                           const itemKey = `${item.product.id}_${idx}`;
                           const isChecked = Boolean(selectedItemIds[itemKey]);
                           const isRestocked = Boolean(restockMap[itemKey]);
-                          const qty = refundQuantities[itemKey] || item.quantity;
+                          // Stepper max = per-line remainder (identity-aware).
+                          const maxQty = Math.max(1, remainingByItemKey.get(itemKey) ?? item.quantity);
+                          const qty = Math.min(maxQty, refundQuantities[itemKey] || maxQty);
                           const unitPrice = item.appliedPrice || item.product.price;
                           const discountPerUnit = item.discount > 0 && item.quantity > 0 ? item.discount / item.quantity : 0;
                           const netUnitPrice = Math.max(0, unitPrice - discountPerUnit);
@@ -897,7 +949,7 @@ export const RefundModal: React.FC = () => {
                                     type="button"
                                     data-testid={`refund-dec-${itemKey}`}
                                     disabled={!isChecked || qty <= 1}
-                                    onClick={() => handleQuantityChange(itemKey, qty - 1, item.quantity)}
+                                    onClick={() => handleQuantityChange(itemKey, qty - 1, maxQty)}
                                     className="w-6 h-6 rounded-lg bg-pos-bg border border-pos-border text-pos-text font-bold disabled:opacity-30"
                                   >
                                     -
@@ -905,14 +957,14 @@ export const RefundModal: React.FC = () => {
                                   <span className="w-8 text-center font-bold text-pos-text num">{qty}</span>
                                   <button
                                     type="button"
-                                    disabled={!isChecked || qty >= item.quantity}
-                                    onClick={() => handleQuantityChange(itemKey, qty + 1, item.quantity)}
+                                    disabled={!isChecked || qty >= maxQty}
+                                    onClick={() => handleQuantityChange(itemKey, qty + 1, maxQty)}
                                     className="w-6 h-6 rounded-lg bg-pos-bg border border-pos-border text-pos-text font-bold disabled:opacity-30"
                                   >
                                     +
                                   </button>
                                 </div>
-                                <span className="text-[9px] text-pos-muted block mt-0.5">(Max: {item.quantity})</span>
+                                <span className="text-[9px] text-pos-muted block mt-0.5">(Max: {maxQty})</span>
                               </td>
                               <td className="p-3 text-center">
                                 <button

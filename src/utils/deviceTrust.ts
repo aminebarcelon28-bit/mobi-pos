@@ -153,13 +153,23 @@ export const INSPECTION_WATER_LABELS: Record<TradeInInspectionMarkers['water'], 
 
 // ── 2. Ownership-ledger event primitives ────────────────────────────────────
 
-export type ImeiTrustEventKind = 'PO_RECEIVE' | 'TRADE_IN' | 'SALE' | 'RETURN_IN' | 'REPAIR_INTAKE';
+export type ImeiTrustEventKind =
+  | 'PO_RECEIVE'
+  | 'TRADE_IN'
+  | 'SALE'
+  | 'RETURN_IN'
+  | 'RETURN_DEFECTIVE'
+  | 'REPAIR_INTAKE';
 
 export const IMEI_TRUST_EVENT_LABELS: Record<ImeiTrustEventKind, string> = {
   PO_RECEIVE: 'Réception fournisseur',
   TRADE_IN: 'Rachat client',
   SALE: 'Vente',
   RETURN_IN: 'Retour boutique',
+  // Defective restitution: device re-enters the ledger in quarantine
+  // (`imei_records.status = 'defective'`), never sellable stock — mirrors
+  // the native `RETURN_DEFECTIVE` event vocabulary byte-for-byte.
+  RETURN_DEFECTIVE: 'Retour défectueux (SAV)',
   REPAIR_INTAKE: 'Prise en charge SAV',
 };
 

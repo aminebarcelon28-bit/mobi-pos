@@ -178,6 +178,7 @@ async function reenqueueAllFromAuthority(): Promise<number> {
         notes: r.notes ? String(r.notes) : undefined,
         recordedBy: r.recorded_by ? String(r.recorded_by) : undefined,
         createdAt: String(r.created_at || now),
+        origin: String(r.origin || 'operational'),
         version: Number(r.version || 1),
       });
     }

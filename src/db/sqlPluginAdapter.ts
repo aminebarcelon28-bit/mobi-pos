@@ -40,7 +40,7 @@ function devBenchMark(label: string): void {
 }
 import { withBusyRetry, isBusyError, isStaleTxnError, isRetryableDbError } from './busyRetry';
 export { isRetryableDbError, isBusyError, isStaleTxnError, withBusyRetry };
-import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL, CUSTOMER_DEBTS_HEAL_PROBE_SQL, AUDIT_ACTOR_ID_HEAL_SQL, AUDIT_ACTOR_ID_HEAL_PROBE_SQL, CYCLE_COUNT_TASKS_HEAL_SQL, CYCLE_COUNT_TASKS_HEAL_PROBE_SQL, KREDY_V126_HEAL_SQL, KREDY_V126_PROBE_CUSTOMER_DEBTS_SQL, KREDY_V126_PROBE_CUSTOMERS_SQL } from './schemaHeal';
+import { CUSTOMER_DEBTS_COLUMN_HEAL_SQL, CUSTOMER_DEBTS_HEAL_PROBE_SQL, AUDIT_ACTOR_ID_HEAL_SQL, AUDIT_ACTOR_ID_HEAL_PROBE_SQL, CYCLE_COUNT_TASKS_HEAL_SQL, CYCLE_COUNT_TASKS_HEAL_PROBE_SQL, KREDY_V126_HEAL_SQL, KREDY_V126_PROBE_CUSTOMER_DEBTS_SQL, KREDY_V126_PROBE_CUSTOMERS_SQL, IMPORT_PROVENANCE_HEAL_SQL, IMPORT_PROVENANCE_DEBTS_PROBE_SQL, IMPORT_PROVENANCE_IDENTITY_PROBE_SQL } from './schemaHeal';
 import {
   abcClassForProduct,
   computeVarianceQty,
@@ -207,6 +207,8 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     // piece fails a probe and forces the idempotent full pass below.
     await db.select(KREDY_V126_PROBE_CUSTOMER_DEBTS_SQL);
     await db.select(KREDY_V126_PROBE_CUSTOMERS_SQL);
+    await db.select(IMPORT_PROVENANCE_DEBTS_PROBE_SQL);
+    await db.select(IMPORT_PROVENANCE_IDENTITY_PROBE_SQL);
     return;
   } catch (probeErr) {
     // B-009: BUSY is transient lock contention, NOT a missing column —
@@ -567,6 +569,7 @@ export async function ensureLocalSyncColumns(db: Database): Promise<void> {
     // UPGRADE-11 (v126) — Kredy collections & risk; same single-source rule
     // (lib.rs v126 = schemaHeal constants = this spread).
     ...KREDY_V126_HEAL_SQL,
+    ...IMPORT_PROVENANCE_HEAL_SQL,
   ];
   // B-021: destructive service-ledger/stock DML gated behind a one-shot
   // app_settings flag — a failed probe for an unrelated reason must never
@@ -998,6 +1001,17 @@ export async function ensureShiftLedgerV113(db: Database): Promise<void> {
     ['idx_vendor_disputes_supplier', 'CREATE INDEX IF NOT EXISTS idx_vendor_disputes_supplier ON vendor_disputes(supplier_name);'],
     ['idx_vendor_disputes_po', 'CREATE INDEX IF NOT EXISTS idx_vendor_disputes_po ON vendor_disputes(po_id);'],
     ['idx_vendor_disputes_created', 'CREATE INDEX IF NOT EXISTS idx_vendor_disputes_created ON vendor_disputes(created_at DESC);'],
+    // v127 refund rebuild (exact parity with Rust migration 127): refund-line
+    // identity (`transaction_items.sale_item_id`), RESTOCKED-only recovered
+    // cogs (`transactions.restored_cogs`), native debt aggregate
+    // (`customers.current_debt`) and IMEI release state
+    // (`imei_records.status`: 'in_stock' | 'defective'). ALTERs, not
+    // CREATEs — duplicate-column on healed DBs is benign (handled above);
+    // anything else is logged with context and never fails boot.
+    ['transaction_items.sale_item_id', 'ALTER TABLE transaction_items ADD COLUMN sale_item_id TEXT;'],
+    ['transactions.restored_cogs', 'ALTER TABLE transactions ADD COLUMN restored_cogs REAL;'],
+    ['customers.current_debt', 'ALTER TABLE customers ADD COLUMN current_debt INTEGER;'],
+    ['imei_records.status', 'ALTER TABLE imei_records ADD COLUMN status TEXT;'],
   ];
   const failures: string[] = [];
   for (const [label, sql] of steps) {
@@ -2972,11 +2986,23 @@ export async function syncProductsFromSqlToDexie(productIds?: Iterable<string>):
         if (!id) continue;
         validIds.add(id);
         const existing = existingById.get(id);
+        const brandVal = (r.brand && String(r.brand).trim()) || (existing?.brand && String(existing.brand).trim()) || 'Autre';
+        const categoryVal = (r.category && String(r.category).trim()) || (existing?.category && String(existing.category).trim()) || 'Tous les produits';
+        const priceVal = Number(r.price ?? existing?.price ?? 0);
+        const costPriceVal = Number(r.cost_price ?? existing?.costPrice ?? 0);
+        const titleVal = String(r.title ?? existing?.title ?? id);
+        const stockVal = Number(r.stock ?? existing?.stock ?? 0);
+
         if (existing) {
-          if (existing.stock !== Number(r.stock ?? existing.stock)) {
-            existing.stock = Number(r.stock ?? 0);
-            toPut.push(existing);
-          }
+          existing.stock = stockVal;
+          existing.title = titleVal;
+          existing.brand = brandVal as never;
+          existing.category = categoryVal as never;
+          existing.price = priceVal;
+          existing.costPrice = costPriceVal;
+          existing.barcode = String(r.barcode ?? existing.barcode ?? '');
+          existing.sku = String(r.sku ?? existing.sku ?? '');
+          toPut.push(existing);
         } else {
           let base: Record<string, unknown> = {};
           try {
@@ -2989,14 +3015,14 @@ export async function syncProductsFromSqlToDexie(productIds?: Iterable<string>):
             id,
             sku: String(r.sku ?? base.sku ?? ''),
             barcode: String(r.barcode ?? base.barcode ?? ''),
-            title: String(r.title ?? base.title ?? id),
-            brand: (r.brand as never) ?? base.brand ?? 'Autre',
-            category: (r.category as never) ?? base.category ?? 'Tous les produits',
-            price: Number(r.price ?? base.price ?? 0),
+            title: titleVal,
+            brand: (brandVal || base.brand || 'Autre') as never,
+            category: (categoryVal || base.category || 'Tous les produits') as never,
+            price: priceVal,
             wholesalePrice: Number(r.wholesale_price ?? base.wholesalePrice ?? 0),
             semiWholesalePrice: typeof base.semiWholesalePrice === 'number' ? base.semiWholesalePrice : undefined,
-            costPrice: Number(r.cost_price ?? base.costPrice ?? 0),
-            stock: Number(r.stock ?? base.stock ?? 0),
+            costPrice: costPriceVal,
+            stock: stockVal,
             imageUrl: String(r.image_url ?? base.imageUrl ?? ''),
             isSerialized: Boolean(r.is_serialized ?? base.isSerialized),
             imeiNumber: (r.imei_number as string | undefined) ?? (base.imeiNumber as string | undefined),
@@ -6713,5 +6739,4 @@ export async function listWhatsappLaunches(customerId: string): Promise<Whatsapp
   >;
   return (rows ?? []).map(mapWhatsappLaunchRow).filter((r) => r.id !== '');
 }
-
 

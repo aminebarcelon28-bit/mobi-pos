@@ -293,6 +293,10 @@ export const ReportsModal: React.FC = () => {
   const totalRefundsValue = salesMetrics.refundsTotal;
   const totalRevenue = salesMetrics.netRevenue;
   const totalCost = salesMetrics.costTotal;
+  // Recovered COGS (restocked refund units) — the P&L credit that keeps a
+  // restock refund neutral. Shown explicitly so the table's arithmetic stays
+  // readable: CA Net − COGS + COGS récupérés = Marge.
+  const totalRestoredCogs = salesMetrics.restoredCogsTotal;
   const totalNetProfit = salesMetrics.profitTotal;
   const netProfitMargin = salesMetrics.marginPct;
   const averageBasket = salesMetrics.averageBasket;
@@ -1222,6 +1226,15 @@ export const ReportsModal: React.FC = () => {
                                 {totalRevenue > 0 ? ((totalCost / totalRevenue) * 100).toFixed(1) : 0}%
                               </td>
                             </tr>
+                            {totalRestoredCogs > 0 && (
+                              <tr className="text-emerald-400/90">
+                                <td className="py-2 px-2 font-sans">(+) COGS Récupérés (Retours Remis en Stock)</td>
+                                <td className="text-right py-2 px-2">+{formatDZD(totalRestoredCogs)}</td>
+                                <td className="text-right py-2 px-2">
+                                  {totalRevenue > 0 ? ((totalRestoredCogs / totalRevenue) * 100).toFixed(1) : 0}%
+                                </td>
+                              </tr>
+                            )}
                             <tr className="bg-emerald-950/20 font-bold text-emerald-400 border-y border-emerald-500/20">
                               <td className="py-2 px-2 font-sans uppercase text-[11px] font-black">(=) Marge Commerciale Brute</td>
                               <td className="text-right py-2 px-2 text-sm">{formatDZD(totalNetProfit)}</td>

@@ -66,6 +66,7 @@
 //! `OFFLINE_CASH_CAP_EXCEEDED:<current>:<cap>:<attempted>`,
 //! `SUPERVISOR_PIN_REQUIRED` (covers SupervisorPinRequired +
 //! InvalidSupervisorPin — an empty/malformed block fails the same gate),
+//! `RESTOCK_REASON_REQUIRED` (write-off line without its note),
 //! `BUSY` (covers SqliteBusy), `INVALID:<msg>`, `SCHEMA_UNHEALED:<msg>`,
 //! `INTERNAL:<msg>` (covers Internal).
 //!
@@ -102,6 +103,17 @@ pub struct RefundItemIn {
     pub discount_amount: i64,
     pub line_profit: i64,
     pub imei_number: Option<String>,
+    /// Original sale-line identity (`${saleTxnId}-item-${idx}` — the same
+    /// derivation `sale_batch_allocations.sale_item_id` uses). Pins the line
+    /// so a multi-line same-SKU ticket keeps per-line restitution state.
+    /// Absent for pre-rebuild callers (product-keyed fallback only).
+    pub sale_item_id: Option<String>,
+    /// Zero-based index of the line in the original ticket (legacy
+    /// `-item-N` fallback when `sale_item_id` is absent).
+    pub line_index: Option<i64>,
+    /// 'restock' | 'defective'. Absent = restock (the pre-rebuild behavior
+    /// for every line that used to travel).
+    pub condition: Option<String>,
     pub item_key: String,
     pub item_payload: String,
 }
@@ -220,14 +232,37 @@ pub struct RefundRequest {
     /// `writeCheckoutAtomicInner` persists, so the v109 backfill and the
     /// quota check keep working).
     pub refund_payload: String,
-    /// Original-ticket JSON for the status-flip outbox row (version is
-    /// stamped natively before enqueue).
+    /// Original-ticket JSON used as the merge FALLBACK base only when the
+    /// durable row payload is unparseable — normally the base is the row
+    /// payload itself (read under the write lock, so concurrent tabs'
+    /// `refundedItems` accumulate instead of being dropped). The merged bytes
+    /// (status/version/refundedItems) are what the row UPDATE, the outbox row
+    /// and `RefundOk.ticket_payload` carry.
     pub original_outbox_payload: String,
     pub device_id: String,
     pub lines: Vec<RefundItemIn>,
     pub deltas: Vec<LedgerDeltaIn>,
     pub batches: Vec<BatchRestoreIn>,
     pub imeis: Vec<String>,
+    /// IMEIs released as DEFECTIVE (quarantine): unlinked from the sale and
+    /// landed `status='defective'`; restocked IMEIs ride `imeis` and land
+    /// `status='in_stock'`. Both append ownership events in the same commit
+    /// (`RETURN_IN` / `RETURN_DEFECTIVE`).
+    #[serde(default)]
+    pub defective_imeis: Vec<String>,
+    /// Mandatory note when a line goes to write-off (mirrors the TS gate:
+    /// `RESTOCK_REASON_REQUIRED` before submit). Recorded on the
+    /// `defective_returns` rows.
+    #[serde(default)]
+    pub defect_note: Option<String>,
+    /// Loyalty clawback result computed by the shared TS math from the
+    /// original sale's immutable snapshots. Persisted here (points column +
+    /// payload buckets) so the authority can reproduce the balance; this
+    /// command never invents loyalty numbers.
+    #[serde(default)]
+    pub customer_points_after: Option<i64>,
+    #[serde(default)]
+    pub customer_point_buckets_json: Option<String>,
     pub debt: Option<DebtReliefIn>,
     pub voucher: Option<VoucherRestoreIn>,
     pub cash_move: Option<CashMoveIn>,
@@ -242,6 +277,24 @@ pub struct RefundOk {
     pub ticket_status: String,
     pub ticket_version: i64,
     pub warnings: Vec<String>,
+    /// Original-ticket JSON AFTER the in-txn merge (new status + accumulated
+    /// `refundedItems` with line identity) — the exact bytes written to the
+    /// row and enqueued to the outbox. Read-back hydration consumes these.
+    pub ticket_payload: String,
+    /// Post-refund customer debt aggregate recomputed from the durable
+    /// `customer_debts` ledger inside this transaction (None when the refund
+    /// carried no customer).
+    pub customer_debt_after: Option<i64>,
+    /// Debt relief actually applied (≤ requested; clamped to the live
+    /// balance with a warning when the requested share exceeded it).
+    pub debt_relief_applied: i64,
+    /// Loyalty points after clawback (echo of the persisted value).
+    pub customer_points_after: Option<i64>,
+    /// RESTOCKED-only cost credited back (Σ unit_cost_at_sale × qty over
+    /// non-defective lines). Defective lines are NOT credited — their cost
+    /// stays consumed on the original sale, and the loss is represented by
+    /// `defective_returns` + the unrecovered COGS, never a second expense.
+    pub recovered_cogs: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +356,14 @@ fn validate(req: &RefundRequest) -> Result<(), TrustError> {
         if l.quantity <= 0 {
             return Err(conflict("INVALID:line quantity must be > 0"));
         }
+        match l.condition.as_deref() {
+            None | Some("restock") | Some("defective") => {}
+            Some(other) => {
+                return Err(conflict(&format!(
+                    "INVALID:line condition must be restock|defective (got {other})"
+                )))
+            }
+        }
     }
     for v in [
         req.subtotal,
@@ -333,6 +394,36 @@ fn validate(req: &RefundRequest) -> Result<(), TrustError> {
     if !req.online && (req.local_device_id.trim().is_empty() || req.active_shift_id.trim().is_empty()) {
         return Err(conflict("INVALID:offline refund requires local device + shift context"));
     }
+    // Write-off lines quarantine physical stock: the reason note is the audit
+    // evidence for that movement (same gate as the TS `RESTOCK_REASON_REQUIRED`
+    // pre-submit check — native re-verifies instead of trusting the caller).
+    if req.lines.iter().any(|l| l.condition.as_deref() == Some("defective"))
+        && req
+            .defect_note
+            .as_deref()
+            .map(str::trim)
+            .map(str::is_empty)
+            .unwrap_or(true)
+    {
+        return Err(conflict("RESTOCK_REASON_REQUIRED"));
+    }
+    // Loyalty clawback rides the customer row it belongs to.
+    if (req.customer_points_after.is_some() || req.customer_point_buckets_json.is_some())
+        && req
+            .customer_id
+            .as_deref()
+            .map(str::trim)
+            .map(str::is_empty)
+            .unwrap_or(true)
+    {
+        return Err(conflict("INVALID:loyalty clawback requires the customer"));
+    }
+    // Debt relief must target the same customer the refund was written for.
+    if let (Some(rc), Some(d)) = (req.customer_id.as_deref(), req.debt.as_ref()) {
+        if rc.trim() != d.customer_id.trim() {
+            return Err(conflict("INVALID:debt customer mismatch"));
+        }
+    }
     if let Some(s) = &req.supervisor {
         if s.user_id.trim().is_empty() || s.verified_at.trim().len() < 10 {
             return Err(conflict("SUPERVISOR_PIN_REQUIRED"));
@@ -354,6 +445,224 @@ fn has_column(tx: &Transaction, table: &str, col: &str) -> Result<bool, TrustErr
             rusqlite::Error::QueryReturnedNoRows => Ok(false),
             other => Err(TrustError::op_failed(format!("schema probe: {other}"))),
         })
+}
+
+/// Table-existence probe for OPTIONAL tables (`defective_returns` v116,
+/// `imei_events` v123). Absent = skip the optional evidence lane like the
+/// pre-rebuild builds did — never fail the money over an evidence table.
+fn has_table(tx: &Transaction, table: &str) -> Result<bool, TrustError> {
+    // Internal constants at every call site — no caller input interpolated.
+    tx.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |_| Ok(()),
+    )
+    .map(|_| true)
+    .or_else(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => Ok(false),
+        other => Err(TrustError::op_failed(format!("table probe: {other}"))),
+    })
+}
+
+/// FNV-1a 32-bit over `parts.join('|')` — byte-for-byte the JS
+/// `deterministicId` derivation for ASCII inputs, so ids for rows the TS lane
+/// can equally write (quarantine ledger markers) converge via ON CONFLICT.
+fn deterministic_id(prefix: &str, parts: &[&str]) -> String {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in parts.join("|").bytes() {
+        h ^= u32::from(b);
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    format!("{prefix}-{h:08X}")
+}
+
+/// `'defective'` is the ONLY write-off condition; absent (pre-rebuild caller)
+/// means restock, exactly like the TS default normalization
+/// (`cri.condition = cri.restock ? 'restock' : 'defective'`).
+fn line_is_defective(l: &RefundItemIn) -> bool {
+    matches!(l.condition.as_deref(), Some("defective"))
+}
+
+/// Canonical condition stamped on the merged `refundedItems` entries.
+fn line_condition(l: &RefundItemIn) -> &'static str {
+    if line_is_defective(l) {
+        "defective"
+    } else {
+        "restock"
+    }
+}
+
+/// Original sale-line identity: explicit `sale_item_id` wins; the legacy
+/// `-item-N` derivation recovers it for callers that only carry the index.
+fn line_identity(req: &RefundRequest, l: &RefundItemIn) -> Option<String> {
+    l.sale_item_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| l.line_index.map(|i| format!("{}-item-{}", req.ticket_id, i)))
+}
+
+/// Live outstanding debt recomputed from the durable ledger (same convention
+/// as `reconcileCustomerDebtFromLedger`: DEBT_ACQUIRED adds, PAYMENT_SETTLED
+/// subtracts, clamped at zero; the row's `balance_after` is a projection and
+/// is never trusted). INTEGER DZD end to end — the CAST mirrors the cash-cap
+/// read so REAL-affinity columns can never leak float dust into money.
+fn customer_ledger_balance(tx: &Transaction, customer_id: &str) -> Result<i64, TrustError> {
+    tx.query_row(
+        "SELECT COALESCE(SUM(CAST(CASE WHEN type = 'PAYMENT_SETTLED' THEN -amount ELSE amount END AS INTEGER)), 0) \
+         FROM customer_debts WHERE customer_id = ?1 AND deleted = 0",
+        [customer_id],
+        |r| r.get(0),
+    )
+    .map(|v: i64| v.max(0))
+    .map_err(|e| TrustError::op_failed(format!("debt balance: {e}")))
+}
+
+/// Idempotent customer parent stub (same shape as the TS fallback writer):
+/// only creates rows the refund's own writes need; an existing row is
+/// untouched. `uq_customers_idem` keeps the stub key unique per customer.
+fn ensure_customer_stub(tx: &Transaction, id: &str, name: &str, now: &str) -> Result<(), TrustError> {
+    tx.execute(
+        "INSERT INTO customers (id, name, phone, json_payload, updated_at, idempotency_key, created_at) \
+         VALUES (?1, ?2, '', '{}', ?3, 'stub-cust-' || ?1, ?3) ON CONFLICT(id) DO NOTHING",
+        params![id, name, now],
+    )
+    .map_err(|e| map_rusqlite("customer stub", e))?;
+    Ok(())
+}
+
+/// Read-merge-write for `customers.json_payload`: parses the durable payload
+/// (unparseable → empty projection + surfaced warning), applies the patch and
+/// stamps the NEXT customer version into the payload so column version and
+/// payload version agree. Returns the exact bytes the caller must persist.
+fn merge_customer_payload(
+    tx: &Transaction,
+    customer_id: &str,
+    patch: &serde_json::Map<String, serde_json::Value>,
+    warnings: &mut Vec<String>,
+) -> Result<String, TrustError> {
+    let (raw, ver): (String, i64) = tx
+        .query_row(
+            "SELECT json_payload, COALESCE(version, 1) FROM customers WHERE id = ?1",
+            [customer_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => conflict("INVALID:customer row missing"),
+            other => TrustError::op_failed(format!("customer payload read: {other}")),
+        })?;
+    let mut base: serde_json::Map<String, serde_json::Value> = match serde_json::from_str(&raw) {
+        Ok(serde_json::Value::Object(m)) => m,
+        _ => {
+            let t = raw.trim();
+            if !t.is_empty() && t != "{}" {
+                warnings.push(format!(
+                    "[refund] Payload client {customer_id} illisible — fusion minimale de la projection."
+                ));
+            }
+            serde_json::Map::new()
+        }
+    };
+    for (k, v) in patch {
+        base.insert(k.clone(), v.clone());
+    }
+    base.insert("version".to_string(), serde_json::Value::from(ver + 1));
+    Ok(serde_json::Value::Object(base).to_string())
+}
+
+/// Fill ACTIF installment plans of one customer FIFO (oldest plan first,
+/// entries by seq) from an applied payment — the same allocation the TS
+/// payment lane runs (`applyPaymentToPlanEntries`), executed natively so a
+/// refund's debt reduction cannot leave the plan schedule stale when the
+/// caller dies mid-post-commit work. Plan metadata LAGS the money trail by
+/// design: the ledger row and aggregate are already committed above; an
+/// interrupted fill is continued by the next payment instead of double
+/// counting. `paid_at` is stamped only when an entry becomes fully paid.
+fn fill_debt_plans_fifo(
+    tx: &Transaction,
+    customer_id: &str,
+    amount: i64,
+    now: &str,
+) -> Result<(), TrustError> {
+    if amount <= 0 || !has_table(tx, "debt_plans")? || !has_table(tx, "debt_plan_entries")? {
+        return Ok(());
+    }
+    let mut plan_ids: Vec<String> = Vec::new();
+    {
+        let mut stmt = tx
+            .prepare(
+                "SELECT id FROM debt_plans WHERE customer_id = ?1 AND status = 'ACTIF' AND deleted = 0 \
+                 ORDER BY created_at ASC, id ASC",
+            )
+            .map_err(|e| TrustError::op_failed(format!("plans prepare: {e}")))?;
+        let rows = stmt
+            .query_map([customer_id], |r| r.get::<_, String>(0))
+            .map_err(|e| TrustError::op_failed(format!("plans read: {e}")))?;
+        for r in rows {
+            plan_ids.push(r.map_err(|e| TrustError::op_failed(format!("plan row: {e}")))?);
+        }
+    }
+    let mut remainder = amount;
+    for plan_id in plan_ids {
+        if remainder <= 0 {
+            break;
+        }
+        let mut entries: Vec<(String, i64, i64)> = Vec::new();
+        {
+            // CAST keeps float dust from legacy rows out of money arithmetic;
+            // entries are INTEGER DZD by contract.
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, CAST(amount AS INTEGER), CAST(paid_amount AS INTEGER) \
+                     FROM debt_plan_entries WHERE plan_id = ?1 AND deleted = 0 ORDER BY seq ASC, id ASC",
+                )
+                .map_err(|e| TrustError::op_failed(format!("plan entries prepare: {e}")))?;
+            let rows = stmt
+                .query_map([&plan_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .map_err(|e| TrustError::op_failed(format!("plan entries read: {e}")))?;
+            for r in rows {
+                entries.push(r.map_err(|e| TrustError::op_failed(format!("entry row: {e}")))?);
+            }
+        }
+        let mut plan_fully_paid = !entries.is_empty();
+        for (entry_id, amount_due, paid) in &entries {
+            let due = (*amount_due).max(0);
+            let had = (*paid).max(0);
+            if remainder <= 0 {
+                if had < due {
+                    plan_fully_paid = false;
+                }
+                continue;
+            }
+            let capacity = due - had;
+            if capacity <= 0 {
+                continue;
+            }
+            let take = capacity.min(remainder);
+            let new_paid = had + take;
+            remainder -= take;
+            tx.execute(
+                "UPDATE debt_plan_entries SET paid_amount = ?2, \
+                 paid_at = CASE WHEN ?2 >= amount THEN ?3 ELSE paid_at END \
+                 WHERE id = ?1 AND deleted = 0",
+                params![entry_id, new_paid, now],
+            )
+            .map_err(|e| map_rusqlite("debt plan entry fill", e))?;
+            if new_paid < due {
+                plan_fully_paid = false;
+            }
+        }
+        if plan_fully_paid {
+            tx.execute(
+                "UPDATE debt_plans SET status = 'SOLDE', updated_at = ?2 \
+                 WHERE id = ?1 AND status = 'ACTIF' AND deleted = 0",
+                params![plan_id, now],
+            )
+            .map_err(|e| map_rusqlite("debt plan close", e))?;
+        }
+    }
+    Ok(())
 }
 
 fn sql_value_to_json(v: rusqlite::types::Value) -> serde_json::Value {
@@ -499,15 +808,34 @@ fn apply_refund_in_txn(
     // Authorship columns degrade to NULL when absent (online path on a
     // pre-heal DB keeps working; offline already failed closed above).
     let ticket_sql = match (has_device, has_shift_col) {
-        (true, true) => "SELECT status, version, device_id, shift_id FROM transactions WHERE id = ?1",
-        (true, false) => "SELECT status, version, device_id, NULL FROM transactions WHERE id = ?1",
-        _ => "SELECT status, version, NULL, NULL FROM transactions WHERE id = ?1",
+        (true, true) => "SELECT status, version, device_id, shift_id, json_payload, receipt_number, created_at FROM transactions WHERE id = ?1",
+        (true, false) => "SELECT status, version, device_id, NULL, json_payload, receipt_number, created_at FROM transactions WHERE id = ?1",
+        _ => "SELECT status, version, NULL, NULL, json_payload, receipt_number, created_at FROM transactions WHERE id = ?1",
     };
-    let (status, version, ticket_device, ticket_shift): (String, i64, Option<String>, Option<String>) = tx
+    #[allow(clippy::type_complexity)]
+    let (status, version, ticket_device, ticket_shift, ticket_payload_raw, ticket_receipt, ticket_created_at): (
+        String,
+        i64,
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+        String,
+    ) = tx
         .query_row(
             ticket_sql,
             [&req.ticket_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ))
+            },
         )
         .map_err(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => conflict("TICKET_NOT_FOUND"),
@@ -689,14 +1017,107 @@ fn apply_refund_in_txn(
         "PARTIALLY_REFUNDED"
     };
 
+    // 4b. Recovered COGS (RESTOCKED-only): Σ unit_cost_at_sale × qty over
+    //     non-defective lines, integer DZD, native-computed — never trusted
+    //     from the caller. Defective lines keep their cost consumed on the
+    //     original sale: the loss is the unrecovered COGS + the
+    //     `defective_returns` quarantine trail, never a second credit (the
+    //     refund row's `profit` = net refund − recovered COGS is the net
+    //     burden the reports read).
+    let mut recovered_cogs: i64 = 0;
+    for l in &req.lines {
+        if !line_is_defective(l) {
+            recovered_cogs = recovered_cogs
+                .saturating_add(l.unit_cost_at_sale.saturating_mul(l.quantity));
+        }
+    }
+    if req.cost_total != recovered_cogs {
+        warnings.push(format!(
+            "[refund] cost_total client ({}) ≠ COGS récupéré natif ({recovered_cogs}) — valeur native retenue.",
+            req.cost_total
+        ));
+    }
+    let profit_net = req.total_net.saturating_sub(recovered_cogs);
+
+    // 4c. Original-ticket payload merge. The base is the DURABLE row payload
+    //     read under this write lock, so `refundedItems` committed by a
+    //     concurrent tab are accumulated, never dropped by a stale client
+    //     snapshot. The client snapshot is the fallback base ONLY when the
+    //     row payload is unparseable (surfaced as a warning). Status and
+    //     version are stamped to match the CAS below; the merged bytes are
+    //     what the row UPDATE, the outbox row and the read-back all carry.
+    let mut merged: serde_json::Value = match serde_json::from_str::<serde_json::Value>(&ticket_payload_raw) {
+        Ok(v) if v.is_object() => v,
+        _ => {
+            warnings.push(
+                "[refund] Payload ticket original illisible — fusion depuis l'instantané client."
+                    .to_string(),
+            );
+            serde_json::from_str::<serde_json::Value>(&req.original_outbox_payload)
+                .ok()
+                .filter(|v| v.is_object())
+                .ok_or_else(|| conflict("INVALID:original outbox payload must be JSON"))?
+        }
+    };
+    if let Some(obj) = merged.as_object_mut() {
+        obj.insert("status".to_string(), serde_json::Value::from(new_status));
+        obj.insert("version".to_string(), serde_json::Value::from(version + 1));
+        let mut items: Vec<serde_json::Value> = obj
+            .get("refundedItems")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for l in &req.lines {
+            let sid = line_identity(req, l);
+            let dup = items.iter().any(|e| {
+                e.get("refundId").and_then(|v| v.as_str()) == Some(req.refund_id.as_str())
+                    && e.get("saleItemId").and_then(|v| v.as_str()) == sid.as_deref()
+                    && e.get("productId").and_then(|v| v.as_str()) == Some(l.product_id.as_str())
+                    && e.get("condition").and_then(|v| v.as_str()) == Some(line_condition(l))
+                    && e.get("imeiNumber").and_then(|v| v.as_str()) == l.imei_number.as_deref()
+            });
+            if dup {
+                continue;
+            }
+            items.push(serde_json::json!({
+                "saleItemId": sid,
+                "lineIndex": l.line_index,
+                "productId": l.product_id,
+                "quantity": l.quantity,
+                "imeiNumber": l.imei_number,
+                "condition": line_condition(l),
+                "refundId": req.refund_id,
+                "refundReceiptNumber": req.receipt_number,
+            }));
+        }
+        obj.insert("refundedItems".to_string(), serde_json::Value::Array(items));
+        // Alias fields the slice historically stamped on the outbox payload.
+        // Filled only when absent — the row's own columns win for readers.
+        if !obj.contains_key("receipt_number") {
+            obj.insert(
+                "receipt_number".to_string(),
+                serde_json::Value::from(ticket_receipt.as_str()),
+            );
+        }
+        if !obj.contains_key("created_at") {
+            obj.insert(
+                "created_at".to_string(),
+                serde_json::Value::from(ticket_created_at.as_str()),
+            );
+        }
+    }
+    let merged_str = merged.to_string();
+
     // 5. Status flip with version CAS as an invariant assertion: the version
     //    was read under this same lock, so 0 rows means a writer bypassed
-    //    the lock. Re-read to report VOIDED vs duplicate precisely.
+    //    the lock. Re-read to report VOIDED vs duplicate precisely. The
+    //    merged payload travels in the same write, so the row's JSON can
+    //    never lag its status.
     let flipped = tx
         .execute(
-            "UPDATE transactions SET status = ?1, version = version + 1, updated_at = ?2, sync_status = 'pending' \
-             WHERE id = ?3 AND version = ?4 AND status <> 'VOIDED'",
-            params![new_status, now, req.ticket_id, version],
+            "UPDATE transactions SET status = ?1, version = version + 1, updated_at = ?2, sync_status = 'pending', \
+             json_payload = ?3 WHERE id = ?4 AND version = ?5 AND status <> 'VOIDED'",
+            params![new_status, now, merged_str, req.ticket_id, version],
         )
         .map_err(|e| map_rusqlite("ticket cas", e))?;
     if flipped != 1 {
@@ -714,13 +1135,25 @@ fn apply_refund_in_txn(
     }
 
     // 6. Refund row. The dedup row (step 2) satisfies
-    //    `trg_refund_requires_dedup`. `shift_id` / `ledger_cogs_total` may be
-    //    absent on pre-heal DBs — probe and degrade like the TS writer.
+    //    `trg_refund_requires_dedup`. `shift_id` / `ledger_cogs_total` /
+    //    `restored_cogs` may be absent on pre-heal DBs — probe and degrade
+    //    like the TS writer.
     let has_shift = has_column(tx, "transactions", "shift_id")?;
     let has_ledger_cogs = has_column(tx, "transactions", "ledger_cogs_total")?;
-    // The owning shift is the CURRENT shift (contra-revenue to this period);
-    // verified OPEN at step 11 before any cash movement is recorded.
-    let shift_id: Option<&str> = req.cash_move.as_ref().map(|c| c.session_id.as_str());
+    let has_restored_cogs = has_column(tx, "transactions", "restored_cogs")?;
+    // The owning shift is the CURRENT shift (contra-revenue to this period;
+    // verified OPEN at step 13 before any cash movement is recorded). The
+    // drawer movement names it for cash payouts; non-cash refunds anchor to
+    // the asserted active shift so the Z-period sees every refund row.
+    let shift_id: Option<&str> = req
+        .cash_move
+        .as_ref()
+        .map(|c| c.session_id.trim())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            let s = req.active_shift_id.trim();
+            (!s.is_empty()).then_some(s)
+        });
     let mut cols = "id, receipt_number, customer_id, subtotal, discount_total, total, \
         cost_total, profit, profit_margin, pricing_tier, payment_method, cash_tendered, \
         change_due, status, created_at, json_payload, device_id, idempotency_key, \
@@ -728,6 +1161,9 @@ fn apply_refund_in_txn(
         .to_string();
     if has_ledger_cogs {
         cols.push_str(", ledger_cogs_total");
+    }
+    if has_restored_cogs {
+        cols.push_str(", restored_cogs");
     }
     if has_shift {
         cols.push_str(", shift_id");
@@ -750,8 +1186,8 @@ fn apply_refund_in_txn(
             &req.subtotal,
             &req.discount_total,
             &req.total_net,
-            &req.cost_total,
-            &0i64,
+            &recovered_cogs,
+            &profit_net,
             &0i64,
             &req.pricing_tier,
             &req.payment_method,
@@ -772,6 +1208,9 @@ fn apply_refund_in_txn(
         let zero_cogs = 0i64;
         if has_ledger_cogs {
             p.push(&zero_cogs);
+        }
+        if has_restored_cogs {
+            p.push(&recovered_cogs);
         }
         if has_shift {
             p.push(&shift_id);
@@ -810,6 +1249,28 @@ fn apply_refund_in_txn(
             )
         }
         .map_err(|e| map_rusqlite("refund line insert", e))?;
+    }
+
+    // 7b. Line identity (v127): stamp the original sale-line id on the refund
+    //     line (per-line refund state becomes computable in SQL) and fill the
+    //     ORIGINAL row's own identity once (joins on `sale_item_id`, same
+    //     derivation `sale_batch_allocations.sale_item_id` already uses).
+    //     Probed — pre-heal DBs degrade to the product-keyed state as before.
+    if has_column(tx, "transaction_items", "sale_item_id")? {
+        for l in &req.lines {
+            let Some(sid) = line_identity(req, l) else { continue };
+            tx.execute(
+                "UPDATE transaction_items SET sale_item_id = ?1 WHERE id = ?2",
+                params![sid, l.id],
+            )
+            .map_err(|e| map_rusqlite("refund line identity", e))?;
+            tx.execute(
+                "UPDATE transaction_items SET sale_item_id = ?1 \
+                 WHERE id = ?1 AND (sale_item_id IS NULL OR sale_item_id = '')",
+                [&sid],
+            )
+            .map_err(|e| map_rusqlite("original line identity", e))?;
+        }
     }
 
     // 8. Inventory deltas (authoritative stock movement; deterministic keys
@@ -962,61 +1423,244 @@ fn apply_refund_in_txn(
 
     // 10. IMEI release (best-effort mirror of the Dexie release: a missing
     //     row warns instead of failing the money — same policy as the TS
-    //     lane, which collects these as warnings).
-    for imei in &req.imeis {
-        let imei = imei.trim();
+    //     lane, which collects these as warnings). Released units land
+    //     `in_stock` (restock) or `defective` (quarantine) when the v127
+    //     status column exists, and append the ownership event in the SAME
+    //     commit — id formula mirrors TS `imeiTrustEventId` verbatim
+    //     (`imev|{kind}|order|{refundId}|{imei}`); a truly missing event row
+    //     is insert-or-ignore so retries converge.
+    let has_imei_status = has_column(tx, "imei_records", "status")?;
+    let has_imei_events = has_table(tx, "imei_events")?;
+    let releases = req
+        .imeis
+        .iter()
+        .map(|i| {
+            (
+                i.as_str(),
+                "RETURN_IN",
+                "in_stock",
+                "Retour en stock (remboursement)",
+            )
+        })
+        .chain(req.defective_imeis.iter().map(|i| {
+            (
+                i.as_str(),
+                "RETURN_DEFECTIVE",
+                "defective",
+                "Retour défectueux — quarantaine (remboursement)",
+            )
+        }));
+    for (imei_raw, kind, status, note) in releases {
+        let imei = imei_raw.trim();
         if imei.is_empty() {
             continue;
         }
-        let n = tx
-            .execute(
+        let n = if has_imei_status {
+            tx.execute(
+                "UPDATE imei_records SET sale_transaction_id = NULL, sold_at = NULL, status = ?2, version = version + 1 WHERE imei = ?1",
+                params![imei, status],
+            )
+            .map_err(|e| map_rusqlite("imei release", e))?
+        } else {
+            tx.execute(
                 "UPDATE imei_records SET sale_transaction_id = NULL, sold_at = NULL, version = version + 1 WHERE imei = ?1",
                 [imei],
             )
-            .map_err(|e| map_rusqlite("imei release", e))?;
+            .map_err(|e| map_rusqlite("imei release", e))?
+        };
         if n != 1 {
-            warnings.push(format!("[refund] IMEI {imei} introuvable dans SQLite — vérification manuelle."));
+            warnings.push(format!(
+                "[refund] IMEI {imei} introuvable dans SQLite — vérification manuelle."
+            ));
+            continue;
+        }
+        if has_imei_events {
+            tx.execute(
+                "INSERT OR IGNORE INTO imei_events (id, imei, kind, ref_type, ref_id, at, actor, note) \
+                 VALUES (?1, ?2, ?3, 'order', ?4, ?5, '', ?6)",
+                params![
+                    format!("imev|{kind}|order|{}|{imei}", req.refund_id),
+                    imei,
+                    kind,
+                    req.refund_id,
+                    now,
+                    note,
+                ],
+            )
+            .map_err(|e| map_rusqlite("imei event", e))?;
         }
     }
 
-    // 11. Debt relief as an authoritative ledger row with the deterministic
-    //     entry id (same id the TS lane derives: replays converge on the PK,
-    //     and a second tab never gets here — dedup fires first).
+    // 10b. Defective write-off trail: one `defective_returns` row per
+    //      write-off line (the quarantine list's reader contract) plus a
+    //      ZERO-delta ledger marker (`ADJUST` / `DEFECTIVE_QUARANTINE` — the
+    //      legacy lane's exact vocabulary and deterministic id, so the two
+    //      lanes converge via ON CONFLICT). These units never re-enter
+    //      inventory: no stock increment, no batch restitution, and no stock
+    //      recompute for them (the cached SUM is untouched by a 0 delta).
+    if req.lines.iter().any(line_is_defective) {
+        let has_defective_table = has_table(tx, "defective_returns")?;
+        for l in &req.lines {
+            if !line_is_defective(l) {
+                continue;
+            }
+            if has_defective_table {
+                tx.execute(
+                    "INSERT INTO defective_returns (id, product_id, product_name, imei, quantity, \
+                     unit_cost, reason, sale_id, refund_id, device_id, idempotency_key, sync_status, \
+                     version, created_at, updated_at, deleted) \
+                     VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?1, 'pending', 1, ?10, ?10, 0) \
+                     ON CONFLICT(id) DO NOTHING",
+                    params![
+                        format!("def-{}-{}", req.refund_id, l.item_key),
+                        l.product_id,
+                        l.imei_number,
+                        l.quantity,
+                        l.unit_cost_at_sale,
+                        req.defect_note,
+                        req.ticket_id,
+                        req.refund_id,
+                        req.device_id,
+                        now,
+                    ],
+                )
+                .map_err(|e| map_rusqlite("defective return insert", e))?;
+            }
+            let led_id = deterministic_id(
+                "LED-DEF",
+                &[&req.refund_id, &l.product_id, &l.quantity.to_string()],
+            );
+            tx.execute(
+                "INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, \
+                 device_id, idempotency_key, sync_status, created_at, updated_at, deleted, version) \
+                 VALUES (?1, ?2, 0, 'ADJUST', 'DEFECTIVE_QUARANTINE', ?3, ?4, ?1, 'pending', ?5, ?5, 0, 1) \
+                 ON CONFLICT(id) DO NOTHING",
+                params![led_id, l.product_id, req.refund_id, req.device_id, now],
+            )
+            .map_err(|e| map_rusqlite("quarantine marker", e))?;
+        }
+    }
+
+    // 11. Debt relief as an authoritative ledger row. The applied amount is
+    //     clamped to the LIVE balance recomputed from the ledger in this
+    //     transaction (a stale client snapshot must never drive the ledger
+    //     negative) and the clamp is SURFACED, never silent. The row keeps
+    //     the caller's deterministic entry id so replays converge on the PK;
+    //     the cached `customers.current_debt` aggregate is recomputed from
+    //     the ledger, and ACTIF installment plans are filled FIFO in the
+    //     same commit.
+    let mut debt_relief_applied: i64 = 0;
+    let mut customer_debt_after: Option<i64> = None;
     if let Some(d) = &req.debt {
         if d.amount <= 0 {
             return Err(conflict("INVALID:debt relief amount must be > 0"));
         }
-        tx.execute(
-            "INSERT INTO customers (id, name, phone, json_payload, updated_at, idempotency_key, created_at) \
-             VALUES (?1, ?2, '', '{}', ?3, 'stub-cust-' || ?1, ?3) ON CONFLICT(id) DO NOTHING",
-            params![d.customer_id, d.customer_name, now],
-        )
-        .map_err(|e| map_rusqlite("debt parent stub", e))?;
-        let debt_json = serde_json::json!({
-            "id": d.entry_id, "customerId": d.customer_id, "customerName": d.customer_name,
-            "type": "PAYMENT_SETTLED", "amount": d.amount, "receiptNumber": d.receipt_number,
-            "paymentMethod": d.payment_method, "notes": d.notes, "recordedBy": d.recorded_by,
-            "createdAt": now,
-        })
-        .to_string();
-        if let Err(e) = tx.execute(
-            "INSERT INTO customer_debts (id, customer_id, customer_name, type, amount, balance_after, \
-             receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted) \
-             VALUES (?1, ?2, ?3, 'PAYMENT_SETTLED', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?10, 0)",
-            params![
-                d.entry_id, d.customer_id, d.customer_name, d.amount, d.amount,
-                d.receipt_number, d.payment_method, d.notes, d.recorded_by, now, debt_json,
-            ],
-        ) {
-            // balance_after is informational on the ledger row (the cached
-            // aggregate is reconciled from the ledger); only a PK collision
-            // can fail here, which means this exact relief already applied.
-            if is_unique_violation(&e) {
-                warnings.push("[refund] Dette : écriture déjà appliquée (rejouée) — ignorée.".to_string());
+        ensure_customer_stub(tx, &d.customer_id, &d.customer_name, now)?;
+        let prior = customer_ledger_balance(tx, &d.customer_id)?;
+        let applied = d.amount.min(prior);
+        if applied < d.amount {
+            warnings.push(format!(
+                "[refund] Réduction de dette plafonnée: demandé {} DA, appliqué {applied} DA (solde réel {prior} DA).",
+                d.amount
+            ));
+        }
+        let balance_after = (prior - applied).max(0);
+        debt_relief_applied = applied;
+        if applied > 0 {
+            let debt_json = serde_json::json!({
+                "id": d.entry_id, "customerId": d.customer_id, "customerName": d.customer_name,
+                "type": "PAYMENT_SETTLED", "amount": applied, "balanceAfter": balance_after,
+                "receiptNumber": d.receipt_number, "paymentMethod": d.payment_method,
+                "notes": d.notes, "recordedBy": d.recorded_by, "createdAt": now,
+            })
+            .to_string();
+            if let Err(e) = tx.execute(
+                "INSERT INTO customer_debts (id, customer_id, customer_name, type, amount, balance_after, \
+                 receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted) \
+                 VALUES (?1, ?2, ?3, 'PAYMENT_SETTLED', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?10, 0)",
+                params![
+                    d.entry_id, d.customer_id, d.customer_name, applied, balance_after,
+                    d.receipt_number, d.payment_method, d.notes, d.recorded_by, now, debt_json,
+                ],
+            ) {
+                // Only a PK collision can fail here, which means this exact
+                // relief already applied (replay) — converged, not an error.
+                if is_unique_violation(&e) {
+                    warnings.push(
+                        "[refund] Dette : écriture déjà appliquée (rejouée) — ignorée.".to_string(),
+                    );
+                } else {
+                    return Err(map_rusqlite("debt relief insert", e));
+                }
+            }
+            // Cached aggregate + payload projection (single authority: the
+            // ledger sum above; `current_debt` and the payload ride the same
+            // write so they can never disagree).
+            let mut patch = serde_json::Map::new();
+            patch.insert(
+                "currentDebt".to_string(),
+                serde_json::Value::from(balance_after),
+            );
+            let merged_payload =
+                merge_customer_payload(tx, &d.customer_id, &patch, &mut warnings)?;
+            if has_column(tx, "customers", "current_debt")? {
+                tx.execute(
+                    "UPDATE customers SET current_debt = ?2, json_payload = ?3, updated_at = ?4, version = version + 1 WHERE id = ?1",
+                    params![d.customer_id, balance_after, merged_payload, now],
+                )
+                .map_err(|e| map_rusqlite("customer debt aggregate", e))?;
             } else {
-                return Err(map_rusqlite("debt relief insert", e));
+                tx.execute(
+                    "UPDATE customers SET json_payload = ?2, updated_at = ?3, version = version + 1 WHERE id = ?1",
+                    params![d.customer_id, merged_payload, now],
+                )
+                .map_err(|e| map_rusqlite("customer debt payload", e))?;
+            }
+            fill_debt_plans_fifo(tx, &d.customer_id, applied, now)?;
+        }
+        customer_debt_after = Some(customer_ledger_balance(tx, &d.customer_id)?);
+    } else if let Some(cid) = req
+        .customer_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        customer_debt_after = Some(customer_ledger_balance(tx, cid)?);
+    }
+
+    // 11b. Loyalty clawback persistence (single authority: the shared TS
+    //      math already derived the post-refund points + buckets from the
+    //      original sale's immutable snapshots; native REPLAYS that verdict
+    //      onto the durable row and never invents numbers). Read-merge-write
+    //      on the same customer payload as the debt patch above.
+    let mut loyalty_applied: Option<i64> = None;
+    if let Some(points) = req.customer_points_after {
+        let Some(cust_id) = req
+            .customer_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            return Err(conflict("INVALID:loyalty clawback requires the customer"));
+        };
+        ensure_customer_stub(tx, cust_id, "", now)?;
+        let points = points.max(0);
+        let mut patch = serde_json::Map::new();
+        patch.insert("loyaltyPoints".to_string(), serde_json::Value::from(points));
+        if let Some(buckets_json) = req.customer_point_buckets_json.as_deref() {
+            let buckets: serde_json::Value = serde_json::from_str(buckets_json)
+                .map_err(|_| conflict("INVALID:point buckets must be JSON"))?;
+            if !buckets.is_null() {
+                patch.insert("pointBuckets".to_string(), buckets);
             }
         }
+        let merged_payload = merge_customer_payload(tx, cust_id, &patch, &mut warnings)?;
+        tx.execute(
+            "UPDATE customers SET loyalty_points = ?2, json_payload = ?3, updated_at = ?4, version = version + 1 WHERE id = ?1",
+            params![cust_id, points, merged_payload, now],
+        )
+        .map_err(|e| map_rusqlite("loyalty persist", e))?;
+        loyalty_applied = Some(points);
     }
 
     // 12. Voucher credit-back with the same CAS discipline as
@@ -1194,25 +1838,15 @@ fn apply_refund_in_txn(
             |r| r.get(0),
         )
         .unwrap_or_else(|_| format!("legacy-{}", req.ticket_id));
-    let mut orig_value: serde_json::Value =
-        serde_json::from_str(&req.original_outbox_payload)
-            .map_err(|_| conflict("INVALID:original outbox payload must be JSON"))?;
-    if let Some(obj) = orig_value.as_object_mut() {
-        obj.insert(
-            "version".to_string(),
-            serde_json::Value::from(version + 1),
-        );
-        obj.insert(
-            "status".to_string(),
-            serde_json::Value::from(new_status),
-        );
-    }
+    // The outbox row carries the SAME merged bytes that were written to the
+    // durable row in step 5 — status/version/refundedItems included — so a
+    // reader can never see the row and the queue disagree.
     tx.execute(
         "INSERT INTO sync_outbox (idempotency_key, entity_type, entity_id, operation, payload_json, status, created_at, updated_at) \
          VALUES (?1, 'order', ?2, 'UPSERT', ?3, 'pending', ?4, ?4) \
          ON CONFLICT(idempotency_key) DO UPDATE SET operation = 'UPSERT', payload_json = excluded.payload_json, \
          status = 'pending', retry_count = 0, next_retry_at = NULL, last_error = NULL, updated_at = ?4",
-        params![orig_key, req.ticket_id, orig_value.to_string(), now],
+        params![orig_key, req.ticket_id, merged_str, now],
     )
     .map_err(|e| map_rusqlite("outbox original", e))?;
     for l in &req.lines {
@@ -1256,6 +1890,11 @@ fn apply_refund_in_txn(
         ticket_status: new_status.to_string(),
         ticket_version: version + 1,
         warnings,
+        ticket_payload: merged_str,
+        customer_debt_after,
+        debt_relief_applied,
+        customer_points_after: loyalty_applied,
+        recovered_cogs,
     })
 }
 
@@ -1409,7 +2048,8 @@ mod tests {
                 idempotency_key TEXT DEFAULT '', sync_status TEXT DEFAULT 'pending',
                 updated_at TEXT DEFAULT '', version INTEGER NOT NULL DEFAULT 1,
                 deleted INTEGER DEFAULT 0, ledger_cogs_total REAL, shift_id TEXT,
-                original_transaction_id TEXT, is_refund INTEGER NOT NULL DEFAULT 0
+                original_transaction_id TEXT, is_refund INTEGER NOT NULL DEFAULT 0,
+                restored_cogs REAL
             );
             CREATE TABLE app_settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
             CREATE TABLE device_identity (
@@ -1422,6 +2062,7 @@ mod tests {
                 imei_number TEXT, cost_price REAL DEFAULT 0,
                 unit_price_charged REAL DEFAULT 0, unit_cost_at_sale REAL DEFAULT 0,
                 discount_amount REAL DEFAULT 0, line_profit REAL DEFAULT 0,
+                sale_item_id TEXT,
                 json_payload TEXT NOT NULL, device_id TEXT DEFAULT 'local',
                 idempotency_key TEXT DEFAULT '', sync_status TEXT DEFAULT 'pending',
                 created_at TEXT DEFAULT '', updated_at TEXT DEFAULT '',
@@ -1445,7 +2086,10 @@ mod tests {
             CREATE TABLE customers (
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL,
                 json_payload TEXT NOT NULL, updated_at TEXT NOT NULL,
-                idempotency_key TEXT DEFAULT '', created_at TEXT DEFAULT ''
+                idempotency_key TEXT DEFAULT '', created_at TEXT DEFAULT '',
+                loyalty_points INTEGER NOT NULL DEFAULT 0, current_debt INTEGER,
+                version INTEGER NOT NULL DEFAULT 1, device_id TEXT DEFAULT 'legacy',
+                sync_status TEXT DEFAULT 'pending', deleted INTEGER DEFAULT 0
             );
             CREATE TABLE customer_debts (
                 id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, customer_name TEXT NOT NULL,
@@ -1454,6 +2098,37 @@ mod tests {
                 created_at TEXT NOT NULL, json_payload TEXT NOT NULL,
                 version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL,
                 deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE imei_records (
+                imei TEXT PRIMARY KEY, product_id TEXT NOT NULL,
+                purchase_order_id TEXT, sale_transaction_id TEXT, warranty_expires_at TEXT,
+                received_at TEXT, sold_at TEXT, version INTEGER NOT NULL DEFAULT 1,
+                status TEXT
+            );
+            CREATE TABLE imei_events (
+                id TEXT PRIMARY KEY, imei TEXT NOT NULL, kind TEXT NOT NULL,
+                ref_type TEXT, ref_id TEXT, at TEXT NOT NULL, actor TEXT, note TEXT
+            );
+            CREATE TABLE defective_returns (
+                id TEXT PRIMARY KEY, product_id TEXT NOT NULL, product_name TEXT,
+                imei TEXT, quantity REAL NOT NULL DEFAULT 0, unit_cost REAL NOT NULL DEFAULT 0,
+                reason TEXT, sale_id TEXT, refund_id TEXT, device_id TEXT,
+                idempotency_key TEXT UNIQUE, sync_status TEXT DEFAULT 'pending',
+                version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '', deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE debt_plans (
+                id TEXT PRIMARY KEY, customer_id TEXT NOT NULL,
+                total_amount REAL NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'ACTIF',
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                deleted INTEGER DEFAULT 0
+            );
+            CREATE TABLE debt_plan_entries (
+                id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, seq INTEGER NOT NULL,
+                due_date TEXT NOT NULL, amount REAL NOT NULL DEFAULT 0,
+                paid_amount REAL NOT NULL DEFAULT 0, paid_at TEXT,
+                created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '',
+                deleted INTEGER DEFAULT 0, UNIQUE (plan_id, seq)
             );
             CREATE TABLE credit_vouchers (
                 id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE,
@@ -1504,14 +2179,14 @@ mod tests {
         conn.execute("INSERT INTO products (id) VALUES ('P1')", [])
             .unwrap();
         conn.execute(
-            "INSERT INTO transactions (id, receipt_number, subtotal, total, status, created_at, json_payload, version, device_id, shift_id) \
-             VALUES ('TKT-1', 'REC-1', 200, 200, 'COMPLETED', '2026-01-01T00:00:00Z', '{}', 1, 'dev-A', 'S1')",
+            "INSERT INTO transactions (id, receipt_number, subtotal, total, cost_total, profit, status, created_at, json_payload, version, device_id, shift_id, idempotency_key) \
+             VALUES ('TKT-1', 'REC-1', 200, 200, 100, 100, 'COMPLETED', '2026-01-01T00:00:00Z', '{\"id\":\"TKT-1\",\"receiptNumber\":\"REC-1\",\"items\":[{\"id\":\"TKT-1-item-0\"}]}', 1, 'dev-A', 'S1', 'tik-TKT-1')",
             [],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price, json_payload) \
-             VALUES ('TI-0', 'TKT-1', 'P1', 2, 100, '{}')",
+             VALUES ('TKT-1-item-0', 'TKT-1', 'P1', 2, 100, '{}')",
             [],
         )
         .unwrap();
@@ -1525,6 +2200,16 @@ mod tests {
         conn.execute(
             "INSERT INTO customers (id, name, phone, json_payload, updated_at) \
              VALUES ('C1', 'Salma', '', '{}', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        // The ticket was partially credit-funded: a live 500 DA debt the
+        // refund's relief clamps against (the durable ledger is the truth).
+        conn.execute(
+            "INSERT INTO customer_debts (id, customer_id, customer_name, type, amount, balance_after, \
+             receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted) \
+             VALUES ('DEBT-SEED', 'C1', 'Salma', 'DEBT_ACQUIRED', 500, 500, 'REC-DEBT', 'Crédit Client', \
+             'seed', 'seed', '2026-01-01T00:00:00Z', '{}', 1, '2026-01-01T00:00:00Z', 0)",
             [],
         )
         .unwrap();
@@ -1575,6 +2260,9 @@ mod tests {
                 discount_amount: 0,
                 line_profit: 50,
                 imei_number: None,
+                sale_item_id: Some("TKT-1-item-0".into()),
+                line_index: Some(0),
+                condition: None,
                 item_key: "IK-1".into(),
                 item_payload: "{}".into(),
             }],
@@ -1593,6 +2281,10 @@ mod tests {
                 fallback_key: "FBK-1".into(),
             }],
             imeis: vec![],
+            defective_imeis: vec![],
+            defect_note: None,
+            customer_points_after: None,
+            customer_point_buckets_json: None,
             debt: Some(DebtReliefIn {
                 entry_id: "PAYREL-1".into(),
                 customer_id: "C1".into(),
@@ -1696,7 +2388,78 @@ mod tests {
             )
             .unwrap();
         assert_eq!(qty, 12.0);
-        assert_eq!(count(&conn, "SELECT COUNT(*) FROM customer_debts"), 1);
+        // Seed debt (500) + the relief row (100) — applied against the LIVE
+        // ledger balance, with the cached aggregate recomputed.
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM customer_debts"), 2);
+        let (applied, bal): (f64, f64) = conn
+            .query_row(
+                "SELECT amount, balance_after FROM customer_debts WHERE id = 'PAYREL-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((applied, bal), (100.0, 400.0));
+        assert_eq!(
+            count(&conn, "SELECT current_debt FROM customers WHERE id = 'C1'"),
+            400
+        );
+        assert_eq!(ok.debt_relief_applied, 100);
+        assert_eq!(ok.customer_debt_after, Some(400));
+        // Recovered COGS: restocked-only, native-computed; the refund row
+        // carries it as cost_total + restored_cogs, profit = R − G.
+        assert_eq!(ok.recovered_cogs, 100);
+        let (rt, rc, rp, rsc): (f64, f64, f64, f64) = conn
+            .query_row(
+                "SELECT total, cost_total, profit, restored_cogs FROM transactions WHERE id = 'REF-H1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((rt, rc, rp, rsc), (200.0, 100.0, 100.0, 100.0));
+        // Line identity: the refund line pins the original sale line; the
+        // original row self-fills once (joins on `sale_item_id`).
+        let sid: String = conn
+            .query_row(
+                "SELECT sale_item_id FROM transaction_items WHERE id = 'RI-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sid, "TKT-1-item-0");
+        let osid: String = conn
+            .query_row(
+                "SELECT sale_item_id FROM transaction_items WHERE id = 'TKT-1-item-0'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(osid, "TKT-1-item-0");
+        // Ticket payload merge: accumulated refundedItems + status/version,
+        // and the returned read-back payload is the exact row bytes.
+        let (payload,): (String,) = conn
+            .query_row(
+                "SELECT json_payload FROM transactions WHERE id = 'TKT-1'",
+                [],
+                |r| Ok((r.get(0)?,)),
+            )
+            .unwrap();
+        assert_eq!(payload, ok.ticket_payload);
+        let pv: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(pv["status"], "REFUNDED");
+        assert_eq!(pv["version"], 2);
+        assert_eq!(pv["refundedItems"][0]["saleItemId"], "TKT-1-item-0");
+        assert_eq!(pv["refundedItems"][0]["condition"], "restock");
+        assert_eq!(pv["refundedItems"][0]["refundId"], "REF-H1");
+        assert_eq!(pv["receipt_number"], "REC-1");
+        // The outbox row carries the SAME merged bytes as the row.
+        let (ob,): (String,) = conn
+            .query_row(
+                "SELECT payload_json FROM sync_outbox WHERE idempotency_key = 'tik-TKT-1' AND entity_type = 'order'",
+                [],
+                |r| Ok((r.get(0)?,)),
+            )
+            .unwrap();
+        assert_eq!(ob, ok.ticket_payload);
         let remaining: f64 = conn
             .query_row(
                 "SELECT remaining_amount FROM credit_vouchers WHERE code = 'BON1'",
@@ -1891,7 +2654,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(qty, 10.0);
-        assert_eq!(count(&conn, "SELECT COUNT(*) FROM customer_debts"), 0);
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM customer_debts WHERE type = 'PAYMENT_SETTLED'"
+            ),
+            0
+        );
         assert_eq!(count(&conn, "SELECT COUNT(*) FROM refund_dedup"), 0);
         assert_eq!(
             conn.query_row(
@@ -2403,8 +3172,660 @@ mod tests {
             )
             .unwrap();
         assert_eq!(qty, 12.0);
-        assert_eq!(count(&conn, "SELECT COUNT(*) FROM customer_debts"), 1);
+        // Seed debt + the winner's relief row: exactly one relief committed.
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM customer_debts WHERE type = 'PAYMENT_SETTLED'"
+            ),
+            1
+        );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // -----------------------------------------------------------------
+    // Scenario A — multi-step partials with an order-level discount,
+    // conserved to the Dinar, fourth attempt rejected.
+    // -----------------------------------------------------------------
+
+    /// One-refund helper: non-cash payout on shift S1, no debt/voucher —
+    /// isolates quota + payload accumulation math.
+    fn partial_req(
+        ticket: &str,
+        tag: &str,
+        qty: i64,
+        total: i64,
+        applied_price: i64,
+        sale_item_id: Option<&str>,
+    ) -> RefundRequest {
+        let mut r = base_req();
+        r.ticket_id = ticket.into();
+        r.refund_id = format!("REF-{tag}");
+        r.items_hash = format!("H-{tag}");
+        r.receipt_number = format!("AVOIR-{tag}");
+        r.method = "Avoir Client".into();
+        r.payment_method = "Avoir Client".into();
+        r.subtotal = total;
+        r.discount_total = 0;
+        r.total_net = total;
+        r.cost_total = 50 * qty;
+        r.cash_tendered = 0;
+        r.change_due = 0;
+        r.cash_tendered_net = 0;
+        r.refund_payload = format!(
+            "{{\"id\":\"REF-{tag}\",\"isRefund\":true,\"originalTransactionId\":\"{ticket}\",\
+             \"refundMethod\":\"Avoir Client\",\"cashDisbursed\":0,\"total\":{total}}}"
+        );
+        r.lines[0].id = format!("RI-{tag}");
+        r.lines[0].item_key = format!("IK-{tag}");
+        r.lines[0].quantity = qty;
+        r.lines[0].applied_price = applied_price;
+        r.lines[0].unit_price_charged = applied_price;
+        r.lines[0].unit_cost_at_sale = 50;
+        r.lines[0].sale_item_id = sale_item_id.map(str::to_string);
+        r.lines[0].line_index = sale_item_id.map(|_| 0);
+        r.deltas[0].id = format!("LED-{tag}");
+        r.deltas[0].key = format!("LEDK-{tag}");
+        r.deltas[0].delta = qty;
+        r.batches[0].quantity = qty as f64;
+        r.batches[0].fallback_batch_id = format!("FB-{tag}");
+        r.batches[0].fallback_key = format!("FBK-{tag}");
+        r.imeis = vec![];
+        r.debt = None;
+        r.voucher = None;
+        r.cash_move = None;
+        r
+    }
+
+    #[test]
+    fn scenario_a_multi_step_partial_order_discount_conserves_total() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        // Ticket: 3 × 100 with a 30 DA order discount → total 270 (the
+        // client prorates per step: 80 + 90 + 100 = 270 exactly).
+        conn.execute("DELETE FROM transaction_items WHERE transaction_id = 'TKT-1'", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE transactions SET subtotal = 300, discount_total = 30, total = 270, cost_total = 150, profit = 120 WHERE id = 'TKT-1'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price, json_payload) \
+             VALUES ('TKT-1-item-0', 'TKT-1', 'P1', 3, 100, '{}')",
+            [],
+        )
+        .unwrap();
+
+        let steps = [("A1", 80i64), ("A2", 90), ("A3", 100)];
+        for (i, (tag, amount)) in steps.iter().enumerate() {
+            let req = partial_req("TKT-1", tag, 1, *amount, *amount, Some("TKT-1-item-0"));
+            let ok = run(&mut conn, &req).expect("partial must commit");
+            assert_eq!(ok.recovered_cogs, 50);
+            let (len, status): (i64, String) = conn
+                .query_row(
+                    "SELECT json_array_length(json_extract(json_payload, '$.refundedItems')), \
+                     json_extract(json_payload, '$.status') FROM transactions WHERE id = 'TKT-1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(len, (i + 1) as i64, "accumulated across steps");
+            if i < 2 {
+                assert_eq!(status, "PARTIALLY_REFUNDED");
+                assert_eq!(ok.ticket_status, "PARTIALLY_REFUNDED");
+            } else {
+                assert_eq!(status, "REFUNDED", "last unit closes the ticket");
+                assert_eq!(ok.ticket_status, "REFUNDED");
+                assert_eq!(ok.ticket_version, 4);
+            }
+        }
+        // Conservation: refunds sum EXACTLY to the discounted original total.
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT CAST(SUM(total) AS INTEGER) FROM transactions WHERE original_transaction_id = 'TKT-1' AND is_refund = 1"
+            ),
+            270
+        );
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT CAST(SUM(restored_cogs) AS INTEGER) FROM transactions WHERE original_transaction_id = 'TKT-1' AND is_refund = 1"
+            ),
+            150
+        );
+        // Fourth attempt (different hash, quota exhausted): clean refusal.
+        let greedy = partial_req("TKT-1", "A4", 1, 90, 90, Some("TKT-1-item-0"));
+        let err = run(&mut conn, &greedy).expect_err("quota");
+        assert!(format!("{err:?}").contains("REFUND_EXCEEDS"), "got: {err:?}");
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM transactions WHERE original_transaction_id = 'TKT-1' AND is_refund = 1"
+            ),
+            3
+        );
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM refund_dedup WHERE items_hash = 'H-A4'"),
+            0
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Scenario B — cash + Kredy mix: debt-first waterfall against the live
+    // ledger, cash capped at tendered, installment plans filled FIFO.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn scenario_b_kredy_waterfall_clamps_and_fills_plans_fifo() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        // Ticket: 4 × 200 = 800, only 150 net cash tendered (the rest was on
+        // the customer's book). Two ACTIF plans: oldest is fully covered by
+        // the first relief; the newer one absorbs the spillover.
+        conn.execute("DELETE FROM transaction_items WHERE transaction_id = 'TKT-1'", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE transactions SET subtotal = 800, total = 800 WHERE id = 'TKT-1'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price, json_payload) \
+             VALUES ('TKT-1-item-0', 'TKT-1', 'P1', 4, 200, '{}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO debt_plans (id, customer_id, status, created_at, updated_at) \
+             VALUES ('PL1', 'C1', 'ACTIF', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO debt_plans (id, customer_id, status, created_at, updated_at) \
+             VALUES ('PL2', 'C1', 'ACTIF', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO debt_plan_entries (id, plan_id, seq, due_date, amount, paid_amount, created_at, updated_at) \
+             VALUES ('E1', 'PL1', 1, '2026-02-01', 100, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), \
+                    ('E2', 'PL1', 2, '2026-03-01', 100, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), \
+                    ('E3', 'PL2', 1, '2026-04-01', 400, 0, '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        // Refund 1: 2 units, 400 DA — 150 cash + 250 relief against the 500
+        // live ledger; plan PL1 closes, PL2 takes the 50 DA remainder.
+        let mut r1 = partial_req("TKT-1", "B1", 2, 400, 200, Some("TKT-1-item-0"));
+        r1.method = "Espèces".into();
+        r1.payment_method = "Espèces".into();
+        r1.cash_tendered = 150;
+        r1.cash_tendered_net = 150;
+        r1.refund_payload = "{\"id\":\"REF-B1\",\"isRefund\":true,\"originalTransactionId\":\"TKT-1\",\
+            \"refundMethod\":\"Espèces\",\"cashDisbursed\":150,\"total\":400}"
+            .into();
+        r1.cash_move = Some(CashMoveIn {
+            id: "MOV-B1".into(),
+            session_id: "S1".into(),
+            amount: 150,
+            reason: "ALLOCATION B1".into(),
+            cashier_name: "Manager".into(),
+        });
+        r1.debt = Some(DebtReliefIn {
+            entry_id: "PAYREL-B1".into(),
+            customer_id: "C1".into(),
+            customer_name: "Salma".into(),
+            amount: 250,
+            receipt_number: "AVOIR-B1".into(),
+            payment_method: "Crédit Client".into(),
+            notes: "relief B1".into(),
+            recorded_by: "Manager".into(),
+        });
+        let ok1 = run(&mut conn, &r1).expect("refund 1");
+        assert_eq!(ok1.debt_relief_applied, 250);
+        assert_eq!(ok1.customer_debt_after, Some(250));
+        assert_eq!(
+            count(&conn, "SELECT current_debt FROM customers WHERE id = 'C1'"),
+            250
+        );
+        let (amt, bal): (f64, f64) = conn
+            .query_row(
+                "SELECT amount, balance_after FROM customer_debts WHERE id = 'PAYREL-B1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((amt, bal), (250.0, 250.0));
+        // Plans: PL1 fully covered → SOLDE with paid_at stamped; PL2's E3
+        // took the 50 DA spillover, still ACTIF, paid_at NULL.
+        let (s1, s2): (String, String) = conn
+            .query_row(
+                "SELECT (SELECT status FROM debt_plans WHERE id = 'PL1'), \
+                        (SELECT status FROM debt_plans WHERE id = 'PL2')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((s1.as_str(), s2.as_str()), ("SOLDE", "ACTIF"));
+        let (p1, p2, e3): (f64, f64, f64) = conn
+            .query_row(
+                "SELECT (SELECT paid_amount FROM debt_plan_entries WHERE id = 'E1'), \
+                        (SELECT paid_amount FROM debt_plan_entries WHERE id = 'E2'), \
+                        (SELECT paid_amount FROM debt_plan_entries WHERE id = 'E3')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((p1, p2, e3), (100.0, 100.0, 50.0));
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM debt_plan_entries WHERE id IN ('E1','E2') AND paid_at IS NOT NULL"
+            ),
+            2
+        );
+        assert_eq!(
+            count(&conn, "SELECT COUNT(*) FROM debt_plan_entries WHERE id = 'E3' AND paid_at IS NULL"),
+            1
+        );
+
+        // Refund 2: remaining 2 units, 400 DA — non-cash; the client asks for
+        // 999 of relief but only 250 remains live: clamped + surfaced.
+        let mut r2 = partial_req("TKT-1", "B2", 2, 400, 200, Some("TKT-1-item-0"));
+        r2.debt = Some(DebtReliefIn {
+            entry_id: "PAYREL-B2".into(),
+            customer_id: "C1".into(),
+            customer_name: "Salma".into(),
+            amount: 999,
+            receipt_number: "AVOIR-B2".into(),
+            payment_method: "Crédit Client".into(),
+            notes: "relief B2".into(),
+            recorded_by: "Manager".into(),
+        });
+        let ok2 = run(&mut conn, &r2).expect("refund 2");
+        assert_eq!(ok2.debt_relief_applied, 250);
+        assert_eq!(ok2.customer_debt_after, Some(0));
+        assert!(
+            ok2.warnings.iter().any(|w| w.contains("plafonnée")),
+            "clamp must be surfaced: {:?}",
+            ok2.warnings
+        );
+        assert_eq!(
+            count(&conn, "SELECT current_debt FROM customers WHERE id = 'C1'"),
+            0
+        );
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT CAST(COALESCE(SUM(amount), 0) AS INTEGER) FROM customer_debts WHERE type = 'PAYMENT_SETTLED'"
+            ),
+            500
+        );
+        // No plan may be overdrawn: relief beyond PL2's capacity is refused
+        // by exhaustion, not negative balances.
+        let e3_after: f64 = conn
+            .query_row(
+                "SELECT paid_amount FROM debt_plan_entries WHERE id = 'E3'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(e3_after, 300.0);
+        // Cash rail ran exactly once, for 150 (the tendered cap).
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM cash_movements"), 1);
+    }
+
+    // -----------------------------------------------------------------
+    // Scenario C — same-SKU dual IMEI, one restocked and one quarantined:
+    // stock math, ownership events and cost credit stay split correctly.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn deterministic_id_matches_ts_fixed_vectors() {
+        // Vectors computed by the TypeScript `deterministicId`
+        // (src/utils/ids.ts — FNV-1a 32-bit over `parts.join('|')`, 8 upper
+        // hex). ASCII parts only: the two lanes must derive the SAME ids or
+        // quarantine dedup keys fork between native and web-preview writes.
+        assert_eq!(deterministic_id("LED-DEF", &["REF-C", "P1", "1"]), "LED-DEF-AB72EE0E");
+        assert_eq!(
+            deterministic_id("REF", &["TKT-1", "P1:2:200:1::IMEI-A1:restock", "Voucher", "200", "1"]),
+            "REF-87C70085"
+        );
+        assert_eq!(deterministic_id("LED-DEF", &["REF-A", "P1", "1"]), "LED-DEF-A9AF04CC");
+    }
+
+    #[test]
+    fn scenario_c_dual_imei_restock_vs_defective_quarantine() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        // Two same-SKU units sold, each with its own line identity + IMEI.
+        conn.execute("DELETE FROM transaction_items WHERE transaction_id = 'TKT-1'", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price, imei_number, json_payload) \
+             VALUES ('TKT-1-item-0', 'TKT-1', 'P1', 1, 100, 'IMEI-A1', '{}'), \
+                    ('TKT-1-item-1', 'TKT-1', 'P1', 1, 100, 'IMEI-A2', '{}')",
+            [],
+        )
+        .unwrap();
+        for imei in ["IMEI-A1", "IMEI-A2"] {
+            conn.execute(
+                "INSERT INTO imei_records (imei, product_id, sale_transaction_id, sold_at, status, version) \
+                 VALUES (?1, 'P1', 'TKT-1', '2026-01-01T00:00:00Z', 'sold', 1)",
+                [imei],
+            )
+            .unwrap();
+        }
+
+        let mut req = partial_req("TKT-1", "C", 1, 200, 100, Some("TKT-1-item-0"));
+        req.receipt_number = "AVOIR-C".into();
+        req.refund_id = "REF-C".into();
+        req.items_hash = "H-C".into();
+        req.refund_payload = "{\"id\":\"REF-C\",\"isRefund\":true,\"originalTransactionId\":\"TKT-1\",\
+            \"refundMethod\":\"Avoir Client\",\"cashDisbursed\":0,\"total\":200}"
+            .into();
+        // Line 1: restock (default), Line 2: defective with the mandatory note.
+        let mut l2 = req.lines[0].clone();
+        l2.id = "RI-C2".into();
+        l2.item_key = "IK-C2".into();
+        l2.imei_number = Some("IMEI-A2".into());
+        l2.sale_item_id = Some("TKT-1-item-1".into());
+        l2.line_index = Some(1);
+        l2.condition = Some("defective".into());
+        req.lines[0].imei_number = Some("IMEI-A1".into());
+        req.lines.push(l2);
+        req.defect_note = Some("Écran fissuré (SAV)".into());
+        req.imeis = vec!["IMEI-A1".into()];
+        req.defective_imeis = vec!["IMEI-A2".into()];
+        req.total_net = 200;
+        req.cost_total = 50; // client cost is restock-only; native recomputes too
+
+        let ok = run(&mut conn, &req).expect("mixed refund");
+        assert_eq!(ok.recovered_cogs, 50, "only the restocked unit credits COGS");
+        let (rt, rc, rp, rsc): (f64, f64, f64, f64) = conn
+            .query_row(
+                "SELECT total, cost_total, profit, restored_cogs FROM transactions WHERE id = 'REF-C'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((rt, rc, rp, rsc), (200.0, 50.0, 150.0, 50.0));
+        // Quarantine trail: defective_returns row with the reason note.
+        let (did, dpid, dimei, dqty, dcost, dreason): (String, String, String, f64, f64, String) =
+            conn.query_row(
+                "SELECT id, product_id, imei, quantity, unit_cost, reason FROM defective_returns",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            )
+            .unwrap();
+        assert_eq!(did, "def-REF-C-IK-C2");
+        assert_eq!((dpid.as_str(), dimei.as_str()), ("P1", "IMEI-A2"));
+        assert_eq!((dqty, dcost), (1.0, 50.0));
+        assert_eq!(dreason, "Écran fissuré (SAV)");
+        // Zero-delta quarantine marker: the deterministically-named ledger row
+        // (legacy lane's exact id derivation) that never moves stock.
+        let qid = deterministic_id("LED-DEF", &["REF-C", "P1", "1"]);
+        let (qdelta, qreason, qref): (i64, String, String) = conn
+            .query_row(
+                "SELECT delta, reason, ref_type FROM inventory_ledger WHERE id = ?1",
+                [&qid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((qdelta, qreason.as_str(), qref.as_str()), (0, "ADJUST", "DEFECTIVE_QUARANTINE"));
+        // IMEI states: released from the sale; restock in_stock, defective held.
+        let (s1, t1, s2, t2): (Option<String>, Option<String>, Option<String>, Option<String>) =
+            conn.query_row(
+                "SELECT (SELECT status FROM imei_records WHERE imei = 'IMEI-A1'), \
+                        (SELECT sale_transaction_id FROM imei_records WHERE imei = 'IMEI-A1'), \
+                        (SELECT status FROM imei_records WHERE imei = 'IMEI-A2'), \
+                        (SELECT sale_transaction_id FROM imei_records WHERE imei = 'IMEI-A2')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((s1.as_deref(), t1), (Some("in_stock"), None));
+        assert_eq!((s2.as_deref(), t2), (Some("defective"), None));
+        // Ownership events, deterministic ids shared with the TS formula.
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM imei_events WHERE id = 'imev|RETURN_IN|order|REF-C|IMEI-A1'"
+            ),
+            1
+        );
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM imei_events WHERE id = 'imev|RETURN_DEFECTIVE|order|REF-C|IMEI-A2'"
+            ),
+            1
+        );
+        // Stock: only the restocked unit comes back to the batch.
+        let qty: f64 = conn
+            .query_row(
+                "SELECT quantity_remaining FROM stock_batches WHERE batch_id = 'B1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(qty, 11.0);
+        // Payload: per-line conditions + IMEIs travel with the refund state.
+        let (payload,): (String,) = conn
+            .query_row(
+                "SELECT json_payload FROM transactions WHERE id = 'TKT-1'",
+                [],
+                |r| Ok((r.get(0)?,)),
+            )
+            .unwrap();
+        let pv: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        let items = pv["refundedItems"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["condition"], "restock");
+        assert_eq!(items[0]["imeiNumber"], "IMEI-A1");
+        assert_eq!(items[1]["condition"], "defective");
+        assert_eq!(items[1]["imeiNumber"], "IMEI-A2");
+        assert_eq!(items[1]["saleItemId"], "TKT-1-item-1");
+    }
+
+    #[test]
+    fn defect_write_off_requires_reason_and_valid_condition() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        // Defective without the note: the same gate as the TS pre-submit.
+        let mut missing_note = base_req();
+        missing_note.lines[0].condition = Some("defective".into());
+        let err = run(&mut conn, &missing_note).expect_err("note required");
+        assert!(
+            format!("{err:?}").contains("RESTOCK_REASON_REQUIRED"),
+            "got: {err:?}"
+        );
+        // Garbage condition: protocol error, not a silent restock.
+        let mut bad = base_req();
+        bad.lines[0].condition = Some("banana".into());
+        let err = run(&mut conn, &bad).expect_err("condition whitelist");
+        assert!(format!("{err:?}").contains("INVALID:line condition"), "got: {err:?}");
+        // Nothing may have been written by either refusal.
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM refund_dedup"), 0);
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM transactions WHERE is_refund = 1"), 0);
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM defective_returns"), 0);
+    }
+
+    // -----------------------------------------------------------------
+    // Loyalty clawback + debt clamp edge cases.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn loyalty_clawback_persists_points_and_buckets() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        conn.execute("UPDATE customers SET loyalty_points = 120 WHERE id = 'C1'", [])
+            .unwrap();
+        let mut req = base_req();
+        req.customer_points_after = Some(80);
+        req.customer_point_buckets_json = Some("[{\"bucketId\":\"b1\",\"points\":80}]".into());
+        let ok = run(&mut conn, &req).expect("loyalty commit");
+        assert_eq!(ok.customer_points_after, Some(80));
+        let points: i64 = conn
+            .query_row(
+                "SELECT loyalty_points FROM customers WHERE id = 'C1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(points, 80);
+        let (payload,): (String,) = conn
+            .query_row(
+                "SELECT json_payload FROM customers WHERE id = 'C1'",
+                [],
+                |r| Ok((r.get(0)?,)),
+            )
+            .unwrap();
+        let pv: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(pv["loyaltyPoints"], 80);
+        assert_eq!(pv["pointBuckets"][0]["bucketId"], "b1");
+        // Points without a customer is a protocol error (fail closed).
+        let mut conn2 = Connection::open_in_memory().unwrap();
+        test_schema(&conn2);
+        seed_ticket(&conn2);
+        let mut orphan = base_req();
+        orphan.customer_id = None;
+        orphan.debt = None;
+        orphan.customer_points_after = Some(10);
+        let err = run(&mut conn2, &orphan).expect_err("orphan points");
+        assert!(
+            format!("{err:?}").contains("INVALID:loyalty clawback requires the customer"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn debt_relief_clamped_to_zero_when_ledger_empty() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        // The customer's book is empty (debt settled elsewhere): the relief
+        // rail pays nothing, the clamp is surfaced, the money txn still
+        // commits — never a silent wrong-rail payout, never a negative ledger.
+        conn.execute("DELETE FROM customer_debts WHERE customer_id = 'C1'", [])
+            .unwrap();
+        let ok = run(&mut conn, &base_req()).expect("commit with clamp");
+        assert_eq!(ok.debt_relief_applied, 0);
+        assert_eq!(ok.customer_debt_after, Some(0));
+        assert!(
+            ok.warnings.iter().any(|w| w.contains("plafonnée")),
+            "clamp must be surfaced: {:?}",
+            ok.warnings
+        );
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM customer_debts WHERE type = 'PAYMENT_SETTLED'"
+            ),
+            0
+        );
+        assert_eq!(
+            count(
+                &conn,
+                "SELECT COUNT(*) FROM customers WHERE id = 'C1' AND current_debt IS NULL"
+            ),
+            1,
+            "no aggregate write when nothing applied"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Scenario D — Z-report / shift conservation + P&L inputs.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn scenario_d_z_report_and_pnl_conservation() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        // Full refund: cash 150 + debt 100 + voucher 200 on shift S1.
+        let ok = run(&mut conn, &base_req()).expect("full refund");
+        assert_eq!(ok.ticket_status, "REFUNDED");
+        // Cash rail: exactly ONE drawer movement, exactly the disbursed cash.
+        let (cnt, amt, typ, sess): (i64, i64, String, String) = conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(amount), 0), MIN(type), MIN(session_id) FROM cash_movements",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((cnt, amt), (1, 150));
+        assert_eq!((typ.as_str(), sess.as_str()), ("ALLOCATION", "S1"));
+        // The refund row anchors to the shift; its P&L contributions are
+        // recovered-COGS based (R − G), so base(100) − burden(100) = 0 net.
+        let (shift, rt, rc, rp, rsc): (String, f64, f64, f64, f64) = conn
+            .query_row(
+                "SELECT shift_id, total, cost_total, profit, restored_cogs FROM transactions WHERE id = 'REF-H1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(shift, "S1");
+        assert_eq!((rt, rc, rp, rsc), (200.0, 100.0, 100.0, 100.0));
+        let (base_total, base_cost, base_profit): (f64, f64, f64) = conn
+            .query_row(
+                "SELECT total, cost_total, profit FROM transactions WHERE id = 'TKT-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        // profitTotal = (sales − refunds) − baseCost + restoredCogs
+        let net = (base_total - rt) - base_cost + rsc;
+        assert_eq!(net, 0.0, "after a full restock refund the P&L is neutral");
+        assert_eq!(net, base_profit - rp, "equals base − refund burden");
+
+        // Second ticket, NON-cash refund: the row still anchors to the active
+        // shift (so the Z-period sees it) and moves no drawer cash.
+        conn.execute(
+            "INSERT INTO transactions (id, receipt_number, subtotal, total, cost_total, profit, status, created_at, json_payload, version, device_id, shift_id, idempotency_key) \
+             VALUES ('TKT-2', 'REC-2', 50, 50, 20, 30, 'COMPLETED', '2026-01-01T00:00:00Z', '{}', 1, 'dev-A', 'S1', 'tik-TKT-2')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price, json_payload) \
+             VALUES ('TKT-2-item-0', 'TKT-2', 'P1', 1, 50, '{}')",
+            [],
+        )
+        .unwrap();
+        let mut r2 = partial_req("TKT-2", "D2", 1, 50, 50, Some("TKT-2-item-0"));
+        r2.cost_total = 20;
+        r2.lines[0].unit_cost_at_sale = 20;
+        r2.deltas = vec![];
+        r2.batches = vec![];
+        let ok2 = run(&mut conn, &r2).expect("non-cash refund");
+        assert_eq!(ok2.ticket_status, "REFUNDED");
+        let (shift2, cash2): (String, f64) = conn
+            .query_row(
+                "SELECT (SELECT shift_id FROM transactions WHERE id = 'REF-D2'), \
+                        (SELECT COALESCE(SUM(amount), 0) FROM cash_movements)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(shift2, "S1");
+        assert_eq!(cash2, 150.0, "no second cash movement");
     }
 }
 

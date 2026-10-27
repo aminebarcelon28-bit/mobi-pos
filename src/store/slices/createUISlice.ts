@@ -2126,9 +2126,12 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
       const currentCustomer = get().currentCustomer
         ? customers.find((c) => c.id === get().currentCustomer?.id) ?? get().currentCustomer
         : get().currentCustomer;
+      const savedVendors = await (await getSettingsRepo()).get<Record<string, unknown>>('vendor_directory', get().vendorDirectory);
+      const activeVendorDirectory = savedVendors && typeof savedVendors === 'object' ? { ...get().vendorDirectory, ...savedVendors } : get().vendorDirectory;
       set({
         products,
         customers,
+        vendorDirectory: activeVendorDirectory as Record<string, import('../../types/pos').VendorDirectoryEntry>,
         // Post-pull invariant: newest-first (sync lands rows in cursor
         // order; the helper restores recency before paint).
         transactions: sortedTransactions(txWindow.items),

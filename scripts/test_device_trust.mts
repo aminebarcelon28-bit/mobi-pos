@@ -303,8 +303,9 @@ const base: TradeInInspectionMarkers = {
 
 {
   const lib = src('src-tauri/src/lib.rs');
-  // The ceiling pin re-bumps with each upgrade; UPGRADE-11 landed v126.
-  check('lib.rs: expected version bumped to 126', lib.includes('const EXPECTED_MAX_DB_USER_VERSION: u32 = 126;'));
+  // The ceiling pin re-bumps with each upgrade; the refund root rebuild
+  // landed v127 (line identity + restored COGS + debt/IMEI columns).
+  check('lib.rs: expected version bumped to 127', lib.includes('const EXPECTED_MAX_DB_USER_VERSION: u32 = 127;'));
   check('lib.rs: v123 migration present', norm(lib).includes('version: 123, description: "UPGRADE-08: trade_ins.inspection_json, blocked_imeis, imei_events"'));
 
   const v123Stmts = [
@@ -366,7 +367,10 @@ const base: TradeInInspectionMarkers = {
 
   const txAdapter = src('src/db/adapters/transactionAdapter.ts');
   const returnInCount = (txAdapter.match(/INSERT OR IGNORE INTO imei_events/g) || []).length;
-  check('transactionAdapter: BOTH release lanes append RETURN_IN', returnInCount === 2 && txAdapter.includes("imeiTrustEventId('RETURN_IN', 'order', voidedTransaction.id, imei)") && txAdapter.includes("imeiTrustEventId('RETURN_IN', 'order', refundTransaction.id, imei)"));
+  // The refund lane now emits the kind from ONE shared release list
+  // (restock → RETURN_IN, write-off → RETURN_DEFECTIVE); the void lane keeps
+  // its inline RETURN_IN. Both INSERTs must survive the refactor.
+  check('transactionAdapter: BOTH release lanes append RETURN_IN', returnInCount === 2 && txAdapter.includes("imeiTrustEventId('RETURN_IN', 'order', voidedTransaction.id, imei)") && txAdapter.includes("imeiTrustEventId(release.kind, 'order', refundTransaction.id, imei)") && txAdapter.includes("kind: 'RETURN_IN' as const"));
 
   const opsAdapter = src('src/db/adapters/operationsAdapter.ts');
   check('operationsAdapter: trade_ins carries inspection_json', opsAdapter.includes('inspection_json') && opsAdapter.includes('buildTradeInInspectionJson(trade.inspectionMarkers, trade.conditionGrade)'));

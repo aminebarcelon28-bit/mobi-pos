@@ -16,7 +16,7 @@
 import { invokeCommand } from '../../platform/invoke';
 import { deterministicId } from '../../utils/ids';
 import { db as dexieDb } from '../database';
-import type { Customer, Product, SaleTransaction, SecurityAuditLogEntry } from '../../types/pos';
+import type { Customer, Product, RefundItem, SaleTransaction, SecurityAuditLogEntry } from '../../types/pos';
 
 // ---------------------------------------------------------------------------
 // Deterministic identity
@@ -82,6 +82,12 @@ export interface NativeRefundLine {
   discountAmount: number;
   lineProfit: number;
   imeiNumber?: string | null;
+  /** Original sale line identity (`${saleTxnId}-item-${lineIdx}`) when known. */
+  saleItemId?: string | null;
+  /** Zero-based line index in the original ticket (derivation fallback). */
+  lineIndex?: number | null;
+  /** 'restock' | 'defective' (absent ⇒ restock). */
+  condition?: string | null;
   itemKey: string;
   itemPayload: string;
 }
@@ -170,6 +176,17 @@ export interface NativeRefundRequest {
     fallbackKey: string;
   }>;
   imeis: string[];
+  /** IMEIs of defective (write-off) lines: released to `defective` + evented. */
+  defectiveImeis?: string[];
+  /** Mandatory note for any defective line (native gate: RESTOCK_REASON_REQUIRED). */
+  defectNote?: string | null;
+  /**
+   * Post-refund loyalty verdict computed by the shared TS math from the
+   * original sale's immutable snapshots. Native REPLAYS it (never invents);
+   * absent ⇒ loyalty untouched.
+   */
+  customerPointsAfter?: number | null;
+  customerPointBucketsJson?: string | null;
   debt?: {
     entryId: string;
     customerId: string;
@@ -204,10 +221,34 @@ export interface NativeRefundOk {
   ticketStatus: string;
   ticketVersion: number;
   warnings: string[];
+  /** Durable merged ticket payload (status/version/refundedItems accumulated). */
+  ticketPayload: string;
+  /** Live ledger balance after the (clamped) relief — null when not asked. */
+  customerDebtAfter?: number | null;
+  /** Relief actually applied in this commit (≤ requested, clamped live). */
+  debtReliefApplied: number;
+  /** Points written (echo of the shared TS verdict) — null when untouched. */
+  customerPointsAfter?: number | null;
+  /** Native-computed recovered COGS (restocked lines only, frozen costs). */
+  recoveredCogs: number;
 }
 
 export type RefundNativeResult =
-  | { success: true; refundId: string; receiptNumber: string; ticketStatus: string; ticketVersion: number; warnings: string[] }
+  | {
+      success: true;
+      refundId: string;
+      receiptNumber: string;
+      ticketStatus: string;
+      ticketVersion: number;
+      warnings: string[];
+      ticketPayload: string;
+      customerDebtAfter?: number | null;
+      debtReliefApplied: number;
+      customerPointsAfter?: number | null;
+      recoveredCogs: number;
+      /** Hydrated original ticket (durable refundedItems union) for cache/state. */
+      updatedOriginal: SaleTransaction;
+    }
   | { success: false; reason: string; refundId?: string; retryable: boolean; detail: string };
 
 // ---------------------------------------------------------------------------
@@ -225,7 +266,7 @@ function parseRefundError(err: unknown): { reason: string; refundId?: string; re
   const detail = String(raw ?? '');
   const head = detail.split('\n')[0];
   const m = head.match(
-    /^(ALREADY_REFUNDED|ORIGINAL_VOIDED|TICKET_NOT_FOUND|REFUND_EXCEEDS|VOUCHER_CHANGED|VOUCHER_MISSING|NO_OPEN_SHIFT|BUSY|INVALID|DEBT_CHANGED|INTERNAL|OFFLINE_FOREIGN_TICKET|OFFLINE_CASH_CAP_EXCEEDED|SUPERVISOR_PIN_REQUIRED|SCHEMA_UNHEALED|DEVICE_IDENTITY_SPOOFED|SUPERVISOR_AUTH_EXPIRED|SYSTEM_CLOCK_REGRESSION|DEVICE_NOT_INITIALIZED|DEVICE_SIGNATURE_FAILED)(?::(.*))?$/,
+    /^(ALREADY_REFUNDED|ORIGINAL_VOIDED|TICKET_NOT_FOUND|REFUND_EXCEEDS|VOUCHER_CHANGED|VOUCHER_MISSING|NO_OPEN_SHIFT|BUSY|INVALID|DEBT_CHANGED|INTERNAL|OFFLINE_FOREIGN_TICKET|OFFLINE_CASH_CAP_EXCEEDED|SUPERVISOR_PIN_REQUIRED|RESTOCK_REASON_REQUIRED|SCHEMA_UNHEALED|DEVICE_IDENTITY_SPOOFED|SUPERVISOR_AUTH_EXPIRED|SYSTEM_CLOCK_REGRESSION|DEVICE_NOT_INITIALIZED|DEVICE_SIGNATURE_FAILED)(?::(.*))?$/,
   );
   if (!m) return { reason: 'PERSISTENCE_FAILED', retryable: false, detail };
   const code = m[1];
@@ -244,6 +285,9 @@ function parseRefundError(err: unknown): { reason: string; refundId?: string; re
   }
   if (code === 'SUPERVISOR_PIN_REQUIRED') {
     return { reason: 'SUPERVISOR_PIN_REQUIRED', retryable: false, detail };
+  }
+  if (code === 'RESTOCK_REASON_REQUIRED') {
+    return { reason: 'RESTOCK_REASON_REQUIRED', retryable: false, detail };
   }
   if (code === 'DEVICE_IDENTITY_SPOOFED') {
     return { reason: 'DEVICE_IDENTITY_SPOOFED', retryable: false, detail };
@@ -297,6 +341,64 @@ async function projectToDexie(p: RefundProjection): Promise<void> {
   }
 }
 
+/**
+ * Merge the durable `refundedItems` union (every refund, the current one
+ * included — read under the native write lock) with the caller's FULL item
+ * objects for THIS refund: entries of this refund keep their complete shape
+ * (title, prices, fifo allocations), entries left by other refunds stay
+ * minimal but faithful. Returns null when the payload has nothing usable.
+ */
+function hydrateRefundedItems(
+  payloadJson: string,
+  refundId: string,
+  callerItems: SaleTransaction['refundedItems'],
+): SaleTransaction['refundedItems'] | null {
+  let parsed: { refundedItems?: unknown } | null = null;
+  try {
+    parsed = JSON.parse(payloadJson) as { refundedItems?: unknown };
+  } catch {
+    return null;
+  }
+  if (!parsed || !Array.isArray(parsed.refundedItems)) return null;
+  const full = (callerItems ?? []) as unknown as Array<Record<string, unknown>>;
+  const hydrated: RefundItem[] = (
+    parsed.refundedItems as Array<Record<string, unknown>>
+  ).map((e) => {
+    const pid = e.productId ? String(e.productId) : '';
+    const cond = e.condition === 'defective' ? 'defective' : 'restock';
+    if (e.refundId && String(e.refundId) === refundId) {
+      const sid = e.saleItemId ? String(e.saleItemId) : '';
+      const imei = e.imeiNumber ? String(e.imeiNumber) : '';
+      const match = full.find(
+        (c) =>
+          String(c.productId ?? '') === pid &&
+          String(c.saleItemId ?? '') === sid &&
+          String(c.imeiNumber ?? '') === imei &&
+          (c.condition === 'defective' ? 'defective' : 'restock') === cond,
+      );
+      if (match) {
+        return {
+          ...(match as unknown as RefundItem),
+          quantity: Number(e.quantity) || Number(match.quantity) || 0,
+        };
+      }
+    }
+    return {
+      productId: pid,
+      title: '',
+      sku: '',
+      unitPrice: 0,
+      quantity: Number(e.quantity) || 0,
+      totalRefundAmount: 0,
+      restock: cond === 'restock',
+      condition: cond,
+      imeiNumber: e.imeiNumber ? String(e.imeiNumber) : undefined,
+      saleItemId: e.saleItemId ? String(e.saleItemId) : undefined,
+    };
+  });
+  return hydrated as SaleTransaction['refundedItems'];
+}
+
 export async function refundSaleNative(
   req: NativeRefundRequest,
   projection: RefundProjection,
@@ -318,13 +420,20 @@ export async function refundSaleNative(
         'SYNC_CONFLICT',
       );
       // Status/version are authoritative from the receipt, not the
-      // pre-computed guess: stamp the projection before caching it.
+      // pre-computed guess; `refundedItems` come from the durable merged
+      // payload so a peer tab's refunds are never dropped by our projection.
+      const hydratedItems = hydrateRefundedItems(
+        ok.ticketPayload,
+        ok.refundId,
+        projection.updatedOriginal.refundedItems,
+      );
       projection.updatedOriginal = {
         ...projection.updatedOriginal,
         status: (ok.ticketStatus as SaleTransaction['status']) ?? projection.updatedOriginal.status,
+        ...(hydratedItems ? { refundedItems: hydratedItems } : {}),
       };
       await projectToDexie(projection);
-      return { success: true, ...ok };
+      return { success: true, ...ok, updatedOriginal: projection.updatedOriginal };
     } catch (err) {
       const parsed = parseRefundError(err);
       if (parsed.reason === 'BUSY' && attempt < 2) {

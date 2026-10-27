@@ -1,8 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-
-const foldForSearch = (s: string | undefined | null): string =>
-  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+import { matchProductSearch } from '../../utils/catalogSearch';
 import {
   X,
   Search,
@@ -20,6 +18,7 @@ import {
   EyeOff,
   ClipboardList,
   Camera,
+  Upload,
 } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
@@ -42,6 +41,7 @@ export const InventoryManagerModal: React.FC = () => {
   const {
     activeModal,
     closeModal,
+    openModal,
     products,
     setEditingProduct,
     deleteProduct,
@@ -106,30 +106,40 @@ export const InventoryManagerModal: React.FC = () => {
     };
   }, [activeModal, mode]);
 
+  // Re-sync products when opening inventory manager or when import finishes
+  useEffect(() => {
+    if (activeModal !== 'inventory_manager') return;
+    let cancelled = false;
+    const syncProducts = async () => {
+      try {
+        const { productAdapter } = await import('../../db/adapters/productAdapter');
+        const fresh = await productAdapter.getAllProducts();
+        if (!cancelled && fresh && fresh.length > 0) {
+          usePosStore.setState({ products: fresh });
+        }
+      } catch (err) {
+        console.warn('[InventoryManager] Product sync failed:', err);
+      }
+    };
+    void syncProducts();
+    window.addEventListener('mobi:catalog-reset-filters', syncProducts);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('mobi:catalog-reset-filters', syncProducts);
+    };
+  }, [activeModal]);
+
   // Memoized above the early return so typing does not rescan per keystroke.
   const filteredCatalogMemo = useMemo(() => {
-    const q = foldForSearch(debouncedManagerSearch.trim());
     const rawQ = debouncedManagerSearch.trim();
-    if (!q) return products;
-    return products.filter(
-      (p) =>
-        foldForSearch(p.title).includes(q) ||
-        foldForSearch(p.sku).includes(q) ||
-        foldForSearch(p.brand).includes(q) ||
-        foldForSearch(p.compatibleModel).includes(q) ||
-        (p.barcode ? p.barcode.includes(rawQ) || foldForSearch(p.barcode).includes(q) : false)
-    );
+    if (!rawQ) return products;
+    return products.filter((p) => matchProductSearch(p, rawQ));
   }, [products, debouncedManagerSearch]);
+
   const filteredStocktakeMemo = useMemo(() => {
-    const q = foldForSearch(debouncedManagerSearch.trim());
     const rawQ = debouncedManagerSearch.trim();
     return products.filter((p) => {
-      const matchesSearch =
-        !q ||
-        foldForSearch(p.title).includes(q) ||
-        foldForSearch(p.sku).includes(q) ||
-        (p.barcode ? p.barcode.includes(rawQ) || foldForSearch(p.barcode).includes(q) : false);
-
+      const matchesSearch = !rawQ || matchProductSearch(p, rawQ);
       if (!matchesSearch) return false;
 
       const counted = auditCounts[p.id];
@@ -450,14 +460,25 @@ export const InventoryManagerModal: React.FC = () => {
             </div>
 
             {mode === 'catalog' && (
-              <button
-                type="button"
-                onClick={() => setEditingProduct(null)}
-                className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-500/20 active:scale-95 transition cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span className="hidden sm:inline">Nouveau Produit</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => openModal('smart_import')}
+                  className="px-3 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-400 font-bold text-xs flex items-center gap-1.5 active:scale-95 transition cursor-pointer"
+                  title="Importer des produits depuis Excel, CSV, etc."
+                >
+                  <Upload className="w-4 h-4" />
+                  <span className="hidden sm:inline">Importer</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingProduct(null)}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-500/20 active:scale-95 transition cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span className="hidden sm:inline">Nouveau Produit</span>
+                </button>
+              </>
             )}
 
             <div className="flex items-center gap-1.5 shrink-0">
@@ -526,6 +547,9 @@ export const InventoryManagerModal: React.FC = () => {
               <div className="relative flex-1">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-pos-muted" />
                 <input
+                  id="inventory-manager-search"
+                  data-testid="inventory-manager-search"
+                  aria-label="Rechercher dans l'inventaire"
                   type="text"
                   value={managerSearch}
                   onChange={(e) => setManagerSearch(e.target.value)}

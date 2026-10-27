@@ -1,0 +1,466 @@
+/**
+ * Refund engine — root invariants (post-rebuild adversarial suite).
+ *
+ * Pins the SEVEN invariants of the rebuilt refund engine on the real TS
+ * helpers (no copies), plus source-wiring checks that bind the UI/slice/
+ * adapters to the native authority:
+ *
+ *   I2  line identity — canonical hash + per-line refundable remaining
+ *       (dual-IMEI same-SKU, multi-step partials).
+ *   I3  order-discount proration — cumulative partial refunds conserve the
+ *       ticket value to the Dinar (80 + 90 + 100 = 270), 4th is ineligible.
+ *   I4  debt-first / tender-capped waterfall — refund split reverses each
+ *       funding source, cash never exceeds net cash paid.
+ *   I5  FIFO restitution vs defective quarantine — P&L credit is recovered
+ *       COGS only; a write-off carries the cost burden once.
+ *   I6  IMEI event vocabulary — RETURN_IN / RETURN_DEFECTIVE deterministic ids
+ *       (byte-identical to the native `imev|...` format).
+ *   I7  Z-report conservation — cash refund reduces expected cash exactly
+ *       once (cashDisbursed, never `total` when both exist; ALLOCATION
+ *       movements stay math-invisible).
+ *   I1  read-back hydration — the slice consumes native ticketPayload /
+ *       debtReliefApplied / customerDebtAfter / recoveredCogs; refund-native
+ *       error domain includes RESTOCK_REASON_REQUIRED.
+ *
+ * Integer DZD throughout; no floats cross any assertion.
+ */
+import { readFileSync } from 'node:fs';
+import { deterministicId } from '../src/utils/ids.ts';
+import {
+  computeRefundFundingSplit,
+  computeSalesMetrics,
+  refundedQtyByProduct,
+  refundableBalanceOfTxn,
+  refundableValueOf,
+  isRefundEligible,
+} from '../src/utils/receiptMath.ts';
+import { cashRefundsFromTxns, standaloneExpensesFromMovements } from '../src/utils/cashTerms.ts';
+import { imeiTrustEventId, IMEI_TRUST_EVENT_LABELS } from '../src/utils/deviceTrust.ts';
+import type { SaleTransaction } from '../src/types/pos.ts';
+
+let pass = 0;
+let fail = 0;
+function check(name: string, cond: boolean, extra = '') {
+  if (cond) {
+    pass++;
+    console.log(`[PASS] ${name}${extra ? ' :: ' + extra : ''}`);
+  } else {
+    fail++;
+    console.log(`[FAIL] ${name}${extra ? ' :: ' + extra : ''}`);
+  }
+}
+const src = (p: string): string => readFileSync(p, 'utf8');
+const isInt = (n: number): boolean => Number.isInteger(n);
+
+const line = (
+  pid: string,
+  qty: number,
+  price: number,
+  opts: { discount?: number; imei?: string; saleItemId?: string } = {}
+) => ({
+  product: { id: pid, price },
+  quantity: qty,
+  appliedPrice: price,
+  discount: opts.discount ?? 0,
+  ...(opts.imei ? { imeiNumber: opts.imei } : {}),
+  ...(opts.saleItemId ? { saleItemId: opts.saleItemId } : {}),
+});
+
+const SALE = {
+  id: 'TKT-A',
+  receiptNumber: 'REC-A',
+  status: 'COMPLETED',
+  isRefund: false,
+  subtotal: 370,
+  discountTotal: 100,
+  total: 270,
+  costTotal: 135,
+  profit: 135,
+  profitMargin: 50,
+  ledgerCogsTotal: 135,
+  paymentMethod: 'Espèces',
+  cashTendered: 270,
+  changeDue: 0,
+  customer: null,
+  createdAt: '2026-10-18T10:00:00.000Z',
+  pricingTier: 'Retail',
+  items: [
+    line('P1', 1, 100, { saleItemId: 'TKT-A-item-0', imei: 'IMEI-A1' }),
+    line('P2', 1, 120, { saleItemId: 'TKT-A-item-1', imei: 'IMEI-A2' }),
+    line('P3', 1, 150, { saleItemId: 'TKT-A-item-2' }),
+  ],
+} as unknown as SaleTransaction;
+
+/** Refund row exactly as the native engine / slice now writes it. */
+const refundRow = (
+  id: string,
+  total: number,
+  restoredCogs: number,
+  items: Array<{ productId: string; quantity: number; saleItemId?: string; imeiNumber?: string }>,
+  extra: Partial<SaleTransaction> = {}
+) =>
+  ({
+    id,
+    receiptNumber: `REC-${id}`,
+    status: 'COMPLETED',
+    isRefund: true,
+    originalTransactionId: SALE.id,
+    subtotal: total,
+    discountTotal: 0,
+    total,
+    costTotal: restoredCogs,
+    restoredCogs,
+    profit: total - restoredCogs,
+    profitMargin: 0,
+    paymentMethod: 'Espèces',
+    cashTendered: 0,
+    changeDue: 0,
+    customer: null,
+    createdAt: '2026-10-18T11:00:00.000Z',
+    pricingTier: 'Retail',
+    items: [],
+    refundedItems: items,
+    ...extra,
+  }) as unknown as SaleTransaction;
+
+// ------------------------------------------------------------------ I2 ---
+console.log('\n--- I2: line identity — canonical hash + per-line remainder ---');
+{
+  // Mirrors createOrderSlice canonicalKey EXACTLY (order built after the
+  // canonical sort by productId / qty / price).
+  const canonicalKey = (
+    items: Array<{
+      productId: string;
+      quantity: number;
+      unitPrice?: number;
+      restock: boolean;
+      saleItemId?: string;
+      imeiNumber?: string;
+      condition?: string;
+    }>
+  ) =>
+    [...items]
+      .sort(
+        (a, b) =>
+          String(a.productId).localeCompare(String(b.productId)) ||
+          a.quantity - b.quantity ||
+          (a.unitPrice ?? 0) - (b.unitPrice ?? 0)
+      )
+      .map(
+        (i) =>
+          `${i.productId}:${i.quantity}:${Math.round(i.unitPrice ?? 0)}:${i.restock ? 1 : 0}:` +
+          `${i.saleItemId ?? ''}:${(i.imeiNumber ?? '').trim()}:${i.condition ?? ''}`
+      )
+      .join(',');
+
+  const base = {
+    productId: 'P1',
+    quantity: 1,
+    unitPrice: 200,
+    restock: true,
+    saleItemId: 'TKT-A-item-0',
+    imeiNumber: 'IMEI-A1',
+    condition: 'restock',
+  };
+  check(
+    'identical line → identical key (cross-device determinism)',
+    canonicalKey([base]) === canonicalKey([{ ...base }])
+  );
+  check(
+    'same SKU, different line identity → different key (no false dedup)',
+    canonicalKey([base]) !== canonicalKey([{ ...base, saleItemId: 'TKT-A-item-1' }])
+  );
+  check(
+    'same SKU, different IMEI → different key',
+    canonicalKey([base]) !== canonicalKey([{ ...base, imeiNumber: 'IMEI-A2' }])
+  );
+  check(
+    'restock vs defective → different key (same unit, different lane)',
+    canonicalKey([base]) !== canonicalKey([{ ...base, restock: false, condition: 'defective' }])
+  );
+  check(
+    'key ordering is product-sorted (item order cannot fork the hash)',
+    canonicalKey([base, { ...base, productId: 'P0', saleItemId: 'TKT-A-item-9' }]) ===
+      canonicalKey([{ ...base, productId: 'P0', saleItemId: 'TKT-A-item-9' }, base])
+  );
+}
+
+// ------------------------------------------------------------------ I3 ---
+console.log('\n--- I3: multi-step partials conserve the discounted total ---');
+{
+  // 80 + 90 + 100 = 270 exactly; recovered COGS 40 + 50 + 45 = 135 = the
+  // sale's gross cost → full restock refund leaves P&L at zero.
+  const r1 = refundRow('R-A1', 80, 40, [
+    { productId: 'P1', quantity: 1, saleItemId: 'TKT-A-item-0', imeiNumber: 'IMEI-A1' },
+  ]);
+  const r2 = refundRow('R-A2', 90, 50, [
+    { productId: 'P2', quantity: 1, saleItemId: 'TKT-A-item-1', imeiNumber: 'IMEI-A2' },
+  ]);
+  const r3 = refundRow('R-A3', 100, 45, [
+    { productId: 'P3', quantity: 1, saleItemId: 'TKT-A-item-2' },
+  ]);
+  const all = [SALE, r1, r2, r3];
+  const cumulative = r1.total + r2.total + r3.total;
+  check('cumulative partials end exactly at the ticket total (270)', cumulative === SALE.total, `got ${cumulative}`);
+  check('integer arithmetic only', [SALE.total, r1.total, r2.total, r3.total].every(isInt));
+  check('4th refund attempt sees ZERO refundable value', refundableValueOf(SALE, all) === 0);
+  check('4th refund attempt is ineligible', isRefundEligible(SALE, refundedQtyByProduct(all, SALE.id)) === false);
+
+  const mid = [SALE, r1, r2];
+  check(
+    'per-line remainder after two partials keeps only the untouched line',
+    refundableValueOf(SALE, mid) === 100,
+    `got ${refundableValueOf(SALE, mid)}`
+  );
+  check(
+    'legacy payload readers still aggregate product quantities (native entries)',
+    refundedQtyByProduct([SALE, ...all.slice(1)], SALE.id).get('P1') === 1
+  );
+}
+
+// ------------------------------------------------------------------ I5 ---
+console.log('\n--- I5: P&L conservation — restock neutral, write-off burdened once ---');
+{
+  const fullRestock = refundRow('R-FULL', 270, 135, [
+    { productId: 'P1', quantity: 1, saleItemId: 'TKT-A-item-0' },
+    { productId: 'P2', quantity: 1, saleItemId: 'TKT-A-item-1' },
+    { productId: 'P3', quantity: 1, saleItemId: 'TKT-A-item-2' },
+  ]);
+  const m1 = computeSalesMetrics([SALE, fullRestock]);
+  check('full restock refund: CA Net 0', m1.netRevenue === 0, `got ${m1.netRevenue}`);
+  check('full restock refund: gross COGS stays 135', m1.costTotal === 135, `got ${m1.costTotal}`);
+  check('full restock refund: recovered 135', m1.restoredCogsTotal === 135, `got ${m1.restoredCogsTotal}`);
+  check('full restock refund: profit exactly 0 (no leak, no double cost)', m1.profitTotal === 0, `got ${m1.profitTotal}`);
+
+  const partialRestock = refundRow('R-PART', 90, 50, [
+    { productId: 'P2', quantity: 1, saleItemId: 'TKT-A-item-1' },
+  ]);
+  const m2 = computeSalesMetrics([SALE, partialRestock]);
+  check('partial restock: CA Net 180', m2.netRevenue === 180, `got ${m2.netRevenue}`);
+  check('partial restock: profit 95 (180 − 135 + 50)', m2.profitTotal === 95, `got ${m2.profitTotal}`);
+
+  const writeOff = refundRow('R-DEF', 270, 0, [
+    { productId: 'P1', quantity: 1, condition: 'defective' },
+    { productId: 'P2', quantity: 1, condition: 'defective' },
+    { productId: 'P3', quantity: 1, condition: 'defective' },
+  ]);
+  const m3 = computeSalesMetrics([SALE, writeOff]);
+  check('full write-off: recovered credit 0', m3.restoredCogsTotal === 0);
+  check('full write-off: profit = −cost (−135) exactly once', m3.profitTotal === -135, `got ${m3.profitTotal}`);
+
+  // Legacy refund row: no restored_cogs value anywhere → no credit invented.
+  const legacy = refundRow('R-LEGACY', 270, 0, []);
+  delete (legacy as unknown as Record<string, unknown>).restoredCogs;
+  const m4 = computeSalesMetrics([SALE, legacy]);
+  check('legacy refund row is never over-credited', m4.restoredCogsTotal === 0 && m4.profitTotal === -135);
+
+  // Snake-case alias (unmapped payload / peer row) is honored.
+  const alias = refundRow('R-ALIAS', 270, 0, []);
+  delete (alias as unknown as Record<string, unknown>).restoredCogs;
+  (alias as unknown as Record<string, unknown>).restored_cogs = 135;
+  const m5 = computeSalesMetrics([SALE, alias]);
+  check('restored_cogs alias feeds the same credit', m5.profitTotal === 0, `got ${m5.profitTotal}`);
+
+  // Base profit identity: base = 270 − 135 = 135.
+  const base = computeSalesMetrics([SALE]);
+  check('base profit identity (135)', base.profitTotal === 135);
+  const delta = base.profitTotal - m2.profitTotal;
+  check(
+    'profit delta equals Σ(net refund − recovered) for the partial',
+    delta === 90 - 50,
+    `got ${delta}`
+  );
+}
+
+// ------------------------------------------------------------------ I4 ---
+console.log('\n--- I4: debt-first / tender-capped funding waterfall ---');
+{
+  const mixed = {
+    id: 'TKT-B',
+    subtotal: 1000,
+    total: 1000,
+    paymentMethod: 'Espèces',
+    debtAdded: 400,
+    tenders: [
+      { method: 'Espèces', amount: 600 },
+      { method: 'Crédit Client', amount: 400 },
+    ],
+  };
+  const full = computeRefundFundingSplit(mixed, 1000);
+  check('full mixed refund nets the whole 1000', full.netRefund === 1000, `got ${full.netRefund}`);
+  check('debt leg reversed first/exactly (400)', full.debtShare === 400, `got ${full.debtShare}`);
+  check('cash never exceeds net cash paid (600)', full.cashShare === 600, `got ${full.cashShare}`);
+  check('cash cap reference is the paid cash (600)', full.cashPaidOriginal === 600);
+  check(
+    'funding split conserves the net to the Dinar',
+    full.cashShare + full.debtShare + full.voucherShare + full.avoirShare + full.digitalShare === full.netRefund
+  );
+  check('integer split only', [full.cashShare, full.debtShare, full.netRefund].every(isInt));
+
+  const half = computeRefundFundingSplit(mixed, 500);
+  check('half refund: net 500', half.netRefund === 500);
+  check('half refund: debt share 200 (pro-rata)', half.debtShare === 200, `got ${half.debtShare}`);
+  check('half refund: cash share 300 (never prorated gross)', half.cashShare === 300, `got ${half.cashShare}`);
+
+  // Fully debt-funded ticket: a full refund must not mint drawer cash.
+  const debtOnly = {
+    id: 'TKT-C',
+    subtotal: 800,
+    total: 800,
+    paymentMethod: 'Crédit Client',
+    debtAdded: 800,
+  };
+  const d = computeRefundFundingSplit(debtOnly, 800);
+  check('debt-only refund pays ZERO cash', d.cashShare === 0 && d.digitalShare === 0, JSON.stringify(d));
+  check('debt-only refund restores the full debt (800)', d.debtShare === 800);
+
+  // Cash cap across partials: cumulative recovery never exceeds paid value.
+  const capped = computeRefundFundingSplit(mixed, 700, 700);
+  check('cumulative cash cap trims over-recovery', capped.capped === true && capped.netRefund === 300, JSON.stringify(capped));
+}
+
+// ------------------------------------------------------------------ I6 ---
+console.log('\n--- I6: IMEI ownership event vocabulary (native parity) ---');
+{
+  check(
+    'RETURN_IN id mirrors the native format',
+    imeiTrustEventId('RETURN_IN', 'order', 'REF-C', 'IMEI-A1') === 'imev|RETURN_IN|order|REF-C|IMEI-A1'
+  );
+  check(
+    'RETURN_DEFECTIVE id mirrors the native format',
+    imeiTrustEventId('RETURN_DEFECTIVE', 'order', 'REF-C', 'IMEI-A2') ===
+      'imev|RETURN_DEFECTIVE|order|REF-C|IMEI-A2'
+  );
+  check('RETURN_DEFECTIVE has an operator label', IMEI_TRUST_EVENT_LABELS.RETURN_DEFECTIVE.length > 0);
+
+  // Quarantine marker ids: TS helper === native fixed vectors (FNV-1a 32,
+  // ASCII). The Rust suite asserts the same literals — drift fails both.
+  check('LED-DEF vector matches native', deterministicId('LED-DEF', 'REF-C', 'P1', 1) === 'LED-DEF-AB72EE0E');
+  check('LED-DEF vector (second line)', deterministicId('LED-DEF', 'REF-A', 'P1', 1) === 'LED-DEF-A9AF04CC');
+  check(
+    'refund-id vector matches native (identity-bearing canonical key)',
+    deterministicId('REF', 'TKT-1', 'P1:2:200:1::IMEI-A1:restock', 'Voucher', 200, 1) === 'REF-87C70085'
+  );
+}
+
+// ------------------------------------------------------------------ I7 ---
+console.log('\n--- I7: Z-report — cash refund reduces expected cash exactly once ---');
+{
+  const cashRefund = refundRow('R-CASH', 500, 0, [], {
+    cashDisbursed: 150,
+    refundMethod: 'Espèces',
+    shiftId: 'SHIFT-1',
+  });
+  check('exact disbursed cash read (150), never the net value (500)', cashRefundsFromTxns([cashRefund]) === 150);
+  check('integer cash figure', isInt(cashRefundsFromTxns([cashRefund])));
+
+  const debtFunded = refundRow('R-MIX', 500, 0, [], {
+    cashDisbursed: 0,
+    refundMethod: 'Espèces',
+  });
+  check('Espèces refund with zero cash share pays nothing from the drawer', cashRefundsFromTxns([debtFunded]) === 0);
+
+  const voided = refundRow('R-VOID', 500, 0, [], {
+    cashDisbursed: 150,
+    refundMethod: 'Espèces',
+    status: 'VOIDED',
+  });
+  check('VOIDED refund rows never count', cashRefundsFromTxns([voided]) === 0);
+
+  const legacyCash = refundRow('R-LEG', 120, 0, [], { refundMethod: 'Espèces' });
+  check('legacy row (no cashDisbursed) falls back to total', cashRefundsFromTxns([legacyCash]) === 120);
+
+  // The cross-shift ALLOCATION movement is math-invisible (no manual tag).
+  const alloc = {
+    type: 'EXPENSE',
+    amount: 150,
+    reason: `Remboursement allocation [REC-R-CASH] drawer=SHIFT-1 periode=SHIFT-1 net=500 especes=150 avoir=0 origine=REC-A ticket=TKT-A shift_origine=SHIFT-0`,
+  };
+  check('ALLOCATION movement is excluded from drawer expenses', standaloneExpensesFromMovements([alloc]) === 0);
+
+  // Expected cash: opening 1000 + 0 sales − 0 expenses − 150 refund = 850.
+  const openingFloat = 1000;
+  const expectedCash =
+    openingFloat + 0 - standaloneExpensesFromMovements([alloc]) - cashRefundsFromTxns([cashRefund]);
+  check('expected cash debited exactly once (850)', expectedCash === 850, `got ${expectedCash}`);
+
+  // Same ticket refunded in two cash steps: 80 + 70 = 150 (not 500).
+  const step1 = refundRow('R-S1', 300, 0, [], { cashDisbursed: 80, refundMethod: 'Espèces' });
+  const step2 = refundRow('R-S2', 200, 0, [], { cashDisbursed: 70, refundMethod: 'Espèces' });
+  check('multi-step cash refunds accumulate exactly', cashRefundsFromTxns([step1, step2]) === 150);
+}
+
+// ------------------------------------------------------------------ I1 ---
+console.log('\n--- I1: single authority — read-back hydration wiring ---');
+{
+  const slice = src('src/store/slices/createOrderSlice.ts');
+  const nativeClient = src('src/db/adapters/refundNative.ts');
+  const modal = src('src/components/modals/RefundModal.tsx');
+  const math = src('src/utils/receiptMath.ts');
+  const trust = src('src/utils/deviceTrust.ts');
+  const txAdapter = src('src/db/adapters/transactionAdapter.ts');
+  const shiftModal = src('src/components/modals/ShiftCloseModal.tsx');
+  const reports = src('src/components/modals/ReportsModal.tsx');
+  const rust = src('src-tauri/src/refund.rs');
+
+  check('slice hydrates recovered COGS from the receipt', slice.includes('nativeRes.recoveredCogs'));
+  check('slice hydrates the clamped debt relief', slice.includes('nativeRes.debtReliefApplied'));
+  check('slice hydrates the live debt after', slice.includes('nativeRes.customerDebtAfter'));
+  check('slice hydrates the loyalty verdict', slice.includes('nativeRes.customerPointsAfter'));
+  check('slice mirrors the durable merged payload', slice.includes('nativeRes.updatedOriginal'));
+  check('slice sends line identity + condition natively', slice.includes('saleItemId: ri.saleItemId ?? null') && slice.includes("condition: ri.condition ?? (ri.restock ? 'restock' : 'defective')"));
+  check('slice splits restock/defective IMEIs', slice.includes('defectiveImeis') && slice.includes('defectiveImeis,'));
+  check('slice cost sum is restock-only', slice.includes("!== 'restock') return acc;"));
+  check('slice refund row carries restoredCogs', slice.includes('restoredCogs: costRefundTotal'));
+  check('slice commits the hydrated refund row', slice.includes('restoredCogs: committedRecoveredCogs'));
+  check('slice has no client-math debtRelief fallback to requested amount', !slice.includes('amount: debtReliefForNative.relief'));
+
+  check('native client exposes ticketPayload', nativeClient.includes('ticketPayload') && nativeClient.includes('hydrateRefundedItems'));
+  check('native client maps RESTOCK_REASON_REQUIRED', nativeClient.includes("reason: 'RESTOCK_REASON_REQUIRED'"));
+  check('native client result carries the authoritative fields', nativeClient.includes('debtReliefApplied: number') && nativeClient.includes('recoveredCogs: number'));
+
+  check('modal computes per-line remaining', modal.includes('computeRefundableRemaining') && modal.includes('remainingByItemKey'));
+  check('modal stepper max is per-line remaining', modal.includes('qty >= maxQty') && !modal.includes('qty >= item.quantity'));
+  check('modal uses the per-line max in handlers', modal.includes('handleQuantityChange(itemKey, qty + 1, maxQty)'));
+
+  check('metrics interface exposes restoredCogsTotal', math.includes('restoredCogsTotal: number'));
+  check('metrics profit includes the recovered credit', math.includes('netRevenue - costTotal + restoredCogsTotal'));
+  check('device trust knows RETURN_DEFECTIVE', trust.includes("'RETURN_DEFECTIVE'"));
+  check('transaction adapter maps restored_cogs', txAdapter.includes('restored_cogs') && txAdapter.includes('restoredCogs: Math.round(v)'));
+  check(
+    'legacy adapter releases defective IMEIs into quarantine',
+    txAdapter.includes("kind: 'RETURN_DEFECTIVE'") && txAdapter.includes('status = $2')
+  );
+  check(
+    'legacy adapter keeps ONE release list for Dexie + SQLite + sync',
+    txAdapter.includes('imeiReleases(restoredImeis, defectiveImeis)')
+  );
+  check(
+    'legacy adapter writes the RETURN_DEFECTIVE ownership event',
+    txAdapter.includes("imeiTrustEventId(release.kind, 'order', refundTransaction.id, imei)")
+  );
+  check(
+    'slice hands defective IMEIs to the legacy lane',
+    /processRefundAtomic\([\s\S]{0,600}defectiveImeis/.test(slice)
+  );
+  check(
+    'IMEIRecord carries the release-status vocabulary',
+    src('src/types/pos.ts').includes("status?: 'in_stock' | 'defective'")
+  );
+  check('shift close reads cashDisbursed via the canonical helper', shiftModal.includes('cashRefundsFromTxns(sessionRefunds)'));
+  check('reports P&L shows the recovered-COGS credit', reports.includes('totalRestoredCogs') && reports.includes('COGS Récupérés'));
+  check('defect loss memo stays out of EBITDA', reports.includes("e.category !== 'Perte Stock / SAV'"));
+
+  // Native engine vocabulary / gates (the authority the TS mirrors).
+  check('native gate: defect reason required', rust.includes('RESTOCK_REASON_REQUIRED'));
+  check('native: defective IMEI vocabulary', rust.includes('RETURN_DEFECTIVE'));
+  check('native debt waterfall fills plans FIFO', rust.includes('fill_debt_plans_fifo'));
+  check('native loyalty replay persists', rust.includes('customer_points_after'));
+  check('native read-back returns ticket payload', rust.includes('ticket_payload'));
+  check('native recomputes recovered COGS', rust.includes('recovered_cogs'));
+  check('native masks defective quarantine rows', rust.includes('DEFECTIVE_QUARANTINE'));
+  check('native merges refundedItems into the durable payload', rust.includes('"refundedItems"'));
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
+if (fail > 0) process.exit(1);

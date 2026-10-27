@@ -137,6 +137,8 @@ export interface SalesMetrics {
   refundsTotal: number;
   netRevenue: number;
   costTotal: number;
+  /** Σ recovered COGS over refund rows (restocked units, v127). */
+  restoredCogsTotal: number;
   profitTotal: number;
   averageBasket: number;
   marginPct: string;
@@ -202,7 +204,20 @@ export function computeSalesMetrics(
     return acc;
   }, 0);
 
-  const profitTotal = netRevenue - costTotal;
+  // Recovered-COGS credit (v127): refund rows carry the native-computed
+  // value of the RESTOCKED units only (frozen per-line cost at commit).
+  //   profitTotal = netRevenue − grossSaleCOGS + Σ restoredCogs
+  // which equals base − Σ(netRefund − recovered): a full restock refund is
+  // P&L-neutral, a write-off stays a cost burden (no restock credit, loss
+  // memo'd separately — never double-counted). Legacy refund rows have no
+  // value → 0 credit; they are never over-credited.
+  const restoredCogsTotal = refundVouchers.reduce((acc, t) => {
+    const raw = typeof t.restoredCogs === 'number' ? t.restoredCogs : t.restored_cogs;
+    const v = Number(raw);
+    return acc + (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+  }, 0);
+
+  const profitTotal = netRevenue - costTotal + restoredCogsTotal;
   const validCount = validSales.length;
   const averageBasket = validCount > 0 ? Math.round(netSalesRevenue / validCount) : 0;
   const marginPct = netRevenue > 0 ? ((profitTotal / netRevenue) * 100).toFixed(1) : '0';
@@ -217,6 +232,7 @@ export function computeSalesMetrics(
     refundsTotal,
     netRevenue,
     costTotal,
+    restoredCogsTotal,
     profitTotal,
     averageBasket,
     marginPct,

@@ -59,6 +59,25 @@ export const SettingsModal: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SettingsTab>('appearance');
   const tabStripRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    const el = tabStripRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      if (el.scrollWidth <= el.clientWidth + 1) return;
+      el.scrollLeft += e.deltaY;
+      e.preventDefault();
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  useEffect(() => {
+    const el = tabStripRef.current;
+    const activeEl = el?.querySelector<HTMLElement>('[data-active="true"]');
+    activeEl?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  }, [activeTab]);
+
   const scheduleReceiptSave = (next: ReceiptSettings) => {
     setReceiptSettings(next);
   };
@@ -151,12 +170,14 @@ export const SettingsModal: React.FC = () => {
         {/* ═══ Tab Navigation (horizontally scrollable on mobile) ═══ */}
         <div
           ref={tabStripRef}
+          style={{ WebkitOverflowScrolling: 'touch' }}
           className="flex flex-nowrap gap-1 px-2.5 sm:px-4 pt-2 sm:pt-3 pb-0 shrink-0 overflow-x-auto overscroll-contain overflow-y-hidden no-scrollbar whitespace-nowrap border-b border-pos-border/40 min-w-0 max-w-full"
         >
           {tabs.map((tab) => (
             <button
               key={tab.key}
               type="button"
+              data-active={activeTab === tab.key ? 'true' : 'false'}
               onClick={() => setActiveTab(tab.key)}
               className={`px-3 sm:px-4 py-2 rounded-t-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === tab.key

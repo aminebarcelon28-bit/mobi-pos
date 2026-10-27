@@ -16,6 +16,8 @@ import {
   Trash2,
   KeyRound,
   FileKey,
+  FileSpreadsheet,
+  Sparkles,
 } from 'lucide-react';
 import {
   maintenanceService,
@@ -42,7 +44,7 @@ export const BackupSettingsTab: React.FC<BackupSettingsTabProps> = ({
   openSecurityTab,
 }) => {
   void openSecurityTab;
-  const { exportDatabase, importDatabase, logSecurityAction, activeCashier } = usePosStore();
+  const { exportDatabase, importDatabase, logSecurityAction, activeCashier, openModal } = usePosStore();
 
   const [dbStats, setDbStats] = useState<DbStats | null>(null);
   const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
@@ -692,6 +694,36 @@ export const BackupSettingsTab: React.FC<BackupSettingsTabProps> = ({
             onChange={handleFileUpload}
             className="hidden"
           />
+        </div>
+
+        {/* Smart Import Card */}
+        <div className="bg-pos-card border border-cyan-500/30 rounded-xl p-4 flex flex-col justify-between sm:col-span-2 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center border border-cyan-500/30 shadow-md">
+                <FileSpreadsheet className="w-5 h-5 stroke-[2.5]" />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold text-pos-text flex items-center gap-1.5">
+                  <span>Import Intelligent & Migration Facile</span>
+                  <span className="bg-cyan-500/20 text-cyan-400 text-[9px] font-extrabold px-1.5 py-0.5 rounded-full border border-cyan-500/30">
+                    Nouveau
+                  </span>
+                </h4>
+                <p className="text-[10px] text-pos-muted">
+                  Importez vos catalogues ou clients depuis n'importe quel fichier Excel (.xlsx, .xls), CSV, TSV, vCard, JSON ou SQL avec détection automatique des colonnes et des prix.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => openModal('smart_import')}
+              className="py-2.5 px-4 bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-slate-950 font-extrabold text-xs rounded-xl flex items-center justify-center gap-2 transition shadow-md cursor-pointer shrink-0"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>Lancer l'Import Intelligent</span>
+            </button>
+          </div>
         </div>
       </div>
 

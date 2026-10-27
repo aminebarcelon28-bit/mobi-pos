@@ -5,6 +5,7 @@
  * Reads:
  *   e2e-tests/COVERAGE.md        summary dashboard table
  *   e2e-tests/CASE_INDEX.csv     one row per catalog case (verdict, retired flag)
+ *   e2e-tests/FAIL-CLUSTERS.csv  case_id -> cluster_id (root-cause map)
  *
  * Checks:
  *   - every CSV row is placed (id present, retired 0/1, known verdict)
@@ -13,6 +14,7 @@
  *   - dashboard buckets sum to the total
  *   - each dashboard bucket equals the CSV count for that verdict
  *   - case ids are unique
+ *   - every FAIL row has exactly one cluster, and no cluster names a non-FAIL
  *
  * The CSV is the only verdict source; there are no bucket JSON files to drift.
  *
@@ -29,7 +31,8 @@ const args = parseArgs();
 
 const coverageFile = path.join(E2E, 'COVERAGE.md');
 const csvFile = path.join(E2E, 'CASE_INDEX.csv');
-for (const f of [coverageFile, csvFile]) {
+const clusterFile = path.join(E2E, 'FAIL-CLUSTERS.csv');
+for (const f of [coverageFile, csvFile, clusterFile]) {
   if (!fs.existsSync(f)) {
     bad(`missing ${path.relative(root, f)}`);
     process.exit(1);
@@ -148,6 +151,58 @@ if (dupes.length) {
   failures.push('unique ids');
 } else {
   console.log(`${C.green}ok  ${C.reset} unique case ids                  ${ids.size}`);
+}
+
+/* ---------- FAIL -> root-cause cluster ---------- */
+// Every FAIL row must name exactly one cluster; a cluster must not name a
+// non-FAIL row. This is what keeps FAIL-CLUSTERS.md from drifting away from
+// the verdict source.
+const failIds = new Set();
+for (const r of raw) {
+  if (!r.length || r.every((f) => !String(f).trim())) continue;
+  const id = String(r[idx.id] ?? '').trim();
+  if (!id) continue;
+  if (String(r[idx.retired]).trim() === '1') continue;
+  if (String(r[idx.verdict]).trim() === 'FAIL') failIds.add(id);
+}
+
+const cRaw = parseCsv(fs.readFileSync(clusterFile, 'utf8'));
+const cHeader = cRaw.shift().map((h) => h.trim());
+const cIdx = Object.fromEntries(cHeader.map((h, i) => [h, i]));
+if (cIdx.case_id === undefined || cIdx.cluster_id === undefined) {
+  bad('FAIL-CLUSTERS.csv must have case_id and cluster_id columns');
+  process.exit(1);
+}
+const clustered = new Map();
+const clusterDupes = [];
+for (const r of cRaw) {
+  if (!r.length || r.every((f) => !String(f).trim())) continue;
+  const cid = String(r[cIdx.case_id] ?? '').trim();
+  const kid = String(r[cIdx.cluster_id] ?? '').trim();
+  if (!cid) continue;
+  if (!kid) { clusterDupes.push(`${cid} has an empty cluster_id`); continue; }
+  if (clustered.has(cid)) clusterDupes.push(`${cid} listed twice`);
+  clustered.set(cid, kid);
+}
+const unclustered = [...failIds].filter((id) => !clustered.has(id));
+const phantom = [...clustered.keys()].filter((id) => !failIds.has(id));
+
+if (unclustered.length || phantom.length || clusterDupes.length) {
+  if (unclustered.length) {
+    bad(`${unclustered.length} FAIL row(s) have no root-cause cluster:`);
+    for (const id of unclustered.slice(0, 20)) console.log(`       - ${id}`);
+    if (unclustered.length > 20) console.log(`       … ${unclustered.length - 20} more`);
+  }
+  if (phantom.length) {
+    bad(`${phantom.length} cluster row(s) name a non-FAIL case:`);
+    for (const id of phantom.slice(0, 20)) console.log(`       - ${id}`);
+    if (phantom.length > 20) console.log(`       … ${phantom.length - 20} more`);
+  }
+  for (const d of clusterDupes.slice(0, 20)) bad(d);
+  failures.push('FAIL rows clustered');
+} else {
+  const nClusters = new Set(clustered.values()).size;
+  console.log(`${C.green}ok  ${C.reset} every FAIL row has one cluster   ${failIds.size} cases / ${nClusters} clusters`);
 }
 
 if (unplaced.length) {

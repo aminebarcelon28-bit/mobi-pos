@@ -70,8 +70,8 @@ function mapSqlRowToProduct(r: Record<string, unknown>): Product {
     sku: String(r.sku ?? base.sku ?? ''),
     barcode: String(r.barcode ?? base.barcode ?? ''),
     title: String(r.title ?? base.title ?? r.id),
-    brand: (r.brand as Product['brand']) ?? (base.brand as Product['brand']) ?? 'Autre',
-    category: (r.category as Product['category']) ?? (base.category as Product['category']) ?? 'Tous les produits',
+    brand: ((r.brand && String(r.brand).trim()) || (base.brand && String(base.brand).trim()) || 'Autre') as Product['brand'],
+    category: ((r.category && String(r.category).trim()) || (base.category && String(base.category).trim()) || 'Tous les produits') as Product['category'],
     price: Number(r.price ?? base.price ?? 0),
     wholesalePrice: Number(r.wholesale_price ?? base.wholesalePrice ?? 0),
     semiWholesalePrice: typeof base.semiWholesalePrice === 'number' ? base.semiWholesalePrice : undefined,
@@ -168,7 +168,7 @@ export const productAdapter = {
       try {
         const [{ getLocalDb }] = await Promise.all([getSqlAdapter()]);
         const db = await getLocalDb();
-        const rows = (await db.select('SELECT * FROM products WHERE deleted = 0')) as Array<Record<string, unknown>>;
+        const rows = (await db.select("SELECT * FROM products WHERE deleted = 0 AND id NOT LIKE 'prod-test-%'")) as Array<Record<string, unknown>>;
         if (rows && rows.length > 0) {
           const products = rows.map(mapSqlRowToProduct);
           // UPGRADE-03: seed the semantic index for the whole catalog once

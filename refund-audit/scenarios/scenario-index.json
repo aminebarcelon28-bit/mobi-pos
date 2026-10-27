@@ -1,0 +1,18 @@
+{
+  "generatedAt": "2026-10-25T14:46:02.311Z",
+  "total": 10000,
+  "valid": 6692,
+  "invalidFixture": 3308,
+  "executable": 5864,
+  "dimensionCounts": {
+    "over-limit": 1442,
+    "single-item": 1386,
+    "partial": 1485,
+    "repeat-partial": 1422,
+    "zero-qty": 1403,
+    "multi-line": 1441,
+    "full": 1421
+  },
+  "sourceFile": "scenarios.jsonl",
+  "seedBase": 20261025
+}

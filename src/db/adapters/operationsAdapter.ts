@@ -315,8 +315,8 @@ export const operationsAdapter = {
       try {
         const db = await getLocalDb();
         await db.execute(
-          `INSERT INTO imei_records (imei, product_id, purchase_order_id, sale_transaction_id, warranty_expires_at, received_at, sold_at, warranty_months)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          `INSERT INTO imei_records (imei, product_id, purchase_order_id, sale_transaction_id, warranty_expires_at, received_at, sold_at, warranty_months, status)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, 'in_stock'))
            ON CONFLICT(imei) DO UPDATE SET
              product_id=excluded.product_id,
              purchase_order_id=COALESCE(excluded.purchase_order_id, imei_records.purchase_order_id),
@@ -325,6 +325,7 @@ export const operationsAdapter = {
              received_at=COALESCE(excluded.received_at, imei_records.received_at),
              sold_at=excluded.sold_at,
              warranty_months=COALESCE(excluded.warranty_months, imei_records.warranty_months),
+             status=COALESCE($9, imei_records.status),
              version=imei_records.version + 1`,
           [
             record.imei,
@@ -335,6 +336,7 @@ export const operationsAdapter = {
             record.receivedAt || new Date().toISOString(),
             record.soldAt || null,
             record.warrantyMonths || null,
+            record.status || null,
           ],
         );
       } catch (err) {
@@ -350,7 +352,7 @@ export const operationsAdapter = {
       try {
         const db = await getLocalDb();
         const rows = (await db.select(
-          'SELECT imei, product_id, purchase_order_id, sale_transaction_id, warranty_expires_at, received_at, sold_at, warranty_months FROM imei_records ORDER BY received_at DESC',
+          'SELECT imei, product_id, purchase_order_id, sale_transaction_id, warranty_expires_at, received_at, sold_at, warranty_months, status FROM imei_records ORDER BY received_at DESC',
         )) as Array<{
           imei: string;
           product_id: string;
@@ -360,6 +362,7 @@ export const operationsAdapter = {
           received_at: string;
           sold_at: string | null;
           warranty_months: number | null;
+          status: 'in_stock' | 'defective' | null;
         }>;
         if (rows && rows.length > 0) {
           const list: IMEIRecord[] = rows.map((r) => ({
@@ -371,6 +374,7 @@ export const operationsAdapter = {
             receivedAt: r.received_at,
             soldAt: r.sold_at || undefined,
             warrantyMonths: r.warranty_months ?? undefined,
+            status: r.status || undefined,
           }));
           void dexieDb.imeiRecords.bulkPut(list).catch(() => {});
           return list;
@@ -587,4 +591,3 @@ export const operationsAdapter = {
     return fallback;
   },
 };
-

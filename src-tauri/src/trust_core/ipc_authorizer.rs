@@ -451,6 +451,12 @@ static COMMAND_REGISTRY: &[(&str, Capability)] = &[
     ("mobile_bluetooth_print", Capability::HardwareOperations),
     ("launch_url", Capability::HardwareOperations),
     ("mobile_scan_document", Capability::HardwareOperations),
+    // Smart Import / Easy Migration subsystem.
+    ("import_inspect_file", Capability::ReadOperationalData),
+    ("import_stage_file", Capability::OperationalWrites),
+    ("import_commit_batch", Capability::OperationalWrites),
+    ("import_get_staged_batch", Capability::ReadOperationalData),
+    ("import_list_batches", Capability::ReadOperationalData),
 ];
 
 /// Public commands: no capability required, callable in every state
@@ -1159,6 +1165,11 @@ pub static ALL_COMMAND_FNS_IN_TESTS: &[&str] = &[
     "prune_snapshots",
     "decrypt_snapshot_for_recovery",
     "pin_set",
+    "import_inspect_file",
+    "import_stage_file",
+    "import_commit_batch",
+    "import_get_staged_batch",
+    "import_list_batches",
 ];
 
 #[cfg(test)]

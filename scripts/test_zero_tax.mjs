@@ -203,23 +203,25 @@ const WHITELIST = new Set([
   // Documented removals (comments recording what was deleted and why).
   // Re-pinned on the UPGRADE-11 (v126) Kredy heal-lane + repo insertion.
   // Re-pinned again on UPGRADE-12 (held-claim import line).
-  'src/db/sqlPluginAdapter.ts:1572',
-  'src/db/sqlPluginAdapter.ts:2383',
-  'src/db/sqlPluginAdapter.ts:2385',
+  // Re-pinned on the refund root rebuild (v127): heal parity + restored-COGS
+  // docs shifted these lines (content unchanged).
+  'src/db/sqlPluginAdapter.ts:1583',
+  'src/db/sqlPluginAdapter.ts:2394',
+  'src/db/sqlPluginAdapter.ts:2396',
   // Legacy `vatRate` scrub on the settings lane (push strip + pull apply).
-  'src/db/sqlPluginAdapter.ts:3934',
-  'src/db/sqlPluginAdapter.ts:3935',
-  'src/db/sqlPluginAdapter.ts:3947',
-  'src/db/sqlPluginAdapter.ts:3948',
+  'src/db/sqlPluginAdapter.ts:3957',
+  'src/db/sqlPluginAdapter.ts:3958',
+  'src/db/sqlPluginAdapter.ts:3970',
+  'src/db/sqlPluginAdapter.ts:3971',
   'src/sync/genericApply.ts:633',
   'src/sync/genericApply.ts:639',
   'src/sync/genericApply.ts:640',
   'src/store/slices/createOrderSlice.ts:539',
   'src/sync/payloadHygiene.ts:37',
   'src/sync/SyncManager.ts:134',
-  'src/utils/receiptMath.ts:241',
-  'src/utils/receiptMath.ts:243',
-  'src/utils/receiptMath.ts:402',
+  'src/utils/receiptMath.ts:257',
+  'src/utils/receiptMath.ts:259',
+  'src/utils/receiptMath.ts:418',
   'src/utils/escpos.ts:279',
   'src/utils/escpos.ts:296',
   'src/utils/mobileDocPrint.ts:162',

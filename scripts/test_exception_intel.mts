@@ -338,7 +338,7 @@ console.log('\n--- Part 8: wiring + parity ---');
   const V124 = 'ALTER TABLE security_audit_logs ADD COLUMN actor_id TEXT;';
 
   check('lib.rs v124 migration present', libRs.includes('version: 124,') && libRs.includes(V124));
-  check('lib.rs ceiling bumped to 126', /EXPECTED_MAX_DB_USER_VERSION: u32 = 126;/.test(libRs));
+  check('lib.rs ceiling bumped to 127', /EXPECTED_MAX_DB_USER_VERSION: u32 = 127;/.test(libRs));
   check('schemaHeal exports the verbatim v124 constant', AUDIT_ACTOR_ID_HEAL_SQL.length === 1 && AUDIT_ACTOR_ID_HEAL_SQL[0] === V124);
   check('schemaHeal probe constant exact', AUDIT_ACTOR_ID_HEAL_PROBE_SQL === 'SELECT actor_id FROM security_audit_logs LIMIT 0;');
   check('3-way DDL parity (rust ↔ heal ↔ pull-mirror)', libRs.includes(V124) && heal.includes(V124) && generic.includes(V124));

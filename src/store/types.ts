@@ -81,6 +81,7 @@ export type ActiveModalType =
   | 'custom_item'
   | 'command_palette'
   | 'conflict_resolution'
+  | 'smart_import'
   | null;
 
 export interface CartSlice {

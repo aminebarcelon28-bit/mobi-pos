@@ -286,43 +286,44 @@ async function mirrorGenericToSqlite(
     // into SQLite under the same version guard as customers. The parent
     // customer stub is INSERT ... DO NOTHING so a debt can land before its
     // customer row without tripping the FK.
-    const d = payload;
-    const now = utcNowIso();
+    const d = payload, now = utcNowIso();
+    const custId = String(d.customerId ?? d.customer_id ?? id), custName = String(d.customerName ?? d.customer_name ?? 'Client');
     await db.execute(
       `INSERT INTO customers (id, name, phone, json_payload, updated_at, idempotency_key)
        VALUES ($1, $2, $3, $4, $5, 'stub-cust-' || $1)
        ON CONFLICT(id) DO NOTHING`,
-      [String(d.customerId ?? id), String(d.customerName ?? 'Client'), '', JSON.stringify({ id: String(d.customerId ?? id) }), now],
+      [custId, custName, '', JSON.stringify({ id: custId, name: custName }), now],
     );
     await db.execute(
       `INSERT INTO customer_debts (id, customer_id, customer_name, type, amount, balance_after,
         receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted,
-        due_date, kind)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16)
+        due_date, kind, origin)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16, $17)
        ON CONFLICT(id) DO UPDATE SET customer_id=excluded.customer_id, customer_name=excluded.customer_name,
         type=excluded.type, amount=excluded.amount, balance_after=excluded.balance_after,
         receipt_number=excluded.receipt_number, payment_method=excluded.payment_method,
         notes=excluded.notes, recorded_by=excluded.recorded_by, created_at=excluded.created_at,
         json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
-        due_date=excluded.due_date, kind=excluded.kind, version=excluded.version
+        due_date=excluded.due_date, kind=excluded.kind, origin=excluded.origin, version=excluded.version
         WHERE excluded.version >= customer_debts.version`,
       [
         id,
-        String(d.customerId ?? ''),
-        String(d.customerName ?? 'Client'),
+        String(d.customerId ?? d.customer_id ?? ''),
+        custName,
         String(d.type ?? 'DEBT_ACQUIRED'),
         Number(d.amount ?? 0),
-        Number(d.balanceAfter ?? 0),
-        (d.receiptNumber as string) ?? null,
-        (d.paymentMethod as string) ?? null,
+        Number(d.balanceAfter ?? d.balance_after ?? d.amount ?? 0),
+        (d.receiptNumber ?? d.receipt_number) as string ?? null,
+        (d.paymentMethod ?? d.payment_method) as string ?? null,
         (d.notes as string) ?? null,
-        (d.recordedBy as string) ?? null,
-        (d.createdAt as string) ?? now,
+        (d.recordedBy ?? d.recorded_by) as string ?? null,
+        (d.createdAt ?? d.created_at) as string ?? now,
         JSON.stringify(payload),
         version,
         now,
-        (d.dueDate as string) ?? null,
+        (d.dueDate ?? d.due_date) as string ?? null,
         String(d.kind ?? ''),
+        String(d.origin ?? 'operational'),
       ],
     );
   } else if (table === 'stock_batches') {
@@ -517,6 +518,11 @@ async function mirrorGenericToSqlite(
       coerceIsoInstant(m.received_at ?? m.receivedAt) ?? now,
       version,
     ];
+    const incomingStatus = m.status === 'in_stock' || m.status === 'defective' ? m.status : undefined;
+    if (anchorCols.has('status') && incomingStatus) {
+      cols.push('status');
+      vals.push(incomingStatus);
+    }
     if (anchorCols.has('warranty_expires_at')) {
       cols.push('warranty_expires_at');
       vals.push(coerceAnchorInstant(m.warranty_expires_at ?? m.warrantyExpiresAt));
@@ -526,12 +532,13 @@ async function mirrorGenericToSqlite(
       vals.push(coerceAnchorMonths(m.warranty_months ?? m.warrantyMonths));
     }
     const placeholders = vals.map((_, i) => `$${i + 1}`).join(', ');
+    const statusUpdate = anchorCols.has('status') && incomingStatus ? ', status=excluded.status' : '';
     await db.execute(
       `INSERT INTO imei_records (${cols.join(', ')})
        VALUES (${placeholders})
        ON CONFLICT(imei) DO UPDATE SET sale_transaction_id=excluded.sale_transaction_id,
          sold_at=excluded.sold_at, product_id=excluded.product_id,
-         received_at=excluded.received_at, version=excluded.version
+         received_at=excluded.received_at${statusUpdate}, version=excluded.version
          WHERE excluded.version >= imei_records.version`,
       vals as never[],
     );

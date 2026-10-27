@@ -86,7 +86,9 @@ console.log('\n--- Rule 3: money-path float registry (Stage E expiry) ---');
 {
   // file -> max allowed hits (author-time baseline, Stage A).
   const REGISTRY = {
-    'src/utils/receiptMath.ts': 28,
+    // +1: recovered-COGS credit rounded to integer DA (v127 refund root
+    // rebuild — no float money crosses the P&L).
+    'src/utils/receiptMath.ts': 29,
     // Phase 1b-i: taxEngine.ts is DELETED — its registry entry goes with it
     // (the file may not reappear; the zero-tax gate greps src/ for tax tokens).
     'src/utils/moneyInput.ts': 1,
@@ -96,7 +98,10 @@ console.log('\n--- Rule 3: money-path float registry (Stage E expiry) ---');
     'src/utils/inventoryValuation.ts': 2,
     'src/utils/zReportSnapshot.ts': 0,
     'src/db/sqlPluginAdapter.ts': 49,
-    'src/store/slices/createOrderSlice.ts': 38,
+    // +12: refund root rebuild — frozen-cost recovery, native read-back
+    // hydration (recovered COGS / applied relief / live debt / points) and
+    // refund-line identity are all clamped to integer DA at the boundary.
+    'src/store/slices/createOrderSlice.ts': 50,
     'src/store/slices/createCartSlice.ts': 8,
     'src/components/PoReviewScreen.tsx': 55,
     'src/utils/savQuoteBuilder.ts': 1,

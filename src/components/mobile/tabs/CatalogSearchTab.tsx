@@ -24,8 +24,9 @@ import { useRegisterMobileBackHandler } from '../../../hooks/useMobileBackNaviga
 import { useTranslation, Bdi } from '../../../i18n';
 
 // Normalisation insensible aux accents/casse pour la recherche catalogue.
-const foldForSearch = (s: string | undefined | null): string =>
-  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+import { matchProductSearch } from '../../../utils/catalogSearch';
+
+
 
 interface CatalogSearchTabProps {
   onAddToCart?: (product: Product) => void;
@@ -170,18 +171,20 @@ export const CatalogSearchTab: React.FC<CatalogSearchTabProps> = ({ onAddToCart 
   // Filtered products with multi-attribute search (accent-insensitive).
   // Reads debouncedSearch so the list re-scans 200ms after typing stops.
   const filteredProducts = useMemo(() => {
-    const q = foldForSearch(debouncedSearch.trim());
+    const rawQ = debouncedSearch.trim();
     return (products || []).filter((p) => {
-      const matchesCat = selectedCategory === 'all' || p.category === selectedCategory;
+      const matchesCat = !rawQ ? (selectedCategory === 'all' || p.category === selectedCategory) : true;
       if (!matchesCat) return false;
 
-      if (!q) return true;
-      const titleMatch = foldForSearch(p.title).includes(q);
-      const skuMatch = foldForSearch(p.sku).includes(q);
-      const barcodeMatch = foldForSearch(p.barcode).includes(q);
-      const imeiMatch = foldForSearch(p.imeiNumber).includes(q);
-      const brandMatch = foldForSearch(p.brand).includes(q);
-      return titleMatch || skuMatch || barcodeMatch || imeiMatch || brandMatch;
+      if (!rawQ) return true;
+      return matchProductSearch(p, rawQ);
+
+
+
+
+
+
+
     });
   }, [products, debouncedSearch, selectedCategory]);
 

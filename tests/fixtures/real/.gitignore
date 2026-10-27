@@ -1,0 +1,15 @@
+# Ignore any raw, non-anonymized merchant files
+*.raw.*
+raw_*
+*.private.*
+*.orig.*
+*secret*
+*confidential*
+
+# Allow anonymized test fixtures and labels
+!*.csv
+!*.tsv
+!*.xlsx
+!*.labels.json
+!README.md
+

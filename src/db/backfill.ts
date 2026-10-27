@@ -551,25 +551,30 @@ export async function remirrorToDexie(force = false): Promise<{ mirrored: number
         } catch (err) {
           console.warn(`[backfill] Failed parsing json_payload for product ${r.id}:`, err);
         }
+        const brandVal = (r.brand && String(r.brand).trim()) || (base.brand && String(base.brand).trim()) || 'Autre';
+        const categoryVal = (r.category && String(r.category).trim()) || (base.category && String(base.category).trim()) || 'Tous les produits';
+        const priceVal = Number(r.price ?? (typeof base.price === 'number' ? base.price : (base.price as any)?.dzd) ?? 0);
+        const costPriceVal = Number(r.cost_price ?? (typeof base.costPrice === 'number' ? base.costPrice : (base.cost_price as any)?.dzd) ?? 0);
+
         productsToPut.push({
-          sku: (r.sku as string) ?? '',
-          barcode: (r.barcode as string) ?? '',
-          title: (r.title as string) ?? '',
-          brand: (r.brand as Product['brand']) || 'Autre',
-          category: (r.category as Product['category']) || 'Tous les produits',
-          price: Number(r.price ?? 0),
-          wholesalePrice: Number(r.wholesale_price ?? 0),
-          costPrice: Number(r.cost_price ?? 0),
-          imageUrl: String(r.image_url ?? ''),
-          isSerialized: Boolean(r.is_serialized),
-          imeiNumber: r.imei_number ? String(r.imei_number) : undefined,
-          vendorName: String(r.vendor_name ?? 'Fournisseur Général'),
-          leadTimeDays: Number(r.lead_time_days ?? 7),
-          dailySalesVelocity: Number(r.daily_sales_velocity ?? 0),
-          reorderPoint: Number(r.reorder_point ?? 5),
-          compatibleModel: String(r.compatible_model ?? ''),
           ...base,
           id: String(r.id),
+          sku: (r.sku as string) ?? (base.sku as string) ?? '',
+          barcode: (r.barcode as string) ?? (base.barcode as string) ?? '',
+          title: (r.title as string) ?? (base.title as string) ?? String(r.id),
+          brand: brandVal as Product['brand'],
+          category: categoryVal as Product['category'],
+          price: priceVal,
+          wholesalePrice: Number(r.wholesale_price ?? 0),
+          costPrice: costPriceVal,
+          imageUrl: String(r.image_url ?? base.imageUrl ?? ''),
+          isSerialized: Boolean(r.is_serialized ?? base.isSerialized),
+          imeiNumber: r.imei_number ? String(r.imei_number) : (base.imeiNumber ? String(base.imeiNumber) : undefined),
+          vendorName: String(r.vendor_name ?? base.vendorName ?? 'Fournisseur Général'),
+          leadTimeDays: Number(r.lead_time_days ?? base.leadTimeDays ?? 7),
+          dailySalesVelocity: Number(r.daily_sales_velocity ?? base.dailySalesVelocity ?? 0),
+          reorderPoint: Number(r.reorder_point ?? base.reorderPoint ?? 5),
+          compatibleModel: String(r.compatible_model ?? base.compatibleModel ?? ''),
           // Row-column authority (double-count fix): ledger recomputes
           // (appendInventoryDeltas et al.) UPDATE products.stock WITHOUT
           // touching json_payload, so a stale blob must never win for stock.

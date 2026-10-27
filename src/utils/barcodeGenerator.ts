@@ -361,7 +361,7 @@ export function generateUniqueSku(
       .filter((s): s is string => Boolean(s && s.length > 0))
   );
 
-  let catCode = 'ACC';
+  let catCode = 'PRD';
   if (category) {
     const c = category.toLowerCase();
     if (c.includes('iphone')) catCode = 'COQ-IPH';
@@ -374,7 +374,7 @@ export function generateUniqueSku(
     else if (c.includes('reprise') || c.includes('occasion')) catCode = 'OCC';
   }
 
-  let brdCode = 'GEN';
+  let brdCode = 'AUT';
   if (brand) {
     const b = brand.toLowerCase();
     if (b.includes('apple')) brdCode = 'APP';

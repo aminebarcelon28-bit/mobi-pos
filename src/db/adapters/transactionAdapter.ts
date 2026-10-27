@@ -284,6 +284,17 @@ async function mapTxRowsToSaleTransactions(
         const v = Number(rawLedger);
         return Number.isFinite(v) && v >= 0 ? { ledgerCogsTotal: Math.round(v) } : {};
       })(),
+      // v127 REFUND RECOVERY: recovered COGS of the RESTOCKED units (finite
+      // column value wins, then the envelope alias); absent = 0 credit —
+      // legacy refund rows are never over-credited in the P&L.
+      ...(() => {
+        const rawRestored =
+          (r.restored_cogs as unknown) ??
+          (parsed.restoredCogs as unknown) ??
+          (parsed.restored_cogs as unknown);
+        const v = Number(rawRestored);
+        return Number.isFinite(v) && v > 0 ? { restoredCogs: Math.round(v) } : {};
+      })(),
       pricingTier:
         (r.pricing_tier as SaleTransaction['pricingTier']) ??
         (parsed.pricingTier as SaleTransaction['pricingTier']) ??
@@ -786,7 +797,12 @@ export const transactionAdapter = {
     updatedCustomer?: Customer,
     restoredImeis: string[] = [],
     auditEntry?: SecurityAuditLogEntry,
-    policy?: RefundExecutionPolicy
+    policy?: RefundExecutionPolicy,
+    /**
+     * Defective units released into quarantine (`status='defective'` +
+     * `RETURN_DEFECTIVE` event) — mirrors the native release list exactly.
+     */
+    defectiveImeis: string[] = []
   ): Promise<ImeiReleaseResult> {
     const warnings: string[] = [];
     const flightKey = refundFlightKey(refundTransaction);
@@ -873,6 +889,32 @@ export const transactionAdapter = {
         }
       }
     };
+    // ONE release list shared by the Dexie mirror, the SQLite reset and the
+    // sync push — the exact native vocabulary (`imei_release` in refund.rs):
+    // restocked → `in_stock`/RETURN_IN, write-off → `defective`/
+    // RETURN_DEFECTIVE with the same operator note. Never derived twice.
+    const imeiReleases = (
+      restored: string[],
+      defective: string[]
+    ): Array<{
+      imei: string;
+      kind: 'RETURN_IN' | 'RETURN_DEFECTIVE';
+      status: 'in_stock' | 'defective';
+      note: string;
+    }> => [
+      ...restored.map((imei) => ({
+        imei,
+        kind: 'RETURN_IN' as const,
+        status: 'in_stock' as const,
+        note: 'Retour en stock (remboursement)',
+      })),
+      ...defective.map((imei) => ({
+        imei,
+        kind: 'RETURN_DEFECTIVE' as const,
+        status: 'defective' as const,
+        note: 'Retour défectueux — quarantaine (remboursement)',
+      })),
+    ];
     await dexieDb.transaction('rw', [dexieDb.transactions, dexieDb.products, dexieDb.customers, dexieDb.securityAuditLogs, dexieDb.imeiRecords], async () => {
       const originalId = refundTransaction.originalTransactionId;
       // Cross-operation guard (same atomicity as the bound re-read below):
@@ -910,16 +952,15 @@ export const transactionAdapter = {
       if (enrichedRefundAudit) {
         await dexieDb.securityAuditLogs.put(enrichedRefundAudit);
       }
-      if (restoredImeis.length > 0) {
-        for (const imei of restoredImeis) {
-          const rec = await dexieDb.imeiRecords.get(imei);
-          if (rec) {
-            await dexieDb.imeiRecords.put({
-              ...rec,
-              saleTransactionId: undefined,
-              soldAt: undefined,
-            });
-          }
+      for (const release of imeiReleases(restoredImeis, defectiveImeis)) {
+        const rec = await dexieDb.imeiRecords.get(release.imei);
+        if (rec) {
+          await dexieDb.imeiRecords.put({
+            ...rec,
+            saleTransactionId: undefined,
+            soldAt: undefined,
+            status: release.status,
+          });
         }
       }
     });
@@ -973,30 +1014,49 @@ export const transactionAdapter = {
             }
             assertRefundBound(prior);
           }
-          for (const imei of restoredImeis) {
+          // v127 heal may race a preview write on a schema-degraded DB: probe
+          // the `status` column like the native engine does and degrade to the
+          // legacy sold-state reset alone (telemetry never fails the refund).
+          let hasImeiStatus = true;
+          try {
+            await db.select('SELECT status FROM imei_records LIMIT 0;');
+          } catch {
+            hasImeiStatus = false;
+          }
+          for (const release of imeiReleases(restoredImeis, defectiveImeis)) {
+            const imei = release.imei;
             try {
-              await db.execute(
-                'UPDATE imei_records SET sale_transaction_id = NULL, sold_at = NULL, version = version + 1 WHERE imei = $1',
-                [imei]
-              );
+              if (hasImeiStatus) {
+                await db.execute(
+                  'UPDATE imei_records SET sale_transaction_id = NULL, sold_at = NULL, status = $2, version = version + 1 WHERE imei = $1',
+                  [imei, release.status]
+                );
+              } else {
+                await db.execute(
+                  'UPDATE imei_records SET sale_transaction_id = NULL, sold_at = NULL, version = version + 1 WHERE imei = $1',
+                  [imei]
+                );
+              }
             } catch (imeiErr) {
               const msg = `[db:refund] IMEI ${imei} resté 'sold' dans SQLite (miroir Dexie libéré) — re-synchroniser manuellement.`;
               console.warn(msg, imeiErr);
               warnings.push(msg);
             }
-            // UPGRADE-08 — ownership ledger: the refund returned this unit to
-            // the shop. Best-effort + idempotent (logged only, never pushed to
-            // `warnings` — the money-path guarantee is the sold-state reset).
+            // UPGRADE-08 — ownership ledger: the refund moved this unit into
+            // its post-sale state (stock or quarantine). Best-effort +
+            // idempotent (logged only, never pushed to `warnings` — the
+            // money-path guarantee is the sold-state reset).
             try {
               await db.execute(
                 `INSERT OR IGNORE INTO imei_events (id, imei, kind, ref_type, ref_id, at, actor, note)
-                 VALUES ($1, $2, 'RETURN_IN', 'order', $3, $4, '', $5)`,
+                 VALUES ($1, $2, $3, 'order', $4, $5, '', $6)`,
                 [
-                  imeiTrustEventId('RETURN_IN', 'order', refundTransaction.id, imei),
+                  imeiTrustEventId(release.kind, 'order', refundTransaction.id, imei),
                   imei,
+                  release.kind,
                   refundTransaction.id,
                   new Date().toISOString(),
-                  'Retour en stock (remboursement)',
+                  release.note,
                 ]
               );
             } catch (evtErr) {
@@ -1026,11 +1086,9 @@ export const transactionAdapter = {
       );
     }
 
-    if (restoredImeis.length > 0) {
-      for (const imei of restoredImeis) {
-        const rec = await dexieDb.imeiRecords.get(imei);
-        if (rec) void fireSync('imei', imei, rec);
-      }
+    for (const imei of [...restoredImeis, ...defectiveImeis]) {
+      const rec = await dexieDb.imeiRecords.get(imei);
+      if (rec) void fireSync('imei', imei, rec);
     }
 
     if (updatedCustomer) void fireSync('customer', updatedCustomer.id, updatedCustomer);

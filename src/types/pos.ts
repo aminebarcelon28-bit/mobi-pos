@@ -19,7 +19,8 @@ export type SortOption =
   | 'price_asc'
   | 'price_desc'
   | 'stock_desc'
-  | 'brand_asc';
+  | 'brand_asc'
+  | 'recent';
 
 export type PricingTier = 'Retail' | 'Wholesale' | 'VIP';
 
@@ -104,6 +105,10 @@ export interface Product {
   variantName?: string;
   /** True when this product heads a variant matrix (has children). */
   hasVariants?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  deleted?: number;
+  version?: number;
 }
 
 export type ProductInput = Omit<Product, 'id'> & { id?: string };
@@ -375,6 +380,7 @@ export interface Customer {
   id: string;
   name: string;
   phone: string;
+  secondaryPhone?: string;
   email: string;
   registeredDevice: string;
   loyaltyPoints: number;
@@ -415,6 +421,7 @@ export interface CustomerDebtEntry {
   customerId: string;
   customerName: string;
   type: 'DEBT_ACQUIRED' | 'PAYMENT_SETTLED';
+  origin?: 'operational' | 'imported_history';
   amount: number;
   balanceAfter: number;
   receiptNumber?: string;
@@ -559,6 +566,15 @@ export interface SaleTransaction {
   ledgerCogsTotal?: number;
   ledger_cogs_total?: number;
   cost_total?: number;
+  /**
+   * v127 refund rows: recovered COGS of the RESTOCKED lines only (native-
+   * computed from frozen per-line costs at commit). Feeds the single P&L
+   * credit (profit = netRevenue − costTotal + Σ restoredCogs) so a restock
+   * refund stays neutral and a write-off burden never double-counts. Absent
+   * (legacy refund rows) means 0 credit — never invented.
+   */
+  restoredCogs?: number;
+  restored_cogs?: number;
   pricingTier: PricingTier;
   paymentMethod: PaymentMethodType;
   tenders?: PaymentTender[];
@@ -1654,6 +1670,12 @@ export interface IMEIRecord {
   warrantyMonths?: number;
   receivedAt: string;
   soldAt?: string;
+  /**
+   * Physical state after the last release: `in_stock` (a refund restocked the
+   * unit) or `defective` (a write-off quarantined it). Mirrors the native
+   * `imei_records.status` column (v127); absent on rows predating the column.
+   */
+  status?: 'in_stock' | 'defective';
   notes?: string;
   version?: number;
 }
@@ -1897,7 +1919,7 @@ export interface HardwareStatus {
   customerDisplayConnected: boolean;
 }
 
-export const APP_VERSION = '1.6.8';
+export const APP_VERSION = '1.6.9';
 
 // Cached formatters: constructing Intl.NumberFormat per call showed up in
 // checkout/catalog hot paths. One instance per fraction variant.

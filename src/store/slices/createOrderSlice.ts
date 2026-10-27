@@ -2264,6 +2264,21 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     const tradeValueUnclaimed =
       hasTradeLeg && tradeRestoreNow > 0 && !originalTransaction.customer;
 
+    // Original-line resolver: refund lines carry the ORIGINAL sale line
+    // identity (`saleItemId` = `${saleTxnId}-item-${lineIdx}`), so frozen
+    // costs and FIFO allocations come from the exact line sold — never a
+    // product-level guess (same-SKU lines are distinct money).
+    const origLines = originalTransaction.items || [];
+    const findOrigLine = (ri: { productId: string; saleItemId?: string }) => {
+      if (ri.saleItemId) {
+        const m = String(ri.saleItemId).match(/-item-(\d+)$/);
+        const idx = m ? Number(m[1]) : -1;
+        const byIdx = idx >= 0 ? origLines[idx] : undefined;
+        if (byIdx && byIdx.product?.id === ri.productId) return byIdx;
+      }
+      return origLines.find((i) => i.product?.id === ri.productId);
+    };
+
     const refundQtyMap = new Map<string, number>();
     for (const item of refundItems) {
       // Services carry no stock identity — restocking them collapses their
@@ -2273,10 +2288,23 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       }
     }
 
+    // Recovered COGS: RESTOCKED lines only, at the FROZEN cost captured on
+    // the original sale line. The native engine recomputes the same figure
+    // from the same columns and stamps it as the refund row's `cost_total` /
+    // `restored_cogs` (profit = net − recovered) — never re-derived from
+    // live catalog prices. Defective (write-off) units credit NOTHING here;
+    // their loss is a separate memo expense (no double subtraction).
     const costRefundTotal = refundItems.reduce((acc, ri) => {
-      const prod = products.find((p) => p.id === ri.productId);
-      const unitCost = prod ? getEffectiveCostPrice(prod) : getEffectiveCostPrice({ price: ri.unitPrice });
-      return acc + unitCost * ri.quantity;
+      if ((ri.condition ?? (ri.restock ? 'restock' : 'defective')) !== 'restock') return acc;
+      const origLine = findOrigLine(ri);
+      const unitCost = Math.max(
+        0,
+        Math.round(
+          origLine?.unitCostAtSale ?? origLine?.unitCostPrice ?? ri.unitCostAtSale
+            ?? products.find((p) => p.id === ri.productId)?.costPrice ?? 0
+        )
+      );
+      return acc + unitCost * Math.max(0, Math.round(ri.quantity));
     }, 0);
 
     const restockedProducts: Product[] = [];
@@ -2291,7 +2319,14 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     });
 
     const restoredImeis = refundItems
-      .filter((i) => i.restock)
+      .filter((i) => (i.condition ?? (i.restock ? 'restock' : 'defective')) === 'restock')
+      .map((i) => i.imeiNumber?.trim())
+      .filter((imei): imei is string => Boolean(imei && imei.length > 0));
+    // Defective units also leave the sale — but into quarantine: released
+    // from the ticket (no longer sellable-as-sold) and marked `defective` on
+    // the SQLite row natively. They are NEVER restocked and credit no COGS.
+    const defectiveImeis = refundItems
+      .filter((i) => (i.condition ?? (i.restock ? 'restock' : 'defective')) === 'defective')
       .map((i) => i.imeiNumber?.trim())
       .filter((imei): imei is string => Boolean(imei && imei.length > 0));
 
@@ -2407,8 +2442,19 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     for (const cri of canonicalRefundItems) {
       if (!cri.condition) cri.condition = cri.restock ? 'restock' : 'defective';
     }
+    // Line identity participates in the deterministic hash: same ticket,
+    // same product, same qty can be a DIFFERENT legitimate refund when it
+    // targets distinct sale lines / IMEIs / conditions (e.g. two IMEIs of
+    // one SKU). Every component is deterministic ticket data, so two devices
+    // refunding the same lines still derive the SAME id — while the old
+    // product-only key made a second line refund collide (false
+    // ALREADY_REFUNDED) or forced basis hacks (false REFUND_EXCEEDS).
     const canonicalKey = canonicalRefundItems
-      .map((i) => `${i.productId}:${i.quantity}:${Math.round(i.unitPrice ?? 0)}:${i.restock ? 1 : 0}`)
+      .map(
+        (i) =>
+          `${i.productId}:${i.quantity}:${Math.round(i.unitPrice ?? 0)}:${i.restock ? 1 : 0}:` +
+          `${i.saleItemId ?? ''}:${(i.imeiNumber ?? '').trim()}:${i.condition ?? ''}`
+      )
       .join(',');
     // MOBI-DEFECT-F: basis-aware deterministic identity. `basis` counts the
     // refunds for this ticket the caller already knew about (store + Dexie
@@ -2524,7 +2570,13 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       // ticket subtract this before restoring more trade value.
       ...(tradeRestoreNow > 0 && !tradeValueUnclaimed ? { tradeInRestored: tradeRestoreNow } : {}),
       costTotal: costRefundTotal,
-      profit: 0,
+      // Recovered COGS of the RESTOCKED units — the P&L credit. The native
+      // engine recomputes the same figure and the read-back (committedRefund)
+      // overwrites both fields; the legacy lane trusts the frozen-line sum.
+      restoredCogs: costRefundTotal,
+      // Refund-row profit = net reversed − recovered COGS (native `profit_net`);
+      // a restock refund nets 0, a write-off carries the loss.
+      profit: Math.round(netRefund) - costRefundTotal,
       profitMargin: 0,
       pricingTier: originalTransaction.pricingTier,
       paymentMethod: effectiveRefundMethod,
@@ -2568,17 +2620,6 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       requiresPin: true,
     };
 
-    const origLines = originalTransaction.items || [];
-    const findOrigLine = (ri: { productId: string; saleItemId?: string }) => {
-      if (ri.saleItemId) {
-        const m = String(ri.saleItemId).match(/-item-(\d+)$/);
-        const idx = m ? Number(m[1]) : -1;
-        const byIdx = idx >= 0 ? origLines[idx] : undefined;
-        if (byIdx && byIdx.product?.id === ri.productId) return byIdx;
-      }
-      return origLines.find((i) => i.product?.id === ri.productId);
-    };
-
     const recordDefectiveLossExpenses = async (warningsOut: string[]) => {
       const defective = refundItems.filter(
         (i) => (i.condition ?? (i.restock ? 'restock' : 'defective')) === 'defective' && i.quantity > 0
@@ -2597,12 +2638,14 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           };
           for (const di of defective) {
             const origLine = findOrigLine(di);
+            // Loss memo = COST only (frozen at sale, catalog as last resort).
+            // The sell price is never a cost basis — dropping `unitPrice`
+            // here keeps a defective unit from inflating the write-off.
             const lossUnitCost = Math.max(
               0,
               Math.round(
                 origLine?.unitCostAtSale ?? origLine?.unitCostPrice
-                ?? products.find((p) => p.id === di.productId)?.costPrice
-                ?? di.unitPrice ?? 0
+                ?? products.find((p) => p.id === di.productId)?.costPrice ?? 0
               )
             );
             const lossAmount = lossUnitCost * Math.max(0, Math.round(di.quantity));
@@ -2634,7 +2677,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       const batchSeed = `ref-${refundTxnId}`;
       const restitutionAllocations: Array<{ batchId?: string; productId: string; quantity: number; unitCost: number }> = [];
       {
-        const restocked = refundItems.filter((i) => i.restock && i.quantity > 0 && !isUnstockedProduct(i.productId, products));
+        const restocked = refundItems.filter(
+        (i) =>
+          (i.condition ?? (i.restock ? 'restock' : 'defective')) === 'restock' &&
+          i.quantity > 0 &&
+          !isUnstockedProduct(i.productId, products)
+      );
         for (const ri of restocked) {
           const origItem = findOrigLine(ri);
           const origAllocations = origItem?.fifoAllocations || [];
@@ -2749,26 +2797,45 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           created_at: originalTransaction.createdAt,
         }),
         deviceId: refundLocalDevice || 'local',
-        lines: canonicalRefundItems.map((ri, idx) => ({
-          id: `${refundTxnId}-item-${idx}`,
-          productId: ri.productId,
-          quantity: ri.quantity,
-          appliedPrice: Math.round(ri.unitPrice ?? 0),
-          unitPriceCharged: Math.round(ri.unitPrice ?? 0),
-          unitCostAtSale: 0,
-          discountAmount: 0,
-          lineProfit: 0,
-          imeiNumber: ri.imeiNumber ?? null,
-          itemKey: `${refundTxnId}-itemkey-${idx}`,
-          itemPayload: JSON.stringify({
+        lines: canonicalRefundItems.map((ri, idx) => {
+          const origLine = findOrigLine(ri);
+          // Frozen cost from the exact original line (same chain the
+          // recovered-COGS sum above uses): the native engine recomputes
+          // its figure from these per-line values.
+          const frozenUnitCost = Math.max(
+            0,
+            Math.round(
+              origLine?.unitCostAtSale ?? origLine?.unitCostPrice ?? ri.unitCostAtSale
+                ?? products.find((p) => p.id === ri.productId)?.costPrice ?? 0
+            )
+          );
+          const lineIdxMatch = ri.saleItemId ? String(ri.saleItemId).match(/-item-(\d+)$/) : null;
+          return {
             id: `${refundTxnId}-item-${idx}`,
-            transactionId: refundTxnId,
             productId: ri.productId,
             quantity: ri.quantity,
             appliedPrice: Math.round(ri.unitPrice ?? 0),
+            unitPriceCharged: Math.round(ri.unitPrice ?? 0),
+            unitCostAtSale: frozenUnitCost,
+            discountAmount: 0,
+            lineProfit: 0,
             imeiNumber: ri.imeiNumber ?? null,
-          }),
-        })),
+            saleItemId: ri.saleItemId ?? null,
+            // Original-ticket line index (parsed from the line identity —
+            // never the canonical refund order, which may differ).
+            lineIndex: lineIdxMatch ? Number(lineIdxMatch[1]) : null,
+            condition: ri.condition ?? (ri.restock ? 'restock' : 'defective'),
+            itemKey: `${refundTxnId}-itemkey-${idx}`,
+            itemPayload: JSON.stringify({
+              id: `${refundTxnId}-item-${idx}`,
+              transactionId: refundTxnId,
+              productId: ri.productId,
+              quantity: ri.quantity,
+              appliedPrice: Math.round(ri.unitPrice ?? 0),
+              imeiNumber: ri.imeiNumber ?? null,
+            }),
+          };
+        }),
         deltas: refundItems
           .filter((i) => i.restock && i.quantity > 0 && !isUnstockedProduct(i.productId, products))
           .map((i) => ({
@@ -2789,6 +2856,17 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           };
         }),
         imeis: restoredImeis,
+        defectiveImeis,
+        defectNote: hasNonRestocked ? (refundReason?.trim() || null) : null,
+        // Loyalty clawback is decided by the shared TS math (immutable sale
+        // snapshots); native replays it onto the durable row. The echo in
+        // the receipt is authoritative for hydration.
+        customerPointsAfter: updatedCustomer
+          ? Math.max(0, Math.round(updatedCustomer.loyaltyPoints || 0))
+          : null,
+        customerPointBucketsJson: updatedCustomer
+          ? JSON.stringify(updatedCustomer.pointBuckets || [])
+          : null,
         debt: debtReliefForNative?.entry ?? null,
         voucher: voucherForNative,
         cashMove: cashMoveForNative,
@@ -2813,7 +2891,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       };
       const nativeRes = await refundSaleNative(nativeReq, {
         refund: refundTransaction,
-        updatedOriginal: updatedOriginalTransaction,
+        updatedOriginal: { ...updatedOriginalTransaction, refundedItems: canonicalRefundItems },
         products: restockedProducts,
         customer: updatedCustomerProjected,
         audit: auditMirror,
@@ -2831,6 +2909,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         if (r === 'OFFLINE_CASH_CAP_EXCEEDED') return { success: false, reason: 'OFFLINE_CASH_CAP_EXCEEDED' };
         if (r === 'SUPERVISOR_PIN_REQUIRED') return { success: false, reason: 'SUPERVISOR_PIN_REQUIRED' };
         if (r === 'SUPERVISOR_AUTH_EXPIRED') return { success: false, reason: 'SUPERVISOR_AUTH_EXPIRED' };
+        if (r === 'RESTOCK_REASON_REQUIRED') return { success: false, reason: 'RESTOCK_REASON_REQUIRED' };
         if (r === 'SYSTEM_CLOCK_REGRESSION') return { success: false, reason: 'SYSTEM_CLOCK_REGRESSION' };
         if (r === 'DEVICE_IDENTITY_SPOOFED') return { success: false, reason: 'DEVICE_IDENTITY_SPOOFED' };
         return { success: false, reason: 'PERSISTENCE_FAILED' };
@@ -2841,21 +2920,56 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           `Valeur reprise ${formatDZD(tradeRestoreNow)} non réclamable (ticket anonyme) — régularisation manager requise.`
         );
       }
-      const debtMirror: CustomerDebtEntry | undefined = debtReliefForNative && liveCustForRelief
+      // ---- Read-back hydration: single authority = the committed rows ----
+      // The receipt carries what actually committed — recovered COGS, the
+      // (possibly clamped) relief applied, the live debt/points after, and
+      // the durable merged ticket payload. Store mirrors are rebuilt from
+      // it, never from the pre-commit client math or a silent fallback.
+      const committedRecoveredCogs = Math.max(
+        0,
+        Math.round(nativeRes.recoveredCogs ?? costRefundTotal)
+      );
+      const committedRefund: SaleTransaction = {
+        ...refundTransaction,
+        costTotal: committedRecoveredCogs,
+        restoredCogs: committedRecoveredCogs,
+        profit: Math.round(netRefund) - committedRecoveredCogs,
+      };
+      const nativeReliefApplied = Math.max(
+        0,
+        Math.round(nativeRes.debtReliefApplied ?? debtReliefForNative?.relief ?? 0)
+      );
+      const nativeDebtAfter = typeof nativeRes.customerDebtAfter === 'number'
+        ? Math.max(0, Math.round(nativeRes.customerDebtAfter))
+        : undefined;
+      const nativePointsAfter = typeof nativeRes.customerPointsAfter === 'number'
+        ? Math.max(0, Math.round(nativeRes.customerPointsAfter))
+        : undefined;
+      const hydratedCustomer = updatedCustomerProjected
         ? {
-            id: debtReliefForNative.entry.entryId,
-            customerId: liveCustForRelief.id,
-            customerName: liveCustForRelief.name,
-            type: 'PAYMENT_SETTLED',
-            amount: debtReliefForNative.relief,
-            balanceAfter: debtReliefForNative.newDebt,
-            receiptNumber: debtReliefForNative.entry.receiptNumber,
-            paymentMethod: 'Crédit Client',
-            notes: debtReliefForNative.entry.notes,
-            createdAt: new Date().toISOString(),
-            recordedBy: cashierName || 'Manager',
+            ...updatedCustomerProjected,
+            ...(nativeDebtAfter !== undefined ? { currentDebt: nativeDebtAfter } : {}),
+            ...(nativePointsAfter !== undefined ? { loyaltyPoints: nativePointsAfter } : {}),
           }
         : undefined;
+      const hydratedOriginal = nativeRes.updatedOriginal ?? updatedOriginalTransaction;
+      // A relief clamped to zero leaves NO ledger row — mirror that truth.
+      const debtMirror: CustomerDebtEntry | undefined =
+        debtReliefForNative && liveCustForRelief && nativeReliefApplied > 0
+          ? {
+              id: debtReliefForNative.entry.entryId,
+              customerId: liveCustForRelief.id,
+              customerName: liveCustForRelief.name,
+              type: 'PAYMENT_SETTLED',
+              amount: nativeReliefApplied,
+              balanceAfter: nativeDebtAfter ?? updatedCustomerProjected?.currentDebt ?? 0,
+              receiptNumber: debtReliefForNative.entry.receiptNumber,
+              paymentMethod: 'Crédit Client',
+              notes: debtReliefForNative.entry.notes,
+              createdAt: new Date().toISOString(),
+              recordedBy: cashierName || 'Manager',
+            }
+          : undefined;
       // Post-commit sync notifications + Dexie mirrors (best-effort: the money
       // is durable; failures warn instead of failing the refund).
       try {
@@ -2863,14 +2977,28 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           import('../../db/adapters/base'),
           import('../../db/sqlPluginAdapter'),
         ]);
-        if (updatedCustomerProjected) {
+        if (hydratedCustomer) {
           await sql
-            .enqueueGenericSync('customer', updatedCustomerProjected.id, updatedCustomerProjected as unknown as Record<string, unknown>)
+            .enqueueGenericSync('customer', hydratedCustomer.id, hydratedCustomer as unknown as Record<string, unknown>)
             .catch((e: unknown) => {
               nativeWarnings.push('Dette client : mise en file de synchronisation différée — le remboursement reste valide.');
               console.warn('[refund:sync] customer enqueue deferred:', e);
             });
-          void fireSync('customer', updatedCustomerProjected.id, updatedCustomerProjected);
+          void fireSync('customer', hydratedCustomer.id, hydratedCustomer);
+          try {
+            const { db } = await import('../../db/database');
+            await db.customers.put(hydratedCustomer);
+          } catch (e) {
+            console.warn('[refund] Dexie customer hydration skipped:', e);
+          }
+        }
+        // Refund row parity: the projection wrote the pre-commit client
+        // guess; re-put the read-back hydrated row (authoritative cost/profit).
+        try {
+          const { db } = await import('../../db/database');
+          await db.transactions.put(committedRefund);
+        } catch (e) {
+          console.warn('[refund] Dexie refund hydration skipped:', e);
         }
         if (debtMirror) {
           try {
@@ -2882,7 +3010,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           void fireSync('customer_debt', debtMirror.id, debtMirror);
         }
         void fireSync('audit_log', nativeAuditId, auditMirror);
-        for (const imei of restoredImeis) {
+        for (const imei of [...restoredImeis, ...defectiveImeis]) {
           try {
             const { db } = await import('../../db/database');
             const rec = await db.imeiRecords.get(imei);
@@ -2935,34 +3063,34 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       if (effectiveRefundMethod === 'Espèces') {
         audioBus.emit('cashDrawer');
       }
-      const releasedImeiKeysNative = new Set(restoredImeis.map(normalizeDeviceKey));
+      const releasedImeiKeysNative = new Set(
+        [...restoredImeis, ...defectiveImeis].map(normalizeDeviceKey)
+      );
       const nextImeiRecordsNative = (get().imeiRecords || []).map((rr) =>
         releasedImeiKeysNative.has(normalizeDeviceKey(rr.imei))
           ? { ...rr, saleTransactionId: undefined, soldAt: undefined }
           : rr
       );
       const nativeUpdatedTransactions = sortedTransactions([
-        refundTransaction,
-        ...transactions.map((t) => (t.id === originalTransaction.id
-          ? { ...updatedOriginalTransaction, status: nativeRes.ticketStatus as SaleTransaction['status'] }
-          : t)),
+        committedRefund,
+        ...transactions.map((t) => (t.id === originalTransaction.id ? hydratedOriginal : t)),
       ]);
       set({
         products: updatedProducts,
         transactions: nativeUpdatedTransactions,
-        customers: updatedCustomerProjected ? customers.map((c) => (c.id === updatedCustomerProjected.id ? updatedCustomerProjected : c)) : customers,
-        currentCustomer: updatedCustomerProjected || get().currentCustomer,
+        customers: hydratedCustomer ? customers.map((c) => (c.id === hydratedCustomer.id ? hydratedCustomer : c)) : customers,
+        currentCustomer: hydratedCustomer || get().currentCustomer,
         customerDebts: debtMirror ? [debtMirror, ...get().customerDebts] : get().customerDebts,
         securityAuditLog: [auditMirror, ...get().securityAuditLog],
         imeiRecords: nextImeiRecordsNative,
-        lastTransaction: refundTransaction,
+        lastTransaction: committedRefund,
         activeModal: null,
         hardwareStatus:
           effectiveRefundMethod === 'Espèces' ? { ...get().hardwareStatus, cashDrawerOpen: true } : get().hardwareStatus,
       });
       const nativeSettings = get().receiptSettings;
       if (nativeSettings?.autoPrintEnabled !== false) {
-        void printReceipt(refundTransaction, nativeSettings);
+        void printReceipt(committedRefund, nativeSettings);
       }
       await recordDefectiveLossExpenses(nativeWarnings);
       return { success: true, refundTransaction, warnings: nativeWarnings };
@@ -2980,7 +3108,10 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           localDeviceId: refundLocalDevice,
           activeShiftId: refundShiftGate.id,
           online: refundOnline,
-        }
+        },
+        // Defective units ride into quarantine (`status='defective'` +
+        // RETURN_DEFECTIVE event) — the same split the native lane performs.
+        defectiveImeis
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -3004,7 +3135,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       );
     }
     try {
-      const restocked = refundItems.filter((i) => i.restock && i.quantity > 0 && !isUnstockedProduct(i.productId, products));
+      const restocked = refundItems.filter(
+        (i) =>
+          (i.condition ?? (i.restock ? 'restock' : 'defective')) === 'restock' &&
+          i.quantity > 0 &&
+          !isUnstockedProduct(i.productId, products)
+      );
       if (restocked.length > 0) {
         const { appendInventoryDeltas, restituteStockBatches } = await import('../../db/sqlPluginAdapter');
         await appendInventoryDeltas(
@@ -3064,7 +3200,9 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         }
       }
 
-      const defective = refundItems.filter((i) => !i.restock && i.quantity > 0);
+      const defective = refundItems.filter(
+        (i) => (i.condition ?? (i.restock ? 'restock' : 'defective')) === 'defective' && i.quantity > 0
+      );
       if (defective.length > 0) {
         const { recordDefectiveReturn, appendInventoryDeltas } = await import('../../db/sqlPluginAdapter');
         for (const item of defective) {
@@ -3074,7 +3212,8 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             productName: origItem?.product?.title,
             imei: item.imeiNumber,
             quantity: item.quantity,
-            unitCost: origItem?.unitCostAtSale ?? origItem?.product?.costPrice ?? 0,
+            unitCost:
+              origItem?.unitCostAtSale ?? origItem?.unitCostPrice ?? origItem?.product?.costPrice ?? 0,
             reason: refundReason,
             saleId: originalTransaction.id,
             refundId: refundTxnId,
@@ -3119,7 +3258,10 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           // Net value reversed (money truth); drawer outflow is cashOut.
           total: netRefund,
           cost_total: costRefundTotal,
-          profit: 0,
+          // Recovered-COGS credit is also carried by the receipt JSON
+          // envelope (`restoredCogs`) for schema-degraded previews where the
+          // v127 column may lag the heal — the P&L credit never vanishes.
+          profit: Math.round(netRefund) - costRefundTotal,
           profit_margin: 0,
           pricing_tier: originalTransaction.pricingTier,
           payment_method: effectiveRefundMethod,
@@ -3129,15 +3271,27 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           created_at: refundTransaction.createdAt,
         },
         fullTx: refundTransaction as unknown as Record<string, unknown>,
-        items: canonicalRefundItems.map((ri, idx) => ({
-          id: `${refundTxnId}-item-${idx}`,
-          product_id: ri.productId,
-          quantity: ri.quantity,
-          applied_price: ri.unitPrice,
-          discount: 0,
-          imei_number: ri.imeiNumber ?? null,
-          cost_price: 0,
-        })),
+        items: canonicalRefundItems.map((ri, idx) => {
+          const origLine = findOrigLine(ri);
+          const frozenUnitCost = Math.max(
+            0,
+            Math.round(origLine?.unitCostAtSale ?? origLine?.unitCostPrice ?? ri.unitCostAtSale ?? 0)
+          );
+          return {
+            id: `${refundTxnId}-item-${idx}`,
+            product_id: ri.productId,
+            quantity: ri.quantity,
+            applied_price: ri.unitPrice,
+            discount: 0,
+            imei_number: ri.imeiNumber ?? null,
+            // Frozen original-line cost (never the live catalog) so the
+            // legacy lane's refund lines match the native write.
+            cost_price: frozenUnitCost,
+            unit_cost_at_sale: frozenUnitCost,
+            // Original sale line identity — preserved on the refund line.
+            sale_item_id: ri.saleItemId ?? null,
+          };
+        }),
         deltas: [],
       };
       await saveCheckoutRecoveryIntent({

@@ -800,6 +800,138 @@ pub fn e2e_get_db_state(app: tauri::AppHandle) -> Result<DbStateReport, String> 
     })
 }
 
+/// Narrow read-only import persistence oracle for native E2E tests.
+/// Accepts only product SKU/barcode or customer phone/email identities.
+#[cfg(any(debug_assertions, feature = "e2e"))]
+#[tauri::command]
+pub fn e2e_get_import_probe(
+    app: tauri::AppHandle,
+    entity: String,
+    identity: String,
+) -> Result<serde_json::Value, String> {
+    let path = resolve_db_path(&app)?;
+    let conn = open_db(&path)?;
+
+    match entity.as_str() {
+        "products" => {
+            let row: Option<(String, String, String, String, f64, f64, i64, i64, Option<String>, String)> = conn
+                .query_row(
+                    "SELECT id, sku, barcode, title, price, cost_price, stock, is_serialized, imei_number, json_payload \
+                     FROM products WHERE sku = ?1 OR barcode = ?1 LIMIT 1",
+                    [&identity],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?)),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            let Some((id, sku, barcode, title, price, cost_price, stock, is_serialized, imei_number, raw_payload)) = row else {
+                return Ok(serde_json::json!({ "entity": entity, "found": false }));
+            };
+            let payload: serde_json::Value = serde_json::from_str(&raw_payload)
+                .map_err(|error| format!("Invalid imported product payload: {error}"))?;
+            let imei_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM imei_records WHERE product_id = ?1", [&id], |r| r.get(0))
+                .map_err(|error| error.to_string())?;
+            let imei_status: Option<String> = conn
+                .query_row(
+                    "SELECT status FROM imei_records WHERE product_id = ?1 ORDER BY received_at DESC LIMIT 1",
+                    [&id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            Ok(serde_json::json!({
+                "entity": entity,
+                "found": true,
+                "id": id,
+                "sku": sku,
+                "barcode": barcode,
+                "title": title,
+                "price": price,
+                "costPrice": cost_price,
+                "stock": stock,
+                "isSerialized": is_serialized != 0,
+                "imeiNumber": imei_number,
+                "imeiCount": imei_count,
+                "imeiStatus": imei_status,
+                "warrantyMonths": payload.get("warrantyMonths").or_else(|| payload.get("warranty_months")),
+                "warrantyExplicitlyDisabled": payload.get("warrantyExplicitlyDisabled")
+                    .or_else(|| payload.get("warranty_explicitly_disabled")),
+            }))
+        }
+        "customers" => {
+            let row: Option<(String, String, String, String, f64)> = conn
+                .query_row(
+                    "SELECT id, name, phone, COALESCE(email, ''), current_debt FROM customers \
+                     WHERE phone = ?1 OR email = ?1 LIMIT 1",
+                    [&identity],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            let Some((id, name, phone, email, current_debt)) = row else {
+                return Ok(serde_json::json!({ "entity": entity, "found": false }));
+            };
+            let (debt_entries, debt_total, imported_debt_entries): (i64, f64, i64) = conn
+                .query_row(
+                    "SELECT COUNT(*), COALESCE(SUM(amount), 0), \
+                     COALESCE(SUM(CASE WHEN origin = 'imported_history' THEN 1 ELSE 0 END), 0) \
+                     FROM customer_debts WHERE customer_id = ?1",
+                    [&id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(serde_json::json!({
+                "entity": entity,
+                "found": true,
+                "id": id,
+                "name": name,
+                "phone": phone,
+                "email": email,
+                "currentDebt": current_debt,
+                "debtEntries": debt_entries,
+                "debtTotal": debt_total,
+                "importedDebtEntries": imported_debt_entries,
+            }))
+        }
+        "suppliers" => {
+            let directory_json: Option<String> = conn
+                .query_row(
+                    "SELECT value_json FROM app_settings WHERE key = 'vendor_directory'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| error.to_string())?;
+            let Some(directory_json) = directory_json else {
+                return Ok(serde_json::json!({ "entity": entity, "found": false }));
+            };
+            let directory: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&directory_json)
+                    .map_err(|error| format!("Invalid supplier directory JSON: {error}"))?;
+            let mut matches = directory
+                .iter()
+                .filter(|(name, _)| crate::import::normalize_supplier_name(name) == crate::import::normalize_supplier_name(&identity));
+            let Some((name, supplier)) = matches.next() else {
+                return Ok(serde_json::json!({ "entity": entity, "found": false }));
+            };
+            if matches.next().is_some() {
+                return Err(format!("Ambiguous supplier probe identity: {identity}"));
+            }
+            let contact = supplier.get("contact");
+            Ok(serde_json::json!({
+                "entity": entity,
+                "found": true,
+                "name": supplier.get("name").and_then(serde_json::Value::as_str).unwrap_or(name),
+                "phone": contact.and_then(|value| value.get("phone")).or_else(|| supplier.get("phone")),
+                "email": contact.and_then(|value| value.get("email")).or_else(|| supplier.get("email")),
+                "address": contact.and_then(|value| value.get("address")).or_else(|| supplier.get("address")),
+                "notes": supplier.get("notes"),
+            }))
+        }
+        _ => Err(format!("Unsupported import probe entity: {entity}")),
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductStockOut {

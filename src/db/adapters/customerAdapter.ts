@@ -221,16 +221,17 @@ export const customerAdapter = {
         const db = await getLocalDb();
         const rows = (await db
           .select(
-            'SELECT id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, version, created_at FROM customers WHERE deleted = 0 ORDER BY name ASC',
-          )
-          .catch(() => [])) as Array<Record<string, unknown>>;
+            'SELECT id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, version, created_at, current_debt, whatsapp_opt_in FROM customers WHERE deleted = 0 ORDER BY name ASC',
+          )) as Array<Record<string, unknown>>;
         if (rows && rows.length > 0) {
           const loaded: Customer[] = [];
           for (const r of rows) {
-            let base: Partial<Customer> = {};
+            let base: Partial<Customer> & { secondary_phone?: string } = {};
             if (r.json_payload) {
               try {
-                base = JSON.parse(String(r.json_payload)) as Partial<Customer>;
+                base = JSON.parse(String(r.json_payload)) as Partial<Customer> & {
+                  secondary_phone?: string;
+                };
               } catch {}
             }
             const cust: Customer = {
@@ -242,10 +243,13 @@ export const customerAdapter = {
               id: String(r.id || base.id || ''),
               name: String(r.name || base.name || 'Client'),
               phone: String(r.phone ?? base.phone ?? ''),
+              secondaryPhone: String(base.secondaryPhone ?? base.secondary_phone ?? '') || undefined,
               loyaltyPoints: Number(r.loyalty_points ?? base.loyaltyPoints ?? 0),
               storeCredit: Number(r.store_credit ?? base.storeCredit ?? 0),
               pricingTier: (r.pricing_tier as Customer['pricingTier']) || base.pricingTier || 'Retail',
               totalSpent: Number(r.total_spent ?? base.totalSpent ?? 0),
+              currentDebt: Number(r.current_debt ?? (base as any).currentDebt ?? (base as any).current_debt ?? 0),
+              whatsappOptIn: Boolean(r.whatsapp_opt_in ?? base.whatsappOptIn),
             };
             (cust as unknown as { version?: number }).version = Number(r.version ?? (base as unknown as { version?: number }).version ?? 1);
             loaded.push(cust);
@@ -355,7 +359,11 @@ export const customerAdapter = {
       }
       // Non-Tauri (web) — keep the in-memory version fallback above.
     }
-    const debtWithVersion = { ...debt, version: nextVersion };
+    const debtWithVersion = {
+      ...debt,
+      origin: debt.origin ?? 'operational',
+      version: nextVersion,
+    };
     await dexieDb.customerDebts.put(debtWithVersion);
     try {
       const { getLocalDb, utcNowIso } = await import('../sqlPluginAdapter');
@@ -375,15 +383,15 @@ export const customerAdapter = {
       await db.execute(
         `INSERT INTO customer_debts (id, customer_id, customer_name, type, amount, balance_after,
            receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted,
-           due_date, kind)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16)
+             due_date, kind, origin)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, $15, $16, $17)
          ON CONFLICT(id) DO UPDATE SET customer_id=excluded.customer_id, customer_name=excluded.customer_name,
            type=excluded.type, amount=excluded.amount, balance_after=excluded.balance_after,
            receipt_number=excluded.receipt_number, payment_method=excluded.payment_method,
            notes=excluded.notes, recorded_by=excluded.recorded_by, created_at=excluded.created_at,
            json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
            due_date=excluded.due_date, kind=excluded.kind,
-         version = excluded.version
+           origin=excluded.origin, version = excluded.version
          WHERE excluded.version >= customer_debts.version`,
         [
           debt.id, debt.customerId, debt.customerName || 'Client', debt.type,
@@ -392,6 +400,7 @@ export const customerAdapter = {
           debt.notes || null, debt.recordedBy || null, debt.createdAt,
           JSON.stringify(debtWithVersion), nextVersion, utcNowIso(),
           debt.dueDate ?? null, debt.kind || '',
+          debtWithVersion.origin,
         ],
       );
     } catch (err) {
@@ -409,7 +418,48 @@ export const customerAdapter = {
   },
 
   async getAllCustomerDebts(): Promise<CustomerDebtEntry[]> {
+    if (isTauriEnv()) {
+      try {
+        const { getLocalDb } = await import('../sqlPluginAdapter');
+        const db = await getLocalDb();
+        const rows = (await db
+          .select(
+            'SELECT id, customer_id, customer_name, type, amount, balance_after, receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, due_date, kind, origin FROM customer_debts WHERE deleted = 0 ORDER BY created_at DESC',
+          )
+          .catch(() => [])) as Array<Record<string, unknown>>;
+        if (rows && rows.length > 0) {
+          const loaded: CustomerDebtEntry[] = rows.map((r) => {
+            let base: Partial<CustomerDebtEntry> = {};
+            if (r.json_payload) {
+              try {
+                base = JSON.parse(String(r.json_payload));
+              } catch {}
+            }
+            return {
+              id: String(r.id || base.id),
+              customerId: String(r.customer_id || base.customerId),
+              customerName: String(r.customer_name || base.customerName || 'Client'),
+              type: (r.type || base.type) as 'DEBT_ACQUIRED' | 'PAYMENT_SETTLED',
+              amount: Number(r.amount ?? base.amount ?? 0),
+              balanceAfter: Number(r.balance_after ?? base.balanceAfter ?? 0),
+              receiptNumber: r.receipt_number ? String(r.receipt_number) : base.receiptNumber,
+              paymentMethod: (r.payment_method || base.paymentMethod) as any,
+              notes: r.notes ? String(r.notes) : base.notes,
+              recordedBy: r.recorded_by ? String(r.recorded_by) : base.recordedBy,
+              createdAt: String(r.created_at || base.createdAt || ''),
+              dueDate: r.due_date ? String(r.due_date) : base.dueDate,
+              kind: (r.kind || base.kind) as any,
+              origin: String(r.origin || base.origin || 'operational') as CustomerDebtEntry['origin'],
+              allocations: base.allocations,
+            };
+          });
+          await dexieDb.customerDebts.bulkPut(loaded).catch(() => {});
+          return loaded;
+        }
+      } catch (err) {
+        console.warn('[customerAdapter] SQLite getAllCustomerDebts failed, fallback to Dexie:', err);
+      }
+    }
     return await dexieDb.customerDebts.toArray();
   },
 };
-

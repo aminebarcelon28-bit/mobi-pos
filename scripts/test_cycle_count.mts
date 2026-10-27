@@ -391,7 +391,7 @@ console.log('\n--- Part 6: wiring + parity ---');
   const engine = src('src/utils/cycleCount.ts');
 
   check('lib.rs v125 migration present', norm(libRs).includes('version: 125, description: "UPGRADE-10: cycle_count_tasks (scheduled ABC micro-stocktakes)"'));
-  check('lib.rs ceiling bumped to 126', /EXPECTED_MAX_DB_USER_VERSION: u32 = 126;/.test(libRs));
+  check('lib.rs ceiling bumped to 127', /EXPECTED_MAX_DB_USER_VERSION: u32 = 127;/.test(libRs));
   check('lib.rs is append-only (v124 still present)', libRs.includes('version: 124,'));
 
   // 3-way DDL parity: every heal statement appears verbatim in Rust v125.

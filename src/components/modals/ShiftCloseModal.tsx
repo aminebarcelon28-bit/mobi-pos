@@ -28,7 +28,7 @@ import { verifyManagerGate } from '../../utils/pinGate';
 import { useAllocationCogs } from '../../hooks/useAllocationCogs';
 import { Kbd } from '../../design-system/desktop/Kbd';
 import { isExchangeSaleTx } from '../../utils/receiptMath';
-import { DRAWER_REASON_PREFIXES } from '../../utils/cashTerms';
+import { DRAWER_REASON_PREFIXES, cashRefundsFromTxns } from '../../utils/cashTerms';
 
 // Lock-screen cashier fallback (createUISlice owns `activeCashier`; absent
 // from the shared PosState type, so read via structural cast).
@@ -187,10 +187,13 @@ export const ShiftCloseModal: React.FC = () => {
     });
   }, [authoritativeTxns, transactions, openedAt]);
 
+  // Canonical cash-refund reader (cashTerms): pays out EXACT `cashDisbursed`
+  // when present — `total` is the net value reversed, which can include
+  // non-cash shares even on an Espèces refund — and falls back to `total`
+  // only for legacy rows. The same helper drives the after-close adapter
+  // figure, so the live preview and the booked Z can never disagree.
   const totalCashRefunds = useMemo(() => {
-    return sessionRefunds.reduce((sum, t) => {
-      return (t.refundMethod === 'Espèces' || t.paymentMethod === 'Espèces') ? sum + t.total : sum;
-    }, 0);
+    return cashRefundsFromTxns(sessionRefunds);
   }, [sessionRefunds]);
 
   const totalCashSales = useMemo(() => {

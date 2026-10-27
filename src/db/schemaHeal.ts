@@ -165,3 +165,27 @@ export const KREDY_V126_PROBE_CUSTOMER_DEBTS_SQL =
 /** Canary probe for the customer-side v126 columns (opt-in + score). */
 export const KREDY_V126_PROBE_CUSTOMERS_SQL =
   'SELECT whatsapp_opt_in, credit_score, credit_score_at FROM customers LIMIT 0;';
+
+/** Smart Import provenance: mirrors Rust migration v128. */
+export const IMPORT_PROVENANCE_HEAL_SQL: readonly string[] = [
+  `ALTER TABLE customer_debts ADD COLUMN origin TEXT NOT NULL DEFAULT 'operational'
+    CHECK (origin IN ('operational', 'imported_history'));`,
+  `CREATE TABLE IF NOT EXISTS import_source_identity (
+    destination TEXT NOT NULL,
+    source_namespace TEXT NOT NULL,
+    source_record_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    source_file_hash TEXT NOT NULL,
+    sheet_index INTEGER,
+    row_index INTEGER,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (destination, source_namespace, source_record_id)
+  );`,
+  'CREATE INDEX IF NOT EXISTS idx_import_source_identity_target ON import_source_identity(destination, target_id);',
+];
+
+export const IMPORT_PROVENANCE_DEBTS_PROBE_SQL =
+  'SELECT origin FROM customer_debts LIMIT 0;';
+export const IMPORT_PROVENANCE_IDENTITY_PROBE_SQL =
+  'SELECT destination, source_namespace, source_record_id FROM import_source_identity LIMIT 0;';

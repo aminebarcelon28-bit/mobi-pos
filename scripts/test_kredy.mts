@@ -556,7 +556,7 @@ console.log('\n--- Part 6: wiring + parity ---');
   const pkg = JSON.parse(src('package.json')) as { scripts: Record<string, string> };
 
   check('lib.rs v126 migration present', norm(libRs).includes('version: 126, description: "UPGRADE-11: Kredy due dates, 0-fee plans, dunning ladder, honest launch log"'));
-  check('lib.rs ceiling bumped to 126', /EXPECTED_MAX_DB_USER_VERSION: u32 = 126;/.test(libRs));
+  check('lib.rs ceiling bumped to 127', /EXPECTED_MAX_DB_USER_VERSION: u32 = 127;/.test(libRs));
   check('lib.rs is append-only (v125 + v124 still present)', libRs.includes('version: 125,') && libRs.includes('version: 124,'));
 
   check('heal exports 14 v126 statements (5 ALTER + 4 CREATE TABLE + 5 INDEX)', KREDY_V126_HEAL_SQL.length === 14, `len=${KREDY_V126_HEAL_SQL.length}`);
