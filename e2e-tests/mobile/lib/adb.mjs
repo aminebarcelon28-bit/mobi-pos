@@ -9,12 +9,17 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3');
 
-export const ROOT = path.resolve(process.cwd(), '..');
-export const E2E = process.cwd();
+// Resolve from THIS file, not from the caller's cwd. The runner used to assume
+// cwd == e2e-tests/, so `node e2e-tests/mobile/25-mob-mobile.mjs` from the repo
+// root looked for fixtures in `<repo>/mobile/fixtures` and reported BLOCKED even
+// when they existed. Paths are now identical from any cwd.
+export const E2E = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+export const ROOT = path.resolve(E2E, '..');
 export const MOBILE = path.join(E2E, 'mobile');
 export const SHOTS = path.join(E2E, 'logs', 'mob-shots');
 export const BASELINE = path.join(MOBILE, 'fixtures', 'mobile-baseline.db');

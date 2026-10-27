@@ -15,6 +15,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import {
   ADB, PACKAGE, ACTIVITY, MOBILE, BASELINE,
   adb, shell, tap, key, text, sleep, home, wake, setAirplane, setWifi,
@@ -30,7 +31,9 @@ requireBaseline();
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3');
 
-const ROOT = path.resolve(process.cwd(), '..');
+// Same rule as lib/adb.mjs: resolve from this file so the runner behaves the
+// same whether it is started from the repo root or from e2e-tests/.
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const TMP = path.join(MOBILE, 'tmp');
 const RECORD = [];
 
