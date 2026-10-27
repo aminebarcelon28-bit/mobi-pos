@@ -31,6 +31,9 @@ TypeScript outbox sync).
 
 ## Working rules
 
+- **Load the `e2e-testing` skill first.** Before any feature work, bug fix,
+  refactor, or test run, load `.opencode/skills/e2e-testing/SKILL.md` and follow
+  its gates; it is the mandatory entry point for all verification work.
 - Fail closed. Unknown states deny. No silent sequential fallbacks for
   money flows (checkout, refund, void).
 - Report-first on architectural conflicts (STOP and report, do not

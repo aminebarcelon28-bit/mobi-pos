@@ -88,5 +88,13 @@ test_*.db
 .playwright-mcp/
 artifacts/
 
+# The e2e-testing skill is SOURCE ONLY (SKILL.md, references, scripts,
+# templates). Generated output — evidence bundles, run sidecars, logs — is
+# never committed inside it, even if a future session writes one there.
+.opencode/skills/e2e-testing/**/evidence/
+.opencode/skills/e2e-testing/**/runs/
+.opencode/skills/e2e-testing/**/*.sidecar.json
+.opencode/skills/e2e-testing/**/*.log
+
 
 

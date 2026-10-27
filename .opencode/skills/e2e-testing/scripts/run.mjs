@@ -1,0 +1,134 @@
+#!/usr/bin/env node
+/**
+ * run.mjs - run one or more specs, tee the output to a log, write a sidecar.
+ *
+ * Usage:
+ *   node .opencode/skills/e2e-testing/scripts/run.mjs --spec e2e-tests/specs/00-harness-smoke.e2e.ts --wipe --tag smoke
+ *   node .opencode/skills/e2e-testing/scripts/run.mjs --spec a.e2e.ts --spec b.e2e.ts
+ *   node ... --all                      # whole suite
+ *   node ... --build                    # npm run build:e2e first
+ *   node ... --timeout 900000           # WDIO_MOCHA_TIMEOUT
+ *
+ * Writes e2e-tests/results/runs/<stamp>-<tag>.log and .json.
+ * Exit code is the WDIO exit code (0 = green).
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { paths, repoRoot, gitSha, stamp, parseArgs, ok, bad, info, C } from './_lib.mjs';
+
+const args = parseArgs();
+if (args.help) {
+  console.log(fs.readFileSync(new URL(import.meta.url), 'utf8').split('*/')[0]);
+  process.exit(0);
+}
+
+const root = repoRoot();
+const p = paths(root);
+fs.mkdirSync(p.runs, { recursive: true });
+
+const specs = args.spec ? [].concat(args.spec) : [];
+if (!specs.length && !args.all) {
+  bad('no --spec given (use --all for the whole suite)');
+  process.exit(2);
+}
+for (const s of specs) {
+  if (!fs.existsSync(path.resolve(root, s))) {
+    bad(`spec not found: ${s}`);
+    process.exit(2);
+  }
+}
+
+const tag = String(args.tag || (args.all ? 'all' : path.basename(specs[0]).replace(/\.e2e\.ts$/, '')));
+const ts = stamp();
+const logFile = path.join(p.runs, `${ts}-${tag}.log`);
+const sidecar = path.join(p.runs, `${ts}-${tag}.json`);
+
+if (args.build) {
+  info('building e2e flavor (npm run build:e2e) ...');
+  const code = await runInherit('npm', ['run', 'build:e2e'], root, process.env);
+  if (code !== 0) {
+    bad(`build failed with exit ${code}`);
+    process.exit(code);
+  }
+}
+
+const env = { ...process.env };
+if (args.wipe) env.POS_E2E_WIPE = '1';
+if (args.timeout) env.WDIO_MOCHA_TIMEOUT = String(args.timeout);
+
+const wdioArgs = [p.wdioBin, 'run', p.wdioConf];
+for (const s of specs) wdioArgs.push('--spec', path.resolve(root, s));
+
+info(`run     ${tag}`);
+info(`specs   ${specs.length ? specs.join(', ') : '(all)'}`);
+info(`wipe    ${args.wipe ? 'yes' : 'no'}`);
+info(`log     ${path.relative(root, logFile)}`);
+
+const started = Date.now();
+const sha = gitSha(root);
+const code = await tee(process.execPath, wdioArgs, root, env, logFile);
+const durationMs = Date.now() - started;
+
+const text = fs.readFileSync(logFile, 'utf8');
+const passing = Number((/(\d+)\s+passing/.exec(text) || [])[1] || 0);
+const failing = Number((/(\d+)\s+failing/.exec(text) || [])[1] || 0);
+const skipped = Number((/(\d+)\s+(?:skipped|pending)/.exec(text) || [])[1] || 0);
+
+const record = {
+  tag,
+  specs: specs.length ? specs : ['(all)'],
+  gitSha: sha,
+  wipe: Boolean(args.wipe),
+  startedAt: new Date(started).toISOString(),
+  durationMs,
+  exitCode: code,
+  passing,
+  failing,
+  skipped,
+  log: path.relative(root, logFile),
+  node: process.version,
+  binary: path.relative(root, p.binary),
+};
+fs.writeFileSync(sidecar, JSON.stringify(record, null, 2));
+
+console.log('');
+info(`duration ${(durationMs / 1000).toFixed(1)}s   passing ${passing}   failing ${failing}   skipped ${skipped}`);
+info(`sidecar  ${path.relative(root, sidecar)}`);
+if (code === 0) console.log(`${C.green}GREEN${C.reset} ${tag}`);
+else console.log(`${C.red}RED${C.reset} ${tag} (exit ${code}) - triage before editing code`);
+
+process.exit(code);
+
+/* ------------------------------------------------------------------ */
+
+function tee(cmd, argv, cwd, env, file) {
+  return new Promise((resolve) => {
+    const out = fs.createWriteStream(file, { flags: 'w' });
+    const child = spawn(cmd, argv, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const pipe = (stream, target) => {
+      stream.setEncoding('utf8');
+      stream.on('data', (chunk) => {
+        target.write(chunk);
+        out.write(chunk);
+      });
+    };
+    pipe(child.stdout, process.stdout);
+    pipe(child.stderr, process.stderr);
+    child.on('close', (code) => {
+      out.end(() => resolve(code ?? 1));
+    });
+    child.on('error', (err) => {
+      out.write(`\n[run.mjs] spawn error: ${err.message}\n`);
+      out.end(() => resolve(1));
+    });
+  });
+}
+
+function runInherit(cmd, argv, cwd, env) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, argv, { cwd, env, stdio: 'inherit', shell: process.platform === 'win32' });
+    child.on('close', (code) => resolve(code ?? 1));
+    child.on('error', () => resolve(1));
+  });
+}
