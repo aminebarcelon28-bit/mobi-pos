@@ -140,7 +140,7 @@ console.log('\n--- TEST 5: Held Sales Queue Life-Cycle ---');
   const cartItem = { product: { id: 'prod-1', title: 'Câble Type-C', price: 600 }, quantity: 2 };
   const holdTicket = {
     id: `hold-${Date.now()}`,
-    customer: { id: 'cust-1', name: 'Karim Hadj', storeCredit: 1200 },
+    customer: { id: 'cust-1', name: 'Salma Hadj', storeCredit: 1200 },
     items: [cartItem],
     timestamp: '14:30'
   };

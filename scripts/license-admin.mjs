@@ -226,7 +226,7 @@ async function runInteractiveMint() {
   console.log('✨ MOBIPOS — ASSISTANT DE CRÉATION DE LICENCE PROFESSIONNELLE');
   console.log('========================================================================\n');
 
-  const customer = await askQuestion('👤 Nom du Client / Établissement', 'Superette Al-Amine');
+  const customer = await askQuestion('👤 Nom du Client / Établissement', 'Superette Al-Leila');
 
   console.log('\n📌 Type de Licence :');
   console.log('   [1] LIFETIME  — Licence Définitive / Illimitée à Vie (Recommandé)');

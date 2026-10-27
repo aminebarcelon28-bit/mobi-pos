@@ -185,7 +185,7 @@ const detail = (id: string, deps: Deps, mode: 'imei' | 'serial' = 'imei') =>
 /** Certificate print settings; both widths must behave identically. */
 const settings = {
   storeName: 'MOBI ACCESSORIES',
-  address: 'Boulevard Mohamed V, Alger Centre',
+  address: '12 Rue des Oliviers, Alger, Alger',
   phone: '0550 00 00 00',
   paperWidth: '80mm',
 } as never;
@@ -1690,7 +1690,7 @@ section('S28  Seller PII never reaches customer-facing output (printer scan)');
   const printerSettings = (paperWidth: '58mm' | '80mm') =>
     ({
       storeName: 'MOBI ACCESSORIES',
-      address: 'Boulevard Mohamed V, Alger Centre',
+      address: '12 Rue des Oliviers, Alger, Alger',
       phone: '0550 00 00 00',
       paperWidth,
     } as never);
@@ -1763,7 +1763,7 @@ section('S28  Seller PII never reaches customer-facing output (printer scan)');
   const savOutputs: Array<[string, string]> = [
     ['repair voucher', repairVoucherEscPosText(order, printerSettings('80mm'), 'Caisse')],
     ['chassis tag', chassisTagEscPosText(order)],
-    ['workshop slip', workshopSlipText(order, 'Caisse', 'Yacine', printerSettings('80mm'))],
+    ['workshop slip', workshopSlipText(order, 'Caisse', 'Farida', printerSettings('80mm'))],
     ['restitution ticket',
       new TextDecoder('latin1').decode(
         SavRestitutionBuilder.buildSavRestitutionTicket(order, printerSettings('80mm'), 'Caisse')
@@ -2371,7 +2371,7 @@ section('S34  BLIND COUNT reveal — audited once, with no concealed figure in t
   // something can try to put it there.
   const detail = blindRevealAuditDetail;
   for (const amount of [0, 31_305, 1_234_567, -999, 12.5, 1e9]) {
-    const line = detail({ zNumber: 'Z-2026-0042', cashier: 'Yacine' });
+    const line = detail({ zNumber: 'Z-2026-0042', cashier: 'Farida' });
     // Compare the RENDERED money forms, not bare digits: a single "0" also
     // occurs inside the Z document number and proves nothing.
     const leaked = [formatDZD(Math.abs(amount)), String(Math.abs(amount)), `${Math.abs(amount)} DA`]
@@ -2379,8 +2379,8 @@ section('S34  BLIND COUNT reveal — audited once, with no concealed figure in t
     ok(leaked.length === 0,
        `S34a the audit line never carries a monetary value (${amount})`, leaked);
   }
-  const full = detail({ zNumber: 'Z-2026-0042', cashier: 'Yacine' });
-  ok(full.includes('Z-2026-0042') && full.includes('Yacine'),
+  const full = detail({ zNumber: 'Z-2026-0042', cashier: 'Farida' });
+  ok(full.includes('Z-2026-0042') && full.includes('Farida'),
      'S34a the document and the operator ARE recorded — accountability without a reference is useless',
      full);
   ok(detail({}).length > 0 && !/undefined|NaN/.test(detail({})),
@@ -2472,7 +2472,7 @@ section('S36  Z REPORT print settlement — an un-counted drawer prints no figur
   // (`buildZReportBuffer`, decoded) and the mobile text twin (`zReportText`).
   const baseArgs = {
     settings: { storeName: 'MOBI ACCESSORIES', paperWidth: '80mm' } as never,
-    shift: { id: 'shift-1', openedAt: iso(-8 * 60 * 60 * 1000), openedBy: 'Yacine', openingFloat: 20_000 },
+    shift: { id: 'shift-1', openedAt: iso(-8 * 60 * 60 * 1000), openedBy: 'Farida', openingFloat: 20_000 },
     shiftFloat: 20_000,
     transactions: [soldTx({ id: 'txZ', total: 45_000, paymentMethod: 'CASH' })] as never[],
     customerDebts: [] as never[],
@@ -2483,7 +2483,7 @@ section('S36  Z REPORT print settlement — an un-counted drawer prints no figur
     payouts: [] as never[],
     closedAtISO: iso(0),
     closedShiftCount: 3,
-    fallbackCashier: 'Yacine',
+    fallbackCashier: 'Farida',
   };
   const unCounted = buildZSnapshot({ ...baseArgs, countedCash: 0, blindCountPerformed: false });
   ok(unCounted.blindCountPerformed === false,
@@ -2509,7 +2509,7 @@ section('S36  Z REPORT print settlement — an un-counted drawer prints no figur
      'S36b the THEORICAL line still prints — that figure is computed, not concealed');
 
   const textUnCounted = zReportText({
-    ...baseArgs, cashierName: 'Yacine', dateStr: '04/10/2026',
+    ...baseArgs, cashierName: 'Farida', dateStr: '04/10/2026',
     openingFloat: 20_000, cashSales: unCounted.cashSales, debtSettlements: 0,
     refunds: 0, expenses: 0, drops: 0, payouts: 0,
     expectedCash: unCounted.expectedCash, countedCash: 0, variance: unCounted.variance,
@@ -2530,7 +2530,7 @@ section('S36  Z REPORT print settlement — an un-counted drawer prints no figur
      'S36d the signed close ticket still prints the counted amount and a real variance',
      escCounted.match(/COMPTE EN CAISSE:[^\n]{0,24}/)?.[0]);
   const textCounted = zReportText({
-    ...baseArgs, cashierName: 'Yacine', dateStr: '04/10/2026',
+    ...baseArgs, cashierName: 'Farida', dateStr: '04/10/2026',
     openingFloat: 20_000, cashSales: counted.cashSales, debtSettlements: 0,
     refunds: 0, expenses: 0, drops: 0, payouts: 0,
     expectedCash: counted.expectedCash, countedCash: 44_000, variance: counted.variance,

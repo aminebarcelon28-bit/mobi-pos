@@ -163,7 +163,7 @@ export function buildZSnapshot(a: BuildZSnapshotArgs): ZReportSnapshot {
     zNumber: zTicketNumber(a.closedShiftCount),
     openedAtISO: openedAt || a.closedAtISO,
     closedAtISO: a.closedAtISO,
-    registerLabel: a.shift?.id ? `Caisse ${a.shift.id.slice(-8)}` : 'Caisse Principale',
+    registerLabel: a.shift?.id ? `Caisse ${a.shift.id.slice(-8)}` : 'Abdelkader Benali',
     responsibleName: opener,
     openingFloat,
     cashSales: totalCashSales,

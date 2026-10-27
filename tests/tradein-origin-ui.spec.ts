@@ -48,7 +48,7 @@ function seedPayload(tradeIns: SeedTradeIn[], role: 'admin' | 'cashier') {
   return {
     activeCashier: {
       id: role === 'admin' ? 'u-admin' : 'u-cashier',
-      name: role === 'admin' ? 'Gérant' : 'Karim',
+      name: role === 'admin' ? 'Gérant' : 'Salma',
       pin: '',
       role,
       avatarColor: '#000',

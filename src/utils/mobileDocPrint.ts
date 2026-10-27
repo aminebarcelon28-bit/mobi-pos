@@ -680,7 +680,7 @@ export function warrantyCertificateText(
     (tx.shiftOpenedByName || '').trim() ||
     (seller || '').trim() ||
     (tx.cashierName || '').trim() ||
-    'Caisse Principale';
+    'Abdelkader Benali';
   const lines: string[] = [
     center32(storeNameOf(settings)),
     center32('CERTIFICAT DE GARANTIE'),

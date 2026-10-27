@@ -240,7 +240,7 @@ async function main() {
       console.log('Comme c\'est votre premier Worker, Cloudflare vous demande de choisir un sous-domaine.');
       console.log('\n👉 Cliquez sur ce lien pour choisir votre sous-domaine (10 secondes) :');
       console.log(`   \x1b[34m\x1b[4m${onboardingUrl}\x1b[0m`);
-      console.log('\n(Exemple de nom : mobipos ou amine-pos)');
+      console.log('\n(Exemple de nom : mobipos ou amira-pos)');
       console.log('Une fois validé, relancez simplement : npm run license:deploy');
       console.log('========================================================================\n');
     } else {

@@ -316,7 +316,7 @@ test.describe('SAV + inspector WCAG AA contrast', () => {
     // contrast of both hints rather than asserting a class name.
     await openHarness(page, 'repair', 'light');
 
-    const phone = page.getByPlaceholder('Ex: 0550 12 34 56');
+    const phone = page.getByPlaceholder('Ex: 0550 00 22 22');
     await phone.fill('123'); // fails isValidDzPhone
     await phone.blur();
 
@@ -380,9 +380,9 @@ test.describe('SAV + inspector input focus retention', () => {
 
     // pressSequentially fires one key event per character, which is exactly the
     // cadence that used to trigger the re-focus.
-    await name.pressSequentially('Yacine Benali', { delay: 30 });
+    await name.pressSequentially('Farida Amrani', { delay: 30 });
 
-    await expect(name).toHaveValue('Yacine Benali');
+    await expect(name).toHaveValue('Farida Amrani');
     await expect(name).toBeFocused();
   });
 

@@ -88,8 +88,8 @@ assert(profitRes.marginPercent === 36.8, 'Net Profit Margin % is 36.8%');
 
 // 5. Barcode Scanner Customer PVC Card Identification
 const mockCustomers = [
-  { id: 'cust-1', name: 'Amina Kaddour', phone: '0661887755', storeCredit: 14500 },
-  { id: 'cust-2', name: 'amine', phone: '0654878994', storeCredit: 1000 },
+  { id: 'cust-1', name: 'Farida Benali', phone: '0661887755', storeCredit: 14500 },
+  { id: 'cust-2', name: 'amira', phone: '0654878994', storeCredit: 1000 },
 ];
 
 function scanCustomerBarcode(scannedCode) {
@@ -111,10 +111,10 @@ function scanCustomerBarcode(scannedCode) {
 }
 
 const found1 = scanCustomerBarcode('LOY-cust-2');
-assert(found1 && found1.name === 'amine', 'Scanning PVC card barcode "LOY-cust-2" identifies customer "amine"');
+assert(found1 && found1.name === 'amira', 'Scanning PVC card barcode "LOY-cust-2" identifies customer "amira"');
 
 const found2 = scanCustomerBarcode('0654878994');
-assert(found2 && found2.name === 'amine', 'Scanning phone number "0654878994" identifies customer "amine"');
+assert(found2 && found2.name === 'amira', 'Scanning phone number "0654878994" identifies customer "amira"');
 
 console.log('\n--------------------------------------------------------');
 console.log(`📊 TEST SUITE RESULT: ${passCount}/${passCount + failCount} TESTS PASSED CLEANLY!`);

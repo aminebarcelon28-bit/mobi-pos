@@ -211,9 +211,9 @@ is verified against the store/adapter path, never a request.
 - **Severity:** low
 - **Symptom:** names and device names are matched through an NFD diacritic
   fold + lowercase, but the phone is matched with a raw
-  `String.includes` on the trimmed query. Searching `0550 12 34 56`,
+  `String.includes` on the trimmed query. Searching `0550 00 22 22`,
   `+213 550…` or `0550.12.34.56` finds nothing even though the stored number
-  is `0550123456`.
+  is `0550002222`.
 - **Evidence:** `src/components/modals/DebtLedgerModal.tsx:5-6` (`foldForSearch`),
   `:126-129` — `foldForSearch(c.name).includes(q) ||
   (c.phone || '').includes(debouncedSearch.trim()) ||

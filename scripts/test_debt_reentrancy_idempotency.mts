@@ -13,7 +13,7 @@
  *      repeats collapse via put-upsert + stable outbox key (convergence
  *      simulation with Map upsert semantics, the same contract Dexie.put
  *      and the stable idempotency key provide).
- *   3. Session cashier binding (no hardcoded 'Caissier (Yacine)').
+ *   3. Session cashier binding (no hardcoded 'Caissier (Farida)').
  *
  * Run: node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_debt_reentrancy_idempotency.mts
  */
@@ -85,7 +85,7 @@ console.log('\n--- Wiring: latch + deterministic ids + cashier binding ---');
   check('debt path uses deterministic movement id', slice.includes('debtDepositMovementId(debtEntry.id)'));
   check('debt audit passes key to the funnel',
     slice.split('DEBT-SETTLE-${debtEntry.id}').length >= 3);
-  check('no hardcoded Yacine in debt path', !slice.includes("'Caissier (Yacine)'"));
+  check('no hardcoded Farida in debt path', !slice.includes("'Caissier (Farida)'"));
   check('cashier bound from session', slice.includes('activeCashier?.name'));
   const shift = src('src/db/adapters/shiftAdapter.ts');
   check('logExpense accepts explicit movement id', shift.includes('movementId?: string'));

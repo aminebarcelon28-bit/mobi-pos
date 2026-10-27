@@ -28,7 +28,7 @@ export class RepairNotificationEngine {
     type: RepairNotificationType = 'READY_FOR_PICKUP'
   ): string {
     const storeName = settings.storeName || 'MOBI ACCESSORIES';
-    const storeAddress = settings.address || 'Boulevard Mohamed V, Alger Centre';
+    const storeAddress = settings.address || '12 Rue des Oliviers, Alger, Alger';
     const remaining = Math.max(0, order.totalCost - (order.depositAmount || 0));
 
     switch (type) {

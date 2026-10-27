@@ -375,7 +375,7 @@ console.log('\n📁 MODULE 7: Multi-Tender Combinations & Conservation Invariant
 console.log('\n📁 MODULE 8: Customer Debt Ledger (Kredy) & Credit Limits');
 {
   const customer = {
-    name: 'Karim Brahimi',
+    name: 'Salma Brahimi',
     currentDebt: 35000,
     debtLimit: 100000
   };

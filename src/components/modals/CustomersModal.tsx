@@ -824,7 +824,7 @@ export const CustomersModal: React.FC = () => {
                   <div>
                     <label className="text-[10px] text-pos-muted uppercase font-bold block mb-1.5">Nom Complet *</label>
                     <input type="text" required value={name} onChange={e => setName(e.target.value)}
-                      placeholder="Ex: Mohamed Amine"
+                      placeholder="Ex: Mohamed Leila"
                       className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2.5 text-xs text-pos-text focus:border-emerald-400 focus:outline-none transition" />
                   </div>
                   <div>
@@ -834,7 +834,7 @@ export const CustomersModal: React.FC = () => {
                       required
                       value={phone}
                       onChange={setPhone}
-                      placeholder="Ex: 0550 12 34 56"
+                      placeholder="Ex: 0550 00 22 22"
                       inputClassName="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2.5 text-xs text-pos-text focus:border-emerald-400 focus:outline-none transition"
                     />
                   </div>

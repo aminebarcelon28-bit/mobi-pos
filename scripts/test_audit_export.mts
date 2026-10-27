@@ -49,8 +49,8 @@ const { sanitizeSpreadsheetValue, buildAuditExport, runGatedAuditExport, EXPORT_
 // ── 2. In-memory build (headless): bytes + manifest + verdict, no download ──
 {
   const logs: any[] = [
-    { id: 'AUD-1', timestamp: '2024-05-01T10:00:00.000Z', user: 'Yacine', action: 'Ouverture Tiroir', details: '=INJECTED', requiresPin: true, deviceId: 'TERM-1', ipAddress: '1.2.3.4' },
-    { id: 'AUD-2', timestamp: '2024-05-02T10:00:00.000Z', user: 'Amine', action: 'Remise', details: 'normal', requiresPin: false },
+    { id: 'AUD-1', timestamp: '2024-05-01T10:00:00.000Z', user: 'Farida', action: 'Ouverture Tiroir', details: '=INJECTED', requiresPin: true, deviceId: 'TERM-1', ipAddress: '1.2.3.4' },
+    { id: 'AUD-2', timestamp: '2024-05-02T10:00:00.000Z', user: 'Leila', action: 'Remise', details: 'normal', requiresPin: false },
   ];
   const pdf = await buildAuditExport(logs, 'pdf', { storeName: 'Test' });
   check('pdf builds bytes in memory', pdf.buffer.byteLength > 10, String(pdf.buffer.byteLength));

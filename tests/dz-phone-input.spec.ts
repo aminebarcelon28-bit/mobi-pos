@@ -13,7 +13,7 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
 
 const HARNESS = '/tests/harness/index.html';
-const PHONE_PLACEHOLDER = 'Ex: 0550 12 34 56';
+const PHONE_PLACEHOLDER = 'Ex: 0550 00 22 22';
 
 async function openRepair(page: Page) {
   await page.goto(`${HARNESS}?modal=repair&theme=light`, { waitUntil: 'domcontentloaded' });
@@ -52,7 +52,7 @@ test.describe('DzPhoneInput keystroke behavior', () => {
     await openRepair(page);
     const input = phone(page);
     await input.click();
-    await input.pressSequentially('0550123456', { delay: 10 });
+    await input.pressSequentially('0550002222', { delay: 10 });
     await expect(input).toHaveValue('05 50 12 34 56');
     // Three extra digits: none may enter state OR the DOM.
     await input.pressSequentially('999', { delay: 10 });

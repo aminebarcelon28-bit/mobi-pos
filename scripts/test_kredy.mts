@@ -532,7 +532,7 @@ console.log('\n--- Part 5: single-claim dunning + honest launch log ---');
   check('plan close is single-shot', Number(db.prepare(KREDY_PLAN_STATUS_UPDATE_SQL).run(bind(['P1', 'SOLDE', '2026-10-18T09:02:00.000Z'])).changes) === 0);
 
   // Honest launch log: written only with the exact pinned status.
-  check('launch log row lands', Number(db.prepare(KREDY_WHATSAPP_LAUNCH_INSERT_SQL).run(bind(['W1', 'c1', '0550123456', 'RELANCE', 'R1', 'preview', KREDY_LAUNCH_STATUS, '2026-10-17T10:20:01.000Z', 'Yacine'])).changes) === 1);
+  check('launch log row lands', Number(db.prepare(KREDY_WHATSAPP_LAUNCH_INSERT_SQL).run(bind(['W1', 'c1', '0550002222', 'RELANCE', 'R1', 'preview', KREDY_LAUNCH_STATUS, '2026-10-17T10:20:01.000Z', 'Farida'])).changes) === 1);
   const waRow = (db.prepare(KREDY_WHATSAPP_BY_CUSTOMER_SQL).all(bind(['c1'])) as Array<Record<string, unknown>>)[0];
   check("launch log status is exactly 'Lancé'", String(waRow?.status ?? '') === 'Lancé');
   db.close();

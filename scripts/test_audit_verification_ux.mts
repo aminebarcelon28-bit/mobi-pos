@@ -48,7 +48,7 @@ function check(name: string, cond: boolean, extra = '') {
 const row: SecurityAuditLogEntry = {
   id: 'audit-ux-1',
   timestamp: '2026-09-29T23:07:14.231Z',
-  user: 'Yacine (Gérant)',
+  user: 'Farida (Gérant)',
   action: 'Règlement (Erreur)',
   details: 'Ticket #T-4471 (12 000 DA) — Règlement annulé',
   requiresPin: true,

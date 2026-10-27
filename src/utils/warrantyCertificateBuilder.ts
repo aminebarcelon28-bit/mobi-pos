@@ -42,7 +42,7 @@ export class WarrantyCertificateBuilder {
       .text(settings.storeName || 'MOBI ACCESSORIES')
       .newline()
       .bold(false)
-      .text(settings.address || 'Boulevard Mohamed V, Alger Centre')
+      .text(settings.address || '12 Rue des Oliviers, Alger, Alger')
       .newline()
       .text(`Tél : ${settings.phone || '0550 00 00 00'}`)
       .newline()
@@ -59,7 +59,7 @@ export class WarrantyCertificateBuilder {
       (transaction.shiftOpenedByName || '').trim() ||
       (seller || '').trim() ||
       (transaction.cashierName || '').trim() ||
-      'Caisse Principale';
+      'Abdelkader Benali';
     builder
       .text(`Vendeur (Caisse) : ${vendeur}`)
       .newline()

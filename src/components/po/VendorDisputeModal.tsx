@@ -327,7 +327,7 @@ export const VendorDisputeModal: React.FC<VendorDisputeModalProps> = ({
                   <DzPhoneInput
                     value={phoneNumber}
                     onChange={handlePhoneChange}
-                    placeholder="Ex: 0550 12 34 56 ou 0661 00 11 22"
+                    placeholder="Ex: 0550 00 22 22 ou 0661 00 11 22"
                     showBadge={false}
                     showHint={false}
                     inputClassName="w-full bg-slate-900 border border-slate-700 rounded-xl pl-8 pr-3 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-emerald-500"

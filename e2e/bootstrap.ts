@@ -33,7 +33,7 @@ export async function bootstrapUnlockedTill(page: Page): Promise<void> {
   if ((await onboardingTitle.count()) > 0) {
     await page.getByLabel('PIN gérant', { exact: true }).fill(E2E_MANAGER_PIN);
     await page.getByLabel('Confirmer le PIN gérant', { exact: true }).fill(E2E_MANAGER_PIN);
-    for (const [name, pin] of [['Amine', '1212'], ['Karim', '3434']] as const) {
+    for (const [name, pin] of [['Leila', '1212'], ['Salma', '3434']] as const) {
       const pinInput = page.getByLabel(`Code PIN de ${name}`, { exact: true });
       if ((await pinInput.count()) > 0) await pinInput.fill(pin);
     }

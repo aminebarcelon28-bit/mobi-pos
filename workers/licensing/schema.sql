@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS license_activations (
         device_type IN ('desktop', 'mobile')
     ),
     hardware_hash TEXT NOT NULL,                   -- SHA-256 hash of device identity
-    friendly_name TEXT NOT NULL DEFAULT '',        -- e.g. 'Caisse Principale', 'Tablette Vendeur'
+    friendly_name TEXT NOT NULL DEFAULT '',        -- e.g. 'Abdelkader Benali', 'Tablette Vendeur'
     activated_at TEXT NOT NULL,                    -- ISO 8601 UTC
     last_ping_at TEXT NOT NULL,                    -- ISO 8601 UTC
     ip_hash TEXT NOT NULL,                         -- Pseudonymized HMAC-SHA256(IP_PEPPER, client_ip)

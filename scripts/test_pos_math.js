@@ -102,7 +102,7 @@ const excessStoreCredit = Math.max(0, versementAmount - currentDebt);
 assert(newDebt === 0 && excessStoreCredit === 1000, 'Debt Overpayment: 5,000 DA versement on 4,000 DA debt leaves 0 DA debt + 1,000 DA store credit');
 
 // 12. Active Debt Customer Deletion Prevention
-const customerWithDebt = { id: 'c-1', name: 'Karim', currentDebt: 3500 };
+const customerWithDebt = { id: 'c-1', name: 'Salma', currentDebt: 3500 };
 const canDelete = (customerWithDebt.currentDebt || 0) === 0;
 assert(canDelete === false, 'Customer Deletion Protection: Block deletion of customer with active 3,500 DA debt');
 
@@ -134,7 +134,7 @@ function testNormalizePhone(input) {
   else if (digitsOnly.startsWith('0') && digitsOnly.length === 10) std = digitsOnly.slice(1);
   return '213' + std;
 }
-assert(testNormalizePhone('0550123456') === '213550123456', 'Phone Normalizer: 0550123456 -> 213550123456');
+assert(testNormalizePhone('0550002222') === '213550123456', 'Phone Normalizer: 0550002222 -> 213550123456');
 assert(testNormalizePhone('+213 660 12 34 56') === '213660123456', 'Phone Normalizer: +213 660 12 34 56 -> 213660123456');
 assert(testNormalizePhone('00213 770 12 34 56') === '213770123456', 'Phone Normalizer: 00213 770 12 34 56 -> 213770123456');
 
@@ -538,9 +538,9 @@ const simulatePersistence = async (dbShouldFail) => {
   assert(simulateSetCartItemQty(5, 4, true) === 1, 'Direct Qty Input: Serialized phone locked to 1 unit per IMEI');
 
   // 50. Dynamic Cashier Identity Attribution
-  const getSaleCashierName = (activeShift) => activeShift?.cashierName || 'Yacine (Caisse 1)';
-  assert(getSaleCashierName({ cashierName: 'Amine' }) === 'Amine', 'Cashier Attribution: Sale assigned to active shift cashier (Amine)');
-  assert(getSaleCashierName(null) === 'Yacine (Caisse 1)', 'Cashier Attribution: Fallback default assigned when no shift open');
+  const getSaleCashierName = (activeShift) => activeShift?.cashierName || 'Farida (Caisse 1)';
+  assert(getSaleCashierName({ cashierName: 'Leila' }) === 'Leila', 'Cashier Attribution: Sale assigned to active shift cashier (Leila)');
+  assert(getSaleCashierName(null) === 'Farida (Caisse 1)', 'Cashier Attribution: Fallback default assigned when no shift open');
 
   // 51. Subtotal Brut & Remise Separation Math
   const items = [
@@ -634,9 +634,9 @@ const simulatePersistence = async (dbShouldFail) => {
 
   // 57. Per-Cashier Quick Lock Screen PIN Validation
   const cashiers = [
-    { id: 'u1', name: 'Yacine (Gérant)', pin: '1234', role: 'admin' },
-    { id: 'u2', name: 'Amine', pin: '0000', role: 'cashier' },
-    { id: 'u3', name: 'Karim', pin: '1111', role: 'cashier' },
+    { id: 'u1', name: 'Farida (Gérant)', pin: '1234', role: 'admin' },
+    { id: 'u2', name: 'Leila', pin: '0000', role: 'cashier' },
+    { id: 'u3', name: 'Salma', pin: '1111', role: 'cashier' },
   ];
   const managerPin = '1234';
   const authenticateUnlock = (enteredPin) => {
@@ -644,8 +644,8 @@ const simulatePersistence = async (dbShouldFail) => {
     const matched = cashiers.find((u) => u.pin === enteredPin);
     return matched ? { success: true, user: matched } : { success: false };
   };
-  assert(authenticateUnlock('0000').user?.name === 'Amine', 'Lock Screen: Amine unlocked with PIN 0000');
-  assert(authenticateUnlock('1111').user?.name === 'Karim', 'Lock Screen: Karim unlocked with PIN 1111');
+  assert(authenticateUnlock('0000').user?.name === 'Leila', 'Lock Screen: Leila unlocked with PIN 0000');
+  assert(authenticateUnlock('1111').user?.name === 'Salma', 'Lock Screen: Salma unlocked with PIN 1111');
   assert(authenticateUnlock('9999').success === false, 'Lock Screen: Invalid PIN 9999 rejected');
   assert(authenticateUnlock('1234').user?.role === 'admin', 'Lock Screen: Manager PIN overrides and unlocks with admin');
 

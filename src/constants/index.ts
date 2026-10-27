@@ -74,7 +74,7 @@ export const STORAGE_KEYS = {
 } as const;
 
 export const ROLES = {
-  ADMIN: 'Yacine (Admin)',
+  ADMIN: 'Farida (Admin)',
   MANAGER: 'Manager',
   CASHIER: 'Caissier',
 } as const;

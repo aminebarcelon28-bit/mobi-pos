@@ -194,7 +194,7 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
         if (!cancelled) {
           setHwid(res);
           const isMob = platformInfo.category === 'mobile' || platformInfo.category === 'tablet';
-          setFriendlyName(isMob ? 'Mobile Vendeur' : 'Caisse Principale');
+          setFriendlyName(isMob ? 'Mobile Vendeur' : 'Abdelkader Benali');
         }
       })
       .catch(console.warn);
@@ -627,7 +627,7 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
               <div className="flex items-center justify-between text-[11px] font-semibold text-pos-muted mb-1.5">
                 <span>Rôle de ce terminal :</span>
                 <span className="text-[10px] text-pos-muted">
-                  {deviceType === 'desktop' ? 'Caisse Principale (PC)' : 'Vendeur / Rayon (Mobile)'}
+                  {deviceType === 'desktop' ? 'Abdelkader Benali (PC)' : 'Vendeur / Rayon (Mobile)'}
                 </span>
               </div>
 
@@ -636,7 +636,7 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
                   type="button"
                   onClick={() => {
                     setDeviceType('desktop');
-                    setFriendlyName('Caisse Principale');
+                    setFriendlyName('Abdelkader Benali');
                   }}
                   className={`min-h-[48px] py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
                     deviceType === 'desktop'
@@ -768,7 +768,7 @@ export const ActivationGateScreen: React.FC<ActivationGateScreenProps> = ({
                     type="text"
                     value={friendlyName}
                     onChange={(e) => setFriendlyName(e.target.value)}
-                    placeholder="ex: Caisse Principale, Tablette Vendeur"
+                    placeholder="ex: Abdelkader Benali, Tablette Vendeur"
                     disabled={loading}
                     className="w-full min-h-[48px] px-4 py-2.5 bg-pos-card border border-pos-border focus:border-emerald-500 rounded-xl text-xs text-pos-text placeholder:text-pos-muted/50 transition outline-none"
                   />

@@ -41,7 +41,7 @@ async function snapshot(page: Page) {
 
 const imeiInput = (page: Page) => page.getByPlaceholder('358921004812345');
 const cniInput = (page: Page) => page.getByPlaceholder('Ex: 1987-44-112233');
-const nameInput = (page: Page) => page.getByPlaceholder('Ex: Karim Hadj');
+const nameInput = (page: Page) => page.getByPlaceholder('Ex: Salma Hadj');
 const modelInput = (page: Page) => page.getByPlaceholder('ex: iPhone 14 Pro Max');
 // Scoped to the modal overlay: CartPanel mounts cart steppers (number
 // inputs) that would otherwise shadow the buyback field in DOM order.
@@ -65,7 +65,7 @@ const submitBtn = (page: Page) => page.getByRole('button', { name: /Racheter & I
 
 /** Fill the natively-required fields so submit reaches our handler. */
 async function fillRequired(page: Page, buyback = '45000') {
-  await nameInput(page).fill('Karim Hadj');
+  await nameInput(page).fill('Salma Hadj');
   await modelInput(page).fill('iPhone 13 Pro');
   await buybackInput(page).fill(buyback);
   await expectBuybackCommitted(page);
@@ -255,7 +255,7 @@ test.describe('Suite 6 — staged exchange flow (real UI, zero DB writes)', () =
     await expect(page.getByText(/Verser en Avoir Client/)).toHaveCount(0);
     await expect(page.getByRole('button', { name: /Valider l’Échange/ })).toBeVisible();
 
-    await nameInput(page).fill('Karim Hadj');
+    await nameInput(page).fill('Salma Hadj');
     await modelInput(page).fill('iPhone 13 Pro');
     await imeiInput(page).fill('490154203237518');
     await buybackInput(page).fill('50000');

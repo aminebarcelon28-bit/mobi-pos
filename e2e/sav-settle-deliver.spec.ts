@@ -177,7 +177,7 @@ test.describe('SAV settle-and-deliver live loop', () => {
       // a 4-digit default is rejected outright by first-boot setup.
       await page.getByLabel('PIN gérant (6 chiffres minimum)', { exact: true }).fill('789012');
       await page.getByLabel('Confirmer le PIN', { exact: true }).fill('789012');
-      for (const [name, pin] of [['Amine', '1212'], ['Karim', '3434']] as const) {
+      for (const [name, pin] of [['Leila', '1212'], ['Salma', '3434']] as const) {
         const pinInput = page.getByLabel(`Code PIN de ${name}`, { exact: true });
         if ((await pinInput.count()) > 0) await pinInput.fill(pin);
       }
@@ -216,9 +216,9 @@ test.describe('SAV settle-and-deliver live loop', () => {
     const modal = scopeSAV(page);
     await expect(modal.getByText('Nouveau Ticket SAV')).toBeVisible({ timeout: 20000 });
 
-    await modal.getByPlaceholder('Ex: Yacine Benali').fill(uniqueName);
-    await modal.getByPlaceholder('Ex: 0550 12 34 56').fill('0555123456');
-    log('intake', 'ui', 'phone live mask', await modal.getByPlaceholder('Ex: 0550 12 34 56').inputValue(), '05 55 12 34 56');
+    await modal.getByPlaceholder('Ex: Farida Amrani').fill(uniqueName);
+    await modal.getByPlaceholder('Ex: 0550 00 22 22').fill('0555123456');
+    log('intake', 'ui', 'phone live mask', await modal.getByPlaceholder('Ex: 0550 00 22 22').inputValue(), '05 55 12 34 56');
     await modal.getByPlaceholder('Ex: iPhone 15 Pro Max').fill('Galaxy E2E A55');
     const imeiInput = modal.getByPlaceholder('Scanner ou 15 chiffres…');
     await imeiInput.fill('490154203237518');
@@ -315,8 +315,8 @@ test.describe('SAV settle-and-deliver live loop', () => {
     const zeroName = `${uniqueName}-SOLDÉ`;
     await page.getByTitle('Gestion des Réparations & Tickets SAV').click();
     const modalZero = scopeSAV(page);
-    await modalZero.getByPlaceholder('Ex: Yacine Benali').fill(zeroName);
-    await modalZero.getByPlaceholder('Ex: 0550 12 34 56').fill('0555123456');
+    await modalZero.getByPlaceholder('Ex: Farida Amrani').fill(zeroName);
+    await modalZero.getByPlaceholder('Ex: 0550 00 22 22').fill('0555123456');
     await modalZero.getByPlaceholder('Ex: iPhone 15 Pro Max').fill('Galaxy E2E A55');
     await modalZero.getByPlaceholder('Scanner ou 15 chiffres…').fill('490154203237518');
     await modalZero.getByPlaceholder('Ex: écran fissuré + connecteur de charge cassé').fill('Écran E2E soldé');

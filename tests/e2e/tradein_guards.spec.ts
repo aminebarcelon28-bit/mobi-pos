@@ -41,7 +41,7 @@ async function openHarness(page: Page) {
 }
 
 const imeiInput = (page: Page) => page.getByPlaceholder('358921004812345');
-const nameInput = (page: Page) => page.getByPlaceholder('Ex: Karim Hadj');
+const nameInput = (page: Page) => page.getByPlaceholder('Ex: Salma Hadj');
 const modelInput = (page: Page) => page.getByPlaceholder('ex: iPhone 14 Pro Max');
 const cniInput = (page: Page) => page.getByPlaceholder('Ex: 1987-44-112233');
 const tradeInDialog = (page: Page) => page.locator('div.fixed.inset-0').filter({ hasText: 'REPRISE & TRADE-IN' });

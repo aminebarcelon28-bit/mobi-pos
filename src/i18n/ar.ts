@@ -251,7 +251,7 @@ export const ar: TranslationDictionary = {
     receivedOutOfTotal: 'استُلم {tendered} من أصل {total}',
     totalPaid: 'المجموع المدفوع',
     sendReceiptWhatsAppTitle: 'إرسال الوصل عبر واتساب (WhatsApp)',
-    whatsAppPhonePlaceholder: '0550 12 34 56 أو +213...',
+    whatsAppPhonePlaceholder: '0550 00 22 22 أو +213...',
     sendViaWhatsAppButton: 'إرسال عبر WhatsApp',
     printReceiptButton: 'طباعة الوصل',
     newSaleButton: 'بيع جديد',

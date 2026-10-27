@@ -215,7 +215,7 @@ if (PHASE === 'all' || PHASE === 'float') {
       const S = () => usePosStore.getState();
       const before = (await db.cashMovements.toArray().catch(() => [])).length;
       const cust = {
-        id: 'cust-gauntlet', name: 'Gauntlet Client', phone: '0550000000',
+        id: 'cust-gauntlet', name: 'Epicerie Benali', phone: '0550001111',
         email: '', storeCredit: 0, loyaltyPoints: 0, totalSpent: 0, currentDebt: 0,
         loyaltyTier: 'Bronze', pointBuckets: [], ledger: [],
       };
@@ -227,7 +227,7 @@ if (PHASE === 'all' || PHASE === 'float') {
         cart: [{ product: PZERO, quantity: 1, appliedPrice: 0, discount: 0 }],
       });
       S().setStagedTradeIn({
-        stagedId: 'g-float2', customerName: 'Gauntlet Client', deviceModel: 'Gauntlet Phone',
+        stagedId: 'g-float2', customerName: 'Epicerie Benali', deviceModel: 'Gauntlet Phone',
         imei: 'GAUNTLET-FLOAT2', brand: 'Autre', conditionGrade: 'Grade B (Bon État)',
         buybackValue: 50000, resaleMarginPercent: 30, creditToWallet: false,
       });

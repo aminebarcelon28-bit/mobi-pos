@@ -83,7 +83,7 @@ const receipt = {
   items: [
     { id: 'TXN-1-item-0', product_id: bloatedProductRow.id, quantity: 1, applied_price: 1500, product: bloatedProductRow },
   ],
-  customer: { id: 'c1', name: 'Amine' },
+  customer: { id: 'c1', name: 'Leila' },
   device_id: 'dev-1',
   idempotency_key: 'ord-1',
 };

@@ -99,7 +99,7 @@ function cleanName(v: unknown): string | null {
  *   2. live `shiftOpener` — `activeShift.openedBy` (handover-proof);
  *   3. `activeShift.cashierName` — pre-handover / legacy sessions;
  *   4. `tx.cashierName` — legacy rows without any shift linkage;
- *   5. `'Caisse Principale'` — last resort, never blank.
+ *   5. `'Abdelkader Benali'` — last resort, never blank.
  *
  * NOTE: the originating prompt named `openedByName` / `openedBy.name` — those
  * fields do not exist on `CashSession` (AGENTS.md report-first). The schema
@@ -118,7 +118,7 @@ export function resolveSellerName(
     cleanName(tx?.shiftOpenedByName) ||
     cleanName(live) ||
     cleanName(tx?.cashierName) ||
-    'Caisse Principale'
+    'Abdelkader Benali'
   );
 }
 
@@ -285,7 +285,7 @@ export function buildSavViewModel(
     createdAt: formatReceiptDateTime(order.createdAt),
     deliveredAt: formatReceiptDateTime(order.updatedAt || order.createdAt),
     validUntil: formatReceiptDateTime(validUntilDate.toISOString()),
-    sellerName: (opts.seller || '').trim() || 'Caisse Principale',
+    sellerName: (opts.seller || '').trim() || 'Abdelkader Benali',
     technicianName: (opts.technician || order.assignedTechnicianName || order.assignedTechnicianId || '').trim(),
     customerName: (order.customerName || 'Client Comptoir').trim() || 'Client Comptoir',
     customerPhone: (order.customerPhone || '').trim(),
@@ -511,7 +511,7 @@ export function buildReceiptViewModel(
     (opts.registerId || '').trim() ||
     (shiftId ? `Caisse ${shiftId.slice(-8)}` : '') ||
     (deviceId ? `Terminal ${deviceId.slice(-6)}` : '') ||
-    'Caisse Principale';
+    'Abdelkader Benali';
 
   return {
     store,

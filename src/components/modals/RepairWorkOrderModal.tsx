@@ -1716,7 +1716,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                       tabIndex={1}
                       value={customerName}
                       onChange={(e) => setCustomerName(e.target.value)}
-                      placeholder="Ex: Yacine Benali"
+                      placeholder="Ex: Farida Amrani"
                       className="w-full h-10 sm:h-9 bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-base sm:text-xs font-normal text-pos-text placeholder:text-pos-muted focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     />
                   </div>
@@ -1728,7 +1728,7 @@ export const RepairWorkOrderModal: React.FC = () => {
                       tabIndex={2}
                       value={customerPhone}
                       onChange={setCustomerPhone}
-                      placeholder="Ex: 0550 12 34 56"
+                      placeholder="Ex: 0550 00 22 22"
                       inputClassName="w-full h-10 sm:h-9 bg-pos-card border border-pos-border rounded-lg px-3 py-1.5 text-base sm:text-xs font-normal font-mono tabular-nums tracking-normal text-pos-text placeholder:font-sans placeholder:text-pos-muted focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     />
                   </div>

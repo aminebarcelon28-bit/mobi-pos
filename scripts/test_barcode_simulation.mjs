@@ -261,7 +261,7 @@ const testBundles = [
 ];
 
 const testCustomers = [
-  { id: 'cust_101', name: 'Karim Bouzid', phone: '0555123456', loyaltyCardCode: 'LOY-KB101', barcode: 'CARD-KB-101', storeCredit: 1500, loyaltyPoints: 340 }
+  { id: 'cust_101', name: 'Salma Bouzid', phone: '0555123456', loyaltyCardCode: 'LOY-KB101', barcode: 'CARD-KB-101', storeCredit: 1500, loyaltyPoints: 340 }
 ];
 
 // TEST 1: Rapid 10ms USB Scanner Burst -> Successfully added to cart
@@ -337,7 +337,7 @@ const testCustomers = [
 {
   const sim = new MockBarcodeScannerEngine({ customers: testCustomers });
   sim.simulateScannerBurst('0555123456');
-  assert(sim.currentCustomer && sim.currentCustomer.id === 'cust_101', 'Customer PVC Scan (Phone): Customer Karim Bouzid identified');
+  assert(sim.currentCustomer && sim.currentCustomer.id === 'cust_101', 'Customer PVC Scan (Phone): Customer Salma Bouzid identified');
   assert(sim.securityLogs.length === 1, 'Customer PVC Scan: Security audit log entry created');
 }
 

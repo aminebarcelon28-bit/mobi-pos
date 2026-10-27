@@ -164,9 +164,9 @@ async function main() {
   for (const r of rows) await db.execute(r);
 
   // Dexie mirror: session + movements + GHOSTS (void-as-COMPLETED T3 echo, phantom sale).
-  await dexieDb.cashSessions.put({ id: 'S1', status: 'OPEN', openingFloat: 20000, openedAt: T0, cashierName: 'Amine', deviceId: 'desk-1', movements: [] });
-  await dexieDb.cashMovements.put({ id: 'M1', sessionId: 'S1', type: 'MANUAL_DEPOSIT', amount: 5000, reason: 'dépôt', cashierName: 'Amine', createdAt: T(7) });
-  await dexieDb.cashMovements.put({ id: 'M2', sessionId: 'S1', type: 'EXPENSE', amount: 3500, reason: 'dépense', cashierName: 'Amine', createdAt: T(8) });
+  await dexieDb.cashSessions.put({ id: 'S1', status: 'OPEN', openingFloat: 20000, openedAt: T0, cashierName: 'Leila', deviceId: 'desk-1', movements: [] });
+  await dexieDb.cashMovements.put({ id: 'M1', sessionId: 'S1', type: 'MANUAL_DEPOSIT', amount: 5000, reason: 'dépôt', cashierName: 'Leila', createdAt: T(7) });
+  await dexieDb.cashMovements.put({ id: 'M2', sessionId: 'S1', type: 'EXPENSE', amount: 3500, reason: 'dépense', cashierName: 'Leila', createdAt: T(8) });
   await dexieDb.transactions.put({ id: 'T3', total: 5000, profit: 1000, paymentMethod: 'Espèces', status: 'COMPLETED', createdAt: T(9), deviceId: 'desk-1' });
   await dexieDb.transactions.put({ id: 'GHOST', total: 99999, profit: 0, paymentMethod: 'Espèces', status: 'COMPLETED', createdAt: T(10), deviceId: 'desk-1' });
 
@@ -180,7 +180,7 @@ async function main() {
   // Hand-computed: cashSales = 10000+14000+1000+2000+3000 = 30000;
   // expected = 20000 + 30000 + 5000 − 3500 − 1500 = 50000.
   // revenue = 10000+24000+1000+2000+3000 = 40000; count 5; profit 2000+5000+100+0+300 = 7400.
-  const closed = await shiftAdapter.closeShift(50000, '', 'Amine', 'S1');
+  const closed = await shiftAdapter.closeShift(50000, '', 'Leila', 'S1');
   console.warn = origWarn;
   check('authority close: expectedCash 50000 (ghosts ignored)', closed.expectedCash === 50000, `got ${closed.expectedCash}`);
   check('authority close: revenue 40000', closed.totalSalesRevenue === 40000, `got ${closed.totalSalesRevenue}`);
@@ -196,27 +196,27 @@ async function main() {
 
   // Gates preserved: reopen and close off-balance without note.
   // Fresh sessions carry their own movements (movements are per-session).
-  await dexieDb.cashSessions.put({ id: 'S2', status: 'OPEN', openingFloat: 20000, openedAt: T0, cashierName: 'Amine', deviceId: 'desk-1', movements: [] });
-  await dexieDb.cashMovements.put({ id: 'M1-S2', sessionId: 'S2', type: 'MANUAL_DEPOSIT', amount: 5000, reason: 'dépôt', cashierName: 'Amine', createdAt: T(7) });
-  await dexieDb.cashMovements.put({ id: 'M2-S2', sessionId: 'S2', type: 'EXPENSE', amount: 3500, reason: 'dépense', cashierName: 'Amine', createdAt: T(8) });
+  await dexieDb.cashSessions.put({ id: 'S2', status: 'OPEN', openingFloat: 20000, openedAt: T0, cashierName: 'Leila', deviceId: 'desk-1', movements: [] });
+  await dexieDb.cashMovements.put({ id: 'M1-S2', sessionId: 'S2', type: 'MANUAL_DEPOSIT', amount: 5000, reason: 'dépôt', cashierName: 'Leila', createdAt: T(7) });
+  await dexieDb.cashMovements.put({ id: 'M2-S2', sessionId: 'S2', type: 'EXPENSE', amount: 3500, reason: 'dépense', cashierName: 'Leila', createdAt: T(8) });
   let gateErr = null;
-  try { await shiftAdapter.closeShift(43000, '', 'Amine', 'S2'); }
+  try { await shiftAdapter.closeShift(43000, '', 'Leila', 'S2'); }
   catch (e) { gateErr = e; }
   check('blind gate: note required on variance', gateErr && gateErr.code === 'CLOSING_NOTE_REQUIRED', gateErr?.code ?? 'no-throw');
-  const noted = await shiftAdapter.closeShift(49500, 'écart justifié', 'Amine', 'S2');
+  const noted = await shiftAdapter.closeShift(49500, 'écart justifié', 'Leila', 'S2');
   check('noted close: discrepancy -500, no PIN under threshold', noted.discrepancy === -500, `got ${noted.discrepancy}`);
-  await dexieDb.cashSessions.put({ id: 'S3', status: 'OPEN', openingFloat: 20000, openedAt: T0, cashierName: 'Amine', deviceId: 'desk-1', movements: [] });
-  await dexieDb.cashMovements.put({ id: 'M1-S3', sessionId: 'S3', type: 'MANUAL_DEPOSIT', amount: 5000, reason: 'dépôt', cashierName: 'Amine', createdAt: T(7) });
-  await dexieDb.cashMovements.put({ id: 'M2-S3', sessionId: 'S3', type: 'EXPENSE', amount: 3500, reason: 'dépense', cashierName: 'Amine', createdAt: T(8) });
+  await dexieDb.cashSessions.put({ id: 'S3', status: 'OPEN', openingFloat: 20000, openedAt: T0, cashierName: 'Leila', deviceId: 'desk-1', movements: [] });
+  await dexieDb.cashMovements.put({ id: 'M1-S3', sessionId: 'S3', type: 'MANUAL_DEPOSIT', amount: 5000, reason: 'dépôt', cashierName: 'Leila', createdAt: T(7) });
+  await dexieDb.cashMovements.put({ id: 'M2-S3', sessionId: 'S3', type: 'EXPENSE', amount: 3500, reason: 'dépense', cashierName: 'Leila', createdAt: T(8) });
   let pinErr = null;
-  try { await shiftAdapter.closeShift(40000, 'gros écart', 'Amine', 'S3'); }
+  try { await shiftAdapter.closeShift(40000, 'gros écart', 'Leila', 'S3'); }
   catch (e) { pinErr = e; }
   check('variance gate: PIN required at >= 1000', pinErr && pinErr.code === 'MANAGER_PIN_REQUIRED', pinErr?.code ?? 'no-throw');
   let badPin = null;
-  try { await shiftAdapter.closeShift(40000, 'gros écart', 'Amine', 'S3', '0000'); }
+  try { await shiftAdapter.closeShift(40000, 'gros écart', 'Leila', 'S3', '0000'); }
   catch (e) { badPin = e; }
   check('variance gate: wrong PIN rejected', badPin && badPin.code === 'MANAGER_PIN_INVALID', badPin?.code ?? 'no-throw');
-  const pinnned = await shiftAdapter.closeShift(40000, 'gros écart', 'Amine', 'S3', '9999');
+  const pinnned = await shiftAdapter.closeShift(40000, 'gros écart', 'Leila', 'S3', '9999');
   check('variance gate: manager PIN closes (|disc| 10000)', pinnned.discrepancy === -10000, `got ${pinnned.discrepancy}`);
 
   // Web fallback parity: same books via Dexie give same numbers.
@@ -235,11 +235,11 @@ async function main() {
   ]) {
     await dexieDb.transactions.put({ id, total, profit, status: 'COMPLETED', createdAt: T(7), deviceId: 'desk-1', changeDue: 0, ...extra });
   }
-  await dexieDb.cashSessions.put({ id: 'S4', status: 'OPEN', openingFloat: 20000, openedAt: T0, cashierName: 'Amine', deviceId: 'desk-1', movements: [] });
-  await dexieDb.cashMovements.put({ id: 'M1-S4', sessionId: 'S4', type: 'MANUAL_DEPOSIT', amount: 5000, reason: 'dépôt', cashierName: 'Amine', createdAt: T(7) });
-  await dexieDb.cashMovements.put({ id: 'M2-S4', sessionId: 'S4', type: 'EXPENSE', amount: 3500, reason: 'dépense', cashierName: 'Amine', createdAt: T(8) });
+  await dexieDb.cashSessions.put({ id: 'S4', status: 'OPEN', openingFloat: 20000, openedAt: T0, cashierName: 'Leila', deviceId: 'desk-1', movements: [] });
+  await dexieDb.cashMovements.put({ id: 'M1-S4', sessionId: 'S4', type: 'MANUAL_DEPOSIT', amount: 5000, reason: 'dépôt', cashierName: 'Leila', createdAt: T(7) });
+  await dexieDb.cashMovements.put({ id: 'M2-S4', sessionId: 'S4', type: 'EXPENSE', amount: 3500, reason: 'dépense', cashierName: 'Leila', createdAt: T(8) });
   // NOTE: T6 tombstone has no Dexie row (deletes evict) — parity holds trivially.
-  const webClosed = await shiftAdapter.closeShift(50000, '', 'Amine', 'S4');
+  const webClosed = await shiftAdapter.closeShift(50000, '', 'Leila', 'S4');
   check('web fallback: same expectedCash 50000', webClosed.expectedCash === 50000, `got ${webClosed.expectedCash}`);
 
   console.log('====================================================');

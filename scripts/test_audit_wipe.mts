@@ -362,8 +362,8 @@ const checkpointOk = async () => ({ ok: true, busy: 0, message: 'checkpoint ok' 
 // ── 8. F3: backup audit history merges insert-only (fresh + existing device) ──
 {
   const { mergeImportAuditHistory } = (await import('../src/db/adapters/maintenanceAdapter.ts')) as typeof import('../src/db/adapters/maintenanceAdapter.ts');
-  const rowA = { id: 'AUD-old', timestamp: '2024-05-01T10:00:00.000Z', user: 'Yacine', action: 'Vente', details: 'd1', requiresPin: false, deviceId: 'TERM-X', ipAddress: '1.2.3.4' };
-  const rowB = { id: 'AUD-new', timestamp: '2024-06-01T10:00:00.000Z', user: 'Amine', action: 'Remise', details: 'd2', requiresPin: true };
+  const rowA = { id: 'AUD-old', timestamp: '2024-05-01T10:00:00.000Z', user: 'Farida', action: 'Vente', details: 'd1', requiresPin: false, deviceId: 'TERM-X', ipAddress: '1.2.3.4' };
+  const rowB = { id: 'AUD-new', timestamp: '2024-06-01T10:00:00.000Z', user: 'Leila', action: 'Remise', details: 'd2', requiresPin: true };
   const fakeDb = (initial: Map<string, unknown[]>) => ({
     store: initial,
     async execute(sql: string, params: unknown[]) {
@@ -409,7 +409,7 @@ const checkpointOk = async () => ({ ok: true, busy: 0, message: 'checkpoint ok' 
 
   // Existing device: same-id rows never overwrite (details + user kept).
   {
-    const prior = ['AUD-old', '2024-05-01T10:00:00.000Z', 'Yacine', 'Vente', 'LOCAL-TRUTH', 0, 'TERM-X', '1.2.3.4'];
+    const prior = ['AUD-old', '2024-05-01T10:00:00.000Z', 'Farida', 'Vente', 'LOCAL-TRUTH', 0, 'TERM-X', '1.2.3.4'];
     const db = fakeDb(new Map([['AUD-old', prior]]));
     const mirror = fakeMirror(new Map([['AUD-old', { ...rowA, details: 'LOCAL-TRUTH' }]]));
     const tampered = { ...rowA, details: 'FORGED', user: 'Intrus' };

@@ -55,7 +55,7 @@ const {
 
 const baseOrder = (over: Record<string, unknown> = {}) =>
   ({
-    customerName: 'Yacine B',
+    customerName: 'Farida B',
     deviceModel: 'iPhone 13 Pro',
     imei: '358921004812345',
     imeiKind: 'imei',

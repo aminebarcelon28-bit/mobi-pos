@@ -10,7 +10,7 @@ with sync_playwright() as p:
     
     # Fill in the activation key
     page.fill('input[placeholder="MOBI-LIFE-XXXX-XXXX"]', 'MOBI-LIFE-KSXF-HTV4')
-    page.fill('input[placeholder="ex: Caisse Principale, Tablette Vendeur"]', 'Caisse Principale')
+    page.fill('input[placeholder="ex: Abdelkader Benali, Tablette Vendeur"]', 'Abdelkader Benali')
     
     # Click Activer la Licence
     page.click('button:has-text("Activer la Licence")')
@@ -21,7 +21,7 @@ with sync_playwright() as p:
     
     # Now we're at the first-boot PIN setup screen
     # Fill in manager name
-    page.fill('input[placeholder="Ex. Yacine"]', 'Yacine')
+    page.fill('input[placeholder="Ex. Farida"]', 'Farida')
     
     # Fill in manager PIN (6+ digits)
     page.fill('input[aria-label="PIN gérant (6 chiffres minimum)"]', '123456')

@@ -125,7 +125,7 @@ try {
   const alloc1Id = `alloc-${targetTxId}-0-batch-1790539492405-1-3AT6`;
   const alloc2Id = `alloc-${targetTxId}-0-batch-po-po-1790539505468-1-NEL0-prod-1789591848585-909-1790539507197-734520`;
   const itemId = `${targetTxId}-item-0`;
-  const devId = txn.device_id || 'ec645423-3d41-4a07-83e7-1f88b817082f';
+  const devId = txn.device_id || 'deadbeef-dead-4ead-8ead-deadbeefdead';
 
   const insertAlloc = db.prepare(`
     INSERT INTO sale_batch_allocations (

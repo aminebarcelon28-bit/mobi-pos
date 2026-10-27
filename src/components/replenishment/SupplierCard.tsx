@@ -341,7 +341,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
               <DzPhoneInput
                 value={phoneDraft}
                 onChange={setPhoneDraft}
-                placeholder="0550 12 34 56"
+                placeholder="0550 00 22 22"
                 ariaLabel={`Téléphone de ${name}`}
                 showHint={false}
                 inputClassName="w-full min-h-[44px] bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:border-emerald-500 focus:outline-none"
@@ -352,7 +352,7 @@ export const SupplierCard: React.FC<SupplierCardProps> = ({
               <DzPhoneInput
                 value={whatsappDraft}
                 onChange={setWhatsappDraft}
-                placeholder="0550 12 34 56"
+                placeholder="0550 00 22 22"
                 ariaLabel={`WhatsApp de ${name}`}
                 showHint={false}
                 inputClassName="w-full min-h-[44px] bg-gray-50 dark:bg-slate-900 border border-gray-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-slate-500 focus:border-emerald-500 focus:outline-none"

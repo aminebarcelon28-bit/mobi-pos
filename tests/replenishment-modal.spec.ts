@@ -180,8 +180,8 @@ test.describe('Réapprovisionnement — live store wiring (Stage 2)', () => {
   test('inline contact editor persists to the vendor directory', async ({ page }) => {
     await openHarness(page, true, LG, 900);
     await page.getByRole('button', { name: 'Ajouter contact pour Grossiste Algerien Mobile' }).first().click();
-    await page.getByLabel('Téléphone de Grossiste Algerien Mobile').fill('0550123456');
-    await page.getByLabel('WhatsApp de Grossiste Algerien Mobile').fill('0550123456');
+    await page.getByLabel('Téléphone de Grossiste Algerien Mobile').fill('0550002222');
+    await page.getByLabel('WhatsApp de Grossiste Algerien Mobile').fill('0550002222');
     await page.getByLabel('E-mail de Grossiste Algerien Mobile').fill('commandes@gam.dz');
     await page.getByRole('button', { name: 'Enregistrer les coordonnées de Grossiste Algerien Mobile' }).click();
     const saved = await page.evaluate(() => {

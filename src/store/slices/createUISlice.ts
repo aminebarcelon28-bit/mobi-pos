@@ -132,9 +132,9 @@ const DEFAULT_RECEIPT_SETTINGS: ReceiptSettings = {
   storeName: 'ACCESSOIRES MOBI',
   storeSubheader: 'Vente Accessoires & Téléphonie',
   logoUrl: '',
-  address: 'Boulevard Mohamed V, Alger Centre',
+  address: '12 Rue des Oliviers, Alger, Alger',
   phone: '021 65 43 21 / 0550 00 11 22',
-  email: 'contact@mobi-accessories.dz',
+  email: 'contact@example-boutique.dz',
   customHeaderMsg: 'Bienvenue chez MOBI ACCESSORIES',
   customFooterMsg:
     'Paiement comptant en espèces uniquement. Les articles ne sont ni repris ni échangés sans ticket de caisse. Garantie 12 mois SAV.',
@@ -201,9 +201,9 @@ async function getSqlite() {
 // blocking setup step in App.tsx. An empty PIN can never authenticate:
 // verifyPin('' stored) fails closed and the lock screen rejects empty input.
 export const DEFAULT_CASHIERS: CashierUser[] = [
-  { id: 'usr-admin', name: 'Yacine (Gérant)', pin: '', role: 'admin', avatarColor: '#3b82f6' },
-  { id: 'usr-amine', name: 'Amine', pin: '', role: 'cashier', avatarColor: '#10b981' },
-  { id: 'usr-karim', name: 'Karim', pin: '', role: 'cashier', avatarColor: '#f59e0b' },
+  { id: 'usr-admin', name: 'Farida (Gérant)', pin: '', role: 'admin', avatarColor: '#3b82f6' },
+  { id: 'usr-amira', name: 'Leila', pin: '', role: 'cashier', avatarColor: '#10b981' },
+  { id: 'usr-karim', name: 'Salma', pin: '', role: 'cashier', avatarColor: '#f59e0b' },
 ];
 
 export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get) => ({
@@ -231,7 +231,7 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     {
       id: 'log-1',
       timestamp: new Date().toISOString(),
-      user: 'Yacine (Admin)',
+      user: 'Farida (Admin)',
       action: 'Initialisation Système POS',
       details: 'Moteur de base de données IndexedDB activé',
       requiresPin: false,

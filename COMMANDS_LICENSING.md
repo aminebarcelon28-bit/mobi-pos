@@ -45,7 +45,7 @@ npm run license:ui
 npm run license:mint
 ```
 * **Ce qu'il fait :**
-  1. Vous demande le **Nom du client** (ex: *Superette El-Amine*).
+  1. Vous demande le **Nom du client** (ex: *Superette El-Leila*).
   2. Vous demande la **Formule** :
      * `[1] LIFETIME` : Illimitée à Vie (sans abonnement).
      * `[2] 90D` : 3 Mois (Trimestriel).
@@ -71,7 +71,7 @@ npm run license:cloud-list
 ┌─────────┬───────────────────┬────────────┬────────────────┬──────────────┬──────────┐
 │ (index) │ Client            │ Formule    │ Postes Caisses │ Mobiles Sync │ Statut   │
 ├─────────┼───────────────────┼────────────┼────────────────┼──────────────┼──────────┤
-│ 0       │ 'amine'           │ 'LIFETIME' │ '0 / 1'        │ '0 / 1'      │ 'active' │
+│ 0       │ 'amira'           │ 'LIFETIME' │ '0 / 1'        │ '0 / 1'      │ 'active' │
 │ 1       │ 'Superette Central│ 'LIFETIME' │ '1 / 2'        │ '2 / 3'      │ 'active' │
 └─────────┴───────────────────┴────────────┴────────────────┴──────────────┴──────────┘
 ```

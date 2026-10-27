@@ -9,10 +9,10 @@
 export interface NormalizedPhoneResult {
   raw: string;
   digitsOnly: string;
-  local: string;           // ex: 0550123456
+  local: string;           // ex: 0550002222
   international: string;   // ex: +213550123456
   whatsAppFormat: string;  // ex: 213550123456 (format requis pour wa.me)
-  formattedDisplay: string;// ex: 0550 12 34 56
+  formattedDisplay: string;// ex: 0550 00 22 22
   isValid: boolean;
   operator: 'Mobilis' | 'Djezzy' | 'Ooredoo' | 'Fixe' | 'Inconnu';
 }
@@ -57,7 +57,7 @@ export function normalizeAlgerianPhone(input: string | undefined | null): Normal
     nationalDigits = digitsOnly.slice(3);
   } else if (digitsOnly.startsWith('0')) {
     // Format 2: Local with leading 0
-    // Mobile: 0 + 9 digits = 10 digits (e.g. 0550123456)
+    // Mobile: 0 + 9 digits = 10 digits (e.g. 0550002222)
     // Fixe: 0 + 8 digits = 9 digits (e.g. 021123456)
     if (digitsOnly.length === 10 || digitsOnly.length === 9) {
       nationalDigits = digitsOnly.slice(1);
@@ -100,7 +100,7 @@ export function normalizeAlgerianPhone(input: string | undefined | null): Normal
   const whatsAppFormat = isValid ? `213${nationalDigits}` : digitsOnly;
 
   // Format for clean display:
-  // Mobile: 0550 12 34 56
+  // Mobile: 0550 00 22 22
   // Fixe:   021 12 34 56
   let formattedDisplay = local;
   if (isValid) {

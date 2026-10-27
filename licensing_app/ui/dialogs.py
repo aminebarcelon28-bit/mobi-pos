@@ -333,7 +333,7 @@ class NewLicenseDialog(QDialog):
         lbl_cust.setStyleSheet("font-weight: 600; color: #cbd5e1;")
         form_layout.addWidget(lbl_cust, 0, 0)
         self.cust_input = QLineEdit()
-        self.cust_input.setPlaceholderText("Ex: Superette Al-Amine, Pharmacie Centrale...")
+        self.cust_input.setPlaceholderText("Ex: Superette Al-Leila, Pharmacie Centrale...")
         self.cust_input.textChanged.connect(self.update_whatsapp_preview)
         form_layout.addWidget(self.cust_input, 0, 1, 1, 2)
 
@@ -419,7 +419,7 @@ class NewLicenseDialog(QDialog):
         lbl_notes.setStyleSheet("font-weight: 600; color: #cbd5e1;")
         form_layout.addWidget(lbl_notes, 6, 0)
         self.notes_input = QLineEdit()
-        self.notes_input.setPlaceholderText("Ex: Payé en espèces, matériel POS fourni, contact direct M. Karim...")
+        self.notes_input.setPlaceholderText("Ex: Payé en espèces, matériel POS fourni, contact direct M. Salma...")
         form_layout.addWidget(self.notes_input, 6, 1, 1, 2)
 
         # 6. Optional Turso BYODB
@@ -1464,7 +1464,7 @@ class EditCustomerNotesDialog(QDialog):
         lbl_not.setStyleSheet("font-weight: 600; color: #cbd5e1;")
         grid.addWidget(lbl_not, 3, 0, Qt.AlignmentFlag.AlignTop)
         self.notes_input = QTextEdit()
-        self.notes_input.setPlaceholderText("Ex: Payé en espèces, matériel POS fourni par TechDistrib, contact M. Karim...")
+        self.notes_input.setPlaceholderText("Ex: Payé en espèces, matériel POS fourni par TechDistrib, contact M. Salma...")
         self.notes_input.setPlainText(self.license_data.get("notes", ""))
         self.notes_input.setMaximumHeight(120)
         grid.addWidget(self.notes_input, 3, 1)

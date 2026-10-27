@@ -212,7 +212,7 @@ function formatWhatsAppLink(customer, storeName) {
 }
 
 // Case A: Mobilis number with spaces
-const mobilis = normalizeAlgerianPhoneMock('0661 88 77 55');
+const mobilis = normalizeAlgerianPhoneMock('0550 00 33 33');
 assert.strictEqual(mobilis.operator, 'Mobilis');
 assert.strictEqual(mobilis.telUri, 'tel:0661887755', 'tel: URI must contain ZERO spaces for native OS dialer');
 assert.strictEqual(mobilis.whatsAppFormat, '213661887755');
@@ -228,7 +228,7 @@ const ooredoo = normalizeAlgerianPhoneMock('0555 99 88 77');
 assert.strictEqual(ooredoo.operator, 'Ooredoo');
 assert.strictEqual(ooredoo.telUri, 'tel:0555998877');
 
-const waLink = formatWhatsAppLink({ name: 'Karim', phone: '0555 12 34 56', currentDebt: 12500 }, 'MobiPOS Alger');
+const waLink = formatWhatsAppLink({ name: 'Salma', phone: '0555 12 34 56', currentDebt: 12500 }, 'MobiPOS Alger');
 assert.ok(waLink.includes('wa.me/213555123456'), 'Phone must format to Algerian E.164 without leading 0');
 assert.ok(waLink.includes('12500'), 'Message must contain exact debt amount');
 assert.ok(waLink.includes('MobiPOS%20Alger'), 'Store name must be URI encoded');

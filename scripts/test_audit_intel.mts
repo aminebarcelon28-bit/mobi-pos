@@ -264,8 +264,8 @@ function check(name, cond, extra = '') {
   // the severity model now has to classify it, not the text colour.
   check(
     'a failed PIN attempt is critical regardless of category',
-    classifySeverity('Connexion / Déverrouillage Caisse', 'Tentative de code erroné pour Karim', true) === 'critical',
-    classifySeverity('Connexion / Déverrouillage Caisse', 'Tentative de code erroné pour Karim', true),
+    classifySeverity('Connexion / Déverrouillage Caisse', 'Tentative de code erroné pour Salma', true) === 'critical',
+    classifySeverity('Connexion / Déverrouillage Caisse', 'Tentative de code erroné pour Salma', true),
   );
   check(
     'blocked destructive delete is critical',
@@ -277,7 +277,7 @@ function check(name, cond, extra = '') {
   );
   check(
     'a routine session open is informational',
-    classifySeverity('Connexion / Déverrouillage Caisse', 'Session ouverte par Karim (Caissier)', false) === 'info',
+    classifySeverity('Connexion / Déverrouillage Caisse', 'Session ouverte par Salma (Caissier)', false) === 'info',
   );
   check(
     'a plain catalogue creation is baseline audit noise',
@@ -305,7 +305,7 @@ function check(name, cond, extra = '') {
 {
   // Real call site: `Client: X — ${moneyKeys.map(k => `${k}: a → b`)}`
   const details =
-    "Client: Karim B — creditLimit: 0 → 250000, currentDebt: 18000 → 0, clientType: Particulier → Pro.";
+    "Client: Salma B — creditLimit: 0 → 250000, currentDebt: 18000 → 0, clientType: Particulier → Pro.";
   const p = parseAuditPayload(details, 'Modification Financière Client');
   check('before/after deltas are extracted', p.changes.length === 3, JSON.stringify(p.changes));
   check('field name preserved', p.changes[0]?.field === 'creditLimit');
@@ -404,7 +404,7 @@ function check(name, cond, extra = '') {
   const recorded = {
     id: 'a1',
     timestamp: '2026-09-29T23:00:00.000Z',
-    user: 'Karim',
+    user: 'Salma',
     action: 'Connexion / Déverrouillage Caisse',
     details: 'Session ouverte',
     requiresPin: false,
@@ -423,7 +423,7 @@ function check(name, cond, extra = '') {
   const legacy = {
     id: 'a2',
     timestamp: '2026-09-29T23:00:00.000Z',
-    user: 'Karim',
+    user: 'Salma',
     action: 'Connexion / Déverrouillage Caisse',
     details: 'Session ouverte',
     requiresPin: false,
@@ -443,7 +443,7 @@ function check(name, cond, extra = '') {
   const failed = {
     id: 'a3',
     timestamp: '2026-09-29T23:00:00.000Z',
-    user: 'Karim',
+    user: 'Salma',
     action: 'X',
     details: 'Y',
     requiresPin: false,
@@ -477,7 +477,7 @@ function check(name, cond, extra = '') {
 const sigEntry = {
   id: 'audit-1',
   timestamp: '2026-09-29T23:07:14.231Z',
-  user: 'Karim',
+  user: 'Salma',
   action: 'Annulation Vente (Erreur)',
   details: 'Ticket #T-4471 (12 000 DA) annulé. Motif: Erreur de saisie',
   requiresPin: true,
@@ -710,8 +710,8 @@ const sigEntry = {
 
   // The two scenarios named in the requirement.
   check(
-    '`gerant` matches "Yacine (Gérant)"',
-    matchesFoldedQuery(foldedSearchFields({ user: 'Yacine (Gérant)' }), foldAccents('gerant')),
+    '`gerant` matches "Farida (Gérant)"',
+    matchesFoldedQuery(foldedSearchFields({ user: 'Farida (Gérant)' }), foldAccents('gerant')),
   );
   check(
     '`reglement` matches "Règlement"',
@@ -721,7 +721,7 @@ const sigEntry = {
   // Symmetry across every searchable field, not just the actor.
   const row = {
     action: 'Déverrouillage Caisse',
-    user: 'Yacine (Gérant)',
+    user: 'Farida (Gérant)',
     details: 'Règlement — 12 000 DA',
     category: 'Trésorerie',
     entityIds: ['TÂCHE-4471'],

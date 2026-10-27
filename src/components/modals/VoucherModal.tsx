@@ -28,7 +28,7 @@ export const VoucherModal: React.FC = () => {
   const voucherSeller =
     (activeShift?.openedBy || '').trim() ||
     (activeShift?.cashierName || '').trim() ||
-    'Caisse Principale';
+    'Abdelkader Benali';
 
   const [activeTab, setActiveTab] = useState<'create' | 'list'>('create');
   const [amountInput, setAmountInput] = useState<number>(0);
@@ -334,7 +334,7 @@ export const VoucherModal: React.FC = () => {
                       id="voucher-customer-phone"
                       value={customerPhone}
                       onChange={setCustomerPhone}
-                      placeholder="Ex: 0550123456"
+                      placeholder="Ex: 0550002222"
                       inputClassName="w-full bg-pos-card border border-pos-border rounded-xl px-3 py-2 text-sm text-pos-text focus:outline-none focus:border-purple-500 transition"
                     />
                   </div>
@@ -676,7 +676,7 @@ export const VoucherModal: React.FC = () => {
               <p className="font-black text-xs uppercase mt-1">*** BON D'AVOIR ***</p>
               <p className="font-black text-base tracking-widest mt-1">{printingVoucher.code}</p>
               <p className="text-[10px]">{formatDateTime(printingVoucher.createdAt)}</p>
-              <p className="text-[10px]">Caisse: {activeShift?.id ? `Caisse ${activeShift.id.slice(-8)}` : 'Caisse Principale'} • Vendeur: {voucherSeller}</p>
+              <p className="text-[10px]">Caisse: {activeShift?.id ? `Caisse ${activeShift.id.slice(-8)}` : 'Abdelkader Benali'} • Vendeur: {voucherSeller}</p>
             </div>
             <div className="py-2 border-b border-dashed border-gray-500">
               <div className="flex justify-between font-extrabold text-[13px]">

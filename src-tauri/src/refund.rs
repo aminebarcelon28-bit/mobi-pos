@@ -1524,7 +1524,7 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO customers (id, name, phone, json_payload, updated_at) \
-             VALUES ('C1', 'Karim', '', '{}', '2026-01-01T00:00:00Z')",
+             VALUES ('C1', 'Salma', '', '{}', '2026-01-01T00:00:00Z')",
             [],
         )
         .unwrap();
@@ -1596,7 +1596,7 @@ mod tests {
             debt: Some(DebtReliefIn {
                 entry_id: "PAYREL-1".into(),
                 customer_id: "C1".into(),
-                customer_name: "Karim".into(),
+                customer_name: "Salma".into(),
                 amount: 100,
                 receipt_number: "AVOIR-H1".into(),
                 payment_method: "Crédit Client".into(),

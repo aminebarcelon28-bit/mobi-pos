@@ -92,7 +92,7 @@ const localShim = (db: DatabaseSync) => ({
   }
   const custRow = (over: Record<string, unknown> = {}) => ({
     id: 'c-new', version: 2, updated_at: '2026-09-22T10:00:00.000Z', deleted: 0,
-    data_json: JSON.stringify({ id: 'c-new', name: 'Yacine', phone: '0550', ...over }),
+    data_json: JSON.stringify({ id: 'c-new', name: 'Farida', phone: '0550', ...over }),
   });
   await applyGenericRemoteRow(shim, 'customers', custRow(), { skipDexie: true });
   const c1 = db.prepare('SELECT idempotency_key FROM customers WHERE id = ?').get('c-new') as { idempotency_key: string };

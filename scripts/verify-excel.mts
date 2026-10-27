@@ -5,16 +5,16 @@ import { generateProfessionalExcelXml, generateProfessionalExcelXmlAsync } from 
 const txns = [
   {
     id: 't1', receiptNumber: 'R-001', status: 'COMPLETED', isRefund: false,
-    createdAt: '2026-09-20T10:00:00', customer: { name: 'Yacine & Fils <SARL>' },
+    createdAt: '2026-09-20T10:00:00', customer: { name: 'Farida & Fils <SARL>' },
     items: [{ quantity: 2, appliedPrice: 1500, product: { price: 1500, title: 'Coque', sku: 'C1', barcode: '6130001', category: 'Coques' } }],
     subtotal: 3000, discountTotal: 200, total: 2800, costTotal: 1800, profit: 1000,
-    paymentMethod: 'Espèces', cashierName: 'Amine',
+    paymentMethod: 'Espèces', cashierName: 'Leila',
   },
   {
     id: 't2', receiptNumber: 'R-002', status: 'VOIDED', isRefund: false,
     createdAt: '2026-09-20T11:00:00', customer: null, items: [],
     subtotal: 0, discountTotal: 0, total: 500, costTotal: 0,
-    paymentMethod: 'Espèces', cashierName: 'Amine',
+    paymentMethod: 'Espèces', cashierName: 'Leila',
   },
 ];
 
@@ -39,7 +39,7 @@ for (const needle of ['FreezePanes', 'FitToPage', 'TabColorIndex', 'AutoFilter',
   if (!syncXml.includes(needle)) { console.log('MISSING:', needle); ok = false; }
 }
 // 4. escaping intact
-if (!syncXml.includes('Yacine &amp; Fils &lt;SARL&gt;')) { console.log('ESCAPE FAIL'); ok = false; }
+if (!syncXml.includes('Farida &amp; Fils &lt;SARL&gt;')) { console.log('ESCAPE FAIL'); ok = false; }
 // 5. sync/async byte-identical (modulo the per-call <Created> timestamp)
 const norm = (x: string) => x.replace(/<Created>[^<]*<\/Created>/, '<Created>X</Created>');
 if (norm(syncXml) !== norm(asyncXml)) { console.log('SYNC/ASYNC MISMATCH'); ok = false; }

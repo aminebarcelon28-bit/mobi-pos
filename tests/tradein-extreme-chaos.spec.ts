@@ -54,7 +54,7 @@ async function openTradeIn(page: Page) {
 }
 
 const imeiInput = (page: Page) => page.getByPlaceholder('358921004812345');
-const nameInput = (page: Page) => page.getByPlaceholder('Ex: Karim Hadj');
+const nameInput = (page: Page) => page.getByPlaceholder('Ex: Salma Hadj');
 const modelInput = (page: Page) => page.getByPlaceholder('ex: iPhone 14 Pro Max');
 const cniInput = (page: Page) => page.getByPlaceholder('Ex: 1987-44-112233');
 const tradeInDialog = (page: Page) => page.locator('div.fixed.inset-0').filter({ hasText: 'REPRISE & TRADE-IN' });
@@ -291,7 +291,7 @@ const EXCHANGE_TXN = {
   id: 'txn-chaos-5',
   receiptNumber: 'T-CHAOS-5',
   status: 'COMPLETED',
-  customer: { id: 'cust-harness', name: 'Client Harness', phone: '0550000000' },
+  customer: { id: 'cust-harness', name: 'Client Harness', phone: '0550001111' },
   items: [
     { product: { id: 'alpha', title: 'Phone Alpha', sku: 'ALPHA', price: 60000 }, quantity: 1, appliedPrice: 60000, discount: 0 },
     { product: { id: 'beta', title: 'Phone Beta', sku: 'BETA', price: 40000 }, quantity: 1, appliedPrice: 40000, discount: 0 },

@@ -126,7 +126,7 @@ export const GeneralSettingsTab: React.FC<GeneralSettingsTabProps> = ({
               type="text"
               value={receiptDraft.phone || ''}
               onChange={(e) => scheduleReceiptSave({ ...receiptDraft, phone: e.target.value })}
-              placeholder="ex: 0550 12 34 56"
+              placeholder="ex: 0550 00 22 22"
               className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs text-pos-text focus:border-cyan-400 focus:outline-none"
             />
           </div>

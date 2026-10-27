@@ -351,7 +351,7 @@ const FirstBootPinSetup: React.FC = () => {
     setError('');
     const cleanManagerName = managerName.trim();
     if (!cleanManagerName) {
-      setError('Indiquez le nom du gérant (ex. Yacine).');
+      setError('Indiquez le nom du gérant (ex. Farida).');
       return;
     }
     const cleanManagerPin = managerNew.trim();
@@ -502,7 +502,7 @@ const FirstBootPinSetup: React.FC = () => {
                 value={managerName}
                 onChange={(e) => setManagerName(e.target.value)}
                 className={nameInputClass}
-                placeholder="Ex. Yacine"
+                placeholder="Ex. Farida"
               />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

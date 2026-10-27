@@ -50,7 +50,7 @@ export class TradeInVoucherBuilder {
       .text(settings.storeName || 'MOBI ACCESSORIES')
       .newline()
       .bold(false)
-      .text(settings.address || 'Boulevard Mohamed V, Alger Centre')
+      .text(settings.address || '12 Rue des Oliviers, Alger, Alger')
       .newline()
       .text(`Tél : ${settings.phone || '0550 00 00 00'}`)
       .newline()
@@ -209,7 +209,7 @@ export class TradeInVoucherBuilder {
       (transaction.shiftOpenedByName || '').trim() ||
       (seller || '').trim() ||
       (transaction.cashierName || '').trim() ||
-      'Caisse Principale';
+      'Abdelkader Benali';
 
     builder
       .init()
@@ -218,7 +218,7 @@ export class TradeInVoucherBuilder {
       .text(settings.storeName || 'MOBI ACCESSORIES')
       .newline()
       .bold(false)
-      .text(settings.address || 'Boulevard Mohamed V, Alger Centre')
+      .text(settings.address || '12 Rue des Oliviers, Alger, Alger')
       .newline()
       .text(`Tél : ${settings.phone || '0550 00 00 00'}`)
       .newline()
@@ -231,7 +231,7 @@ export class TradeInVoucherBuilder {
       .newline();
     builder.text(pair('Ticket:', transaction.receiptNumber || transaction.id)).newline();
     builder.text(pair('Date:', formatReceiptDateTime(transaction.createdAt))).newline();
-    builder.text(pair('Caisse:', transaction.shiftId ? `Caisse ${transaction.shiftId.slice(-8)}` : 'Caisse Principale')).newline();
+    builder.text(pair('Caisse:', transaction.shiftId ? `Caisse ${transaction.shiftId.slice(-8)}` : 'Abdelkader Benali')).newline();
     builder.text(pair('Vendeur:', vendeur)).newline();
     builder.text(separator).newline();
 

@@ -668,7 +668,7 @@ export const TradeInBuybackModal: React.FC<TradeInBuybackModalProps> = (props) =
                       value={customerName}
                       onChange={(e) => setCustomerName(e.target.value)}
                       className={`w-full min-h-[48px] bg-pos-card border border-pos-border rounded-lg px-3 py-2 text-base sm:text-xs font-bold text-pos-text focus:border-emerald-400 focus:outline-none ${isIdentityEdit ? 'opacity-60' : ''}`}
-                      placeholder="Ex: Karim Hadj"
+                      placeholder="Ex: Salma Hadj"
                     />
                   </div>
                   <div>

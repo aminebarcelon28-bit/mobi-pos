@@ -219,14 +219,14 @@ console.log('\n--- Part 2: owner oracle — mid-count sale books 0 phantom shrin
   check('nothing is selected for booking (appendStocktakeAdjustments never called)', bookingItems.length === 0, JSON.stringify(bookingItems));
 
   // Claim the task; the ledger must not gain a single ADJUST row.
-  const upd = db.prepare(CCT_SUBMIT_UPDATE_SQL).run(bind(['CCT-p1-open', counted, expected, NOW, 'Yacine']));
+  const upd = db.prepare(CCT_SUBMIT_UPDATE_SQL).run(bind(['CCT-p1-open', counted, expected, NOW, 'Farida']));
   check('task claimed (rowsAffected 1)', Number(upd.changes) === 1);
   const adjustRows = db.prepare(`SELECT COUNT(*) AS n FROM inventory_ledger WHERE reason = 'ADJUST'`).all()[0] as Record<string, unknown>;
   check('ZERO ADJUST rows booked', Number(adjustRows.n) === 0, `rows=${adjustRows.n}`);
   const liveSum = db.prepare(`SELECT COALESCE(SUM(delta), 0) AS s FROM inventory_ledger WHERE product_id = 'p1' AND deleted = 0`).all()[0] as Record<string, unknown>;
   check('ledger truth stays 7 (sale only)', Number(liveSum.s) === 7, `sum=${liveSum.s}`);
   const task = db.prepare(CCT_TASK_BY_ID_SQL).all(bind(['CCT-p1-open']))[0] as Record<string, unknown>;
-  check('task records counted + expected + operator', Number(task.counted_qty) === 7 && Number(task.expected_qty) === 7 && task.operator === 'Yacine');
+  check('task records counted + expected + operator', Number(task.counted_qty) === 7 && Number(task.expected_qty) === 7 && task.operator === 'Farida');
   db.close();
 }
 
@@ -293,8 +293,8 @@ console.log('\n--- Part 4: single-claim submit + one-open-task-per-product ---')
   check('idempotent retry of the SAME id stays a no-op', Number(ins.run(bind(['CCT-p5-open', 'p5', 'A', '2026-11-16T09:00:00.000Z', NOW, 1, 10])).changes) === 0);
 
   // Single-claim: the first submit wins, the second matches nothing.
-  const first = db.prepare(CCT_SUBMIT_UPDATE_SQL).run(bind(['CCT-p5-open', 10, 10, NOW, 'Yacine']));
-  const second = db.prepare(CCT_SUBMIT_UPDATE_SQL).run(bind(['CCT-p5-open', 9, 9, NOW, 'Yacine']));
+  const first = db.prepare(CCT_SUBMIT_UPDATE_SQL).run(bind(['CCT-p5-open', 10, 10, NOW, 'Farida']));
+  const second = db.prepare(CCT_SUBMIT_UPDATE_SQL).run(bind(['CCT-p5-open', 9, 9, NOW, 'Farida']));
   check('first submit claims (1 row)', Number(first.changes) === 1);
   check('double-tap submit is skipped (0 rows)', Number(second.changes) === 0);
   const after = db.prepare(CCT_TASK_BY_ID_SQL).all(bind(['CCT-p5-open']))[0] as Record<string, unknown>;
@@ -316,9 +316,9 @@ console.log('\n--- Part 4: single-claim submit + one-open-task-per-product ---')
 
   // Last-counted cadence read (batched IN-list) returns the MAX counted_at.
   db.prepare(CCT_OPEN_TASK_INSERT_SQL).run(bind(['CCT-p6-open', 'p6', 'B', '2026-11-01T09:00:00.000Z', NOW, 0, 0]));
-  db.prepare(CCT_SUBMIT_UPDATE_SQL).run(bind(['CCT-p6-open', 0, 0, '2026-10-05T09:00:00.000Z', 'Yacine']));
+  db.prepare(CCT_SUBMIT_UPDATE_SQL).run(bind(['CCT-p6-open', 0, 0, '2026-10-05T09:00:00.000Z', 'Farida']));
   db.prepare(CCT_OPEN_TASK_INSERT_SQL).run(bind(['CCT-p6-open-2', 'p6', 'B', '2026-11-01T09:00:00.000Z', NOW, 0, 0]));
-  db.prepare(CCT_SUBMIT_UPDATE_SQL).run(bind(['CCT-p6-open-2', 0, 0, '2026-10-12T09:00:00.000Z', 'Yacine']));
+  db.prepare(CCT_SUBMIT_UPDATE_SQL).run(bind(['CCT-p6-open-2', 0, 0, '2026-10-12T09:00:00.000Z', 'Farida']));
   const lastSql = buildLastCountedSql(2);
   const lastRows = db.prepare(lastSql).all(bind(['p5', 'p6'])) as Array<Record<string, unknown>>;
   const lastByPid = new Map(lastRows.map((r) => [String(r.product_id), String(r.last_counted_at)]));

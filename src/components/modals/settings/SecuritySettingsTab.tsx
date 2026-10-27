@@ -577,7 +577,7 @@ export const SecuritySettingsTab: React.FC<SecuritySettingsTabProps> = ({ manage
                   type="text"
                   value={cashierNameInput}
                   onChange={(e) => setCashierNameInput(e.target.value)}
-                  placeholder="ex: Amine, Karim, Fatima..."
+                  placeholder="ex: Leila, Salma, Fatima..."
                   className="w-full bg-pos-bg border border-pos-border rounded-xl px-3 py-2 text-xs font-bold text-pos-text focus:outline-none focus:border-emerald-400"
                 />
               </div>

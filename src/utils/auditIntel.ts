@@ -48,7 +48,7 @@ const LIGATURES: Record<string, string> = {
  * the plain version folds correctly is still folded the same way here.
  *
  * Applied *symmetrically* — to the query and to every searchable field — so
- * `gerant` matches `Yacine (Gérant)` and `reglement` matches `Règlement`.
+ * `gerant` matches `Farida (Gérant)` and `reglement` matches `Règlement`.
  * Folding only one side is the classic way this feature silently half-works.
  */
 export function foldAccents(value: string | undefined | null): string {

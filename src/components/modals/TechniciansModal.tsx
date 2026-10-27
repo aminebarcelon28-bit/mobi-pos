@@ -401,7 +401,7 @@ export const TechniciansModal: React.FC<TechniciansModalProps> = ({ isOpen, onCl
                       type="text"
                       value={formName}
                       onChange={(e) => setFormName(e.target.value)}
-                      placeholder="ex. Karim B."
+                      placeholder="ex. Salma B."
                       className={inputClass}
                     />
                   </div>

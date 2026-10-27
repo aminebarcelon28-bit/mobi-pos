@@ -912,7 +912,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             recordedBy:
               (activeShift as unknown as { currentCashier?: string } | null | undefined)?.currentCashier?.trim() ||
               activeShift?.cashierName ||
-              'Caisse Principale',
+              'Abdelkader Benali',
           };
           newCustomerDebts = [debtEntry, ...newCustomerDebts];
         }
@@ -969,7 +969,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           : cashTendered,
         changeDue,
         createdAt: new Date().toISOString(),
-        cashierName: shiftOpenerName || 'Caisse Principale',
+        cashierName: shiftOpenerName || 'Abdelkader Benali',
         debtAdded: creditDebtAmount > 0 ? creditDebtAmount : undefined,
         debtRemainingTotal: updatedCustomer?.currentDebt,
         deviceId: currentDeviceId,

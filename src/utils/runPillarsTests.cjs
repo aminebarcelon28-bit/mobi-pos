@@ -87,8 +87,8 @@ function sanitizeAlgerianPhone(phone) {
   return clean;
 }
 
-it('Sanitizes Ooredoo local number 0550123456 to 213550123456', () => {
-  assert.strictEqual(sanitizeAlgerianPhone('0550123456'), '213550123456');
+it('Sanitizes Ooredoo local number 0550002222 to 213550123456', () => {
+  assert.strictEqual(sanitizeAlgerianPhone('0550002222'), '213550123456');
 });
 
 it('Sanitizes Mobilis local number 0661123456 to 213661123456', () => {

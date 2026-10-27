@@ -206,7 +206,7 @@ W3.__harnessSeedCustomer = (storeCredit: number) => {
   const cust = {
     id: 'cust-harness',
     name: 'Client Harness',
-    phone: '0550000000',
+    phone: '0550001111',
     storeCredit,
     loyaltyPoints: 0,
     totalSpent: 0,
@@ -251,7 +251,7 @@ window.__harnessCartSnapshot = () =>
 window.__harnessStageTradeIn = (buybackValue: number) => {
   usePosStore.getState().setStagedTradeIn({
     stagedId: 'harness-staged-1',
-    customerName: 'Karim Hadj',
+    customerName: 'Salma Hadj',
     deviceModel: 'iPhone 13 Pro',
     imei: '490154203237518',
     brand: 'Apple',

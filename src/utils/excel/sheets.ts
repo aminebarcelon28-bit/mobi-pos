@@ -174,7 +174,7 @@ function salesRowXml(
     <Cell ss:StyleID="${rowStyleProfit}"><Data ss:Type="Number">${profit}</Data></Cell>
     <Cell ss:StyleID="${rowStyleCenter}"><Data ss:Type="String">${margin}%</Data></Cell>
     <Cell ss:StyleID="${rowStyleCenter}"><Data ss:Type="String">${cellStr(t.paymentMethod || 'Espèces')}</Data></Cell>
-    <Cell ss:StyleID="${rowStyleCenter}"><Data ss:Type="String">${cellStr(t.cashierName || 'Yacine (Caisse 1)')}</Data></Cell>
+    <Cell ss:StyleID="${rowStyleCenter}"><Data ss:Type="String">${cellStr(t.cashierName || 'Farida (Caisse 1)')}</Data></Cell>
    </Row>`;
 }
 

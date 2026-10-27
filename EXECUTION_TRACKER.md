@@ -63,7 +63,7 @@
   - In `src/components/Header.tsx:221-235` and `src/components/mobile/tabs/ManagementTab.tsx:115-132`, call `openCashDrawerViaSpooler()` / `openThermalCashDrawer()` on "No Sale" drawer open, and show the drawer pulse badge in `ReceiptModal.tsx:172-174` only when a drawer pulse actually fired.
   - In `src/components/modals/DatabaseMaintenanceModal.tsx:103-107, 267-293`, gate `loadStats()` on `maintUnlocked === true` and replace the broken `v1.5.8` export with `usePosStore.getState().exportDatabase()`.
   - In `src/components/modals/ReportsModal.tsx:1651-1656`, `await deleteStoreExpense(exp.id)` and check `res.reason === 'CLOSED_SESSION_IMMUTABLE'` before toasting.
-  - In `src/components/replenishment/ReplenishmentContainer.tsx:107-161`, merge suppliers that have active `purchaseOrders` even when they have zero low-stock alerts, and in `src/components/modals/CommandTicketDashboardModal.tsx:413-422`, look up `vendorDirectory[po.vendorName]?.phone` instead of `'0550000000'`.
+  - In `src/components/replenishment/ReplenishmentContainer.tsx:107-161`, merge suppliers that have active `purchaseOrders` even when they have zero low-stock alerts, and in `src/components/modals/CommandTicketDashboardModal.tsx:413-422`, look up `vendorDirectory[po.vendorName]?.phone` instead of `'0550001111'`.
 
 ---
 

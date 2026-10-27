@@ -104,7 +104,7 @@ export const runLoyaltyEngineTests = () => {
   // Test 5: Ledger Entry & Customer State Sync
   const mockCustomer: Customer = {
     id: 'CUST-001',
-    name: 'Karim Hadj',
+    name: 'Salma Hadj',
     phone: '0555123456',
     email: 'karim@test.dz',
     registeredDevice: 'iPhone 15',

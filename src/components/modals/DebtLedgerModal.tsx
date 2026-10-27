@@ -8,7 +8,7 @@ const foldForSearch = (s: string | undefined | null): string =>
  * I8 (UPGRADE-11): phone-aware search. The stored number is normalized
  * through `normalizeAlgerianPhone` (the ONE normalizer this repo owns) and
  * compared on its national core without the trunk `0`; the query side accepts
- * the shapes a cashier actually types — `0550 12 34 56`, `+213 550…`,
+ * the shapes a cashier actually types — `0550 00 22 22`, `+213 550…`,
  * `0550.12.34` — and needs at least 3 digits to count as a phone query
  * (shorter inputs still match names / devices).
  */
@@ -87,7 +87,7 @@ export const DebtLedgerModal: React.FC = () => {
   const debtSeller =
     (activeShift?.openedBy || '').trim() ||
     (activeShift?.cashierName || '').trim() ||
-    'Caisse Principale';
+    'Abdelkader Benali';
 
   const { showToast } = useToast();
 
@@ -1055,7 +1055,7 @@ export const DebtLedgerModal: React.FC = () => {
               <p className="font-extrabold text-sm uppercase tracking-wider">{receiptSettings?.storeName || 'MOBI ACCESSORIES'}</p>
               <p className="font-black text-xs uppercase mt-1">*** RELEVÉ DE COMPTE CLIENT ***</p>
               <p className="text-[10px]">{new Date().toLocaleString('fr-DZ')}</p>
-              <p className="text-[10px]">Caisse: {activeShift?.id ? `Caisse ${activeShift.id.slice(-8)}` : 'Caisse Principale'} • Vendeur: {debtSeller}</p>
+              <p className="text-[10px]">Caisse: {activeShift?.id ? `Caisse ${activeShift.id.slice(-8)}` : 'Abdelkader Benali'} • Vendeur: {debtSeller}</p>
             </div>
             <div className="py-2 border-b border-dashed border-gray-500">
               <div className="flex justify-between"><span>Client :</span><span className="font-bold">{printingCustomer.name}</span></div>

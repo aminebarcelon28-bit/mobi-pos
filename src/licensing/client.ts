@@ -615,7 +615,7 @@ export async function recheckLicenseStatus(
   try {
     const res = await activateLicense({
       licenseKey: keyToUse,
-      friendlyName: isMobile ? 'Mobile Vendeur' : 'Caisse Principale',
+      friendlyName: isMobile ? 'Mobile Vendeur' : 'Abdelkader Benali',
       deviceType,
       serverUrl: endpoint,
     });

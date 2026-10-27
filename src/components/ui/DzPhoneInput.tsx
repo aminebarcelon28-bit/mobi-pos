@@ -79,7 +79,7 @@ export const DzPhoneInput: React.FC<DzPhoneInputProps> = ({
   onChange,
   id,
   name,
-  placeholder = 'Ex: 0550 12 34 56',
+  placeholder = 'Ex: 0550 00 22 22',
   required = false,
   disabled = false,
   readOnly = false,

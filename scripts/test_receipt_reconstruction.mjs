@@ -71,14 +71,14 @@ await client.execute(`
 
 await client.execute(`
   INSERT INTO customers (id, name, phone, balance)
-  VALUES ('c1', 'Karim Benali', '0550123456', 0)
+  VALUES ('c1', 'Salma Benali', '0550002222', 0)
 `);
 
 // Insert transaction as it comes from Turso / SQLite restore:
 // notice json_payload is minimal/empty or missing items/receiptNumber
 await client.execute(`
   INSERT INTO transactions (id, receipt_number, date, total, discount, payment_method, cash_tendered, cash_change, customer_id, cashier_name, status, json_payload)
-  VALUES ('tx-001', 'REC-2026-0042', '2026-09-10T14:30:00.000Z', 98500, 0, 'cash', 100000, 1500, 'c1', 'Amine', 'completed', '{}')
+  VALUES ('tx-001', 'REC-2026-0042', '2026-09-10T14:30:00.000Z', 98500, 0, 'cash', 100000, 1500, 'c1', 'Leila', 'completed', '{}')
 `);
 
 await client.execute(`
@@ -163,7 +163,7 @@ console.log('Reconstructed Tx:', JSON.stringify(sampleTx, null, 2));
 
 assert.strictEqual(sampleTx.receiptNumber, 'REC-2026-0042', 'Receipt number must match receipt_number from SQLite/Turso');
 assert.strictEqual(sampleTx.items.length, 2, 'Must have 2 reconstructed cart items');
-assert.strictEqual(sampleTx.customerName, 'Karim Benali', 'Customer name must be populated');
+assert.strictEqual(sampleTx.customerName, 'Salma Benali', 'Customer name must be populated');
 
 // In ReportsModal.tsx line 1146:
 // (t.items || []).reduce((acc, i) => acc + i.quantity, 0)

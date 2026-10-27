@@ -12,7 +12,7 @@ export class DebtNotificationEngine {
     settings: ReceiptSettings
   ): string {
     const storeName = settings.storeName || 'MOBI ACCESSORIES';
-    const storeAddress = settings.address || 'Boulevard Mohamed V, Alger Centre';
+    const storeAddress = settings.address || '12 Rue des Oliviers, Alger, Alger';
     const storePhone = settings.phone || '0550 00 00 00';
     const debtAmount = (customer.currentDebt || 0).toLocaleString('fr-DZ');
 

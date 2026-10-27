@@ -256,8 +256,8 @@ const FIXTURE_PRODUCTS: Product[] = [
 const FIXTURE_CUSTOMERS: Customer[] = [
   {
     id: 'cust-karim-benali',
-    name: 'Karim Benali',
-    phone: '0550 12 34 56',
+    name: 'Salma Benali',
+    phone: '0550 00 22 22',
     email: 'karim.benali@example.dz',
     registeredDevice: 'Samsung Galaxy A55 5G',
     loyaltyPoints: 340,
@@ -269,10 +269,10 @@ const FIXTURE_CUSTOMERS: Customer[] = [
     debtLimit: 50000,
   },
   {
-    id: 'cust-amine-bouzid',
-    name: 'Amine Bouzid',
+    id: 'cust-amira-bouzid',
+    name: 'Leila Bouzid',
     phone: '0661 98 76 54',
-    email: 'amine.bouzid@example.dz',
+    email: 'amira.bouzid@example.dz',
     registeredDevice: 'iPhone 15 Pro Max',
     loyaltyPoints: 1200,
     storeCredit: 1500,
@@ -302,7 +302,7 @@ const FIXTURE_DEBTS: CustomerDebtEntry[] = [
   {
     id: 'debt-entry-001',
     customerId: 'cust-karim-benali',
-    customerName: 'Karim Benali',
+    customerName: 'Salma Benali',
     type: 'DEBT_ACQUIRED',
     amount: 24500,
     balanceAfter: 24500,
@@ -310,12 +310,12 @@ const FIXTURE_DEBTS: CustomerDebtEntry[] = [
     paymentMethod: 'Crédit Client',
     notes: 'Reste sur Samsung Galaxy A55 5G',
     createdAt: ONE_HOUR_AGO_ISO,
-    recordedBy: 'Yacine (Gérant)',
+    recordedBy: 'Farida (Gérant)',
   },
   {
     id: 'debt-entry-002',
-    customerId: 'cust-amine-bouzid',
-    customerName: 'Amine Bouzid',
+    customerId: 'cust-amira-bouzid',
+    customerName: 'Leila Bouzid',
     type: 'DEBT_ACQUIRED',
     amount: 38000,
     balanceAfter: 38000,
@@ -323,7 +323,7 @@ const FIXTURE_DEBTS: CustomerDebtEntry[] = [
     paymentMethod: 'Crédit Client',
     notes: 'Échéance fin de mois',
     createdAt: FIVE_DAYS_AGO_ISO,
-    recordedBy: 'Yacine (Gérant)',
+    recordedBy: 'Farida (Gérant)',
   },
 ];
 
@@ -385,7 +385,7 @@ const FIXTURE_TRANSACTIONS: SaleTransaction[] = [
     cashTendered: 5000,
     changeDue: 400,
     createdAt: TWO_HOURS_AGO_ISO,
-    cashierName: 'Yacine (Gérant)',
+    cashierName: 'Farida (Gérant)',
   },
   {
     id: 'tx-2026-0102',
@@ -421,7 +421,7 @@ const FIXTURE_TRANSACTIONS: SaleTransaction[] = [
     debtAdded: 24500,
     debtRemainingTotal: 24500,
     createdAt: ONE_HOUR_AGO_ISO,
-    cashierName: 'Yacine (Gérant)',
+    cashierName: 'Farida (Gérant)',
   },
 ];
 

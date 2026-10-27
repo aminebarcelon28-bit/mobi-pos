@@ -268,7 +268,7 @@ export const customerAdapter = {
     if (!trimmed) return undefined;
     // normalizeAlgerianPhone (utils/phoneUtils) canonicalizes Arabic-Indic /
     // full-width digits and 0/213/+213/00213 prefixes, so a till typing
-    // '+213 550 12 34 56' finds the customer stored as '0550123456'.
+    // '+213 550 12 34 56' finds the customer stored as '0550002222'.
     // Fallback is trim-only exact match when normalization yields nothing.
     let candidates = [trimmed];
     try {

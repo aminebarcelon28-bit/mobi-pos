@@ -1951,7 +1951,7 @@ export const ReportsModal: React.FC = () => {
                       Inspection Reçu #{inspectingTransaction.receiptNumber}
                     </h3>
                     <p className="text-[10px] text-pos-muted">
-                      {formatDateTime(inspectingTransaction.createdAt)} • Caissier: {inspectingTransaction.cashierName || 'Yacine (Caisse 1)'}
+                      {formatDateTime(inspectingTransaction.createdAt)} • Caissier: {inspectingTransaction.cashierName || 'Farida (Caisse 1)'}
                     </p>
                   </div>
                 </div>

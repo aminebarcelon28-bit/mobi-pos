@@ -119,7 +119,7 @@ function refundFixed(db, req, holdMs = 0) {
       db.prepare(
         `INSERT INTO customer_debts(id,customer_id,customer_name,type,amount,balance_after,receipt_number,payment_method,notes,recorded_by,created_at,json_payload,updated_at)
          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`
-      ).run(req.debt.entryId, 'C1', 'Karim', 'PAYMENT_SETTLED', req.debt.amount, req.debt.amount, 'VERS-x', 'Crédit Client', 'relief', 'Manager', now, '{}', now);
+      ).run(req.debt.entryId, 'C1', 'Salma', 'PAYMENT_SETTLED', req.debt.amount, req.debt.amount, 'VERS-x', 'Crédit Client', 'relief', 'Manager', now, '{}', now);
     }
     if (req.voucher) {
       const v = db.prepare('SELECT id, initial_amount i, remaining_amount r FROM credit_vouchers WHERE code=?').get(req.voucher.code);
@@ -270,7 +270,7 @@ function seed(path, items, migrated = true) {
       .run(`TI-${p}`, 'TKT-1', p, q, 100, '{}', `TIK-${p}`);
   }
   db.prepare("INSERT INTO stock_batches(batch_id,product_id,quantity_remaining,unit_cost,received_at,device_id,idempotency_key,created_at,updated_at) VALUES('B1','P1',10,50,'t','d1','bk1','t','t')").run();
-  db.prepare("INSERT INTO customers(id,name,phone,json_payload,updated_at) VALUES('C1','Karim','','{}','t')").run();
+  db.prepare("INSERT INTO customers(id,name,phone,json_payload,updated_at) VALUES('C1','Salma','','{}','t')").run();
   db.prepare("INSERT INTO credit_vouchers(id,code,initial_amount,remaining_amount,status,updated_at) VALUES('V1','BON1',1000,700,'ACTIVE','t')").run();
   db.prepare("INSERT INTO cash_sessions(id,status) VALUES('S1','OPEN')").run();
   return db;

@@ -1,14 +1,14 @@
 import { receiptText, xReportText, zReportText, purchaseOrderText, repairTicketText, tradeInText, voucherText } from '../src/utils/mobileDocPrint.ts';
 
-const tx = { receiptNumber: 'R-001', createdAt: '2026-09-22T10:00:00', customer: { name: 'Yacine Benali' },
+const tx = { receiptNumber: 'R-001', createdAt: '2026-09-22T10:00:00', customer: { name: 'Farida Amrani' },
   items: [{ quantity: 2, appliedPrice: 1500, discount: 200, product: { title: 'Coque Silicone MagSafe iPhone 15 Pro Max Noir Titane', price: 1500 } }],
-  total: 2800, discountTotal: 200, paymentMethod: 'Espèces', cashTendered: 3000, changeDue: 200, cashierName: 'Amine', isRefund: false };
+  total: 2800, discountTotal: 200, paymentMethod: 'Espèces', cashTendered: 3000, changeDue: 200, cashierName: 'Leila', isRefund: false };
 const docs: Array<[string, string]> = [
   ['receipt', receiptText(tx, { storeName: 'ACCESSOIRES MOBI', address: 'Alger', phone: '0550' })],
-  ['x', xReportText({ sessionId: 'S1', cashierName: 'Amine', dateStr: 'd', openingFloat: 20000, cashSales: 55000, deposits: 0, expenses: 1500, refunds: 0, expectedCash: 73500, salesCount: 12, totalRevenue: 60000 }, 'STORE')],
-  ['z', zReportText({ cashierName: 'Amine', dateStr: 'd', openingFloat: 20000, cashSales: 55000, debtSettlements: 8000, refunds: 0, expenses: 1500, drops: 20000, payouts: 0, expectedCash: 61500, countedCash: 61500, variance: 0 })],
+  ['x', xReportText({ sessionId: 'S1', cashierName: 'Leila', dateStr: 'd', openingFloat: 20000, cashSales: 55000, deposits: 0, expenses: 1500, refunds: 0, expectedCash: 73500, salesCount: 12, totalRevenue: 60000 }, 'STORE')],
+  ['z', zReportText({ cashierName: 'Leila', dateStr: 'd', openingFloat: 20000, cashSales: 55000, debtSettlements: 8000, refunds: 0, expenses: 1500, drops: 20000, payouts: 0, expectedCash: 61500, countedCash: 61500, variance: 0 })],
   ['po', purchaseOrderText({ poNumber: 'PO-1', createdAt: '2026-09-22', vendorName: 'Grossiste', items: Array.from({ length: 30 }, (_, i) => ({ title: `Article ${i} avec un nom très long pour tester`, sku: 'S', suggestedQty: 5, unitCost: 800, totalCost: 4000 })), totalAmount: 120000 }, null)],
-  ['repair', repairTicketText({ ticketNumber: 'SAV-1', customerName: 'Karim', customerPhone: '0661', deviceModel: 'iPhone 14', imei: '3589', problemDescription: 'Écran fissuré', diagnosticNotes: 'Afficheur HS', conditionChecklist: { screenOk: false, faceIdOk: true, cameraOk: true, chargingOk: true, bodyOk: true, batteryOk: true, audioOk: true }, totalCost: 8000, depositAmount: 3000, createdAt: '2026-09-22' }, null)],
+  ['repair', repairTicketText({ ticketNumber: 'SAV-1', customerName: 'Salma', customerPhone: '0661', deviceModel: 'iPhone 14', imei: '3589', problemDescription: 'Écran fissuré', diagnosticNotes: 'Afficheur HS', conditionChecklist: { screenOk: false, faceIdOk: true, cameraOk: true, chargingOk: true, bodyOk: true, batteryOk: true, audioOk: true }, totalCost: 8000, depositAmount: 3000, createdAt: '2026-09-22' }, null)],
   ['tradein', tradeInText({ id: 'T1', customerName: 'Samir', deviceModel: 'iPhone 13', brand: 'Apple', imei: '3589', conditionGrade: 'Grade B (Bon État)', buybackValue: 45000, creditToWallet: false, createdAt: '2026-09-22' }, null)],
   ['voucher', voucherText({ code: 'AV-ABC123', initialAmount: 2000, customerName: 'Lina', createdAt: '2026-09-22', expiresAt: '2026-11-22' }, null)],
 ];

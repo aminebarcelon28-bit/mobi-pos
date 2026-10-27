@@ -2,7 +2,7 @@ import type { TranslationDictionary } from './types';
 
 const activitySection: TranslationDictionary['activity'] = {
   sessionPrefix: 'Session : {name}',
-  mainRegisterOnline: 'Caisse Principale (En Ligne)',
+  mainRegisterOnline: 'Abdelkader Benali (En Ligne)',
   syncButton: 'Sync',
   syncNowTitle: 'Synchroniser immédiatement avec la caisse',
   syncAriaLabel: 'Sync — Actualiser les données',
@@ -215,7 +215,7 @@ export const fr: TranslationDictionary = {
     receivedOutOfTotal: 'Reçu {tendered} sur {total}',
     totalPaid: 'Total Payé',
     sendReceiptWhatsAppTitle: 'Envoyer le Ticket par WhatsApp',
-    whatsAppPhonePlaceholder: '0550 12 34 56 ou +213...',
+    whatsAppPhonePlaceholder: '0550 00 22 22 ou +213...',
     sendViaWhatsAppButton: 'Envoyer via WhatsApp',
     printReceiptButton: 'Imprimer Ticket',
     newSaleButton: 'Nouvelle Vente',
@@ -705,7 +705,7 @@ export const fr: TranslationDictionary = {
     confirmManagerPinTitle: 'Confirmez votre code PIN Gérant',
     createFirstCashierTitle: 'Créer un compte Caissier (4 chiffres)',
     cashierNameLabel: 'Prénom / Nom du Caissier',
-    cashierNamePlaceholder: 'Ex: Karim, Yasmine...',
+    cashierNamePlaceholder: 'Ex: Salma, Yasmine...',
     continueButton: 'Continuer',
     createAndUnlockButton: 'Créer & Déverrouiller',
     skipStepButton: 'Passer cette étape',

@@ -68,7 +68,7 @@ assert(mockDb.products.size === 1000, `Bulk seeded 1,000 products in ${seedDurat
 // Seed customer
 mockDb.customers.set('cust-101', {
   id: 'cust-101',
-  name: 'Karim Bouzid',
+  name: 'Salma Bouzid',
   phone: '0555123456',
   storeCredit: 2500,
   loyaltyPoints: 120,
