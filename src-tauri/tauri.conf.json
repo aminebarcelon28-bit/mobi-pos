@@ -32,7 +32,7 @@
       "app"
     ],
     "android": {
-      "versionCode": 14
+      "versionCode": 15
     },
     "iOS": {
       "bundleVersion": "1.6.9"
