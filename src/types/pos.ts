@@ -1919,7 +1919,7 @@ export interface HardwareStatus {
   customerDisplayConnected: boolean;
 }
 
-export const APP_VERSION = '1.6.9';
+export const APP_VERSION = '1.7.0';
 
 // Cached formatters: constructing Intl.NumberFormat per call showed up in
 // checkout/catalog hot paths. One instance per fraction variant.
