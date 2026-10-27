@@ -96,5 +96,39 @@ artifacts/
 .opencode/skills/e2e-testing/**/*.sidecar.json
 .opencode/skills/e2e-testing/**/*.log
 
+# E2E run output and local-only fixtures. Nothing here is source: run logs,
+# evidence bundles, pulled device DBs, state tarballs, built APKs and signing
+# material are all generated on the machine that runs the suite.
+e2e-tests/results/
+e2e-tests/test-logs/
+e2e-tests/logs/
+e2e-tests/TEST_EVIDENCE/
+e2e-tests/long/
+e2e-tests/mobile/tmp/
+e2e-tests/mobile/tmp-*
+e2e-tests/mobile/fixtures/
+# One-off scratch scripts (REPL-style probes, not part of the suite).
+e2e-tests/tmp-*
+e2e-tests/**/*.png
+e2e-tests/**/*.webm
+e2e-tests/**/*.ndjson
+
+# Databases, archives, mobile packages and signing material never belong in
+# git. A real shop DB was once copied in as a "baseline"; this blocks repeats.
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.tar.gz
+*.apk
+*.aab
+*.jks
+*.keystore
+keystore.properties
+
 
 

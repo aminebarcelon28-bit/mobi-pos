@@ -1,0 +1,460 @@
+/**
+ * Direct better-sqlite3 seeding / resetting — mirrors the SQL the app's own
+ * seed command uses (verified against `src-tauri/src/e2e.rs`), but executed
+ * OUT-OF-BAND from Node, per the harness mandate.
+ *
+ * Every seeded row gets a deterministic idempotency_key so repeated seeds
+ * never collide and app readers can recognize test rows.
+ */
+import { all, db, run, tx } from './db';
+
+export interface SeedProduct {
+  id: string;
+  title: string;
+  priceDa: number;
+  stock: number;
+  barcode?: string;
+  category?: string;
+  costDa?: number;
+  /** Serialized device (one IMEI per unit) — REF-10 lane. */
+  isSerialized?: boolean;
+  imeiNumber?: string;
+}
+
+export interface SeedCustomer {
+  id: string;
+  name: string;
+  phone: string;
+}
+
+export function seedProducts(products: SeedProduct[]): void {
+  tx((d) => {
+    const insProd = d.prepare(
+      `INSERT INTO products
+       (id, sku, barcode, title, brand, compatible_model, category,
+        price, wholesale_price, cost_price, stock, image_url, json_payload, updated_at,
+        idempotency_key, is_serialized, imei_number)
+       VALUES (@id, @id, @barcode, @title, '', NULL, @category, @price, 0, @cost, @stock, NULL, '{}',
+        datetime('now','utc'), 'e2e-prod-' || @id, @isSerialized, @imeiNumber)
+       ON CONFLICT(id) DO UPDATE SET title=excluded.title, price=excluded.price,
+        stock=excluded.stock, barcode=excluded.barcode, category=excluded.category,
+        cost_price=excluded.cost_price, idempotency_key=excluded.idempotency_key,
+        is_serialized=excluded.is_serialized, imei_number=excluded.imei_number`,
+    );
+    const insLedger = d.prepare(
+      `INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id,
+        device_id, idempotency_key, sync_status, created_at, updated_at, deleted, version)
+       VALUES ('E2E-BASE-' || @id, @id, @stock, 'SEED', 'seed', @id,
+        'e2e-seed', 'e2e-base-' || @id, 'pending', datetime('now','utc'), datetime('now','utc'), 0, 1)
+       ON CONFLICT(id) DO UPDATE SET delta=excluded.delta`,
+    );
+    for (const p of products) {
+      insProd.run({
+        id: p.id,
+        barcode: p.barcode ?? p.id,
+        title: p.title,
+        category: p.category ?? 'Test',
+        price: p.priceDa,
+        cost: p.costDa ?? 0,
+        stock: p.stock,
+        isSerialized: p.isSerialized ? 1 : 0,
+        imeiNumber: p.imeiNumber ?? null,
+      });
+      if (p.stock > 0) insLedger.run({ id: p.id, stock: p.stock });
+    }
+  });
+}
+
+export function seedCustomers(customers: SeedCustomer[]): void {
+  tx((d) => {
+    const stmt = d.prepare(
+      `INSERT INTO customers (id, name, phone, json_payload, updated_at, idempotency_key)
+       VALUES (@id, @name, @phone, '{}', datetime('now','utc'), 'e2e-cust-' || @id)
+       ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone`,
+    );
+    for (const c of customers) stmt.run(c);
+  });
+}
+
+/** Full customer seed: wallet credit + debt/limit (PAY batch).
+ *  currentDebt/debtLimit live ONLY in json_payload (customerAdapter.ts
+ *  `getAllCustomers` SELECT has no current_debt column; `...base` spread
+ *  carries payload fields). store_credit column wins when non-null. */
+export interface SeedCustomerFull {
+  id: string;
+  name: string;
+  phone: string;
+  storeCreditDa?: number;
+  currentDebtDa?: number;
+  debtLimitDa?: number;
+  loyaltyPoints?: number;
+  /** Optional `customers.loyalty_points` COLUMN value. The app adapter maps
+   *  the column first (customerAdapter.ts:245), so a payload-only seed leaves
+   *  the POS seeing 0 points. Use this to mirror the real shape written by
+   *  `customerAdapter.saveCustomer` (:96-97), which persists both.
+   *  Defaults to 0 (previous payload-only behaviour). */
+  loyaltyPointsColumnDa?: number;
+  /** Optional override for the `customers.current_debt` COLUMN when it must
+   *  differ from the payload value — mirrors the real sale-path shape (P2-7:
+   *  the v127 column never advances on credit acquisition). Defaults to
+   *  `currentDebtDa`. */
+  currentDebtColumnDa?: number;
+  /** Cumulative spend driving tier progression (customers.total_spent). */
+  totalSpentDa?: number;
+  /** Tier name mirrored into the JSON payload (loyalty_tier is payload-only). */
+  loyaltyTier?: string;
+  /** Dated FIFO point buckets (expiry/LOY-07 data shape). */
+  pointBuckets?: unknown[];
+  /** PVC / digital loyalty-card barcode resolved by the wedge scanner. */
+  loyaltyCardCode?: string;
+  /** Generic scan barcode (QR/PVC payload) resolved by the wedge scanner. */
+  barcode?: string;
+}
+
+export function seedCustomerFull(customers: SeedCustomerFull[]): void {
+  tx((d) => {
+    const stmt = d.prepare(
+      `INSERT INTO customers (id, name, phone, store_credit, current_debt, loyalty_points,
+         total_spent, loyalty_card_code, barcode, json_payload, updated_at, idempotency_key)
+       VALUES (@id, @name, @phone, @credit, @debt, @points, @spent, @card, @barcode, @payload,
+         datetime('now','utc'), 'e2e-cust-' || @id)
+       ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone,
+         store_credit=excluded.store_credit, current_debt=excluded.current_debt,
+         loyalty_points=excluded.loyalty_points, total_spent=excluded.total_spent,
+         loyalty_card_code=excluded.loyalty_card_code, barcode=excluded.barcode,
+         json_payload=excluded.json_payload, updated_at=excluded.updated_at`,
+    );
+    for (const c of customers) {
+      stmt.run({
+        id: c.id,
+        name: c.name,
+        phone: c.phone,
+        credit: c.storeCreditDa ?? 0,
+        debt: c.currentDebtColumnDa ?? c.currentDebtDa ?? 0,
+        points: c.loyaltyPointsColumnDa ?? 0,
+        spent: c.totalSpentDa ?? 0,
+        card: c.loyaltyCardCode ?? null,
+        barcode: c.barcode ?? null,
+        payload: JSON.stringify({
+          id: c.id,
+          name: c.name,
+          phone: c.phone,
+          storeCredit: c.storeCreditDa ?? 0,
+          currentDebt: c.currentDebtDa ?? 0,
+          debtLimit: c.debtLimitDa ?? 100000,
+          loyaltyPoints: c.loyaltyPoints ?? 0,
+          totalSpent: c.totalSpentDa ?? 0,
+          loyaltyTier: c.loyaltyTier ?? 'Bronze',
+          ...(c.pointBuckets ? { pointBuckets: c.pointBuckets } : {}),
+          ...(c.loyaltyCardCode ? { loyaltyCardCode: c.loyaltyCardCode } : {}),
+          ...(c.barcode ? { barcode: c.barcode } : {}),
+        }),
+      });
+    }
+  });
+}
+
+/** Debt-ledger seed (Kredy MNY-25 / REF-66 lanes): one `customer_debts` row
+ *  per entry, mirroring the app's own INSERT column set
+ *  (customerAdapter.ts `saveCustomerDebt` :375-395). The ledger is the
+ *  authority the Kredy surfaces read: `customerDebtMetaMap` gates the card's
+ *  expand toggle on `meta.totalMovements > 0` (KredyTab.tsx:1012) and the
+ *  invariant harness derives the ledger balance from it
+ *  (invariants.ts `ledgerBalance` :121-130). */
+export interface SeedCustomerDebt {
+  id: string;
+  customerId: string;
+  customerName: string;
+  type: 'DEBT_ACQUIRED' | 'PAYMENT_SETTLED';
+  amountDa: number;
+  balanceAfterDa?: number;
+  receiptNumber?: string | null;
+  paymentMethod?: string | null;
+  notes?: string | null;
+  recordedBy?: string;
+  createdAt?: string;
+  dueDate?: string | null;
+  kind?: string;
+}
+
+export function seedCustomerDebts(rows: SeedCustomerDebt[]): void {
+  tx((d) => {
+    const stmt = d.prepare(
+      `INSERT INTO customer_debts (id, customer_id, customer_name, type, amount, balance_after,
+         receipt_number, payment_method, notes, recorded_by, created_at, json_payload, version, updated_at, deleted,
+         due_date, kind)
+       VALUES (@id, @cust, @name, @type, @amount, @bal, @rcpt, @pm, @notes, @by, @created, @payload, 1, @created, 0, @due, @kind)
+       ON CONFLICT(id) DO UPDATE SET customer_id=excluded.customer_id, customer_name=excluded.customer_name,
+         type=excluded.type, amount=excluded.amount, balance_after=excluded.balance_after,
+         receipt_number=excluded.receipt_number, payment_method=excluded.payment_method,
+         notes=excluded.notes, recorded_by=excluded.recorded_by, created_at=excluded.created_at,
+         json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
+         due_date=excluded.due_date, kind=excluded.kind`,
+    );
+    for (const r of rows) {
+      const createdAt = r.createdAt ?? new Date().toISOString();
+      const entry = {
+        id: r.id,
+        customerId: r.customerId,
+        customerName: r.customerName,
+        type: r.type,
+        amount: r.amountDa,
+        balanceAfter: r.balanceAfterDa ?? r.amountDa,
+        receiptNumber: r.receiptNumber ?? null,
+        paymentMethod: r.paymentMethod ?? null,
+        notes: r.notes ?? null,
+        recordedBy: r.recordedBy ?? 'E2E-seed',
+        createdAt,
+        dueDate: r.dueDate ?? null,
+        kind: r.kind ?? '',
+      };
+      stmt.run({
+        id: r.id,
+        cust: r.customerId,
+        name: r.customerName,
+        type: r.type,
+        amount: r.amountDa,
+        bal: entry.balanceAfter,
+        rcpt: entry.receiptNumber,
+        pm: entry.paymentMethod,
+        notes: entry.notes,
+        by: entry.recordedBy,
+        created: createdAt,
+        payload: JSON.stringify(entry),
+        due: entry.dueDate,
+        kind: entry.kind,
+      });
+    }
+  });
+}
+
+/** Credit-voucher (gift card / bon d'avoir) seed — matches the columns the
+ *  adapter reads (voucherAdapter.findCreditVoucherByCode: `WHERE UPPER(code)
+ *  = ? AND deleted = 0`). DELETE-by-code first so stale ids never collide on
+ *  the UNIQUE(code) lane across non-wiped re-runs. */
+export interface SeedVoucher {
+  id: string;
+  code: string;
+  initialAmountDa: number;
+  remainingAmountDa?: number;
+  status?: string;
+  expiresAt?: string | null;
+  customerName?: string;
+}
+
+export function seedCreditVouchers(vouchers: SeedVoucher[]): void {
+  tx((d) => {
+    const del = d.prepare('DELETE FROM credit_vouchers WHERE code = ?');
+    const stmt = d.prepare(
+      `INSERT INTO credit_vouchers
+        (id, code, initial_amount, remaining_amount, status, customer_name, device_id,
+         idempotency_key, sync_status, version, created_at, updated_at, expires_at, deleted)
+       VALUES (@id, @code, @init, @remaining, @status, @cust, 'e2e-seed',
+         'e2e-voucher-' || @id, 'pending', 1, datetime('now','utc'), datetime('now','utc'), @expires, 0)`,
+    );
+    for (const v of vouchers) {
+      del.run(v.code);
+      stmt.run({
+        id: v.id,
+        code: v.code,
+        init: v.initialAmountDa,
+        remaining: v.remainingAmountDa ?? v.initialAmountDa,
+        status: v.status ?? 'ACTIVE',
+        cust: v.customerName ?? null,
+        expires: v.expiresAt ?? null,
+      });
+    }
+  });
+}
+
+/** IMEI lifecycle seed (REF-10 lane): one row per serialized unit, matching
+ *  the columns the adapter reads (`imei`, `product_id`, `status`,
+ *  `sale_transaction_id`, `warranty_months`, `received_at`). */
+export interface SeedImeiRecord {
+  imei: string;
+  productId: string;
+  status?: string;
+  warrantyMonths?: number;
+  receivedAt?: string;
+}
+
+export function seedImeiRecords(records: SeedImeiRecord[]): void {
+  tx((d) => {
+    const stmt = d.prepare(
+      `INSERT INTO imei_records
+        (imei, product_id, purchase_order_id, sale_transaction_id, warranty_expires_at,
+         received_at, sold_at, version, warranty_months, status)
+       VALUES (@imei, @pid, NULL, NULL, NULL, @received, NULL, 1, @months, @status)
+       ON CONFLICT(imei) DO UPDATE SET product_id=excluded.product_id,
+         status=excluded.status, warranty_months=excluded.warranty_months`,
+    );
+    for (const r of records) {
+      stmt.run({
+        imei: r.imei,
+        pid: r.productId,
+        received: r.receivedAt ?? new Date().toISOString(),
+        months: r.warrantyMonths ?? 12,
+        status: r.status ?? 'in_stock',
+      });
+    }
+  });
+}
+
+/** Kitting-bundle seed (MNY-30 lane): row + the ProductBundle json the store
+ *  hydrates (`{ id, title, barcode, bundlePrice, childSkus }`). */
+export interface SeedBundle {
+  id: string;
+  title: string;
+  barcode: string;
+  bundlePriceDa: number;
+  childSkus: string[];
+}
+
+export function seedBundles(bundles: SeedBundle[]): void {
+  tx((d) => {
+    const stmt = d.prepare(
+      `INSERT INTO product_bundles
+        (id, bundle_title, barcode, bundle_price, child_skus_json, json_payload, version)
+       VALUES (@id, @title, @barcode, @price, @childJson, @payload, 1)
+       ON CONFLICT(id) DO UPDATE SET bundle_title=excluded.bundle_title,
+         barcode=excluded.barcode, bundle_price=excluded.bundle_price,
+         child_skus_json=excluded.child_skus_json, json_payload=excluded.json_payload,
+         version=product_bundles.version + 1`,
+    );
+    for (const b of bundles) {
+      stmt.run({
+        id: b.id,
+        title: b.title,
+        barcode: b.barcode,
+        price: b.bundlePriceDa,
+        childJson: JSON.stringify(b.childSkus),
+        payload: JSON.stringify({
+          id: b.id,
+          title: b.title,
+          barcode: b.barcode,
+          bundlePrice: b.bundlePriceDa,
+          childSkus: b.childSkus,
+        }),
+      });
+    }
+  });
+}
+
+export function seedShift(id: string, openingFloatDa: number, cashierName = 'E2E'): void {
+  tx((d) => {
+    d.prepare(
+      `INSERT INTO cash_sessions
+       (id, opened_at, opening_float, status, cashier_name, json_payload, updated_at)
+       VALUES (@id, datetime('now','utc'), @float, 'OPEN', @cashier, '{}', datetime('now','utc'))
+       ON CONFLICT(id) DO UPDATE SET opening_float=excluded.opening_float,
+         status='OPEN', cashier_name=excluded.cashier_name`,
+    ).run({ id, float: openingFloatDa, cashier: cashierName });
+  });
+}
+
+export interface SeedBlockedImei {
+  imei: string;
+  reason: string;
+  source?: string;
+  active?: boolean;
+}
+
+/** Merchant-local blocked/stolen list (blocked_imeis, native read path). */
+export function seedBlockedImeis(rows: SeedBlockedImei[]): void {
+  tx((d) => {
+    const stmt = d.prepare(
+      `INSERT INTO blocked_imeis (imei, reason, source, added_at, active)
+       VALUES (@imei, @reason, @source, datetime('now','utc'), @active)
+       ON CONFLICT(imei) DO UPDATE SET reason=excluded.reason, source=excluded.source,
+         added_at=excluded.added_at, active=excluded.active`,
+    );
+    for (const r of rows) {
+      stmt.run({
+        imei: r.imei,
+        reason: r.reason,
+        source: r.source ?? 'e2e-seed',
+        active: r.active === false ? 0 : 1,
+      });
+    }
+  });
+}
+
+export function seedSettings(settings: { key: string; valueJson: string }[]): void {
+  tx((d) => {
+    const stmt = d.prepare(
+      `INSERT INTO app_settings (key, value_json, updated_at)
+       VALUES (@key, @value, datetime('now','utc'))
+       ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at`,
+    );
+    for (const s of settings) stmt.run({ key: s.key, value: s.valueJson });
+  });
+}
+
+/**
+ * Data-table reset: wipe merchant data rows, keep migration ledgers,
+ * app_settings mirrors (PIN roster!) and FTS structure. Mirrors the reset
+ * discipline proven in the repo (`e2e.rs::e2e_reset_db`):
+ *  - `products_fts_*` shadows are NEVER deleted directly (destroys the index);
+ *    deleting `products` rows triggers the FTS sync triggers instead.
+ *  - `_sqlx_migrations` / `schema_migrations` are never touched (re-migration
+ *    brick risk).
+ */
+const RESET_TABLES = [
+  'sale_batch_allocations',
+  'refund_dedup',
+  'transaction_items',
+  'transactions',
+  'inventory_ledger',
+  'stock_batches',
+  'cash_movements',
+  'cash_sessions',
+  'credit_vouchers',
+  'customer_debts',
+  'loyalty_ledger',
+  'store_expenses',
+  'cash_drops',
+  'repair_orders',
+  'purchase_orders',
+  'trade_ins',
+  'imei_records',
+  'security_audit_logs',
+  'held_orders',
+  'warranty_claims',
+  'debt_plans',
+  'dunning_queue',
+  'products',
+  'customers',
+];
+
+export function resetData(): { tables: string[]; rowsDeleted: number } {
+  const cleared: string[] = [];
+  let rowsDeleted = 0;
+  tx((d) => {
+    d.pragma('foreign_keys = OFF');
+    for (const t of RESET_TABLES) {
+      const exists = d
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
+        .get(t);
+      if (!exists) continue;
+      const n = d.prepare(`DELETE FROM "${t}"`).run().changes;
+      rowsDeleted += n;
+      cleared.push(t);
+    }
+    d.prepare('DELETE FROM sqlite_sequence').run();
+  });
+  return { tables: cleared, rowsDeleted };
+}
+
+/** Remove every outbox row (sync residue from app-side backfills). */
+export function clearOutbox(): number {
+  const exists = db()
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_outbox'")
+    .get();
+  if (!exists) return 0;
+  return run('DELETE FROM sync_outbox').changes;
+}
+
+/** All current product ids (for existence checks). */
+export function productIds(): string[] {
+  return all<{ id: string }>('SELECT id FROM products ORDER BY id').map((r) => r.id);
+}
