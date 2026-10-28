@@ -403,6 +403,21 @@ export async function installScanSpy(): Promise<void> {
   });
 }
 
+/** Install the scan spy only if it is absent (a reload drops it). Unlike
+ * `installScanSpy()` this never clears the captured events, so specs that read
+ * the history still see earlier scans. */
+export async function ensureScanSpy(): Promise<void> {
+  await browser.execute(() => {
+    const w = window as unknown as { __posScanSpy?: boolean; __posScanEvents?: unknown[] };
+    if (w.__posScanSpy) return;
+    w.__posScanSpy = true;
+    w.__posScanEvents = [];
+    window.addEventListener('pos:barcode-scanned', (e) => {
+      w.__posScanEvents?.push((e as CustomEvent).detail);
+    });
+  });
+}
+
 export async function readScanEvents(): Promise<{ code: string; multiplier: number }[]> {
   return (await browser.execute(
     () => (window as unknown as { __posScanEvents?: unknown[] }).__posScanEvents ?? [],
@@ -438,6 +453,11 @@ export async function scanCode(
   opts: { expectCartChange?: boolean; timeoutMs?: number } = {},
 ): Promise<boolean> {
   const { expectCartChange = true, timeoutMs = 2500 } = opts;
+  // The decode signal is the app event, so the spy MUST exist before the burst:
+  // without it every read is empty, the fallback always fires, and every scan is
+  // sent twice (HARNESS-07 with a blind guard). Most specs never called
+  // installScanSpy(), so this is the default path, not an edge case.
+  await ensureScanSpy();
   const before = await cartTotalMinor().catch(() => 0n);
   const eventsBefore = (await readScanEvents().catch(() => [])).length;
   const t0 = Date.now();
