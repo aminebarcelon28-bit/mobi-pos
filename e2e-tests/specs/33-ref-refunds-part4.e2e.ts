@@ -1540,7 +1540,12 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
       const byPh = (frag: string) => inputs.find((i) => (i.placeholder || '').includes(frag));
       const model = byPh('iPhone');
       const imeiEl = byPh('358921');
-      const nameEl = byPh('Nadir');
+      const byLabel = (re: RegExp) => {
+        const lab = [...document.querySelectorAll('label')].find((l) => re.test(l.textContent || ''));
+        const sib = lab?.nextElementSibling as HTMLElement | null;
+        return sib && sib.tagName === 'INPUT' ? (sib as HTMLInputElement) : undefined;
+      };
+      const nameEl = byLabel(/Nom & Pr/);
       if (!model || !imeiEl || !nameEl) return false;
       setValue(model, 'iPhone E2E 14');
       setValue(imeiEl, imeiV);
