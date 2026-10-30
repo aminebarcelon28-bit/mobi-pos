@@ -803,8 +803,7 @@ function contractTests() {
  *   - `--run <sidecar>` must read the log the sidecar itself names
  *   - N/A has a slash, which the verdict token class must accept
  */
-function verdictProtocolTests() {
-  const dir = makeRepo('verdicts-protocol');
+function verdictProtocolTests() {  const dir = makeRepo('verdicts-protocol');
   const events = write(dir, 'e2e-tests/results/events.ndjson', [
     '{"ts":"2026-01-01T00:00:01Z","kind":"pass","fullTitle":"[REF-02] refund refuses","state":"pass"}',
     '{"ts":"2026-01-01T00:00:02Z","kind":"pass","fullTitle":"[NAP-01] foreign currency","state":"pass"}',
@@ -841,6 +840,26 @@ function verdictProtocolTests() {
   const bad = write(dir, 'e2e-tests/results/bad.txt', 'VERDICT=REF-01 MAYBE\n');
   r = run('verdicts.mjs', ['--events', events, '--log', bad], dir);
   check('verdicts: an unknown verdict word is exit 2', r.code === 2, r.out);
+
+  // A PARTIAL run (one case, e.g. run.mjs --grep) must never move a verdict it
+  // did not observe: only the cases in the run window may be stamped.
+  {
+    const dir2 = makeRepo('partial-run');
+    const before = readIndex(dir2);
+    const untouched = ['REF-02', 'REF-03'].map((id) => before.get(before.byId.get(id), 'verdict'));
+    const ev = write(dir2, 'e2e-tests/results/events.ndjson',
+      '{"ts":"2026-01-01T00:00:01Z","kind":"pass","fullTitle":"[REF-01] only this one ran","state":"pass"}\n');
+    const sc = write(dir2, 'e2e-tests/results/runs/2026-01-01-partial.json', JSON.stringify({
+      tag: 'partial', gitSha: 'deadbee', exitCode: 0, passing: 1, failing: 0, durationMs: 10,
+      startedAt: '2026-01-01T00:00:00.000Z', specs: ['10-ref.e2e.ts'],
+    }));
+    r = run('verdicts.mjs', ['--run', sc, '--events', ev, '--write-index'], dir2);
+    const after = readIndex(dir2);
+    const still = ['REF-02', 'REF-03'].map((id) => after.get(after.byId.get(id), 'verdict'));
+    check('partial run: the observed case is stamped', after.get(after.byId.get('REF-01'), 'verdict') === 'PASS', r.out);
+    check('partial run: unrun cases keep their verdicts', JSON.stringify(still) === JSON.stringify(untouched), `before=${before} after=${still}`);
+    check('partial run: unrun cases keep their run reference', !after.get(after.byId.get('REF-02'), 'verdict_run'), r.out);
+  }
 }
 
 /* ------------------------------------------------------------------ */
