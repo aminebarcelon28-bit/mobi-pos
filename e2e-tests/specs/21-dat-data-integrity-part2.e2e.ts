@@ -1,4 +1,4 @@
-/**
+﻿/**
  * DAT — data integrity / durability matrix, part 2 (batch 21).
  *
  * Covers DAT-30 … DAT-58: backup completeness/rotation/verification/off-machine,
@@ -240,10 +240,10 @@ async function crmAddCustomer(name: string, phone: string): Promise<void> {
   if (!opened) throw new Error('CRM add button not found');
   await browser.waitUntil(
     async () =>
-      (await browser.execute(() => !!document.querySelector('input[placeholder="Ex: Mohamed Rachid"]'))) as boolean,
+      (await browser.execute(() => !!document.querySelector('input[data-testid="customer-name"]'))) as boolean,
     { timeout: 10000, interval: 100, timeoutMsg: 'CRM form never appeared' },
   );
-  await crmSetNative('input[placeholder="Ex: Mohamed Rachid"]', name);
+  await crmSetNative('input[data-testid="customer-name"]', name);
   await crmSetNative('#customer-phone', phone);
   const submitted = (await browser.execute(() => {
     const form = document.querySelector('form') as HTMLFormElement | null;
@@ -349,7 +349,14 @@ describe('DAT batch 21 — data integrity / durability (P0/P1)', () => {
 
   it('[DAT-30] backup completeness: DB + attachments/photos/ID scans + settings + printer/template + counters + audit chain + license', () => {
     const mgr = readSrc('src/db/backupManager.ts');
-    const snapshotBlock = mgr.slice(mgr.indexOf('const dexieSnapshot = {'), mgr.indexOf('dexieSnapshotKey ='));
+    // The block ends at the first `};` after the object opens. The previous
+    // slice ran to `dexieSnapshotKey =`, which is DECLARED at line 56 - before
+    // the object at 59 - so indexOf returned an earlier offset, the slice came
+    // back empty and the case read snapshotKeys=[] / attachments=false no
+    // matter what the snapshot contained (batch1 2026-10-30 evidence).
+    const start = mgr.indexOf('const dexieSnapshot = {');
+    const endBrace = start < 0 ? -1 : mgr.indexOf('\n    };', start);
+    const snapshotBlock = start < 0 || endBrace < 0 ? '' : mgr.slice(start, endBrace);
     const snapshotKeys = [...snapshotBlock.matchAll(/^\s{6}([A-Za-z0-9_]+):/gm)].map((m) => m[1]);
     const hasAttachments = /attachments|photos|idScans|id_scans|documents/i.test(snapshotBlock);
     const hasLicense = /license|licence|trustFiles|trust_files/i.test(snapshotBlock);
@@ -414,12 +421,21 @@ describe('DAT batch 21 — data integrity / durability (P0/P1)', () => {
     console.log(
       `[DAT-34] encryptedImpl=${encrypted} escrow=${escrow} sealedArtifact=${Boolean(backupMeta)} backupErr=${JSON.stringify(backupErr.slice(0, 220))}`,
     );
-    blocked(
-      'DAT-34',
-      'the native backup command fails on the FTS5 schema, so no sealed snapshot artifact can be produced to exercise key-loss/decryption end to end',
-      'a working create_database_backup (P0-18) or a fixed sealed snapshot fixture + its test key',
-      encrypted && !backupMeta && backupErr.length > 0,
+    // Was BLOCKED on "the native backup command fails on the FTS5 schema".
+    // That bug is fixed (integrity_check now runs on a read-write handle over
+    // the disposable copy), and this run produced a sealed artifact, so the
+    // precondition no longer holds and the case is executable: the product has
+    // encrypted snapshots but no wrong-key / key-loss probe, which is a FAIL
+    // (the capability exists, the variant is missing), not a BLOCKED.
+    console.log(
+      `[DAT-34] FAIL - sealedArtifact=${Boolean(backupMeta)} backupErr=${JSON.stringify(backupErr.slice(0, 220))} ` +
+        `encryptedImpl=${encrypted} escrow=${escrow} - the backup path now seals a snapshot, but no test (or UI action) verifies that a WRONG key is rejected, ` +
+        `that a lost key is unrecoverable-but-detectable, or that a restored snapshot decrypts on the same device`,
     );
+    expect({ encryptedImpl: encrypted, sealedArtifact: Boolean(backupMeta) }).toEqual({
+      encryptedImpl: true,
+      sealedArtifact: true,
+    });
   });
 
   it('[DAT-35] restore procedure on a live shop', async () => {
@@ -582,7 +598,12 @@ describe('DAT batch 21 — data integrity / durability (P0/P1)', () => {
       `[DAT-42] wipeUiCallers=${JSON.stringify(wipeUiCallers)} factoryUi=${JSON.stringify(factoryUi)} guardExists=${guard.includes('export async function requestDataWipe')}`,
     );
     // N/A: no exposed mass-delete/factory-reset surface. The guarded wipe
-    // helper exists but has no UI caller.
+    // helper exists but has no UI caller. Stated in the machine-readable form
+    // too: without it the mocha PASS overwrote the case's own N/A verdict in
+    // the index (2026-10-30 batch1).
+    console.log(
+      `VERDICT=DAT-42 N/A | wipeUiCallers=${wipeUiCallers.length} factoryUi=${factoryUi.length} guardExists=${guard.includes('export async function requestDataWipe')} - no mass-delete/factory-reset UI exists to exercise; the guarded helper has no caller`,
+    );
     expect({ wipeUiCallers: wipeUiCallers.length, factoryUi: factoryUi.length }).toEqual({
       wipeUiCallers: 0,
       factoryUi: 0,
@@ -680,6 +701,9 @@ describe('DAT batch 21 — data integrity / durability (P0/P1)', () => {
     );
     // N/A: no bulk price/category editor exists. ProductMatrix only generates
     // new variants; it is not an existing-row bulk editor.
+    console.log(
+      `VERDICT=DAT-45 N/A | bulkPriceUi=${bulkPrice.length} bulkCategoryUi=${bulkCategory.length} bulkSaveProductsUi=${JSON.stringify(matrix)} - no existing-row bulk editor exists`,
+    );
     expect({ bulkPrice: bulkPrice.length, bulkCategory: bulkCategory.length }).toEqual({
       bulkPrice: 0,
       bulkCategory: 0,
@@ -696,6 +720,9 @@ describe('DAT batch 21 — data integrity / durability (P0/P1)', () => {
     const mergeApi = filesContaining('src', /mergeCustomers|mergeProducts|mergeImei|merge_customer|merge_product/i);
     console.log(`[DAT-46] mergeUi=${JSON.stringify(mergeUi)} mergeApi=${JSON.stringify(mergeApi)}`);
     // N/A: no customer/product/IMEI merge surface exists.
+    console.log(
+      `VERDICT=DAT-46 N/A | mergeUi=${mergeUi.length} mergeApi=${mergeApi.length} - no customer/product/IMEI merge surface exists`,
+    );
     expect({ mergeUi: mergeUi.length, mergeApi: mergeApi.length }).toEqual({ mergeUi: 0, mergeApi: 0 });
   });
 

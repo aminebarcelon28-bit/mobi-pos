@@ -46,7 +46,26 @@ import {
 } from '../lib/pos';
 import { resetData, seedCustomerFull, seedProducts, seedSettings } from '../lib/seed';
 
-const ROOT = path.resolve(process.cwd(), '..');
+// Repo root, independent of the directory wdio was started from: the
+// canonical runner starts it at the repo root, while a hand-run from
+// e2e-tests/ has the root one level up. The old unconditional `../` made every
+// source read and the ESC/POS byte helper resolve under the Desktop folder when
+// run from the root, which is why RCP-03/09/17 died with ERR_MODULE_NOT_FOUND
+// (2026-10-30 batch run).
+const ROOT = (() => {
+  let d = process.cwd();
+  for (let i = 0; i < 5; i++) {
+    try {
+      if (fs.existsSync(path.join(d, 'src-tauri', 'tauri.conf.json')) && fs.existsSync(path.join(d, 'e2e-tests'))) return d;
+    } catch {
+      /* keep walking */
+    }
+    const up = path.dirname(d);
+    if (up === d) break;
+    d = up;
+  }
+  return path.resolve(process.cwd(), '..');
+})();
 
 const P1 = 'RCP26-P1';
 const AR = 'RCP26-AR';

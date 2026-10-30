@@ -699,11 +699,23 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     await typeTender('1000000000');
     const largeChange = await payChangeMinor();
     await (await $(tid('pay-confirm'))).click();
+    // The app now guards an implausible tender with the "Montant encaissé
+    // inhabituel" alertdialog (`pay-fatfinger`, PaymentModal.tsx:609-666); it
+    // shows the change due and requires an explicit second confirmation. A
+    // 1e9 tender therefore closes only after that confirmation (measured
+    // 2026-10-30: the run died on "pay dialog did not close" while the guard
+    // was up, because the spec predated it).
+    const fatFinger = await $(tid('pay-fatfinger'));
+    const fatFingerShown = await fatFinger.isDisplayed().catch(() => false);
+    if (fatFingerShown) {
+      await (await $(tid('pay-fatfinger-confirm'))).click();
+    }
     await waitPayClosed();
     await waitSaleLanded(before3);
     const largeTx = newestTx() ?? {};
     console.log(
-      '[PAY-02] arabic:', jstr({ parsedMinor: String(arabicParsed), changeMinor: String(arabicChange), cash: arabicTx.cash_tendered }),
+      '[PAY-02] fatFingerGuardShown=', fatFingerShown,
+      'arabic:', jstr({ parsedMinor: String(arabicParsed), changeMinor: String(arabicChange), cash: arabicTx.cash_tendered }),
       'decimal:', jstr({ changeMinor: String(decimalChange), cash: decimalTx.cash_tendered, change: decimalTx.change_due }),
       'large:', jstr({ changeMinor: String(largeChange), cash: largeTx.cash_tendered, change: largeTx.change_due }),
     );
@@ -713,12 +725,13 @@ describe('PAY — payment tenders, split & credit (batch 2)', () => {
     expect(arabicChange).toBe(0n);
     expect(daToMinor(arabicTx.cash_tendered)).toBe(50000n);
     expect(decimalChange).toBe(50n);
-    // P2 (display-vs-commit drift, cross-ref MNY-centric report): the tender
-    // PREVIEW shows 0,50 change, but the committed row stores whole-DA values
-    // (500,5 → cash_tendered=501 / change_due=1) — the commit path rounds
-    // (toLegacyReal, src/utils/money.ts:267) after the preview is computed.
-    expect(daToMinor(decimalTx.cash_tendered)).toBe(50100n);
-    expect(daToMinor(decimalTx.change_due)).toBe(100n);
+    // The preview and the committed row agree: 500,5 → cash_tendered 500,50
+    // and change_due 0,50 (50050 / 50 minor). This used to disagree - the
+    // preview showed 0,50 while the commit stored 501 / 1 because
+    // toLegacyReal rounded after the preview (measured 2026-10-30: preview 50,
+    // stored 50050/50, i.e. the drift this assertion used to codify is gone).
+    expect(daToMinor(decimalTx.cash_tendered)).toBe(50050n);
+    expect(daToMinor(decimalTx.change_due)).toBe(50n);
     expect(largeChange).toBe(99999950000n);
     expect(daToMinor(largeTx.cash_tendered)).toBe(100000000000n);
     expect(daToMinor(largeTx.change_due)).toBe(99999950000n);

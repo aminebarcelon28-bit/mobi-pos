@@ -1,4 +1,4 @@
-/**
+﻿/**
  * BATCH 27c (part 1) — I18 / DAT deterministic checks.
  *
  * Runs the app's own modules under Node (same resolve hook as 27b) and reads
@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { normalizeForSearch, cleanAlphanumeric } from '../../src/utils/catalogSearch.ts';
+import { normalizeForSearch, foldForSearch, cleanAlphanumeric } from '../../src/utils/catalogSearch.ts';
 import {
   convertNonAsciiDigits,
   normalizeAlgerianPhone,
@@ -73,16 +73,22 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
     left: normalizeForSearch(a),
     right: normalizeForSearch(b),
   }));
-  // The customer fold, taken verbatim from CustomersModal.tsx:23-24 (the
-  // component itself is not importable outside React). The source text is
-  // checked for any Arabic code-point handling.
+  // The customer fold. When the component imports the shared normalizer the
+  // check probes that real function (stronger than trusting source text);
+  // only an inline definition is reproduced verbatim, because the component
+  // itself is not importable outside React.
   const custSrc = read('src/components/modals/CustomersModal.tsx');
   const custLines = custSrc.split(/\r?\n/);
   const foldIdx = custLines.findIndex((l) => /const foldForSearch = /.test(l));
   const customerFoldDef =
     (foldIdx >= 0 ? custLines.slice(foldIdx, foldIdx + 2).join(' ') : '').replace(/\s+/g, ' ').trim();
-  const customerFoldArabicAware = /\\u06[0-9A-Fa-f]{2}|\\u0640|\\u0670|normalizeForSearch/.test(customerFoldDef);
-  const customerFold = (s: string) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const importsSharedFold =
+    /import\s*\{[^}]*\bfoldForSearch\b[^}]*\}\s*from\s*['"][^'"]*catalogSearch['"]/.test(custSrc);
+  const customerFoldArabicAware =
+    importsSharedFold || /\\u06[0-9A-Fa-f]{2}|\\u0640|\\u0670|normalizeForSearch/.test(customerFoldDef);
+  const customerFold = importsSharedFold
+    ? (s: string | null | undefined) => foldForSearch(s)
+    : (s: string | null | undefined) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const customerFoldResults = pairs.map(([a, b, label]) => ({ label, equal: customerFold(a) === customerFold(b) }));
   const productOk = productFold.filter((r) => r.equal).length;
   const customerOk = customerFoldResults.filter((r) => r.equal).length;
@@ -102,13 +108,18 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
   ]);
   const productCaseMisses = productFold.filter((r) => caseListLabels.has(r.label) && !r.equal);
   const dupes = srcHits(/const foldForSearch/);
+  const sharedFoldFiles = srcHits(/from ['"][^'"]*catalogSearch['"]/)
+    .filter((h) => /foldForSearch|normalizeForSearch/.test(h.text));
   record(
     'I18-04',
     productCaseMisses.length === 0 && customerOk === pairs.length ? 'PASS' : 'FAIL',
     `product_fold=${productOk}/${pairs.length} case_list_misses=${productCaseMisses.length} extra_misses=${JSON.stringify(productFold.filter((r) => !caseListLabels.has(r.label) && !r.equal).map((r) => r.label))} ` +
       `customer_fold=${customerOk}/${pairs.length} customer_misses=${JSON.stringify(customerFoldResults.filter((r) => !r.equal).map((r) => r.label))} ` +
-      `customer_fold_source="${customerFoldDef.slice(0, 150)}" customer_fold_handles_arabic=${customerFoldArabicAware} duplicate_fold_definitions=${dupes.length} (${dupes.map((d) => `${d.file}:${d.line}`).join(',')}) ` +
-      `— the product omnisearch covers the case's list (harakat, hamza-alef forms, ta marbuta, alef maqsura, Latin accents) but still misses tatweel and Arabic-Indic digits; the customer directory, Kredy tab, debt ledger and five other boxes each carry an inline NFD+lowercase fold that handles NONE of the Arabic variants (${customerOk}/${pairs.length} pairs fold equal, only the two Latin-accent ones), so the same typed name finds a product and misses the customer (SCL-61 is the measured consequence)`,
+      `customer_fold_source="${(importsSharedFold ? 'import { foldForSearch } from utils/catalogSearch' : customerFoldDef).slice(0, 150)}" customer_fold_handles_arabic=${customerFoldArabicAware} duplicate_fold_definitions=${dupes.length} (${dupes.map((d) => `${d.file}:${d.line}`).join(',')}) ` +
+      `shared_fold_importers=${sharedFoldFiles.length} ` +
+      (customerOk === pairs.length
+        ? '— the product omnisearch and the customer directory fold identically (one shared normalizer), so a name that finds a product also finds the customer'
+        : '— the customer directory folds differently from the product omnisearch, so the same typed name finds a product and misses the customer (SCL-61 is the measured consequence)'),
   );
 }
 
@@ -374,7 +385,7 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
   const escAt = emojiBytes.indexOf(0x1b);
   const emojiLowBytes = '🔛'.split('').map((c) => c.charCodeAt(0) & 0xff);
   console.log(
-    `FACT=I18-03_PRINT text_encoder="charCodeAt(i) & 0xFF, no code page command (ESC t never emitted)" ` +
+    `FACT=I18-03_PRINT text_encoder="control bytes blocked in text(); characters above Latin-1 -> 0x3F; no code page command (ESC t never emitted)" ` +
       `arabic_name_bytes="${dump(arabicBytes)}" accent_label_bytes="${dump(accentBytes)}" ` +
       `printable_arabic_bytes_are_ascii=${[...arabicBytes].every((x) => x >= 0x20 && x <= 0x7e)} ` +
       `receipt_customer_line_source="${(read('src/utils/escpos.ts')
@@ -385,7 +396,9 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
   console.log(
     `FACT=I18-07_PRINT emoji="🔛" code_unit_low_bytes=${JSON.stringify(emojiLowBytes)} buffer_bytes="${dump(emojiBytes)}" ` +
       `esc_injected=${hasEsc} esc_at=${escAt} following_byte=${escAt >= 0 ? emojiBytes[escAt + 1]?.toString(16) : 'n/a'} ` +
-      `— a title containing an emoji whose low surrogate ends in 0x1B emits a raw ESC into the print stream; with a following 0x40 it is the ESC @ printer-reset command`,
+      `- ${hasEsc
+        ? 'a title containing an emoji whose low surrogate ends in 0x1B emits a raw ESC into the print stream; with a following 0x40 it is the ESC @ printer-reset command'
+        : 'no control byte from the title reaches the stream: text() drops bytes < 0x20 and degrades characters above Latin-1 to "?", so a malicious title cannot inject ESC/GS commands. Arabic still prints as "?" because no code page or raster mode is negotiated (RCP-01)'}`,
   );
 }
 

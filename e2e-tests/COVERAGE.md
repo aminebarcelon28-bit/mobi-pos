@@ -10,10 +10,10 @@ Source cases: `POS_EDGE_CASE_ENCYCLOPEDIA_and_LONG_SESSION.md` (local, not in re
 | Metric | Count |
 |---|---|
 | Catalog cases (table rows) | 687 |
-| Passed (full) | 178 |
-| Passed (partial — unasserted facets listed) | 24 |
-| **FAILED** | 251 |
-| N/A (absent or unobservable in harness) | 117 |
+| Passed (full) | 195 |
+| Passed (partial — unasserted facets listed) | 20 |
+| **FAILED** | 239 |
+| N/A (absent or unobservable in harness) | 116 |
 | Remaining (doable today, not yet executed) | 0 |
 | BLOCKED (missing dependency — see Evidence) | 117 |
 | Global invariants (G-01…G-36) executed | 25/36 |

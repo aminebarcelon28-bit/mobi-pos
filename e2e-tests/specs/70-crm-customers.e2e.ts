@@ -1,4 +1,4 @@
-/**
+﻿/**
  * CRM - customer directory, phone identity & deletion (batch 13 / spec 70;
  * CRM-02, CRM-03, CRM-06; CRM-01/05/07/08/09/10/11/12 N/A with file:line).
  *
@@ -3670,10 +3670,10 @@ async function crmAddCustomer(name: string, phone: string, debtLimit?: number): 
   const opened = await crmClickText('Ajouter un Client');
   if (!opened) throw new Error('CRM add button not found (Ajouter un Client)');
   await browser.waitUntil(
-    async () => (await browser.execute(() => !!document.querySelector('input[placeholder="Ex: Mohamed Rachid"]'))) as boolean,
+    async () => (await browser.execute(() => !!document.querySelector('input[data-testid="customer-name"]'))) as boolean,
     { timeout: 10000, interval: 100, timeoutMsg: 'CRM form never appeared' },
   );
-  await crmSetNative('input[placeholder="Ex: Mohamed Rachid"]', name);
+  await crmSetNative('input[data-testid="customer-name"]', name);
   await crmSetNative('#customer-phone', phone);
   if (debtLimit !== undefined) {
     await crmSetNative('input[type="number"][placeholder^="0 ou vide"]', String(debtLimit));

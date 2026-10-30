@@ -5,13 +5,6 @@ REF-33,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
 CRT-05,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
 CRT-06,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
 CRT-17,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
-MNY-26,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
-MNY-30,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
-MNY-01,C09,MONEY-ROUNDING,app,SQLite,money movement,P0,A
-MNY-02,C09,MONEY-ROUNDING,app,SQLite,money movement,P0,A
-MNY-03,C09,MONEY-ROUNDING,app,SQLite,money movement,P0,A
-MNY-06,C09,MONEY-ROUNDING,app,SQLite,money movement,P0,A
-MNY-18,C09,MONEY-ROUNDING,app,SQLite,money movement,P0,A
 REF-40,C02,REF-DELIVERY,app,SQLite,money movement,P0,NEW
 REF-42,C02,REF-DELIVERY,app,SQLite,money movement,P0,NEW
 REF-65,C02,REF-DELIVERY,app,SQLite,money movement,P0,NEW
@@ -32,7 +25,6 @@ REF-91,C05,REF-RESTORE-VOLATILE,app,SQLite,money movement,P0,D (D2)
 REF-78,C06,REF-NO-RECONCILE,app,SQLite,money movement,P0,G (G3)
 SHF-11,C06,REF-NO-RECONCILE,app,SQLite,money movement,P0,G (G3)
 REF-87,C08,REF-SELECTABILITY,app,SQLite,money movement,P0,E
-MNY-29,C10,TENDER-GUARD,app,SQLite,money movement,P0,G
 LOY-07,C14,LOY-BUCKET,app,SQLite,money movement,P1,NEW
 LOY-14,C15,LOY-ZERO-COVER,app,SQLite,money movement,P1,G
 REP-01,C64,REP-WORKFLOW-GAPS,app,SQLite,money movement,P0,NEW
@@ -49,7 +41,6 @@ REP-14,C63,REP-STATE-MACHINE,app,SQLite,money movement,P0,NEW
 HW-01,C82,KEYBOARD-INPUT,app,DOM,money movement,P0,F (F4)
 I18-09,C82,KEYBOARD-INPUT,app,DOM,money movement,P0,F (F4)
 MOB-23,C82,KEYBOARD-INPUT,app,DOM,money movement,P0,F (F4)
-PAY-08,C82,KEYBOARD-INPUT,app,DOM,money movement,P0,F (F4)
 TIN-08,C11,TOTALS-IDENTITY,app,SQLite,money movement,P0,A
 DAT-20,C27,DB-DURABILITY,app,SQLite,money movement,P0,NEW
 SCL-48,C46,BURST-DROP,app,SQLite,money movement,P0,NEW
@@ -105,7 +96,6 @@ INV-17,C32,NO-CAS-LWW,app,SQLite,stored value,P0,NEW
 TIM-01,C22,CLOCK-AUDIT,app,SQLite,stored value,P0,C (C3)
 TIM-07,C22,CLOCK-AUDIT,app,SQLite,stored value,P0,C (C3)
 MOB-07,C22,CLOCK-AUDIT,app,SQLite,stored value,P0,C (C3)
-TIM-09,C22,CLOCK-AUDIT,app,SQLite,stored value,P0,C (C3)
 TIN-01,C65,TIN-VALIDATION,app,SQLite,stored value,P0,G
 TIN-04,C65,TIN-VALIDATION,app,SQLite,stored value,P0,G
 TIN-06,C65,TIN-VALIDATION,app,SQLite,stored value,P0,G
@@ -138,7 +128,6 @@ RCP-13,C16,PRINT-ENCODER,app,bytes,display only,P1,B (B4) + A (A4)
 RCP-21,C16,PRINT-ENCODER,app,bytes,display only,P1,B (B4) + A (A4)
 RCP-23,C16,PRINT-ENCODER,app,bytes,display only,P1,B (B4) + A (A4)
 I18-03,C16,PRINT-ENCODER,app,bytes,display only,P1,B (B4) + A (A4)
-I18-07,C16,PRINT-ENCODER,app,bytes,display only,P1,B (B4) + A (A4)
 RCP-02,C17,PRINT-LAYOUT,app,bytes,display only,P1,B
 IDN-07,C17,PRINT-LAYOUT,app,bytes,display only,P1,B
 RCP-16,C21,RECEIPT-TZ,app,bytes,display only,P1,C (C1)
@@ -162,8 +151,6 @@ I18-04,C57,INPUT-NORMALIZATION,app,SQLite,none,P1,G (G1)
 I18-06,C57,INPUT-NORMALIZATION,app,SQLite,none,P1,G (G1)
 I18-11,C57,INPUT-NORMALIZATION,app,SQLite,none,P1,G (G1)
 I18-12,C57,INPUT-NORMALIZATION,app,SQLite,none,P1,G (G1)
-I18-13,C57,INPUT-NORMALIZATION,app,SQLite,none,P1,G (G1)
-I18-15,C57,INPUT-NORMALIZATION,app,SQLite,none,P1,G (G1)
 REP-16,C57,INPUT-NORMALIZATION,app,SQLite,none,P1,G (G1)
 REP-24,C57,INPUT-NORMALIZATION,app,SQLite,none,P1,G (G1)
 SCL-61,C57,INPUT-NORMALIZATION,app,SQLite,none,P1,G (G1)
@@ -250,3 +237,4 @@ SCL-10,C52,INDEX-HEALTH,app,SQLite,none,P1,E (E1)
 I18-01,C59,I18-UI-HITTEST,app,DOM,none,P1,F
 MOB-11,C69,MOB-LAYOUT,app,DOM,none,P1,F
 SCL-76,C87,TRANSIENT-RETENTION,app,SQLite,none,P1,NEW
+DAT-34,C88,SEALED-KEY-COVERAGE,app,RUNTIME,none,P0,NEW

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SCL / RCP / TIM / I18 — scale, receipt, clock and numeric-entry edges
  * (batch 23, functional half).
  *
@@ -182,7 +182,7 @@ describe('SCL/RCP/TIM/I18 — batch 23 functional', () => {
     await (await $(tid('customers-dialog'))).waitForDisplayed({ timeout: 20000 });
     const add = await clickButtonText('Ajouter un Client');
     expect(add).toBe(true);
-    const nameInput = await $('input[placeholder="Ex: Mohamed Rachid"]');
+    const nameInput = await $('input[data-testid="customer-name"]');
     await nameInput.waitForDisplayed({ timeout: 10000 });
     await nameInput.setValue('SCL Dup Alpha');
     const phone = await $('#customer-phone');
@@ -191,8 +191,8 @@ describe('SCL/RCP/TIM/I18 — batch 23 functional', () => {
     expect(create1).toBe(true);
     await browser.pause(500);
     await clickButtonText('Ajouter un Client');
-    await (await $('input[placeholder="Ex: Mohamed Rachid"]')).waitForDisplayed({ timeout: 10000 });
-    await (await $('input[placeholder="Ex: Mohamed Rachid"]')).setValue('SCL Dup Beta');
+    await (await $('input[data-testid="customer-name"]')).waitForDisplayed({ timeout: 10000 });
+    await (await $('input[data-testid="customer-name"]')).setValue('SCL Dup Beta');
     await (await $('#customer-phone')).setValue('0550111222');
     const create2 = await clickButtonText('Créer le Client');
     expect(create2).toBe(true);

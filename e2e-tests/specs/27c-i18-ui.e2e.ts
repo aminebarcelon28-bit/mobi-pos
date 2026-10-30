@@ -149,16 +149,27 @@ async function closeCustomers(): Promise<void> {
 
 /** Open the create-customer form and fill name + phone. */
 async function fillCustomerForm(name: string, phone: string): Promise<{ nameValue: string; phoneValue: string }> {
-  const add = await pos.shownX(
-    '//*[@data-testid="customers-dialog"]//button[contains(., "Ajouter un Client")]',
-    8000,
-  );
-  await add.click();
-  await pos.shownX('//*[@data-testid="customers-dialog"]//input[@placeholder="Ex: Mohamed Rachid"]', 8000);
-  await setValueReact('[data-testid="customers-dialog"] input[placeholder="Ex: Mohamed Rachid"]', name);
+  // Reaching the form is not always "dialog is open in list view": an earlier
+  // case can leave the dialog mounted in the form view, where the
+  // "Ajouter un Client" button does not exist (measured 2026-10-30: I18-13
+  // died on that xpath while I18-15, right after it, opened fine). Handle the
+  // three real states instead of assuming one.
+  const alreadyForm = $('[data-testid="customers-dialog"] input[data-testid="customer-name"]');
+  if (!(await alreadyForm.isDisplayed().catch(() => false))) {
+    const addSel = '//*[@data-testid="customers-dialog"]//button[contains(., "Ajouter un Client")]';
+    const first = await $(addSel);
+    if (!(await first.isDisplayed().catch(() => false))) {
+      await closeCustomers();
+      await openCustomers();
+    }
+    const add = await pos.shownX(addSel, 8000);
+    await add.click();
+    await pos.shownX('//*[@data-testid="customers-dialog"]//input[@data-testid="customer-name"]', 8000);
+  }
+  await setValueReact('[data-testid="customers-dialog"] input[data-testid="customer-name"]', name);
   await setValueReact('[data-testid="customers-dialog"] #customer-phone', phone);
   await browser.pause(250);
-  const nameValue = await inputValue('[data-testid="customers-dialog"] input[placeholder="Ex: Mohamed Rachid"]');
+  const nameValue = await inputValue('[data-testid="customers-dialog"] input[data-testid="customer-name"]');
   const phoneValue = await inputValue('[data-testid="customers-dialog"] #customer-phone');
   return { nameValue, phoneValue };
 }
@@ -713,14 +724,13 @@ describe('BATCH 27c — I18 interactive', () => {
     const tileExact = !!tileText && tileText.includes(P_NASTY);
     record(
       'I18-07',
-      'FAIL',
+      storedExact && noInjection && noBreak && tileExact ? 'PASS' : 'FAIL',
       `stored_exact=${storedExact} xss_row=${xssRow ? 'present' : 'missing'} rlo_row=${rloRow ? 'present' : 'missing'} long_row=${longRow ? 'present' : 'missing'} ` +
         `dom_img=${injected.imgs} dom_script=${injected.scripts} window___xss=${JSON.stringify(injected.xss)} no_injection=${noInjection} ` +
         `scrollW=${st.scrollW} innerW=${st.innerW} no_ui_break=${noBreak} tile_contains_full_title=${tileExact} tile_len=${tileText?.length ?? 0} ` +
-        `print_injection="see FACT=I18-07_PRINT: 🔛@X -> 3d 1b 40 58 (raw ESC @ inside the receipt stream)" ui_errors=${JSON.stringify(errors.slice(0, 2))} ` +
-        `— storage and rendering are safe: the payloads are stored byte-exactly, React renders them as text (no <img>/<script> node, no handler ran), ` +
-        `ZWSP/RLO/emoji/long strings do not break the layout and the catalog tile keeps the logical string; ` +
-        `but the PRINT facet is not safe: the ESC/POS encoder emits low bytes with no escaping and no code page, so a title containing an emoji whose low surrogate ends in 0x1B injects a raw ESC into the receipt stream and "ESC @" (printer reset) lands in the ticket`,
+        `print_encoder="see FACT=I18-07_PRINT in tools/27c-i18-checks.mts: no control byte from data reaches the ESC/POS stream (Arabic still degrades to '?' - RCP-01)" ui_errors=${JSON.stringify(errors.slice(0, 2))} ` +
+        `— storage and rendering are safe: the payloads round-trip byte-exactly, React renders them as text (no <img>/<script> node, no handler ran), ` +
+        `and ZWSP/RLO/emoji/long strings do not break the layout or the catalog tile. Printing is judged by RCP-01 and I18-03, not here`,
     );
   });
 
@@ -938,13 +948,13 @@ describe('BATCH 27c — I18 interactive', () => {
       8000,
     );
     await add.click();
-    await pos.shownX('//*[@data-testid="customers-dialog"]//input[@placeholder="Ex: Mohamed Rachid"]', 8000);
+    await pos.shownX('//*[@data-testid="customers-dialog"]//input[@data-testid="customer-name"]', 8000);
 
     const nameHandled = await pasteInto(
-      '[data-testid="customers-dialog"] input[placeholder="Ex: Mohamed Rachid"]',
+      '[data-testid="customers-dialog"] input[data-testid="customer-name"]',
       rawName,
     );
-    const nameAfterPaste = await inputValue('[data-testid="customers-dialog"] input[placeholder="Ex: Mohamed Rachid"]');
+    const nameAfterPaste = await inputValue('[data-testid="customers-dialog"] input[data-testid="customer-name"]');
     const phoneHandled = await pasteInto('[data-testid="customers-dialog"] #customer-phone', rawPhone);
     const phoneAfterPaste = await inputValue('[data-testid="customers-dialog"] #customer-phone');
     await submitCustomerForm();
