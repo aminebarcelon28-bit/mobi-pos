@@ -25,6 +25,7 @@
  * Integer DZD throughout; no floats cross any assertion.
  */
 import { readFileSync } from 'node:fs';
+import * as receiptMathModule from '../src/utils/receiptMath.ts';
 import { deterministicId } from '../src/utils/ids.ts';
 import {
   computeRefundFundingSplit,
@@ -427,6 +428,215 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
     p1.avoirShare + p2.avoirShare + p3.avoirShare === 100,
     `${p1.avoirShare}+${p2.avoirShare}+${p3.avoirShare}`
   );
+
+  // ---- D3 cumulative lanes: the tests below pass the per-lane amounts
+  // already returned. Until the split accepts them (4th argument) they are
+  // ignored, so these checks are red for the arithmetic, not for a type.
+  type Lanes = { cash: number; avoir: number; voucher: number; debt: number; digital: number };
+  const runSequence = (sale: Record<string, unknown>, grosses: number[]) => {
+    const prior: Lanes = { cash: 0, avoir: 0, voucher: 0, debt: 0, digital: 0 };
+    let priorNet = 0;
+    const rows: Array<{ net: number; lanes: Lanes }> = [];
+    for (const g of grosses) {
+      const s = (computeRefundFundingSplit as unknown as (
+        o: unknown,
+        g: number,
+        p: number,
+        l: Lanes
+      ) => {
+        netRefund: number;
+        cashShare: number;
+        avoirShare: number;
+        voucherShare: number;
+        debtShare: number;
+        digitalShare: number;
+      })(sale, g, priorNet, { ...prior });
+      const lanes: Lanes = {
+        cash: s.cashShare,
+        avoir: s.avoirShare,
+        voucher: s.voucherShare,
+        debt: s.debtShare,
+        digital: s.digitalShare,
+      };
+      rows.push({ net: s.netRefund, lanes });
+      prior.cash += lanes.cash;
+      prior.avoir += lanes.avoir;
+      prior.voucher += lanes.voucher;
+      prior.debt += lanes.debt;
+      prior.digital += lanes.digital;
+      priorNet += s.netRefund;
+    }
+    return { rows, total: prior, net: priorNet };
+  };
+
+  for (const n of [2, 3, 5]) {
+    const grosses = Array.from({ length: n }, () => Math.round(900 / n));
+    const seq = runSequence(exclCredit, grosses);
+    const laneSum =
+      seq.total.cash + seq.total.avoir + seq.total.voucher + seq.total.debt + seq.total.digital;
+    check(
+      `I4b/e ${n} partials: the avoir lane is refunded exactly (100)`,
+      seq.total.avoir === 100,
+      `${n} partials -> avoir ${seq.total.avoir} (${seq.rows.map((r) => r.lanes.avoir).join('+')})`
+    );
+    check(
+      `I4b/e ${n} partials: lanes sum to the net returned (${grosses.reduce((a, b) => a + b, 0)})`,
+      laneSum === seq.net,
+      `lanes=${laneSum} net=${seq.net}`
+    );
+    check(
+      `I4b/e ${n} partials: no lane is negative`,
+      Object.values(seq.total).every((v) => v >= 0),
+      JSON.stringify(seq.total)
+    );
+    check(
+      `I4b/e ${n} partials: each refund's lanes sum to its own total`,
+      seq.rows.every(
+        (r) => r.lanes.cash + r.lanes.avoir + r.lanes.voucher + r.lanes.debt + r.lanes.digital === r.net
+      ),
+      JSON.stringify(seq.rows.map((r) => [r.net, r.lanes]))
+    );
+  }
+
+  // (f) Odd amounts and one-minor-unit edges: 0.01 DA tickets and 1-DA refunds
+  // must not mint or destroy a minor unit.
+  const penny = {
+    id: 'TKT-PENNY',
+    subtotal: 1.01,
+    discountTotal: 0,
+    total: 1.01,
+    paymentMethod: 'Espèces',
+    tenders: [
+      { method: 'Espèces', amount: 0.51 },
+      { method: 'Avoir Client', amount: 0.5 },
+    ],
+  };
+  const pennySeq = runSequence(penny, [0.01, 0.01, 0.99]);
+  check(
+    'I4b/f 0.01 DA partials keep the credit lane exact',
+    pennySeq.total.avoir === 0.5,
+    `${JSON.stringify(pennySeq.total)} rows=${JSON.stringify(pennySeq.rows)}`
+  );
+  check(
+    'I4b/f penny sequence conserves the net',
+    Math.round(pennySeq.net * 100) === 101,
+    `net=${pennySeq.net}`
+  );
+
+  // (g) Mixed lanes: cash + avoir + voucher on one ticket, three partials, each
+  // lane conserving its own original amount. (A debt lane is deliberately NOT
+  // asserted here: the current model pays debt relief out of the customer's
+  // returned value, which is a separate cluster's semantics — REF-65. Changing
+  // it is out of C01 scope; recorded in the RFC as an open finding.)
+  const threeLanes = {
+    id: 'TKT-3L',
+    subtotal: 1000,
+    discountTotal: 0,
+    total: 700, // cash only: credits excluded by convention
+    paymentMethod: 'Espèces',
+    tenders: [
+      { method: 'Espèces', amount: 700 },
+      { method: 'Avoir Client', amount: 200 },
+    ],
+    voucherCreditApplied: 100,
+  };
+  const seq4 = runSequence(threeLanes, [400, 300, 300]);
+  check('I4b/g mixed lanes: avoir 200 exact', seq4.total.avoir === 200, JSON.stringify(seq4.total));
+  check('I4b/g mixed lanes: voucher 100 exact', seq4.total.voucher === 100, JSON.stringify(seq4.total));
+  check('I4b/g mixed lanes: cash 700 exact', seq4.total.cash === 700, JSON.stringify(seq4.total));
+  check(
+    'I4b/g mixed lanes: lanes sum to the value returned (1000)',
+    seq4.total.cash + seq4.total.avoir + seq4.total.voucher === 1000,
+    JSON.stringify(seq4.total)
+  );
+
+  // (h) Property: random partial sequences, invariants (i)-(iv) hold.
+  {
+    let s2 = 987654321;
+    const r2 = () => ((s2 = (s2 * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    const ri2 = (lo: number, hi: number) => lo + Math.floor(r2() * (hi - lo + 1));
+    let bad = 0;
+    let firstBad = '';
+    for (let t = 0; t < 400; t++) {
+      const avoir = r2() < 0.4 ? ri2(1, 300) : 0;
+      const voucher = r2() < 0.2 ? ri2(1, 150) : 0;
+      const debt = r2() < 0.2 ? ri2(1, 200) : 0;
+      const cash = ri2(0, 700);
+      const tendered = avoir + debt + cash;
+      if (tendered === 0) continue;
+      const sale = {
+        id: `TKT-P${t}`,
+        subtotal: tendered,
+        discountTotal: r2() < 0.4 ? ri2(0, tendered) : 0,
+        total: Math.max(0, tendered - avoir - debt),
+        paymentMethod: 'Espèces',
+        tenders: [
+          ...(cash ? [{ method: 'Espèces', amount: cash }] : []),
+          ...(avoir ? [{ method: 'Avoir Client', amount: avoir }] : []),
+          ...(debt ? [{ method: 'Crédit Client', amount: debt }] : []),
+        ],
+        voucherCreditApplied: voucher,
+      };
+      const base = Math.max(1, tendered - sale.discountTotal);
+      const pieces = ri2(1, 6);
+      const grosses: number[] = [];
+      let left = base;
+      for (let k = 0; k < pieces - 1 && left > 0; k++) {
+        const g = ri2(0, left);
+        grosses.push(g);
+        left -= g;
+      }
+      grosses.push(left);
+      const seq = runSequence(sale, grosses);
+      const given = tendered + voucher;
+      const lanesTotal =
+        seq.total.cash + seq.total.avoir + seq.total.voucher + seq.total.debt + seq.total.digital;
+      const fullRefund = grosses.reduce((a, b) => a + b, 0) === base;
+      if (seq.net > given) {
+        bad++;
+        if (!firstBad) firstBad = `net>given t=${t} net=${seq.net} given=${given}`;
+      } else if (Math.round(lanesTotal * 100) !== Math.round(seq.net * 100)) {
+        bad++;
+        if (!firstBad) firstBad = `lanes!=net t=${t} lanes=${lanesTotal} net=${seq.net}`;
+      } else if (Object.values(seq.total).some((v) => v < 0)) {
+        bad++;
+        if (!firstBad) firstBad = `negative lane t=${t}`;
+      } else if (fullRefund && Math.round(seq.total.avoir * 100) !== Math.round(avoir * 100)) {
+        bad++;
+        if (!firstBad) firstBad = `avoir drift t=${t} avoir=${seq.total.avoir} want=${avoir}`;
+      }
+    }
+    check('I4b/h random partial sequences hold invariants (i)-(iv)', bad === 0, `${bad} bad: ${firstBad}`);
+  }
+
+  // (i) Legacy refund rows carry no `funding` object: the lane reader must
+  // derive them from the durable columns and never throw.
+  {
+    const helper = (receiptMathModule as unknown as Record<string, unknown>).refundLaneTotalsOf as
+      | ((t: unknown) => Lanes)
+      | undefined;
+    let derived: Lanes | null = null;
+    let threw = '';
+    try {
+      derived = helper
+        ? helper({
+            id: 'REF-LEGACY',
+            isRefund: true,
+            total: 500,
+            cashDisbursed: 300,
+            refundMethod: 'Avoir Client',
+          })
+        : null;
+    } catch (e) {
+      threw = String((e as Error)?.message ?? e);
+    }
+    check('I4b/i legacy refund without a funding object does not throw', threw === '', threw);
+    check(
+      'I4b/i legacy refund derives cash 300 and avoir 200',
+      !!derived && derived.cash === 300 && derived.avoir === 200,
+      JSON.stringify(derived)
+    );
+  }
 }
 
 // ------------------------------------------------------------------ I6 ---
