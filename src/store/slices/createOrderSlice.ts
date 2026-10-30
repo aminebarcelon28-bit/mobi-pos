@@ -57,7 +57,7 @@ import {
   getEffectiveCostPrice,
   calculateProfit,
 } from '../../utils/pricingEngine';
-import { computeCartTotals, computeRefundFundingSplit, refundLaneTotalsOf, computeTradeInSettlement, computeTradeRestoreQuota, lineProfitNet, refundableValueOf } from '../../utils/receiptMath';
+import { computeCartTotals, computeRefundFundingSplit, refundLaneTotalsOf, fundingPayloadOf, computeTradeInSettlement, computeTradeRestoreQuota, lineProfitNet, refundableValueOf } from '../../utils/receiptMath';
 import type { RefundLaneTotals } from '../../utils/receiptMath';
 import {
   cashSalesFromTxns,
@@ -2640,20 +2640,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     // D2: the per-lane split rides the refund's existing JSON payload (no
     // migration). Later refunds of this ticket read it back through
     // `refundLaneTotalsOf`, which is what makes partial refunds conserve.
-    (refundTransaction as unknown as Record<string, unknown>).funding = {
-      version: 1,
-      basis:
-        funding.anomalies.includes('no-tenders') || funding.anomalies.includes('legacy-no-tenders')
-          ? 'derived'
-          : 'explicit',
-      anomalies: funding.anomalies,
-      cash: funding.cashShare,
-      avoir: funding.avoirShare,
-      voucher: funding.voucherShare,
-      debt: funding.debtShare,
-      digital: funding.digitalShare,
-      gross: funding.grossRefund,
-    } satisfies Record<string, unknown>;
+    (refundTransaction as unknown as Record<string, unknown>).funding = fundingPayloadOf(
+      funding,
+      funding.anomalies.includes('no-tenders') || funding.anomalies.includes('legacy-no-tenders')
+        ? 'derived'
+        : 'explicit'
+    );
 
     const totalOrigItems = (originalTransaction.items || []).reduce((acc, i) => acc + i.quantity, 0);
     const totalRefundedItems = refundItems.reduce((acc, i) => acc + i.quantity, 0);

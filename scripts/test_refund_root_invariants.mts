@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Refund engine — root invariants (post-rebuild adversarial suite).
  *
  * Pins the SEVEN invariants of the rebuilt refund engine on the real TS
@@ -26,6 +26,8 @@
  */
 import { readFileSync } from 'node:fs';
 import * as receiptMathModule from '../src/utils/receiptMath.ts';
+import { payoutOf } from './refundPayout.mts';
+import { fundingPayloadOf } from '../src/utils/receiptMath.ts';
 import { deterministicId } from '../src/utils/ids.ts';
 import {
   computeRefundFundingSplit,
@@ -771,12 +773,35 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
       let net = 0;
       for (const s of splits) {
         net += minor(s.netRefund);
+        const deviations: Array<{ k: string; d: number }> = [];
         for (const k of ['avoir', 'cash', 'voucher', 'debt', 'digital'] as const) {
           const before = cum[k];
           cum[k] += minor(s[k === 'avoir' ? 'avoirShare' : k === 'cash' ? 'cashShare' : k === 'voucher' ? 'voucherShare' : k === 'debt' ? 'debtShare' : 'digitalShare']);
           if (cum[k] < before) return `(vi) ${k} decreased`;
           const share = minor(given[k]) === 0 ? 0 : Math.round((minor(given[k]) * net) / Math.max(1, minor(total)));
-          if (Math.abs(cum[k] - share) > 1) return `(v) ${k} ${cum[k]} vs proportional ${share} at net ${net}`;
+          deviations.push({ k, d: Math.abs(cum[k] - share) });
+        }
+        // Q-i moves the sub-dinar cash remainder BETWEEN cash and one non-cash
+        // lane, so at most two lanes may deviate by up to one dinar and their
+        // signed deviations must cancel (conservation). Any other pattern is a
+        // degenerate allocator and is killed.
+        const rowSum = s.voucherShare + s.avoirShare + s.debtShare + s.cashShare + s.digitalShare;
+        if (Math.round(rowSum * 100) !== minor(s.netRefund)) {
+          return `(iv) row lanes ${Math.round(rowSum * 100)} != net ${minor(s.netRefund)}`;
+        }
+        const off = deviations.filter((x) => x.d > 1);
+        if (off.length > 2) return `(v) ${off.map((x) => `${x.k}:${x.d}`).join(',')} at net ${net}`;
+        if (off.some((x) => x.d > 100)) return `(v) ${off.map((x) => `${x.k}:${x.d}`).join(',')} > 1 DA`;
+        if (off.length === 2) {
+          const signed = deviations
+            .filter((x) => x.d > 1)
+            .map((x) => {
+              const k = x.k as 'avoir' | 'cash' | 'voucher' | 'debt' | 'digital';
+              const share = minor(given[k]) === 0 ? 0 : Math.round((minor(given[k]) * net) / Math.max(1, minor(total)));
+              return cum[k] - share;
+            })
+            .reduce((a, b) => a + b, 0);
+          if (Math.abs(signed) > 1) return `(v) two lanes drift without cancelling (${signed}) at net ${net}`;
         }
       }
       return '';
@@ -808,14 +833,22 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
     const m1 = checkPrefixes(given, 900, cashFirst([300, 300, 300]));
     check('I4b/o mutation cash-first is KILLED', m1 !== '', m1 || 'not killed');
 
-    // Mutation 2: floor-only lanes, cash plug allowed to go negative.
-    const floorOnly = (nets: number[]): Split[] =>
-      nets.map((n) => {
-        const a = Math.floor((100 * n) / 900);
-        return { netRefund: n, voucherShare: 0, avoirShare: a, debtShare: 0, cashShare: n - a, digitalShare: 0 };
+    // Mutation 2: fabricates a minor unit (row lanes sum to net + 1), which
+    // (iv) must kill.
+    const mintOne = (nets: number[]): Split[] =>
+      nets.map((n, i) => {
+        const a = Math.round((100 * n) / 900) + (i === 0 ? 1 : 0);
+        return {
+          netRefund: n,
+          voucherShare: 0,
+          avoirShare: a,
+          debtShare: 0,
+          cashShare: n - Math.round((100 * n) / 900) + (i === 0 ? 1 : 0),
+          digitalShare: 0,
+        };
       });
-    const m2 = checkPrefixes(given, 900, floorOnly([300, 300, 300]));
-    check('I4b/o mutation floor-only is KILLED', m2 !== '', m2 || 'not killed');
+    const m2 = checkPrefixes(given, 900, mintOne([300, 300, 300]));
+    check('I4b/o mutation mint-one-minor is KILLED', m2 !== '', m2 || 'not killed');
 
     // Mutation 3: always correct the cash lane last (can overdraw the drawer).
     const lastLane = (nets: number[]): Split[] =>
@@ -853,6 +886,123 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
       !!derived && derived.cash === 300 && derived.avoir === 200,
       JSON.stringify(derived)
     );
+  }
+
+  // (p) INVARIANT (vii) PAYOUT CONSERVATION. The money that physically leaves
+  // the business (drawer rounded to whole DA + wallet + voucher + digital +
+  // debt) must equal the refund row total, run through the REAL clamp and the
+  // slice's Math.round.
+  {
+    const cashSale = {
+      id: 'TKT-CASH',
+      subtotal: 1000,
+      discountTotal: 0,
+      total: 1000,
+      paymentMethod: 'Espèces',
+      tenders: [{ method: 'Espèces', amount: 1000 }],
+    };
+    const mixedSale = {
+      id: 'TKT-MIX',
+      subtotal: 900,
+      discountTotal: 0,
+      total: 800,
+      paymentMethod: 'Espèces',
+      tenders: [
+        { method: 'Espèces', amount: 800 },
+        { method: 'Avoir Client', amount: 100 },
+      ],
+    };
+    const checkVii = (sale: Record<string, unknown>, grosses: number[], cashPaid: number) => {
+      const problems: string[] = [];
+      let priorNet = 0;
+      const prior = { cash: 0, avoir: 0, voucher: 0, debt: 0, digital: 0, gross: 0, basis: 'explicit' as const };
+      for (const g of grosses) {
+        const s = computeRefundFundingSplit(sale, g, priorNet, { ...prior });
+        const p = payoutOf(s, cashPaid - prior.cash, prior.cash);
+        if (p.residue !== 0) {
+          problems.push(`g=${g} residue=${p.residue} (cash=${p.cashOut} wallet=${p.wallet} net=${p.net})`);
+        }
+        prior.cash += s.cashShare;
+        prior.avoir += s.avoirShare;
+        prior.voucher += s.voucherShare;
+        prior.debt += s.debtShare;
+        prior.digital += s.digitalShare;
+        prior.gross = (prior.gross ?? 0) + s.grossRefund;
+        priorNet += s.netRefund;
+      }
+      return problems;
+    };
+
+    const thirds = checkVii(cashSale, [333.33, 333.33, 333.34], 1000);
+    check('I4b/p (vii) cash-only thirds conserve to the drawer', thirds.length === 0, thirds.join(' | '));
+
+    const sevenths = checkVii(cashSale, [142.86, 142.86, 142.86, 142.86, 142.86, 142.86, 142.84], 1000);
+    check('I4b/p (vii) cash-only sevenths conserve', sevenths.length === 0, sevenths.join(' | '));
+
+    const mixedThirds = checkVii(mixedSale, [300, 300, 300], 800);
+    check('I4b/p (vii) cash+avoir thirds conserve (wallet absorbs the sub-DA)', mixedThirds.length === 0, mixedThirds.join(' | '));
+
+    const s1 = computeRefundFundingSplit(cashSale, 333.33);
+    check(
+      'I4b/p fractional cash is promoted to whole DA (or reported)',
+      Math.round(s1.cashShare * 100) % 100 === 0 || (s1.anomalies ?? []).includes('fractional-original-cash'),
+      `cash=${s1.cashShare} anomalies=${JSON.stringify(s1.anomalies)}`
+    );
+
+    // Mutation: a split that returns raw fractional cash must be killed by (vii).
+    const rawFractional = {
+      ...s1,
+      cashShare: 333.33,
+      digitalShare: 0,
+      avoirShare: 0,
+      voucherShare: 0,
+      debtShare: 0,
+      netRefund: 333.33,
+    };
+    const m = payoutOf(rawFractional as never, 1000);
+    check('I4b/p mutation raw-fractional-cash is KILLED by (vii)', m.residue !== 0, JSON.stringify(m));
+  }
+
+  // (q) FUNDING FORMAT (Q-vi): integer minor units + unit:'minor'; the reader
+  // round-trips every lane and still accepts a DA-valued legacy object.
+  {
+    const rt = [
+      { subtotal: 1400, discountTotal: 500, total: 800, paymentMethod: 'Espèces', tenders: [{ method: 'Avoir Client', amount: 100 }, { method: 'Espèces', amount: 800 }] },
+      { subtotal: 1000, discountTotal: 0, total: 1000, paymentMethod: 'Espèces', tenders: [{ method: 'Espèces', amount: 1000 }] },
+      { subtotal: 669, discountTotal: 0, total: 669, paymentMethod: 'Espèces', tenders: [{ method: 'Espèces', amount: 462 }, { method: 'Avoir Client', amount: 207 }] },
+      { subtotal: 900, discountTotal: 0, total: 800, changeDue: 100, paymentMethod: 'Avoir Client', tenders: [{ method: 'Avoir Client', amount: 100 }, { method: 'Espèces', amount: 900 }] },
+    ];
+    let bad = 0;
+    for (const sale of rt) {
+      for (const g of [1, 33.33, 100, 269, 450, 900]) {
+        const s = computeRefundFundingSplit(sale as never, g);
+        const payload = fundingPayloadOf(s);
+        const read = refundLaneTotalsOf({ funding: payload } as unknown as Record<string, unknown>);
+        const pairs: Array<[number, number]> = [
+          [payload.cash, Math.round(read.cash * 100)],
+          [payload.avoir, Math.round(read.avoir * 100)],
+          [payload.voucher, Math.round(read.voucher * 100)],
+          [payload.debt, Math.round(read.debt * 100)],
+          [payload.digital, Math.round(read.digital * 100)],
+        ];
+        if (pairs.some(([a, b]) => a !== b)) bad++;
+        if (payload.unit !== 'minor' || payload.version !== 1) bad++;
+        if (read.basis !== 'explicit') bad++;
+      }
+    }
+    check('I4b/q funding round-trips in minor units (all lanes)', bad === 0, `${bad} mismatches`);
+
+    const daLegacy = refundLaneTotalsOf({
+      funding: { version: 1, basis: 'explicit', cash: 800, avoir: 100, voucher: 0, debt: 0, digital: 0, gross: 900 },
+    } as unknown as Record<string, unknown>);
+    check(
+      'I4b/q a DA-valued legacy object is read, not rejected',
+      daLegacy.cash === 800 && daLegacy.avoir === 100 && (daLegacy.anomalies ?? []).includes('funding-unit-legacy'),
+      JSON.stringify(daLegacy)
+    );
+
+    const malformed = refundLaneTotalsOf({ funding: { cash: 'x' } } as unknown as Record<string, unknown>);
+    check('I4b/q a malformed funding object falls back without throwing', malformed.basis === 'legacy', JSON.stringify(malformed));
   }
 }
 

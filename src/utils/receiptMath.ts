@@ -557,6 +557,44 @@ function tenderMinor(tenders: RefundFundingInput['tenders'], rails: string[]): n
 }
 
 /**
+ * Persisted per-refund funding (Q-vi): integer MINOR units with an explicit
+ * `unit` tag. Version stays 1 because no released build ever wrote the earlier
+ * DA-valued shape (no tag contains the commit that introduced it); the reader
+ * still accepts a DA-valued object from this branch's own test runs and flags
+ * it as `funding-unit-legacy`.
+ */
+export interface RefundFundingPayload {
+  version: 1;
+  unit: 'minor';
+  basis: 'explicit' | 'derived' | 'legacy';
+  anomalies: string[];
+  cash: number;
+  avoir: number;
+  voucher: number;
+  debt: number;
+  digital: number;
+  gross: number;
+}
+
+export function fundingPayloadOf(
+  split: RefundFundingSplit,
+  basis: 'explicit' | 'derived' | 'legacy' = 'explicit'
+): RefundFundingPayload {
+  return {
+    version: 1,
+    unit: 'minor',
+    basis,
+    anomalies: [...(split.anomalies ?? [])],
+    cash: toMinor(split.cashShare),
+    avoir: toMinor(split.avoirShare),
+    voucher: toMinor(split.voucherShare),
+    debt: toMinor(split.debtShare),
+    digital: toMinor(split.digitalShare),
+    gross: toMinor(split.grossRefund),
+  };
+}
+
+/**
  * Read the per-lane funding of one refund row.
  *
  * New rows carry `funding` in their JSON payload (D2, no migration). Historical
@@ -565,19 +603,27 @@ function tenderMinor(tenders: RefundFundingInput['tenders'], rails: string[]): n
  * malformed or missing `funding` object falls back to the derivation.
  */
 export function refundLaneTotalsOf(txn: Record<string, unknown> | null | undefined): RefundLaneTotals {
-  const raw = (txn?.funding ?? null) as Partial<RefundLaneTotals> | null;
+  const raw = (txn?.funding ?? null) as Partial<RefundFundingPayload> | null;
   if (raw && typeof raw === 'object') {
     const keys = ['cash', 'avoir', 'voucher', 'debt', 'digital'] as const;
     if (keys.every((k) => Number.isFinite(Number((raw as Record<string, unknown>)[k])))) {
+      // `unit:'minor'` is the current format. A DA-valued object can only come
+      // from this branch's own pre-Q-vi test runs; it is read (not rejected) and
+      // flagged so a mixed history is visible.
+      const isMinor = (raw as RefundFundingPayload).unit === 'minor';
+      const scale = (v: unknown) => fromMinor(Number(v)); // minor -> DA
+      const da = (v: unknown) => (isMinor ? scale(v) : Number(v));
+      const anomalies = Array.isArray(raw.anomalies) ? [...(raw.anomalies as string[])] : [];
+      if (!isMinor) anomalies.push('funding-unit-legacy');
       return {
-        cash: fromMinor(toMinor(raw.cash)),
-        avoir: fromMinor(toMinor(raw.avoir)),
-        voucher: fromMinor(toMinor(raw.voucher)),
-        debt: fromMinor(toMinor(raw.debt)),
-        digital: fromMinor(toMinor(raw.digital)),
-        gross: fromMinor(toMinor(raw.gross)),
+        cash: da(raw.cash),
+        avoir: da(raw.avoir),
+        voucher: da(raw.voucher),
+        debt: da(raw.debt),
+        digital: da(raw.digital),
+        gross: da(raw.gross),
         basis: (raw.basis as RefundLaneTotals['basis']) ?? 'explicit',
-        anomalies: Array.isArray(raw.anomalies) ? (raw.anomalies as string[]) : [],
+        anomalies,
       };
     }
   }
@@ -744,7 +790,13 @@ export function computeRefundFundingSplit(
   // telescopes to the lane total at the end (D3 i-iv).
   const capGrossM = baseM > 0 ? baseM : Number.MAX_SAFE_INTEGER;
   const cumGrossM = Math.min(capGrossM, prior.gross + grossM);
-  const cumNetM = baseM > 0 ? Math.min(givenM, Math.round((givenM * cumGrossM) / baseM)) : givenM;
+  let cumNetM = baseM > 0 ? Math.min(givenM, Math.round((givenM * cumGrossM) / baseM)) : givenM;
+  // Q-i: the drawer can only hand out whole dinars. On a CASH-ONLY ticket the
+  // refund itself is therefore rounded to a whole dinar on a cumulative target,
+  // so the sequence still sums to the exact net (333 + 333 + 334 = 1000) and no
+  // sub-dinar is ever promised to a drawer that would round it away.
+  const hasNonCashLane = fundV > 0 || fundA > 0 || fundD > 0;
+  if (!hasNonCashLane) cumNetM = Math.round(cumNetM / 100) * 100;
   const thisNetM = Math.max(0, cumNetM - priorNetM);
   const requestedNetM = baseM > 0 ? Math.round((givenM * grossM) / baseM) : givenM;
   const capped = thisNetM < requestedNetM;
@@ -786,8 +838,61 @@ export function computeRefundFundingSplit(
   // Rail split of the cash plug: the drawer pays the cash share, a digital rail
   // reverses on its own lane. Cash never exceeds what the customer left behind.
   const railPaidM = cashPaidM + digitalPaidM;
-  const cashM = railPaidM > 0 ? Math.min(plugM, Math.round((plugM * cashPaidM) / railPaidM)) : plugM;
-  const digitalM = Math.max(0, plugM - cashM);
+  let cashM = railPaidM > 0 ? Math.min(plugM, Math.round((plugM * cashPaidM) / railPaidM)) : plugM;
+  // Q-i: the DRAWER only pays whole dinars. Round the cash lane to a cumulative
+  // whole-dinar target (so the sequence stays exact) and hand the sub-dinar
+  // remainder to the largest non-cash lane. A fractional ORIGINAL cash lane
+  // cannot be fixed here: it is recorded instead of being silently dropped.
+  if (cashPaidM % 100 !== 0) {
+    anomalies.push('fractional-original-cash');
+  } else if (digitalPaidM === 0 && cashPaidM > 0) {
+    const cumCashTargetM = Math.round((cumNetM * cashPaidM) / Math.max(1, givenM));
+    const cumCashWholeM = Math.round(cumCashTargetM / 100) * 100;
+    // The whole-dinar target may exceed this row's cash plug by up to 1 DA;
+    // the excess (rem below) is taken out of the largest non-cash lane so the
+    // row still sums to its total and the drawer never receives a fraction.
+    cashM = Math.max(0, Math.min(cashPaidM - prior.cash, cumCashWholeM - prior.cash));
+  }
+  let digitalM = digitalPaidM > 0 ? Math.max(0, plugM - cashM) : 0;
+  // Sub-dinar remainder -> a non-cash lane with ROOM (rem > 0) or with value to
+  // give back (rem < 0), so a lane already at its original amount is never
+  // pushed past it. This is what keeps (ii) exact at the end of a sequence.
+  let remM = plugM - cashM - digitalM;
+  if (remM !== 0) {
+    const headroom = (fund: number, priorLane: number, current: number) =>
+      Math.max(0, fund - priorLane - current);
+    const lanes: Array<['v' | 'a' | 'd', number, number]> = [
+      ['v', v, headroom(fundV, prior.voucher, v)],
+      ['a', a, headroom(fundA, prior.avoir, a)],
+      ['d', d, headroom(fundD, prior.debt, d)],
+    ];
+    if (remM > 0) {
+      lanes.sort((x, y) => y[2] - x[2]);
+      for (const [key, , room] of lanes) {
+        if (remM === 0) break;
+        const take = Math.min(remM, room);
+        if (take <= 0) continue;
+        if (key === 'v') v += take;
+        else if (key === 'a') a += take;
+        else d += take;
+        remM -= take;
+      }
+    } else {
+      lanes.sort((x, y) => y[1] - x[1]);
+      let excess = -remM;
+      for (const [key, value] of lanes) {
+        if (excess === 0) break;
+        const take = Math.min(excess, value);
+        if (take <= 0) continue;
+        if (key === 'v') v -= take;
+        else if (key === 'a') a -= take;
+        else d -= take;
+        excess -= take;
+      }
+      remM = -excess;
+    }
+    if (remM !== 0) digitalM += remM; // nothing else can take it
+  }
   if (cashM + prior.cash > cashPaidM) anomalies.push('cash-over-paid');
 
   return {
