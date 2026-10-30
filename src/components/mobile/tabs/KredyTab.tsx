@@ -45,9 +45,9 @@ import {
 import { useTranslation, Bdi } from '../../../i18n';
 import { useRegisterMobileBackHandler } from '../../../hooks/useMobileBackNavigation';
 
-// Normalisation diacritique insensible aux accents et à la casse
-const foldForSearch = (s: string | undefined | null): string =>
-  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+// Normalisation unique de l'app (`utils/catalogSearch`) : harakat, tatweel,
+// variantes alef/teh-marbuta/yeh et chiffres arabes-indiens inclus.
+import { foldForSearch } from '../../../utils/catalogSearch';
 
 type KredyFilter = 'debtors' | 'over_limit' | 'aging' | 'all';
 

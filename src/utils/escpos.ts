@@ -59,11 +59,29 @@ export class EscPosBuilder {
 
   /**
    * Encode le texte en octets et l'ajoute au tampon.
+   *
+   * A receipt title is OPERATOR DATA, not printer commands. The old
+   * `charCodeAt(i) & 0xFF` truncated every UTF-16 code unit to one byte, so an
+   * emoji whose low surrogate byte happened to be 0x1B injected a raw ESC into
+   * the ticket stream and "ESC @" reset the printer mid-receipt (I18-07,
+   * measured). Control bytes can only enter the stream through the command
+   * methods above; here they are dropped, characters above Latin-1 are
+   * degraded to `?` (no code page is negotiated yet: RCP-01), and CR/LF in
+   * data become spaces.
    */
   text(content: string): this {
-    for (let i = 0; i < content.length; i++) {
-      // Encodage simplifié pour ASCII
-      this.buffer.push(content.charCodeAt(i) & 0xFF);
+    for (const ch of content) {
+      const cp = ch.codePointAt(0) as number;
+      if (cp === 0x0A || cp === 0x0D || cp === 0x09) {
+        this.buffer.push(0x20);
+        continue;
+      }
+      if (cp < 0x20 || cp === 0x7F) continue; // never emit a control byte from data
+      if (cp < 0x100) {
+        this.buffer.push(cp);
+        continue;
+      }
+      this.buffer.push(0x3F); // '?' - not representable without a code page
     }
     return this;
   }

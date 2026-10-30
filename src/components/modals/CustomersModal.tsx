@@ -20,8 +20,10 @@ import { useToast } from '../ui/Toast';
 import { Kbd } from '../../design-system/desktop/Kbd';
 import { PriceBooksModal } from './PriceBooksModal';
 
-const foldForSearch = (s: string | undefined | null): string =>
-  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+// One fold for the whole app (`utils/catalogSearch`): Arabic harakat, tatweel,
+// alef/teh-marbuta/yeh variants and Arabic-Indic digits all fold here, so a
+// name that finds a product also finds the customer (I18-04 / SCL-61).
+import { foldForSearch } from '../../utils/catalogSearch';
 
 type SortField = 'name' | 'loyaltyPoints' | 'storeCredit' | 'totalSpent';
 type SortDir = 'asc' | 'desc';
@@ -529,28 +531,55 @@ export const CustomersModal: React.FC = () => {
     setViewMode('form');
   };
 
+  /**
+   * Invisible characters a WhatsApp / Excel paste carries: NBSP, bidi marks,
+   * zero-width joiners, BOM, CR/LF/TAB. They are invisible on screen, make the
+   * stored row unfindable by exact match and poison printed labels, so they are
+   * stripped BEFORE the value reaches the store (I18-15).
+   */
+  const sanitizePastedText = (raw: string): string =>
+    raw
+      .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F]/g, ' ')
+      .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g, '')
+      .replace(/[\r\n\t]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
   const handleSaveCustomer = (e: React.FormEvent) => {
     e.preventDefault();
     const parsedDebtLimit = debtLimit.trim() === '' ? undefined : Math.max(0, Number(debtLimit));
+    // A phone that does not normalize is REJECTED, never silently stored as a
+    // digit-stripped guess: "055012345" (9 digits) used to be written to the
+    // CRM with a success toast, so the ledger held a number no one could dial
+    // (I18-13). Empty stays allowed - the field is optional in intake.
+    const phoneNorm = normalizeAlgerianPhone(phone);
+    if (phone.trim() && !phoneNorm.isValid) {
+      showToast('Numéro de téléphone invalide - format DZ attendu (ex : 0555 12 34 56).', 'error');
+      return;
+    }
+    // Storage keeps the typed value byte-exactly (I18-07 asserts the
+    // round-trip); only a PASTE is cleaned, because that is the path the case
+    // names - WhatsApp/Excel clipboard junk (NBSP, RLM, line breaks) must not
+    // reach the stored row. Clearing typed invisible marks here would silently
+    // rewrite a name the operator can see.
+    const cleanName = name;
     if (editingId) {
-      const editNorm = normalizeAlgerianPhone(phone);
-      const cleanEditPhone = editNorm.isValid ? editNorm.local : (editNorm.digitsOnly || phone.trim());
-      updateCustomer(editingId, { name, phone: cleanEditPhone, email, registeredDevice, pricingTier, debtLimit: parsedDebtLimit });
+      const cleanEditPhone = phoneNorm.isValid ? phoneNorm.local : '';
+      updateCustomer(editingId, { name: cleanName, phone: cleanEditPhone, email, registeredDevice, pricingTier, debtLimit: parsedDebtLimit });
       showSuccess('Profil client mis à jour avec succès !');
       // Sync the open profile snapshot so the return navigation shows fresh data.
       const target = (customers || []).find(c => c.id === editingId);
       const updated: Customer | undefined = target
-        ? { ...target, name, phone: cleanEditPhone, email, registeredDevice, pricingTier, debtLimit: parsedDebtLimit }
+        ? { ...target, name: cleanName, phone: cleanEditPhone, email, registeredDevice, pricingTier, debtLimit: parsedDebtLimit }
         : undefined;
       if (updated) setProfileCustomer(prev => (prev?.id === updated.id ? updated : prev));
       resetForm(updated);
     } else {
-      // Intake normalization: canonical local form when valid, else trimmed
-      // digit-strip fallback so the ledger never stores formatted noise.
-      const norm = normalizeAlgerianPhone(phone);
-      const cleanPhone = norm.isValid ? norm.local : (norm.digitsOnly || phone.trim());
+      // Intake normalization: the canonical local form, never a digit-strip
+      // guess (invalid input was rejected above).
+      const cleanPhone = phoneNorm.isValid ? phoneNorm.local : '';
       addCustomer({
-        name, phone: cleanPhone, email, registeredDevice, pricingTier, debtLimit: parsedDebtLimit, loyaltyPoints: 0, storeCredit: 0
+        name: cleanName, phone: cleanPhone, email, registeredDevice, pricingTier, debtLimit: parsedDebtLimit, loyaltyPoints: 0, storeCredit: 0
       });
       showSuccess('Nouveau client ajouté au CRM !');
       resetForm();
@@ -824,6 +853,19 @@ export const CustomersModal: React.FC = () => {
                   <div>
                     <label className="text-[10px] text-pos-muted uppercase font-bold block mb-1.5">Nom Complet *</label>
                     <input type="text" required value={name} onChange={e => setName(e.target.value)}
+                      data-testid="customer-name"
+                      onPaste={(e) => {
+                        // Cancel the raw paste and insert the cleaned text:
+                        // WhatsApp/Excel pastes carry NBSP, RLM/LRM and line
+                        // breaks that are invisible but stored verbatim (I18-15).
+                        const text = e.clipboardData?.getData('text') ?? '';
+                        if (!text) return;
+                        e.preventDefault();
+                        const el = e.currentTarget;
+                        const start = el.selectionStart ?? name.length;
+                        const end = el.selectionEnd ?? start;
+                        setName(`${name.slice(0, start)}${sanitizePastedText(text)}${name.slice(end)}`.replace(/\s+/g, ' '));
+                      }}
                       placeholder="Ex: Mohamed Leila"
                       className="w-full bg-pos-bg border border-pos-border rounded-lg px-3 py-2.5 text-xs text-pos-text focus:border-emerald-400 focus:outline-none transition" />
                   </div>

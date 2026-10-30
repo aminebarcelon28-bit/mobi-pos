@@ -623,17 +623,26 @@ pub fn backup_db_file_with_key(
         let _ = std::fs::remove_file(&dst_path);
         return Err(e);
     }
-    let ro = rusqlite::Connection::open_with_flags(
+    // The verification handle is opened READ-WRITE on purpose, but only on the
+    // disposable copy and only for the check. Since SQLite 3.44 `PRAGMA
+    // integrity_check` also validates FTS5 inverted indexes, and that
+    // validator writes scratch pages: on a read-only handle it fails with
+    // "unable to validate the inverted index for FTS5 table ...: attempt to
+    // write a readonly database", which used to fail EVERY backup of a shop
+    // with the product FTS index (batch 21 DAT-30 / batch 22 DAT-65). Nothing
+    // is repaired through this handle; the SHA-256 is computed after the check
+    // over the finished bytes, so the verified image is the stored image.
+    let rw_copy = rusqlite::Connection::open_with_flags(
         &dst_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )
     .map_err(|e| TrustError::op_failed(format!("Réouverture du snapshot impossible: {e}")))?;
-    if let Err(e) = crate::trust_core::export_snapshot::integrity_check(&ro) {
-        drop(ro);
+    if let Err(e) = crate::trust_core::export_snapshot::integrity_check(&rw_copy) {
+        drop(rw_copy);
         let _ = std::fs::remove_file(&dst_path);
         return Err(e);
     }
-    drop(ro);
+    drop(rw_copy);
     // Phase 4d: seal the verified image before it rests. The seal covers the
     // exact bytes integrity_check just approved; the SHA below is over the
     // STORED (ciphertext) bytes. A seal failure deletes the copy and fails
@@ -839,17 +848,21 @@ fn decrypt_snapshot_for_recovery(
             let bytes = crate::snapshot_crypto::decrypt_file_to(&canon_src, &key, &dest)?;
             // Plaintext working copy exists: verify it opens before reporting
             // success (a torn decrypt must not be handed to an operator).
+            // READ-WRITE for the same reason as the snapshot path: since
+            // SQLite 3.44 `PRAGMA integrity_check` validates FTS5 indexes and
+            // writes scratch pages, so a read-only handle reports "attempt to
+            // write a readonly database" on every DB with products_fts.
             {
-                let ro = rusqlite::Connection::open_with_flags(
+                let rw = rusqlite::Connection::open_with_flags(
                     &dest,
-                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_URI,
                 )
                 .map_err(|e| {
                     let _ = std::fs::remove_file(&dest);
                     TrustError::op_failed(format!("recovery copy illisible: {e}"))
                 })?;
-                if let Err(e) = crate::trust_core::export_snapshot::integrity_check(&ro) {
-                    drop(ro);
+                if let Err(e) = crate::trust_core::export_snapshot::integrity_check(&rw) {
+                    drop(rw);
                     let _ = std::fs::remove_file(&dest);
                     return Err(e);
                 }

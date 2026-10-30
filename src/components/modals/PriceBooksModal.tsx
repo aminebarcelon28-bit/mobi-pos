@@ -37,8 +37,7 @@ interface PriceBooksModalProps {
   onClose: () => void;
 }
 
-const foldForSearch = (s: string | undefined | null): string =>
-  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+import { foldForSearch } from '../../utils/catalogSearch';
 
 export const PriceBooksModal: React.FC<PriceBooksModalProps> = ({ isOpen, onClose }) => {
   const { showToast } = useToast();

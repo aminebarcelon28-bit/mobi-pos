@@ -1,8 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { parseLocalizedAmount } from '../../utils/moneyInput';
 
-const foldForSearch = (s: string | undefined | null): string =>
-  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+import { foldForSearch } from '../../utils/catalogSearch';
 
 /**
  * I8 (UPGRADE-11): phone-aware search. The stored number is normalized

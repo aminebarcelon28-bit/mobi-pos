@@ -2,9 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 
-const foldForSearch = (s: string | undefined | null): string =>
-  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-import {
+import { foldForSearch } from '../../utils/catalogSearch';import {
   X,
   Package,
   ShoppingBag,

@@ -20,8 +20,7 @@ export interface LabelQueueItem {
   quantity: number;
 }
 
-const foldForSearch = (s: string | undefined | null): string =>
-  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+import { foldForSearch } from '../../utils/catalogSearch';
 
 const CATEGORIES: CategoryType[] = [
   'Tous les produits',

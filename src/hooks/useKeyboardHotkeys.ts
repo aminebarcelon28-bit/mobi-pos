@@ -58,8 +58,12 @@ export const useKeyboardHotkeys = () => {
         return;
       }
 
-      // Prevent browser default behavior for function keys
-      if (e.key.startsWith('F') && e.key.length <= 3) {
+      // Prevent browser default behavior for function keys. Match F1..F12
+      // exactly: the old `startsWith('F')` test also matched a lone uppercase
+      // "F" (Shift+f), so any card reference, serial or customer name typed
+      // with a capital F lost the character app-wide (`20-pay-payments`
+      // [PAY-08]: "OFF-777" stored as "O-777").
+      if (/^F([1-9]|1[0-2])$/.test(e.key)) {
         e.preventDefault();
       }
 

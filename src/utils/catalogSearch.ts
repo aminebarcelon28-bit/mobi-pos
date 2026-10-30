@@ -37,6 +37,16 @@ const SYNONYM_CLUSTERS: string[][] = [
 
 /**
  * Normalizes a string for diacritic, Arabic, and case-insensitive search.
+ *
+ * This is THE fold for every search box in the app. It used to exist as a
+ * private two-line NFD+lowercase copy in eight components, so the same typed
+ * name matched in the product grid and missed in the customer directory
+ * (`27c-i18-checks` [I18-04], `27a-scl-batch` [SCL-61]). Import it; never
+ * re-implement it.
+ *
+ * Handles: Latin diacritics, Arabic harakat/tashkeel, tatweel, alef/hamza
+ * variants, teh marbuta, alef maqsura, Persian yeh/kaf, Arabic-Indic and
+ * Persian digits, invisible bidi marks and NBSP.
  */
 export function normalizeForSearch(s: string | undefined | null | number): string {
   if (s == null) return '';
@@ -44,9 +54,16 @@ export function normalizeForSearch(s: string | undefined | null | number): strin
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '') // Strip combining diacritical marks
     .replace(/[\u064B-\u065F\u0670]/g, '') // Strip Arabic harakat / tashkeel
-    .replace(/[إأآا]/g, 'ا') // Normalize Arabic Alef variants
-    .replace(/ة/g, 'ه') // Normalize Teh Marbuta
-    .replace(/ى/g, 'ي') // Normalize Yeh
+    .replace(/\u0640/g, '') // Strip tatweel (kashida) - a purely cosmetic glyph
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g, '') // bidi / zero-width marks
+    .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F]/g, ' ') // Unicode spaces -> space
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660)) // ٠-٩
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06f0)) // ۰-۹
+    .replace(/[\u0622\u0623\u0625\u0627\u0671]/g, '\u0627') // Alef variants -> alef
+    .replace(/\u0629/g, '\u0647') // Teh Marbuta -> heh
+    .replace(/\u0649/g, '\u064A') // Alef maqsura -> yeh
+    .replace(/\u06CC/g, '\u064A') // Persian yeh -> yeh
+    .replace(/\u06A9/g, '\u0643') // Persian kaf -> kaf
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
