@@ -19,7 +19,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
-  parseArgs, sumRunCounts, classifyId, csvLine, parseCsv, readIndex, writeIndex,
+  parseArgs, sumRunCounts, classifyId, csvLine, parseCsv, readIndex, writeIndex, indexCounts, readDashboard,
 } from './_lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -77,7 +77,8 @@ function dashboardFor(rows) {
 | Catalog cases (table rows) | ${total} |
 | Passed (full) | ${c.PASS} |
 | Passed (partial - unasserted facets listed) | ${c['PASS-PARTIAL']} |
-| Passed (excluding flaky rows) | ${Object.entries(c).length ? rows.filter((r) => String(r[7]) !== '1' && ['PASS', 'PASS-PARTIAL'].includes(r[8]) && !/FLAKY/i.test(String(r[10] ?? ''))).length : 0} |
+| Passed (full, excluding flaky rows) | ${rows.filter((r) => String(r[7]) !== '1' && r[8] === 'PASS' && !/FLAKY/i.test(String(r[10] ?? ''))).length} |
+| FLAKY (pass, order-dependent - excluded from the headline) | ${rows.filter((r) => String(r[7]) !== '1' && ['PASS', 'PASS-PARTIAL'].includes(r[8]) && /FLAKY/i.test(String(r[10] ?? ''))).length} |
 | **FAILED** | ${c.FAIL} |
 | N/A (absent or unobservable in harness) | ${c['N/A']} |
 | Remaining (doable today, not yet executed) | ${c.REMAIN} |
@@ -914,6 +915,26 @@ function derivedTests() {
 }
 
 /* ------------------------------------------------------------------ */
+/* dashboard buckets: PASS, PASS-PARTIAL and FLAKY are different things      */
+/* ------------------------------------------------------------------ */
+
+function dashboardCountTests() {
+  const rows = [
+    ['REF-01', 'REF', 'P0', '', 'full pass', 'REF', '10', '0', 'PASS', '10-ref.e2e.ts', '**PASS**', '', ''],
+    ['REF-02', 'REF', 'P0', '', 'partial pass', 'REF', '11', '0', 'PASS-PARTIAL', '10-ref.e2e.ts', '**PASS-PARTIAL**', '', ''],
+    ['REF-03', 'REF', 'P1', '', 'flaky pass', 'REF', '12', '0', 'PASS', '10-ref.e2e.ts', '**PASS (FLAKY)** - order dependent', '', ''],
+    ['REF-04', 'REF', 'P0', '', 'red', 'REF', '13', '0', 'FAIL', '10-ref.e2e.ts', '**FAIL**', '', ''],
+  ];
+  const dir = makeRepo('dashcounts', { rows });
+  const c = indexCounts(readIndex(dir));
+  check('dashboard: PASS-NONFLAKY counts FULL passes only', c['PASS-NONFLAKY'] === 1, JSON.stringify(c));
+  check('dashboard: a PASS-PARTIAL is not a full pass', c['PASS-NONFLAKY'] < c.PASS, JSON.stringify(c));
+  check('dashboard: FLAKY is counted on its own', c.FLAKY === 1, JSON.stringify(c));
+  const dash = readDashboard(path.join(dir, 'e2e-tests', 'COVERAGE.md'));
+  check('dashboard: fixture carries the three buckets', dash['PASS-NONFLAKY'] === 1 && dash['PASS-PARTIAL'] === 1 && dash.FLAKY === 1, JSON.stringify(dash));
+}
+
+/* ------------------------------------------------------------------ */
 /* cluster.mjs: the only writer of FAIL-CLUSTERS.csv                       */
 /* ------------------------------------------------------------------ */
 
@@ -960,6 +981,7 @@ const ALL = [
   ['verdicts', verdictsTests],
   ['derived', derivedTests],
   ['cluster', clusterTests],
+  ['dashboard', dashboardCountTests],
   ['verdict-protocol', verdictProtocolTests],
   ['repeat-run', repeatRunTests],
   ['reconcile', reconcileTests],

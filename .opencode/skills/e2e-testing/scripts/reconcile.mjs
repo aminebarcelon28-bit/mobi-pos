@@ -116,7 +116,8 @@ if (index.rows.length !== counts.TOTAL + retired) {
 
 check('PASS', counts.PASS, dash.PASS);
 check('PASS-PARTIAL', counts['PASS-PARTIAL'], dash['PASS-PARTIAL']);
-check('PASS-NONFLAKY', counts['PASS-NONFLAKY'], dash['PASS-NONFLAKY']);
+check('PASS-NONFLAKY (full only)', counts['PASS-NONFLAKY'], dash['PASS-NONFLAKY']);
+check('FLAKY', counts.FLAKY, dash.FLAKY);
 check('FAIL', counts.FAIL, dash.FAIL);
 check('N/A', counts['N/A'], dash['N/A']);
 check('REMAIN', counts.REMAIN, dash.REMAIN);
@@ -199,12 +200,13 @@ if (unclustered.length || phantom.length || clusterProblems.length) {
 // Flaky rows are reported separately and excluded from the PASS headline
 // (Q-C): an order-dependent pass is not a green.
 if (flakyRows.length) {
-  const passes = active.filter((r) => ['PASS', 'PASS-PARTIAL'].includes(index.get(r, 'verdict'))).length;
   console.log(
     `${C.yellow}[flaky]${C.reset} ${flakyRows.length} row(s) pass but are order-dependent (excluded from the headline):`
   );
   for (const r of flakyRows) console.log(`       - ${index.get(r, 'id')} (${index.get(r, 'verdict')})`);
-  console.log(`${C.dim}     PASS excluding flaky rows: ${passes - flakyRows.length} of ${passes}${C.reset}`);
+  console.log(
+    `${C.dim}     PASS (full) excluding flaky: ${counts['PASS-NONFLAKY']} of ${counts.PASS}  ·  PASS-PARTIAL: ${counts['PASS-PARTIAL']}  ·  FLAKY: ${counts.FLAKY}${C.reset}`
+  );
 }
 
 if (unplaced.length) {
