@@ -19,7 +19,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
-  parseArgs, sumRunCounts, classifyId, csvLine, parseCsv,
+  parseArgs, sumRunCounts, classifyId, csvLine, parseCsv, readIndex, writeIndex,
 } from './_lib.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -844,11 +844,62 @@ function verdictProtocolTests() {
 }
 
 /* ------------------------------------------------------------------ */
+/* derived rows (D5): derived:<ANCHOR> follows the anchor, never launders   */
+/* an unproven anchor into a green                                         */
+/* ------------------------------------------------------------------ */
+
+function derivedTests() {
+  const rows = [
+    ['REF-01', 'REF', 'P0', '', 'anchor case', 'REF', '10', '0', 'FAIL', '10-ref.e2e.ts', '**FAIL**', '', ''],
+    ['CRT-01', 'CRT', 'P1', '', 'derived facet', 'CRT', '', '0', 'FAIL', 'derived:REF-01', '**FAIL** — derived', '', ''],
+  ];
+  const dir = makeRepo('derived', { rows });
+  const events = write(dir, 'e2e-tests/results/events.ndjson',
+    '{"ts":"2026-01-01T00:00:01Z","kind":"pass","fullTitle":"[REF-01] anchor case","state":"pass"}\n');
+  const sidecar = write(dir, 'e2e-tests/results/runs/2026-01-01-run.json', JSON.stringify({
+    tag: 'run', gitSha: 'deadbee', exitCode: 0, passing: 1, failing: 0, durationMs: 10,
+    startedAt: '2026-01-01T00:00:00.000Z', specs: ['10-ref.e2e.ts'],
+  }));
+
+  let r = run('verdicts.mjs', ['--run', sidecar, '--write-index'], dir);
+  let idx = readIndex(dir);
+  check('derived: the anchor is stamped PASS', idx.byId.get('REF-01') && idx.get(idx.byId.get('REF-01'), 'verdict') === 'PASS', r.out);
+  check('derived: the derived row follows a PASS anchor', idx.get(idx.byId.get('CRT-01'), 'verdict') === 'PASS', r.out);
+  check('derived: the derived row carries the anchor run reference', idx.get(idx.byId.get('CRT-01'), 'verdict_run') === '2026-01-01-run.json', r.out);
+
+  // Anchor marked UNPROVEN: the derived row must not stay green.
+  const anchorRow = idx.byId.get('REF-01');
+  anchorRow[idx.ix.evidence] = '**PASS (INTERMITTENT)** — 5/6 runs, not explained';
+  writeIndex(idx);
+  r = run('verdicts.mjs', ['--run', sidecar, '--write-index'], dir);
+  idx = readIndex(dir);
+  check('derived: an UNPROVEN anchor forces the derived row to FAIL', idx.get(idx.byId.get('CRT-01'), 'verdict') === 'FAIL', r.out);
+
+  // Anchor FAIL: derived FAIL. A second run reports the anchor as failing.
+  const eventsFail = write(dir, 'e2e-tests/results/events2.ndjson',
+    '{"ts":"2026-01-01T00:00:09Z","kind":"fail","fullTitle":"[REF-01] anchor case","state":"fail"}\n');
+  const sidecarFail = write(dir, 'e2e-tests/results/runs/2026-01-01-run2.json', JSON.stringify({
+    tag: 'run2', gitSha: 'deadbee', exitCode: 1, passing: 0, failing: 1, durationMs: 10,
+    startedAt: '2026-01-01T00:00:08.000Z', specs: ['10-ref.e2e.ts'],
+  }));
+  r = run('verdicts.mjs', ['--run', sidecarFail, '--events', eventsFail, '--write-index'], dir);
+  idx = readIndex(dir);
+  check('derived: a FAIL anchor keeps the derived row FAIL', idx.get(idx.byId.get('CRT-01'), 'verdict') === 'FAIL', r.out);
+
+  const bad = write(dir, 'e2e-tests/CASE_INDEX.csv',
+    fs.readFileSync(path.join(dir, 'e2e-tests', 'CASE_INDEX.csv'), 'utf8').replace('derived:REF-01', 'derived:REF-99'));
+  r = run('verdicts.mjs', ['--run', sidecar, '--write-index'], dir);
+  check('derived: an unknown anchor is exit 2', r.code === 2 && /REF-99/.test(r.out), r.out);
+  void bad;
+}
+
+/* ------------------------------------------------------------------ */
 
 const ALL = [
   ['unit', unitTests],
   ['delta', deltaTests],
   ['verdicts', verdictsTests],
+  ['derived', derivedTests],
   ['verdict-protocol', verdictProtocolTests],
   ['repeat-run', repeatRunTests],
   ['reconcile', reconcileTests],

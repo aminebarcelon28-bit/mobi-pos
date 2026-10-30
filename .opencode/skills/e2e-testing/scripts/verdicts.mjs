@@ -180,6 +180,36 @@ if (args['write-index']) {
     row[index.ix.verdict_sha] = sha;
     if (was !== verdict) changes.push(`${id}: ${was || '(none)'} -> ${verdict}`);
   }
+
+  // Derived rows (D5): a row whose `spec` is `derived:<ANCHOR_ID>` has no case
+  // of its own; its verdict is the anchor's. It is PASS/PASS-PARTIAL only when
+  // the anchor is AND the anchor is not marked unproven: the anchor's evidence
+  // carries UNPROVEN or INTERMITTENT when the observation is a low-rate flake
+  // or has no confirmed root cause, and a derived row must not launder that
+  // into a green.
+  const DERIVED_MARK = /^derived:([A-Z][A-Z0-9]{1,3}-\d{2,3})$/;
+  const isUnproven = (text) => /\b(UNPROVEN|INTERMITTENT)\b/i.test(String(text ?? ''));
+  for (const row of index.rows) {
+    if (index.get(row, 'retired') === '1') continue;
+    const m = DERIVED_MARK.exec(index.get(row, 'spec'));
+    if (!m) continue;
+    const id = index.get(row, 'id');
+    const anchor = index.byId.get(m[1]);
+    if (!anchor) {
+      die(2, `${id} derives from ${m[1]}, which is not in CASE_INDEX.csv`);
+    }
+    const anchorVerdict = index.get(anchor, 'verdict');
+    const unproven = isUnproven(index.get(anchor, 'evidence'));
+    const next = ['PASS', 'PASS-PARTIAL'].includes(anchorVerdict) && !unproven ? anchorVerdict : 'FAIL';
+    const was = index.get(row, 'verdict');
+    const nextRun = index.get(anchor, 'verdict_run');
+    const nextSha = index.get(anchor, 'verdict_sha');
+    if (was === next && index.get(row, 'verdict_run') === nextRun) continue;
+    row[index.ix.verdict] = next;
+    row[index.ix.verdict_run] = nextRun;
+    row[index.ix.verdict_sha] = nextSha;
+    changes.push(`${id}: ${was || '(none)'} -> ${next} (derived from ${m[1]}${unproven ? ', anchor UNPROVEN' : ''})`);
+  }
   writeIndex(index);
   const dashboard = syncDashboard(COVERAGE, indexCounts(index));
   console.log(`${C.green}index${C.reset} ${changes.length} verdict change(s), run=${runRef} sha=${sha}`);
