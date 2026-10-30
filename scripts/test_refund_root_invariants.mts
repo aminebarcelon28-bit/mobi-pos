@@ -319,6 +319,116 @@ console.log('\n--- I4: debt-first / tender-capped funding waterfall ---');
   check('cumulative cash cap trims over-recovery', capped.capped === true && capped.netRefund === 300, JSON.stringify(capped));
 }
 
+// --------------------------------------------------------------- I4b ---
+console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
+{
+  // (a) The committed REF-28 shape: `total` EXCLUDES the avoir leg (800 paid
+  // cash + 100 avoir = 900 given). A full reversal returns 900: 800 cash and
+  // the 100 back to the wallet. This is the behaviour the E2E case asserts.
+  const exclCredit = {
+    id: 'TKT-EXCL',
+    subtotal: 1400,
+    discountTotal: 500,
+    total: 800,
+    paymentMethod: 'Espèces',
+    tenders: [
+      { method: 'Avoir Client', amount: 100 },
+      { method: 'Espèces', amount: 800 },
+    ],
+  };
+  const a = computeRefundFundingSplit(exclCredit, 900);
+  check('I4b/a full refund reverses 900', a.netRefund === 900, JSON.stringify(a));
+  check('I4b/a avoir share returns to the wallet (100)', a.avoirShare === 100, `got ${a.avoirShare}`);
+  check('I4b/a cash share is the cash actually paid (800)', a.cashShare === 800, `got ${a.cashShare}`);
+  check(
+    'I4b/a parts sum to the refund',
+    a.voucherShare + a.avoirShare + a.debtShare + a.cashShare + a.digitalShare === a.netRefund
+  );
+
+  // (b) The SAME ticket when `total` already INCLUDES the credit leg (the
+  // shape the in-memory checkout object can carry: total = Σ tenders). The
+  // customer gave 669 (462 cash + 207 avoir); a full refund must return 669.
+  // Adding the avoir on top of a total that already contains it mints money.
+  const inclCredit = {
+    id: 'TKT-INCL',
+    subtotal: 669,
+    discountTotal: 0,
+    total: 669,
+    paymentMethod: 'Espèces',
+    tenders: [
+      { method: 'Espèces', amount: 462 },
+      { method: 'Avoir Client', amount: 207 },
+    ],
+  };
+  const b = computeRefundFundingSplit(inclCredit, 669);
+  const givenB = 669; // 462 cash + 207 avoir
+  check('I4b/b full refund never returns more than the customer gave', b.netRefund <= givenB, `net=${b.netRefund} given=${givenB}`);
+  check('I4b/b full refund returns exactly 669', b.netRefund === givenB, `got ${b.netRefund}`);
+  check('I4b/b avoir share is 207 (not 207 + its own double count)', b.avoirShare === 207, `got ${b.avoirShare}`);
+  check('I4b/b cash share is 462', b.cashShare === 462, `got ${b.cashShare}`);
+
+  // (c) Property sweep: for random tickets, the refund never exceeds the value
+  // the customer handed over (Σ tenders + voucher), and the lanes always sum
+  // to the net. Deterministic pseudo-random so a failure is reproducible.
+  let seed = 12345;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const ri = (lo: number, hi: number) => lo + Math.floor(rnd() * (hi - lo + 1));
+  let over = 0;
+  let sumBad = 0;
+  let firstOver = '';
+  for (let i = 0; i < 5000; i++) {
+    const avoir = rnd() < 0.35 ? ri(1, 400) : 0;
+    const cash = rnd() < 0.85 ? ri(0, 800) : 0;
+    const debt = rnd() < 0.2 ? ri(0, 300) : 0;
+    const voucher = rnd() < 0.15 ? ri(0, 200) : 0;
+    const tendered = avoir + cash + debt;
+    if (tendered === 0) continue;
+    const discount = rnd() < 0.5 ? ri(0, tendered) : 0;
+    // Both conventions appear in the repo: credits excluded, and included.
+    const total = rnd() < 0.5 ? Math.max(0, tendered - avoir - debt) : tendered;
+    const gross = ri(0, Math.max(1, tendered - discount));
+    const s = computeRefundFundingSplit(
+      {
+        subtotal: tendered,
+        discountTotal: discount,
+        total,
+        paymentMethod: 'Espèces',
+        tenders: [
+          ...(cash ? [{ method: 'Espèces', amount: cash }] : []),
+          ...(avoir ? [{ method: 'Avoir Client', amount: avoir }] : []),
+          ...(debt ? [{ method: 'Crédit Client', amount: debt }] : []),
+        ],
+        voucherCreditApplied: voucher,
+      },
+      gross
+    );
+    const given = tendered + voucher;
+    const parts = s.voucherShare + s.avoirShare + s.debtShare + s.cashShare + s.digitalShare;
+    if (parts !== s.netRefund) sumBad++;
+    if (s.netRefund > given) {
+      over++;
+      if (!firstOver) firstOver = JSON.stringify({ total, tendered, voucher, gross, net: s.netRefund });
+    }
+  }
+  check('I4b/c lanes always sum to the net (5000 random tickets)', sumBad === 0, `${sumBad} shapes`);
+  check('I4b/c a refund never exceeds what was handed over (5000 random tickets)', over === 0, `${over} shapes, first=${firstOver}`);
+
+  // (d) Three partial refunds of the exclusion-convention ticket conserve.
+  const p1 = computeRefundFundingSplit(exclCredit, 300);
+  const p2 = computeRefundFundingSplit(exclCredit, 300, p1.netRefund);
+  const p3 = computeRefundFundingSplit(exclCredit, 300, p1.netRefund + p2.netRefund);
+  check(
+    'I4b/d three partials conserve the ticket value to the Dinar',
+    p1.netRefund + p2.netRefund + p3.netRefund === 900,
+    `${p1.netRefund}+${p2.netRefund}+${p3.netRefund}`
+  );
+  check(
+    'I4b/d avoir lane conserves across partials (100)',
+    p1.avoirShare + p2.avoirShare + p3.avoirShare === 100,
+    `${p1.avoirShare}+${p2.avoirShare}+${p3.avoirShare}`
+  );
+}
+
 // ------------------------------------------------------------------ I6 ---
 console.log('\n--- I6: IMEI ownership event vocabulary (native parity) ---');
 {
