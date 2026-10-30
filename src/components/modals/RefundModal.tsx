@@ -20,7 +20,8 @@ import { formatDZD, formatDateTime } from '../../types/pos';
 import { sortTransactionsNewestFirst } from '../../utils/dateUtils';
 import type { SaleTransaction, PaymentMethodType, RefundItem } from '../../types/pos';
 import { useToast } from '../ui/Toast';
-import { computeRefundFundingSplit } from '../../utils/receiptMath';
+import { computeRefundFundingSplit, refundLaneTotalsOf } from '../../utils/receiptMath';
+import type { RefundLaneTotals } from '../../utils/receiptMath';
 import { refundableValueOf } from '../../utils/receiptMath';
 import { clampCashRefund, physicalCashTendered, cashDisbursedOf } from '../../utils/cashTerms';
 import { isOwnShiftTicket } from '../../sync/refundLockPolicy';
@@ -426,10 +427,27 @@ export const RefundModal: React.FC = () => {
   // computation (not a hook): this sits below the modal's early return.
   const fundingPreview = (() => {
     if (!selectedTxn || totalRefundAmount <= 0) return null;
-    const priorRecovery = (transactions || [])
-      .filter((t) => t.isRefund && t.originalTransactionId === selectedTxn.id)
-      .reduce((acc, t) => acc + (Number(t.total) || 0), 0);
-    return computeRefundFundingSplit(selectedTxn, totalRefundAmount, priorRecovery);
+    const priorRefunds = (transactions || []).filter(
+      (t) => t.isRefund && t.originalTransactionId === selectedTxn.id
+    );
+    const priorRecovery = priorRefunds.reduce((acc, t) => acc + (Number(t.total) || 0), 0);
+    // Same cumulative lanes as the slice (D3): the preview must show what the
+    // commit writes, partial refund after partial refund.
+    const priorLanes = priorRefunds.reduce<RefundLaneTotals>(
+      (acc, t) => {
+        const l = refundLaneTotalsOf(t as unknown as Record<string, unknown>);
+        acc.cash += l.cash;
+        acc.avoir += l.avoir;
+        acc.voucher += l.voucher;
+        acc.debt += l.debt;
+        acc.digital += l.digital;
+        acc.gross = (acc.gross ?? 0) + (l.gross ?? 0);
+        if (l.basis === 'legacy') acc.basis = 'legacy';
+        return acc;
+      },
+      { cash: 0, avoir: 0, voucher: 0, debt: 0, digital: 0, gross: 0, basis: 'explicit', anomalies: [] }
+    );
+    return computeRefundFundingSplit(selectedTxn, totalRefundAmount, priorRecovery, priorLanes);
   })();
   const previewCashOut = refundMethod === 'Espèces' ? fundingPreview?.cashShare ?? 0 : 0;
 

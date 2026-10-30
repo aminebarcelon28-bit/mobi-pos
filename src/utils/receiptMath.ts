@@ -520,8 +520,87 @@ export interface RefundFundingInput {
   paymentMethod?: string;
   /** Persisted credit-debt amount (preferred over re-summing tenders). */
   debtAdded?: number | null;
+  /** Change handed back at the till — carved out of the CASH lane only. */
+  changeDue?: number | null;
   /** Lines of the original ticket — fallback basis when the columns are absent. */
   items?: RefundEligibilityItem[] | null;
+}
+
+/**
+ * Per-lane amounts already returned by earlier refunds of the SAME ticket.
+ * Stored in the refund row's JSON payload (`funding`), so no migration is
+ * needed; `gross` is the cumulative gross refunded (the basis for the
+ * cumulative rounding, which is what makes partial refunds conserve exactly).
+ * `basis` records how the numbers were obtained, `anomalies` records anything
+ * the code had to guess (D1d).
+ */
+export interface RefundLaneTotals {
+  cash: number;
+  avoir: number;
+  voucher: number;
+  debt: number;
+  digital: number;
+  gross?: number;
+  basis?: 'explicit' | 'derived' | 'legacy';
+  anomalies?: string[];
+}
+
+const DIGITAL_RAILS = ['BaridiMob', 'Chèque', 'Autre'];
+const FUNDING_RAILS = ['Espèces', 'Avoir Client', 'Crédit Client', ...DIGITAL_RAILS];
+
+function tenderMinor(tenders: RefundFundingInput['tenders'], rails: string[]): number {
+  if (!Array.isArray(tenders)) return NaN;
+  return tenders.reduce((acc, t) => {
+    const method = String(t?.method ?? '');
+    return rails.includes(method) ? acc + toMinor(t?.amount) : acc;
+  }, 0);
+}
+
+/**
+ * Read the per-lane funding of one refund row.
+ *
+ * New rows carry `funding` in their JSON payload (D2, no migration). Historical
+ * rows do not, so the durable columns are the only evidence and the residual is
+ * attributed to the rail the refund was settled on. Must never throw: a
+ * malformed or missing `funding` object falls back to the derivation.
+ */
+export function refundLaneTotalsOf(txn: Record<string, unknown> | null | undefined): RefundLaneTotals {
+  const raw = (txn?.funding ?? null) as Partial<RefundLaneTotals> | null;
+  if (raw && typeof raw === 'object') {
+    const keys = ['cash', 'avoir', 'voucher', 'debt', 'digital'] as const;
+    if (keys.every((k) => Number.isFinite(Number((raw as Record<string, unknown>)[k])))) {
+      return {
+        cash: fromMinor(toMinor(raw.cash)),
+        avoir: fromMinor(toMinor(raw.avoir)),
+        voucher: fromMinor(toMinor(raw.voucher)),
+        debt: fromMinor(toMinor(raw.debt)),
+        digital: fromMinor(toMinor(raw.digital)),
+        gross: fromMinor(toMinor(raw.gross)),
+        basis: (raw.basis as RefundLaneTotals['basis']) ?? 'explicit',
+        anomalies: Array.isArray(raw.anomalies) ? (raw.anomalies as string[]) : [],
+      };
+    }
+  }
+  const totalM = Math.max(0, toMinor(txn?.total));
+  const method = String(txn?.refundMethod ?? txn?.paymentMethod ?? '');
+  const cashRaw = txn?.cashDisbursed;
+  const cashM =
+    cashRaw === undefined || cashRaw === null
+      ? method === 'Espèces'
+        ? totalM
+        : 0
+      : Math.min(totalM, Math.max(0, toMinor(cashRaw)));
+  const residualM = Math.max(0, totalM - cashM);
+  return {
+    cash: fromMinor(cashM),
+    avoir: fromMinor(method === 'Avoir Client' ? residualM : 0),
+    voucher: fromMinor(method === 'Voucher' || method === 'Bon Achat' ? residualM : 0),
+    debt: fromMinor(method === 'Crédit Client' ? residualM : 0),
+    digital: fromMinor(DIGITAL_RAILS.includes(method) ? residualM : 0),
+    gross: fromMinor(Math.max(0, toMinor(txn?.subtotal ?? txn?.total))),
+    basis: 'legacy',
+    anomalies: ['legacy-no-funding-object'],
+  };
 }
 
 export interface RefundFundingSplit {
@@ -546,20 +625,14 @@ export interface RefundFundingSplit {
   cashPaidOriginal: number;
   /** True when the cumulative cap trimmed the reversal. */
   capped: boolean;
+  /**
+   * Anything the split had to guess (legacy row without tenders, credits above
+   * the base, rounding correction, cash over the paid amount). Persisted inside
+   * the refund's `funding` object so a disputed refund can be reconstructed.
+   */
+  anomalies: string[];
 }
 
-function tenderSum(tenders: RefundFundingInput['tenders'], method: string): number {
-  if (!tenders || !Array.isArray(tenders)) return NaN;
-  return tenders
-    .filter((t) => t && t.method === method)
-    .reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
-}
-
-/**
- * Σ net value of the ticket's lines (appliedPrice − line discount) × qty.
- * Used as the proration denominator when the ticket columns are absent, so the
- * numerator (`netUnitOf`, also net) and the denominator share one basis.
- */
 function netBaseOf(orig: RefundFundingInput): number {
   const items = orig?.items;
   if (!items || items.length === 0) return 0;
@@ -582,92 +655,137 @@ function netBaseOf(orig: RefundFundingInput): number {
 export function computeRefundFundingSplit(
   orig: RefundFundingInput | null | undefined,
   grossRefund: number,
-  priorRecovery = 0
+  priorRecovery = 0,
+  priorLanes?: RefundLaneTotals | null
 ): RefundFundingSplit {
-  const total = Math.max(0, Math.round(Number(orig?.total ?? 0)));
-  // Basis of the proration. Every caller passes the NET value of the returned
-  // lines (`netUnitOf` = appliedPrice − line discount), so the denominator must
-  // be the ticket's NET line value. Using the GROSS `subtotal` applied the line
-  // discount a second time: a 350 DA bundle child discounted by 81 returned
-  // 269 × 500/650 = 207 instead of its allocated 269 ([MNY-30]).
-  const grossLines = Math.max(0, Math.round(Number(orig?.subtotal ?? 0)));
-  const ticketDiscount = Math.max(0, Math.round(Number(orig?.discountTotal ?? 0)));
-  const netLines = Math.max(0, grossLines - ticketDiscount);
-  const netBaseFromItems = netBaseOf(orig ?? {});
-  const grossBase =
-    netLines > 0 ? netLines : netBaseFromItems > 0 ? netBaseFromItems : grossLines;
-  const fundV = Math.min(total, Math.max(0, Math.round(Number(orig?.voucherCreditApplied ?? 0))));
-  const avoirRaw = tenderSum(orig?.tenders, 'Avoir Client');
-  const fundA = Math.min(
-    total,
-    Math.max(0, Math.round(Number.isFinite(avoirRaw) ? avoirRaw : orig?.paymentMethod === 'Avoir Client' ? total : 0))
-  );
-  const debtTender = tenderSum(orig?.tenders, 'Crédit Client');
-  const debtRaw =
-    orig?.debtAdded ?? (Number.isFinite(debtTender) ? debtTender : orig?.paymentMethod === 'Crédit Client' ? total : 0);
-  const fundD = Math.min(total, Math.max(0, Math.round(Number(debtRaw))));
-  const gross = Math.max(0, Math.round(Number(grossRefund ?? 0)));
-  const ratio =
-    grossBase > 0 ? Math.min(1, gross / grossBase) : total > 0 ? Math.min(1, gross / total) : 0;
-  // Recoverable base = everything the customer gave (net paid + voucher +
-  // avoir value). The ratio applies to THIS, not to total alone — otherwise
-  // a full refund of a voucher/avoir sale would evaporate the prepaid value
-  // instead of restoring it to its origin.
-  const recoverableBase = total + fundV + fundA;
-  let net = Math.round(recoverableBase * ratio);
-  // Cumulative cap: all refunds combined can never return more value than
-  // the customer gave. Prior rows are gross-format (legacy), which
-  // overstates recovery — safe direction.
-  const maxRecoverable = recoverableBase;
-  const cappedNet = Math.max(0, Math.min(net, maxRecoverable - Math.max(0, Math.round(priorRecovery))));
-  const capped = cappedNet < net;
-  net = cappedNet;
-  const denom = total + fundV + fundA;
-  let v = 0;
-  let a = 0;
-  let d = 0;
-  if (denom > 0 && net > 0) {
-    v = Math.min(fundV, Math.round((net * fundV) / denom));
-    a = Math.min(fundA, Math.round((net * fundA) / denom));
-    d = Math.min(fundD, Math.round((net * fundD) / denom));
-  }
-  const cashPlug = Math.max(0, net - v - a - d);
-  // Split the cash plug by tender rail: Espèces disburses from the drawer,
-  // BaridiMob/Chèque/Autre reverse on their rail of origin (never cash).
-  // Avoir/Crédit/Reprise legs are claimed above and never land here.
-  const NON_CASH_RAILS = ['Avoir Client', 'Crédit Client', 'Reprise'];
-  const railTenders = orig?.tenders;
-  let cashT = 0;
-  let digT = 0;
-  if (railTenders && Array.isArray(railTenders) && railTenders.length > 0) {
-    for (const t of railTenders) {
-      if (!t || typeof t.method !== 'string') continue;
-      const amt = Math.max(0, Math.round(Number(t.amount) || 0));
-      if (t.method === 'Espèces') cashT += amt;
-      else if (!NON_CASH_RAILS.includes(t.method)) digT += amt;
-    }
+  const anomalies: string[] = [];
+  const totalM = Math.max(0, toMinor(orig?.total));
+  // Proration basis: the NET value of the ticket's lines. Every caller passes
+  // the net value of the returned lines, so the denominator must be net too —
+  // using the GROSS subtotal applied the line discount twice ([MNY-30]).
+  const grossLinesM = Math.max(0, toMinor(orig?.subtotal));
+  const discountM = Math.max(0, toMinor(orig?.discountTotal));
+  const netLinesM = Math.max(0, grossLinesM - discountM);
+  const itemsBaseM = toMinor(netBaseOf(orig ?? {}));
+  const baseM = netLinesM > 0 ? netLinesM : itemsBaseM > 0 ? itemsBaseM : grossLinesM;
+
+  // `undefined` (not []) when the row carries no tender array: tenderMinor
+  // returns NaN for that, which is how the legacy fallbacks below are chosen.
+  const tenders = orig?.tenders;
+  const fundingTenderM = tenderMinor(tenders, FUNDING_RAILS);
+  const cashTenderM = tenderMinor(tenders, ['Espèces']);
+  const digitalTenderM = tenderMinor(tenders, DIGITAL_RAILS);
+  const avoirTenderM = tenderMinor(tenders, ['Avoir Client']);
+  const debtTenderM = tenderMinor(tenders, ['Crédit Client']);
+  const voucherM = Math.max(0, toMinor(orig?.voucherCreditApplied));
+  const changeM = Math.max(0, toMinor(orig?.changeDue));
+
+  // Change is carved out of the CASH lane only (D1a): a till that handed 100 DA
+  // back did not collect it, and no credit lane is ever reduced for change.
+  let cashPaidM = 0;
+  if (Number.isFinite(cashTenderM)) {
+    cashPaidM = Math.max(0, cashTenderM - Math.min(cashTenderM, changeM));
   } else if (orig?.paymentMethod === 'Espèces') {
-    cashT = total;
-  } else if (
-    orig?.paymentMethod === 'BaridiMob' ||
-    orig?.paymentMethod === 'Chèque' ||
-    orig?.paymentMethod === 'Autre'
-  ) {
-    digT = total;
+    cashPaidM = Math.max(0, totalM - changeM);
+    anomalies.push('legacy-no-tenders');
+  } else {
+    anomalies.push('no-tenders');
   }
-  const railBase = cashT + digT;
-  const cash = railBase > 0 ? Math.max(0, Math.min(cashPlug, Math.round((cashPlug * cashT) / railBase))) : cashPlug;
-  const digital = Math.max(0, cashPlug - cash);
+  const digitalPaidM = Number.isFinite(digitalTenderM) ? Math.max(0, digitalTenderM) : 0;
+
+  const tenderedGivenM =
+    (Number.isFinite(fundingTenderM) ? Math.max(0, fundingTenderM) : 0) + voucherM;
+  // D1: what the customer gave, counted ONCE. `total` excludes credit legs and
+  // tenders include them, so the larger is the truth for that row's vintage;
+  // change is always netted out.
+  const givenM = Math.max(totalM, Math.max(0, tenderedGivenM - changeM));
+  if (givenM <= 0) anomalies.push('no-funding-base');
+
+  const fundV = Math.min(givenM, voucherM);
+  // Tenders are the authority; a legacy row without them falls back to the
+  // persisted method/debt columns (same convention as the refund readers).
+  const avoirRaw = Number.isFinite(avoirTenderM)
+    ? Math.max(0, avoirTenderM)
+    : orig?.paymentMethod === 'Avoir Client'
+      ? totalM
+      : 0;
+  const debtRaw = Number.isFinite(debtTenderM)
+    ? Math.max(0, debtTenderM)
+    : Math.max(0, toMinor(orig?.debtAdded ?? (orig?.paymentMethod === 'Crédit Client' ? totalM : 0)));
+  const fundA = Math.min(givenM, avoirRaw);
+  const fundD = Math.min(givenM, debtRaw);
+  if (fundV + fundA + fundD > givenM) anomalies.push('credits-exceed-base');
+
+  const grossM = Math.max(0, toMinor(grossRefund));
+  const priorNetM = Math.max(0, toMinor(priorRecovery));
+  const prior = {
+    cash: Math.max(0, toMinor(priorLanes?.cash)),
+    avoir: Math.max(0, toMinor(priorLanes?.avoir)),
+    voucher: Math.max(0, toMinor(priorLanes?.voucher)),
+    debt: Math.max(0, toMinor(priorLanes?.debt)),
+    digital: Math.max(0, toMinor(priorLanes?.digital)),
+    // Cumulative GROSS is the basis for the cumulative rounding; older callers
+    // without it fall back to the cumulative net (one rounding per step still).
+    gross: Math.max(0, toMinor(priorLanes?.gross ?? priorRecovery)),
+  };
+  if (priorLanes?.basis === 'legacy') anomalies.push('prior-refund-legacy');
+
+  // Cumulative gross -> one rounding per step on a monotone cumulative, which
+  // telescopes to the lane total at the end (D3 i-iv).
+  const capGrossM = baseM > 0 ? baseM : Number.MAX_SAFE_INTEGER;
+  const cumGrossM = Math.min(capGrossM, prior.gross + grossM);
+  const cumNetM = baseM > 0 ? Math.min(givenM, Math.round((givenM * cumGrossM) / baseM)) : givenM;
+  const thisNetM = Math.max(0, cumNetM - priorNetM);
+  const requestedNetM = baseM > 0 ? Math.round((givenM * grossM) / baseM) : givenM;
+  const capped = thisNetM < requestedNetM;
+
+  const targetM = (fund: number) => (givenM > 0 ? Math.round((cumNetM * fund) / givenM) : 0);
+
+  let v = Math.max(0, Math.min(fundV - prior.voucher, targetM(fundV) - prior.voucher));
+  let a = Math.max(0, Math.min(fundA - prior.avoir, targetM(fundA) - prior.avoir));
+  let d = Math.max(0, Math.min(fundD - prior.debt, targetM(fundD) - prior.debt));
+
+  // The cash plug absorbs rounding; when the credit lanes round ABOVE the
+  // refund (measured 1-in-5000) the largest lane gives the dinar back.
+  let plugM = thisNetM - (v + a + d);
+  if (plugM < 0) {
+    let excess = -plugM;
+    const lanes: Array<['v' | 'a' | 'd', number]> = [
+      ['v', v],
+      ['a', a],
+      ['d', d],
+    ];
+    lanes.sort((x, y) => y[1] - x[1]);
+    for (const [key, value] of lanes) {
+      if (excess <= 0) break;
+      const take = Math.min(excess, value);
+      if (key === 'v') v -= take;
+      else if (key === 'a') a -= take;
+      else d -= take;
+      excess -= take;
+    }
+    plugM = 0;
+    anomalies.push('rounding-correction');
+  }
+
+  // Rail split of the cash plug: the drawer pays the cash share, a digital rail
+  // reverses on its own lane. Cash never exceeds what the customer left behind.
+  const railPaidM = cashPaidM + digitalPaidM;
+  const cashM = railPaidM > 0 ? Math.min(plugM, Math.round((plugM * cashPaidM) / railPaidM)) : plugM;
+  const digitalM = Math.max(0, plugM - cashM);
+  if (cashM + prior.cash > cashPaidM) anomalies.push('cash-over-paid');
+
   return {
-    grossRefund: gross,
-    netRefund: net,
-    voucherShare: v,
-    avoirShare: a,
-    debtShare: d,
-    cashShare: cash,
-    digitalShare: digital,
-    cashPaidOriginal: Math.max(0, total - fundD),
+    grossRefund: fromMinor(grossM),
+    netRefund: fromMinor(thisNetM),
+    voucherShare: fromMinor(v),
+    avoirShare: fromMinor(a),
+    debtShare: fromMinor(d),
+    cashShare: fromMinor(cashM),
+    digitalShare: fromMinor(digitalM),
+    cashPaidOriginal: fromMinor(cashPaidM),
     capped,
+    anomalies,
   };
 }
 

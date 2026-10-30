@@ -57,7 +57,8 @@ import {
   getEffectiveCostPrice,
   calculateProfit,
 } from '../../utils/pricingEngine';
-import { computeCartTotals, computeRefundFundingSplit, computeTradeInSettlement, computeTradeRestoreQuota, lineProfitNet, refundableValueOf } from '../../utils/receiptMath';
+import { computeCartTotals, computeRefundFundingSplit, refundLaneTotalsOf, computeTradeInSettlement, computeTradeRestoreQuota, lineProfitNet, refundableValueOf } from '../../utils/receiptMath';
+import type { RefundLaneTotals } from '../../utils/receiptMath';
 import {
   cashSalesFromTxns,
   cashRefundsFromTxns,
@@ -2183,7 +2184,26 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           ),
         0,
       );
-    const funding = computeRefundFundingSplit(originalTransaction, refundTotal, priorRecovery);
+    // C01/D2: the lanes returned by EARLIER refunds of this ticket, read from
+    // their durable JSON payload (`funding`); legacy rows derive from columns.
+    // They make the split cumulative so partial refunds conserve to the dinar.
+    const priorLanes: RefundLaneTotals = (transactions || [])
+      .filter((t) => t.isRefund && t.originalTransactionId === originalTransaction.id)
+      .reduce<RefundLaneTotals>(
+        (acc, t) => {
+          const l = refundLaneTotalsOf(t as unknown as Record<string, unknown>);
+          acc.cash += l.cash;
+          acc.avoir += l.avoir;
+          acc.voucher += l.voucher;
+          acc.debt += l.debt;
+          acc.digital += l.digital;
+          acc.gross = (acc.gross ?? 0) + (l.gross ?? 0);
+          if (l.basis === 'legacy') acc.basis = 'legacy';
+          return acc;
+        },
+        { cash: 0, avoir: 0, voucher: 0, debt: 0, digital: 0, gross: 0, basis: 'explicit', anomalies: [] }
+      );
+    const funding = computeRefundFundingSplit(originalTransaction, refundTotal, priorRecovery, priorLanes);
     const netRefund = funding.netRefund;
     // Fix 2: strict tender clamp (anti cash-extraction). Cumulative drawer
     // cash out can never exceed the net physical cash tendered on the original
@@ -2616,6 +2636,24 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       changeDue: 0,
       createdAt: new Date().toISOString(),
     };
+
+    // D2: the per-lane split rides the refund's existing JSON payload (no
+    // migration). Later refunds of this ticket read it back through
+    // `refundLaneTotalsOf`, which is what makes partial refunds conserve.
+    (refundTransaction as unknown as Record<string, unknown>).funding = {
+      version: 1,
+      basis:
+        funding.anomalies.includes('no-tenders') || funding.anomalies.includes('legacy-no-tenders')
+          ? 'derived'
+          : 'explicit',
+      anomalies: funding.anomalies,
+      cash: funding.cashShare,
+      avoir: funding.avoirShare,
+      voucher: funding.voucherShare,
+      debt: funding.debtShare,
+      digital: funding.digitalShare,
+      gross: funding.grossRefund,
+    } satisfies Record<string, unknown>;
 
     const totalOrigItems = (originalTransaction.items || []).reduce((acc, i) => acc + i.quantity, 0);
     const totalRefundedItems = refundItems.reduce((acc, i) => acc + i.quantity, 0);
