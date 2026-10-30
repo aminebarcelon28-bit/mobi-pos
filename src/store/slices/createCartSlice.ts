@@ -445,7 +445,16 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
   },
 
   applyCartDiscountPercent: (percent, managerApproved = false) => {
-    const safePercent = Math.max(0, Math.min(100, isNaN(percent) ? 0 : percent));
+    // A percent is a BOUNDED input, never a clamped one: clamping a typo
+    // ("33333" from "33.333") silently applied a 100 % discount and gave the
+    // cart away ([MNY-18]). Out-of-range changes nothing and says why.
+    const safePercent = Number(percent);
+    if (!Number.isFinite(safePercent) || safePercent < 0 || safePercent > 100) {
+      return {
+        success: false,
+        reason: `Remise invalide : ${String(percent)} % (0-100 attendu).`,
+      };
+    }
     // Cart discounts above 10 % need a manager PIN.
     if (safePercent > 10 && !managerApproved) {
       return { success: false, requiresPin: true, reason: 'Remise panier > 10 % : PIN Manager requis.' };

@@ -1,0 +1,55 @@
+{
+  "note": "Baselined lint debt. Every entry carries a reason. `lint-specs.mjs --strict` ignores this list and fails on every violation, so the list can only shrink honestly - never add an entry without a reason that names the real gap.",
+  "files": [
+    {
+      "file": "00-session-proof.e2e.ts",
+      "reason": "session-helper proof (fresh -> setup -> dashboard -> reload -> lock): a precondition check, not a catalog case, so it has no case id"
+    },
+    {
+      "file": "99-probe-native.e2e.ts",
+      "reason": "diagnostic probe spec (tauri env, native write, canvas webp encode): probes the harness, asserts no catalog case"
+    },
+    {
+      "file": "refund-campaign-bulk.e2e.ts",
+      "reason": "generated batch driver: titles are built from a scenario table at runtime, so the id lives in the table, not the title"
+    }
+  ],
+  "cases": [
+    {
+      "id": "CRT-05",
+      "reason": "FAIL recorded from a batch run; no spec anchors the id. Needs a regression case - decision open (owner)"
+    },
+    {
+      "id": "CRT-06",
+      "reason": "FAIL recorded from a batch run; no spec anchors the id. Needs a regression case - decision open (owner)"
+    },
+    {
+      "id": "CRT-17",
+      "reason": "FAIL recorded from a batch run; no spec anchors the id. Needs a regression case - decision open (owner)"
+    },
+    {
+      "id": "LOY-05",
+      "reason": "FAIL recorded from a batch run; no spec anchors the id. Needs a regression case - decision open (owner)"
+    },
+    {
+      "id": "SHF-10",
+      "reason": "FAIL recorded from a batch run; no spec anchors the id. Needs a regression case - decision open (owner)"
+    },
+    {
+      "id": "CRM-09",
+      "reason": "FAIL recorded from a batch run; no spec anchors the id. Needs a regression case - decision open (owner)"
+    }
+  ],
+  "tokens": [
+    {
+      "file": "20-pay-payments.e2e.ts",
+      "id": "REF-999",
+      "reason": "payment reference literal typed into the CIB/Edahabia reference field, not a case id"
+    },
+    {
+      "file": "20-pay-payments.e2e.ts",
+      "id": "OFF-777",
+      "reason": "offline payment reference literal used by the tender flow, not a case id"
+    }
+  ]
+}

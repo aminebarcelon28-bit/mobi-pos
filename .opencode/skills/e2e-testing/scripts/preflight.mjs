@@ -6,21 +6,29 @@
  *   - node >= 20 and the WDIO CLI present
  *   - the e2e binary exists, embeds HEAD (build provenance) and the
  *     `com.mobi.pos.e2e` identifier, and is not older than any source file
+ *     (including `src-tauri/Cargo.lock`: a dependency bump changes the binary)
  *   - tauri-driver is where wdio.conf.ts expects it
  *   - no orphaned mobi-pos.exe / drivers (they hold the DB and the WebView dir)
  *   - the sandbox paths, and whether a DB is already there
  *
- * Usage: node .opencode/skills/e2e-testing/scripts/preflight.mjs [--quiet] [--provenance]
+ * `--mobile` swaps the desktop checks for the mobile ones: adb present, a
+ * device/emulator attached, an AVD listed, and the built APK newer than the
+ * sources AND carrying the same version as tauri.conf.json / package.json.
+ * A missing APK is a blocker: mobile cannot be reported as tested without one.
+ *
+ * Usage: node .opencode/skills/e2e-testing/scripts/preflight.mjs [--quiet] [--provenance] [--mobile]
  *        --provenance   only certify the binary (sha + identifier + freshness);
  *                       used by wdio.conf.ts at import time, where driver and
  *                       orphan checks would misfire inside a worker.
+ *        --mobile       mobile lane: adb + AVD + APK version/freshness.
  * Exit:  0 all good (warnings allowed), 1 a hard blocker.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync, execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   paths, repoRoot, isRunning, humanBytes, parseArgs, ok, warn, bad, info, C, IDENTIFIER, gitHead,
+  APP_PATHS, sourceNewest, walk,
 } from './_lib.mjs';
 
 const args = parseArgs();
@@ -29,25 +37,9 @@ const quiet = Boolean(args.quiet);
 // and orphan checks would misfire (workers see tauri-driver already running)
 // and where only the binary's identity matters.
 const provenanceOnly = Boolean(args.provenance);
+const mobile = Boolean(args.mobile);
 let failures = 0;
 let warnings = 0;
-
-/**
- * Paths that actually change the compiled app, i.e. what a rebuild is FOR.
- * Deliberately narrow: docs, skills, specs and scripts do not appear here, so
- * a docs-only commit between build and HEAD does not force a rebuild.
- */
-const APP_PATHS = [
-  'src',
-  'src-tauri/src',
-  'src-tauri/Cargo.toml',
-  'src-tauri/Cargo.lock',
-  'src-tauri/build.rs',
-  'src-tauri/tauri.conf.json',
-  'src-tauri/tauri.e2e.conf.json',
-  'index.html',
-  'vite.config.ts',
-];
 
 function hard(msg) { bad(msg); failures++; }
 function soft(msg) { warn(msg); warnings++; }
@@ -72,7 +64,9 @@ if (!provenanceOnly) {
 }
 
 // 2. Binary provenance + freshness
-if (!fs.existsSync(p.binary)) {
+if (mobile) {
+  mobileChecks();
+} else if (!fs.existsSync(p.binary)) {
   hard(`e2e binary missing: ${p.binary}\n       build it: npm run build:e2e`);
 } else {
   const st = fs.statSync(p.binary);
@@ -112,26 +106,9 @@ if (!fs.existsSync(p.binary)) {
   // Freshness: uncommitted source edits after the build are not covered by the
   // sha stamp. package.json is excluded on purpose: script edits (and this
   // skill's own npm scripts) do not change the compiled app, and flagging them
-  // would push people to rebuild for nothing.
-  const sources = [
-    path.join(root, 'src'),
-    path.join(root, 'src-tauri', 'src'),
-    path.join(root, 'src-tauri', 'Cargo.toml'),
-    path.join(root, 'src-tauri', 'build.rs'),
-    path.join(root, 'src-tauri', 'tauri.conf.json'),
-    path.join(root, 'src-tauri', 'tauri.e2e.conf.json'),
-    path.join(root, 'index.html'),
-    path.join(root, 'vite.config.ts'),
-  ].filter((x) => fs.existsSync(x));
-  const newest = Math.max(...sources.map((s) => {
-    try {
-      const st2 = fs.statSync(s);
-      if (!st2.isDirectory()) return st2.mtimeMs;
-      let m = 0;
-      for (const f of walkShallow(s)) m = Math.max(m, f);
-      return m;
-    } catch { return 0; }
-  }));
+  // would push people to rebuild for nothing. Cargo.lock IS included: a
+  // dependency bump recompiles the app without touching a .rs file.
+  const newest = sourceNewest(root);
   const lagMs = newest - st.mtimeMs;
   if (lagMs > 1000) {
     hard(
@@ -145,7 +122,7 @@ if (!fs.existsSync(p.binary)) {
 }
 
 // 3. Driver
-if (!provenanceOnly) {
+if (!provenanceOnly && !mobile) {
   if (!fs.existsSync(p.driver)) {
     hard(`tauri-driver not found at ${p.driver}\n       install: cargo install tauri-driver  (or set WDIO_TAURI_DRIVER)`);
   } else if (!quiet) {
@@ -215,19 +192,90 @@ function findEmbeddedCommit(bytes, root) {
   return null;
 }
 
-function walkShallow(dir) {
-  const out = [];
-  const stack = [dir];
-  while (stack.length) {
-    const d = stack.pop();
-    let entries;
-    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
-    for (const e of entries) {
-      if (e.name === 'node_modules' || e.name === 'target') continue;
-      const full = path.join(d, e.name);
-      if (e.isDirectory()) stack.push(full);
-      else { try { out.push(fs.statSync(full).mtimeMs); } catch { /* ignore */ } }
+/* ------------------------------------------------------------------ */
+/* mobile lane                                                         */
+/* ------------------------------------------------------------------ */
+
+/** Run a tool that may only exist on PATH; null when it cannot run. */
+function tryCmd(cmd, argv) {
+  const r = spawnSync(cmd, argv, { encoding: 'utf8', shell: process.platform === 'win32' });
+  if (r.error || (r.status !== 0 && !r.stdout)) return null;
+  return String(r.stdout || '').trim();
+}
+
+function readJsonFile(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+/**
+ * Mobile preflight. A mobile verdict is only worth recording when we know
+ * WHICH build ran: adb present, a device attached, and an APK that is both
+ * newer than the sources and stamped with the declared version.
+ */
+function mobileChecks() {
+  const adb = tryCmd('adb', ['version']);
+  if (!adb) {
+    hard('adb not found on PATH - install platform-tools (or set ANDROID_HOME) before the mobile lane');
+  } else {
+    const line = adb.split(/\r?\n/)[0];
+    ok(`adb ${line}`);
+  }
+
+  if (adb) {
+    const devices = tryCmd('adb', ['devices']) || '';
+    const attached = devices.split(/\r?\n/).slice(1).map((l) => l.trim()).filter((l) => /\tdevice$/.test(l));
+    if (!attached.length) {
+      hard('no device/emulator attached (adb devices shows none) - start an AVD or plug the device in');
+    } else {
+      ok(`${attached.length} device(s) attached: ${attached.map((l) => l.split('\t')[0]).join(', ')}`);
     }
   }
-  return out;
+
+  const avds = tryCmd('emulator', ['-list-avds']) ?? tryCmd(path.join(process.env.ANDROID_HOME || '', 'emulator', 'emulator'), ['-list-avds']);
+  if (avds === null) soft('emulator not on PATH - cannot list AVDs (only matters when you need to start one)');
+  else if (!avds.trim()) soft('no AVD installed (emulator -list-avds is empty)');
+  else ok(`AVD(s): ${avds.split(/\r?\n/).filter(Boolean).join(', ')}`);
+
+  // APK: the only artifact a mobile verdict can be attributed to.
+  const apkRoot = path.join(root, 'src-tauri', 'gen', 'android', 'app', 'build', 'outputs', 'apk');
+  const apks = fs.existsSync(apkRoot)
+    ? walk(apkRoot).filter((f) => f.toLowerCase().endsWith('.apk'))
+    : [];
+  if (!apks.length) {
+    hard(`no APK under ${path.relative(root, apkRoot)} - build it: npm run tauri android build`);
+    return;
+  }
+  const apk = apks.map((f) => ({ f, st: fs.statSync(f) })).sort((a, b) => b.st.mtimeMs - a.st.mtimeMs)[0];
+  ok(`APK ${path.relative(root, apk.f)} (${humanBytes(apk.st.size)}, ${new Date(apk.st.mtimeMs).toISOString()})`);
+
+  const declared = readJsonFile(path.join(root, 'src-tauri', 'tauri.conf.json'))?.version;
+  const packaged = readJsonFile(path.join(root, 'package.json'))?.version;
+  if (declared && packaged && declared !== packaged) {
+    hard(`version mismatch: tauri.conf.json ${declared} vs package.json ${packaged} - the APK cannot be attributed to a source version`);
+  } else if (declared) {
+    ok(`declared version ${declared} (tauri.conf.json = package.json)`);
+  } else {
+    soft('cannot read a version from src-tauri/tauri.conf.json');
+  }
+
+  const apkVersion = tryCmd('aapt', ['dump', 'badging', apk.f]);
+  const versionName = apkVersion ? (/versionName='([^']+)'/.exec(apkVersion) || [])[1] : null;
+  if (versionName && declared && versionName !== declared) {
+    hard(`APK versionName ${versionName} != declared ${declared} - rebuild before recording a mobile verdict`);
+  } else if (versionName) {
+    ok(`APK versionName ${versionName}`);
+  } else {
+    soft('aapt not on PATH - APK versionName not read (mtime + declared version still checked)');
+  }
+
+  const newest = sourceNewest(root);
+  const lagMs = newest - apk.st.mtimeMs;
+  if (lagMs > 1000) {
+    hard(
+      `source changed ${(lagMs / 60000).toFixed(1)} min AFTER the APK was built ` +
+        `(newest source ${new Date(newest).toISOString()}) - rebuild: npm run tauri android build`,
+    );
+  } else {
+    ok('APK newer than all app sources');
+  }
 }

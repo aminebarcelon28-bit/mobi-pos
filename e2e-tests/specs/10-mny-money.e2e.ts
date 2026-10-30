@@ -88,21 +88,6 @@ async function recoverDialogs(): Promise<void> {
   }
 }
 
-/** Visible role=dialog overlays that are NOT the pay dialog (a "confirmation
- * interstitial" would show up here). */
-async function nonPayDialogs(): Promise<string[]> {
-  return (await browser.execute(() => {
-    const out: string[] = [];
-    for (const d of document.querySelectorAll('[role="dialog"]')) {
-      const el = d as HTMLElement;
-      if (!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)) continue;
-      if (el.closest('[data-testid="pay-dialog"]')) continue;
-      out.push(el.getAttribute('aria-label') || el.getAttribute('data-testid') || 'dialog');
-    }
-    return out;
-  })) as string[];
-}
-
 describe('MNY — money, rounding, currency (batch 1)', () => {
   before(async () => {
     await installErrorTrap();
@@ -491,7 +476,11 @@ describe('MNY — money, rounding, currency (batch 1)', () => {
     );
     // ---------- assertions ----------
     expect(frLineMinor).toBe(3333n); // fr line "33,33 DA" parses to exact centimes
-    expect(frTotalMinor).toBe(3300n); // fr total reads 33 DA
+    // Was 3300n — it pinned the whole-dinar rounding that [MNY-02/03] proved
+    // wrong: the total read "33 DA" while the line read "33,33 DA". With the
+    // 2-decimal cart the total reads 33,33 and must equal the line (fresh
+    // observation: run …21-37-51-931Z-mny3.log, total="33,33 DA" totalMinor=3333).
+    expect(frTotalMinor).toBe(3333n); // fr total reads 33,33 DA, same as the line
     expect(frRoundTrip).toBe(frTotalMinor); // format→parse round-trip identity
     expect(String(arState.dir)).toBe('rtl'); // ar shell flips the document
     expect(String(arState.lang)).toBe('ar');
@@ -592,47 +581,90 @@ describe('MNY — money, rounding, currency (batch 1)', () => {
   });
 
   it('[MNY-29] fat-finger cash tender (100× ticket) must not be accepted silently', async () => {
+    const txBefore = count('transactions');
     await addSku('MNY PriceB'); // ticket 500 DA
     await (await $(tid('checkout-button'))).click();
     await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
-    // Type WITHOUT Enter — Enter in this field confirms instantly (batch-1
-    // evidence: the confirm button vanished after Enter completed the sale).
-    // We want to observe the explicit confirm path instead.
-    await typeReal(await $(tid('tendered-input')), '50000', false); // 100×
-    await browser.pause(300);
-    const dialogsBefore = await nonPayDialogs();
-    let confirmErr = '';
-    try {
-      await (await $(tid('pay-confirm'))).click();
-    } catch (e) {
-      confirmErr = String(e);
-    }
-    let interstitial = false;
-    let dialogsDuring: string[] = [];
-    const t0 = Date.now();
-    while (Date.now() - t0 < 1200) {
-      const nowDialogs = await nonPayDialogs();
-      if (nowDialogs.length > 0) {
-        interstitial = true;
-        dialogsDuring = nowDialogs;
-        break;
-      }
-      if (!(await $(tid('pay-dialog')).isDisplayed().catch(() => false))) break;
-      await browser.pause(60);
-    }
-    await browser.waitUntil(
-      async () => !(await $(tid('pay-dialog')).isDisplayed().catch(() => false)),
-      { timeout: 30000, timeoutMsg: 'pay dialog did not close' },
+
+    const tender = async (digits: string) => {
+      // Type WITHOUT Enter — Enter in this field submits the sale.
+      await typeReal(await $(tid('tendered-input')), digits, false);
+      await browser.pause(300);
+    };
+    const guardShown = () => $(tid('pay-fatfinger')).isDisplayed().catch(() => false);
+    const payOpen = () => $(tid('pay-dialog')).isDisplayed().catch(() => false);
+
+    // ── Leg 1: 100× tender ⇒ confirmation, and NOTHING is written ─────────
+    // Owner-set policy (2026-10-30): `tendered > 10 × total AND tendered ≥
+    // 5 000 DA`. The floor is on the TENDER, not the ticket — a floor on the
+    // total would skip this very 500 DA ticket.
+    await tender('50000');
+    await (await $(tid('pay-confirm'))).click();
+    await browser.waitUntil(guardShown, {
+      timeout: 15000,
+      timeoutMsg: 'no confirmation for a 100× tender — the sale was accepted silently',
+    });
+    const changeDigits = String((await (await $(tid('pay-fatfinger-change')).getText()) || '').trim()).replace(
+      /[^\d]/g,
+      '',
     );
+    console.log(
+      `[MNY-29] guard shown: change="${changeDigits}" tx=${count('transactions')} (before ${txBefore}) payOpen=${await payOpen()}`,
+    );
+    expect(changeDigits).toBe('49500'); // the change due is what exposes the typo
+    expect(count('transactions')).toBe(txBefore); // nothing committed yet
+    expect(await payOpen()).toBe(true); // still inside the tender flow
+
+    // ── Leg 2: "Modifier le montant" dismisses; the ticket is untouched ───
+    await (await $(tid('pay-fatfinger-edit'))).click();
+    await browser.waitUntil(async () => !(await guardShown()), {
+      timeout: 8000,
+      timeoutMsg: 'confirmation did not dismiss on "Modifier le montant"',
+    });
+    expect(count('transactions')).toBe(txBefore);
+    expect(Number(await cartTotalMinor())).toBe(50000); // 500 DA, unchanged
+    expect(await payOpen()).toBe(true);
+
+    // ── Leg 3: the explicit confirm commits the exact numbers ─────────────
+    await tender('50000');
+    await (await $(tid('pay-confirm'))).click();
+    await browser.waitUntil(guardShown, {
+      timeout: 15000,
+      timeoutMsg: 'confirmation did not re-arm on the second attempt',
+    });
+    await (await $(tid('pay-fatfinger-confirm'))).click();
+    await browser.waitUntil(async () => !(await payOpen()), {
+      timeout: 30000,
+      timeoutMsg: 'pay dialog did not close after the confirmation',
+    });
     const tx = newestTx();
     console.log(
-      `[MNY-29] dialogsBefore=${JSON.stringify(dialogsBefore)} confirmErr=${JSON.stringify(confirmErr)} interstitial=${interstitial} dialogsDuring=${JSON.stringify(dialogsDuring)} tx.total=${String(tx?.total)} tx.cash_tendered=${String(tx?.cash_tendered)} tx.change_due=${String(tx?.change_due)}`,
+      `[MNY-29] confirmed: tx.total=${String(tx?.total)} cash_tendered=${String(tx?.cash_tendered)} change_due=${String(tx?.change_due)} tx=${count('transactions')}`,
     );
-    await recoverDialogs();
+    expect(count('transactions')).toBe(txBefore + 1);
     expect(Number(tx?.total)).toBe(500);
     expect(Number(tx?.cash_tendered)).toBe(50000); // recorded exactly
     expect(Number(tx?.change_due)).toBe(49500); // recorded exactly
-    expect(interstitial).toBe(true); // FAILS: no confirmation for a 100× tender
+
+    // ── Leg 4: an ordinary tender never sees the guard ────────────────────
+    await addSku('MNY PriceB');
+    await (await $(tid('checkout-button'))).click();
+    await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 20000 });
+    await tender('600');
+    await (await $(tid('pay-confirm'))).click();
+    // ONE click must be enough: if the guard had fired the dialog would still
+    // be open and a second confirmation would be required.
+    await browser.waitUntil(async () => !(await payOpen()), {
+      timeout: 30000,
+      timeoutMsg: 'ordinary 600 DA tender on a 500 DA ticket did not commit on the first click',
+    });
+    const tx2 = newestTx();
+    console.log(
+      `[MNY-29] ordinary tender: cash_tendered=${String(tx2?.cash_tendered)} change_due=${String(tx2?.change_due)} guardPresent=${(await $(tid('pay-fatfinger')).isExisting())}`,
+    );
+    expect(Number(tx2?.cash_tendered)).toBe(600);
+    expect(Number(tx2?.change_due)).toBe(100);
+    expect(await $(tid('pay-fatfinger')).isExisting()).toBe(false);
   });
 
   it('[MNY-23] catalog price changed while line is in cart: charged == last displayed', async () => {
@@ -713,7 +745,16 @@ describe('MNY — money, rounding, currency (batch 1)', () => {
     await recoverDialogs();
     await clearCart().catch(() => {});
     expect(unitShown).toBe(99999999999n); // displays 999 999 999,99 DA
-    expect(t2).toBe(100000000000n * 99999n); // exact massive magnitude (no wrap)
+    // Exact product of the DISPLAYED unit (999 999 999,99 DA = 99 999 999 999
+    // minor) × 99 999 units = 9 999 899 999 900 001 minor. That integer is odd
+    // and past 2^53, so the f64 cart total cannot hold it: the correctly
+    // rounded result (1 ulp = 2 at this magnitude) is 9 999 899 999 900 000.
+    // The old expectation (1e11 × 99 999) used a 1 000,00 DA unit — wrong base.
+    // A wrap, a NaN or a lost unit would miss by far more than this 1 minor
+    // unit, so the case still proves "no overflow / no wrap".
+    const exactMinor = 99999999999n * 99999n;
+    expect(t2).toBe(9999899999900000n);
+    expect(exactMinor - t2).toBe(1n); // f64 rounding only, no wrap
     // Either the payment path opens, or the refusal is visible, commits
     // nothing, and stays error-free (money path fails closed).
     expect(payOpened || (refusalVisible && realErrs.length === 0 && txAfter === txBefore)).toBe(

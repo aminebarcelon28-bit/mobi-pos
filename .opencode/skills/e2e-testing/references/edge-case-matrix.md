@@ -18,7 +18,7 @@ of things that already bit us.
 | 9 | Max length and unicode in names | 67-char product name, emoji, Arabic, RTL mixed | no code-point split, no column overflow crash | When touching labels/receipts |
 | 10 | Barcode duplicate / reuse after delete | create, delete, create with the same barcode | second create refused; lookup misses after delete | When touching catalog |
 | 11 | Search with 1 character | type `a` in the catalog search | bounded result set; measure p95 and rendered nodes | When touching catalog/search |
-| 12 | List at 100k+ rows | seed 100k in `tx()`, then boot and scroll | p95 within the pre-written threshold, bounded memory | When touching adapters/lists |
+| 12 | List at 100k+ rows | seed 100k in `tx()`, then boot and scroll | p95 within the pre-written threshold, bounded memory. **1M is BLOCKED in the WebView**: seed and time it Node-side (`tools/27e-prf-checks.mts:233`) and label the result a lower bound - 100k is the WebView ceiling | When touching adapters/lists |
 | 13 | Out-of-band write then UI read | seed via `lib/db.ts`, do **not** reload | document whether the UI is stale (that is the finding) | When touching cache/mirror |
 | 14 | Sale committed, then app killed | `taskkill` mid-checkout, restart, inspect rows | either fully committed or fully absent | When touching checkout/DB |
 | 15 | Offline sale, then reconnect | airplane mode on mobile / gateway unset on desktop | queued, ordered, replayed once | When touching sync |
@@ -31,7 +31,7 @@ of things that already bit us.
 | 22 | Legacy data on an upgraded DB | boot the binary on an upgraded-shape DB copy | migrations heal, no data loss, version monotonic | When touching migrations |
 | 23 | Deleted record still referenced | delete a customer with an open credit | refused, or cascade documented | When touching deletes |
 | 24 | Large file import (100k CSV, bad rows, duplicates) | kill/resume mid-import | partial import is atomic or resumable, never half-written | When touching import |
-| 25 | Export at the size cap | 200 000 and 200 001 rows | below cap succeeds, above cap returns `TOO_LARGE` | When touching export |
+| 25 | Export at the size cap | 200 000 and 200 001 rows, Node-side (`27d-rpt-checks.mts`) | below cap succeeds, above cap returns `TOO_LARGE`; a WebView export case tops out at 100k rows | When touching export |
 | 26 | Print failure | make the spooler fail, then retry | user-visible failure, no silent drop | When touching printing |
 | 27 | Reprint | print twice | second copy marked, same totals | When touching receipts |
 | 28 | Keyboard-only flow | Tab through checkout, `setWindowSize(800,600)` | primary action reachable and not clipped | When touching layout |
@@ -56,7 +56,7 @@ Do not weaken these into a different case. Name the missing thing and move on.
 | Row | Needs |
 |---|---|
 | 15, 16 | a real merchant gateway with enrolled device keys (the loopback verifier is test-only) |
-| 12, 25 at 1M+ | multi-minute fixtures and a bigger box; 100k is the practical ceiling here |
+| 12 at 1M, 25 above 100k in the WebView | 1M rows cannot be seeded or rendered through the UI/IPC (300 s mocha timeout + WebView heap). Measure Node-side and label the number a lower bound; 100k is the WebView ceiling |
 | 30 on a low-end device | a real Android device; the `MobiLite` AVD currently exits code 4 |
 | 26, 27 physical | a real ESC/POS printer and label rolls |
 | 29 physical | a real HID wedge; synthetic bursts are the substitute and prove the parser, not the device |

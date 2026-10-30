@@ -10,12 +10,23 @@
  *   node ... --timeout 900000           # WDIO_MOCHA_TIMEOUT
  *
  * Writes e2e-tests/results/runs/<stamp>-<tag>.log and .json.
+ *
+ * Counts are SUMMED across every spec line: WDIO prints one `N passing` block
+ * per spec file, so reading only the first block under-reports a multi-spec
+ * run (and a green first spec hides a red second one).
+ *
+ * The sidecar also carries `caseVerdicts` (id -> verdict) harvested from
+ * results/events.ndjson inside this run's window, overridden by any
+ * `VERDICT=<ID> <VERDICT>` line in the log. repeat-run.mjs and prove-fix.mjs
+ * read that field; without it they can only see exit codes.
+ *
  * Exit code is the WDIO exit code (0 = green).
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { paths, repoRoot, gitSha, stamp, parseArgs, ok, bad, info, C } from './_lib.mjs';
+import { paths, repoRoot, gitSha, stamp, parseArgs, bad, info, C, sumRunCounts } from './_lib.mjs';
+import { parseVerdictLines, verdictsFromEvents, readNdjson } from './_results.mjs';
 
 const args = parseArgs();
 if (args.help) {
@@ -71,9 +82,27 @@ const code = await tee(process.execPath, wdioArgs, root, env, logFile);
 const durationMs = Date.now() - started;
 
 const text = fs.readFileSync(logFile, 'utf8');
-const passing = Number((/(\d+)\s+passing/.exec(text) || [])[1] || 0);
-const failing = Number((/(\d+)\s+failing/.exec(text) || [])[1] || 0);
-const skipped = Number((/(\d+)\s+(?:skipped|pending)/.exec(text) || [])[1] || 0);
+const counts = sumRunCounts(text);
+const { passing, failing, skipped } = counts;
+
+/* Per-case verdicts for this run only: events inside the window, then any
+ * authored VERDICT= line in this log (the author's explicit statement wins). */
+let caseVerdicts = {};
+const eventsFile = path.join(p.results, 'events.ndjson');
+if (fs.existsSync(eventsFile)) {
+  try {
+    const map = verdictsFromEvents(readNdjson(eventsFile), { since: started - 1000, until: Date.now() + 5000 });
+    caseVerdicts = Object.fromEntries([...map.entries()].sort(([a], [b]) => a.localeCompare(b)));
+  } catch (err) {
+    info(`events  ${err.message} (no caseVerdicts in the sidecar)`);
+  }
+}
+try {
+  for (const [id, v] of parseVerdictLines(text)) caseVerdicts[id] = v;
+} catch (err) {
+  bad(err.message);
+}
+const caseCount = Object.keys(caseVerdicts).length;
 
 const record = {
   tag,
@@ -86,6 +115,7 @@ const record = {
   passing,
   failing,
   skipped,
+  caseVerdicts,
   log: path.relative(root, logFile),
   node: process.version,
   binary: path.relative(root, p.binary),
@@ -93,9 +123,9 @@ const record = {
 fs.writeFileSync(sidecar, JSON.stringify(record, null, 2));
 
 console.log('');
-info(`duration ${(durationMs / 1000).toFixed(1)}s   passing ${passing}   failing ${failing}   skipped ${skipped}`);
+info(`duration ${(durationMs / 1000).toFixed(1)}s   passing ${passing}   failing ${failing}   skipped ${skipped}   cases ${caseCount}`);
 info(`sidecar  ${path.relative(root, sidecar)}`);
-if (code === 0) console.log(`${C.green}GREEN${C.reset} ${tag}`);
+if (code === 0 && failing === 0) console.log(`${C.green}GREEN${C.reset} ${tag}`);
 else console.log(`${C.red}RED${C.reset} ${tag} (exit ${code}) - triage before editing code`);
 
 process.exit(code);

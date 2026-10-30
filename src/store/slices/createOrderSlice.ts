@@ -2169,9 +2169,20 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     // its origin — voucher→voucher, avoir→wallet, debt→debt relief — with
     // only the cash-funded share disbursable as cash. Paying gross cash
     // minted the voucher/avoir/debt amount as free money.
+    // Prior refund totals now include the trade value they restored, so the
+    // cumulative funding cap must subtract it back to stay on the funding
+    // basis (`recoverableBase` never contains the trade leg).
     const priorRecovery = (transactions || [])
       .filter((t) => t.isRefund && t.originalTransactionId === originalTransaction.id)
-      .reduce((acc, t) => acc + (Number(t.total) || 0), 0);
+      .reduce(
+        (acc, t) =>
+          acc +
+          Math.max(
+            0,
+            (Number(t.total) || 0) - (Number((t as { tradeInRestored?: number }).tradeInRestored) || 0),
+          ),
+        0,
+      );
     const funding = computeRefundFundingSplit(originalTransaction, refundTotal, priorRecovery);
     const netRefund = funding.netRefund;
     // Fix 2: strict tender clamp (anti cash-extraction). Cumulative drawer
@@ -2263,6 +2274,14 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     // evaporation, no free-money cash).
     const tradeValueUnclaimed =
       hasTradeLeg && tradeRestoreNow > 0 && !originalTransaction.customer;
+
+    // Value reversed = funding returned + trade value restored. The customer
+    // handed the device's value for this ticket, so a full refund gives it
+    // back too — the row's `total` is the value reversed, never the cash
+    // share ([MNY-26]: 1300 = 600 cash + 400 wallet + 300 trade). Anonymous
+    // tickets cannot receive the trade value, so it is not counted.
+    const tradeRestoredValue = tradeValueUnclaimed ? 0 : tradeRestoreNow;
+    const valueReversed = netRefund + tradeRestoredValue;
 
     // Original-line resolver: refund lines carry the ORIGINAL sale line
     // identity (`saleItemId` = `${saleTxnId}-item-${lineIdx}`), so frozen
@@ -2357,12 +2376,25 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       );
       // Shrink the earn bucket minted by the original sale first; only the
       // uncovered residual hits the headline balance (bucket already spent).
-      const { updatedBuckets: refundBuckets, residualHeadlineDeduction } = shrinkEarnBucketForRefund(
+      const {
+        updatedBuckets: refundBuckets,
+        appliedDeduction: bucketDeduction,
+        residualHeadlineDeduction,
+      } = shrinkEarnBucketForRefund(
         cust.pointBuckets || [],
         originalTransaction.receiptNumber,
         pointsToDeduct
       );
-      const newPoints = Math.max(0, (cust.loyaltyPoints || 0) - residualHeadlineDeduction);
+      // The headline IS the spendable balance and must equal Σ buckets: the
+      // shrink above already removed `bucketDeduction` from the buckets, so
+      // the headline drops by that same total plus the residual. Deducting
+      // only the residual left the headline holding points no bucket owned
+      // (G-07: headline 8 > Σ buckets 0) — a later redemption would then
+      // spend an unbacked discount.
+      const newPoints = Math.max(
+        0,
+        (cust.loyaltyPoints || 0) - (bucketDeduction + residualHeadlineDeduction)
+      );
       // Structured milestone clawback from the original sale's immutable
       // snapshots. Unclamped like voids: the wallet refill below offsets
       // any negative before value flows out (refill-before-payout).
@@ -2559,12 +2591,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       }),
       subtotal: refundTotal,
       discountTotal: 0,
-      // Money truth: the NET value reversed (never the gross — gross
-      // includes discounts/credits the customer never paid). The drawer
-      // lane reads cashDisbursed (exact cash out); revenue lanes read
-      // total (value reversed). Legacy rows without cashDisbursed keep
-      // the old total===cash reading via the cashTerms fallback.
-      total: netRefund,
+      // Money truth: the value reversed — funding returned plus any trade
+      // value restored (see `valueReversed`). The drawer lane reads
+      // cashDisbursed (exact cash out); revenue lanes read total (value
+      // reversed). Legacy rows without cashDisbursed keep the old
+      // total===cash reading via the cashTerms fallback.
+      total: valueReversed,
       cashDisbursed: cashOut,
       // Chaos S5 cumulative cap anchor: later partial refunds of the same
       // ticket subtract this before restoring more trade value.
@@ -2783,6 +2815,10 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         subtotal: Math.round(refundTotal),
         discountTotal: 0,
         totalNet: Math.round(netRefund),
+        // Row `total` = value reversed (funding + trade restore) — the same
+        // number the receipt payload carries, so column and JSON never
+        // disagree ([MNY-26]: 600 cash + 400 avoir + 300 reprise = 1300).
+        valueReversed: Math.round(valueReversed),
         costTotal: Math.round(costRefundTotal),
         pricingTier: originalTransaction.pricingTier,
         paymentMethod: effectiveRefundMethod,
@@ -2978,6 +3014,21 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           import('../../db/sqlPluginAdapter'),
         ]);
         if (hydratedCustomer) {
+          // Local authority FIRST: the wallet refill (avoir share + restored
+          // trade value) and the loyalty clawback are money. Mirroring them to
+          // Dexie/cloud alone loses them on restart, because boot rehydrates
+          // from SQLite ([MNY-26]: store_credit stayed 0 while the refund had
+          // credited 400). Same H8 policy as checkout: retry once, then queue
+          // to the outbox with a loud warning.
+          const savedCust = await persistWithRetryOnce(() =>
+            getCustomerRepo().then((repo) => repo.save(hydratedCustomer))
+          );
+          if (!savedCust.ok) {
+            nativeWarnings.push(
+              'Avoir client : écriture locale différée — solde client en file de synchronisation.'
+            );
+            console.warn('[refund:persist] customer save failed; queueing to outbox', savedCust.error);
+          }
           await sql
             .enqueueGenericSync('customer', hydratedCustomer.id, hydratedCustomer as unknown as Record<string, unknown>)
             .catch((e: unknown) => {
@@ -3255,8 +3306,8 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           customer_id: updatedCustomer?.id ?? originalTransaction.customer?.id ?? null,
           subtotal: refundTotal,
           discount_total: 0,
-          // Net value reversed (money truth); drawer outflow is cashOut.
-          total: netRefund,
+          // Value reversed (funding + trade restore); drawer outflow is cashOut.
+          total: valueReversed,
           cost_total: costRefundTotal,
           // Recovered-COGS credit is also carried by the receipt JSON
           // envelope (`restoredCogs`) for schema-degraded previews where the

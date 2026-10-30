@@ -353,6 +353,24 @@ function toInt(n: unknown): number {
 }
 
 /**
+ * Money at the precision the product actually carries: integer minor units
+ * (1 DA = 100). The cart used to round every unit price to WHOLE dinars
+ * (`toInt`), so a 0,01 DA line charged 0, a 33,335 DA line charged 33,00 and
+ * 3×33,33 + 7×14,29 charged 197,00 while the lines rendered 200,02
+ * ([MNY-01/02/03/06]). Half-away-from-zero is the same rule the entry path
+ * uses (`Money.fromUserInput` rejects a third decimal; display rounds half up).
+ */
+function toMinor(n: unknown): number {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 0;
+  return Math.round(v * 100);
+}
+
+function fromMinor(minor: number): number {
+  return minor / 100;
+}
+
+/**
  * Chaos S5 trade-in restoration quota for one refund row: pro-rata share of
  * the deduction by net value reversed, capped by what prior refunds of the
  * same ticket already restored. Pure (slice + battery share it — one source).
@@ -377,8 +395,8 @@ export function computeTradeRestoreQuota(
 
 export function computeCartTotals(lines: CartItem[], opts: CartTotalsOptions = {}): CartTotals {
   const tier = opts.pricingTier;
-  let grossSubtotal = 0;
-  let lineDiscountTotal = 0;
+  let grossMinor = 0;
+  let lineDiscountMinor = 0;
   for (const line of lines ?? []) {
     const unit =
       line.appliedPrice !== undefined
@@ -386,39 +404,53 @@ export function computeCartTotals(lines: CartItem[], opts: CartTotalsOptions = {
         : resolveBaseUnitPrice(line.product, tier, line.quantity, opts.priceBookItems ?? null);
     const magnitude = Math.abs(toInt(line.quantity));
     const signedQty = line.isReturn ? -magnitude : magnitude;
-    grossSubtotal += toInt(unit) * signedQty;
+    // Charge the price the line DISPLAYS (2 decimals), never a whole-dinar
+    // rounding of it: [MNY-01/02/03/06] all failed because this multiplied a
+    // rounded unit by the quantity.
+    grossMinor += toMinor(unit) * signedQty;
     // Sign-aware discounts (OBS-A1): a return line's stored discount must
     // shrink the refund, not grow it — otherwise toggling a discounted sale
     // to a return refunds gross + discount (e.g. 1100 on a 900 ticket).
-    const lineDisc = Math.max(0, toInt(line.discount));
-    lineDiscountTotal += line.isReturn ? -lineDisc : lineDisc;
+    const lineDiscMinor = Math.max(0, toMinor(line.discount));
+    lineDiscountMinor += line.isReturn ? -lineDiscMinor : lineDiscMinor;
   }
   const pct = Math.max(0, Math.min(100, Number(opts.cartDiscountPercent) || 0));
-  const base = grossSubtotal - lineDiscountTotal;
-  const cartDiscountTotal = base > 0 && pct > 0 ? Math.round((base * pct) / 100) : 0;
-  const discountTotal = lineDiscountTotal + cartDiscountTotal;
-  const subtotalAfterDiscount = grossSubtotal - discountTotal;
-  const storeCreditApplied = Math.max(0, toInt(opts.storeCreditApplied));
-  const voucherCreditApplied = Math.max(0, toInt(opts.voucherCreditApplied));
+  const baseMinor = grossMinor - lineDiscountMinor;
+  const cartDiscountMinor = baseMinor > 0 && pct > 0 ? Math.round((baseMinor * pct) / 100) : 0;
+  const discountMinor = lineDiscountMinor + cartDiscountMinor;
+  const subtotalAfterDiscountMinor = grossMinor - discountMinor;
+  const storeCreditMinor = Math.max(0, toMinor(opts.storeCreditApplied));
+  const voucherCreditMinor = Math.max(0, toMinor(opts.voucherCreditApplied));
   // Exchange credit is clamped to the payable remainder AFTER store +
   // voucher credits (never over-covers into a phantom refund via refundDue;
   // a true soulte is a post-checkout payout, never a negative net). Credits
   // can never exceed the pre-credit base in combination.
-  const tradeInCreditApplied = Math.max(
+  const tradeInCreditMinor = Math.max(
     0,
     Math.min(
-      toInt(opts.tradeInCredit),
-      Math.max(0, subtotalAfterDiscount - storeCreditApplied - voucherCreditApplied)
+      toMinor(opts.tradeInCredit),
+      Math.max(0, subtotalAfterDiscountMinor - storeCreditMinor - voucherCreditMinor)
     )
   );
-  const credits = storeCreditApplied + voucherCreditApplied + tradeInCreditApplied;
-  const net = subtotalAfterDiscount - credits;
+  const creditsMinor = storeCreditMinor + voucherCreditMinor + tradeInCreditMinor;
+  const netMinor = subtotalAfterDiscountMinor - creditsMinor;
   // Phase 1b-i: the `taxEngine` zero shim is deleted. `ht` is the taxable base
   // (pre-credit subtotal, clamped >= 0) and there is no VAT to add — every sale
   // is HT-only by product decision (Gate Addendum A), and the `tax` column that
   // used to receive the zero is dropped in migration 108.
-  const ht = Math.max(0, subtotalAfterDiscount);
-  const ttc = Math.max(0, ht - credits);
+  const htMinor = Math.max(0, subtotalAfterDiscountMinor);
+  const ttcMinor = Math.max(0, htMinor - creditsMinor);
+  const grossSubtotal = fromMinor(grossMinor);
+  const lineDiscountTotal = fromMinor(lineDiscountMinor);
+  const cartDiscountTotal = fromMinor(cartDiscountMinor);
+  const discountTotal = fromMinor(discountMinor);
+  const subtotalAfterDiscount = fromMinor(subtotalAfterDiscountMinor);
+  const storeCreditApplied = fromMinor(storeCreditMinor);
+  const voucherCreditApplied = fromMinor(voucherCreditMinor);
+  const tradeInCreditApplied = fromMinor(tradeInCreditMinor);
+  const net = fromMinor(netMinor);
+  const ht = fromMinor(htMinor);
+  const ttc = fromMinor(ttcMinor);
   return {
     grossSubtotal,
     lineDiscountTotal,
@@ -435,7 +467,9 @@ export function computeCartTotals(lines: CartItem[], opts: CartTotalsOptions = {
     // B-026: signed net can go negative — surface the disbursement amount.
     // HT-only, so what was owed is `ht` itself: credits minus the taxable base.
     refundDue:
-      subtotalAfterDiscount < 0 ? Math.max(0, -net) : Math.max(0, credits - ht),
+      subtotalAfterDiscountMinor < 0
+        ? fromMinor(Math.max(0, -netMinor))
+        : fromMinor(Math.max(0, creditsMinor - htMinor)),
   };
 }
 
@@ -465,25 +499,29 @@ export function lineProfitNet(input: {
   discount?: number | null;
   isReturn?: boolean;
 }): number {
-  const charged = toInt(input.unitPriceCharged);
-  const unitCost = toInt(input.unitCostAtSale);
+  const charged = toMinor(input.unitPriceCharged);
+  const unitCost = toInt(input.unitCostAtSale) * 100;
   const qty = toInt(input.quantity);
   const isReturn = Boolean(input.isReturn);
   const signedQty = isReturn ? -Math.abs(qty) : Math.abs(qty);
-  const lineDiscount = Math.max(0, toInt(input.discount));
+  const lineDiscount = Math.max(0, toMinor(input.discount));
   const signedDiscount = isReturn ? -lineDiscount : lineDiscount;
-  return (charged - unitCost) * signedQty - signedDiscount;
+  return fromMinor((charged - unitCost) * signedQty - signedDiscount);
 }
 
 /** Funding sources of an original sale, for refund reversal. */
 export interface RefundFundingInput {
   total?: number;
   subtotal?: number;
+  /** Ticket-level discount (line discounts + cart discount), if recorded. */
+  discountTotal?: number | null;
   voucherCreditApplied?: number | null;
   tenders?: Array<{ method?: string; amount?: number }> | null;
   paymentMethod?: string;
   /** Persisted credit-debt amount (preferred over re-summing tenders). */
   debtAdded?: number | null;
+  /** Lines of the original ticket — fallback basis when the columns are absent. */
+  items?: RefundEligibilityItem[] | null;
 }
 
 export interface RefundFundingSplit {
@@ -518,6 +556,22 @@ function tenderSum(tenders: RefundFundingInput['tenders'], method: string): numb
 }
 
 /**
+ * Σ net value of the ticket's lines (appliedPrice − line discount) × qty.
+ * Used as the proration denominator when the ticket columns are absent, so the
+ * numerator (`netUnitOf`, also net) and the denominator share one basis.
+ */
+function netBaseOf(orig: RefundFundingInput): number {
+  const items = orig?.items;
+  if (!items || items.length === 0) return 0;
+  let sum = 0;
+  for (const item of items) {
+    if (!item) continue;
+    sum += netUnitOf(item) * Math.max(0, Number(item.quantity) || 0);
+  }
+  return Math.max(0, Math.round(sum));
+}
+
+/**
  * Anti-arbitrage refund split: a refund must reverse each funding source —
  * never pay gross cash for value the customer paid with voucher, wallet
  * credit, or unpaid debt (C1/C2/C3), and never refund cart discounts as cash.
@@ -531,7 +585,17 @@ export function computeRefundFundingSplit(
   priorRecovery = 0
 ): RefundFundingSplit {
   const total = Math.max(0, Math.round(Number(orig?.total ?? 0)));
-  const grossBase = Math.max(0, Math.round(Number(orig?.subtotal ?? 0)));
+  // Basis of the proration. Every caller passes the NET value of the returned
+  // lines (`netUnitOf` = appliedPrice − line discount), so the denominator must
+  // be the ticket's NET line value. Using the GROSS `subtotal` applied the line
+  // discount a second time: a 350 DA bundle child discounted by 81 returned
+  // 269 × 500/650 = 207 instead of its allocated 269 ([MNY-30]).
+  const grossLines = Math.max(0, Math.round(Number(orig?.subtotal ?? 0)));
+  const ticketDiscount = Math.max(0, Math.round(Number(orig?.discountTotal ?? 0)));
+  const netLines = Math.max(0, grossLines - ticketDiscount);
+  const netBaseFromItems = netBaseOf(orig ?? {});
+  const grossBase =
+    netLines > 0 ? netLines : netBaseFromItems > 0 ? netBaseFromItems : grossLines;
   const fundV = Math.min(total, Math.max(0, Math.round(Number(orig?.voucherCreditApplied ?? 0))));
   const avoirRaw = tenderSum(orig?.tenders, 'Avoir Client');
   const fundA = Math.min(
@@ -724,8 +788,10 @@ export function refundableValueOf(
   let priorTrade = 0;
   for (const t of allTxns || []) {
     if (!t || !t.isRefund || t.originalTransactionId !== txn.id) continue;
-    priorGross += Math.max(0, Math.round(Number(t.total) || 0));
+    // Refund totals include the trade value they restored; the funding cap is
+    // on the funding basis, so subtract it back (same rule as the slice).
     priorTrade += Math.max(0, Math.round(Number(t.tradeInRestored) || 0));
+    priorGross += Math.max(0, Math.round(Number(t.total) || 0) - Math.round(Number(t.tradeInRestored) || 0));
   }
   const funding = computeRefundFundingSplit(txn, gross, priorGross);
   let value = funding.netRefund;

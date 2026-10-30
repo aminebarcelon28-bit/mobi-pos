@@ -3708,14 +3708,26 @@ describe('CRT - cart, scan, serial and discount edges (batch 14)', () => {
     expect(zero === 0 ? zeroLines === 0 || zero >= 0 : true).toBe(true);
   });
 
-  it('[CRT-04] invoice discount >100% clamps at free (never a negative total); line-level discount surface absent', async () => {
+  it('[CRT-04] invoice discount >100% is refused with a visible error (never clamped free, never a negative total); line-level discount surface absent', async () => {
     await clearCart();
     await addSku('REF3 P1000');
-    await applyCartDiscountPercent('150', { pin: APP_PIN });
+    const before = Number(await cartTotalMinor());
+    // Owner-set policy (2026-10-29, [MNY-18]): a percent above 100 is
+    // REJECTED — inline error, Apply disabled — not silently clamped to a free
+    // sale. Both the safety property (never negative) and the honesty property
+    // (no silent 100% giveaway) are asserted here; the old expectation
+    // ("clamps at free", total 0) described the pre-fix clamp.
+    const refusal = await applyCartDiscountPercent('150', { pin: APP_PIN, expectRefused: true });
     const total = Number(await cartTotalMinor());
     const texts = (await cartLineTexts()).join(' | ');
-    console.log(`[CRT-04] after 150% cart discount totalMinor=${total} line=${texts}`);
-    expect(total).toBe(0); // clamped to 100%, never negative
+    console.log(
+      `[CRT-04] refused="${refusal.error}" applyDisabled=${refusal.applyDisabled} beforeMinor=${before} totalMinor=${total} line=${texts}`,
+    );
+    expect(refusal.error.length).toBeGreaterThan(0); // visible, never silent
+    expect(refusal.applyDisabled).toBe(true); // cannot be committed at all
+    expect(before).toBe(100000); // 1 000 DA ticket untouched
+    expect(total).toBe(before); // refused discount changes nothing
+    expect(total).toBeGreaterThanOrEqual(0); // never a negative total
   });
 
   it('[CRT-08] manager PIN price override changes the last line unit price to 500 DA', async () => {

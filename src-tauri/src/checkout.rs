@@ -157,7 +157,7 @@ pub struct FifoItemOut {
     pub id: String,
     pub item_id: String,
     pub unit_cost_at_sale: i64,
-    pub line_profit: i64,
+    pub line_profit: f64,
     pub fifo_allocations: Vec<FifoAllocationOut>,
 }
 
@@ -165,8 +165,8 @@ pub struct FifoItemOut {
 #[serde(rename_all = "camelCase")]
 pub struct CheckoutResponse {
     pub device_id: String,
-    pub fifo_cost_total: Option<i64>,
-    pub fifo_profit: Option<i64>,
+    pub fifo_cost_total: Option<f64>,
+    pub fifo_profit: Option<f64>,
     pub ledger_cogs_total: Option<i64>,
     pub fifo_items: Vec<FifoItemOut>,
 }
@@ -209,22 +209,33 @@ fn map_rusqlite(context: &str, e: rusqlite::Error) -> TrustError {
 /// 2026-10-16 reconciliation incident). Return lines follow
 /// `computeCartTotals`' sign contract: signed_qty is negative and their
 /// line discount shrinks the refund, never grows it (OBS-A1).
+/// Round a dinar amount to 2 decimals (integer minor units) — the same
+/// precision `computeCartTotals` charges. Whole-dinar `.round()` here made a
+/// 200,02 DA cart store `total = 200` while the customer paid 200,02
+/// ([MNY-01/02/03/06]: screen vs ledger drift).
+fn q2(x: f64) -> f64 {
+    if !x.is_finite() {
+        return 0.0;
+    }
+    (x * 100.0).round() / 100.0
+}
+
 fn line_profit_net(
     unit_price_charged: f64,
     unit_cost_at_sale: i64,
     qty: f64,
     discount: f64,
     is_return: bool,
-) -> i64 {
+) -> f64 {
     let magnitude = (qty.round() as i64).abs();
     let signed_qty = if is_return { -magnitude } else { magnitude };
-    let line_discount = discount.round().max(0.0) as i64;
+    let line_discount = q2(discount.max(0.0));
     let signed_discount = if is_return {
         -line_discount
     } else {
         line_discount
     };
-    (unit_price_charged.round() as i64 - unit_cost_at_sale) * signed_qty - signed_discount
+    q2((q2(unit_price_charged) - unit_cost_at_sale as f64) * signed_qty as f64 - signed_discount)
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +419,7 @@ pub fn apply_checkout_in_txn(
                         id: item_id.clone(),
                         item_id,
                         unit_cost_at_sale: unit_cost.map(|v| v.round() as i64).unwrap_or(0),
-                        line_profit: line_prof.map(|v| v.round() as i64).unwrap_or(0),
+                        line_profit: line_prof.unwrap_or(0.0),
                         fifo_allocations: vec![],
                     })
                 })
@@ -418,8 +429,8 @@ pub fn apply_checkout_in_txn(
 
             return Ok(CheckoutResponse {
                 device_id,
-                fifo_cost_total: Some(ct.round() as i64),
-                fifo_profit: profit.map(|v| v.round() as i64),
+                fifo_cost_total: Some(q2(ct)),
+                fifo_profit: profit.map(q2),
                 ledger_cogs_total: ledger_cogs.map(|v| v.round() as i64),
                 fifo_items: stored_items,
             });
@@ -1034,16 +1045,17 @@ pub fn apply_checkout_in_txn(
         }
     }
 
-    // 5. Order Totals & Pricing
-    let order_total = req.order_row.total.unwrap_or(0.0).round() as i64;
+    // 5. Order Totals & Pricing — 2-decimal dinars (minor units), never a
+    // whole-dinar round: the cart charges what the lines display.
+    let order_total = q2(req.order_row.total.unwrap_or(0.0));
     let final_cost_total = if fifo_resolved_any {
-        total_fifo_cost
+        total_fifo_cost as f64
     } else {
-        req.order_row.cost_total.unwrap_or(0.0).round() as i64
+        q2(req.order_row.cost_total.unwrap_or(0.0))
     };
-    let final_profit = order_total - final_cost_total;
-    let final_profit_margin = if order_total > 0 {
-        ((final_profit as f64 / order_total as f64) * 1000.0).round() / 10.0
+    let final_profit = q2(order_total - final_cost_total);
+    let final_profit_margin = if order_total > 0.0 {
+        ((final_profit / order_total) * 1000.0).round() / 10.0
     } else {
         0.0
     };
@@ -1084,11 +1096,11 @@ pub fn apply_checkout_in_txn(
     );
     receipt_obj.insert(
         "costTotal".to_string(),
-        serde_json::Value::Number(final_cost_total.into()),
+        serde_json::Value::from(final_cost_total),
     );
     receipt_obj.insert(
         "profit".to_string(),
-        serde_json::Value::Number(final_profit.into()),
+        serde_json::Value::from(final_profit),
     );
     if let Some(lc) = final_ledger_cogs {
         receipt_obj.insert(
@@ -1116,7 +1128,7 @@ pub fn apply_checkout_in_txn(
                 continue;
             };
             let cost = serde_json::Value::Number(res.unit_cost_at_sale.into());
-            let profit = serde_json::Value::Number(res.line_profit.into());
+            let profit = serde_json::Value::from(res.line_profit);
             obj.insert("unitCostAtSale".to_string(), cost.clone());
             obj.insert("unitCostPrice".to_string(), cost.clone());
             obj.insert("unit_cost_at_sale".to_string(), cost);
@@ -1128,8 +1140,8 @@ pub fn apply_checkout_in_txn(
 
     // 6. Upsert transactions table
     let shift_id = req.order_row.shift_id.clone();
-    let subtotal = req.order_row.subtotal.unwrap_or(0.0).round();
-    let discount_total = req.order_row.discount_total.unwrap_or(0.0).round();
+    let subtotal = q2(req.order_row.subtotal.unwrap_or(0.0));
+    let discount_total = q2(req.order_row.discount_total.unwrap_or(0.0));
     let pricing_tier = req
         .order_row
         .pricing_tier
@@ -1140,8 +1152,8 @@ pub fn apply_checkout_in_txn(
         .payment_method
         .clone()
         .unwrap_or_else(|| "Espèces".into());
-    let cash_tendered = req.order_row.cash_tendered.unwrap_or(0.0).round();
-    let change_due = req.order_row.change_due.unwrap_or(0.0).round();
+    let cash_tendered = q2(req.order_row.cash_tendered.unwrap_or(0.0));
+    let change_due = q2(req.order_row.change_due.unwrap_or(0.0));
     let status = req
         .order_row
         .status
@@ -1267,7 +1279,7 @@ pub fn apply_checkout_in_txn(
         );
         item_obj.insert(
             "line_profit".into(),
-            serde_json::Value::Number(res.line_profit.into()),
+            serde_json::Value::from(res.line_profit),
         );
         item_obj.insert(
             "fifo_allocations".into(),
@@ -1307,7 +1319,7 @@ pub fn apply_checkout_in_txn(
                 unit_price_charged,
                 res.unit_cost_at_sale as f64,
                 discount_amount,
-                res.line_profit as f64,
+                res.line_profit,
                 item_json,
                 device_id,
                 item_key,
@@ -1486,16 +1498,19 @@ mod tests {
     fn line_profit_nets_discount_and_signs_returns() {
         // Gross-vs-net regression (2026-10-16): (2416−1336)×1 − 200 = 880,
         // matching the stored ticket profit — not the gross 1080.
-        assert_eq!(line_profit_net(2416.0, 1336, 1.0, 200.0, false), 880);
+        assert_eq!(line_profit_net(2416.0, 1336, 1.0, 200.0, false), 880.0);
         // Multi-unit with no line discount: (400−1605)×2 = −2410.
-        assert_eq!(line_profit_net(400.0, 1605, 2.0, 0.0, false), -2410);
+        assert_eq!(line_profit_net(400.0, 1605, 2.0, 0.0, false), -2410.0);
         // Return line: signed qty negative AND the discount shrinks the
         // refund: −((500−380)×2) + 100 = −140.
-        assert_eq!(line_profit_net(500.0, 380, -2.0, 100.0, true), -140);
+        assert_eq!(line_profit_net(500.0, 380, -2.0, 100.0, true), -140.0);
         // Sale-line discount always nets as a subtraction.
-        assert_eq!(line_profit_net(1000.0, 600, 1.0, 50.0, false), 350);
-        // Fractional qty rounds; negative discounts clamp at 0.
-        assert_eq!(line_profit_net(1000.5, 600, 2.4, -25.0, false), 802);
+        assert_eq!(line_profit_net(1000.0, 600, 1.0, 50.0, false), 350.0);
+        // Fractional qty rounds; negative discounts clamp at 0. The charged
+        // price keeps its 2 decimals: (1000,50−600)×2 = 801,00.
+        assert_eq!(line_profit_net(1000.5, 600, 2.4, -25.0, false), 801.0);
+        // Centime revenue is preserved, not rounded to whole dinars.
+        assert_eq!(line_profit_net(33.34, 12, 3.0, 0.0, false), 64.02);
     }
 
     fn setup_test_db() -> Connection {
@@ -1675,8 +1690,8 @@ mod tests {
         // 5 units from B1 (5 * 100 = 500) + 2 units from B2 (2 * 200 = 400) = 900 DZD exact batch cost
         // Blended unit cost: 900 / 7 = 128.57 -> rounded to 129 DZD.
         // Line-item FIFO cost: 7 * 129 = 903 DZD.
-        assert_eq!(res.fifo_cost_total, Some(903));
-        assert_eq!(res.fifo_profit, Some(2100 - 903)); // 1197 DZD profit
+        assert_eq!(res.fifo_cost_total, Some(903.0));
+        assert_eq!(res.fifo_profit, Some(1197.0)); // 1197 DZD profit
         assert_eq!(res.ledger_cogs_total, Some(900)); // Exact ledger allocations: 500 + 400 = 900
 
         // Check stock batch remaining

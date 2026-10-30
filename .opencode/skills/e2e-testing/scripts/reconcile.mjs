@@ -1,33 +1,44 @@
 #!/usr/bin/env node
 /**
- * reconcile.mjs - prove the verdict dashboard is internally consistent.
+ * reconcile.mjs - prove the verdict dashboard is internally consistent, and
+ * (with --close) that every verdict carries the evidence it claims.
  *
  * Reads:
  *   e2e-tests/COVERAGE.md        summary dashboard table
- *   e2e-tests/CASE_INDEX.csv     one row per catalog case (verdict, retired flag)
+ *   e2e-tests/CASE_INDEX.csv     one row per catalog case
  *   e2e-tests/FAIL-CLUSTERS.csv  case_id -> cluster_id (root-cause map)
  *
- * Checks:
- *   - every CSV row is placed (id present, retired 0/1, known verdict)
- *   - rows == active + retired (697 = 687 active + 10 owner-retired)
- *   - active rows (retired=0) == "Catalog cases (table rows)"
- *   - dashboard buckets sum to the total
- *   - each dashboard bucket equals the CSV count for that verdict
+ * Always checks:
+ *   - every row is placeable (id present and well formed, retired 0/1, known verdict)
+ *   - rows == active + retired
+ *   - active rows == "Catalog cases (table rows)"
+ *   - dashboard buckets sum to the total, and each equals the CSV count
  *   - case ids are unique
  *   - every FAIL row has exactly one cluster, and no cluster names a non-FAIL
+ *   - verdict_run / verdict_sha columns exist (hint: verdicts.mjs --migrate)
  *
- * The CSV is the only verdict source; there are no bucket JSON files to drift.
+ * --close additionally enforces the evidence bar:
+ *   - REMAIN == 0 (REMAIN is a queue, not a parking lot)
+ *   - BLOCKED evidence names the missing dependency
+ *   - FAIL evidence names an observation class (DB|BYTES|RUNTIME|SOURCE|UI) and
+ *     either a `file:line` or the literal `SOURCE unknown`
+ *   - PASS-PARTIAL evidence names the unasserted facet
+ *   - --prev <csv>: a verdict that changed since that file needs a run
+ *     reference (verdict_run + verdict_sha) on the row
  *
- * Usage: node .opencode/skills/e2e-testing/scripts/reconcile.mjs
- * Exit:  0 consistent, 1 mismatch (prints the diff).
+ * Usage: node .opencode/skills/e2e-testing/scripts/reconcile.mjs [--close] [--prev <csv>] [--json]
+ * Exit:  0 consistent, 1 mismatch (prints the diff), 2 bad input.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { repoRoot, parseArgs, ok, bad, warn, info, C } from './_lib.mjs';
+import {
+  repoRoot, parseArgs, readIndex, activeRows, indexCounts, readDashboard,
+  ID_CATALOG_RE, VERDICTS, C, bad, warn,
+} from './_lib.mjs';
 
+const args = parseArgs();
 const root = repoRoot();
 const E2E = path.join(root, 'e2e-tests');
-const args = parseArgs();
 
 const coverageFile = path.join(E2E, 'COVERAGE.md');
 const csvFile = path.join(E2E, 'CASE_INDEX.csv');
@@ -35,103 +46,72 @@ const clusterFile = path.join(E2E, 'FAIL-CLUSTERS.csv');
 for (const f of [coverageFile, csvFile, clusterFile]) {
   if (!fs.existsSync(f)) {
     bad(`missing ${path.relative(root, f)}`);
-    process.exit(1);
+    process.exit(2);
   }
 }
 
-/* ---------- dashboard ---------- */
-const dash = {};
-for (const line of fs.readFileSync(coverageFile, 'utf8').split(/\r?\n/)) {
-  const m = /^\|\s*(.+?)\s*\|\s*([\d/]+)\s*\|\s*$/.exec(line);
-  if (!m) continue;
-  const label = m[1].replace(/\*/g, '');
-  const value = m[2];
-  if (/^Catalog cases/.test(label)) dash.TOTAL = Number(value);
-  else if (/^Passed \(full\)/.test(label)) dash.PASS = Number(value);
-  else if (/^Passed \(partial/.test(label)) dash['PASS-PARTIAL'] = Number(value);
-  else if (/^FAILED/.test(label)) dash.FAIL = Number(value);
-  else if (/^N\/A/.test(label)) dash['N/A'] = Number(value);
-  else if (/^Remaining/.test(label)) dash.REMAIN = Number(value);
-  else if (/^BLOCKED/.test(label)) dash.BLOCKED = Number(value);
-}
-
-/* ---------- CSV ---------- */
-function parseCsv(text) {
-  const rows = [];
-  let row = [];
-  let field = '';
-  let quoted = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (quoted) {
-      if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; }
-      else if (ch === '"') quoted = false;
-      else field += ch;
-    } else if (ch === '"') quoted = true;
-    else if (ch === ',') { row.push(field); field = ''; }
-    else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
-    else if (ch === '\r') { /* skip */ }
-    else field += ch;
-  }
-  if (field.length || row.length) { row.push(field); rows.push(row); }
-  return rows;
-}
-
-const raw = parseCsv(fs.readFileSync(csvFile, 'utf8'));
-const header = raw.shift().map((h) => h.trim());
-const idx = Object.fromEntries(header.map((h, i) => [h, i]));
-for (const need of ['id', 'verdict', 'retired']) {
-  if (idx[need] === undefined) {
-    bad(`CASE_INDEX.csv has no "${need}" column`);
-    process.exit(1);
-  }
-}
-
-const counts = { PASS: 0, 'PASS-PARTIAL': 0, FAIL: 0, 'N/A': 0, REMAIN: 0, BLOCKED: 0 };
-const ids = new Map();
-let active = 0;
-let retired = 0;
-let dataRows = 0;
-const unplaced = []; // rows this script cannot place in a bucket
-
-for (const r of raw) {
-  if (!r.length || r.every((f) => !String(f).trim())) continue;
-  dataRows++;
-  const id = String(r[idx.id] ?? '').trim();
-  if (!id) {
-    unplaced.push(`line without an id: ${JSON.stringify(r).slice(0, 120)}`);
-    continue;
-  }
-  ids.set(id, (ids.get(id) || 0) + 1);
-  const retiredFlag = String(r[idx.retired]).trim();
-  if (retiredFlag !== '0' && retiredFlag !== '1') {
-    unplaced.push(`${id}: retired="${retiredFlag}" (must be 0 or 1)`);
-    continue;
-  }
-  if (retiredFlag === '1') { retired++; continue; }
-  active++;
-  const v = String(r[idx.verdict]).trim();
-  if (counts[v] === undefined) unplaced.push(`${id}: unknown verdict "${v}"`);
-  else counts[v]++;
-}
-
-/* ---------- checks ---------- */
 const failures = [];
+const fail = (label) => { failures.push(label); };
+
+/* ------------------------------------------------------------------ */
+/* index                                                               */
+/* ------------------------------------------------------------------ */
+
+const index = readIndex(root, csvFile);
+for (const need of ['id', 'verdict', 'retired', 'evidence']) {
+  if (index.ix[need] === undefined) {
+    bad(`CASE_INDEX.csv has no "${need}" column`);
+    process.exit(2);
+  }
+}
+
+const active = activeRows(index);
+const retired = index.rows.length - active.length;
+const counts = indexCounts(index);
+
+const unplaced = [];
+const seen = new Map();
+for (const row of index.rows) {
+  const id = index.get(row, 'id');
+  if (!id) { unplaced.push(`line without an id: ${JSON.stringify(row).slice(0, 100)}`); continue; }
+  seen.set(id, (seen.get(id) || 0) + 1);
+  if (!ID_CATALOG_RE.test(id)) unplaced.push(`${id}: id does not match ${ID_CATALOG_RE} (e.g. REF-03)`);
+  const retiredFlag = index.get(row, 'retired');
+  if (retiredFlag !== '0' && retiredFlag !== '1') unplaced.push(`${id}: retired="${retiredFlag}" (must be 0 or 1)`);
+  if (retiredFlag === '1') continue;
+  const v = index.get(row, 'verdict');
+  if (!VERDICTS.includes(v)) unplaced.push(`${id}: unknown verdict "${v}"`);
+}
+
+/* ------------------------------------------------------------------ */
+/* dashboard                                                           */
+/* ------------------------------------------------------------------ */
+
+const dash = readDashboard(coverageFile);
+for (const key of ['TOTAL', 'PASS', 'PASS-PARTIAL', 'FAIL', 'N/A', 'REMAIN', 'BLOCKED']) {
+  if (dash[key] === undefined) {
+    bad(`COVERAGE.md dashboard has no row for ${key} (expected the label matched by _lib.DASH_KEYS)`);
+    process.exit(2);
+  }
+}
+
+const checks = [];
 const check = (label, got, want) => {
   const same = got === want;
+  checks.push({ label, got, want, same });
   console.log(`${same ? C.green + 'ok  ' : C.red + 'FAIL'}${C.reset} ${label.padEnd(34)} csv=${String(got).padStart(4)}  dashboard=${String(want).padStart(4)}`);
-  if (!same) failures.push(label);
+  if (!same) fail(label);
 };
 
-console.log(`${C.cyan}CASE_INDEX.csv${C.reset}  rows=${dataRows} = active ${active} + retired ${retired}`);
+console.log(`${C.cyan}CASE_INDEX.csv${C.reset}  rows=${index.rows.length} = active ${counts.TOTAL} + retired ${retired}`);
 console.log(`${C.cyan}COVERAGE.md${C.reset}    total=${dash.TOTAL}`);
 console.log('');
 
-if (dataRows !== active + retired) {
-  bad(`row arithmetic broken: rows=${dataRows} but active+retired=${active + retired}`);
-  failures.push('row arithmetic');
+if (index.rows.length !== counts.TOTAL + retired) {
+  bad(`row arithmetic broken: rows=${index.rows.length} but active+retired=${counts.TOTAL + retired}`);
+  fail('row arithmetic');
 } else {
-  console.log(`${C.green}ok  ${C.reset} rows = active + retired            ${dataRows} = ${active} + ${retired}`);
+  console.log(`${C.green}ok  ${C.reset} rows = active + retired            ${index.rows.length} = ${counts.TOTAL} + ${retired}`);
 }
 
 check('PASS', counts.PASS, dash.PASS);
@@ -141,53 +121,54 @@ check('N/A', counts['N/A'], dash['N/A']);
 check('REMAIN', counts.REMAIN, dash.REMAIN);
 check('BLOCKED', counts.BLOCKED, dash.BLOCKED);
 
-const bucketSum = ['PASS', 'PASS-PARTIAL', 'FAIL', 'N/A', 'REMAIN', 'BLOCKED'].reduce((s, k) => s + (dash[k] || 0), 0);
+const bucketSum = ['PASS', 'PASS-PARTIAL', 'FAIL', 'N/A', 'REMAIN', 'BLOCKED']
+  .reduce((s, k) => s + (dash[k] || 0), 0);
 check('dashboard buckets sum == total', bucketSum, dash.TOTAL);
-check('active rows == total', active, dash.TOTAL);
+check('active rows == total', counts.TOTAL, dash.TOTAL);
 
-const dupes = [...ids.entries()].filter(([, n]) => n > 1);
+const dupes = [...seen.entries()].filter(([, n]) => n > 1);
 if (dupes.length) {
   bad(`${dupes.length} duplicate id(s): ${dupes.slice(0, 8).map(([id, n]) => `${id}x${n}`).join(', ')}`);
-  failures.push('unique ids');
+  fail('unique ids');
 } else {
-  console.log(`${C.green}ok  ${C.reset} unique case ids                  ${ids.size}`);
+  console.log(`${C.green}ok  ${C.reset} unique case ids                  ${seen.size}`);
 }
 
-/* ---------- FAIL -> root-cause cluster ---------- */
-// Every FAIL row must name exactly one cluster; a cluster must not name a
-// non-FAIL row. This is what keeps FAIL-CLUSTERS.md from drifting away from
-// the verdict source.
-const failIds = new Set();
-for (const r of raw) {
-  if (!r.length || r.every((f) => !String(f).trim())) continue;
-  const id = String(r[idx.id] ?? '').trim();
-  if (!id) continue;
-  if (String(r[idx.retired]).trim() === '1') continue;
-  if (String(r[idx.verdict]).trim() === 'FAIL') failIds.add(id);
+if (index.ix.verdict_run === undefined || index.ix.verdict_sha === undefined) {
+  bad('CASE_INDEX.csv is missing verdict_run/verdict_sha - run: node .opencode/skills/e2e-testing/scripts/verdicts.mjs --migrate');
+  fail('verdict provenance columns');
+} else {
+  const missingRun = active.filter((r) => index.get(r, 'verdict') !== 'N/A' && index.get(r, 'verdict') !== 'BLOCKED'
+    && !index.get(r, 'verdict_run'));
+  console.log(`${C.dim}     verdict provenance columns present; ${missingRun.length} executable row(s) have no run reference yet${C.reset}`);
 }
 
-const cRaw = parseCsv(fs.readFileSync(clusterFile, 'utf8'));
-const cHeader = cRaw.shift().map((h) => h.trim());
-const cIdx = Object.fromEntries(cHeader.map((h, i) => [h, i]));
-if (cIdx.case_id === undefined || cIdx.cluster_id === undefined) {
+/* ------------------------------------------------------------------ */
+/* FAIL -> root-cause cluster                                          */
+/* ------------------------------------------------------------------ */
+
+const failRows = active.filter((r) => index.get(r, 'verdict') === 'FAIL');
+const failIds = new Set(failRows.map((r) => index.get(r, 'id')));
+
+const clusters = readIndex(root, clusterFile);
+if (clusters.ix.case_id === undefined || clusters.ix.cluster_id === undefined) {
   bad('FAIL-CLUSTERS.csv must have case_id and cluster_id columns');
-  process.exit(1);
+  process.exit(2);
 }
 const clustered = new Map();
-const clusterDupes = [];
-for (const r of cRaw) {
-  if (!r.length || r.every((f) => !String(f).trim())) continue;
-  const cid = String(r[cIdx.case_id] ?? '').trim();
-  const kid = String(r[cIdx.cluster_id] ?? '').trim();
+const clusterProblems = [];
+for (const row of clusters.rows) {
+  const cid = clusters.get(row, 'case_id');
+  const kid = clusters.get(row, 'cluster_id');
   if (!cid) continue;
-  if (!kid) { clusterDupes.push(`${cid} has an empty cluster_id`); continue; }
-  if (clustered.has(cid)) clusterDupes.push(`${cid} listed twice`);
+  if (!kid) { clusterProblems.push(`${cid} has an empty cluster_id`); continue; }
+  if (clustered.has(cid)) clusterProblems.push(`${cid} listed twice`);
   clustered.set(cid, kid);
 }
 const unclustered = [...failIds].filter((id) => !clustered.has(id));
 const phantom = [...clustered.keys()].filter((id) => !failIds.has(id));
 
-if (unclustered.length || phantom.length || clusterDupes.length) {
+if (unclustered.length || phantom.length || clusterProblems.length) {
   if (unclustered.length) {
     bad(`${unclustered.length} FAIL row(s) have no root-cause cluster:`);
     for (const id of unclustered.slice(0, 20)) console.log(`       - ${id}`);
@@ -198,20 +179,128 @@ if (unclustered.length || phantom.length || clusterDupes.length) {
     for (const id of phantom.slice(0, 20)) console.log(`       - ${id}`);
     if (phantom.length > 20) console.log(`       … ${phantom.length - 20} more`);
   }
-  for (const d of clusterDupes.slice(0, 20)) bad(d);
-  failures.push('FAIL rows clustered');
+  for (const p of clusterProblems.slice(0, 20)) bad(p);
+  fail('FAIL rows clustered');
 } else {
-  const nClusters = new Set(clustered.values()).size;
-  console.log(`${C.green}ok  ${C.reset} every FAIL row has one cluster   ${failIds.size} cases / ${nClusters} clusters`);
+  console.log(`${C.green}ok  ${C.reset} every FAIL row has one cluster   ${failIds.size} cases / ${new Set(clustered.values()).size} clusters`);
 }
 
 if (unplaced.length) {
   bad(`${unplaced.length} row(s) cannot be placed in a bucket:`);
   for (const u of unplaced.slice(0, 20)) console.log(`       - ${u}`);
   if (unplaced.length > 20) console.log(`       … ${unplaced.length - 20} more`);
-  failures.push('all rows placeable');
+  fail('all rows placeable');
 } else {
-  console.log(`${C.green}ok  ${C.reset} every row placed in a bucket     ${dataRows}`);
+  console.log(`${C.green}ok  ${C.reset} every row placed in a bucket     ${index.rows.length}`);
+}
+
+/* ------------------------------------------------------------------ */
+/* --close: the evidence bar                                           */
+/* ------------------------------------------------------------------ */
+
+const FAIL_CLASS_RE = /\b(DB|BYTES|RUNTIME|SOURCE|UI)\b/;
+const FILE_LINE_RE = /\b[\w./\\-]+\.(?:ts|tsx|js|mjs|cjs|rs|css|scss|json|md|html|toml):\d+/;
+const SOURCE_UNKNOWN_RE = /SOURCE\s+unknown/i;
+// No trailing \b: the `no\s+[a-z]` alternative ends inside a word ("no random"),
+// so a trailing boundary made that shape unmatchable - which is how 14 real
+// BLOCKED rows that do name their dependency were reported as evidence debt.
+const DEPENDENCY_RE = /\b(?:needs?|requires?|missing|absent|without|no\s+[a-z]|blocked\s+by|fails?\s+on|depends?\s+on|gateway|fixture|emulator|device|terminal)/i;
+const FACET_RE = /(unasserted|un-asserted|not asserted)/i;
+
+const closeProblems = [];
+const closeRule = (label, offenders, hint) => {
+  if (!offenders.length) {
+    console.log(`${C.green}ok  ${C.reset} ${label}`);
+    return;
+  }
+  bad(`${label} - ${offenders.length} row(s)`);
+  for (const o of offenders.slice(0, 12)) console.log(`       - ${o}`);
+  if (offenders.length > 12) console.log(`       … ${offenders.length - 12} more`);
+  if (hint) console.log(`${C.dim}       ${hint}${C.reset}`);
+  closeProblems.push(label);
+  fail(label);
+};
+
+if (args.close) {
+  console.log('');
+  console.log(`${C.cyan}--close${C.reset} evidence bar`);
+
+  closeRule('REMAIN must be 0', active
+    .filter((r) => index.get(r, 'verdict') === 'REMAIN')
+    .map((r) => `${index.get(r, 'id')} is REMAIN - execute it or make it BLOCKED with the dependency named`));
+
+  closeRule('BLOCKED names the dependency', active
+    .filter((r) => index.get(r, 'verdict') === 'BLOCKED')
+    .filter((r) => {
+      const e = index.get(r, 'evidence');
+      return !(e.length >= 12 && DEPENDENCY_RE.test(e));
+    })
+    .map((r) => `${index.get(r, 'id')}: "${index.get(r, 'evidence').slice(0, 80)}"`),
+  'evidence must name what is missing (e.g. "needs a configured merchant gateway")');
+
+  closeRule('FAIL has class + file:line|SOURCE unknown', failRows
+    .filter((r) => {
+      const e = index.get(r, 'evidence');
+      return !(FAIL_CLASS_RE.test(e) && (FILE_LINE_RE.test(e) || SOURCE_UNKNOWN_RE.test(e)));
+    })
+    .map((r) => `${index.get(r, 'id')}: "${index.get(r, 'evidence').slice(0, 80)}"`),
+  'quote the observation class (DB|BYTES|RUNTIME|SOURCE|UI) and a file:line, or write "SOURCE unknown"');
+
+  closeRule('PASS-PARTIAL names the unasserted facet', active
+    .filter((r) => index.get(r, 'verdict') === 'PASS-PARTIAL')
+    .filter((r) => !FACET_RE.test(index.get(r, 'evidence')))
+    .map((r) => `${index.get(r, 'id')}: "${index.get(r, 'evidence').slice(0, 80)}"`),
+  'say which facet was not asserted, e.g. "unasserted: drawer total after the replay"');
+}
+
+/* ------------------------------------------------------------------ */
+/* --prev: a verdict change needs a run reference                      */
+/* ------------------------------------------------------------------ */
+
+if (args.prev) {
+  const prevFile = path.resolve(root, String(args.prev));
+  if (!fs.existsSync(prevFile)) {
+    bad(`--prev ${args.prev} does not exist`);
+    process.exit(2);
+  }
+  const prev = readIndex(root, prevFile);
+  if (prev.ix.id === undefined || prev.ix.verdict === undefined) {
+    bad(`${args.prev} needs id and verdict columns`);
+    process.exit(2);
+  }
+  const noReference = [];
+  for (const row of active) {
+    const id = index.get(row, 'id');
+    const prevRow = prev.byId.get(id);
+    if (!prevRow) continue;
+    const was = prev.get(prevRow, 'verdict');
+    const now = index.get(row, 'verdict');
+    if (was === now) continue;
+    if (!index.get(row, 'verdict_run') || !index.get(row, 'verdict_sha')) {
+      noReference.push(`${id}: ${was} -> ${now} with no verdict_run/verdict_sha (stamp it with verdicts.mjs --write-index --run <sidecar>)`);
+    }
+  }
+  console.log('');
+  closeRule('verdict changes carry a run reference', noReference,
+    'a verdict that moved must name the run that moved it');
+}
+
+/* ------------------------------------------------------------------ */
+
+if (args.json) {
+  console.log(JSON.stringify({
+    rows: index.rows.length,
+    active: counts.TOTAL,
+    retired,
+    counts,
+    dashboard: dash,
+    checks: checks.filter((c) => !c.same),
+    unplaced,
+    unclustered,
+    phantom,
+    close: closeProblems,
+    exit: failures.length ? 1 : 0,
+  }, null, 1));
 }
 
 console.log('');
@@ -219,4 +308,4 @@ if (failures.length) {
   console.log(`${C.red}RECONCILE FAILED${C.reset} (${failures.length} check(s)): ${failures.join(', ')}`);
   process.exit(1);
 }
-console.log(`${C.green}RECONCILED${C.reset} ${dash.TOTAL} cases, all buckets match.`);
+console.log(`${C.green}RECONCILED${C.reset} ${counts.TOTAL} active cases, all buckets match${args.close ? ', evidence bar met' : ''}.`);

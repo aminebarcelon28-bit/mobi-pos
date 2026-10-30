@@ -154,7 +154,21 @@ export async function unlockIfNeeded(pin = APP_PIN): Promise<void> {
     if (await submit.isDisplayed().catch(() => false)) {
       await submit.click();
     }
-    await (await $('header')).waitForDisplayed({ timeout: 90000 });
+    // Proof of unlock is the OVERLAY DISAPPEARING, never `header`: the shell
+    // renders behind the lock screen, so `header` is already visible while the
+    // app is still locked. Waiting on it returned "unlocked" with the PIN pad
+    // on screen (2026-10-28, MNY-25 triage: probe logged lockVisible=true
+    // immediately after this function returned). No silent retry here — a
+    // second PIN entry could append digits and escalate the lockout; a failed
+    // unlock must be loud.
+    await browser.waitUntil(
+      async () => !(await (await $(tid('lock-screen'))).isDisplayed().catch(() => false)),
+      {
+        timeout: 60000,
+        interval: 250,
+        timeoutMsg: `PIN entry did not clear the lock screen (pin=${pin.length} digits) — still locked`,
+      },
+    );
   }
 }
 
@@ -569,13 +583,40 @@ export async function lastQtyInput(): Promise<ReturnType<typeof $>> {
 }
 
 /** Open the cart-discount modal, type a percent (accepts decimals, dot or
- * comma), fill the manager PIN when the gate appears, apply + wait close. */
-export async function applyCartDiscountPercent(percent: string, opts: { pin?: string } = {}): Promise<void> {
+ * comma), fill the manager PIN when the gate appears, apply + wait close.
+ *
+ * `expectRefused` is for the OUT-OF-RANGE contract ([CRT-04]): a percent the
+ * parser rejects must show its inline error and leave Apply disabled, so the
+ * PIN gate never opens. Waiting on `discount-pin` in that case hangs on a
+ * control that legitimately never appears — the old helper did exactly that
+ * and reported "discount PIN field never appeared" instead of the refusal. */
+export async function applyCartDiscountPercent(
+  percent: string,
+  opts: { pin?: string; expectRefused?: boolean } = {},
+): Promise<{ applied: boolean; error: string; applyDisabled: boolean }> {
   await (await $(tid('discount-button'))).click();
   await (await $(tid('discount-dialog'))).waitForDisplayed({ timeout: 20000 });
   const input = await $(tid('discount-percent'));
   await typeReal(input, percent, false);
   await browser.pause(200);
+
+  if (opts.expectRefused) {
+    const errEl = await $(tid('discount-percent-error'));
+    await errEl.waitForDisplayed({
+      timeout: 5000,
+      timeoutMsg: `percent "${percent}" was not refused: no inline error`,
+    });
+    const error = String((await errEl.getText()) || '').trim();
+    const applyDisabled = !(await (await $(tid('discount-apply'))).isEnabled());
+    // Close without applying so the next case starts from a clean shell.
+    await browser.keys('Escape');
+    await browser.waitUntil(
+      async () => !(await $(tid('discount-dialog')).isDisplayed().catch(() => false)),
+      { timeout: 10000, timeoutMsg: 'discount dialog did not close after Escape' },
+    );
+    return { applied: false, error, applyDisabled };
+  }
+
   if (opts.pin) {
     const pin = await $(tid('discount-pin'));
     await pin.waitForDisplayed({ timeout: 10000, timeoutMsg: 'discount PIN field never appeared' });
@@ -586,6 +627,7 @@ export async function applyCartDiscountPercent(percent: string, opts: { pin?: st
     async () => !(await $(tid('discount-dialog')).isDisplayed().catch(() => false)),
     { timeout: 20000, timeoutMsg: 'discount dialog did not close' },
   );
+  return { applied: true, error: '', applyDisabled: false };
 }
 
 /** Open the price editor on the LAST cart line, enter the new unit price

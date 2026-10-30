@@ -27,6 +27,7 @@ import { getEffectiveDebtLimit } from '../../store/slices/createCustomerSlice';
 import { soundEngine } from '../../utils/audioFeedback';
 import { computeCartTotals, computeTradeInSettlement } from '../../utils/receiptMath';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
+import { isFatFingerTender } from '../../utils/tenderGuard';
 import { MoneyInput } from '../ui/MoneyInput';
 import { calculateMaxAllowedCredit, calculateCustomerTier, normalizeLoyaltyConfig } from '../../utils/loyaltyEngine';
 import { Kbd } from '../../design-system/desktop/Kbd';
@@ -65,6 +66,14 @@ export const PaymentModal: React.FC = () => {
   const [isCustomCreditOpen, setIsCustomCreditOpen] = useState(false);
   const [customCreditInput, setCustomCreditInput] = useState<number>(0);
   const [isProcessing, setIsProcessing] = useState(false);
+  // Fat-finger confirmation ([MNY-29]): set when the cash tender is far above
+  // the ticket; holds the numbers the cashier must see before committing.
+  const [fatFinger, setFatFinger] = useState<{
+    tendered: number;
+    total: number;
+    change: number;
+    isCreditSplit: boolean;
+  } | null>(null);
   const [voucherInput, setVoucherInput] = useState('');
   const [voucherBusy, setVoucherBusy] = useState(false);
   const [voucherError, setVoucherError] = useState<string | null>(null);
@@ -270,7 +279,10 @@ export const PaymentModal: React.FC = () => {
     showToast("Bon d'avoir retiré de la vente.", 'info');
   };
 
-  const handleProcessPayment = async (isCreditSplit: boolean = false) => {
+  const handleProcessPayment = async (
+    isCreditSplit: boolean = false,
+    opts: { skipFatFinger?: boolean } = {},
+  ) => {
     if (isProcessing) return;
 
     // Tender-skew guard: rebuild the canonical totals from LIVE store state at
@@ -309,6 +321,21 @@ export const PaymentModal: React.FC = () => {
 
     if (liveHasMissingImei) {
       showToast('Veuillez saisir les numéros IMEI pour tous les articles sérialisés.', 'warning');
+      return;
+    }
+
+    // Fat-finger guard ([MNY-29]): a tender far above the ticket is almost
+    // always a slipped digit. Confirm once before committing; the numbers are
+    // re-derived from LIVE state above, so the dialog quotes what will actually
+    // be written. Skipped for a refund-due cart (its own disbursement branch)
+    // and after the cashier has confirmed.
+    if (!opts.skipFatFinger && submitRefundDue === 0 && isFatFingerTender(submitCash, submitNet)) {
+      setFatFinger({
+        tendered: submitCash,
+        total: submitNet,
+        change: Math.max(0, submitCash - submitNet),
+        isCreditSplit,
+      });
       return;
     }
 
@@ -566,11 +593,77 @@ export const PaymentModal: React.FC = () => {
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
+          // While the fat-finger confirmation is up, Enter is NOT a commit —
+          // a habitual Enter right after typing the tender must never accept a
+          // 100× typo ([MNY-29]). It dismisses the warning so the amount can be
+          // corrected; only the explicit confirm button commits.
+          if (fatFinger) {
+            setFatFinger(null);
+            return;
+          }
           handleProcessPayment();
         }
       }}
     >
-      <div className="bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[94dvh] sm:max-h-[90dvh]">
+      <div className="relative bg-pos-panel border border-pos-border rounded-t-[28px] sm:rounded-2xl w-full max-w-xl overflow-hidden shadow-2xl animate-in slide-in-from-bottom-5 sm:fade-in sm:zoom-in-95 flex flex-col max-h-[94dvh] sm:max-h-[90dvh]">
+        {fatFinger && (
+          <div
+            data-testid="pay-fatfinger"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="pay-fatfinger-title"
+            aria-describedby="pay-fatfinger-detail"
+            className="absolute inset-0 z-30 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+          >
+            <div className="w-full max-w-sm bg-pos-panel border border-amber-500/50 rounded-2xl p-4 shadow-2xl">
+              <div className="flex items-center gap-2 text-amber-400">
+                <AlertCircle className="w-5 h-5 shrink-0" aria-hidden="true" />
+                <h3 id="pay-fatfinger-title" className="text-sm font-black">
+                  Montant encaissé inhabituel
+                </h3>
+              </div>
+              <p id="pay-fatfinger-detail" className="mt-2 text-xs text-pos-muted">
+                Montant saisi{' '}
+                <strong className="text-pos-text font-mono">{formatDZD(fatFinger.tendered)}</strong> pour un
+                ticket de{' '}
+                <strong className="text-pos-text font-mono">{formatDZD(fatFinger.total)}</strong>.
+              </p>
+              {/* The change due is the number that exposes the typo. */}
+              <div className="mt-3 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 flex items-center justify-between">
+                <span className="text-[11px] font-bold text-emerald-300">Monnaie à rendre</span>
+                <span
+                  data-testid="pay-fatfinger-change"
+                  className="text-base font-black font-mono text-emerald-300"
+                >
+                  {formatDZD(fatFinger.change)}
+                </span>
+              </div>
+              <div className="mt-3 flex flex-col-reverse sm:flex-row gap-2">
+                <button
+                  type="button"
+                  data-testid="pay-fatfinger-edit"
+                  autoFocus
+                  onClick={() => setFatFinger(null)}
+                  className="w-full sm:flex-1 min-h-[44px] px-4 py-2.5 rounded-xl text-xs font-bold text-pos-text bg-pos-card border border-pos-border hover:bg-pos-hover transition cursor-pointer"
+                >
+                  Modifier le montant
+                </button>
+                <button
+                  type="button"
+                  data-testid="pay-fatfinger-confirm"
+                  onClick={() => {
+                    const pending = fatFinger;
+                    setFatFinger(null);
+                    void handleProcessPayment(pending.isCreditSplit, { skipFatFinger: true });
+                  }}
+                  className="w-full sm:flex-1 min-h-[44px] px-4 py-2.5 rounded-xl text-xs font-black text-amber-950 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 shadow-lg shadow-amber-500/20 transition cursor-pointer"
+                >
+                  Confirmer {formatDZD(fatFinger.tendered)}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {/* Mobile Pull Handle */}
         <div className="w-12 h-1.5 rounded-full bg-pos-muted/40 mx-auto mt-2.5 mb-1 sm:hidden shrink-0" aria-hidden="true" />
 

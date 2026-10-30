@@ -8,6 +8,15 @@
  *   node ... --minutes 45          # no sidecar: look back N minutes
  *
  * Output: e2e-tests/results/evidence/<stamp>/report.md + copied screenshots.
+ *
+ * Two things this script exists to prevent:
+ *   - a red run with zero executed tests being read as a failing test. When the
+ *     exit code is non-zero and no test ran, the report says
+ *     `NO TESTS EXECUTED` and names it an infrastructure failure.
+ *   - a failure table with no context. Each failure carries the last 40 log
+ *     lines before it (plus the lines right after, where the assertion detail
+ *     usually lands).
+ *
  * Prints the failures so you can start triage without opening the log.
  */
 import fs from 'node:fs';
@@ -17,6 +26,8 @@ import { paths, repoRoot, stamp, parseArgs, ok, warn, info, C } from './_lib.mjs
 const args = parseArgs();
 const root = repoRoot();
 const p = paths(root);
+const CONTEXT_BEFORE = 40;
+const CONTEXT_AFTER = 6;
 
 function latestSidecar() {
   if (!fs.existsSync(p.runs)) return null;
@@ -24,7 +35,7 @@ function latestSidecar() {
   return files.length ? path.join(p.runs, files[files.length - 1]) : null;
 }
 
-const sidecarPath = args.run ? path.resolve(root, args.run) : latestSidecar();
+const sidecarPath = args.run ? path.resolve(root, String(args.run)) : latestSidecar();
 let meta = null;
 let from;
 let to;
@@ -32,7 +43,7 @@ let to;
 if (sidecarPath && fs.existsSync(sidecarPath)) {
   meta = JSON.parse(fs.readFileSync(sidecarPath, 'utf8'));
   from = new Date(meta.startedAt).getTime() - 1000;
-  to = from + meta.durationMs + 5000;
+  to = from + Number(meta.durationMs || 0) + 5000;
   info(`run     ${meta.tag}  ${meta.gitSha}  exit ${meta.exitCode}`);
 } else {
   const minutes = Number(args.minutes || 30);
@@ -56,6 +67,33 @@ if (fs.existsSync(eventsFile)) {
 const fails = events.filter((e) => e.state === 'fail');
 const skips = events.filter((e) => e.state === 'skip');
 const passes = events.filter((e) => e.state === 'pass');
+const executed = passes.length + fails.length + skips.length;
+const exitCode = meta ? Number(meta.exitCode) : null;
+
+/* The false-green case: red exit, nothing executed. Say it out loud. */
+const noTestsExecuted = exitCode !== null && exitCode !== 0 && executed === 0;
+
+/* The log, for the per-failure context window. */
+let logLines = [];
+if (meta && meta.log) {
+  const logFile = path.resolve(root, String(meta.log));
+  if (fs.existsSync(logFile)) logLines = fs.readFileSync(logFile, 'utf8').split(/\r?\n/);
+}
+
+function contextFor(fail) {
+  if (!logLines.length) return null;
+  const title = String(fail.fullTitle || '');
+  const idMatch = /\[?([A-Z][A-Z0-9]{1,3}-\d{2,3})\]?/.exec(title);
+  const needles = [title, idMatch ? idMatch[1] : ''].filter(Boolean);
+  let at = -1;
+  for (let i = logLines.length - 1; i >= 0 && at < 0; i--) {
+    if (needles.some((n) => n && logLines[i].includes(n))) at = i;
+  }
+  if (at < 0) at = logLines.length - 1;
+  const start = Math.max(0, at - CONTEXT_BEFORE);
+  const end = Math.min(logLines.length, at + CONTEXT_AFTER);
+  return { at, start, end, lines: logLines.slice(start, end) };
+}
 
 const outDir = path.join(p.results, 'evidence', stamp());
 fs.mkdirSync(outDir, { recursive: true });
@@ -76,23 +114,54 @@ const rel = (x) => path.relative(root, x).replace(/\\/g, '/');
 const md = [];
 md.push(`# Evidence bundle - ${meta ? meta.tag : 'adhoc'}`);
 md.push('');
+if (noTestsExecuted) {
+  md.push('## NO TESTS EXECUTED');
+  md.push('');
+  md.push(`The run exited **${exitCode}** but no test started (0 pass / 0 fail / 0 skip).`);
+  md.push('This is an infrastructure failure - driver, binary, sandbox or boot gate - **not** a');
+  md.push('failing case. Do not record a verdict from this run.');
+  md.push('');
+}
 md.push(`- generated: ${new Date().toISOString()}`);
 md.push(`- git: \`${meta?.gitSha ?? 'unknown'}\``);
 md.push(`- specs: ${(meta?.specs ?? ['(unknown)']).map((s) => `\`${s}\``).join(', ')}`);
 md.push(`- wipe: ${meta ? (meta.wipe ? 'yes' : 'no') : 'unknown'}`);
-md.push(`- duration: ${meta ? (meta.durationMs / 1000).toFixed(1) + 's' : 'n/a'}`);
-md.push(`- exit: ${meta?.exitCode ?? 'n/a'} (pass ${passes.length} / fail ${fails.length} / skip ${skips.length})`);
+md.push(`- duration: ${meta ? (Number(meta.durationMs || 0) / 1000).toFixed(1) + 's' : 'n/a'}`);
+md.push(`- exit: ${exitCode ?? 'n/a'} (pass ${passes.length} / fail ${fails.length} / skip ${skips.length})`);
 md.push('');
 md.push('## Failures');
 md.push('');
 if (!fails.length) {
-  md.push('_none_');
+  md.push(noTestsExecuted ? '_none - no test ran (see NO TESTS EXECUTED above)_' : '_none_');
 } else {
   md.push('| test | file | error |');
   md.push('|---|---|---|');
   for (const f of fails) {
     const err = String((f.error && f.error[0]) || '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ').slice(0, 400);
     md.push(`| ${String(f.fullTitle || '').replace(/\|/g, '\\|')} | ${f.file || ''} | ${err} |`);
+  }
+  md.push('');
+  for (const f of fails) {
+    md.push(`### ${f.fullTitle || '(untitled)'}`);
+    md.push('');
+    if (f.error && f.error.length) {
+      md.push('```');
+      md.push(String(f.error.join('\n')).slice(0, 4000));
+      md.push('```');
+      md.push('');
+    }
+    const ctx = contextFor(f);
+    if (ctx) {
+      md.push(`Last ${Math.min(CONTEXT_BEFORE, ctx.at - ctx.start)} log line(s) before the failure (log lines ${ctx.start + 1}-${ctx.end}):`);
+      md.push('');
+      md.push('```');
+      md.push(ctx.lines.join('\n').slice(0, 8000));
+      md.push('```');
+      md.push('');
+    } else {
+      md.push('_no log available for this run_');
+      md.push('');
+    }
   }
 }
 if (skips.length) {
@@ -114,9 +183,10 @@ md.push(`- sidecar: \`${sidecarPath ? rel(sidecarPath) : '(none)'}\``);
 md.push('');
 md.push('## Next');
 md.push('');
-md.push('1. Classify each failure with `references/triage-playbook.md` before editing code.');
-md.push('2. Quote the raw observation in the verdict; name the evidence class.');
-md.push('3. `repeat-run.mjs --spec <spec> --times 3` if any failure looks intermittent.');
+md.push('1. `node .opencode/skills/e2e-testing/scripts/scan-pii.mjs` before this bundle leaves the machine.');
+md.push('2. Classify each failure with `references/triage-playbook.md` before editing code.');
+md.push('3. Quote the raw observation in the verdict; name the evidence class.');
+md.push('4. `repeat-run.mjs --spec <spec> --times 3` if any failure looks intermittent.');
 
 const reportPath = path.join(outDir, 'report.md');
 fs.writeFileSync(reportPath, md.join('\n') + '\n', 'utf8');
@@ -124,6 +194,11 @@ fs.writeFileSync(reportPath, md.join('\n') + '\n', 'utf8');
 console.log('');
 ok(`bundle ${rel(reportPath)}`);
 info(`pass ${passes.length} / fail ${fails.length} / skip ${skips.length}, ${shots.length} screenshot(s)`);
+if (noTestsExecuted) {
+  console.log('');
+  console.log(`${C.red}NO TESTS EXECUTED${C.reset} exit ${exitCode} with 0 tests - infrastructure, not a case verdict.`);
+  console.log(`${C.dim}  read the log: ${meta?.log ?? '(no log recorded)'}${C.reset}`);
+}
 if (fails.length) {
   console.log('');
   console.log(`${C.red}${fails.length} failure(s):${C.reset}`);

@@ -32,9 +32,12 @@ Spec file naming: `NN-<domain>-<topic>.e2e.ts`, `NN` matching the domain block (
 must never carry a catalog ID.
 
 Test title **must** start with the case ID in brackets: `it('[MNY-01] price 0.01 ...')`.
-`tools/coverage.mjs` extracts IDs with `/\bit\(\s*['"`]\[([A-Z]{3}-\d{2})\]/`; anything else is
-invisible to the dashboard. Harness self-tests use `[HARNESS-nn]` on purpose so they are not
-counted as catalog cases.
+`tools/coverage.mjs` and `scripts/lint-specs.mjs` extract IDs with
+`/\bit\(\s*['"`]\[([A-Z][A-Z0-9]{1,3}-\d{2,3})\]/` (1-4 letter domains, 2-3 digit suffixes);
+anything else is invisible to the dashboard and fails the lint. A title built from a variable
+(`it(id, ...)`, or the local `harness('LBL-11', ...)` helper) is fine as long as the id appears in
+the file as code - `lint-specs.mjs` checks the code, not only the title. Harness self-tests use
+`[HARNESS-nn]` on purpose so they are not counted as catalog cases.
 
 ## Helper API you should use instead of writing your own
 
@@ -137,6 +140,54 @@ Batch logs are assembled from these lines by `tools/build-27X-log.mjs`, which wr
 canonical artifact; the spec is the generator. Never edit a log by hand to change a verdict -
 re-run the case.
 
+## Severity, evidence class, fix authority
+
+**Severity** is the priority field in `CASE_INDEX.csv`. It describes the consequence, not the
+effort to fix:
+
+| Severity | Means | Examples from this repo |
+|---|---|---|
+| P0 | data or financial loss, or no recovery path | stacked-discount refund returns 579 of 900 collected (CRT-05); a hardware-wedge scan crashes the till (MOB-23) |
+| P1 | the feature runs but produces a wrong result | export cell != headline (RPT-05); boot at 1M customers takes 4.6 s (PRF-05); Arabic name garbled on the ticket (B4) |
+| P2 | missing or incomplete, but what runs is correct | Tab-terminated scanner burst cannot complete a sale (F4); failed label print reported as success (B5) |
+| P3 | cosmetic, or only reachable with artificial extremes | expired promo message renders green (F5); a 67-character product name overflows its column |
+
+**Evidence class** goes in the verdict text and in the `evidence` column. Pick the strongest class
+the case actually produced:
+
+| Class | What it is | Allowed to carry a FAIL alone? |
+|---|---|---|
+| DB | a SQLite row or a SQL aggregate read out-of-band | yes |
+| BYTES | a captured byte stream decoded by an independent decoder (receipt, label, export XML/CSV) | yes |
+| RUNTIME | a timing, heap figure, invoke/tap/print count, or an error message | yes |
+| SOURCE | a `file:line` that explains the cause | yes, as the cause; the observation still needs one of the three above |
+| UI | visible text only | no, unless the case is *about* the text. A FAIL with UI-only evidence is almost always a TEST BUG. |
+
+**Assertion ladder** - prefer the highest rung the case allows:
+
+```
+captured bytes > SQLite row > IPC return value > rendered DOM state > visible text
+```
+
+Two rules make the ladder enforceable: (a) a case may use a lower rung only when the higher one is
+unreachable, and the report says which rung it used; (b) `__TAURI_INTERNALS__.invoke` is
+non-writable in the e2e build, so "byte-level proof of the physical print" is not claimable from a
+spec - capture the builder's buffer and say so.
+
+**Fix authority** - what may be changed without asking:
+
+| Auto-fix | ASK FIRST (report, do not change) |
+|---|---|
+| UI crash / unhandled rejection | money arithmetic or rounding |
+| validator parity (the same rule in every entry point) | migrations, schema, column types |
+| TEST BUG, but only with a fresh observation (re-read log line, screenshot, DB row) proving the assertion is wrong | sync protocol, outbox ordering, gateway contract |
+| cosmetic (copy, spacing, colour branch) | auth, PIN, lockout, roles |
+| a missing `await`, a wrong selector, a stale testid | anything that rewrites stored data |
+
+An ASK FIRST finding is reported with its evidence and left open; it is never "fixed quietly" and
+never closed by weakening the case. The full loop (triage -> fix -> rebuild -> regression case ->
+adjacent specs -> delta -> sibling sweep, three attempts max) is Gate 6 in `SKILL.md`.
+
 ## Review checklist (use on your own diff before running)
 
 - [ ] Title carries `[DOMAIN-NN]`
@@ -148,7 +199,9 @@ re-run the case.
 - [ ] `installErrorTrap()` + `expectNoUiErrors()` present
 - [ ] Failure message would let a stranger reproduce without re-running
 - [ ] If an accessible name changed, dependent locators updated in the same diff
-- [ ] Raw observation logged with the case ID
+- [ ] Raw observation logged with the case ID, and a `VERDICT=` line when the verdict is not the mocha outcome
+- [ ] `node .opencode/skills/e2e-testing/scripts/lint-specs.mjs` exits 0
+- [ ] The finding's sibling search from `references/bug-catalog.md` was run and its result recorded
 
 ## Templates
 

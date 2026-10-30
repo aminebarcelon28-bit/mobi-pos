@@ -1583,32 +1583,50 @@ function toIntMoney(n: unknown): number {
   return Number.isFinite(v) ? v : 0;
 }
 
+/**
+ * Round to 2 decimals — the precision the cart charges. Revenue and prices
+ * carry centimes ([MNY-01/02/03/06]); cost basis stays whole-dinar.
+ */
+function toMoney2(n: unknown): number {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 0;
+  return Math.round(v * 100) / 100;
+}
+
 // Phase 1b-i: `tax` removed — the column is gone and no sale may carry it.
+// Revenue / price keys keep their centimes; cost keys stay whole-dinar.
 const ORDER_MONEY_KEYS = [
   'subtotal', 'discount_total', 'discountTotal', 'total',
-  'cost_total', 'costTotal', 'profit', 'cash_tendered', 'cashTendered',
-  'change_due', 'changeDue',
+  'profit', 'cash_tendered', 'cashTendered', 'change_due', 'changeDue',
 ];
+const ORDER_COST_KEYS = ['cost_total', 'costTotal'];
 const ITEM_MONEY_KEYS = [
   'applied_price', 'appliedPrice', 'unit_price_charged', 'unitPriceCharged',
   'default_price', 'defaultPrice', 'discount_amount', 'discountAmount',
-  'discount', 'cost_price', 'costPrice', 'unit_cost_at_sale', 'unitCostAtSale',
-  'line_profit', 'lineProfit',
+  'discount', 'line_profit', 'lineProfit',
 ];
+const ITEM_COST_KEYS = ['cost_price', 'costPrice', 'unit_cost_at_sale', 'unitCostAtSale'];
 
 /**
- * Canonical integer-DA normalization for the atomic checkout write. Mutates
- * the per-call input object (constructed fresh by every caller).
+ * Canonical checkout-write normalization. Revenue and prices are rounded to
+ * 2 decimals (the cart's unit of account), cost basis to whole dinars.
+ * Mutates the per-call input object (constructed fresh by every caller).
  */
 function normalizeMoneyInput(input: CheckoutWriteInput): void {
   try {
     const row = input.orderRow as Record<string, unknown>;
     for (const k of ORDER_MONEY_KEYS) {
+      if (row[k] !== undefined && row[k] !== null) row[k] = toMoney2(row[k]);
+    }
+    for (const k of ORDER_COST_KEYS) {
       if (row[k] !== undefined && row[k] !== null) row[k] = toIntMoney(row[k]);
     }
     for (const it of input.items ?? []) {
       const r = it as Record<string, unknown>;
       for (const k of ITEM_MONEY_KEYS) {
+        if (r[k] !== undefined && r[k] !== null) r[k] = toMoney2(r[k]);
+      }
+      for (const k of ITEM_COST_KEYS) {
         if (r[k] !== undefined && r[k] !== null) r[k] = toIntMoney(r[k]);
       }
     }
@@ -2339,10 +2357,12 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
     // 2. Order-level FIFO calculation:
     // Determine the exact cost_total, profit, profit_margin and ledger_cogs_total
     // BEFORE inserting the sales row.
-    const orderTotal = toIntMoney(input.orderRow.total ?? 0);
+    // Revenue keeps the 2 decimals the cart charges ([MNY-01/02/03/06]); cost
+    // basis stays whole-dinar (unit costs are integer by design).
+    const orderTotal = toMoney2(input.orderRow.total ?? 0);
     if (!isRefundReceipt && fifoResolvedAny) {
       fifoOrderCostTotal = toIntMoney(fifoCostTotalAccum);
-      fifoOrderProfit = orderTotal - fifoOrderCostTotal;
+      fifoOrderProfit = toMoney2(orderTotal - fifoOrderCostTotal);
       fifoLedgerCogsTotal = toIntMoney(preAllocSum + allocLedgerTotal);
     }
 
@@ -2351,7 +2371,7 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
       : toIntMoney(input.orderRow.cost_total ?? input.orderRow.costTotal ?? 0);
     const finalProfit = fifoOrderProfit !== null
       ? fifoOrderProfit
-      : toIntMoney(input.orderRow.profit ?? 0);
+      : toMoney2(input.orderRow.profit ?? 0);
     const finalProfitMargin = fifoOrderCostTotal !== null
       ? (orderTotal > 0 ? Number(((finalProfit / orderTotal) * 100).toFixed(1)) : 0)
       : Number(input.orderRow.profit_margin ?? input.orderRow.profitMargin ?? 0);
@@ -3090,6 +3110,26 @@ export async function syncProductsFromSqlToDexie(productIds?: Iterable<string>):
       for (const r of rows) {
         const delta = r.type === 'PAYMENT_SETTLED' ? -Number(r.amount) : Number(r.amount);
         byCustomer.set(r.customer_id, (byCustomer.get(r.customer_id) ?? 0) + delta);
+      }
+
+      // The SQLite `customers.current_debt` column is the CACHE the rest of the
+      // app reads first (`customerAdapter.getAllCustomers`), and this lane used
+      // to refresh only the Dexie mirror: a settlement looked correct for the
+      // rest of the session and reverted to the stale column after a restart
+      // ([MNY-25] mirror image — debt paid, still shown owing). Write the
+      // projection to the authority too. `version` is deliberately NOT bumped:
+      // this is a cache refresh derived from rows that already synced, and
+      // bumping it would emit a spurious version/outbox event on every pull.
+      for (const [customerId, debt] of byCustomer) {
+        const projected = Math.max(0, debt);
+        try {
+          await db.execute(
+            'UPDATE customers SET current_debt = ?1 WHERE id = ?2 AND COALESCE(current_debt, -1) <> ?1',
+            [projected, customerId],
+          );
+        } catch (writeErr) {
+          console.warn('[reconcileCustomerDebtFromLedger] column refresh failed:', customerId, writeErr);
+        }
       }
 
       const { db: dexieDb } = await import('./database');

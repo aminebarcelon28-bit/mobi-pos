@@ -39,3 +39,30 @@ export function parseLocalizedAmount(input: unknown): number {
 export function roundDAZ(n: number): number {
   return Math.round(n);
 }
+
+/**
+ * Percent input parsing — deliberately NOT `parseLocalizedAmount`.
+ *
+ * A percentage has no thousands grouping, so the FR heuristic that reads a dot
+ * as a group separator is wrong here: typing "33.333" meant 33,333 % and was
+ * parsed as 33 333 %, then silently clamped to a 100 % discount ([MNY-18]).
+ * Rule: comma OR dot is the decimal mark; one separator maximum; no sign; the
+ * value is returned as-is for the caller to REJECT when out of range — never
+ * clamped, because clamping a typo gives the cart away.
+ */
+export type PercentParseError = 'empty' | 'invalid' | 'range';
+
+export function parsePercentInput(input: unknown): {
+  value: number | null;
+  error: PercentParseError | null;
+} {
+  const raw = String(input ?? '').trim();
+  if (!raw) return { value: null, error: 'empty' };
+  // Grouping spaces/apostrophes are still stripped: FR keyboards insert them.
+  const compact = raw.replace(/[\s\u00A0\u202F\u2009']/g, '').replace(',', '.');
+  if (!/^\d+(\.\d+)?$/.test(compact)) return { value: null, error: 'invalid' };
+  const value = Number(compact);
+  if (!Number.isFinite(value)) return { value: null, error: 'invalid' };
+  if (value > 100) return { value: null, error: 'range' };
+  return { value, error: null };
+}

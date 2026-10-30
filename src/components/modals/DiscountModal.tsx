@@ -3,7 +3,7 @@ import { X, Percent, Check, DollarSign, Tag } from 'lucide-react';
 import { usePosStore } from '../../store/usePosStore';
 import { formatDZD } from '../../types/pos';
 import { getProductPriceForTier } from '../../utils/pricingEngine';
-import { parseLocalizedAmount } from '../../utils/moneyInput';
+import { parsePercentInput } from '../../utils/moneyInput';
 import { MoneyInput } from '../ui/MoneyInput';
 import { toLegacyReal, dinarsToMinor } from '../../utils/money';
 import { PROMO_TRACKING } from '../../constants';
@@ -65,11 +65,22 @@ function incrementPromoRedemption(code: string): void {
   }
 }
 
+/** User-facing reason for a rejected percent entry (never silently corrected). */
+function percentErrorMessage(error: 'empty' | 'invalid' | 'range'): string {
+  if (error === 'range') return 'Pourcentage invalide : saisissez une valeur entre 0 et 100.';
+  if (error === 'empty') return 'Saisissez un pourcentage de remise.';
+  return 'Pourcentage invalide : un seul séparateur décimal (virgule ou point).';
+}
+
 export const DiscountModal: React.FC = () => {
   const { activeModal, closeModal, applyCartDiscountPercent, cart, pricingTier } = usePosStore();
 
   const [discountMode, setDiscountMode] = useState<'percent' | 'amount'>('percent');
-  const [percentValue, setPercentValue] = useState(10);
+  // The percent field holds the RAW string: a controlled numeric value would
+  // re-render "33.333" back from a float and lose the typed text ([MNY-18]).
+  const [percentRaw, setPercentRaw] = useState('10');
+  const percentParse = parsePercentInput(percentRaw);
+  const percentValue = percentParse.value ?? 0;
   const [amountValue, setAmountValue] = useState(500);
   const [promoInput, setPromoInput] = useState('');
   const [promoStatus, setPromoStatus] = useState<string | null>(null);
@@ -115,7 +126,7 @@ export const DiscountModal: React.FC = () => {
       return;
     }
     setDiscountMode(code.type);
-    if (code.type === 'percent') setPercentValue(code.value);
+    if (code.type === 'percent') setPercentRaw(String(code.value));
     else setAmountValue(code.value);
     setAppliedPromoCode(clean);
     setPromoStatus(`Code "${clean}" Appliqué : ${code.label}`);
@@ -124,7 +135,14 @@ export const DiscountModal: React.FC = () => {
   const handleApply = async () => {
     let effectivePercent = 0;
     if (discountMode === 'percent') {
-      effectivePercent = isNaN(percentValue) ? 0 : percentValue;
+      // Never clamp a typed percent ([MNY-18]): "33333" must be refused, not
+      // applied as 100 %. Amount mode converts to a percent and is capped by
+      // the cart subtotal itself (`Math.min` above), so it cannot exceed 100.
+      if (percentParse.error) {
+        setPinError(percentErrorMessage(percentParse.error));
+        return;
+      }
+      effectivePercent = percentValue;
     } else {
       const validAmount = Math.max(0, isNaN(amountValue) ? 0 : amountValue);
       effectivePercent = cartSubtotal > 0 ? (validAmount / cartSubtotal) * 100 : 0;
@@ -241,7 +259,7 @@ export const DiscountModal: React.FC = () => {
                 {[5, 10, 15, 20].map((p) => (
                   <button
                     key={p}
-                    onClick={() => setPercentValue(p)}
+                    onClick={() => setPercentRaw(String(p))}
                     className={`min-h-[48px] py-2 rounded-xl text-xs font-black border transition active:scale-95 ${
                       percentValue === p
                         ? 'bg-purple-600 border-purple-400 text-white shadow-md'
@@ -277,16 +295,36 @@ export const DiscountModal: React.FC = () => {
               {discountMode === 'percent' ? 'Pourcentage de Remise Personnalisé (%)' : 'Montant de Remise Personnalisé (DA)'}
             </label>
             {discountMode === 'percent' ? (
-              <input
-                type="number"
-                data-testid="discount-percent"
-                inputMode="decimal"
-                min="0"
-                max="100"
-                value={percentValue}
-                onChange={(e) => setPercentValue(parseLocalizedAmount(e.target.value) || 0)}
-                className="w-full bg-pos-card border border-pos-border rounded-xl px-3.5 py-2 text-base font-black text-purple-400 focus:border-purple-400 focus:outline-none"
-              />
+              <div>
+                <input
+                  type="text"
+                  data-testid="discount-percent"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  spellCheck="false"
+                  // `type=number` drops the separator on some keyboard layouts
+                  // and the controlled numeric value re-rendered "33333"
+                  // ([MNY-18]); the raw string keeps exactly what was typed.
+                  value={percentRaw}
+                  onChange={(e) => {
+                    setPercentRaw(e.target.value);
+                    setPinError(null);
+                  }}
+                  aria-invalid={percentParse.error ? true : undefined}
+                  aria-describedby={percentParse.error ? 'discount-percent-error' : undefined}
+                  className="w-full bg-pos-card border border-pos-border rounded-xl px-3.5 py-2 text-base font-black text-purple-400 focus:border-purple-400 focus:outline-none"
+                />
+                {percentParse.error && (
+                  <p
+                    id="discount-percent-error"
+                    role="alert"
+                    data-testid="discount-percent-error"
+                    className="text-[10px] font-semibold text-rose-400 pt-1"
+                  >
+                    {percentErrorMessage(percentParse.error)}
+                  </p>
+                )}
+              </div>
             ) : (
               <MoneyInput
                 label="Montant de Remise Personnalisé (DA)"
@@ -389,7 +427,10 @@ export const DiscountModal: React.FC = () => {
           <button
             data-testid="discount-apply"
             onClick={handleApply}
-            className="w-full sm:w-auto min-h-[46px] px-6 py-2.5 bg-gradient-to-r from-purple-600 to-emerald-500 hover:from-purple-500 hover:to-emerald-400 text-slate-950 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-lg shadow-purple-600/20 cursor-pointer active:scale-95 transition"
+            // Invalid percent is refused at the field (never clamped): the
+            // button stays disabled so a typo cannot be committed at all.
+            disabled={discountMode === 'percent' && percentParse.error !== null}
+            className="w-full sm:w-auto min-h-[46px] px-6 py-2.5 bg-gradient-to-r from-purple-600 to-emerald-500 hover:from-purple-500 hover:to-emerald-400 text-slate-950 font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-lg shadow-purple-600/20 cursor-pointer active:scale-95 transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Check className="w-4 h-4 stroke-[2.5]" /> Appliquer la Remise
           </button>

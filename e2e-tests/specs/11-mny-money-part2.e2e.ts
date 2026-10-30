@@ -862,7 +862,15 @@ describe('MNY — money, rounding, currency (batch 2)', () => {
     );
     expect(Number(ref.total)).toBe(1300);
     expect(cashOut).toBe(600);
-    expect(Number(cust?.store_credit)).toBe(400);
+    // Wallet after a FULL reversal = avoir restored (400) + reprise value
+    // restored (300) = 700. The money model returns trade value as credit
+    // (REF-49: "remaining 300 must return as credit/voucher"), and the refund
+    // row's 1300 already counts it: 600 cash + 400 avoir + 300 trade. Leaving
+    // the wallet at 400 would evaporate the customer's device value.
+    expect(Number(cust?.store_credit)).toBe(700);
+    // ...and the trade restore is attributed on the refund row, so the
+    // cumulative trade quota of a later partial refund can subtract it.
+    expect(Number(jsonOf(ref).tradeInRestored ?? 0)).toBe(300);
   });
 
   it('[MNY-30] bundle 100+200+350 → 500: allocation 77/154/269 exact, single-child refund recovers 269', async () => {
@@ -1002,86 +1010,133 @@ describe('MNY — money, rounding, currency (batch 2)', () => {
           }
         ).currentDebt ?? NaN,
       );
+    /** The `customers.current_debt` CACHE — must track the ledger after every
+     *  money movement (owner-set 2026-10-30: "the ledger is the source of
+     *  truth and the column is a cache of it"). */
+    const colDebt = () =>
+      Number(one<{ d: number }>('SELECT current_debt AS d FROM customers WHERE id = ?', CUST25)?.d ?? NaN);
     const planStatus = () => String(one<Row>('SELECT status FROM debt_plans WHERE id = ?', planId)?.status ?? '?');
     expect(ledgerBalance()).toBe(1000);
     expect(payloadDebt()).toBe(1000);
+    // Fixture: model an UPGRADING device whose cache lagged — the ledger and
+    // payload carry the receivable, the column is forced back to 0 right
+    // before the reload (the boot heal is a no-op otherwise).
+    run('UPDATE customers SET current_debt = 0 WHERE id = ?', CUST25);
+    expect(colDebt()).toBe(0);
     const plansBefore = count('debt_plans');
 
     // ── Mobile shell → demo entry → Kredy tab ──────────────────────────────
-    const reloadOk = await reloadWith('?mode=mobile&lang=fr');
-    const shellMobile = (await browser.execute(() => document.documentElement.dataset.shell ?? '')) as string;
-    console.log(`[MNY-25] mobile reload ok=${reloadOk} shell=${shellMobile}`);
-    // No skip: the plan form is a shipped feature and must be reachable.
-    expect(shellMobile).toBe('mobile');
-    const demoClicked = (await browser.execute(() => {
-      const btns = [...document.querySelectorAll('button')] as HTMLButtonElement[];
-      const b = btns.find((x) => /Mode Démo/i.test(x.textContent || '') && !x.disabled);
-      if (!b) return false;
-      b.click();
-      return true;
-    })) as boolean;
-    await browser.pause(1500);
-    const tabClicked = (await browser.execute(() => {
-      const els = [...document.querySelectorAll('button, [role="tab"], a')] as HTMLElement[];
-      const b = els.find((x) => /Kredy|Crédit|تقسيط/i.test(x.textContent || '') && !((x as HTMLButtonElement).disabled ?? false));
-      if (!b) return false;
-      b.click();
-      return true;
-    })) as boolean;
-    await browser.pause(1200);
-    console.log(`[MNY-25] mobile walk: demo=${demoClicked} kredyTab=${tabClicked}`);
-    expect(tabClicked).toBe(true);
+    // Reused twice: at entry and after a RESTART (below). The restart leg is
+    // the regression for the receivable itself — before the fix the boot
+    // hydration read `customers.current_debt` (a column the TS sale path never
+    // wrote, P2-7) instead of the ledger, so a real debt read 0 after every
+    // reload and the debtor card did not render at all.
+    const enterKredyTab = async (label: string) => {
+      const reloadOk = await reloadWith('?mode=mobile&lang=fr');
+      const shell = (await browser.execute(() => document.documentElement.dataset.shell ?? '')) as string;
+      const demoClicked = (await browser.execute(() => {
+        const btns = [...document.querySelectorAll('button')] as HTMLButtonElement[];
+        const b = btns.find((x) => /Mode Démo/i.test(x.textContent || '') && !x.disabled);
+        if (!b) return false;
+        b.click();
+        return true;
+      })) as boolean;
+      await browser.pause(1500);
+      const tabClicked = (await browser.execute(() => {
+        const els = [...document.querySelectorAll('button, [role="tab"], a')] as HTMLElement[];
+        const b = els.find((x) => /Kredy|Crédit|تقسيط/i.test(x.textContent || '') && !((x as HTMLButtonElement).disabled ?? false));
+        if (!b) return false;
+        b.click();
+        return true;
+      })) as boolean;
+      await browser.pause(1200);
+      console.log(`[MNY-25] ${label}: reload=${reloadOk} shell=${shell} demo=${demoClicked} kredyTab=${tabClicked}`);
+      return { reloadOk, shell, demoClicked, tabClicked };
+    };
+    const searchDebtor = async () =>
+      (await browser.execute((name: string) => {
+        const vis = (d: HTMLElement) => {
+          try {
+            const cs = getComputedStyle(d);
+            if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false;
+            const r = d.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          } catch {
+            return false;
+          }
+        };
+        const input = ([...document.querySelectorAll('input')] as HTMLInputElement[]).find(
+          (i) => vis(i) && /chercher|recherche|search/i.test(i.placeholder || ''),
+        );
+        if (!input) return false;
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        setter?.call(input, name);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      }, CUST25_NAME)) as boolean;
+    // The rendered card is the oracle: KredyTab only lists customers whose
+    // `currentDebt > 0` (KredyTab.tsx:208), so a stale 0 removes the debtor
+    // from the list entirely — exactly how the pre-fix bug presented.
+    const expandCard = async () =>
+      (await browser.execute((name: string) => {
+        const btns = [...document.querySelectorAll('button')] as HTMLButtonElement[];
+        const b = btns.find((x) => {
+          const al = x.getAttribute('aria-label') || '';
+          return /Historique/.test(al) && al.includes(name) && !x.disabled;
+        });
+        if (!b) return false;
+        b.click();
+        return true;
+      }, CUST25_NAME)) as boolean;
+    /** Digits + letters only, so `1 000,00 DA` → `1000,00DA` regardless of the
+     *  NBSP / narrow-NBSP / bidi marks Intl injects. */
+    const cardDebtText = async () =>
+      (await browser.execute((name: string) => {
+        const h = ([...document.querySelectorAll('h4')] as HTMLElement[]).find(
+          (x) => (x.textContent || '').trim() === name,
+        );
+        const card = h?.closest('.bg-pos-card') ?? null;
+        return (card?.textContent || '').replace(/[^\dA-Za-z,]+/g, '');
+      }, CUST25_NAME)) as string;
+    const planFormVisible = () =>
+      browser
+        .waitUntil(
+          () =>
+            browser.execute(() => {
+              const spans = [...document.querySelectorAll('span')] as HTMLElement[];
+              return spans.some((s) => /Plan de paiement 0 %/.test(s.textContent || ''));
+            }),
+          { timeout: 10000, interval: 300 },
+        )
+        .then(() => true)
+        .catch(() => false);
 
-    // ── Search the debtor ───────────────────────────────────────────────────
-    const searched = (await browser.execute((name: string) => {
-      const vis = (d: HTMLElement) => {
-        try {
-          const cs = getComputedStyle(d);
-          if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false;
-          const r = d.getBoundingClientRect();
-          return r.width > 0 && r.height > 0;
-        } catch {
-          return false;
-        }
-      };
-      const input = ([...document.querySelectorAll('input')] as HTMLInputElement[]).find(
-        (i) => vis(i) && /chercher|recherche|search/i.test(i.placeholder || ''),
-      );
-      if (!input) return false;
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-      setter?.call(input, name);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      return true;
-    }, CUST25_NAME)) as boolean;
-    expect(searched).toBe(true);
+    const entry = await enterKredyTab('entry');
+    // No skip: the plan form is a shipped feature and must be reachable.
+    expect(entry.reloadOk).toBe(true);
+    expect(entry.shell).toBe('mobile');
+    expect(entry.demoClicked).toBe(true);
+    expect(entry.tabClicked).toBe(true);
+
+    // ── Search the debtor: 1 000 DA receivable, stored column deliberately 0
+    //    (an upgrading device whose cache lagged) — the ledger must win. ────
+    expect(await searchDebtor()).toBe(true);
     await browser.pause(1000);
+    const entryCardText = await cardDebtText();
+    console.log(`[MNY-25] debtor card (col=0, ledger=1000): "${entryCardText}"`);
+    expect(entryCardText).toContain('1000DA');
+    // …and the boot back-fill repaired the cache from the ledger (idempotent,
+    // only disagreeing rows), so the column is a true projection from here on.
+    await browser.waitUntil(() => colDebt() === 1000, {
+      timeout: 15000,
+      interval: 250,
+      timeoutMsg: 'boot heal did not repair customers.current_debt from the ledger',
+    });
 
     // ── Expand the card — the history toggle exists only when the ledger has
     //    movements (KredyTab.tsx:1012) and carries the plan form body. ──────
-    const expandClicked = (await browser.execute((name: string) => {
-      const btns = [...document.querySelectorAll('button')] as HTMLButtonElement[];
-      const b = btns.find((x) => {
-        const al = x.getAttribute('aria-label') || '';
-        return /Historique/.test(al) && al.includes(name) && !x.disabled;
-      });
-      if (!b) return false;
-      b.click();
-      return true;
-    }, CUST25_NAME)) as boolean;
-    console.log(`[MNY-25] expand toggle clicked=${expandClicked}`);
-    const planFormVisible = await browser
-      .waitUntil(
-        () =>
-          browser.execute(() => {
-            const spans = [...document.querySelectorAll('span')] as HTMLElement[];
-            return spans.some((s) => /Plan de paiement 0 %/.test(s.textContent || ''));
-          }),
-        { timeout: 10000, interval: 300 },
-      )
-      .then(() => true)
-      .catch(() => false);
-    console.log(`[MNY-25] plan section visible=${planFormVisible}`);
-    expect(planFormVisible).toBe(true);
+    expect(await expandCard()).toBe(true);
+    expect(await planFormVisible()).toBe(true);
 
     const setPlanMoney = async (digits: string) =>
       (await browser.execute((d: string) => {
@@ -1209,6 +1264,30 @@ describe('MNY — money, rounding, currency (batch 2)', () => {
     expect(payloadDebt()).toBe(666);
     expect(ledgerBalance()).toBe(666);
 
+    // ── Cache contract: the payment path moves the COLUMN too ──────────────
+    // Before 2026-10-30 only the payload advanced (P2-7): the ledger said 666
+    // and every column-first reader said 0, so the debt vanished on restart.
+    console.log(`[MNY-25] after settle#1 column=${colDebt()} (must equal the ledger 666)`);
+    expect(colDebt()).toBe(666);
+
+    // ── RESTART: the receivable must survive a boot rehydration ────────────
+    // The cashier closes the till with 666 DA outstanding; on the next launch
+    // the debtor must still be listed and still owe 666 — read from the ledger,
+    // never from a stale cache.
+    const restart = await enterKredyTab('after restart');
+    expect(restart.reloadOk).toBe(true);
+    expect(restart.shell).toBe('mobile');
+    expect(restart.demoClicked).toBe(true);
+    expect(restart.tabClicked).toBe(true);
+    expect(await searchDebtor()).toBe(true);
+    await browser.pause(1000);
+    const restartCardText = await cardDebtText();
+    console.log(`[MNY-25] debtor card after restart: "${restartCardText}" (oracle 666)`);
+    expect(restartCardText).toContain('666DA');
+    // Re-open the card so the settlement surface is reachable again.
+    expect(await expandCard()).toBe(true);
+    expect(await planFormVisible()).toBe(true);
+
     // ── Early payoff step 2: settle the remainder (default = 666, full) ────
     expect(await openSettlement()).toBe(true);
     await browser.waitUntil(() => browser.execute(() => !!document.getElementById('kredy-payment-amount')), {
@@ -1229,13 +1308,10 @@ describe('MNY — money, rounding, currency (batch 2)', () => {
     for (const e of e2) expect(Date.parse(String(e.paid_at))).toBeLessThan(Date.parse(String(e.due_date)));
     expect(ledgerBalance()).toBe(0);
     expect(payloadDebt()).toBe(0);
-    const colDebt = Number(
-      one<{ d: number }>('SELECT current_debt AS d FROM customers WHERE id = ?', CUST25)?.d ?? NaN,
-    );
     console.log(
-      `[MNY-25] post-settle chain: col=${colDebt} payload=0 ledger=0 (the v127 column never advances in the TS lane — P2-7)`,
+      `[MNY-25] post-settle chain: col=${colDebt()} payload=0 ledger=0 (cache tracks the ledger both ways)`,
     );
-    expect(colDebt).toBe(0);
+    expect(colDebt()).toBe(0);
 
     // ── No fee/interest model exists anywhere in the plan schema ───────────
     const planCols = all<Row>('PRAGMA table_info(debt_plans)').map((r) => String(r.name));

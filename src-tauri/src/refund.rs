@@ -204,6 +204,15 @@ pub struct RefundRequest {
     pub subtotal: i64,
     pub discount_total: i64,
     pub total_net: i64,
+    /// Value reversed by this refund: the funding returned to the customer
+    /// PLUS any trade-in value restored to the wallet. This is what the row's
+    /// `total` column carries, so the column and the JSON payload agree
+    /// (G-11) and revenue lanes read the full reversal. Optional for wire
+    /// compatibility: absent falls back to `total_net`. `total_net` stays the
+    /// funding basis for the zero-value guard, the profit identity and the
+    /// signed envelope.
+    #[serde(default)]
+    pub value_reversed: Option<i64>,
     pub cost_total: i64,
     pub pricing_tier: String,
     pub payment_method: String,
@@ -369,6 +378,7 @@ fn validate(req: &RefundRequest) -> Result<(), TrustError> {
         req.subtotal,
         req.discount_total,
         req.total_net,
+        req.value_reversed.unwrap_or(0),
         req.cost_total,
         req.cash_tendered,
         req.change_due,
@@ -1171,6 +1181,10 @@ fn apply_refund_in_txn(
     let placeholders: Vec<String> = (1..=cols.split(',').count())
         .map(|i| format!("?{i}"))
         .collect();
+    // The row's `total` is the VALUE REVERSED (funding + trade restore); the
+    // funding basis (`total_net`) still drives the zero-value guard and the
+    // profit identity below.
+    let total_reversed = req.value_reversed.unwrap_or(req.total_net);
     let mut stmt = tx
         .prepare(&format!(
             "INSERT INTO transactions ({cols}) VALUES ({})",
@@ -1185,7 +1199,7 @@ fn apply_refund_in_txn(
             &req.customer_id,
             &req.subtotal,
             &req.discount_total,
-            &req.total_net,
+            &total_reversed,
             &recovered_cogs,
             &profit_net,
             &0i64,

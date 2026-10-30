@@ -82,12 +82,66 @@ default (debug) alone.
 | Deterministic module check | `node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types e2e-tests/tools/<name>.mts` |
 | Sync gateway loopback proof | `npm run test:sync-e2e` |
 | Rebuild a canonical batch log | `node e2e-tests/tools/build-27b-log.mjs` (one per batch) |
-| Reconcile verdicts | `node .opencode/skills/e2e-testing/scripts/reconcile.mjs` |
+| Preflight (desktop) | `node .opencode/skills/e2e-testing/scripts/preflight.mjs` |
+| Preflight (mobile) | `node .opencode/skills/e2e-testing/scripts/preflight.mjs --mobile` |
+| Risk map for a change | `node .../scripts/risk-map.mjs` (or `--files a.ts,b.ts`) |
+| Run specs + sidecar | `node .../scripts/run.mjs --spec <f> --wipe --tag <name>` |
+| Extract verdicts | `node .../scripts/verdicts.mjs --run e2e-tests/results/runs/<stamp>-<tag>.json` |
+| Delta vs the baseline | `node .../scripts/delta.mjs --results <verdicts.json> --scope spec=<f>` |
+| Lint the spec/index contract | `node .../scripts/lint-specs.mjs` |
+| Prove a fix (red before, 3/3 green) | `node .../scripts/prove-fix.mjs --case <ID> --spec <f>` |
+| Evidence bundle | `node .../scripts/collect-evidence.mjs [--run <sidecar>]` |
+| PII scan before sharing a bundle | `node .../scripts/scan-pii.mjs [--path <dir>]` |
+| Reconcile verdicts | `node .../scripts/reconcile.mjs` (add `--close` for the evidence bar) |
+| Self-test the scripts | `node .../scripts/selftest.mjs` (`--filter`, `--verbose`) |
+
+The script-to-gate table is in `SKILL.md`; this table is the command line for each.
 
 `npm run test:e2e` now points at the maintained config (`wdio run e2e-tests/wdio.conf.ts`); the
 legacy root `wdio.conf.ts` and the `test:hello` / `test:smoke` / `test:money:e2e` scripts were
 deleted on 2026-10-27 so no session can run the old harness by accident. Prefer the `npx` form
 above when you want one spec.
+
+## Run artifacts
+
+Every run produces these. Read them in this order; the first one that answers the question ends
+the investigation.
+
+| Artifact | Path | What it answers |
+|---|---|---|
+| WDIO log | `e2e-tests/test-logs/<spec>-0-0.log` (`outputDir` at `wdio.conf.ts:259`) | what the app and the driver logged at the moment of failure |
+| Run log | `e2e-tests/results/runs/<stamp>-<tag>.log` | the same stream as `run.mjs` saw it, including the build step |
+| Per-test NDJSON | `e2e-tests/results/events.ndjson` (`wdio.conf.ts:346`) | last state per test, duration, error message |
+| Screenshots | `e2e-tests/results/*.png` | dialog/overlay state when a click "did nothing" |
+| Run sidecar | `e2e-tests/results/runs/<stamp>-<tag>.json` | specs, git SHA, exit code, summed counts, `caseVerdicts` |
+| Evidence bundle | `e2e-tests/results/evidence/<stamp>/report.md` | failures + the last 40 log lines before each |
+| Invariant events | `e2e-tests/results/invariant-events.ndjson` | violations from `lib/invariants.ts`, once each |
+
+No video and no WebDriver trace recording is configured. If these cannot answer the question, add
+a `console.log` with the case ID and re-run - do not infer the cause from a screenshot.
+
+`collect-evidence.mjs` prints `NO TESTS EXECUTED` when the exit code is non-zero and no test body
+ran: that is infrastructure, never a case verdict. `scan-pii.mjs` masks what it finds (phone
+numbers, non-loopback IPs, PIN/password hashes, `device_id` values and bare UUIDs) and must exit 0
+before a bundle is attached to a report or shared.
+
+## `.gitignore` split (proposed, not applied)
+
+Today's rules ignore `e2e-tests/results/`, `test-logs/`, `logs/`, `TEST_EVIDENCE/` and `long/`,
+plus **every** `e2e-tests/**/*.png` and `e2e-tests/**/*.ndjson` (`.gitignore:102-114`). Two of
+those are too wide and one is too narrow:
+
+| Rule today | Problem | Proposed |
+|---|---|---|
+| `e2e-tests/logs/` ignored | the canonical per-batch verdict logs (`VERDICT=` lines) live there and are reviewable evidence, not output | track `e2e-tests/logs/*.md`, ignore `e2e-tests/logs/tmp*` |
+| `e2e-tests/**/*.png` | hides a committed diagram or fixture image anywhere in the tree | `e2e-tests/results/**/*.png` |
+| `e2e-tests/**/*.ndjson` | hides a fixture a spec might need | `e2e-tests/results/**/*.ndjson` |
+| `e2e-tests/results/`, `test-logs/`, `TEST_EVIDENCE/`, `long/` | correct - pure run output | unchanged |
+
+Specs, `CASE_INDEX.csv`, `COVERAGE.md`, `FAIL-CLUSTERS.csv`, `fixtures/`, `tools/`, `lib/`,
+`mobile/*.mjs` and `wdio.conf.ts` are source and stay tracked (155 files today). The change needs
+an owner sign-off because it would newly track files that were previously ignored - do not apply it
+unilaterally.
 
 ## Environment variables
 
@@ -131,6 +185,19 @@ the env var or the helper.
 `.MainActivity`), screenshots + OCR via `mobile/ocr-boxes.ps1`. `adb root` is required to read
 `/data/data/com.mobi.pos/mobi_pos.db`. Baseline DB snapshot:
 `mobile/fixtures/mobile-baseline.db`; state tarball `mobile/fixtures/mobile-state.tar.gz`.
+
+**Preflight before any mobile verdict:**
+
+```powershell
+node .opencode/skills/e2e-testing/scripts/preflight.mjs --mobile
+```
+
+It hard-fails when `adb` is missing, no device/emulator is attached, or the APK is missing or older
+than the sources it was built from; it soft-fails when `emulator` is not on `PATH` or no AVD is
+installed (only matters if you need to start one). It also reads the APK's `versionName` and
+compares it with `tauri.conf.json` / `package.json`: a version mismatch means the mobile verdict
+describes a different build. A missing APK is a blocker, not a warning - mobile cannot be reported
+as tested without one.
 
 Known limits, all verified:
 - The installed baseline APK is 1.6.8 and accepts a **4-digit** PIN while current source

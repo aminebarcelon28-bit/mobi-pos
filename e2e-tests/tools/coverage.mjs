@@ -111,7 +111,7 @@ const implemented = new Map();
 const duplicate = new Map();
 for (const f of fs.readdirSync(specDir).filter((x) => x.endsWith('.e2e.ts'))) {
   const text = fs.readFileSync(path.join(specDir, f), 'utf8');
-  const re = /\bit\(\s*['"`]\[([A-Z]{3}-\d{2})\]/g;
+  const re = /\bit\(\s*['"`]\[([A-Z][A-Z0-9]{1,3}-\d{2,3})\]/g;
   let m;
   while ((m = re.exec(text))) {
     const id = m[1];
@@ -130,7 +130,7 @@ if (fs.existsSync(eventsFile)) {
     if (!line.trim()) continue;
     let rec;
     try { rec = JSON.parse(line); } catch { continue; }
-    const idMatch = /\[([A-Z]{3}-\d{2})\]/.exec(rec.fullTitle ?? '');
+    const idMatch = /\[([A-Z][A-Z0-9]{1,3}-\d{2,3})\]/.exec(rec.fullTitle ?? '');
     if (!idMatch) continue;
     const prev = lastState.get(idMatch[1]);
     if (!prev || prev.ts <= rec.ts) lastState.set(idMatch[1], { state: rec.state, ts: rec.ts });
@@ -149,12 +149,12 @@ if (fs.existsSync(invFile)) {
     if (!tag.startsWith('FINALIZE')) continue;
     const ids = new Set();
     for (const v of rec.violations ?? []) {
-      const m = /^([A-Z]{1,3}-\d{2}):/.exec(String(v));
+      const m = /^([A-Z][A-Z0-9]{1,3}-\d{2,3}):/.exec(String(v));
       if (m) ids.add(m[1]);
     }
     for (const v of rec.pending ?? []) {
       if (v?.check) ids.add(String(v.check));
-      const m = /^([A-Z]{1,3}-\d{2}):/.exec(String(v?.violation ?? ''));
+      const m = /^([A-Z][A-Z0-9]{1,3}-\d{2,3}):/.exec(String(v?.violation ?? ''));
       if (m) ids.add(m[1]);
     }
     const label = tag.replace(/^FINALIZE\s*::\s*/, '');

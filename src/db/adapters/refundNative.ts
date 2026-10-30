@@ -154,6 +154,13 @@ export interface NativeRefundRequest {
   subtotal: number;
   discountTotal: number;
   totalNet: number;
+  /**
+   * Value reversed by this refund (funding returned + trade value restored).
+   * Written to the row's `total` column so it matches the JSON payload;
+   * `totalNet` stays the funding basis for guards, profit and the signed
+   * envelope. Absent on older writers ⇒ native falls back to `totalNet`.
+   */
+  valueReversed?: number;
   costTotal: number;
   pricingTier: string;
   paymentMethod: string;

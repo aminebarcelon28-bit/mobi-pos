@@ -3775,7 +3775,7 @@ dependencies = [
 
 [[package]]
 name = "mobi-pos"
-version = "1.6.8"
+version = "1.7.0"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -4795,7 +4795,7 @@ dependencies = [
 
 [[package]]
 name = "pos-core"
-version = "1.6.8"
+version = "1.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4806,7 +4806,7 @@ dependencies = [
 
 [[package]]
 name = "pos-peripherals"
-version = "1.6.8"
+version = "1.7.0"
 dependencies = [
  "pos-core",
 ]

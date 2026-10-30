@@ -125,6 +125,33 @@ function parseJson(s: unknown): Record<string, unknown> {
   }
 }
 
+/**
+ * Credit legs of a sale, read from its tender list.
+ *
+ * The desktop lane does not stamp `voucherCreditApplied` / `storeCreditApplied`
+ * / `tradeInCreditApplied` on every ticket: a wallet balance and a staged
+ * Reprise are recorded as TENDER LEGS (`Avoir Client`, `Reprise`). Those legs
+ * are value the customer already owned, not money handed to the till, so they
+ * reduce `total` and must be excluded from both conservation sides.
+ * ([MNY-26]: tenders 400+600+300 = 1300 vs total 600 — the 700 of credit legs
+ * is exactly the gap.) `Crédit Client` is deliberately NOT here: a Kredy debt
+ * leg IS revenue (the receivable), so it belongs inside `total`.
+ */
+const CREDIT_TENDER_METHODS = ['Avoir Client', 'Reprise'];
+
+function creditLegsOf(j: Record<string, unknown>): number {
+  const tenders = Array.isArray(j.tenders) ? (j.tenders as Array<Record<string, unknown>>) : null;
+  if (!tenders) return 0;
+  let sum = 0;
+  for (const t of tenders) {
+    const method = String(t?.method ?? '').trim();
+    if (!CREDIT_TENDER_METHODS.includes(method)) continue;
+    const amt = num(t?.amount ?? 0);
+    if (Number.isFinite(amt) && amt > 0) sum += amt;
+  }
+  return sum;
+}
+
 function maxRowid(table: string): number {
   try {
     return Number(one<{ m: number | null }>(`SELECT MAX(rowid) AS m FROM "${table}"`)?.m ?? 0);
@@ -313,11 +340,17 @@ export function runInvariantChecks(): CheckOut[] {
     const tenders = Array.isArray(j.tenders) ? (j.tenders as Array<Record<string, unknown>>) : null;
     if (tenders) {
       // Tenders record cash HANDED (gross); change is handed back in the same
-      // beat, so the conservation identity is Σtenders − change = total.
+      // beat, so the conservation identity is Σtenders − creditLegs − change =
+      // total (credit legs are prepaid value, not till money — see
+      // creditLegsOf). Debt legs stay in the sum: they are part of `total`.
       const s = tenders.reduce((a, x) => a + num(x?.amount ?? 0), 0);
+      const creditLegs = creditLegsOf(j);
       const chg = num(j.changeDue ?? t.change_due ?? 0);
-      if (!close(s - chg, total, 0.01)) {
-        push('G-01', `tx ${t.receipt_number}: Σtenders−change=${s - chg} != total=${total}`);
+      if (!close(s - creditLegs - chg, total, 0.01)) {
+        push(
+          'G-01',
+          `tx ${t.receipt_number}: Σtenders−credits−change=${s - creditLegs - chg} != total=${total}`,
+        );
       }
     }
     if (Number(t.is_refund) === 1) {
@@ -415,11 +448,14 @@ export function runInvariantChecks(): CheckOut[] {
     const j = parseJson(t.json_payload);
     // Payment credits (voucher, Avoir Client, reprise) reduce the cash total
     // without living in discount_total; include them or every covered sale
-    // reports a false mismatch.
-    const covered =
+    // reports a false mismatch. The desktop lane writes them as tender legs
+    // only, so take the larger of the explicit stamps and the legs (never the
+    // sum — a sale that carries both would count the same value twice).
+    const explicitCovered =
       num(j.voucherCreditApplied ?? 0) +
       num(j.storeCreditApplied ?? 0) +
       num(j.tradeInCreditApplied ?? 0);
+    const covered = Math.max(explicitCovered, creditLegsOf(j));
     if (!close(sub - disc - covered, tot, 0.01)) {
       push(
         'G-03',
@@ -715,7 +751,14 @@ export function runInvariantChecks(): CheckOut[] {
     if (fk.length > 0) push('G-13', `PRAGMA foreign_key_check: ${fk.length} violation(s)`);
   }
 
-  // ---- G-14: money is integer DA ----
+  // ---- G-14: money has no sub-centime dust ----
+  // Restated 2026-10-28 (owner-authorised 2-decimal fix, [MNY-01/02/03/06]).
+  // The unit of account is integer MINOR units (money.ts:4-5) and the columns
+  // are REAL, so a centime sale stores 0.01 — the old "integer DA" form made
+  // every correct centime sale a violation (10+ per run, mny4 log). The real
+  // risk this guard exists for is float dust and third-decimal leakage, so the
+  // predicate is `amount*100` integral, NOT a relaxed rounding tolerance.
+  // Quantities stay integer (the cart rounds magnitude before multiplying).
   {
     const integral = (v: unknown, label: string, id: string): void => {
       if (v === null || v === undefined) return;
@@ -724,20 +767,35 @@ export function runInvariantChecks(): CheckOut[] {
         push('G-14', `${id}: ${label} not numeric`);
         return;
       }
-      if (Math.abs(n - Math.round(n)) > 0.001) push('G-14', `${id}: ${label}=${n} not integer DA`);
+      if (Math.abs(n - Math.round(n)) > 0.001) push('G-14', `${id}: ${label}=${n} not integer`);
+    };
+    const minorExact = (v: unknown, label: string, id: string): void => {
+      if (v === null || v === undefined) return;
+      const n = num(v);
+      if (!Number.isFinite(n)) {
+        push('G-14', `${id}: ${label} not numeric`);
+        return;
+      }
+      // f64 spacing at 1e9 DA is ~1e-7 cents; 1e-6 absolute + 1e-11 relative
+      // admits only representation noise, never a third decimal (33.335 is
+      // 0.5 cents off) and never sub-centime dust.
+      const tol = Math.max(1e-6, Math.abs(n) * 1e-11);
+      if (Math.abs(n * 100 - Math.round(n * 100)) > tol) {
+        push('G-14', `${id}: ${label}=${n} is not exact to 2 decimals`);
+      }
     };
     for (const t of newTx) {
       for (const c of ['total', 'subtotal', 'discount_total', 'cash_tendered', 'change_due']) {
-        integral(t[c], c, `tx ${t.receipt_number}`);
+        minorExact(t[c], c, `tx ${t.receipt_number}`);
       }
     }
     for (const i of newItems) {
       integral(i.quantity, 'quantity', `item ${i.id}`);
-      integral(i.applied_price, 'applied_price', `item ${i.id}`);
-      integral(i.unit_price_charged, 'unit_price_charged', `item ${i.id}`);
-      integral(i.discount_amount, 'discount_amount', `item ${i.id}`);
+      minorExact(i.applied_price, 'applied_price', `item ${i.id}`);
+      minorExact(i.unit_price_charged, 'unit_price_charged', `item ${i.id}`);
+      minorExact(i.discount_amount, 'discount_amount', `item ${i.id}`);
     }
-    for (const m of newMoves) integral(m.amount, 'amount', `movement ${m.id}`);
+    for (const m of newMoves) minorExact(m.amount, 'amount', `movement ${m.id}`);
   }
 
   // ---- G-15: authorization envelope on privileged writes ----
@@ -1179,13 +1237,19 @@ export function runInvariantChecks(): CheckOut[] {
     }
 
     const totals = all<Record<string, unknown>>(`
-      SELECT t.id, t.receipt_number, t.total,
+      SELECT t.id, t.receipt_number, t.total, t.json_payload,
         (SELECT COALESCE(SUM(r.total),0) FROM transactions r
           WHERE r.is_refund = 1 AND r.original_transaction_id = t.id) AS rt
       FROM transactions t WHERE t.deleted = 0`);
     for (const r of totals) {
-      if (num(r.rt) > num(r.total) + 0.01) {
-        push('G-29', `ticket ${r.receipt_number}: Σrefunds=${r.rt} > total=${r.total}`);
+      // Refund rows carry the VALUE REVERSED (funding returned + trade value
+      // restored), while the sale's `total` is net of the credit legs it
+      // consumed. Cap against what the customer actually gave: net total plus
+      // those legs ([MNY-26]: 600 + 400 avoir + 300 reprise = 1300). Same
+      // recoverable base the app's funding split uses.
+      const given = num(r.total) + creditLegsOf(parseJson(r.json_payload));
+      if (num(r.rt) > given + 0.01) {
+        push('G-29', `ticket ${r.receipt_number}: Σrefunds=${r.rt} > given=${given} (total ${r.total} + credits)`);
       }
     }
 

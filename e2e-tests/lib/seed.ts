@@ -48,6 +48,22 @@ export function seedProducts(products: SeedProduct[]): void {
         'e2e-seed', 'e2e-base-' || @id, 'pending', datetime('now','utc'), datetime('now','utc'), 0, 1)
        ON CONFLICT(id) DO UPDATE SET delta=excluded.delta`,
     );
+    // A serialized fixture is only internally consistent when every unit on
+    // hand has its own IMEI row — `stock: 5` with one record is exactly what
+    // G-05 reports as "serialized units untracked", and every PSER-style
+    // fixture in the suite had that shape, so the invariant fired on the
+    // FIXTURE at the end of each run. Rows are derived from the product's own
+    // IMEI (trailing digits incremented) and inserted DO NOTHING: an explicit
+    // `seedImeiRecords()` call after this one still owns the status.
+    // A serialized product with NO declared IMEI is left alone — that is the
+    // deliberate [G-05-NC] negative control (NC-G05: stock 2, zero records).
+    const insImei = d.prepare(
+      `INSERT INTO imei_records
+        (imei, product_id, purchase_order_id, sale_transaction_id, warranty_expires_at,
+         received_at, sold_at, version, warranty_months, status)
+       VALUES (@imei, @pid, NULL, NULL, NULL, @received, NULL, 1, 12, 'in_stock')
+       ON CONFLICT(imei) DO NOTHING`,
+    );
     for (const p of products) {
       insProd.run({
         id: p.id,
@@ -61,8 +77,27 @@ export function seedProducts(products: SeedProduct[]): void {
         imeiNumber: p.imeiNumber ?? null,
       });
       if (p.stock > 0) insLedger.run({ id: p.id, stock: p.stock });
+      if (p.isSerialized && p.stock > 0 && p.imeiNumber) {
+        const base = p.imeiNumber.trim();
+        const received = new Date().toISOString();
+        for (let unit = 0; unit < p.stock; unit += 1) {
+          insImei.run({ imei: derivedImei(base, unit), pid: p.id, received });
+        }
+      }
     }
   });
+}
+
+/** IMEI for unit `n` of a serialized fixture: the declared IMEI itself for
+ *  unit 0, then the trailing digits incremented (a numeric IMEI stays numeric,
+ *  anything else gets a `-n` suffix). Only ever used for seed rows. */
+function derivedImei(base: string, unit: number): string {
+  if (unit === 0) return base;
+  const m = /^(.*?)(\d+)$/.exec(base);
+  if (!m) return `${base}-${unit + 1}`;
+  const width = m[2].length;
+  const next = (BigInt(m[2]) + BigInt(unit)).toString().padStart(width, '0');
+  return `${m[1]}${next}`;
 }
 
 export function seedCustomers(customers: SeedCustomer[]): void {
@@ -95,9 +130,15 @@ export interface SeedCustomerFull {
    *  Defaults to 0 (previous payload-only behaviour). */
   loyaltyPointsColumnDa?: number;
   /** Optional override for the `customers.current_debt` COLUMN when it must
-   *  differ from the payload value — mirrors the real sale-path shape (P2-7:
-   *  the v127 column never advances on credit acquisition). Defaults to
-   *  `currentDebtDa`. */
+   *  differ from the payload value. Defaults to `currentDebtDa`.
+   *
+   *  Two legitimate uses:
+   *  - modelling an UPGRADING device: the ledger + payload carry the real
+   *    receivable while the column lags at 0 (the pre-2026-10-30 sale path
+   *    never advanced it, P2-7). The reader must take the ledger
+   *    (`customerAdapter.getAllCustomers` ledger-first read) and the boot
+   *    heal must repair the cache.
+   *  - asserting the cache is NOT the authority in a given path. */
   currentDebtColumnDa?: number;
   /** Cumulative spend driving tier progression (customers.total_spent). */
   totalSpentDa?: number;

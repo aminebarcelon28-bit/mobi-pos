@@ -109,13 +109,25 @@ export const customerAdapter = {
       rowJson: string,
     ): Promise<void> => {
       const predicate = guarded ? ' WHERE customers.version = $13' : '';
+      // The debt COLUMN is a cache of the ledger (the authority) and is read
+      // first by `getAllCustomers` below, so a sale/repayment that only moved
+      // the payload left every debt surface blind after a restart ([MNY-25]:
+      // payload + ledger 1 000, column 0 → "0 débiteurs", and the credit gate
+      // compared the ceiling against 0). $14 is appended after $13 so the
+      // optimistic predicate keeps its placeholder; a caller that does not
+      // carry `currentDebt` passes NULL and the stored value is preserved.
+      const debtArg =
+        typeof customer.currentDebt === 'number' && Number.isFinite(customer.currentDebt)
+          ? Math.round(customer.currentDebt)
+          : null;
       await db.execute(
-        `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $10)
+        `INSERT INTO customers (id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, deleted, version, idempotency_key, created_at, current_debt)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12, $10, $14)
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, phone=excluded.phone, email=excluded.email,
            loyalty_points=excluded.loyalty_points, store_credit=excluded.store_credit,
            pricing_tier=excluded.pricing_tier, total_spent=excluded.total_spent,
            json_payload=excluded.json_payload, updated_at=excluded.updated_at, deleted=0,
+           current_debt=COALESCE(excluded.current_debt, customers.current_debt),
          version = excluded.version,
          created_at = CASE WHEN COALESCE(customers.created_at, '') = '' THEN excluded.created_at ELSE customers.created_at END${predicate}`,
         [
@@ -127,6 +139,7 @@ export const customerAdapter = {
           // every local row gets its own stable key (updates keep theirs).
           idemKey,
           baseVersion,
+          debtArg,
         ],
       );
     };
@@ -214,6 +227,58 @@ export const customerAdapter = {
     }
   },
 
+  /**
+   * One-time, idempotent back-fill of the `customers.current_debt` CACHE from
+   * the ledger, which is the authority for a receivable.
+   *
+   * Rows written before 2026-10-30 carry a column that never advanced with the
+   * payload (P2-7), so a merchant upgrading with live credit would still read a
+   * stale 0 even though `saveCustomer` now maintains the column. Only rows that
+   * DISAGREE are touched, and only when the customer has at least one ledger
+   * row — a customer with no ledger history keeps whatever the column/payload
+   * held (legacy/imported shapes must not be zeroed).
+   *
+   * Returns the number of rows repaired (0 on a clean DB, so boot is a no-op).
+   */
+  async healDebtCacheFromLedger(): Promise<number> {
+    if (!isTauriEnv()) return 0;
+    try {
+      const { getLocalDb } = await import('../sqlPluginAdapter');
+      const db = await getLocalDb();
+      const res = (await db.execute(
+        `UPDATE customers
+            SET current_debt = (
+              SELECT COALESCE(SUM(CASE WHEN d.type = 'DEBT_ACQUIRED' THEN d.amount
+                                       WHEN d.type = 'PAYMENT_SETTLED' THEN -d.amount
+                                       ELSE 0 END), 0)
+                FROM customer_debts d
+               WHERE d.customer_id = customers.id AND d.deleted = 0
+            )
+          WHERE EXISTS (
+              SELECT 1 FROM customer_debts d
+               WHERE d.customer_id = customers.id AND d.deleted = 0
+            )
+            AND COALESCE(current_debt, -1) <> (
+              SELECT COALESCE(SUM(CASE WHEN d.type = 'DEBT_ACQUIRED' THEN d.amount
+                                       WHEN d.type = 'PAYMENT_SETTLED' THEN -d.amount
+                                       ELSE 0 END), 0)
+                FROM customer_debts d
+               WHERE d.customer_id = customers.id AND d.deleted = 0
+            )`,
+      )) as unknown as { rowsAffected?: number } | undefined;
+      const repaired = typeof res?.rowsAffected === 'number' ? res.rowsAffected : 0;
+      if (repaired > 0) {
+        console.warn(`[customer] current_debt cache repaired from the ledger for ${repaired} row(s)`);
+      }
+      return repaired;
+    } catch (err) {
+      // Never fails boot: the read-side ledger guard already keeps the UI
+      // honest, this only fixes the stored cache.
+      console.warn('[customer] current_debt cache back-fill skipped:', err);
+      return 0;
+    }
+  },
+
   async getAllCustomers(): Promise<Customer[]> {
     if (isTauriEnv()) {
       try {
@@ -223,6 +288,27 @@ export const customerAdapter = {
           .select(
             'SELECT id, name, phone, email, loyalty_points, store_credit, pricing_tier, total_spent, json_payload, updated_at, version, created_at, current_debt, whatsapp_opt_in FROM customers WHERE deleted = 0 ORDER BY name ASC',
           )) as Array<Record<string, unknown>>;
+        // The LEDGER is the authority for a receivable; `customers.current_debt`
+        // is a cache of it and was historically never written by the TS sale
+        // path (P2-7). Reading the cache first therefore hid a real 1 000 DA
+        // debt after every restart ([MNY-25]). One grouped read keeps the
+        // per-customer loop free of queries.
+        let ledgerDebt = new Map<string, number>();
+        try {
+          const agg = (await db.select(
+            `SELECT customer_id, SUM(CASE WHEN type = 'DEBT_ACQUIRED' THEN amount
+                                          WHEN type = 'PAYMENT_SETTLED' THEN -amount
+                                          ELSE 0 END) AS b
+               FROM customer_debts WHERE deleted = 0 GROUP BY customer_id`,
+          )) as Array<{ customer_id: unknown; b: unknown }>;
+          ledgerDebt = new Map(
+            (agg || [])
+              .filter((r) => String(r?.customer_id ?? '').trim() !== '')
+              .map((r) => [String(r.customer_id), Number(r.b ?? 0)] as const),
+          );
+        } catch {
+          // Ledger unreadable (pre-v8 table): fall back to the cached column.
+        }
         if (rows && rows.length > 0) {
           const loaded: Customer[] = [];
           for (const r of rows) {
@@ -248,7 +334,14 @@ export const customerAdapter = {
               storeCredit: Number(r.store_credit ?? base.storeCredit ?? 0),
               pricingTier: (r.pricing_tier as Customer['pricingTier']) || base.pricingTier || 'Retail',
               totalSpent: Number(r.total_spent ?? base.totalSpent ?? 0),
-              currentDebt: Number(r.current_debt ?? (base as any).currentDebt ?? (base as any).current_debt ?? 0),
+              currentDebt: (() => {
+                const id = String(r.id || base.id || '');
+                const fromLedger = ledgerDebt.get(id);
+                if (typeof fromLedger === 'number' && Number.isFinite(fromLedger)) {
+                  return Math.max(0, fromLedger);
+                }
+                return Number(r.current_debt ?? (base as any).currentDebt ?? (base as any).current_debt ?? 0);
+              })(),
               whatsappOptIn: Boolean(r.whatsapp_opt_in ?? base.whatsappOptIn),
             };
             (cust as unknown as { version?: number }).version = Number(r.version ?? (base as unknown as { version?: number }).version ?? 1);

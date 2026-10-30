@@ -55,6 +55,24 @@ import { usePosStore } from '../usePosStore';
 // P11.3: memo for the in-flight initDatabase promise (see initDatabase below).
 let initDatabaseInFlight: Promise<void> | null = null;
 
+/**
+ * One-shot guard for the `current_debt` cache repair. The back-fill is
+ * idempotent (0 rows once the cache agrees), but boot runs the wave-2 lane on
+ * every refresh — a module flag keeps it to once per session.
+ */
+let debtCacheHealDone = false;
+
+async function healCustomerDebtCacheOnce(): Promise<void> {
+  if (debtCacheHealDone) return;
+  debtCacheHealDone = true;
+  try {
+    const { customerAdapter } = await import('../../db/adapters/customerAdapter');
+    await customerAdapter.healDebtCacheFromLedger();
+  } catch (err) {
+    console.warn('[boot] current_debt cache repair skipped:', err);
+  }
+}
+
 const HELD_SALES_STORAGE_KEY = 'mobi_held_sales_v1';
 
 /**
@@ -1988,6 +2006,12 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         // failure keeps the painted till and warns; it never returns the
         // splash (today a single failed table empties the whole store).
         try {
+          // One-time (idempotent) repair of the `current_debt` cache from the
+          // ledger BEFORE the first customer read. Rows written before
+          // 2026-10-30 carry a column that never advanced with the payload
+          // (P2-7), so an upgrading merchant would still see 0 debt. No-op on
+          // a clean DB; never fails boot.
+          await healCustomerDebtCacheOnce();
           const [
             customers,
             txWindow,
