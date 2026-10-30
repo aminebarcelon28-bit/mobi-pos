@@ -29,6 +29,7 @@ import * as receiptMathModule from '../src/utils/receiptMath.ts';
 import { deterministicId } from '../src/utils/ids.ts';
 import {
   computeRefundFundingSplit,
+  refundLaneTotalsOf,
   computeSalesMetrics,
   refundedQtyByProduct,
   refundableBalanceOfTxn,
@@ -641,8 +642,192 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
   check('I4b/k trade-in: avoir 300', tradeSplit.avoirShare === 300, JSON.stringify(tradeSplit));
   check('I4b/k trade-in: cash 600', tradeSplit.cashShare === 600, JSON.stringify(tradeSplit));
 
-  // (l) Legacy refund rows carry no `funding` object: the lane reader must
-  // derive them from the durable columns and never throw.
+  // (m) D1(c) HARD CAP: the sum of every refund of a ticket can never exceed
+  // what was sold. A second request for more than remains is trimmed and says
+  // so in `anomalies`.
+  {
+    const cappedSale = {
+      id: 'TKT-CAP',
+      subtotal: 1000,
+      discountTotal: 100,
+      total: 900,
+      paymentMethod: 'Espèces',
+      tenders: [{ method: 'Espèces', amount: 900 }],
+    };
+    const first = computeRefundFundingSplit(cappedSale, 600);
+    const over = computeRefundFundingSplit(cappedSale, 600, first.netRefund, {
+      cash: first.cashShare,
+      avoir: first.avoirShare,
+      voucher: first.voucherShare,
+      debt: first.debtShare,
+      digital: first.digitalShare,
+      gross: first.grossRefund,
+      basis: 'explicit',
+    });
+    check('I4b/m hard cap: first refund is full', Math.round(first.netRefund * 100) === 60000, JSON.stringify(first));
+    check(
+      'I4b/m hard cap: an over-refund request is trimmed to what remains (300)',
+      Math.round(over.netRefund * 100) === 30000,
+      JSON.stringify(over)
+    );
+    check('I4b/m hard cap: the trim is recorded', over.anomalies.includes('cumulative-cap'), JSON.stringify(over.anomalies));
+    const third = computeRefundFundingSplit(cappedSale, 300, 900, {
+      cash: 900,
+      avoir: 0,
+      voucher: 0,
+      debt: 0,
+      digital: 0,
+      gross: 900,
+      basis: 'explicit',
+    });
+    check('I4b/m hard cap: everything refunded leaves ZERO', Math.round(third.netRefund * 100) === 0, JSON.stringify(third));
+    check(
+      'I4b/m hard cap: Σ refunds == sale net (900)',
+      Math.round((first.netRefund + over.netRefund + third.netRefund) * 100) === 90000
+    );
+  }
+
+  // (n) MIXED HISTORY: legacy refunds (no funding object, drifted lanes) exist;
+  // v2 continues from what the durable columns say and never throws.
+  {
+    const legacySale = {
+      id: 'TKT-MIXED',
+      subtotal: 900,
+      discountTotal: 0,
+      total: 800,
+      paymentMethod: 'Espèces',
+      tenders: [
+        { method: 'Espèces', amount: 800 },
+        { method: 'Avoir Client', amount: 100 },
+      ],
+    };
+    const legacyRows = [1, 2, 3].map((i) => ({
+      id: `REF-LEG-${i}`,
+      isRefund: true,
+      total: 300,
+      subtotal: 300,
+      cashDisbursed: 267,
+      refundMethod: 'Espèces',
+    }));
+    const derived = legacyRows.map((r) => refundLaneTotalsOf(r as unknown as Record<string, unknown>));
+    check('I4b/n legacy rows derive without throwing', derived.length === 3, JSON.stringify(derived.map((d) => d.basis)));
+    check(
+      'I4b/n legacy rows: cash is what was disbursed, the residual is attributed',
+      derived.every(
+        (d) =>
+          d.cash === 267 &&
+          d.basis === 'legacy' &&
+          Math.round((d.cash + d.avoir + d.voucher + d.debt + d.digital) * 100) === 30000
+      ),
+      JSON.stringify(derived[0])
+    );
+    const priorFromLegacy = derived.reduce(
+      (acc, l) => {
+        acc.cash += l.cash;
+        acc.avoir += l.avoir;
+        acc.voucher += l.voucher;
+        acc.debt += l.debt;
+        acc.digital += l.digital;
+        acc.gross = (acc.gross ?? 0) + (l.gross ?? 0);
+        acc.basis = 'legacy';
+        return acc;
+      },
+      { cash: 0, avoir: 0, voucher: 0, debt: 0, digital: 0, gross: 0, basis: 'legacy' as const, anomalies: [] as string[] }
+    );
+    const next = computeRefundFundingSplit(legacySale, 0, 900, priorFromLegacy);
+    check('I4b/n v2 on top of legacy history does not throw', !!next, '');
+    check(
+      'I4b/n the legacy basis is surfaced as an anomaly',
+      next.anomalies.includes('prior-refund-legacy'),
+      JSON.stringify(next.anomalies)
+    );
+    check('I4b/n no lane exceeds its original amount', next.avoirShare <= 100 && next.cashShare <= 800, JSON.stringify(next));
+    check('I4b/n everything already refunded leaves ZERO', Math.round(next.netRefund * 100) === 0, JSON.stringify(next));
+  }
+
+  // (o) STRONGER INVARIANTS (v)/(vi) + mutation checks. A degenerate allocator
+  // (cash-first, floor-only, always-correct-the-last-lane) must be KILLED.
+  {
+    type Split = {
+      netRefund: number;
+      voucherShare: number;
+      avoirShare: number;
+      debtShare: number;
+      cashShare: number;
+      digitalShare: number;
+    };
+    const minor = (v: number) => Math.round(v * 100);
+    /**
+     * (v) after a prefix, each lane's cumulative refund is within 1 minor of its
+     * proportional share of the cumulative refunded total; (vi) a lane's
+     * cumulative refund never decreases.
+     */
+    const checkPrefixes = (
+      given: { avoir: number; cash: number; voucher: number; debt: number; digital: number },
+      total: number,
+      splits: Split[]
+    ): string => {
+      const cum = { avoir: 0, cash: 0, voucher: 0, debt: 0, digital: 0 };
+      let net = 0;
+      for (const s of splits) {
+        net += minor(s.netRefund);
+        for (const k of ['avoir', 'cash', 'voucher', 'debt', 'digital'] as const) {
+          const before = cum[k];
+          cum[k] += minor(s[k === 'avoir' ? 'avoirShare' : k === 'cash' ? 'cashShare' : k === 'voucher' ? 'voucherShare' : k === 'debt' ? 'debtShare' : 'digitalShare']);
+          if (cum[k] < before) return `(vi) ${k} decreased`;
+          const share = minor(given[k]) === 0 ? 0 : Math.round((minor(given[k]) * net) / Math.max(1, minor(total)));
+          if (Math.abs(cum[k] - share) > 1) return `(v) ${k} ${cum[k]} vs proportional ${share} at net ${net}`;
+        }
+      }
+      return '';
+    };
+
+    const given = { avoir: 100, cash: 800, voucher: 0, debt: 0, digital: 0 };
+    const good = runSequence(exclCredit, [300, 300, 300]).rows.map((r) => ({
+      netRefund: r.net,
+      voucherShare: r.lanes.voucher,
+      avoirShare: r.lanes.avoir,
+      debtShare: r.lanes.debt,
+      cashShare: r.lanes.cash,
+      digitalShare: r.lanes.digital,
+    }));
+    check('I4b/o (v)+(vi) hold for v2 on three partials', checkPrefixes(given, 900, good) === '', checkPrefixes(given, 900, good));
+
+    // Mutation 1: cash-first (pays the drawer until the cash is exhausted).
+    const cashFirst = (nets: number[]): Split[] => {
+      let cashLeft = 800;
+      let avoirLeft = 100;
+      return nets.map((n) => {
+        const cash = Math.min(cashLeft, n);
+        cashLeft -= cash;
+        const avoir = Math.min(avoirLeft, n - cash);
+        avoirLeft -= avoir;
+        return { netRefund: n, voucherShare: 0, avoirShare: avoir, debtShare: 0, cashShare: cash, digitalShare: 0 };
+      });
+    };
+    const m1 = checkPrefixes(given, 900, cashFirst([300, 300, 300]));
+    check('I4b/o mutation cash-first is KILLED', m1 !== '', m1 || 'not killed');
+
+    // Mutation 2: floor-only lanes, cash plug allowed to go negative.
+    const floorOnly = (nets: number[]): Split[] =>
+      nets.map((n) => {
+        const a = Math.floor((100 * n) / 900);
+        return { netRefund: n, voucherShare: 0, avoirShare: a, debtShare: 0, cashShare: n - a, digitalShare: 0 };
+      });
+    const m2 = checkPrefixes(given, 900, floorOnly([300, 300, 300]));
+    check('I4b/o mutation floor-only is KILLED', m2 !== '', m2 || 'not killed');
+
+    // Mutation 3: always correct the cash lane last (can overdraw the drawer).
+    const lastLane = (nets: number[]): Split[] =>
+      nets.map((n, i) => {
+        const a = Math.round((100 * n) / 900);
+        const cash = i === nets.length - 1 ? n - a + 5 : n - a;
+        return { netRefund: n, voucherShare: 0, avoirShare: a, debtShare: 0, cashShare: cash, digitalShare: 0 };
+      });
+    const m3 = checkPrefixes(given, 900, lastLane([300, 300, 300]));
+    check('I4b/o mutation overdraw-the-last-lane is KILLED', m3 !== '', m3 || 'not killed');
+  }
+
   {
     const helper = (receiptMathModule as unknown as Record<string, unknown>).refundLaneTotalsOf as
       | ((t: unknown) => Lanes)

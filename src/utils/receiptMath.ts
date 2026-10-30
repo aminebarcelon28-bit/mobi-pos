@@ -591,15 +591,25 @@ export function refundLaneTotalsOf(txn: Record<string, unknown> | null | undefin
         : 0
       : Math.min(totalM, Math.max(0, toMinor(cashRaw)));
   const residualM = Math.max(0, totalM - cashM);
+  // A legacy cash row whose `total` exceeds its `cashDisbursed` carried the
+  // rest on another lane; the old refund code paid a stacked-discount share as
+  // avoir, so that is where an unattributable cash residual goes. Recorded in
+  // `anomalies` because it is a derivation, not evidence.
+  const legacyAnomalies = ['legacy-no-funding-object'];
+  let avoirM = method === 'Avoir Client' ? residualM : 0;
+  if (method !== 'Avoir Client' && residualM > 0 && (cashM > 0 || method === 'Espèces')) {
+    avoirM = residualM;
+    legacyAnomalies.push('legacy-cash-residual-to-avoir');
+  }
   return {
     cash: fromMinor(cashM),
-    avoir: fromMinor(method === 'Avoir Client' ? residualM : 0),
+    avoir: fromMinor(avoirM),
     voucher: fromMinor(method === 'Voucher' || method === 'Bon Achat' ? residualM : 0),
     debt: fromMinor(method === 'Crédit Client' ? residualM : 0),
     digital: fromMinor(DIGITAL_RAILS.includes(method) ? residualM : 0),
     gross: fromMinor(Math.max(0, toMinor(txn?.subtotal ?? txn?.total))),
     basis: 'legacy',
-    anomalies: ['legacy-no-funding-object'],
+    anomalies: legacyAnomalies,
   };
 }
 
@@ -738,6 +748,11 @@ export function computeRefundFundingSplit(
   const thisNetM = Math.max(0, cumNetM - priorNetM);
   const requestedNetM = baseM > 0 ? Math.round((givenM * grossM) / baseM) : givenM;
   const capped = thisNetM < requestedNetM;
+  // D1(c): the hard cap. `cumGrossM` can never pass the ticket's net line value,
+  // so the sum of every refund of a ticket can never exceed what was sold —
+  // recorded explicitly so a trimmed request is visible in the funding object
+  // instead of looking like a smaller refund.
+  if (capped) anomalies.push('cumulative-cap');
 
   const targetM = (fund: number) => (givenM > 0 ? Math.round((cumNetM * fund) / givenM) : 0);
 
