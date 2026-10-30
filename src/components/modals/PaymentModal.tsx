@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect } from 'react';
 import {
   X,
   Banknote,
@@ -61,32 +61,7 @@ export const PaymentModal: React.FC = () => {
 
   const { showToast } = useToast();
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethodType>('Espèces');
-  const [cashTenderAmount, setCashTenderAmountRaw] = useState<number>(0);
-  /**
-   * DIAGNOSTIC-REVERT (C90 trace): every write to the cash tender field, with
-   * its source and the net due at that instant. Flag-gated, zero behaviour
-   * change — the setter is called with the identical value. Removed with the
-   * diagnostic commit.
-   */
-  const setCashTenderAmount = (value: number, source = 'unknown') => {
-    try {
-      // e2e flavour only (VITE_E2E is dead-code-eliminated from production).
-      if (import.meta.env.VITE_E2E === '1' && typeof localStorage !== 'undefined' && localStorage.getItem('__pos_tender_diag') === 'false') {
-        // explicit opt-out
-      } else if (import.meta.env.VITE_E2E === '1') {
-        console.log(
-          `[TENDER-DIAG] source=${source} value=${value} netToPay=${netToPayRef.current} ` +
-            `credit=${appliedCreditRef.current} method=${methodRef.current} at=${Date.now()}`
-        );
-      }
-    } catch {
-      /* diagnostics never throw into the payment path */
-    }
-    setCashTenderAmountRaw(value);
-  };
-  const netToPayRef = useRef<number>(0);
-  const appliedCreditRef = useRef<number>(0);
-  const methodRef = useRef<string>('');
+  const [cashTenderAmount, setCashTenderAmount] = useState<number>(0);
   const [appliedCredit, setAppliedCredit] = useState<number>(0);
   const [isCustomCreditOpen, setIsCustomCreditOpen] = useState(false);
   const [customCreditInput, setCustomCreditInput] = useState<number>(0);
@@ -131,10 +106,6 @@ export const PaymentModal: React.FC = () => {
   const cartDiscount = totals.discountTotal;
   const netSubtotal = totals.subtotalAfterDiscount;
   const netToPay = totals.total;
-  // DIAGNOSTIC-REVERT: snapshot the values the setter logs against.
-  netToPayRef.current = netToPay;
-  appliedCreditRef.current = appliedCredit;
-  methodRef.current = selectedMethod;
   const tradeInCreditApplied = totals.tradeInCreditApplied;
   // Settlement on the TRUE buyback (unclamped) vs the payable base so the
   // soulte direction survives the totals clamp.
@@ -161,7 +132,7 @@ export const PaymentModal: React.FC = () => {
       );
       setAppliedCredit(initialCredit);
       const initialNet = Math.max(0, netToPay - initialCredit);
-      setCashTenderAmount(initialNet > 0 ? initialNet : 0, 'modal-open-sync');
+      setCashTenderAmount(initialNet > 0 ? initialNet : 0);
     }
   }
 
@@ -240,7 +211,7 @@ export const PaymentModal: React.FC = () => {
     setAppliedCredit(maxAvailableCredit);
     setStoreCreditApplied(maxAvailableCredit);
       const newNet = Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied - maxAvailableCredit);
-    setCashTenderAmount(newNet > 0 ? newNet : 0, 'apply-full-credit');
+    setCashTenderAmount(newNet > 0 ? newNet : 0);
     soundEngine.playSuccess();
     showToast(`🎁 Avoir Client appliqué : -${formatDZD(maxAvailableCredit)}`, 'success');
   };
@@ -254,7 +225,7 @@ export const PaymentModal: React.FC = () => {
     setAppliedCredit(clamped);
     setStoreCreditApplied(clamped);
     const newNet = Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied - clamped);
-    setCashTenderAmount(newNet > 0 ? newNet : 0, 'apply-custom-credit');
+    setCashTenderAmount(newNet > 0 ? newNet : 0);
     setIsCustomCreditOpen(false);
     soundEngine.playKeyBeep?.();
     if (clamped > 0) {
@@ -268,7 +239,7 @@ export const PaymentModal: React.FC = () => {
     setAppliedCredit(0);
     setStoreCreditApplied(0);
       const resetNet = Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied);
-      setCashTenderAmount(resetNet > 0 ? resetNet : 0, 'remove-credit');
+      setCashTenderAmount(resetNet > 0 ? resetNet : 0);
     soundEngine.playKeyBeep?.();
     showToast('Avoir Client retiré de la vente.', 'info');
   };
@@ -358,15 +329,6 @@ export const PaymentModal: React.FC = () => {
     // re-derived from LIVE state above, so the dialog quotes what will actually
     // be written. Skipped for a refund-due cart (its own disbursement branch)
     // and after the cashier has confirmed.
-    try {
-      if (import.meta.env.VITE_E2E === '1') {
-        console.log(
-          `[TENDER-DIAG] submit cash=${submitCash} net=${submitNet} credit=${appliedCredit} method=${selectedMethod} change=${Math.max(0, submitCash - submitNet)}`
-        );
-      }
-    } catch {
-      /* diagnostics */
-    }
     if (!opts.skipFatFinger && submitRefundDue === 0 && isFatFingerTender(submitCash, submitNet)) {
       setFatFinger({
         tendered: submitCash,
@@ -1207,7 +1169,7 @@ export const PaymentModal: React.FC = () => {
                         id="payment-cash-input"
                         data-testid="tendered-input"
                         valueMinor={dinarsToMinor(cashTenderAmount || 0)}
-                        onChangeMinor={(minor) => setCashTenderAmount(toLegacyReal(minor), 'manual')}
+                        onChangeMinor={(minor) => setCashTenderAmount(toLegacyReal(minor))}
                         placeholder={netToPay.toString()}
                         className="w-full bg-pos-bg border border-pos-border focus:border-emerald-400 rounded-xl px-4 py-3 text-3xl font-black font-mono text-pos-text focus:outline-none transition"
                       />
@@ -1223,7 +1185,7 @@ export const PaymentModal: React.FC = () => {
                           type="button"
                           data-testid="pay-exact"
                           onClick={() => {
-                            setCashTenderAmount(netToPay, 'pay-exact');
+                            setCashTenderAmount(netToPay);
                             document.getElementById('payment-cash-input')?.focus();
                           }}
                           className="py-2.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/50 rounded-xl text-xs font-black text-emerald-300 transition cursor-pointer"
@@ -1236,7 +1198,7 @@ export const PaymentModal: React.FC = () => {
                             key={bill}
                             type="button"
                             onClick={() => {
-                              setCashTenderAmount(bill, 'quick-bill');
+                              setCashTenderAmount(bill);
                               document.getElementById('payment-cash-input')?.focus();
                             }}
                             className={`py-2.5 rounded-xl text-xs font-black border transition cursor-pointer font-mono ${
