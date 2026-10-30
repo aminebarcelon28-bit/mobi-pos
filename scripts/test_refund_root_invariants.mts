@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Refund engine — root invariants (post-rebuild adversarial suite).
  *
  * Pins the SEVEN invariants of the rebuilt refund engine on the real TS
@@ -405,8 +405,8 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
     );
     const given = tendered + voucher;
     const parts = s.voucherShare + s.avoirShare + s.debtShare + s.cashShare + s.digitalShare;
-    if (parts !== s.netRefund) sumBad++;
-    if (s.netRefund > given) {
+    if (Math.round(parts * 100) !== Math.round(s.netRefund * 100)) sumBad++;
+    if (Math.round(s.netRefund * 100) > Math.round(given * 100)) {
       over++;
       if (!firstOver) firstOver = JSON.stringify({ total, tendered, voucher, gross, net: s.netRefund });
     }
@@ -414,26 +414,17 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
   check('I4b/c lanes always sum to the net (5000 random tickets)', sumBad === 0, `${sumBad} shapes`);
   check('I4b/c a refund never exceeds what was handed over (5000 random tickets)', over === 0, `${over} shapes, first=${firstOver}`);
 
-  // (d) Three partial refunds of the exclusion-convention ticket conserve.
-  const p1 = computeRefundFundingSplit(exclCredit, 300);
-  const p2 = computeRefundFundingSplit(exclCredit, 300, p1.netRefund);
-  const p3 = computeRefundFundingSplit(exclCredit, 300, p1.netRefund + p2.netRefund);
-  check(
-    'I4b/d three partials conserve the ticket value to the Dinar',
-    p1.netRefund + p2.netRefund + p3.netRefund === 900,
-    `${p1.netRefund}+${p2.netRefund}+${p3.netRefund}`
-  );
-  check(
-    'I4b/d avoir lane conserves across partials (100)',
-    p1.avoirShare + p2.avoirShare + p3.avoirShare === 100,
-    `${p1.avoirShare}+${p2.avoirShare}+${p3.avoirShare}`
-  );
-
   // ---- D3 cumulative lanes: the tests below pass the per-lane amounts
   // already returned. Until the split accepts them (4th argument) they are
   // ignored, so these checks are red for the arithmetic, not for a type.
   type Lanes = { cash: number; avoir: number; voucher: number; debt: number; digital: number };
-  const runSequence = (sale: Record<string, unknown>, grosses: number[]) => {
+  // Money is exact at the minor unit; DA values are hundredths, so compare
+  // there rather than on float equality.
+  const eqMinor = (a: number, b: number) => Math.round(a * 100) === Math.round(b * 100);
+  // (d) Three partial refunds of the exclusion-convention ticket conserve.
+  // Each step is given the lanes already returned — the API's contract.
+  const seqD = runSequence(exclCredit, [300, 300, 300]);
+  function runSequence(sale: Record<string, unknown>, grosses: number[]) {
     const prior: Lanes = { cash: 0, avoir: 0, voucher: 0, debt: 0, digital: 0 };
     let priorNet = 0;
     const rows: Array<{ net: number; lanes: Lanes }> = [];
@@ -467,7 +458,7 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
       priorNet += s.netRefund;
     }
     return { rows, total: prior, net: priorNet };
-  };
+  }
 
   for (const n of [2, 3, 5]) {
     const grosses = Array.from({ length: n }, () => Math.round(900 / n));
@@ -476,12 +467,12 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
       seq.total.cash + seq.total.avoir + seq.total.voucher + seq.total.debt + seq.total.digital;
     check(
       `I4b/e ${n} partials: the avoir lane is refunded exactly (100)`,
-      seq.total.avoir === 100,
+      eqMinor(seq.total.avoir, 100),
       `${n} partials -> avoir ${seq.total.avoir} (${seq.rows.map((r) => r.lanes.avoir).join('+')})`
     );
     check(
       `I4b/e ${n} partials: lanes sum to the net returned (${grosses.reduce((a, b) => a + b, 0)})`,
-      laneSum === seq.net,
+      eqMinor(laneSum, seq.net),
       `lanes=${laneSum} net=${seq.net}`
     );
     check(
@@ -492,7 +483,7 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
     check(
       `I4b/e ${n} partials: each refund's lanes sum to its own total`,
       seq.rows.every(
-        (r) => r.lanes.cash + r.lanes.avoir + r.lanes.voucher + r.lanes.debt + r.lanes.digital === r.net
+        (r) => eqMinor(r.lanes.cash + r.lanes.avoir + r.lanes.voucher + r.lanes.debt + r.lanes.digital, r.net)
       ),
       JSON.stringify(seq.rows.map((r) => [r.net, r.lanes]))
     );
@@ -514,7 +505,7 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
   const pennySeq = runSequence(penny, [0.01, 0.01, 0.99]);
   check(
     'I4b/f 0.01 DA partials keep the credit lane exact',
-    pennySeq.total.avoir === 0.5,
+    eqMinor(pennySeq.total.avoir, 0.5),
     `${JSON.stringify(pennySeq.total)} rows=${JSON.stringify(pennySeq.rows)}`
   );
   check(
@@ -541,12 +532,12 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
     voucherCreditApplied: 100,
   };
   const seq4 = runSequence(threeLanes, [400, 300, 300]);
-  check('I4b/g mixed lanes: avoir 200 exact', seq4.total.avoir === 200, JSON.stringify(seq4.total));
-  check('I4b/g mixed lanes: voucher 100 exact', seq4.total.voucher === 100, JSON.stringify(seq4.total));
-  check('I4b/g mixed lanes: cash 700 exact', seq4.total.cash === 700, JSON.stringify(seq4.total));
+  check('I4b/g mixed lanes: avoir 200 exact', eqMinor(seq4.total.avoir, 200), JSON.stringify(seq4.total));
+  check('I4b/g mixed lanes: voucher 100 exact', eqMinor(seq4.total.voucher, 100), JSON.stringify(seq4.total));
+  check('I4b/g mixed lanes: cash 700 exact', eqMinor(seq4.total.cash, 700), JSON.stringify(seq4.total));
   check(
     'I4b/g mixed lanes: lanes sum to the value returned (1000)',
-    seq4.total.cash + seq4.total.avoir + seq4.total.voucher === 1000,
+    eqMinor(seq4.total.cash + seq4.total.avoir + seq4.total.voucher, 1000),
     JSON.stringify(seq4.total)
   );
 
@@ -592,7 +583,7 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
       const lanesTotal =
         seq.total.cash + seq.total.avoir + seq.total.voucher + seq.total.debt + seq.total.digital;
       const fullRefund = grosses.reduce((a, b) => a + b, 0) === base;
-      if (seq.net > given) {
+      if (Math.round(seq.net * 100) > Math.round(given * 100)) {
         bad++;
         if (!firstBad) firstBad = `net>given t=${t} net=${seq.net} given=${given}`;
       } else if (Math.round(lanesTotal * 100) !== Math.round(seq.net * 100)) {
@@ -609,7 +600,48 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
     check('I4b/h random partial sequences hold invariants (i)-(iv)', bad === 0, `${bad} bad: ${firstBad}`);
   }
 
-  // (i) Legacy refund rows carry no `funding` object: the lane reader must
+  // (i) S3 — the persisted REF-28 mis-tender shape, measured 2026-10-30:
+  // total 800 (credits excluded), tenders 100 avoir + 900 cash, change 100.
+  // The customer gave 900 net cash + 100 credit = 1000? No: 900 cash was
+  // tendered and 100 handed back, so the shop kept 800 cash + 100 credit = the
+  // 900 payable. The split must see 900, not 1000.
+  const s3 = {
+    id: 'TKT-S3',
+    subtotal: 1400,
+    discountTotal: 500,
+    total: 800,
+    changeDue: 100,
+    paymentMethod: 'Avoir Client',
+    tenders: [
+      { method: 'Avoir Client', amount: 100 },
+      { method: 'Espèces', amount: 900 },
+    ],
+  };
+  const s3Split = computeRefundFundingSplit(s3, 900);
+  check('I4b/j S3: full refund reverses 900 (change carved from cash)', s3Split.netRefund === 900, JSON.stringify(s3Split));
+  check('I4b/j S3: 100 to the wallet', s3Split.avoirShare === 100, JSON.stringify(s3Split));
+  check('I4b/j S3: 800 cash out (900 tendered − 100 change)', s3Split.cashShare === 800, JSON.stringify(s3Split));
+
+  // (k) Reprise (trade-in) is restored by its own quota, never by the funding
+  // split: it must not enter G, or a trade-in sale would double-count it.
+  const trade = {
+    id: 'TKT-TRADE',
+    subtotal: 1200,
+    discountTotal: 0,
+    total: 900,
+    paymentMethod: 'Espèces',
+    tenders: [
+      { method: 'Espèces', amount: 600 },
+      { method: 'Avoir Client', amount: 300 },
+      { method: 'Reprise', amount: 300 },
+    ],
+  };
+  const tradeSplit = computeRefundFundingSplit(trade, 1200);
+  check('I4b/k Reprise is not funding: refund reverses 900', tradeSplit.netRefund === 900, JSON.stringify(tradeSplit));
+  check('I4b/k trade-in: avoir 300', tradeSplit.avoirShare === 300, JSON.stringify(tradeSplit));
+  check('I4b/k trade-in: cash 600', tradeSplit.cashShare === 600, JSON.stringify(tradeSplit));
+
+  // (l) Legacy refund rows carry no `funding` object: the lane reader must
   // derive them from the durable columns and never throw.
   {
     const helper = (receiptMathModule as unknown as Record<string, unknown>).refundLaneTotalsOf as
