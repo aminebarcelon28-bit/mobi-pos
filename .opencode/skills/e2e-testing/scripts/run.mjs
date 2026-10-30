@@ -70,6 +70,11 @@ if (args.timeout) env.WDIO_MOCHA_TIMEOUT = String(args.timeout);
 
 const wdioArgs = [p.wdioBin, 'run', p.wdioConf];
 for (const s of specs) wdioArgs.push('--spec', path.resolve(root, s));
+// Mocha title filter. Needed for measurements that must repeat ONE case
+// (the REF-28 wallet diagnostic) without paying for the whole spec's retry
+// loops: `--grep "REF-28"`. Passing it through is a measurement tool, not a
+// way to skip cases in a verdict run.
+if (args.grep) wdioArgs.push('--mochaOpts.grep', String(args.grep));
 
 info(`run     ${tag}`);
 info(`specs   ${specs.length ? specs.join(', ') : '(all)'}`);
