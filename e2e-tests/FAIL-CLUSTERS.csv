@@ -1,7 +1,4 @@
 case_id,cluster_id,cluster_key,class,evidence,money,priority,catalog
-REF-03,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
-REF-28,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
-REF-33,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
 CRT-05,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
 CRT-06,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
 CRT-17,C01,REF-ALLOCATION,app,SQLite,money movement,P0,A (A1)
@@ -19,7 +16,6 @@ REF-67,C07,REF-WORKFLOW,app,SQLite,money movement,P0,G (G1/G2)
 REF-13,C03,VOID-INCOMPLETE,app,SQLite,money movement,P0,NEW
 REF-48,C03,VOID-INCOMPLETE,app,SQLite,money movement,P0,NEW
 PAY-11,C04,STAGED-CREDIT-LEAK,app,SQLite,money movement,P0,NEW
-REF-49,C04,STAGED-CREDIT-LEAK,app,SQLite,money movement,P0,NEW
 REF-15,C05,REF-RESTORE-VOLATILE,app,SQLite,money movement,P0,D (D2)
 REF-91,C05,REF-RESTORE-VOLATILE,app,SQLite,money movement,P0,D (D2)
 REF-78,C06,REF-NO-RECONCILE,app,SQLite,money movement,P0,G (G3)
@@ -238,3 +234,4 @@ I18-01,C59,I18-UI-HITTEST,app,DOM,none,P1,F
 MOB-11,C69,MOB-LAYOUT,app,DOM,none,P1,F
 SCL-76,C87,TRANSIENT-RETENTION,app,SQLite,none,P1,NEW
 DAT-34,C88,SEALED-KEY-COVERAGE,app,RUNTIME,none,P0,NEW
+REF-86,C89,OFFLINE-CASH-CAP,env,RUNTIME,none,P1,NEW
