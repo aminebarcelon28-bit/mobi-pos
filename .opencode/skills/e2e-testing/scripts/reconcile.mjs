@@ -116,6 +116,7 @@ if (index.rows.length !== counts.TOTAL + retired) {
 
 check('PASS', counts.PASS, dash.PASS);
 check('PASS-PARTIAL', counts['PASS-PARTIAL'], dash['PASS-PARTIAL']);
+check('PASS-NONFLAKY', counts['PASS-NONFLAKY'], dash['PASS-NONFLAKY']);
 check('FAIL', counts.FAIL, dash.FAIL);
 check('N/A', counts['N/A'], dash['N/A']);
 check('REMAIN', counts.REMAIN, dash.REMAIN);
@@ -149,6 +150,16 @@ if (index.ix.verdict_run === undefined || index.ix.verdict_sha === undefined) {
 
 const failRows = active.filter((r) => index.get(r, 'verdict') === 'FAIL');
 const failIds = new Set(failRows.map((r) => index.get(r, 'id')));
+// Flaky rows: a PASS/PASS-PARTIAL whose evidence says FLAKY is not a green.
+// They are excluded from the "PASS" headline, reported by id, and may keep a
+// cluster row (their root cause is still open) — Q-C.
+const flakyRows = active.filter(
+  (r) =>
+    ['PASS', 'PASS-PARTIAL'].includes(index.get(r, 'verdict')) &&
+    /(^|\W)FLAKY(\W|$)/i.test(index.get(r, 'evidence') ?? '')
+);
+const flakyIds = new Set(flakyRows.map((r) => index.get(r, 'id')));
+const clusterEligible = new Set([...failIds, ...flakyIds]);
 
 const clusters = readIndex(root, clusterFile);
 if (clusters.ix.case_id === undefined || clusters.ix.cluster_id === undefined) {
@@ -166,7 +177,7 @@ for (const row of clusters.rows) {
   clustered.set(cid, kid);
 }
 const unclustered = [...failIds].filter((id) => !clustered.has(id));
-const phantom = [...clustered.keys()].filter((id) => !failIds.has(id));
+const phantom = [...clustered.keys()].filter((id) => !clusterEligible.has(id));
 
 if (unclustered.length || phantom.length || clusterProblems.length) {
   if (unclustered.length) {
@@ -175,7 +186,7 @@ if (unclustered.length || phantom.length || clusterProblems.length) {
     if (unclustered.length > 20) console.log(`       … ${unclustered.length - 20} more`);
   }
   if (phantom.length) {
-    bad(`${phantom.length} cluster row(s) name a non-FAIL case:`);
+    bad(`${phantom.length} cluster row(s) name a non-FAIL, non-flaky case:`);
     for (const id of phantom.slice(0, 20)) console.log(`       - ${id}`);
     if (phantom.length > 20) console.log(`       … ${phantom.length - 20} more`);
   }
@@ -183,6 +194,17 @@ if (unclustered.length || phantom.length || clusterProblems.length) {
   fail('FAIL rows clustered');
 } else {
   console.log(`${C.green}ok  ${C.reset} every FAIL row has one cluster   ${failIds.size} cases / ${new Set(clustered.values()).size} clusters`);
+}
+
+// Flaky rows are reported separately and excluded from the PASS headline
+// (Q-C): an order-dependent pass is not a green.
+if (flakyRows.length) {
+  const passes = active.filter((r) => ['PASS', 'PASS-PARTIAL'].includes(index.get(r, 'verdict'))).length;
+  console.log(
+    `${C.yellow}[flaky]${C.reset} ${flakyRows.length} row(s) pass but are order-dependent (excluded from the headline):`
+  );
+  for (const r of flakyRows) console.log(`       - ${index.get(r, 'id')} (${index.get(r, 'verdict')})`);
+  console.log(`${C.dim}     PASS excluding flaky rows: ${passes - flakyRows.length} of ${passes}${C.reset}`);
 }
 
 if (unplaced.length) {

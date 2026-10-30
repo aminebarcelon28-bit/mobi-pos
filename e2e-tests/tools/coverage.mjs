@@ -205,6 +205,7 @@ lines.push('|---|---|');
 lines.push(`| Catalog cases (table rows) | ${DASH.total} |`);
 lines.push(`| Passed (full) | ${DASH.PASS} |`);
 lines.push(`| Passed (partial — unasserted facets listed) | ${DASH['PASS-PARTIAL']} |`);
+lines.push(`| Passed (excluding flaky rows) | ${DASH['PASS-NONFLAKY']} |`);
 lines.push(`| **FAILED** | ${DASH.FAIL} |`);
 lines.push(`| N/A (absent or unobservable in harness) | ${DASH['N/A']} |`);
 lines.push(`| Remaining (doable today, not yet executed) | ${DASH.REMAIN} |`);

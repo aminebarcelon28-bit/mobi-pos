@@ -233,3 +233,4 @@ MOB-11,C69,MOB-LAYOUT,app,DOM,none,P1,F
 SCL-76,C87,TRANSIENT-RETENTION,app,SQLite,none,P1,NEW
 DAT-34,C88,SEALED-KEY-COVERAGE,app,RUNTIME,none,P0,NEW
 REF-28,C90,TENDER-CREDIT-OVERSTAMP,app,RUNTIME,money movement,P0,blocked-by C01: refund math unproven until the tender is fixed; see docs/c01-tender-rfc.md
+REF-86,C89,OFFLINE-CASH-CAP,env,RUNTIME,none,P1,order-dependent offline cash-refund ceiling; own batch

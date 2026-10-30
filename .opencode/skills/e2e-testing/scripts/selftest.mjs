@@ -913,12 +913,52 @@ function derivedTests() {
 }
 
 /* ------------------------------------------------------------------ */
+/* cluster.mjs: the only writer of FAIL-CLUSTERS.csv                       */
+/* ------------------------------------------------------------------ */
+
+function clusterTests() {
+  const rows = [
+    ['REF-01', 'REF', 'P0', '', 'green case', 'REF', '10', '0', 'PASS', '10-ref.e2e.ts', '**PASS**', '', ''],
+    ['REF-02', 'REF', 'P0', '', 'red case', 'REF', '11', '0', 'FAIL', '10-ref.e2e.ts', '**FAIL**', '', ''],
+    ['REF-03', 'REF', 'P1', '', 'flaky case', 'REF', '12', '0', 'PASS', '10-ref.e2e.ts', '**PASS (FLAKY)** — order-dependent', '', ''],
+  ];
+  const dir = makeRepo('cluster', { rows, clusters: 'case_id,cluster_id,cluster_key,class,evidence,money,priority,catalog\n' });
+  const ledger = () => fs.readFileSync(path.join(dir, 'e2e-tests', 'FAIL-CLUSTERS.csv'), 'utf8');
+
+  let r = run('cluster.mjs', ['--case', 'REF-02', '--key', 'SOME-CAUSE', '--id', 'C05'], dir);
+  check('cluster: a FAIL case gets a row', r.code === 0 && /REF-02,C05,SOME-CAUSE/.test(ledger()), r.out);
+
+  const once = ledger();
+  r = run('cluster.mjs', ['--case', 'REF-02', '--key', 'SOME-CAUSE', '--id', 'C05'], dir);
+  check('cluster: re-running the same assignment is byte-identical', r.code === 0 && ledger() === once, r.out);
+
+  r = run('cluster.mjs', ['--case', 'REF-02', '--key', 'OTHER-CAUSE', '--id', 'C06'], dir);
+  const occurrences = ledger().split(/\r?\n/).filter((l) => l.startsWith('REF-02,')).length;
+  check('cluster: re-assigning replaces the row (one cluster per case)', r.code === 0 && occurrences === 1 && /C06/.test(ledger()), ledger());
+
+  r = run('cluster.mjs', ['--case', 'REF-01', '--key', 'NOPE'], dir);
+  check('cluster: a green PASS case is refused (exit 2)', r.code === 2, r.out);
+  check('cluster: the refusal writes nothing', !ledger().includes('REF-01'), ledger());
+
+  r = run('cluster.mjs', ['--case', 'REF-03', '--key', 'FLAKY-CAUSE', '--id', 'C07'], dir);
+  check('cluster: a FLAKY pass may keep a cluster row (blocked-by expression)', r.code === 0 && /REF-03,C07,FLAKY-CAUSE/.test(ledger()), r.out);
+
+  const before = ledger();
+  r = run('cluster.mjs', ['--case', 'REF-02', '--key', 'DRY', '--dry-run'], dir);
+  check('cluster: --dry-run writes nothing', r.code === 0 && ledger() === before, r.out);
+
+  r = run('cluster.mjs', ['--case', 'REF-99', '--key', 'X'], dir);
+  check('cluster: an unknown case is exit 2', r.code === 2, r.out);
+}
+
+/* ------------------------------------------------------------------ */
 
 const ALL = [
   ['unit', unitTests],
   ['delta', deltaTests],
   ['verdicts', verdictsTests],
   ['derived', derivedTests],
+  ['cluster', clusterTests],
   ['verdict-protocol', verdictProtocolTests],
   ['repeat-run', repeatRunTests],
   ['reconcile', reconcileTests],

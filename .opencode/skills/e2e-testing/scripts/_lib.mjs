@@ -295,11 +295,19 @@ export function activeRows(index) {
 
 /** Verdict counts over active rows, in dashboard vocabulary. */
 export function indexCounts(index) {
-  const out = { TOTAL: 0, PASS: 0, 'PASS-PARTIAL': 0, FAIL: 0, 'N/A': 0, REMAIN: 0, BLOCKED: 0 };
+  const out = { TOTAL: 0, PASS: 0, 'PASS-PARTIAL': 0, FAIL: 0, 'N/A': 0, REMAIN: 0, BLOCKED: 0, 'PASS-NONFLAKY': 0 };
   for (const row of activeRows(index)) {
     out.TOTAL++;
     const v = index.get(row, 'verdict');
     if (out[v] !== undefined) out[v]++;
+    // Flaky passes are reported but never counted as green (Q-C): a verdict
+    // that changes between compositions is not evidence the behaviour is right.
+    if (
+      ['PASS', 'PASS-PARTIAL'].includes(v) &&
+      !/(^|\W)FLAKY(\W|$)/i.test(index.get(row, 'evidence') ?? '')
+    ) {
+      out['PASS-NONFLAKY']++;
+    }
   }
   return out;
 }
@@ -312,6 +320,7 @@ export const DASH_KEYS = [
   ['TOTAL', /^Catalog cases/],
   ['PASS', /^Passed \(full\)/],
   ['PASS-PARTIAL', /^Passed \(partial/],
+  ['PASS-NONFLAKY', /^Passed \(excluding flaky/],
   ['FAIL', /^FAILED/],
   ['N/A', /^N\/A/],
   ['REMAIN', /^Remaining/],

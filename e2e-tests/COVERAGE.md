@@ -12,6 +12,7 @@ Source cases: `POS_EDGE_CASE_ENCYCLOPEDIA_and_LONG_SESSION.md` (local, not in re
 | Catalog cases (table rows) | 687 |
 | Passed (full) | 200 |
 | Passed (partial — unasserted facets listed) | 20 |
+| Passed (excluding flaky rows) | 219 |
 | **FAILED** | 234 |
 | N/A (absent or unobservable in harness) | 116 |
 | Remaining (doable today, not yet executed) | 0 |
