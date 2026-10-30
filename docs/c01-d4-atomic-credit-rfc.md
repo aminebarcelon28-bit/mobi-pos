@@ -101,3 +101,35 @@ vocabulary and idempotency key. Atomicity inside the existing transaction is str
 Nothing in the wallet path. The refund split now records a per-lane `funding` object and an
 `anomalies[]` array in the refund payload, which is what a future native writer will need to
 validate `customer_store_credit_after` against (`docs/c01-refund-allocation-rfc.md` §7).
+## 6. B3 evidence update (writer inventory, window, injection)
+
+**Writers of `customers.store_credit`** (grep of SQL + every `saveCustomer`/`repo.save` caller):
+
+| Writer | File:line | Value freshness | Can fire after a sale/refund in-session? |
+|---|---|---|---|
+| `customerAdapter.saveCustomer` | `customerAdapter.ts:126-131` | caller's snapshot | yes - every caller below |
+| `customerRepository.save` | `customerRepository.ts:20` | caller's snapshot | yes |
+| checkout customer persist | `createOrderSlice.ts:1178` | in-memory `custToSave` | yes (same checkout) |
+| refund wallet save | `createOrderSlice.ts:3062` | computed post-refund value | yes (the write under study) |
+| checkout-recovery replay | `checkoutRecovery.ts:421` | **a stored intent payload = old snapshot** | yes, on boot/recovery - the one stale writer that can land after a refund (HYPOTHESIS) |
+| maintenance import/merge | `maintenanceAdapter.ts:272` | imported envelope | only on import (PROVEN by caller) |
+| sync pull apply | `sync/genericApply.ts:263` | remote payload, version-guarded | on pull (PROVEN by caller) |
+
+**H4 window (PROVEN by code path):** the native refund commits at `createOrderSlice.ts:2928`; the
+wallet save is at `:3062`, awaited by the slice but *after* the row exists. Any reader that waits on
+the refund row (the spec does) can read the customer row before the save resolves. Proving the
+window exists does not prove it caused the original failure.
+
+**Failure injection: NOT RUN.** Injecting a throw/timeout into the wallet save needs either a mock at
+the `customerRepository` boundary (no seam - the store imports it dynamically) or a test-only
+injection point in `createOrderSlice`. The owner allowed that injection point; it was not built in
+this batch's remaining time. The contract below is therefore **code-path, not observed**.
+
+**Current contract (PROVEN by code path):** two attempts, then warn + outbox + Dexie put; the refund
+is already committed. On a terminal that never syncs the credit is invisible after the next boot
+(SQLite is the authority) - the outbox row is a *push*, so a fully offline terminal has no path back.
+
+**Recommendation:** option **(a)** - write `store_credit` inside `refund_sale_atomic`. Severity:
+medium (money is preserved in Dexie/outbox and recovered on a synced terminal; lost on an offline
+one). It needs the owner to lift the `refund.rs` gate; nothing is implemented.
+

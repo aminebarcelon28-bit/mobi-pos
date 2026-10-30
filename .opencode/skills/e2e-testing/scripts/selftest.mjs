@@ -76,7 +76,8 @@ function dashboardFor(rows) {
 |---|---|
 | Catalog cases (table rows) | ${total} |
 | Passed (full) | ${c.PASS} |
-| Passed (partial — unasserted facets listed) | ${c['PASS-PARTIAL']} |
+| Passed (partial - unasserted facets listed) | ${c['PASS-PARTIAL']} |
+| Passed (excluding flaky rows) | ${Object.entries(c).length ? rows.filter((r) => String(r[7]) !== '1' && ['PASS', 'PASS-PARTIAL'].includes(r[8]) && !/FLAKY/i.test(String(r[10] ?? ''))).length : 0} |
 | **FAILED** | ${c.FAIL} |
 | N/A (absent or unobservable in harness) | ${c['N/A']} |
 | Remaining (doable today, not yet executed) | ${c.REMAIN} |
