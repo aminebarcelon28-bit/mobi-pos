@@ -979,6 +979,15 @@ async function voidSaleViaReports(receipt: string, reason: string): Promise<{ sa
 describe('REF — refunds, returns & avoirs (batch 4 / part 2)', () => {
   before(async () => {
     await installErrorTrap();
+    // DIAGNOSTIC-REVERT (D6): turn on the refund wallet diagnostic for this
+    // spec run. Removed with the diagnostic commit.
+    await browser.execute(() => {
+      try {
+        localStorage.setItem('__pos_refund_diag', '1');
+      } catch {
+        /* ignore */
+      }
+    });
     await browser.waitUntil(() => fs.existsSync(DB_PATH), {
       timeout: 180000,
       interval: 1000,

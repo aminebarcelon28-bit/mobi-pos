@@ -26,6 +26,21 @@ async function getCustomerRepo() {
   const { customerRepository } = await import('../../db/repositories/customerRepository');
   return customerRepository;
 }
+/**
+ * DIAGNOSTIC-REVERT (C01 / D6): REF-28 wallet-credit investigation.
+ * Zero behaviour change: it only prints. Enabled by the harness setting
+ * `localStorage.__pos_refund_diag = '1'` before the refund. Delete this
+ * helper and its three call sites with the diagnostic commit.
+ */
+function refundDiag(label: string, data: Record<string, unknown>): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (localStorage.getItem('__pos_refund_diag') !== '1') return;
+    console.log(`[REFUND-DIAG ${label}] ${JSON.stringify({ at: Date.now(), ...data })}`);
+  } catch {
+    /* diagnostics must never throw into the money path */
+  }
+}
   import { newId, newReceiptNumber, deterministicId } from '../../utils/ids';
   import { toIntMoney } from '../../utils/fifoPreview';
   import { refundIdentity, refundSaleNative } from '../../db/adapters/refundNative';
@@ -2184,6 +2199,20 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         0,
       );
     const funding = computeRefundFundingSplit(originalTransaction, refundTotal, priorRecovery);
+    // DIAGNOSTIC-REVERT (D6): what the split saw and produced.
+    refundDiag('split', {
+      ticket: originalTransaction.id,
+      total: originalTransaction.total,
+      subtotal: originalTransaction.subtotal,
+      discountTotal: originalTransaction.discountTotal,
+      voucher: originalTransaction.voucherCreditApplied,
+      tenderCount: Array.isArray(originalTransaction.tenders) ? originalTransaction.tenders.length : -1,
+      tenders: originalTransaction.tenders,
+      customerId: originalTransaction.customer?.id ?? null,
+      refundTotal,
+      priorRecovery,
+      funding,
+    });
     const netRefund = funding.netRefund;
     // Fix 2: strict tender clamp (anti cash-extraction). Cumulative drawer
     // cash out can never exceed the net physical cash tendered on the original
@@ -2353,6 +2382,15 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     let updatedCustomers = customers;
 
     const origCust = originalTransaction.customer;
+    // DIAGNOSTIC-REVERT (D6): does the refund see the customer link at all?
+    refundDiag('customer-link', {
+      ticket: originalTransaction.id,
+      hasCustomer: Boolean(origCust),
+      customerId: origCust?.id ?? null,
+      storeCreditInTicketObject: origCust?.storeCredit ?? null,
+      storeCustomerCredit: customers.find((c) => c.id === origCust?.id)?.storeCredit ?? null,
+      walletAddBase,
+    });
     if (origCust) {
       const cust = customers.find((c) => c.id === origCust.id) || origCust;
       const currentTotalSpent = cust.totalSpent || 0;
@@ -3023,6 +3061,31 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           const savedCust = await persistWithRetryOnce(() =>
             getCustomerRepo().then((repo) => repo.save(hydratedCustomer))
           );
+          // DIAGNOSTIC-REVERT (D6): did the wallet write land, and what did it
+          // read back from the authority?
+          {
+            let readBack: number | null = null;
+            let readBackErr = '';
+            try {
+              const { getLocalDb } = await import('../../db/sqlPluginAdapter');
+              const db = await getLocalDb();
+              const rows = (await db.select(
+                'SELECT store_credit, version FROM customers WHERE id = ?',
+                [hydratedCustomer.id]
+              )) as Array<{ store_credit: number; version: number }>;
+              readBack = rows[0]?.store_credit ?? null;
+            } catch (e) {
+              readBackErr = String((e as Error)?.message ?? e).slice(0, 160);
+            }
+            refundDiag('wallet-write', {
+              customerId: hydratedCustomer.id,
+              attempted: hydratedCustomer.storeCredit,
+              ok: savedCust.ok,
+              error: savedCust.ok ? '' : String(savedCust.error ?? '').slice(0, 160),
+              readBack,
+              readBackErr,
+            });
+          }
           if (!savedCust.ok) {
             nativeWarnings.push(
               'Avoir client : écriture locale différée — solde client en file de synchronisation.'
