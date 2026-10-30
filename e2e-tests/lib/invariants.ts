@@ -40,11 +40,15 @@ import path from 'node:path';
 import { all, count, one, scalar } from './db';
 import { DB_PATH } from './env';
 
-// WDIO runs with cwd = e2e-tests, while the scripts/coverage tool runs from
-// the repo root. Keep invariant events in the same results directory as the
-// per-test events (e2e-tests/results) regardless of cwd.
-const RESULTS_DIR = existsSync('results') ? 'results' : 'e2e-tests/results';
-const NDJSON = `${RESULTS_DIR}/invariant-events.ndjson`;
+// WDIO runs with cwd = e2e-tests, the coverage tool runs from the repo root.
+// The file must land in e2e-tests/results either way (that is where coverage.mjs
+// reads it), so resolve from THIS module's location instead of cwd. The old
+// `existsSync('results') ? 'results' : …` wrote to a root results/ whenever one
+// existed, which is how a generated artifact ended up tracked in git and
+// churned on every run (Q-D).
+const MODULE_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..');
+const RESULTS_DIR = path.join(MODULE_ROOT, 'e2e-tests', 'results');
+const NDJSON = path.join(RESULTS_DIR, 'invariant-events.ndjson');
 
 export const INVARIANT_IDS = [
   'G-01', 'G-02', 'G-03', 'G-04', 'G-05', 'G-06', 'G-07', 'G-08', 'G-09', 'G-11',
