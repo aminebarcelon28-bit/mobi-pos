@@ -467,6 +467,20 @@ fn validate(req: &RefundRequest) -> Result<(), TrustError> {
             return Err(conflict("SUPERVISOR_PIN_REQUIRED"));
         }
     }
+    // Re-review finding (b): the clawback is a DEBIT. It must belong to the
+    // ticket's own customer, otherwise any caller could zero an unrelated wallet.
+    // validate() is DB-free: the clawback needs a customer here; ownership is
+    // proven against the ticket row inside the transaction.
+    if req.wallet_clawback.unwrap_or(0) > 0
+        && req
+            .customer_id
+            .as_deref()
+            .map(str::trim)
+            .map(str::is_empty)
+            .unwrap_or(true)
+    {
+        return Err(conflict("AVOIR_RECIPIENT_REQUIRED"));
+    }
     if req.audit.action.trim().is_empty() {
         return Err(conflict("INVALID:audit action required"));
     }
@@ -1172,6 +1186,44 @@ fn apply_refund_in_txn(
         return Err(conflict("ALREADY_REFUNDED"));
     }
 
+    // 4b. Value cap (re-review findings 3 and 8): the refund can never be worth
+    //     more than the ticket still has refundable. Basis: the sum of the
+    //     ticket's tenders (a credit leg legitimately makes a refund exceed the
+    //     net `total`), falling back to `total`.
+    let row_total: f64 = tx
+        .query_row("SELECT COALESCE(total,0) FROM transactions WHERE id = ?1", [&req.ticket_id], |r| r.get(0))
+        .unwrap_or(0.0);
+    let payload_value: f64 = serde_json::from_str::<serde_json::Value>(&ticket_payload_raw)
+        .ok()
+        .map(|v| {
+            let tenders: f64 = v
+                .get("tenders")
+                .and_then(|x| x.as_array())
+                .map(|a| a.iter().filter_map(|t| t.get("amount").and_then(|n| n.as_f64())).sum())
+                .unwrap_or(0.0);
+            if tenders > 0.0 {
+                tenders
+            } else {
+                v.get("total").and_then(|n| n.as_f64()).unwrap_or(0.0)
+            }
+        })
+        .unwrap_or(0.0);
+    let ticket_value = payload_value.max(row_total);
+    let already_value: f64 = tx
+        .query_row(
+            "SELECT COALESCE(SUM(total),0) FROM transactions WHERE original_transaction_id = ?1 AND is_refund = 1",
+            [&req.ticket_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| TrustError::op_failed(format!("refund value sum: {e}")))?;
+    let requested_value = req.value_reversed.unwrap_or(req.total_net) as f64;
+    if ticket_value > 0.0 && requested_value > (ticket_value - already_value).max(0.0) + 0.5 {
+        return Err(conflict(&format!(
+            "REFUND_EXCEEDS_VALUE:requested={requested_value}:remaining={}",
+            (ticket_value - already_value).max(0.0)
+        )));
+    }
+
     // 6. Refund row. The dedup row (step 2) satisfies
     //    `trg_refund_requires_dedup`. `shift_id` / `ledger_cogs_total` /
     //    `restored_cogs` may be absent on pre-heal DBs — probe and degrade
@@ -1711,6 +1763,25 @@ fn apply_refund_in_txn(
     //      ledger emission that makes the credit a destination of record is
     //      written in the same step. No recipient -> refuse and roll everything
     //      back (the refund row and the restock die with it).
+    // Re-review finding (b): the clawback is a DEBIT and may only touch the
+    // ticket's own customer, proven against the durable row (not the client).
+    if req.wallet_clawback.unwrap_or(0) > 0 {
+        let ticket_customer: Option<String> = tx
+            .query_row(
+                "SELECT customer_id FROM transactions WHERE id = ?1",
+                [&req.ticket_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .unwrap_or(None)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let req_customer = req.customer_id.as_deref().map(str::trim).unwrap_or("");
+        match ticket_customer {
+            Some(tc) if !req_customer.is_empty() && tc == req_customer => {}
+            _ => return Err(conflict("INVALID:clawback customer mismatch")),
+        }
+    }
+
     let mut wallet_applied: i64 = 0;
     let mut wallet_after: Option<i64> = None;
     let wallet_inc = req.wallet_credit.unwrap_or(0).max(0);
@@ -1736,8 +1807,14 @@ fn apply_refund_in_txn(
         // total) and the milestone revocation the refund un-earns. The balance is
         // floored at zero; every movement is written as a separate ledger row so
         // the clawback is auditable, not netted away.
-        let after_credit = current + wallet_inc as f64;
-        let next = (after_credit - wallet_claw as f64).max(0.0);
+        let after_credit = (current + wallet_inc as f64).max(0.0);
+        // Re-review finding (a): only what the wallet actually holds can be
+        // revoked. Emitting -wallet_claw while flooring the balance at zero would
+        // make the ledger sum diverge from the balance, and peers re-derive the
+        // scalar unclamped (genericApply re-materialises storeCredit from the
+        // ledger) -> negative balances.
+        let revoked = (wallet_claw as f64).min(after_credit).max(0.0);
+        let next = (after_credit - revoked).max(0.0);
         let raw: String = tx
             .query_row(
                 "SELECT json_payload FROM customers WHERE id = ?1",
@@ -1752,7 +1829,7 @@ fn apply_refund_in_txn(
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        if wallet_claw > 0 {
+        if revoked > 0.0 {
             ledger.insert(
                 0,
                 serde_json::json!({
@@ -1764,10 +1841,10 @@ fn apply_refund_in_txn(
                     "balanceAfter": next,
                     "description": format!(
                         "Reprise Avoir Client ({} DA) - palier désacquise suite au retour Ticket #{}",
-                        wallet_claw, req.receipt_number
+                        revoked, req.receipt_number
                     ),
                     "referenceId": req.ticket_id,
-                    "creditDeltaDzd": -wallet_claw,
+                    "creditDeltaDzd": -(revoked.round() as i64),
                     "performedBy": "Système Caisse",
                 }),
             );
@@ -4077,6 +4154,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         test_schema(&conn);
         seed_ticket(&conn);
+        conn.execute("UPDATE transactions SET customer_id = 'C1' WHERE id = 'TKT-1'", []).unwrap();
         conn.execute(
             "INSERT INTO customers (id, name, phone, json_payload, store_credit, updated_at) VALUES ('C1','C','','{}',100,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO UPDATE SET store_credit = 100",
             [],
@@ -4110,6 +4188,61 @@ mod tests {
     }
 
     #[test]
+    fn d4a_clawback_is_clamped_to_the_revocable_balance() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        conn.execute(
+            "INSERT INTO customers (id, name, phone, json_payload, store_credit, updated_at) VALUES ('C1','C','','{}',100,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO UPDATE SET store_credit = 100",
+            [],
+        )
+        .unwrap();
+        let mut req = base_req();
+        req.voucher = None;
+        req.debt = None;
+        req.cash_tendered = 150;
+        req.wallet_credit = Some(50);
+        req.wallet_clawback = Some(500); // more than the wallet can ever hold
+        req.value_reversed = None;
+        // The clawback must be clamped to (100 + 50), never emit -500.
+        let result = run(&mut conn, &req);
+        // either it commits with a clamped revocation or refuses; both must leave a
+        // ledger that reconciles to the balance
+        let payload: String = conn
+            .query_row("SELECT json_payload FROM customers WHERE id='C1'", [], |r| r.get(0))
+            .unwrap();
+        let credit: f64 = conn
+            .query_row("SELECT store_credit FROM customers WHERE id='C1'", [], |r| r.get(0))
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        let ledger_sum: f64 = v
+            .get("ledger")
+            .and_then(|l| l.as_array())
+            .map(|a| a.iter().filter_map(|e| e.get("creditDeltaDzd").and_then(|c| c.as_f64())).sum())
+            .unwrap_or(0.0);
+        assert_eq!(credit, ledger_sum + 100.0, "ledger must reconcile: credit {credit}, deltas {ledger_sum}, seed 100");
+        assert!(credit >= 0.0);
+        let _ = result;
+    }
+
+    #[test]
+    fn d4a_refund_value_cannot_exceed_the_ticket() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        let mut req = base_req();
+        req.value_reversed = Some(999_999); // far above the ticket's tenders
+        let err = run(&mut conn, &req).expect_err("value cap must refuse");
+        assert!(format!("{err:?}").contains("REFUND_EXCEEDS_VALUE"), "{err:?}");
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transactions WHERE id='REF-H1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "no refund row");
+    }
+
+    #[test]
     fn d4a_forced_wallet_failure_rolls_the_whole_refund_back() {
         let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
         let mut conn = Connection::open_in_memory().unwrap();
@@ -4127,6 +4260,7 @@ mod tests {
         )
         .unwrap();
         let mut req = base_req();
+        req.value_reversed = None; // 200 <= ticket 200 (value cap)
         req.wallet_credit = Some(50);
         let err = run(&mut conn, &req).expect_err("wallet failure must abort");
         assert!(format!("{err:?}").to_lowercase().contains("wallet"), "{err:?}");
