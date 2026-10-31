@@ -98,7 +98,7 @@ async function refundOneUnit(pid: string, title: string, priceDa: number, tag: s
   expect(Number(ticket?.total)).toBe(priceDa);
 
   if (typeof seedWallet === 'number') {
-    run("UPDATE customers SET store_credit = ${seedWallet} WHERE id = 'REF4-C87'");
+    run(`UPDATE customers SET store_credit = ${seedWallet} WHERE id = 'REF4-C87'`);
   }
   const before = walletOf();
   await openRefund();

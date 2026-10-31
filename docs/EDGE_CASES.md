@@ -12,7 +12,7 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 5 | Forced wallet-write failure must roll back the whole refund | **COVERED** | `d4a_forced_wallet_failure_rolls_the_whole_refund_back` |
 | 6 | Avoir wallet credit at 2^31+1 | **COVERED** | diag `d4a-wallet-big` (E-0080) |
 | 7 | Avoir wallet credit at 4e9 | **COVERED** | diag `d4a-wallet-big` (E-0087) |
-| 8 | Wallet balance pushed past 2^32 | **OPEN** | diag case exists; harness seeding not yet green |
+| 8 | Wallet balance pushed past 2^32 | **COVERED** | diag `d4a-wallet-big` past-2^32: 4,294,967,000 → 6,442,450,649 (E-0099) |
 | 9 | Refund of a 139 MB ticket (payload scales with value) | **ACCEPTED (mitigated)** | selection projection D5-A; storage blow-up tracked as D6 |
 | 10 | Refund submit re-entrancy (double click in one tick) | **COVERED** | `scripts/test_refund_guards.mts` (submit guard) |
 | 11 | PIN approved for ticket A must not authorise ticket B | **COVERED (unit)** | `pinAuthorisesTicket` tests; E2E pending |
