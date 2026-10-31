@@ -67,3 +67,31 @@ The B2 runs on `97fc1d8` are **stale** for the final code; B3 §10 should not ha
   ("B-1 trade restore dropped for walk-ins") is **KILLED** by measurement.
 - Open policy question: an anonymous trade-in refund neither pays the trade value nor can restore
   it (no wallet). Both versions behave this way; it is not a C01 regression.
+## B5 session (Track 0 + Track 1a partial)
+
+| Track | Status |
+|---|---|
+| 0 budget/hygiene | **DELIVERED** |
+| 1a restated (v) + 4 mutation kills | **DELIVERED** (147/147) |
+| 1a(b) fractional-original floor rule | **NOT DELIVERED — stop condition** |
+| 1a(c) shown == committed | NOT DELIVERED |
+| 1b 4 763-shape roundtrip | NOT DELIVERED |
+| 1c B-2 reachability | NOT DELIVERED |
+| 1d Q-gamma seam | NOT DELIVERED |
+| 1e Q-beta visibility | NOT DELIVERED |
+| 2 evidence, 3 S3 truth, 4 D4/H4/H3-b, 5 C90 | NOT DELIVERED |
+
+### Stop condition hit in 1a(b)
+
+Implementing Q-alpha b (floor the drawer, residue to a lane or `sub-dinar-residue:<r>`) made two
+pre-existing expectations fail:
+
+- `I3 per-line remainder after two partials keeps only the untouched line :: got 270`
+- `cumulative cash cap trims over-recovery` -> net 600 instead of 300 with a bogus
+  `sub-dinar-residue:30000` (a 300 DA remainder was treated as a sub-dinar residue)
+
+That is the declared "v2 contradicts a pre-existing test whose expectation looks legitimate"
+condition. The floor rule and the leftover handling were reverted; the restated (v) and the four
+mutation kills are kept. Q-alpha b needs an owner decision: either those two expectations are wrong
+(evidence needed) or the floor rule must not apply to those shapes.
+
