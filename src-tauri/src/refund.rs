@@ -1004,7 +1004,11 @@ fn apply_refund_in_txn(
     // Fix 2 (enforced): cumulative drawer cash out capped at the net physical
     // cash tendered, so two concurrent refunds cannot jointly exceed the cap
     // even with different hashes.
-    let requested_cash: i64 = if req.method == "Espèces" {
+    // A drawer movement is only required when this refund actually pays cash:
+    // an all-Avoir refund whose request still carries the ticket's method
+    // ("Espèces") has no payout and must not be refused for a movement it does
+    // not need (REF-87 hit exactly that, D6).
+    let requested_cash: i64 = if req.method == "Espèces" && req.cash_tendered.max(0) > 0 {
         match &req.cash_move {
             Some(c) => c.amount,
             None => return Err(conflict("INVALID:cash refund without drawer movement")),
@@ -4535,6 +4539,68 @@ mod tests {
             4.0,
             "{payload2}"
         );
+    }
+
+    #[test]
+    fn d4a_wallet_refund_with_a_huge_customer_ledger() {
+        // D6 diagnostic: a 4e9 sale leaves ~200 000 milestone-tranche rows on the
+        // customer. The wallet leg must still commit (the native merges that
+        // payload inside the transaction). This pins the ceiling behaviour so a
+        // failure names itself instead of surfacing as a generic toast.
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        conn.execute(
+            "UPDATE transactions SET customer_id = 'C1', total = 4000000000, subtotal = 4000000000 WHERE id = 'TKT-1'",
+            [],
+        )
+        .unwrap();
+        let mut ledger = String::from("[");
+        for i in 0..200_000 {
+            if i > 0 {
+                ledger.push(',');
+            }
+            ledger.push_str(&format!(
+                "{{\"id\":\"L{i}\",\"customerId\":\"C1\",\"type\":\"earn\",\"points\":1,\"balanceAfter\":{i},\"description\":\"Palier 20k\",\"referenceId\":\"C1:milestone:ms-20k:tranche:{}\",\"performedBy\":\"Systeme Caisse\"}}",
+                i + 1
+            ));
+        }
+        ledger.push(']');
+        let payload = format!(
+            "{{\"id\":\"C1\",\"loyaltyPoints\":80000000,\"storeCredit\":200000000,\"pointBuckets\":[],\"ledger\":{ledger}}}"
+        );
+        conn.execute(
+            "UPDATE customers SET loyalty_points = 80000000, store_credit = 200000000, json_payload = ?1 WHERE id = 'C1'",
+            [payload],
+        )
+        .unwrap();
+        let payload_len: i64 = conn
+            .query_row("SELECT LENGTH(json_payload) FROM customers WHERE id='C1'", [], |r| r.get(0))
+            .unwrap();
+        assert!(payload_len > 20_000_000, "fixture must be big: {payload_len}");
+
+        let mut req = base_req();
+        req.customer_id = Some("C1".into());
+        req.voucher = None;
+        req.debt = None;
+        req.cash_tendered = 0;
+        req.cash_tendered_net = 0;
+        req.cash_move = None;
+        req.total_net = 2_000_000_000;
+        req.value_reversed = Some(2_000_000_000);
+        req.wallet_credit = Some(2_000_000_000);
+        req.wallet_clawback = Some(100_000_000);
+        req.customer_points_after = Some(40_000_000);
+        req.customer_point_buckets_json = Some("[]".into());
+        let started = std::time::Instant::now();
+        let ok = run(&mut conn, &req).expect("wallet refund with a huge ledger commits");
+        eprintln!(
+            "huge-ledger wallet refund: {} ms, wallet after {:?}",
+            started.elapsed().as_millis(),
+            ok.customer_store_credit_after
+        );
+        assert_eq!(ok.customer_store_credit_after, Some(2_100_000_000));
     }
 
     #[test]
