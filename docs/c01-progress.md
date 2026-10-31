@@ -171,3 +171,18 @@ session — recorded as UNKNOWN rather than assumed).
   REF-36 write-off with an empty "Autre" motive is accepted (expected refusal);
   REF-65 credit-sale refund refused through the UI.
 - REF-15 remains parked (`docs/c01-ref15-loyalty-pack.md`); REF-51/B-3 are harness/policy, not regressions.
+## B6 addendum 13 (REF-13 fixed: void now restocks)
+
+- **Root cause (OBSERVED, E-0037):** `voidTransactionAtomic` flips the durable status itself
+  (`transactionAdapter.ts:716`), so `enqueueOrderSync`'s duplicate-void guard
+  (`sqlPluginAdapter.ts:4109`) refused the FIRST void with ALREADY_VOIDED; the slice's catch returned
+  failure before the VOID ledger delta ran, so `products.stock` (recomputed from the ledger) stayed one
+  unit short and the toast said "deja annulee". DB proof: stock 499 and no `reason='VOID'` row.
+- **Fix (commit eb95527, editable slice):** inventory deltas + FIFO restitution run BEFORE the sync push;
+  an ALREADY_VOIDED refusal from the push is logged, not propagated; the outer catch no longer returns a
+  false ALREADY_VOIDED.
+- **Verified:** REF-13 **3/3** on fresh-worktree binary `434E3AD5...898A` (E-0038), stock 500 = base in
+  every run; full spec **13/15** (was 12/15) with only REF-36/REF-65 left and G-07/G-08 gone (E-0039).
+- **PARKED residual:** the void's outbox payload still carries the SALE shape (`status=null`,
+  `version=1`) because only `enqueueOrderSync` writes it and it refuses the already-VOIDED row.
+  Needs the read-only sync lane (options A/B in `docs/c01-ref13-void.md`, recommend B).
