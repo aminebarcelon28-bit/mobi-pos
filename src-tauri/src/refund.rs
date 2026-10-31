@@ -2442,6 +2442,15 @@ mod tests {
             [],
         )
         .unwrap();
+        // Fixture consistency (D3 / value cap): the shared base_req funds 150 cash
+        // + 200 voucher + 100 debt = 450, so the ticket must be worth 450 with the
+        // same tenders, or the money cap and the leg-sum gate describe different
+        // sales.
+        conn.execute(
+            "UPDATE transactions SET subtotal = 900, total = 900, json_payload = ?1 WHERE id = 'TKT-1'",
+            [r#"{"id":"TKT-1","receiptNumber":"REC-1","total":900,"tenders":[{"method":"Espèces","amount":150},{"method":"Avoir Client","amount":200},{"method":"Crédit Client","amount":100}],"items":[{"id":"TKT-1-item-0"}],"customer":{"id":"C1"}}"#],
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO stock_batches (batch_id, product_id, quantity_remaining, unit_cost, received_at, \
              device_id, idempotency_key, created_at, updated_at) \
@@ -2670,7 +2679,7 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
-        assert_eq!((rt, rc, rp, rsc), (200.0, 100.0, 100.0, 100.0));
+        assert_eq!((rt, rc, rp, rsc), (450.0, 100.0, 100.0, 100.0));
         // Line identity: the refund line pins the original sale line; the
         // original row self-fills once (joins on `sale_item_id`).
         let sid: String = conn
@@ -3644,6 +3653,7 @@ mod tests {
             notes: "relief B1".into(),
             recorded_by: "Manager".into(),
         });
+        r1.value_reversed = Some(400); // 150 cash + 250 relief
         let ok1 = run(&mut conn, &r1).expect("refund 1");
         assert_eq!(ok1.debt_relief_applied, 250);
         assert_eq!(ok1.customer_debt_after, Some(250));
@@ -4037,7 +4047,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(shift, "S1");
-        assert_eq!((rt, rc, rp, rsc), (200.0, 100.0, 100.0, 100.0));
+        assert_eq!((rt, rc, rp, rsc), (450.0, 100.0, 100.0, 100.0));
         let (base_total, base_cost, base_profit): (f64, f64, f64) = conn
             .query_row(
                 "SELECT total, cost_total, profit FROM transactions WHERE id = 'TKT-1'",
