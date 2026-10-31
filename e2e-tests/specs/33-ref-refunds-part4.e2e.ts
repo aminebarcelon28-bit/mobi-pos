@@ -2929,22 +2929,27 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
     expect(stockOf(P500)).toBe(base);
 
     // (b) Concurrent forged pair — one request object, two racing invokes in
-    // the same page task: the loser must block on the dedup row.
+    // the same page task. After the D4-A hardening a forged request cannot
+    // produce a cash payout without a drawer movement, so BOTH legs are
+    // refused before any write: the stronger contract replaces the old
+    // "one of the pair lands" expectation (a forged payout that cannot be
+    // traced must never land). Concurrency dedupe itself is covered by (a)
+    // above and by the forged re-refund probes (REF-60/REF-41).
     const s2 = await makeCashSale('REF3 P500', 1);
     const req = buildForgedRefund(s2.id, 1);
     const pair = await invokeForgedRefundPair(req);
     const oks = pair.filter((p) => p.ok).length;
     console.log(`[REF-58] forged pair: ok=${oks} results=${JSON.stringify(pair.map((p) => ({ ok: p.ok, raw: p.raw.slice(0, 140) })))}`);
-    expect(oks).toBe(1);
-    for (const p of pair.filter((x) => !x.ok)) {
-      expect(p.raw).toMatch(/ALREADY_REFUNDED|REFUND_ALREADY_IN_PROGRESS|REFUND_EXCEEDS/);
+    expect(oks).toBe(0);
+    for (const p of pair) {
+      expect(p.raw).toMatch(/cash refund without drawer movement/);
     }
     const rows2 = refundsFor(s2.id);
     const dedup = Number(one<{ n: number }>('SELECT COUNT(*) AS n FROM refund_dedup WHERE ticket_id = ?', s2.id)?.n ?? -1);
     console.log(`[REF-58] forged pair outcome: rows=${rows2.length} dedupRows=${dedup} stock=${stockOf(P500)}`);
-    expect(rows2.length).toBe(1);
-    expect(dedup).toBe(1);
-    expect(stockOf(P500)).toBe(base);
+    expect(rows2.length).toBe(0);
+    expect(dedup).toBe(0);
+    expect(stockOf(P500)).toBe(base - 1);
   });
 
   it('[REF-52] clock integrity: high-water regression refuses UI+forged refunds (SYSTEM_CLOCK_REGRESSION); stale/future supervisor blocks refused; retry lands', async () => {
