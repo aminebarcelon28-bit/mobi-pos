@@ -84,3 +84,20 @@ So every failure in this file is **pre-existing**; the C90/REF-13/REF-36/REF-65 
 
 **Queue for the next pass:** REF-35/REF-87 share one cause (the gift line's 0,01 reaching the cart total) and are
 the cheapest pair to fix together; REF-40 is a separate tombstone path; REF-42 waits on the owner decision.
+## Third sweep - after the REF-40 fix (`7026e7e`, binary `ED113DA9`)
+
+| Build | Result | Failing cases |
+|---|---|---|
+| HEAD `7026e7e` | **15/18** | REF-35, REF-42, REF-87 (was 14/18 with REF-40 also failing) |
+
+- **REF-40: FIXED** (`7026e7e`) - a refund no longer resurrects a tombstoned customer; a wallet credit
+  with no live profile is refused with `CUSTOMER_UNAVAILABLE` and a cashier-facing message. **3/3**
+  (E-0047). Cause: the customer upsert clears `deleted` on conflict (`customerAdapter.ts:129`,
+  read-only) while the delete only removes the row from the store and tombstones SQLite, so saving a
+  snapshot-reconstructed profile un-deleted it.
+- **REF-35: PARKED on a contract conflict** (`docs/c01-ref35-minor-unit.md`): it wants a 500,01 basket
+  to total 500, while MNY-01/02/03 (all passing) require the cent to be charged and ISO 4217 gives DZD a
+  minor unit of 2 (E-0049). Fixing it means editing a spec, which C01 may not do.
+- **REF-87: RECLASSIFIED** - not the 0,01 shape at all: it fails at `33-ref:3199` because the
+  4 000 000 000 DA ticket is never selectable in the refund modal (extreme-value selectability).
+- **REF-42: still parked** on the A/B/C decision (oracle double-counts one mirrored credit, E-0044).

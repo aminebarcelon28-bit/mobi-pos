@@ -217,3 +217,17 @@ session — recorded as UNKNOWN rather than assumed).
 - Research: R-004 in `docs/c01-research.md` (Stripe refund-destination rule) - card refunds belong on the
   original rail; the terminal has no acquirer lane, so the fallback is a merchant policy choice.
 - REF-42 stays 0/2 (E-0042); no code change was made for it.
+## B6 addendum 16 (REF-40 fixed; REF-35 parked as a contract conflict)
+
+- **REF-40 FIXED** (`7026e7e`): a refund no longer resurrects a soft-deleted customer. `origCustLive`
+  gates both the customer save and a wallet credit; an avoir refund for an archived profile is refused
+  with `CUSTOMER_UNAVAILABLE` (modal message added). **3/3** (E-0047); full 33-ref **15/18** (E-0048).
+  Root cause: `customerAdapter.ts:129` clears `deleted=0` on every upsert (read-only file), so saving a
+  profile rebuilt from the transaction snapshot un-deleted it.
+- **REF-35 PARKED - contract conflict** (`docs/c01-ref35-minor-unit.md`, E-0049): REF-35 expects a
+  500,01 basket to total 500, but MNY-01 (0,01 must be charged), MNY-02 (33,34) and MNY-03 (200,02) all
+  pass and ISO 4217 gives DZD minor unit 2. Option A = correct REF-35 (needs owner authorisation to edit a
+  spec); B/C would break the money spec.
+- **REF-87 RECLASSIFIED**: fails at `33-ref:3199` - the 4e9 ticket is never selectable in the refund
+  modal. Not the 0,01 shape; separate extreme-value item.
+- **REF-42** still waiting on A/B/C (`docs/c01-ref42-double-delivery.md`).
