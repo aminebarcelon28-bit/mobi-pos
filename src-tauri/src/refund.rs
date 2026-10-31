@@ -1746,13 +1746,27 @@ fn apply_refund_in_txn(
     // simple, durable case: buckets whose origin is THIS ticket receipt are
     // zeroed and their remaining points deducted from the headline balance.
     let mut derived_loyalty: Option<(i64, String)> = None;
+    // The ticket's OWN customer is the durable attribution: a forged/legacy
+    // request can omit customer_id while still refunding the ticket, and the
+    // loyalty reversal must land on the owner, not be skipped.
+    let ticket_customer_for_loyalty: Option<String> = tx
+        .query_row(
+            "SELECT customer_id FROM transactions WHERE id = ?1",
+            [&req.ticket_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .unwrap_or(None)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let loyalty_customer_id = req
+        .customer_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| ticket_customer_for_loyalty.clone());
     if req.customer_points_after.is_none() {
-        if let Some(cust_id) = req
-            .customer_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
+        if let Some(cust_id) = loyalty_customer_id.as_deref() {
             let payload: Option<String> = tx
                 .query_row(
                     "SELECT json_payload FROM customers WHERE id = ?1",
@@ -1818,12 +1832,7 @@ fn apply_refund_in_txn(
         None => derived_loyalty.map(|(points, buckets)| (points, Some(buckets))),
     };
     if let Some((points, buckets_json)) = loyalty_verdict {
-        let Some(cust_id) = req
-            .customer_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        else {
+        let Some(cust_id) = loyalty_customer_id.as_deref() else {
             return Err(conflict("INVALID:loyalty clawback requires the customer"));
         };
         ensure_customer_stub(tx, cust_id, "", now)?;
@@ -4415,6 +4424,34 @@ mod tests {
         req.customer_points_after = None;
         req.customer_point_buckets_json = None;
         let ok = run(&mut conn, &req).expect("refund derives the reversal and commits");
+        // A forged request can omit customer_id entirely: the ticket row still
+        // knows its owner, so the reversal must land there, not be skipped.
+        let mut conn3 = Connection::open_in_memory().unwrap();
+        test_schema(&conn3);
+        seed_ticket(&conn3);
+        conn3
+            .execute("UPDATE transactions SET customer_id = 'C1' WHERE id = 'TKT-1'", [])
+            .unwrap();
+        conn3
+            .execute(
+                "UPDATE customers SET loyalty_points = 10, json_payload = ?1 WHERE id = 'C1'",
+                [r#"{"id":"C1","loyaltyPoints":10,"pointBuckets":[{"id":"B1","originTransactionId":"REC-1","initialPoints":10,"remainingPoints":10}],"ledger":[]}"#],
+            )
+            .unwrap();
+        let mut forged = base_req();
+        forged.customer_id = None;
+        forged.customer_points_after = None;
+        forged.customer_point_buckets_json = None;
+        run(&mut conn3, &forged).expect("refund without customer_id still reverses loyalty");
+        let payload3: String = conn3
+            .query_row("SELECT json_payload FROM customers WHERE id='C1'", [], |r| r.get(0))
+            .unwrap();
+        let v3: serde_json::Value = serde_json::from_str(&payload3).unwrap();
+        assert_eq!(
+            v3["pointBuckets"][0]["remainingPoints"].as_f64().unwrap_or(-1.0),
+            0.0,
+            "ticket-owner bucket zeroed: {payload3}"
+        );
         assert_eq!(ok.customer_points_after, Some(0));
         let payload: String = conn
             .query_row("SELECT json_payload FROM customers WHERE id='C1'", [], |r| r.get(0))
