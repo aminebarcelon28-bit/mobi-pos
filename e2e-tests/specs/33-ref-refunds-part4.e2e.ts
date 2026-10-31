@@ -501,19 +501,25 @@ async function submitRefund(pin = APP_PIN, times = 1): Promise<void> {
   // batch runs. Wait for readiness, then click; one retry covers a
   // re-evaluation that starts between the wait and the click. The assertion is
   // unchanged: the refund must be submitted and land.
-  const ready = await browser
-    .waitUntil(
-      async () =>
-        (await browser.execute(() => {
-          const b = document.querySelector('[data-testid="refund-submit"]') as HTMLButtonElement | null;
-          const p = document.querySelector('[data-testid="refund-pin"]') as HTMLInputElement | null;
-          if (!b || !p) return false;
-          const r = b.getBoundingClientRect();
-          return !b.disabled && r.width > 0 && r.height > 0;
-        })) as boolean,
-      { timeout: 15000, interval: 200 },
-    )
-    .catch(() => undefined);
+  const waitReady = async (timeout: number): Promise<boolean> =>
+    (await browser
+      .waitUntil(
+        async () =>
+          (await browser.execute(() => {
+            const b = document.querySelector('[data-testid="refund-submit"]') as HTMLButtonElement | null;
+            const p = document.querySelector('[data-testid="refund-pin"]') as HTMLInputElement | null;
+            if (!b || !p) return false;
+            const r = b.getBoundingClientRect();
+            return !b.disabled && r.width > 0 && r.height > 0;
+          })) as boolean,
+        { timeout, interval: 200 },
+      )
+      .catch(() => false)) as boolean;
+  // The offline-cash-cap switch re-renders the modal: the submit/PIN can be
+  // absent for a beat. Wait again before concluding the dialog is gone (that
+  // false negative made REF-87 skip its Avoir revalidation).
+  let ready = await waitReady(15000);
+  if (!ready) ready = await waitReady(10000);
   if (!ready) {
     // A pre-check refusal (offline cash cap, foreign ticket, empty selection)
     // can close the modal before the PIN renders. That is a REFUSAL surface for
