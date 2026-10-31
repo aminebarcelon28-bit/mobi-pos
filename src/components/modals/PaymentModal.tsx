@@ -205,12 +205,21 @@ export const PaymentModal: React.FC = () => {
   const projectedDebtOnCredit = customerCurrentDebt + (selectedMethod === 'Crédit Client' ? netToPay : resteAPayer);
   const isOverDebtLimit = currentCustomer ? projectedDebtOnCredit > customerDebtLimit : false;
 
-  // Handlers for Store Credit / Loyalty application
+  /**
+   * C90: THE derivation of "what the tender must cover" after credits. The
+   * quick-tender button and the credit handlers used two different expressions
+   * (netSubtotal - voucher - trade - credit vs totals.total); when they disagree
+   * the drawer records the pre-credit amount and returns the difference as
+   * change, which is a 100 DA overage on a credit-covered ticket (REF-28,
+   * E-0012). One expression, every call site.
+   */
+  const netAfterCredits = (base: number, c: { voucher: number; trade: number; credit: number }): number =>
+    Math.max(0, Math.round((base - (c.voucher || 0) - (c.trade || 0) - (c.credit || 0)) * 100) / 100);  // Handlers for Store Credit / Loyalty application
   const handleApplyFullCredit = () => {
     if (!currentCustomer || maxAvailableCredit <= 0) return;
     setAppliedCredit(maxAvailableCredit);
     setStoreCreditApplied(maxAvailableCredit);
-      const newNet = Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied - maxAvailableCredit);
+      const newNet = netAfterCredits(netSubtotal, { voucher: voucherCreditApplied, trade: tradeInCreditApplied, credit: maxAvailableCredit });
     setCashTenderAmount(newNet > 0 ? newNet : 0);
     soundEngine.playSuccess();
     showToast(`🎁 Avoir Client appliqué : -${formatDZD(maxAvailableCredit)}`, 'success');
@@ -224,7 +233,7 @@ export const PaymentModal: React.FC = () => {
     );
     setAppliedCredit(clamped);
     setStoreCreditApplied(clamped);
-    const newNet = Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied - clamped);
+    const newNet = netAfterCredits(netSubtotal, { voucher: voucherCreditApplied, trade: tradeInCreditApplied, credit: clamped });
     setCashTenderAmount(newNet > 0 ? newNet : 0);
     setIsCustomCreditOpen(false);
     soundEngine.playKeyBeep?.();
@@ -238,7 +247,7 @@ export const PaymentModal: React.FC = () => {
   const handleRemoveCredit = () => {
     setAppliedCredit(0);
     setStoreCreditApplied(0);
-      const resetNet = Math.max(0, netSubtotal - voucherCreditApplied - tradeInCreditApplied);
+      const resetNet = netAfterCredits(netSubtotal, { voucher: voucherCreditApplied, trade: tradeInCreditApplied, credit: 0 });
       setCashTenderAmount(resetNet > 0 ? resetNet : 0);
     soundEngine.playKeyBeep?.();
     showToast('Avoir Client retiré de la vente.', 'info');
@@ -1185,7 +1194,7 @@ export const PaymentModal: React.FC = () => {
                           type="button"
                           data-testid="pay-exact"
                           onClick={() => {
-                            setCashTenderAmount(netToPay);
+                            setCashTenderAmount(netAfterCredits(netSubtotal, { voucher: voucherCreditApplied, trade: tradeInCreditApplied, credit: appliedCredit }));
                             document.getElementById('payment-cash-input')?.focus();
                           }}
                           className="py-2.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/50 rounded-xl text-xs font-black text-emerald-300 transition cursor-pointer"
