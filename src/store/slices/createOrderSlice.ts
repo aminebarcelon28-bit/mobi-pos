@@ -3075,12 +3075,32 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       const nativePointsAfter = typeof nativeRes.customerPointsAfter === 'number'
         ? Math.max(0, Math.round(nativeRes.customerPointsAfter))
         : undefined;
+      // D4-A: the native wallet leg also writes the creditDeltaDzd ledger row in
+      // its payload. Mirror THOSE bytes for the ledger/points/buckets so the
+      // post-commit save cannot clobber the native emission (balance alone is not
+      // the destination of record).
+      const nativeCustomerPatch: Record<string, unknown> = (() => {
+        const raw = (nativeRes as { customerPayload?: string | null }).customerPayload;
+        if (!raw) return {};
+        try {
+          const p = JSON.parse(raw) as Record<string, unknown>;
+          return {
+            ...(Array.isArray(p.ledger) ? { ledger: p.ledger } : {}),
+            ...(typeof p.storeCredit === 'number' ? { storeCredit: p.storeCredit } : {}),
+            ...(typeof p.loyaltyPoints === 'number' ? { loyaltyPoints: p.loyaltyPoints } : {}),
+            ...(Array.isArray(p.pointBuckets) ? { pointBuckets: p.pointBuckets } : {}),
+          };
+        } catch {
+          return {};
+        }
+      })();
       const hydratedCustomer = updatedCustomerProjected
         ? {
             ...updatedCustomerProjected,
             ...(nativeDebtAfter !== undefined ? { currentDebt: nativeDebtAfter } : {}),
             ...(nativePointsAfter !== undefined ? { loyaltyPoints: nativePointsAfter } : {}),
             ...(nativeStoreCreditAfter !== undefined ? { storeCredit: nativeStoreCreditAfter } : {}),
+            ...nativeCustomerPatch,
           }
         : undefined;
       const hydratedOriginal = nativeRes.updatedOriginal ?? updatedOriginalTransaction;

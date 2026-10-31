@@ -28,7 +28,7 @@ import {
   typeRefundPin,
   unlockIfNeeded,
 } from '../lib/pos';
-import { resetData, seedCustomerFull, seedProducts } from '../lib/seed';
+import { resetData, seedCustomerFull, seedProducts, seedSettings } from '../lib/seed';
 
 const CUST = 'REF4-C87';
 const CUST_NAME = 'REF4 Extreme';
@@ -115,6 +115,11 @@ describe('D4-A — wallet leg at 32-bit boundaries', () => {
       { id: P4E9, title: 'REF4 P4E9', priceDa: 4000000000, stock: 10, costDa: 1 },
     ]);
     seedCustomerFull([{ id: CUST, name: CUST_NAME, phone: '0551220087', currentDebtDa: 0, debtLimitDa: 100000 }]);
+    // The wallet proof must not depend on the loyalty-tranche explosion: a 4e9
+    // sale at the default earn rate materialises 200 000 milestone tranches
+    // (139 MB payload, D6) which stalls the native merge. Earning is disabled
+    // FOR THIS DIAG so the payload stays small and the wallet leg is measured.
+    seedSettings([{ key: 'mobi_pos_receipt_settings', valueJson: JSON.stringify({ loyaltyConfig: { enabled: false } }) }]);
     await clearWebMirrors();
     await unlockIfNeeded();
     await ensureShiftOpen(10000);
