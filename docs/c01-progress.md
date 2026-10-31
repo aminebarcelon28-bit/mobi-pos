@@ -287,3 +287,19 @@ session — recorded as UNKNOWN rather than assumed).
 - Spec dependency: only REF-87 relied on anonymous over-cap Avoir; no other spec edit requested.
 - REF-35 unchanged (HOLD). REF-42: recipient question answered for Avoir; card lane options restated in
   `docs/c01-p0-recipient.md` (A recommended, B now narrower, C rejected).
+## B6 addendum 21 (change requests 1-5)
+
+- **(1) BLOCKED:** wallet leg is TS-side AFTER the native commit (`createOrderSlice.ts:3117`), native
+  request has no store-credit field -> a write-time throw cannot abort the refund. Needs `refund.rs`
+  (D4-A `customer_store_credit_after`); gate lift required. Evidence E-0070.
+- **(2) DONE:** strict-equality money gate; default run blocks (moneyViolation none on the full run);
+  audit includes REF-FORGE rows (they fail, as ruled); card lane records no destination and is reported,
+  not exempted. E-0067.
+- **(3) PARTIAL:** payload grew only +15,598 B (+0.016%) with the customer fixture -> size is not the
+  cause; the fixture stays the only changed factor; the one-factor matrix and the >=2^31 / 4e9 credit
+  proofs are still open. E-0071.
+- **(4) DONE (narrow):** REF-42 usableDelivery derives from the wallet balance delta; mirror asserted
+  separately; **3/3** (E-0068). Diag additions (anonymous card-paid refusal; PIN A != B E2E) still to do.
+- **(5) NOT STARTED** (depends on 3). B' shelved.
+- Full 33-ref **15/18**: REF-42 +1, REF-51 -1 (baseline flake E-0033 class), REF-87 selection, REF-35
+  unchanged; run money gate passed (E-0069).
