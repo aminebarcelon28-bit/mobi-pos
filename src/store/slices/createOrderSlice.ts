@@ -3041,6 +3041,9 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         if (r === 'SUPERVISOR_AUTH_EXPIRED') return { success: false, reason: 'SUPERVISOR_AUTH_EXPIRED' };
         if (r === 'RESTOCK_REASON_REQUIRED') return { success: false, reason: 'RESTOCK_REASON_REQUIRED' };
         if (r === 'SYSTEM_CLOCK_REGRESSION') return { success: false, reason: 'SYSTEM_CLOCK_REGRESSION' };
+        // D4-A: the native recipient gate must reach the cashier as itself, not as a generic failure.
+        if (r === 'AVOIR_RECIPIENT_REQUIRED') return { success: false, reason: 'AVOIR_RECIPIENT_REQUIRED' };
+        if (r === 'REFUND_EXCEEDS_VALUE') return { success: false, reason: 'REFUND_EXCEEDS_VALUE' };
         if (r === 'DEVICE_IDENTITY_SPOOFED') return { success: false, reason: 'DEVICE_IDENTITY_SPOOFED' };
         return { success: false, reason: 'PERSISTENCE_FAILED' };
       }
@@ -3102,7 +3105,22 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           if (!row) return {};
           const payload = JSON.parse(String(row.json_payload ?? '{}')) as Record<string, unknown>;
           return {
-            ...(Array.isArray(payload.ledger) ? { ledger: payload.ledger } : {}),
+            ...(Array.isArray(payload.ledger)
+              ? {
+                  // Union by id: the native wallet rows AND the TS loyalty clawback
+                  // rows both survive the mirror (review finding 4).
+                  ledger: (() => {
+                    const native = payload.ledger as Array<Record<string, unknown>>;
+                    const tsEntries = Array.isArray(
+                      (updatedCustomerProjected as { ledger?: unknown[] } | undefined)?.ledger,
+                    )
+                      ? ((updatedCustomerProjected as unknown as { ledger: Array<Record<string, unknown>> }).ledger)
+                      : [];
+                    const seen = new Set(native.map((e) => String(e?.id ?? '')));
+                    return [...native, ...tsEntries.filter((e) => !seen.has(String(e?.id ?? '')))];
+                  })(),
+                }
+              : {}),
             ...(typeof row.store_credit === 'number' ? { storeCredit: row.store_credit } : {}),
             ...(typeof row.loyalty_points === 'number' ? { loyaltyPoints: row.loyalty_points } : {}),
             ...(Array.isArray(payload.pointBuckets) ? { pointBuckets: payload.pointBuckets } : {}),

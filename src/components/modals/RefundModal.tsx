@@ -651,6 +651,8 @@ export const RefundModal: React.FC = () => {
           } else {
             showToast('Plafond espèces hors-ligne atteint — resynchronisez avant tout nouveau décaissement.', 'error');
           }
+        } else if (refundResult.reason === 'REFUND_EXCEEDS_VALUE') {
+          showToast('Montant du remboursement supérieur à ce qui reste remboursable sur ce ticket.', 'error');
         } else if (refundResult.reason === 'AVOIR_RECIPIENT_REQUIRED') {
           // P0 (owner ruling): fail closed, terminal, no switch loop.
           showToast(refundRefusalMessage('avoirRecipientRequired'), 'error', 8000);
