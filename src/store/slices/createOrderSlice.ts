@@ -3079,16 +3079,28 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       // its payload. Mirror THOSE bytes for the ledger/points/buckets so the
       // post-commit save cannot clobber the native emission (balance alone is not
       // the destination of record).
-      const nativeCustomerPatch: Record<string, unknown> = (() => {
-        const raw = (nativeRes as { customerPayload?: string | null }).customerPayload;
-        if (!raw) return {};
+      // D4-A: the native wallet leg also wrote the creditDeltaDzd ledger row in
+      // its own payload. Mirror the COMMITTED row (authority read) for the
+      // ledger/points/buckets so the post-commit save cannot clobber the native
+      // emission - the balance alone is not the destination of record.
+      const nativeCustomerPatch: Record<string, unknown> = await (async () => {
         try {
-          const p = JSON.parse(raw) as Record<string, unknown>;
+          const custId = String(originalTransaction.customer?.id ?? '').trim();
+          if (!custId) return {};
+          const { getLocalDb } = await import('../../db/sqlPluginAdapter');
+          const db = await getLocalDb();
+          const rows = (await db.select(
+            'SELECT store_credit, loyalty_points, json_payload FROM customers WHERE id = $1',
+            [custId],
+          )) as Array<Record<string, unknown>>;
+          const row = rows?.[0];
+          if (!row) return {};
+          const payload = JSON.parse(String(row.json_payload ?? '{}')) as Record<string, unknown>;
           return {
-            ...(Array.isArray(p.ledger) ? { ledger: p.ledger } : {}),
-            ...(typeof p.storeCredit === 'number' ? { storeCredit: p.storeCredit } : {}),
-            ...(typeof p.loyaltyPoints === 'number' ? { loyaltyPoints: p.loyaltyPoints } : {}),
-            ...(Array.isArray(p.pointBuckets) ? { pointBuckets: p.pointBuckets } : {}),
+            ...(Array.isArray(payload.ledger) ? { ledger: payload.ledger } : {}),
+            ...(typeof row.store_credit === 'number' ? { storeCredit: row.store_credit } : {}),
+            ...(typeof row.loyalty_points === 'number' ? { loyaltyPoints: row.loyalty_points } : {}),
+            ...(Array.isArray(payload.pointBuckets) ? { pointBuckets: payload.pointBuckets } : {}),
           };
         } catch {
           return {};
