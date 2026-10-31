@@ -255,3 +255,20 @@ session — recorded as UNKNOWN rather than assumed).
 - **PARKED on owner decision:** A) spec helper tolerates the dialog closing (spec edit, forbidden here);
   B) app pre-checks the cap and submits as Avoir on the first click (removes the confirmation step -
   recommended, but it is a money-flow UX call); C) leave as-is (passes alone, flakes in-suite).
+## B6 addendum 19 (REF-87 owner answers + a P0 money defect)
+
+- **(1a) Connectivity (E-0056):** the terminal is OFFLINE in the suite AND alone - every submit logged
+  `online:false` (110 diag rows over 18 cases); `probeOnline(2500)` fails in the sandbox. No flip, no
+  leak, no false-offline: intended E2E config. The isolated/suite difference is timing, not connectivity.
+- **(1b) Who closed the dialog (E-0057):** the APP, on success - `submit-result ok` and `modal-close`
+  in the same millisecond, 405 ms after the helper's re-submit. The helper only clicked.
+- **(3) Money (E-0058/E-0059):** a refused cash attempt is pre-native (`createOrderSlice.ts:2285` before
+  `:2875`) and creates no row, no dedup hash, no parked object - so it can never settle as cash later
+  and cannot double-pay. **BUT the committed Avoir has no recipient on an anonymous ticket: 4e9 recorded
+  as refunded, 0 cash, 0 voucher, 0 wallet, 0 parked -> VALUE EVAPORATION (P0).** My earlier "no money
+  lost" claim is withdrawn.
+- **(4) Tests (E-0060):** `scripts/test_refund_guards.mts` 17/17 against `src/utils/refundGuards.ts`
+  now wired into modal+slice: same-tick submits -> one, PIN A never authorises B, basis = max(union,
+  SQLite). REF-87 alone still 2/2 on the new build (E-0061).
+- **B' NOT implemented**: it would make the P0 loss one-click. Needs the anonymous-ticket rule (refuse
+  fail-closed vs issue a credit voucher) - the same decision as REF-42 B.
