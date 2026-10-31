@@ -1757,7 +1757,16 @@ fn apply_refund_in_txn(
         )
         .unwrap_or(None)
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+        .filter(|s| !s.is_empty())
+        // The column can be empty on older sales; the payload's customer block
+        // is the durable attribution the sale itself wrote.
+        .or_else(|| {
+            serde_json::from_str::<serde_json::Value>(&ticket_payload_raw)
+                .ok()
+                .and_then(|v| v.get("customer").cloned())
+                .and_then(|c| c.get("id").and_then(|i| i.as_str()).map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+        });
     let loyalty_customer_id = req
         .customer_id
         .as_deref()
@@ -4443,6 +4452,36 @@ mod tests {
         forged.customer_points_after = None;
         forged.customer_point_buckets_json = None;
         run(&mut conn3, &forged).expect("refund without customer_id still reverses loyalty");
+        // A sale whose COLUMN is empty but whose payload names the customer
+        // (older rows) must still attribute the reversal.
+        let mut conn4 = Connection::open_in_memory().unwrap();
+        test_schema(&conn4);
+        seed_ticket(&conn4);
+        conn4
+            .execute(
+                "UPDATE transactions SET customer_id = NULL, json_payload = ?1 WHERE id = 'TKT-1'",
+                [r#"{"id":"TKT-1","receiptNumber":"REC-1","total":450,"customer":{"id":"C1"},"items":[{"id":"TKT-1-item-0"}]}"#],
+            )
+            .unwrap();
+        conn4
+            .execute(
+                "UPDATE customers SET loyalty_points = 10, json_payload = ?1 WHERE id = 'C1'",
+                [r#"{"id":"C1","loyaltyPoints":10,"pointBuckets":[{"id":"B1","originTransactionId":"REC-1","initialPoints":10,"remainingPoints":10}],"ledger":[]}"#],
+            )
+            .unwrap();
+        let mut payloadOnly = base_req();
+        payloadOnly.customer_id = None;
+        payloadOnly.customer_points_after = None;
+        run(&mut conn4, &payloadOnly).expect("payload-only attribution reverses loyalty");
+        let payload4: String = conn4
+            .query_row("SELECT json_payload FROM customers WHERE id='C1'", [], |r| r.get(0))
+            .unwrap();
+        let v4: serde_json::Value = serde_json::from_str(&payload4).unwrap();
+        assert_eq!(
+            v4["pointBuckets"][0]["remainingPoints"].as_f64().unwrap_or(-1.0),
+            0.0,
+            "payload-only attribution zeroed the bucket: {payload4}"
+        );
         let payload3: String = conn3
             .query_row("SELECT json_payload FROM customers WHERE id='C1'", [], |r| r.get(0))
             .unwrap();
