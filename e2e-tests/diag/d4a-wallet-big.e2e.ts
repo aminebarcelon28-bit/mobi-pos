@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import { browser, expect } from '@wdio/globals';
 import { DB_PATH } from '../lib/env';
-import { all, count, one, waitForSchemaSettled } from '../lib/db';
+import { all, count, one, run, waitForSchemaSettled } from '../lib/db';
 import {
   addSku,
   APP_PIN,
@@ -47,7 +47,17 @@ function ledgerFor(refundId: string): Array<Record<string, unknown>> {
     CUST,
     refundId,
   );
-  return rows.map((r) => (r.v ?? {}) as Record<string, unknown>);
+  return rows.map((r) => {
+    const raw = r.v;
+    if (typeof raw === 'string') {
+      try {
+        return JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    }
+    return (raw ?? {}) as Record<string, unknown>;
+  });
 }
 
 async function settleRefund(ticketId: string, ms = 120000): Promise<Row | undefined> {
@@ -78,7 +88,7 @@ async function payExactSlow(priceDa: number, ms = 180000): Promise<void> {
   throw new Error('sale did not land within ' + ms + 'ms');
 }
 
-async function refundOneUnit(pid: string, title: string, priceDa: number, tag: string) {
+async function refundOneUnit(pid: string, title: string, priceDa: number, tag: string, seedWallet?: number) {
   if (await refundDialogVisible().catch(() => false)) await closeRefund().catch(() => {});
   await clearCart();
   await selectCustomer(CUST_NAME);
@@ -87,6 +97,9 @@ async function refundOneUnit(pid: string, title: string, priceDa: number, tag: s
   const ticket = one<Row>('SELECT id, receipt_number, total FROM transactions WHERE COALESCE(is_refund,0)=0 AND total = ? ORDER BY rowid DESC LIMIT 1', priceDa) as Row;
   expect(Number(ticket?.total)).toBe(priceDa);
 
+  if (typeof seedWallet === 'number') {
+    run("UPDATE customers SET store_credit = ${seedWallet} WHERE id = 'REF4-C87'");
+  }
   const before = walletOf();
   await openRefund();
   await refundSearch(String(ticket.receipt_number));
@@ -144,7 +157,9 @@ describe('D4-A — wallet leg at 32-bit boundaries', () => {
   });
 
   it('the wallet goes past 2^32 and each credit is still applied once', async () => {
-    const { refund, before, after } = await refundOneUnit(P231, 'REF4 P231', 2147483649, 'past-2^32');
+    // Start the wallet just under 2^32 so ONE credit carries it past the bound.
+    const { refund, before, after } = await refundOneUnit(P231, 'REF4 P231', 2147483649, 'past-2^32', 4294967000);
+    expect(before).toBeGreaterThanOrEqual(4294967000);
     expect(Number(refund.total)).toBe(2147483649);
     expect(after - before).toBe(2147483649);
     console.log(`[D4A past-2^32] wallet now ${after} (> 2^32 = ${Math.pow(2, 32)})`);

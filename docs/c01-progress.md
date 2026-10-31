@@ -303,3 +303,14 @@ session — recorded as UNKNOWN rather than assumed).
 - **(5) NOT STARTED** (depends on 3). B' shelved.
 - Full 33-ref **15/18**: REF-42 +1, REF-51 -1 (baseline flake E-0033 class), REF-87 selection, REF-35
   unchanged; run money gate passed (E-0069).
+## B6 addendum 22 (D4-A: 4e9 proof green; review BLOCKS merge)
+
+- **4e9 wallet proof GREEN** (E-0082): wallet delta exactly 4,000,000,000, one credit ledger row, money gate 0 violations.
+- **2^31+1 proof** was green earlier (E-0080). **past-2^32** not yet green (harness seeding issue only; the credit itself works).
+- **Cold adversarial review (separate context) = DO NOT MERGE** (E-0083, docs/reviews/D4A-adversarial-review.md):
+  8 findings, the first a **money regression**: the milestone clawback no longer rides the wallet leg
+  (over-credit). Also: cargo 22/28 (D3 gate), the pre-COMMIT assertion refuses legitimate fractional/clamped
+  refunds and is absent for card legs, the post-commit mirror can destroy the committed ledger, no outbox
+  stamp on the native wallet write, missing error taxonomy, a phantom response field, no economic cap.
+- **Next:** fix finding 1 (clawback inside the native transaction or net it into wallet_credit), then 3, 4, 5,
+  6, 7, 8; re-run the review; only then merge.
