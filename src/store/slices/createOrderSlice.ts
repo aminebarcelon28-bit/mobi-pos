@@ -780,11 +780,55 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       // below needs the same value, and anonymous sales earn nothing anyway.
       const earnCampaignMult = activeCampaignMultiplier();
 
-      if (currentCustomer) {
+      // Case 44: loyalty must be computed from the DURABLE customer row, not the
+      // in-memory snapshot. A native-only write (a forged/other-window refund, a
+      // void in another tab) updates SQLite without refreshing this store;
+      // computing from the stale snapshot would rewrite the pre-write buckets and
+      // resurrect revoked points. Failure to read falls back to the snapshot with
+      // a warning (a sale must not be refused over a loyalty read).
+      let loyaltyBase: Customer | null = currentCustomer;
+      if (currentCustomer?.id) {
+        try {
+          const { getLocalDb } = await import('../../db/sqlPluginAdapter');
+          const db = await getLocalDb();
+          const rows = (await db.select(
+            'SELECT loyalty_points, total_spent, store_credit, current_debt, json_payload FROM customers WHERE id = $1',
+            [currentCustomer.id],
+          )) as Array<Record<string, unknown>>;
+          const row = rows?.[0];
+          if (row) {
+            let payload: Record<string, unknown> = {};
+            try {
+              payload = JSON.parse(String(row.json_payload ?? '{}')) as Record<string, unknown>;
+            } catch {
+              payload = {};
+            }
+            loyaltyBase = {
+              ...currentCustomer,
+              loyaltyPoints:
+                typeof row.loyalty_points === 'number' ? row.loyalty_points : currentCustomer.loyaltyPoints,
+              totalSpent: typeof row.total_spent === 'number' ? row.total_spent : currentCustomer.totalSpent,
+              storeCredit: typeof row.store_credit === 'number' ? row.store_credit : currentCustomer.storeCredit,
+              currentDebt:
+                typeof row.current_debt === 'number' ? row.current_debt : currentCustomer.currentDebt,
+              pointBuckets: Array.isArray(payload.pointBuckets)
+                ? (payload.pointBuckets as Customer['pointBuckets'])
+                : currentCustomer.pointBuckets,
+              ledger: Array.isArray(payload.ledger)
+                ? (payload.ledger as Customer['ledger'])
+                : currentCustomer.ledger,
+            } as Customer;
+          }
+        } catch (e) {
+          console.warn('[checkout:loyalty] durable customer read failed; using the in-memory snapshot', e);
+        }
+      }
+
+      if (loyaltyBase) {
         // Effective loyalty config: merchant settings merged over defaults.
         const loyaltyCfg = normalizeLoyaltyConfig(get().receiptSettings?.loyaltyConfig);
         const earnAllowed = isEarnAllowed(loyaltyCfg);
-        const currentTotalSpent = currentCustomer.totalSpent || 0;
+        const currentTotalSpent = loyaltyBase.totalSpent || 0;
         const currentTier = calculateCustomerTier(currentTotalSpent, loyaltyCfg);
 
         const earnedPoints =
@@ -799,7 +843,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         const newTotalSpent = currentTotalSpent + spendProgress;
         const newTier = calculateCustomerTier(newTotalSpent, loyaltyCfg);
 
-        const existingBuckets = currentCustomer.pointBuckets || [];
+        const existingBuckets = loyaltyBase.pointBuckets || [];
         // B-024: same config rate as void restore — hardcoded /10 drifted
         // when merchant customized pointRedemptionRate. Normalized (never 0:
         // a raw zero would divide by zero into Infinity and drain all buckets).
@@ -811,7 +855,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         if (earnedPoints > 0) {
           finalBuckets.push(
             createDatedPointBucket(
-              currentCustomer.id,
+              loyaltyBase.id,
               receiptNumber,
               earnedPoints,
               remainingToPay,
@@ -829,18 +873,18 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // pointsBalanceAfter is stamped onto entries below once newPoints
         // is known (ledger convention: headline points balance).
         const milestoneEval = evaluateSpendMilestones(
-          currentCustomer.id,
+          loyaltyBase.id,
           currentTotalSpent,
           newTotalSpent,
           loyaltyCfg,
-          currentCustomer.ledger || [],
+          loyaltyBase.ledger || [],
           0
         );
         const earnedCreditBonus = milestoneEval.totalReward;
 
-        const newCredit = Math.max(0, currentCustomer.storeCredit - actualStoreCreditApplied) + earnedCreditBonus;
-        const newPoints = Math.max(0, currentCustomer.loyaltyPoints - pointsToRedeem) + earnedPoints;
-        const newDebt = (currentCustomer.currentDebt || 0) + creditDebtAmount;
+        const newCredit = Math.max(0, loyaltyBase.storeCredit - actualStoreCreditApplied) + earnedCreditBonus;
+        const newPoints = Math.max(0, loyaltyBase.loyaltyPoints - pointsToRedeem) + earnedPoints;
+        const newDebt = (loyaltyBase.currentDebt || 0) + creditDebtAmount;
         for (const e of milestoneEval.entries) e.balanceAfter = newPoints;
         completedMilestoneAwards = milestoneEval.awards;
 
@@ -848,7 +892,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         if (actualStoreCreditApplied > 0) {
           newEntries.push(
             createLedgerEntry(
-              currentCustomer.id,
+              loyaltyBase.id,
               'redeem',
               -pointsToRedeem,
               newPoints,
@@ -861,7 +905,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         if (earnedPoints > 0) {
           newEntries.push(
             createLedgerEntry(
-              currentCustomer.id,
+              loyaltyBase.id,
               'earn',
               earnedPoints,
               newPoints,
@@ -872,17 +916,17 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         }
         for (const e of milestoneEval.entries) newEntries.push(e);
 
-        const existingLedger = currentCustomer.ledger || [];
+        const existingLedger = loyaltyBase.ledger || [];
         // P2.3 ledger anchor: freeze the pre-upgrade scalar balance once so
         // the sync-merge path can derive credit from ledger deltas. One-time
         // per customer (key-deduped); a no-op for everyone else.
         const genesisEntry = ensureCreditGenesis({
-          ...currentCustomer,
+          ...loyaltyBase,
           storeCredit: newCredit,
           ledger: [...newEntries, ...existingLedger],
         });
         updatedCustomer = {
-          ...currentCustomer,
+          ...loyaltyBase,
           totalSpent: newTotalSpent,
           loyaltyTier: newTier.name,
           loyaltyPoints: newPoints,
@@ -899,8 +943,8 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           const debtCreatedAt = new Date().toISOString();
           debtEntry = {
              id: newId('DEBT'),
-            customerId: currentCustomer.id,
-            customerName: currentCustomer.name,
+            customerId: loyaltyBase.id,
+            customerName: loyaltyBase.name,
             type: 'DEBT_ACQUIRED',
             kind: 'ACHAT',
             amount: creditDebtAmount,
