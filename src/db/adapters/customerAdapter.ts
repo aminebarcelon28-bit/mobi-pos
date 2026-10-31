@@ -267,17 +267,22 @@ export const customerAdapter = {
       }
       const rows = (await db
         .select(
-          'SELECT store_credit, loyalty_points, total_spent, current_debt, json_payload, version FROM customers WHERE id = $1',
+          'SELECT store_credit, loyalty_points, total_spent, current_debt, json_payload, version, LENGTH(json_payload) AS payload_len FROM customers WHERE id = $1',
           [customer.id]
         )
         .catch(() => [])) as Array<Record<string, unknown>>;
       const row = rows?.[0];
       if (row) {
         let payload: Record<string, unknown> = {};
-        try {
-          payload = JSON.parse(String(row.json_payload ?? '{}')) as Record<string, unknown>;
-        } catch {
-          payload = {};
+        // D6: never parse an ~80MB loyalty book on the main thread (it delayed
+        // the next refund past the supervisor window). The native already
+        // persisted the ledger; Dexie keeps the caller's copy.
+        if (Number(row.payload_len ?? 0) <= 4_000_000) {
+          try {
+            payload = JSON.parse(String(row.json_payload ?? '{}')) as Record<string, unknown>;
+          } catch {
+            payload = {};
+          }
         }
         snapshot = {
           ...customer,

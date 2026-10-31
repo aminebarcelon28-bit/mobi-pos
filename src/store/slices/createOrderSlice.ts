@@ -3184,12 +3184,20 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           const { getLocalDb } = await import('../../db/sqlPluginAdapter');
           const db = await getLocalDb();
           const rows = (await db.select(
-            'SELECT store_credit, loyalty_points, json_payload FROM customers WHERE id = $1',
+            'SELECT store_credit, loyalty_points, json_payload, LENGTH(json_payload) AS payload_len FROM customers WHERE id = $1',
             [custId],
           )) as Array<Record<string, unknown>>;
           const row = rows?.[0];
           if (!row) return {};
-          const payload = JSON.parse(String(row.json_payload ?? '{}')) as Record<string, unknown>;
+          // D6: a huge loyalty book (200k tranche rows, ~80MB) must not be
+          // parsed on the renderer's main thread - that stalled the next refund
+          // past the 120s supervisor window. The native already wrote the
+          // ledger; the scalars are all the UI needs here.
+          const payloadLen = Number(row.payload_len ?? 0);
+          const payload =
+            payloadLen > 4_000_000
+              ? {}
+              : (JSON.parse(String(row.json_payload ?? '{}')) as Record<string, unknown>);
           return {
             ...(Array.isArray(payload.ledger)
               ? {
