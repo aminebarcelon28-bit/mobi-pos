@@ -24,7 +24,7 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 17 | Overcharge on credit-covered sales (100 DA) | **COVERED** | REF-28 3/3 (E-0030) |
 | 18 | Card-funded refund delivers value twice / nowhere | **COVERED (measurement)** | REF-42 3/3 after the narrow fix (E-0068) |
 | 19 | Refund legs must equal the destinations of record | **COVERED (native)** | pre-COMMIT gate + 31/31 refund module (E-0090) |
-| 20 | Historical DBs with unbalanced refunds | **OPEN** | money gate 16 violations in 25 DBs (E-0067) — pre-D4-A data |
+| 20 | Historical DBs with unbalanced refunds | **ACCEPTED (D11/D12)** | re-proved on a retained DB: strict mode flags ONLY `REF-FORGE-*` negative-control rows (total 500 / delivered 0) and the card lane; `--exclude-forge` → 0 violations. Production DBs never carry forged ids. Exit criteria: card lane (D12) + gateway (D11) |
 | 21 | Schema migration version drift (`EXPECTED_MAX_DB_USER_VERSION` 127 vs migration 128 — the boot gate would refuse a device that had migrated) | **COVERED** | D8: constant 127 → 128; `tests::base_schema_migrations_are_strictly_increasing_and_wellformed` passes (E-0096) |
 | 22 | Export-manifest golden bytes drift on a release bump | **COVERED** | D8: the fixture pins `app_version` 1.7.0 instead of `env!(CARGO_PKG_VERSION)`; the golden test passes (E-0096) |
 | 23 | `sync_status='pending'` stamped natively but never read | **COVERED** | boot pass `requeuePendingCustomerWrites` re-enqueues pending customers before the credential gate; 6-case test (E-0106) |
