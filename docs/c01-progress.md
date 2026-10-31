@@ -121,3 +121,8 @@ session — recorded as UNKNOWN rather than assumed).
 - 2 506 old-under-refund shapes bucketed, **UNEXPLAINED 0** (E-0026, docs/c01-underrefund-classification.md): digital 1436, debt 578, credit>total 243, zero-total 118, da-rounding 121, change 10.
 - 95.2% are old-code defects v2 already fixes; one policy decision remains (D-RND rounding granularity).
 - Blocked on owner: D-RND, D-C90, D-B3.
+
+## B6 addendum 8 (REF-92 + C89 landed)
+
+- `scripts/ref92-c89.mts`: REF-92 (three partials, 999.99 mixed ticket) pinned to the COMMITTED behaviour - net 999.99, avoir 300, cash 699 whole DA, residue 0.99 on the digital lane (the D-RND artefact, named in the assertion so a rule change is visible) - plus C89 modelling the real per-ticket clamp (ticket cap 300 of 800, excess to Avoir, never refused) and a note that the SHIFT cap is inline in the slice and covered by the E2E helper.
+- 20 passed / 0 failed (E-0027). Not registered in CASE_INDEX: an E2E case still needs a spec file.
