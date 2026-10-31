@@ -1523,7 +1523,10 @@ mod tests {
         let doc = ManifestDoc {
             export_format_version: EXPORT_FORMAT_VERSION,
             export_id: "export_golden1".into(),
-            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            // Pinned (not env!) so a release bump does not masquerade as a
+            // serialization change. The golden still fails on any field,
+            // order or escaping change in the canonical bytes.
+            app_version: "1.7.0".into(),
             license_state: "EXPIRED".into(),
             integrity_state: "clean".into(),
             chain_status: "intact".into(),
@@ -1550,9 +1553,9 @@ mod tests {
     }
 
     /// Golden canonical bytes — see test above. Regenerate deliberately only.
-    /// NOTE: embeds app_version 1.6.8; a version bump intentionally breaks
-    /// this test so the format change gets explicit review.
-    const GOLDEN_MANIFEST_CANONICAL: &str = "{\"export_format_version\":1,\"export_id\":\"export_golden1\",\"app_version\":\"1.6.8\",\"license_state\":\"EXPIRED\",\"integrity_state\":\"clean\",\"chain_status\":\"intact\",\"files\":[{\"table\":\"sales_journal\",\"file_name\":\"sales_journal.csv\",\"row_count\":2,\"byte_len\":44,\"sha256\":\"aaa\"}],\"total_rows\":2,\"total_bytes\":44,\"export_sha256\":\"bbb\",\"trusted_wall_utc_ms\":1700000000000,\"trusted_server_utc_ms\":null,\"exported_at\":\"2026-01-01T00:00:00Z\",\"audit_event_id\":\"AUD-1\",\"audit_error\":null,\"mac_status\":\"hmac-sha256\"}";
+    /// The app_version is pinned in the fixture (1.7.0): a release bump is not a
+    /// format change, so only real canonical-byte churn breaks this test.
+    const GOLDEN_MANIFEST_CANONICAL: &str = "{\"export_format_version\":1,\"export_id\":\"export_golden1\",\"app_version\":\"1.7.0\",\"license_state\":\"EXPIRED\",\"integrity_state\":\"clean\",\"chain_status\":\"intact\",\"files\":[{\"table\":\"sales_journal\",\"file_name\":\"sales_journal.csv\",\"row_count\":2,\"byte_len\":44,\"sha256\":\"aaa\"}],\"total_rows\":2,\"total_bytes\":44,\"export_sha256\":\"bbb\",\"trusted_wall_utc_ms\":1700000000000,\"trusted_server_utc_ms\":null,\"exported_at\":\"2026-01-01T00:00:00Z\",\"audit_event_id\":\"AUD-1\",\"audit_error\":null,\"mac_status\":\"hmac-sha256\"}";
 
     /// A6: host-runnable probe fake (mobile OS branches compile but are NOT
     /// executed here — no Android/iOS CI; see report).
