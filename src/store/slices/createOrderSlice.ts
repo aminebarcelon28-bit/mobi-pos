@@ -2913,11 +2913,14 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         cashTenderedNet: Math.round(cashTenderedNet),
         createdAt: refundTransaction.createdAt,
         refundPayload: JSON.stringify(refundTransaction),
-        originalOutboxPayload: JSON.stringify({
-          ...updatedOriginalTransaction,
-          receipt_number: originalTransaction.receiptNumber,
-          created_at: originalTransaction.createdAt,
-        }),
+        // The native lane merges from the DURABLE row payload read under its own
+        // write lock; this client snapshot is only the fallback base when that
+        // row is unparseable (refund.rs:1074-1093). Shipping the whole ticket is
+        // what made a 4e9 refund (139 MB) stall on the IPC boundary, so the
+        // fallback is now the minimal valid object. Trade-off: if the row payload
+        // is corrupt, the merge starts from `{}` and the native warning fires -
+        // the row is already the corrupt artefact in that case.
+        originalOutboxPayload: JSON.stringify({ id: originalTransaction.id }),
         deviceId: refundLocalDevice || 'local',
         lines: canonicalRefundItems.map((ri, idx) => {
           const origLine = findOrigLine(ri);
