@@ -282,7 +282,7 @@ function parseRefundError(err: unknown): { reason: string; refundId?: string; re
   const detail = String(raw ?? '');
   const head = detail.split('\n')[0];
   const m = head.match(
-    /^(ALREADY_REFUNDED|ORIGINAL_VOIDED|TICKET_NOT_FOUND|REFUND_EXCEEDS|VOUCHER_CHANGED|VOUCHER_MISSING|NO_OPEN_SHIFT|BUSY|INVALID|DEBT_CHANGED|INTERNAL|OFFLINE_FOREIGN_TICKET|OFFLINE_CASH_CAP_EXCEEDED|SUPERVISOR_PIN_REQUIRED|RESTOCK_REASON_REQUIRED|SCHEMA_UNHEALED|DEVICE_IDENTITY_SPOOFED|SUPERVISOR_AUTH_EXPIRED|SYSTEM_CLOCK_REGRESSION|DEVICE_NOT_INITIALIZED|DEVICE_SIGNATURE_FAILED|AVOIR_RECIPIENT_REQUIRED)(?::(.*))?$/,
+    /^(ALREADY_REFUNDED|ORIGINAL_VOIDED|TICKET_NOT_FOUND|REFUND_EXCEEDS|REFUND_EXCEEDS_VALUE|VOUCHER_CHANGED|VOUCHER_MISSING|NO_OPEN_SHIFT|BUSY|INVALID|DEBT_CHANGED|INTERNAL|OFFLINE_FOREIGN_TICKET|OFFLINE_CASH_CAP_EXCEEDED|SUPERVISOR_PIN_REQUIRED|RESTOCK_REASON_REQUIRED|SCHEMA_UNHEALED|DEVICE_IDENTITY_SPOOFED|SUPERVISOR_AUTH_EXPIRED|SYSTEM_CLOCK_REGRESSION|DEVICE_NOT_INITIALIZED|DEVICE_SIGNATURE_FAILED|AVOIR_RECIPIENT_REQUIRED)(?::(.*))?$/,
   );
   if (!m) return { reason: 'PERSISTENCE_FAILED', retryable: false, detail };
   const code = m[1];
@@ -291,6 +291,7 @@ function parseRefundError(err: unknown): { reason: string; refundId?: string; re
     return { reason: 'ALREADY_REFUNDED', refundId: rest || undefined, retryable: false, detail };
   }
   if (code === 'REFUND_EXCEEDS') return { reason: 'REFUND_EXCEEDS_PURCHASED', retryable: false, detail };
+  if (code === 'REFUND_EXCEEDS_VALUE') return { reason: 'REFUND_EXCEEDS_VALUE', retryable: false, detail };
   if (code === 'INVALID') return { reason: 'INVALID_REQUEST', retryable: false, detail };
   if (code === 'AVOIR_RECIPIENT_REQUIRED') return { reason: 'AVOIR_RECIPIENT_REQUIRED', retryable: false, detail };
   if (code === 'INTERNAL' || code === 'SCHEMA_UNHEALED') {

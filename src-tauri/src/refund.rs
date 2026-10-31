@@ -1765,7 +1765,7 @@ fn apply_refund_in_txn(
     //      back (the refund row and the restock die with it).
     // Re-review finding (b): the clawback is a DEBIT and may only touch the
     // ticket's own customer, proven against the durable row (not the client).
-    if req.wallet_clawback.unwrap_or(0) > 0 {
+    if req.wallet_clawback.unwrap_or(0) > 0 || req.wallet_credit.unwrap_or(0) > 0 {
         let ticket_customer: Option<String> = tx
             .query_row(
                 "SELECT customer_id FROM transactions WHERE id = ?1",
@@ -1814,6 +1814,13 @@ fn apply_refund_in_txn(
         // scalar unclamped (genericApply re-materialises storeCredit from the
         // ledger) -> negative balances.
         let revoked = (wallet_claw as f64).min(after_credit).max(0.0);
+        if revoked + 0.5 < wallet_claw as f64 {
+            warnings.push(format!(
+                "[refund] Reprise Avoir plafonnée: {} DA demandés, {} DA révoqués (solde insuffisant).",
+                wallet_claw,
+                revoked.round() as i64
+            ));
+        }
         let next = (after_credit - revoked).max(0.0);
         let raw: String = tx
             .query_row(
@@ -2113,11 +2120,30 @@ fn apply_refund_in_txn(
     //     destination of record in this schema, so a refund carrying a card leg is
     //     scoped OUT explicitly (warned) instead of being silently accepted.
     {
-        let card_leg_minor: i64 = serde_json::from_str::<serde_json::Value>(&req.refund_payload)
+        // N1: derive the card leg from the DURABLE ticket's tenders. The refund
+        // payload is caller-supplied JSON, so trusting funding.digital there let a
+        // caller skip this gate at will.
+        let card_leg_minor: i64 = serde_json::from_str::<serde_json::Value>(&ticket_payload_raw)
             .ok()
-            .and_then(|v| v.get("funding").cloned())
-            .and_then(|f| f.get("digital").and_then(|d| d.as_i64()))
+            .and_then(|v| v.get("tenders").cloned())
+            .and_then(|t| t.as_array().cloned())
+            .map(|a| {
+                a.iter()
+                    .filter(|t| {
+                        let m = t.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                        m.contains("CIB") || m.contains("Edahabia") || m.contains("BaridiMob") || m.contains("Chèque")
+                    })
+                    .filter_map(|t| t.get("amount").and_then(|n| n.as_f64()))
+                    .sum::<f64>()
+                    .round() as i64
+            })
             .unwrap_or(0);
+        // A wallet leg can never exceed the value being refunded.
+        if wallet_applied > total_reversed {
+            return Err(conflict(&format!(
+                "INVALID:wallet leg {wallet_applied} exceeds the refund value {total_reversed}"
+            )));
+        }
         if card_leg_minor > 0 {
             warnings.push(format!(
                 "[refund] rail carte sans destination de remboursement: {:.2} DA hors équilibre.",
@@ -2464,6 +2490,9 @@ mod tests {
             [],
         )
         .unwrap();
+        // The ticket belongs to C1 (the payload's customer) so a wallet credit
+        // can be proven against the ticket's own customer.
+        conn.execute("UPDATE transactions SET customer_id = 'C1' WHERE id = 'TKT-1'", []).unwrap();
         // The ticket was partially credit-funded: a live 500 DA debt the
         // refund's relief clamps against (the durable ledger is the truth).
         conn.execute(
@@ -4088,6 +4117,7 @@ mod tests {
             [],
         )
         .unwrap();
+        conn.execute("UPDATE transactions SET customer_id = 'C1' WHERE id = 'TKT-2'", []).unwrap();
         let mut r2 = partial_req("TKT-2", "D2", 1, 50, 50, Some("TKT-2-item-0"));
         r2.cost_total = 20;
         r2.lines[0].unit_cost_at_sale = 20;
