@@ -101,3 +101,10 @@ session — recorded as UNKNOWN rather than assumed).
 - Fixture (g) completed with oucherCode: 'BON1' - it modelled an impossible sale (voucher without code) and the guard correctly rejected it.
 - RefundModal warning: NOT implemented (budget).
 - Rebuild + worktree re-run: NOT run after this change; the four green cases need it before any claim.
+
+## B6 addendum 5 (post-guard proof)
+
+- Worktree rebuilt on HEAD `5c881ec`, binary `69AF6EBA...2F1F` (E-0021).
+- REF-03 / REF-33 / REF-49 / MNY-30: **3/3 each** after the B-2 guard -> no regression (E-0022).
+- **MNY-26: 3/3** (39.1/39.5/39.4 s) -> the earlier 2/3 was the click interception, now a real PASS (E-0023).
+- REF-28 still intermittent (1/3 in the previous worktree run); C90 overcharge unresolved, parked.
