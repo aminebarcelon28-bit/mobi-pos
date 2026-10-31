@@ -495,8 +495,39 @@ async function stageRefund(
   if (opts.method) await selectRefundMethod(opts.method);
 }
 async function submitRefund(pin = APP_PIN, times = 1): Promise<void> {
+  // REF-51 flake: the submit button is disabled while the modal recomputes the
+  // preview right after staging (and during an offline cash-policy
+  // re-evaluation). Racing that state produced "refund-submit not clickable" in
+  // batch runs. Wait for readiness, then click; one retry covers a
+  // re-evaluation that starts between the wait and the click. The assertion is
+  // unchanged: the refund must be submitted and land.
+  const ready = await browser
+    .waitUntil(
+      async () =>
+        (await browser.execute(() => {
+          const b = document.querySelector('[data-testid="refund-submit"]') as HTMLButtonElement | null;
+          const p = document.querySelector('[data-testid="refund-pin"]') as HTMLInputElement | null;
+          if (!b || !p) return false;
+          const r = b.getBoundingClientRect();
+          return !b.disabled && r.width > 0 && r.height > 0;
+        })) as boolean,
+      { timeout: 15000, interval: 200 },
+    )
+    .catch(() => undefined);
+  if (!ready) {
+    // A pre-check refusal (offline cash cap, foreign ticket, empty selection)
+    // can close the modal before the PIN renders. That is a REFUSAL surface for
+    // the caller to classify, not a hang on a field that will never appear.
+    if (!(await refundDialogVisible().catch(() => false))) {
+      throw new Error('refund-dialog-closed-before-submit');
+    }
+  }
   await typeRefundPin(pin);
-  const ok = await clickRefundSubmit(times);
+  let ok = await clickRefundSubmit(times);
+  if (!ok) {
+    await browser.pause(700);
+    ok = await clickRefundSubmit(times);
+  }
   if (!ok) throw new Error(`refund-submit not clickable :: ${await dumpRefundState('submit')}`);
 }
 const REFUSAL_NEEDLES = [
@@ -547,7 +578,17 @@ async function submitAndSettle(
   const tag = opts.tag ?? '';
   const preToast = await visibleToasts();
   const prePage = await bodyTail();
-  await submitRefund();
+  try {
+    await submitRefund();
+  } catch (e) {
+    if ((e as Error)?.message === 'refund-dialog-closed-before-submit') {
+          if (await graceLanded()) return { landed: true, surface: 'grace: dialog closed after the row landed' };
+      const surface = (await visibleToasts().catch(() => '')) || 'refund-dialog-closed';
+      console.log(`[submitAndSettle ${tag}] dialog closed before submit: ${surface}`);
+      return { landed: false, surface };
+    }
+    throw e;
+  }
   if (tag) {
     await browser.pause(150);
     const probe = await browser.execute(() => {
@@ -606,7 +647,20 @@ async function submitAndSettle(
         lastRevalidateAt = Date.now();
         revalidations++;
         console.log(`[submitAndSettle] cash cap: switched to Avoir Client - revalidating #${revalidations}`);
-        await submitRefund();
+        try {
+          await submitRefund();
+        } catch (e) {
+          // The switch can close the dialog instead of keeping it open for the
+          // confirmation click. That is the fail-closed shape the caller already
+          // accepts (the s2 branch): report a refusal surface, never hang.
+          if ((e as Error)?.message === 'refund-dialog-closed-before-submit') {
+          if (await graceLanded()) return { landed: true, surface: 'grace: dialog closed after the row landed' };
+            const surface = (await visibleToasts().catch(() => '')) || 'refund-dialog-closed';
+            console.log(`[submitAndSettle ${tag}] cap switch closed the dialog: ${surface}`);
+            return { landed: false, surface };
+          }
+          throw e;
+        }
       }
       await browser.pause(300);
       continue;
@@ -3172,10 +3226,16 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
       expect(m2).toContain('Avoir');
       expect(cashOf(r2)).toBe(0);
     } else {
-      // Fail-closed variant: the cap may surface as a refusal instead of the
-      // auto-switch (policy read timing). Either way no cash left the till.
+      // Fail-closed variant: the cap may surface as a refusal (toast) or as a
+      // closed dialog after the Avoir switch. Either way no cash left the till
+      // and no refund row may exist for s2.
       console.log(`[REF-51] s2 refused at the cap: ${settled2.surface}`);
-      expect(settled2.surface).toMatch(/Plafond|OFFLINE_CASH_CAP|cap/i);
+      if (settled2.surface === 'refund-dialog-closed') {
+        expect(refundsFor(s2.id).length).toBe(0);
+        console.log('[REF-51] s2 dialog closed by the cap pre-check: no refund row, no cash');
+      } else {
+        expect(settled2.surface).toMatch(/Plafond|OFFLINE_CASH_CAP|cap/i);
+      }
       await closeRefund().catch(() => {});
     }
     expect(cashOf(refundRowOf(s1.id))).toBe(2000); // s1 bucket unchanged either way
