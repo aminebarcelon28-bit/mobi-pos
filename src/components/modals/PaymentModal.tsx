@@ -214,12 +214,28 @@ export const PaymentModal: React.FC = () => {
    * E-0012). One expression, every call site.
    */
   const netAfterCredits = (base: number, c: { voucher: number; trade: number; credit: number }): number =>
-    Math.max(0, Math.round((base - (c.voucher || 0) - (c.trade || 0) - (c.credit || 0)) * 100) / 100);  // Handlers for Store Credit / Loyalty application
+    Math.max(0, Math.round((base - (c.voucher || 0) - (c.trade || 0) - (c.credit || 0)) * 100) / 100);
+
+  /**
+   * C90 (root cause, E-0029): the cash field keeps its own display buffer and
+   * commits it on blur. Applying a credit does not blur it, so the buffer still
+   * holds the pre-credit amount and the next blur writes it back into the state -
+   * a 100 DA overage on a credit-covered ticket. Every programmatic write flushes
+   * the field FIRST, then sets the new amount; React batches, so the new amount
+   * wins, and the now-unfocused field re-syncs its display from the prop.
+   */
+  const commitCashField = () => {
+    const el = document.getElementById('payment-cash-input') as HTMLInputElement | null;
+    if (el && document.activeElement === el) el.blur();
+  };
+
+  // Handlers for Store Credit / Loyalty application
   const handleApplyFullCredit = () => {
     if (!currentCustomer || maxAvailableCredit <= 0) return;
     setAppliedCredit(maxAvailableCredit);
     setStoreCreditApplied(maxAvailableCredit);
       const newNet = netAfterCredits(netSubtotal, { voucher: voucherCreditApplied, trade: tradeInCreditApplied, credit: maxAvailableCredit });
+    commitCashField();
     setCashTenderAmount(newNet > 0 ? newNet : 0);
     soundEngine.playSuccess();
     showToast(`🎁 Avoir Client appliqué : -${formatDZD(maxAvailableCredit)}`, 'success');
@@ -234,6 +250,7 @@ export const PaymentModal: React.FC = () => {
     setAppliedCredit(clamped);
     setStoreCreditApplied(clamped);
     const newNet = netAfterCredits(netSubtotal, { voucher: voucherCreditApplied, trade: tradeInCreditApplied, credit: clamped });
+    commitCashField();
     setCashTenderAmount(newNet > 0 ? newNet : 0);
     setIsCustomCreditOpen(false);
     soundEngine.playKeyBeep?.();
@@ -248,7 +265,8 @@ export const PaymentModal: React.FC = () => {
     setAppliedCredit(0);
     setStoreCreditApplied(0);
       const resetNet = netAfterCredits(netSubtotal, { voucher: voucherCreditApplied, trade: tradeInCreditApplied, credit: 0 });
-      setCashTenderAmount(resetNet > 0 ? resetNet : 0);
+      commitCashField();
+    setCashTenderAmount(resetNet > 0 ? resetNet : 0);
     soundEngine.playKeyBeep?.();
     showToast('Avoir Client retiré de la vente.', 'info');
   };
@@ -1194,8 +1212,8 @@ export const PaymentModal: React.FC = () => {
                           type="button"
                           data-testid="pay-exact"
                           onClick={() => {
+                            commitCashField();
                             setCashTenderAmount(netAfterCredits(netSubtotal, { voucher: voucherCreditApplied, trade: tradeInCreditApplied, credit: appliedCredit }));
-                            document.getElementById('payment-cash-input')?.focus();
                           }}
                           className="py-2.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/50 rounded-xl text-xs font-black text-emerald-300 transition cursor-pointer"
                           title="Montant exact net"
@@ -1207,8 +1225,8 @@ export const PaymentModal: React.FC = () => {
                             key={bill}
                             type="button"
                             onClick={() => {
+                              commitCashField();
                               setCashTenderAmount(bill);
-                              document.getElementById('payment-cash-input')?.focus();
                             }}
                             className={`py-2.5 rounded-xl text-xs font-black border transition cursor-pointer font-mono ${
                               bill >= netToPay
