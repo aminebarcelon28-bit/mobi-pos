@@ -1806,8 +1806,8 @@ mod tests {
         let res = apply_checkout(&mut conn, &req).unwrap();
 
         assert_eq!(res.ledger_cogs_total, Some(1000)); // 5×120 + 2×200 landed
-        assert_eq!(res.fifo_cost_total, Some(1001)); // 7 × round(1000/7 = 142.857)
-        assert_eq!(res.fifo_profit, Some(2100 - 1001));
+        assert_eq!(res.fifo_cost_total, Some(1001.0)); // 7 × round(1000/7 = 142.857)
+        assert_eq!(res.fifo_profit, Some(2100.0 - 1001.0));
 
         // The batch's frozen freight rate survives depletion unchanged.
         let b1_freight: f64 = conn
@@ -1894,7 +1894,7 @@ mod tests {
 
         // First call
         let res1 = apply_checkout(&mut conn, &req).unwrap();
-        assert_eq!(res1.fifo_cost_total, Some(200));
+        assert_eq!(res1.fifo_cost_total, Some(200.0));
 
         // Remaining in batch should be 3
         let b1_rem: f64 = conn
@@ -1908,7 +1908,7 @@ mod tests {
 
         // Replay call
         let res2 = apply_checkout(&mut conn, &req).unwrap();
-        assert_eq!(res2.fifo_cost_total, Some(200));
+        assert_eq!(res2.fifo_cost_total, Some(200.0));
 
         // Remaining in batch should STILL be 3 (not 1)
         let b1_rem_after: f64 = conn

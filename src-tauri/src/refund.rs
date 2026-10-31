@@ -3983,6 +3983,7 @@ mod tests {
         req.wallet_credit = Some(50);
         req.voucher = None;
         req.debt = None;
+        req.value_reversed = None; // total = total_net = 150 cash + 50 wallet
         req.customer_id = Some("C1".into());
         conn.execute(
             "INSERT INTO customers (id, name, phone, json_payload, store_credit, updated_at) VALUES ('C1','C','','{}',10,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO UPDATE SET store_credit = 10",
