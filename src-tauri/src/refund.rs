@@ -280,6 +280,12 @@ pub struct RefundRequest {
     /// Optional, so cash and card refunds stay byte-identical.
     #[serde(default)]
     pub wallet_credit: Option<i64>,
+    /// Milestone clawback (positive DZD to REVOKE from the wallet) applied in the
+    /// same transaction as the credit. The refund's Avoir leg and the revocation
+    /// are two movements: the leg is part of the refund total, the revocation is
+    /// the loyalty correction the refund un-earns.
+    #[serde(default)]
+    pub wallet_clawback: Option<i64>,
     pub cash_move: Option<CashMoveIn>,
     pub audit: AuditIn,
 }
@@ -446,7 +452,7 @@ fn validate(req: &RefundRequest) -> Result<(), TrustError> {
     }
     // Avoir leg: no wallet can be credited without a recipient. Enforced HERE,
     // at the money boundary, so no caller can bypass it (TS pre-checks are UX).
-    if req.wallet_credit.unwrap_or(0) > 0
+    if (req.wallet_credit.unwrap_or(0) > 0 || req.wallet_clawback.unwrap_or(0) > 0)
         && req
             .customer_id
             .as_deref()
@@ -1707,42 +1713,66 @@ fn apply_refund_in_txn(
     //      back (the refund row and the restock die with it).
     let mut wallet_applied: i64 = 0;
     let mut wallet_after: Option<i64> = None;
-    if let Some(inc) = req.wallet_credit {
-        let inc = inc.max(0);
-        if inc > 0 {
-            let Some(cust_id) = req
-                .customer_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-            else {
-                return Err(conflict("AVOIR_RECIPIENT_REQUIRED"));
-            };
-            ensure_customer_stub(tx, cust_id, "", now)?;
-            let current: f64 = tx
-                .query_row(
-                    "SELECT COALESCE(store_credit, 0) FROM customers WHERE id = ?1",
-                    [cust_id],
-                    |r| r.get(0),
-                )
-                .map_err(|e| TrustError::op_failed(format!("wallet read: {e}")))?;
-            let next = current + inc as f64;
-            // Ledger emission: prepend to the payload's ledger array (same shape
-            // as createLedgerEntry in TS, creditDeltaDzd included).
-            let raw: String = tx
-                .query_row(
-                    "SELECT json_payload FROM customers WHERE id = ?1",
-                    [cust_id],
-                    |r| r.get(0),
-                )
-                .map_err(|e| TrustError::op_failed(format!("wallet payload read: {e}")))?;
-            let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
-            let obj = parsed.as_object().cloned().unwrap_or_default();
-            let mut ledger = obj
-                .get("ledger")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
+    let wallet_inc = req.wallet_credit.unwrap_or(0).max(0);
+    let wallet_claw = req.wallet_clawback.unwrap_or(0).max(0);
+    if wallet_inc > 0 || wallet_claw > 0 {
+        let Some(cust_id) = req
+            .customer_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            return Err(conflict("AVOIR_RECIPIENT_REQUIRED"));
+        };
+        ensure_customer_stub(tx, cust_id, "", now)?;
+        let current: f64 = tx
+            .query_row(
+                "SELECT COALESCE(store_credit, 0) FROM customers WHERE id = ?1",
+                [cust_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| TrustError::op_failed(format!("wallet read: {e}")))?;
+        // Two movements, one transaction: the Avoir leg (part of the refund
+        // total) and the milestone revocation the refund un-earns. The balance is
+        // floored at zero; every movement is written as a separate ledger row so
+        // the clawback is auditable, not netted away.
+        let after_credit = current + wallet_inc as f64;
+        let next = (after_credit - wallet_claw as f64).max(0.0);
+        let raw: String = tx
+            .query_row(
+                "SELECT json_payload FROM customers WHERE id = ?1",
+                [cust_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| TrustError::op_failed(format!("wallet payload read: {e}")))?;
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
+        let obj = parsed.as_object().cloned().unwrap_or_default();
+        let mut ledger = obj
+            .get("ledger")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if wallet_claw > 0 {
+            ledger.insert(
+                0,
+                serde_json::json!({
+                    "id": format!("LEDGER-REF-CLAW-{}", req.refund_id),
+                    "customerId": cust_id,
+                    "timestamp": now,
+                    "type": "adjustment",
+                    "points": 0,
+                    "balanceAfter": next,
+                    "description": format!(
+                        "Reprise Avoir Client ({} DA) - palier désacquise suite au retour Ticket #{}",
+                        wallet_claw, req.receipt_number
+                    ),
+                    "referenceId": req.ticket_id,
+                    "creditDeltaDzd": -wallet_claw,
+                    "performedBy": "Système Caisse",
+                }),
+            );
+        }
+        if wallet_inc > 0 {
             ledger.insert(
                 0,
                 serde_json::json!({
@@ -1751,28 +1781,33 @@ fn apply_refund_in_txn(
                     "timestamp": now,
                     "type": "conversion",
                     "points": 0,
-                    "balanceAfter": next,
+                    "balanceAfter": after_credit,
                     "description": format!(
                         "Émission Avoir Client ({} DA) suite au retour Ticket #{}",
-                        inc, req.receipt_number
+                        wallet_inc, req.receipt_number
                     ),
                     "referenceId": req.ticket_id,
-                    "creditDeltaDzd": inc,
+                    "creditDeltaDzd": wallet_inc,
                     "performedBy": "Système Caisse",
                 }),
             );
-            let mut patch = serde_json::Map::new();
-            patch.insert("storeCredit".to_string(), serde_json::Value::from(next));
-            patch.insert("ledger".to_string(), serde_json::Value::Array(ledger));
-            let merged_payload = merge_customer_payload(tx, cust_id, &patch, &mut warnings)?;
-            tx.execute(
-                "UPDATE customers SET store_credit = ?2, json_payload = ?3, updated_at = ?4, version = version + 1 WHERE id = ?1",
-                params![cust_id, next, merged_payload, now],
-            )
-            .map_err(|e| map_rusqlite("wallet persist", e))?;
-            wallet_applied = inc;
-            wallet_after = Some(next.round() as i64);
         }
+        let mut patch = serde_json::Map::new();
+        patch.insert("storeCredit".to_string(), serde_json::Value::from(next));
+        patch.insert("ledger".to_string(), serde_json::Value::Array(ledger));
+        let merged_payload = merge_customer_payload(tx, cust_id, &patch, &mut warnings)?;
+        // The wallet is money that must propagate: stamp the row pending when the
+        // column exists so a crash before the client's outbox enqueue still has a
+        // durable marker (the outbox row itself stays best-effort).
+        let pending_sql = if has_column(tx, "customers", "sync_status")? {
+            "UPDATE customers SET store_credit = ?2, json_payload = ?3, updated_at = ?4, sync_status = 'pending', version = version + 1 WHERE id = ?1"
+        } else {
+            "UPDATE customers SET store_credit = ?2, json_payload = ?3, updated_at = ?4, version = version + 1 WHERE id = ?1"
+        };
+        tx.execute(pending_sql, params![cust_id, next, merged_payload, now])
+            .map_err(|e| map_rusqlite("wallet persist", e))?;
+        wallet_applied = wallet_inc;
+        wallet_after = Some(next.round() as i64);
     }
 
     // 12. Voucher credit-back with the same CAS discipline as
@@ -2376,6 +2411,7 @@ mod tests {
             total_net: 200,
             value_reversed: Some(450),
             wallet_credit: None,
+            wallet_clawback: None,
             cost_total: 100,
             pricing_tier: "Retail".into(),
             payment_method: "Especes".into(),
@@ -4033,6 +4069,44 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM inventory_ledger WHERE ref_id='REF-H1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(ledger_rows, 0, "no restock");
+    }
+
+    #[test]
+    fn d4a_clawback_revokes_in_the_same_transaction() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        conn.execute(
+            "INSERT INTO customers (id, name, phone, json_payload, store_credit, updated_at) VALUES ('C1','C','','{}',100,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO UPDATE SET store_credit = 100",
+            [],
+        )
+        .unwrap();
+        let mut req = base_req();
+        req.voucher = None;
+        req.debt = None;
+        req.cash_tendered = 150;
+        req.wallet_credit = Some(50);
+        req.wallet_clawback = Some(30); // refund un-earns a milestone
+        req.value_reversed = None; // total = 200 = 150 cash + 50 wallet
+        let ok = run(&mut conn, &req).expect("wallet refund with clawback commits");
+        // 100 + 50 - 30 = 120, applied in one transaction
+        assert_eq!(ok.customer_store_credit_after, Some(120));
+        let credit: f64 = conn
+            .query_row("SELECT store_credit FROM customers WHERE id='C1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(credit, 120.0);
+        let payload: String = conn
+            .query_row("SELECT json_payload FROM customers WHERE id='C1'", [], |r| r.get(0))
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        let ledger = v.get("ledger").and_then(|l| l.as_array()).cloned().unwrap_or_default();
+        assert_eq!(ledger.len(), 2, "emission + revocation both recorded");
+        let deltas: Vec<i64> = ledger
+            .iter()
+            .filter_map(|e| e.get("creditDeltaDzd").and_then(|c| c.as_i64()))
+            .collect();
+        assert!(deltas.contains(&50) && deltas.contains(&-30), "{deltas:?}");
     }
 
     #[test]

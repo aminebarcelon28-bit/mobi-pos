@@ -207,6 +207,8 @@ export interface NativeRefundRequest {
   voucher?: { code: string; amount: number } | null;
   /** D4-A: Avoir Client leg, applied as an increment inside the native txn. */
   walletCredit?: number | null;
+  /** Milestone clawback (positive DZD to revoke) applied in the same native txn. */
+  walletClawback?: number | null;
   cashMove?: {
     id: string;
     sessionId: string;
@@ -241,8 +243,6 @@ export interface NativeRefundOk {
   /** Wallet balance after the native Avoir leg — null when the refund had none.
    *  The client mirrors this; it never computes or re-applies the credit. */
   customerStoreCreditAfter?: number | null;
-  /** Customer payload after the native wallet write (mirror bytes, never re-applied). */
-  customerPayload?: string | null;
   /** Native-computed recovered COGS (restocked lines only, frozen costs). */
   recoveredCogs: number;
 }

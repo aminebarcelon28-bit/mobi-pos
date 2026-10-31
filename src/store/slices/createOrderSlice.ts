@@ -2417,6 +2417,9 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     const origCustLive = !origCust || customers.some((c) => c.id === origCust.id);
     // D4-A: the Avoir leg handed to the native transaction (0 = no wallet leg).
     let walletLegForNative = 0;
+    // D4-A review finding 1: the milestone clawback must ride the SAME native
+    // transaction as the Avoir leg, or the refund leaves revoked credit behind.
+    let walletClawbackForNative = 0;
     if (origCust) {
       const cust = customers.find((c) => c.id === origCust.id) || origCust;
       const currentTotalSpent = cust.totalSpent || 0;
@@ -2501,6 +2504,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       }
 
       for (const e of claw.entries) ledgerEntries.push(e);
+      walletClawbackForNative = Math.max(0, Math.round(Number(claw.totalRevoked) || 0));
 
       const existingLedger = cust.ledger || [];
       updatedCustomer = {
@@ -2890,6 +2894,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         receiptNumber: refundReceiptNumber,
         method: effectiveRefundMethod,
         walletCredit: walletLegForNative > 0 ? Math.round(walletLegForNative) : null,
+        walletClawback: walletClawbackForNative > 0 ? walletClawbackForNative : null,
         online: refundOnline,
         localDeviceId: refundLocalDevice || '',
         activeShiftId: refundShiftGate.id || '',
