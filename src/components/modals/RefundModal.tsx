@@ -554,15 +554,21 @@ export const RefundModal: React.FC = () => {
         setIsSubmitting(false);
         return;
       }
-      // REF-65 / REF-42: when this refund pays no cash at all, the "Espèces"
-      // channel cannot be honoured — the native lane refuses it
-      // (INVALID: cash refund without drawer movement, no cash was ever taken).
-      // The value returns through the ticket's own funding lanes (debt relief,
-      // wallet, or the original card rail), so the request goes out on the
-      // non-cash channel instead of one that can only be rejected.
-      const plannedCashOut = previewClamp ? previewClamp.cashOut : previewCashOut;
+      // REF-65: a PURE CREDIT sale (its only funding lane is the debt) cannot be
+      // paid out in cash — the native lane refuses it (INVALID: cash refund
+      // without drawer movement, no cash was ever taken). Its value returns by
+      // relieving the debt, which the funding split applies regardless of the
+      // channel, so the request submits on the non-cash channel.
+      // Deliberately NARROW: a card/voucher/avoir-funded ticket keeps the
+      // cashier's channel (a forced switch there double-delivers — REF-42).
+      const debtOnlyTicket =
+        (fundingPreview?.debtShare ?? 0) > 0 &&
+        (fundingPreview?.cashShare ?? 0) <= 0 &&
+        (fundingPreview?.digitalShare ?? 0) <= 0 &&
+        (fundingPreview?.voucherShare ?? 0) <= 0 &&
+        (fundingPreview?.avoirShare ?? 0) <= 0;
       const effectiveRefundMethod =
-        refundMethod === 'Espèces' && !(plannedCashOut > 0) ? 'Avoir Client' : refundMethod;
+        refundMethod === 'Espèces' && debtOnlyTicket ? 'Avoir Client' : refundMethod;
       const refundResult = (await processRefund({
         originalTransaction: selectedTxn,
         refundItems: activeRefundItems,
