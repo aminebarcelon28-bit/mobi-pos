@@ -284,7 +284,12 @@ function parseRefundError(err: unknown): { reason: string; refundId?: string; re
   const m = head.match(
     /^(ALREADY_REFUNDED|ORIGINAL_VOIDED|TICKET_NOT_FOUND|REFUND_EXCEEDS|REFUND_EXCEEDS_VALUE|VOUCHER_CHANGED|VOUCHER_MISSING|NO_OPEN_SHIFT|BUSY|INVALID|DEBT_CHANGED|INTERNAL|OFFLINE_FOREIGN_TICKET|OFFLINE_CASH_CAP_EXCEEDED|SUPERVISOR_PIN_REQUIRED|RESTOCK_REASON_REQUIRED|SCHEMA_UNHEALED|DEVICE_IDENTITY_SPOOFED|SUPERVISOR_AUTH_EXPIRED|SYSTEM_CLOCK_REGRESSION|DEVICE_NOT_INITIALIZED|DEVICE_SIGNATURE_FAILED|AVOIR_RECIPIENT_REQUIRED)(?::(.*))?$/,
   );
-  if (!m) return { reason: 'PERSISTENCE_FAILED', retryable: false, detail };
+  if (!m) {
+    // Diagnostics: an unmapped native failure must be visible in the field log,
+    // not only as a generic toast.
+    console.error('[refund] unmapped native failure:', detail);
+    return { reason: 'PERSISTENCE_FAILED', retryable: false, detail };
+  }
   const code = m[1];
   const rest = (m[2] ?? '').trim();
   if (code === 'ALREADY_REFUNDED') {
