@@ -86,3 +86,10 @@ session — recorded as UNKNOWN rather than assumed).
 
 - MNY-26 2/3 classified: run-1 failed on `element click intercepted` at `price-override-open` BEFORE any money assertion -> harness flake, not a defect (E-0014). The 3 runs that reached the refund path passed.
 - P0-c consumer audit DONE: one writer, one unit-aware reader, no other consumer (E-0015, docs/c01-consumer-audit.md).
+
+## B6 addendum 3 (fresh worktree, G4)
+
+- Worktree `C:\Users\Click\AppData\Local\Temp\opencode\c01-wt` at e88136b, fresh build, binary `131614B2...7DAD`.
+- REF-03 / REF-33 / REF-49 / MNY-30: **3/3 each** (E-0016).
+- REF-28: **1 passing / 2 failing** -> the tender mis-shape is INTERMITTENT (E-0017). The 100 DA overcharge is proven for the shape that occurs (E-0012/E-0013) but REF-28 is not a deterministic failure. C90 stays parked.
+- B-2 trace: amount and `voucherCode` are written together (createCartSlice.ts:162) and cleared together (:169, :397, mobile :1002); no UI path sets one without the other. Import/sync envelopes could carry an amount without a code -> the defensive split guard is still worth landing, NOT implemented (needs src + rebuild).
