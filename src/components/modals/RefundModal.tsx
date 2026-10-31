@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { createSubmitGuard, pinAuthorisesTicket } from '../../utils/refundGuards';
 
 import { foldForSearch } from '../../utils/catalogSearch';
 import {
@@ -103,7 +104,10 @@ export const RefundModal: React.FC = () => {
   // clickable long enough for a second click in the same tick; two processRefund
   // calls make the second one fail as ALREADY_REFUNDED (correctly deduped) but
   // leave a misleading refusal on screen and block the next legitimate chunk.
-  const submitInFlightRef = useRef(false);
+  const submitGuardRef = useRef(createSubmitGuard());
+  // REF-87: the PIN is bound to the ticket it was typed for; a PIN typed for
+  // another ticket (or for an earlier refund) never authorises this one.
+  const [managerPinTicket, setManagerPinTicket] = useState<string | null>(null);
 
   // Fix 3 (UI hint — the slice + adapter enforce): offline status and device
   // identity, loaded when the modal opens. Remote/past-shift tickets show a
@@ -251,6 +255,7 @@ export const RefundModal: React.FC = () => {
     // PIN typed for an earlier refund silently authorises this one and the gate
     // never re-appears.
     setManagerPin('');
+    setManagerPinTicket(null);
     setPinRequired(false);
     const initialSelected: Record<string, boolean> = {};
     const initialQty: Record<string, number> = {};
@@ -290,6 +295,8 @@ export const RefundModal: React.FC = () => {
         setRestockMap({});
       }
       setManagerPin('');
+    setManagerPinTicket(null);
+      setManagerPinTicket(null);
       setPinRequired(false);
       setVisibleCount(REFUND_PAGE_SIZE);
     }
@@ -529,7 +536,7 @@ export const RefundModal: React.FC = () => {
     }
 
     // Check Manager PIN — Phase 1: native gate (fail-closed).
-    if (!managerPin) {
+    if (!managerPin || !pinAuthorisesTicket(managerPinTicket, selectedTxn?.id ?? null)) {
       setPinRequired(true);
       showToast('Code PIN Manager requis. Autorisation requise pour émettre un remboursement.', 'error');
       return;
@@ -550,8 +557,7 @@ export const RefundModal: React.FC = () => {
     // where large offline cash requires it and records it in-txn.
     const supervisorPinVerifiedAt = new Date().toISOString();
 
-    if (submitInFlightRef.current) return; // second click in the same tick
-    submitInFlightRef.current = true;
+    if (!submitGuardRef.current.tryEnter()) return; // second click in the same tick
     setIsSubmitting(true);
     try {
       const finalReason = refundReason === 'Autre' && customReason.trim() ? customReason.trim() : refundReason;
@@ -655,12 +661,14 @@ export const RefundModal: React.FC = () => {
       console.error('Refund submission error:', err);
       showToast('Une erreur est survenue lors de l\'enregistrement du remboursement.', 'error');
     } finally {
-      submitInFlightRef.current = false;
+      submitGuardRef.current.leave();
       // REF-87: a manager PIN authorises exactly ONE refund. Leaving it in state
       // let a later refund in the same session skip the supervisor gate (the PIN
       // gate simply never re-appeared) - an authorization replay, and the reason
       // a suite run that had typed a PIN earlier never saw the gate again.
       setManagerPin('');
+    setManagerPinTicket(null);
+      setManagerPinTicket(null);
       setPinRequired(false);
       setIsSubmitting(false);
     }
@@ -1170,6 +1178,7 @@ export const RefundModal: React.FC = () => {
                             value={managerPin}
                             onChange={(e) => {
                               setManagerPin(e.target.value);
+                              setManagerPinTicket(selectedTxn?.id ?? null);
                               setPinRequired(false);
                             }}
                             placeholder="Saisir PIN Manager"

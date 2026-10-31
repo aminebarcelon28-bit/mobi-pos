@@ -29,6 +29,7 @@ async function getCustomerRepo() {
   import { newId, newReceiptNumber, deterministicId } from '../../utils/ids';
   import { toIntMoney } from '../../utils/fifoPreview';
   import { refundIdentity, refundSaleNative } from '../../db/adapters/refundNative';
+  import { committedRefundBasis } from '../../utils/refundGuards';
   import type { NativeRefundRequest } from '../../db/adapters/refundNative';
   import { sortedTransactions } from '../transactionOrder';
   import { saveCheckoutRecoveryIntent, clearCheckoutRecoveryIntent, cartFingerprintOfPayload, clearSiblingRecoveryIntents } from '../../db/checkoutRecovery';
@@ -2555,7 +2556,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         [originalTransaction.id],
       )) as Array<{ n?: number }>;
       const durableCount = Number(rows?.[0]?.n ?? 0);
-      if (Number.isFinite(durableCount)) refundBasis = Math.max(refundBasis, durableCount);
+      if (Number.isFinite(durableCount)) refundBasis = committedRefundBasis(refundBasis, durableCount);
     } catch {
       // SQLite unavailable (web preview / node tests): the union above applies.
     }
