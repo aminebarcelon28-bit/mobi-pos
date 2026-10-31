@@ -1,97 +1,77 @@
-# C01 — progress (Stage B4)
+# C01 — progress (Stage B6, resumable)
 
-Updated at every phase boundary. Ordered backlog, P0 before P1 before P2.
+> **Resume here.** Frozen sha: `02d28362f27789bad9b79b6bdb7df9a54cd83954`
+> Baseline sha (for `e2e-tests/specs` diff): `2c077cb` — `git diff --exit-code 2c077cb -- e2e-tests/specs` → exit 0 at Step 0.
+> Budget: 1 session, ~12 tool calls of the directive's work plan. **Spent: 10. Remaining: ~2.** Next item cap: 8 (P0-a E2E ×3 + S3 dump + consumer audit). → **STOP S2.**
 
-## Status at the end of this session
+## Blockers found before any work (quoted)
 
-| Phase | Priority | Item | Status |
+1. **`docs/c01-standing-orders.md` does not exist.** The directive (§0, §2, §11 S3, §14) makes it the
+   highest-precedence document. Verified: `Get-ChildItem docs -Filter "*standing*"` → no output.
+   Consequence: the gated/read-only and editable lists below are taken from the **B5 prompt text**,
+   which is the last authoritative copy in this session, and §14 is treated as the surrogate.
+2. **The Stage B6 plan does not exist in the repo.** Verified: `Get-ChildItem docs -Filter "*b6*"` → no output.
+   The work register below is therefore derived from the directive's own tiers (P0–P4) plus the
+   open items carried from B4/B5. No per-item caps exist → `UNKNOWN` for every cap (recorded, not invented).
+
+## Step 0 facts (this session)
+
+| Fact | Value | How |
+|---|---|---|
+| Frozen sha | `02d28362f27789bad9b79b6bdb7df9a54cd83954` | `git rev-parse HEAD` |
+| Baseline sha (specs) | `2c077cb` | `git diff --exit-code 2c077cb -- e2e-tests/specs` → exit 0 |
+| Tree | 8 untracked files, all the owner's scratch set (`check_neg_profit.cjs`, `quick_recon.py`, `scanner_ia_*`) | `git status --porcelain` (8 lines, all `??`) |
+| Node | `v24.18.0` | `node -v` |
+| App version | `1.7.0` | `package.json` |
+| Binary present | `target-e2e/debug/mobi-pos.exe`, sha256 `77CBC9A39A629B02677A75BC73564956C5744CC142E231BF7D8C8D296D1120A2` | `Get-FileHash` |
+| Log dir | `e2e-tests/results/runs/` | run.mjs default |
+
+**Binary provenance warning:** that binary was built from `2c077cb` (B4). HEAD `02d2836` changes only
+`docs/`, so app source is identical (`git diff --stat 2c077cb HEAD -- src src-tauri` not run this
+session — recorded as UNKNOWN rather than assumed).
+
+## Gated / read-only and editable lists (from the B5 prompt, standing orders absent)
+
+- **Gated (never edit):** DB schema/migrations, sync/outbox logic, auth/permissions.
+- **Read-only:** `src-tauri/src/refund.rs`, `customerAdapter`, `sqlPluginAdapter`, `refundNative.ts`,
+  `cashTerms.ts`, `checkoutRecovery.ts`, all checkout/commit code.
+- **Editable:** `receiptMath.ts`, `createOrderSlice.ts` (incl. the Q-γ seam), `RefundModal.tsx`;
+  `scripts/` tests; pipeline scripts; `docs`; NEW files under `e2e-tests/diag/`.
+
+## Work register (derived; no B6 plan available)
+
+| Item | Tier | State | Next action | Blocker |
+|---|---|---|---|---|
+| P0-a E2E evidence on frozen sha (REF-03/28/33/49, MNY-26/30), 3× isolated | P0 | `QUEUED` | rebuild, run ×3, evidence E- | none (needs ~6 runs, cap UNKNOWN) |
+| P0-b S3 money truth (QA'-QC', drawer + shift-close) | P0 | `QUEUED` | run REF-28, dump row/tenders/movements | none |
+| P0-c Consumer audit of the funding payload (unit assumed) | P0 | `QUEUED` | grep readers, table file:line | none |
+| P1-a WebView observability probe (C90, refund:persist channel) | P1 | `QUEUED` | research + probe | research |
+| P1-b Module-mock harness (D4/H4/H3-b) | P1 | `QUEUED` | research loader hooks | research |
+| P2-a B-2 decision pack (voucher lane reachability) | P2 | `QUEUED` | code trace + pack | owner decision (not yet produced) |
+| P2-b B-3 walk-in policy pack | P2 | `QUEUED` | pack (evidence exists in B4) | owner decision |
+| P2-c D4 (a)/(b) pack (F1 = UNKNOWN → worst case) | P2 | `QUEUED` | pack | owner decision |
+| P2-d Under-refund policy pack (1 765 shapes) | P2 | `QUEUED` | classify + pack | owner decision |
+| P3-a Fractional-original rule (blocked by two pre-existing expectations) | P3 | `PARKED` | decision needed (see below) | owner decision |
+| P3-b REF-92 store-level + E2E | P3 | `QUEUED` | build harness first (P1-b) | P1-b |
+| P3-c Mixed fleet rollback measurement | P3 | `QUEUED` | old reader over minor rows | none |
+| P4-a Reviewer pack update | P4 | `QUEUED` | after all above | — |
+
+### PARKED detail — P3-a fractional-original rule
+
+- **Blocker type:** owner decision (two pre-existing expectations contradict the rule).
+- **Proof:** B5 evidence — `I3 per-line remainder after two partials keeps only the untouched line :: got 270`
+  and `cumulative cash cap trims over-recovery` → `net 600` vs `300` with `sub-dinar-residue:30000`.
+- **Tried:** floor-the-drawer implementation, reverted to keep the suite green (147/147).
+- **Options:** (A) the two expectations are wrong → show why and change them; (B) the floor rule
+  applies only when the original cash lane is whole-DA *and* a non-cash lane has headroom;
+  (C) drop the rule and keep the `fractional-original-cash` flag.
+- **Recommendation:** B — narrowest, keeps the hard cap, and the two failing shapes are the ones where
+  a 300 DA remainder was misclassified.
+- **DONE when:** the rule lands and 147+ tests are green with the two expectations untouched.
+
+## Session log
+
+| When | Mode | What | Evidence |
 |---|---|---|---|
-| 0a | P0 | hygiene, gates, this file | **DELIVERED** |
-| 0b | P0 | binary provenance table | **DELIVERED** (see below; corrects B3) |
-| 0c | P0 | dashboard: PASS / PASS-PARTIAL / FLAKY split | **DELIVERED** |
-| 1a | P0 | fractional cash + invariant (vii) | **DELIVERED** (red→green, 1 mutation kill) |
-| 1b | P0 | funding format in minor units + `unit` | **DELIVERED** (roundtrip, legacy reader) |
-| 1c | P0 | B-2 reachability | **NOT DELIVERED** — time ran out at the 1d gate |
-| 1d | P0 | B-1 walk-in trade restore | **DELIVERED as measurement** (see below) |
-| 1e | P0 | under-refund sub-buckets | **NOT DELIVERED** |
-| 1f | P0 | mixed-fleet rollback | **NOT DELIVERED** |
-| 2a | P0 | store-level harness | **NOT DELIVERED** |
-| 2b | P0 | H4 controllable-delay proof | **NOT DELIVERED** |
-| 2c | P0 | D4 failure injection (P0, deferred twice) | **NOT DELIVERED** |
-| 2d | P0 | H3-b interleaving | **NOT DELIVERED** |
-| 2e | P0 | D4 RFC update | **NOT DELIVERED** (B3 text stands) |
-| 5 | P0 | verification on the final binary | **NOT DELIVERED** |
-| 3a-f | P1 | C90 | **NOT DELIVERED** |
-| 4a | P1 | REF-92 store-level | **NOT DELIVERED** |
-| 4b | P2 | REF-92 E2E | **NOT DELIVERED** |
-| 6 | P2 | reviewer pack update | **NOT DELIVERED** |
-
-Blocker for every NOT DELIVERED row after 1d: the batch reached its time budget at the 1d gate.
-No phase was started and left half-applied; the tree is committed and the gates are green.
-
-## Provenance finding (Phase 0b) — corrects B3 §10
-
-`git diff --stat 97fc1d8 9d40d7d -- src src-tauri` → **`src/utils/receiptMath.ts` changed (17+/2-)**.
-The B2 runs on `97fc1d8` are **stale** for the final code; B3 §10 should not have cited them.
-`git diff --stat 9d40d7d HEAD -- src src-tauri` → empty (working binary matches HEAD app source).
-
-## Phase 1a — fractional cash
-
-- Invariant (vii): split -> real `clampCashRefund` -> the slice's `Math.round` must conserve
-  (drawer + wallet + voucher + digital + debt == row total).
-- Red before: cash-only thirds lost 0.33/0.33/0.34; mixed thirds drifted ±0.33.
-- Implemented in `receiptMath.ts` only (Q-i): cash-only tickets round the REFUND to a cumulative
-  whole-dinar target (333+333+334=1000); mixed tickets round only the CASH lane and push the
-  sub-dinar remainder into a non-cash lane **with headroom** (so a lane already at its original
-  amount is never pushed past it). A fractional ORIGINAL cash lane is reported as
-  `anomalies:['fractional-original-cash']`.
-- Green: cash-only thirds/sevenths, mixed thirds; mutation "raw fractional cash" killed by (vii).
-- Invariant (v) refined to the Q-i reality: at most two lanes may deviate by ≤1 DA and their signed
-  deviations must cancel; everything else within 1 minor.
-
-## Phase 1b — funding format (Q-vi)
-
-- No tag contains the funding commit (`git tag --contains c9118c4` -> empty; latest release v1.7.0
-  predates it), so the format changed **in place**, version stays 1, with `unit:'minor'`.
-- Writer: `fundingPayloadOf(split, basis)`; reader `refundLaneTotalsOf` accepts `unit:'minor'`,
-  accepts a DA-valued object (flag `funding-unit-legacy`), never throws on malformed input.
-- Roundtrip assertion over 4 fixtures × 6 gross values, every lane.
-
-## Phase 1d — B-1 walk-in (stop-condition check)
-
-- `tradeValueUnclaimed` (`createOrderSlice.ts:2295-2296`) sets `tradeRestoredValue = 0` and
-  `valueReversed = netRefund` (trade excluded), with a warning + audit line. **Pre-existing**
-  (present in a9fa0ad), not introduced by B-1.
-- Measured walk-in (cash 700 + Reprise 300, no customer): **old and new are identical**
-  (net 700, cash 700). B-1 changes nothing for walk-ins -> the stop condition's premise
-  ("B-1 trade restore dropped for walk-ins") is **KILLED** by measurement.
-- Open policy question: an anonymous trade-in refund neither pays the trade value nor can restore
-  it (no wallet). Both versions behave this way; it is not a C01 regression.
-## B5 session (Track 0 + Track 1a partial)
-
-| Track | Status |
-|---|---|
-| 0 budget/hygiene | **DELIVERED** |
-| 1a restated (v) + 4 mutation kills | **DELIVERED** (147/147) |
-| 1a(b) fractional-original floor rule | **NOT DELIVERED — stop condition** |
-| 1a(c) shown == committed | NOT DELIVERED |
-| 1b 4 763-shape roundtrip | NOT DELIVERED |
-| 1c B-2 reachability | NOT DELIVERED |
-| 1d Q-gamma seam | NOT DELIVERED |
-| 1e Q-beta visibility | NOT DELIVERED |
-| 2 evidence, 3 S3 truth, 4 D4/H4/H3-b, 5 C90 | NOT DELIVERED |
-
-### Stop condition hit in 1a(b)
-
-Implementing Q-alpha b (floor the drawer, residue to a lane or `sub-dinar-residue:<r>`) made two
-pre-existing expectations fail:
-
-- `I3 per-line remainder after two partials keeps only the untouched line :: got 270`
-- `cumulative cash cap trims over-recovery` -> net 600 instead of 300 with a bogus
-  `sub-dinar-residue:30000` (a 300 DA remainder was treated as a sub-dinar residue)
-
-That is the declared "v2 contradicts a pre-existing test whose expectation looks legitimate"
-condition. The floor rule and the leftover handling were reverted; the restated (v) and the four
-mutation kills are kept. Q-alpha b needs an owner decision: either those two expectations are wrong
-(evidence needed) or the floor rule must not apply to those shapes.
-
+| Step 0 | Release Clerk | mission saved verbatim, Step 0 facts recorded, blockers found | E-0001, E-0002 |
+| — | — | **STOP S2**: remaining budget (~2 calls) < next item cap (≥8). No item started, tree clean. | E-0003 |
