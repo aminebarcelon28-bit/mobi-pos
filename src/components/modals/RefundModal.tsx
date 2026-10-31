@@ -554,10 +554,19 @@ export const RefundModal: React.FC = () => {
         setIsSubmitting(false);
         return;
       }
+      // REF-65 / REF-42: when this refund pays no cash at all, the "Espèces"
+      // channel cannot be honoured — the native lane refuses it
+      // (INVALID: cash refund without drawer movement, no cash was ever taken).
+      // The value returns through the ticket's own funding lanes (debt relief,
+      // wallet, or the original card rail), so the request goes out on the
+      // non-cash channel instead of one that can only be rejected.
+      const plannedCashOut = previewClamp ? previewClamp.cashOut : previewCashOut;
+      const effectiveRefundMethod =
+        refundMethod === 'Espèces' && !(plannedCashOut > 0) ? 'Avoir Client' : refundMethod;
       const refundResult = (await processRefund({
         originalTransaction: selectedTxn,
         refundItems: activeRefundItems,
-        refundMethod,
+        refundMethod: effectiveRefundMethod,
         refundReason: finalReason,
         cashierName: activeCashier?.name || 'Caissier',
         supervisorPinVerifiedAt,
@@ -573,7 +582,7 @@ export const RefundModal: React.FC = () => {
         showToast(
           refundMethod === 'Espèces' && cashDone !== netDone
             ? `Remboursement net ${formatDZD(netDone)} validé — espèces décaissées : ${formatDZD(cashDone)} (le solde retourne à ses origines).`
-            : `Remboursement de ${formatDZD(netDone)} validé avec succès (${refundMethod}).`,
+            : `Remboursement de ${formatDZD(netDone)} validé avec succès (${effectiveRefundMethod}).`,
           'success'
         );
         setSelectedTxn(null);
