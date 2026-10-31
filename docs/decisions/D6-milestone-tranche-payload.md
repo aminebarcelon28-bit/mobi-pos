@@ -30,3 +30,14 @@ forbid.
 
 Option A with: a dry-run migration on a copy, a backup step in the upgrade path, golden tests for
 `netMilestoneGrants` / clawback, and REF-87 re-enabled unchanged. Then delete D9's acceptance.
+
+## Update 2026-11-01 — the JSON round-trip is gone
+
+The wallet and loyalty writes no longer parse/serialise the customer document in Rust: they use
+`json_insert` / `json_set` inside the same transaction (`sql_append_customer_ledger`,
+`sql_patch_customer_loyalty`, `sql_set_customer_credit`). A 200 000-row / ~80 MB ledger refund went from
+**10.9 s to 4.4 s**, and all 34 refund tests still pass (E-0110).
+
+The remaining batch failure for REF-87 is NOT this cost: the offline-cash-cap auto-switch closes the refund
+dialog for a 2e9 cash refund, so the Avoir revalidation never runs. That is a `RefundModal` lifecycle bug,
+tracked as the next step.
