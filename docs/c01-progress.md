@@ -242,3 +242,16 @@ session — recorded as UNKNOWN rather than assumed).
 - **Full 33-ref: 15/18** (E-0051) - REF-87 now fails at `refund-pin` not displayed within 10 s after the
   95 MB ticket load (large-payload interaction timeout, not money). REF-35 and REF-42 unchanged/parked.
 - Remaining unblocked item: the refund modal's large-payload interaction cost (95 MB ticket).
+## B6 addendum 18 (REF-87: three real fixes landed; in-suite failure re-diagnosed and parked)
+
+- **Landed** (all verified, unit suites green, REF-87 isolated 5/5 - E-0053/E-0055):
+  `cb9f0c0` refund submit re-entrancy guard; `d03e1f7` durable (SQLite-counted) refund basis;
+  `d931f46`+`ae36dff` manager PIN is single-use and cleared when a ticket is selected
+  (a PIN typed for one refund could authorise the next one - authorization replay).
+- **In-suite failure re-diagnosed (E-0054, docs/c01-ref87-in-suite.md):** NOT a payload timeout. The 4e9
+  cash refund hits the offline cash cap, the app parks it and switches to Avoir Client asking for
+  confirmation, the spec helper re-submits by typing a PIN, and the landing refund closes the dialog ->
+  `refund-pin` never appears. Money is correct; the race is helper x deliberate two-step UX.
+- **PARKED on owner decision:** A) spec helper tolerates the dialog closing (spec edit, forbidden here);
+  B) app pre-checks the cap and submits as Avoir on the first click (removes the confirmation step -
+  recommended, but it is a money-flow UX call); C) leave as-is (passes alone, flakes in-suite).
