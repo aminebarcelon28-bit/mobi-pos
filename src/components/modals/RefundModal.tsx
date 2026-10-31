@@ -667,7 +667,13 @@ export const RefundModal: React.FC = () => {
         } else if (refundResult.reason === 'NO_OPEN_SHIFT') {
           showToast('Ouvrez la caisse avant tout remboursement (traçabilité de période).', 'error');
       } else {
-        showToast(`Erreur lors du remboursement: ${refundResult.reason}`, 'error');
+        // Include the native detail: a generic reason hides the cause in the
+        // field log (REF-87 surfaced only PERSISTENCE_FAILED for hours).
+        const refundDetail = String((refundResult as { detail?: unknown }).detail ?? '').trim();
+        showToast(
+          `Erreur lors du remboursement: ${refundResult.reason}${refundDetail ? ` :: ${refundDetail.slice(0, 180)}` : ''}`,
+          'error'
+        );
       }
     } catch (err) {
       console.error('Refund submission error:', err);

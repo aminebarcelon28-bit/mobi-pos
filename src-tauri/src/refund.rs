@@ -4579,6 +4579,31 @@ mod tests {
             .query_row("SELECT LENGTH(json_payload) FROM customers WHERE id='C1'", [], |r| r.get(0))
             .unwrap();
         assert!(payload_len > 20_000_000, "fixture must be big: {payload_len}");
+        // The real REF-87 ticket also carries ~15 MB of milestone awards; the
+        // refund merges the ticket payload too, so the fixture must include it.
+        let mut awards = String::from("[");
+        for i in 0..150_000 {
+            if i > 0 {
+                awards.push(',');
+            }
+            awards.push_str(&format!(
+                "{{\"milestoneId\":\"ms-20k\",\"threshold\":20000,\"rewardAmount\":1000,\"tranche\":{}}}",
+                i + 1
+            ));
+        }
+        awards.push(']');
+        let ticket_payload = format!(
+            "{{\"id\":\"TKT-1\",\"receiptNumber\":\"REC-1\",\"total\":4000000000,\"milestoneAwards\":{awards},\"items\":[{{\"id\":\"TKT-1-item-0\"}}],\"customer\":{{\"id\":\"C1\"}}}}"
+        );
+        conn.execute(
+            "UPDATE transactions SET json_payload = ?1 WHERE id = 'TKT-1'",
+            [ticket_payload],
+        )
+        .unwrap();
+        let ticket_len: i64 = conn
+            .query_row("SELECT LENGTH(json_payload) FROM transactions WHERE id='TKT-1'", [], |r| r.get(0))
+            .unwrap();
+        assert!(ticket_len > 8_000_000, "ticket fixture must be big: {ticket_len}");
 
         let mut req = base_req();
         req.customer_id = Some("C1".into());
