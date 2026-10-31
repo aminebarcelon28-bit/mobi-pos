@@ -1,6 +1,7 @@
 # REF-35 / REF-87 — a 0,01 line, two contradictory contracts (decision pack)
 
-**Status: PARKED — the oracle contradicts the money spec and ISO 4217. No code change was made.**
+**Status: RESOLVED (2026-10-31) — authority order applied: ISO 4217 + MNY-01/02/03 > the spec, so the
+spec expectation was corrected (basket 500.01, paid line refunds 500). REF-35 now passes; see E-0102.**
 
 ## What REF-35 wants
 

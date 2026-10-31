@@ -2377,8 +2377,13 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
     await payExactFlow();
     const tx = await landedSale(before);
     const sale = { id: String(tx.id), receipt: String(tx.receipt_number) };
-    console.log(`[REF-35] basket sale total=${String(tx.total)} subtotal=${String(tx.subtotal)} (display-only 0,01 line charged 0)`);
-    expect(Number(tx.total)).toBe(500);
+    // Authority order (docs/c01-ref35-minor-unit.md): ISO 4217 gives DZD 2 minor
+    // units and MNY-01 requires a 0,01 cart to be CHARGED 0,01. The old
+    // expectation (total 500 for a 500,01 basket) contradicted both and no
+    // rounding rule satisfies MNY-01/02/03 and that expectation together, so
+    // the corrected contract is the charged basket total.
+    console.log(`[REF-35] basket sale total=${String(tx.total)} subtotal=${String(tx.subtotal)} (0,01 line charged as a minor unit)`);
+    expect(Number(tx.total)).toBe(500.01);
     expect(stockOf(P001)).toBe(base001 - 1);
 
     expect(await beginRefund(sale.receipt)).toBe(true);
