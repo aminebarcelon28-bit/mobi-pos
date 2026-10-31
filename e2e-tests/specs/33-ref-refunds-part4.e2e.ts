@@ -582,7 +582,7 @@ async function submitAndSettle(
     await submitRefund();
   } catch (e) {
     if ((e as Error)?.message === 'refund-dialog-closed-before-submit') {
-          if (await graceLanded()) return { landed: true, surface: 'grace: dialog closed after the row landed' };
+          if (await graceLanded(closedDialogBudget)) return { landed: true, surface: 'grace: dialog closed after the row landed' };
       const surface = (await visibleToasts().catch(() => '')) || 'refund-dialog-closed';
       console.log(`[submitAndSettle ${tag}] dialog closed before submit: ${surface}`);
       return { landed: false, surface };
@@ -615,13 +615,20 @@ async function submitAndSettle(
   // PREVIOUS attempt poisoned the surface check while the current attempt's
   // commit was still in flight (~0.3-1 s behind). The grace window polls the
   // row for 6 s; a landing during it is success, not a refusal.
-  const graceLanded = async (): Promise<boolean> => {
-    for (let i = 0; i < 12; i++) {
+  const graceLanded = async (budgetMs = 6000): Promise<boolean> => {
+    const deadline = Date.now() + budgetMs;
+    while (Date.now() < deadline) {
       if (refundsFor(ticketId).length >= want) return true;
       await browser.pause(500);
     }
     return refundsFor(ticketId).length >= want;
   };
+  // A huge ticket's native merge can take ~1 min; when the dialog closes mid-flight
+  // the row it will write is still coming. Give that case a proportionate budget.
+  const ticketTotal = Number(
+    (one<{ t: number }>('SELECT total AS t FROM transactions WHERE id = ?', ticketId)?.t ?? 0),
+  );
+  const closedDialogBudget = ticketTotal > 100_000_000 ? 180000 : 6000;
   while (Date.now() - t0 < maxMs) {
     if (refundsFor(ticketId).length >= want) {
       if (tag) console.log(`[submitAndSettle ${tag}] landed at +${Math.round((Date.now() - t0) / 1000)}s`);
@@ -654,7 +661,7 @@ async function submitAndSettle(
           // confirmation click. That is the fail-closed shape the caller already
           // accepts (the s2 branch): report a refusal surface, never hang.
           if ((e as Error)?.message === 'refund-dialog-closed-before-submit') {
-          if (await graceLanded()) return { landed: true, surface: 'grace: dialog closed after the row landed' };
+          if (await graceLanded(closedDialogBudget)) return { landed: true, surface: 'grace: dialog closed after the row landed' };
             const surface = (await visibleToasts().catch(() => '')) || 'refund-dialog-closed';
             console.log(`[submitAndSettle ${tag}] cap switch closed the dialog: ${surface}`);
             return { landed: false, surface };
