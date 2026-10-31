@@ -205,6 +205,8 @@ export interface NativeRefundRequest {
     recordedBy: string;
   } | null;
   voucher?: { code: string; amount: number } | null;
+  /** D4-A: Avoir Client leg, applied as an increment inside the native txn. */
+  walletCredit?: number | null;
   cashMove?: {
     id: string;
     sessionId: string;
@@ -236,6 +238,9 @@ export interface NativeRefundOk {
   debtReliefApplied: number;
   /** Points written (echo of the shared TS verdict) — null when untouched. */
   customerPointsAfter?: number | null;
+  /** Wallet balance after the native Avoir leg — null when the refund had none.
+   *  The client mirrors this; it never computes or re-applies the credit. */
+  customerStoreCreditAfter?: number | null;
   /** Native-computed recovered COGS (restocked lines only, frozen costs). */
   recoveredCogs: number;
 }
@@ -252,6 +257,8 @@ export type RefundNativeResult =
       customerDebtAfter?: number | null;
       debtReliefApplied: number;
       customerPointsAfter?: number | null;
+      /** D4-A: wallet balance after the native Avoir leg (mirror, never re-applied). */
+      customerStoreCreditAfter?: number | null;
       recoveredCogs: number;
       /** Hydrated original ticket (durable refundedItems union) for cache/state. */
       updatedOriginal: SaleTransaction;

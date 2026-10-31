@@ -2415,6 +2415,8 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     // profile from the transaction snapshot and saving it here would therefore
     // un-delete it. `origCustLive` gates both the wallet write and the save.
     const origCustLive = !origCust || customers.some((c) => c.id === origCust.id);
+    // D4-A: the Avoir leg handed to the native transaction (0 = no wallet leg).
+    let walletLegForNative = 0;
     if (origCust) {
       const cust = customers.find((c) => c.id === origCust.id) || origCust;
       const currentTotalSpent = cust.totalSpent || 0;
@@ -2470,6 +2472,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       );
 
       const creditToAdd = walletAddBase + tradeRestoreNow;
+      walletLegForNative = creditToAdd;
       // REF-40: an archived profile has no usable owner for a wallet credit.
       // Refuse instead of committing a refund whose value lands nowhere (or,
       // worse, resurrects the deleted profile through the upsert).
@@ -2479,21 +2482,11 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       const newCredit = (cust.storeCredit || 0) + creditToAdd - claw.totalRevoked;
 
       const ledgerEntries: LoyaltyLedgerEntry[] = [];
-      if (creditToAdd > 0) {
-        ledgerEntries.push(
-          createLedgerEntry(
-            cust.id,
-            'conversion',
-            0,
-            newPoints,
-            `Émission Avoir Client (${creditToAdd} DA${
-              tradeRestoreNow > 0 ? ` dont reprise ${tradeRestoreNow} DA` : ''
-            }) suite au retour Ticket #${originalTransaction.receiptNumber}`,
-            originalTransaction.id,
-            creditToAdd
-          )
-        );
-      }
+      // D4-A: the Avoir leg's balance update AND its creditDeltaDzd ledger
+      // emission are written by `refund_sale_atomic` inside the refund
+      // transaction. The TS must not emit a second ledger row for the same
+      // money (double credit is the new failure mode) — the native value is
+      // mirrored back afterwards.
       if (pointsToDeduct > 0) {
         ledgerEntries.push(
           createLedgerEntry(
@@ -2896,6 +2889,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         itemsHash: refundItemsHash,
         receiptNumber: refundReceiptNumber,
         method: effectiveRefundMethod,
+        walletCredit: walletLegForNative > 0 ? Math.round(walletLegForNative) : null,
         online: refundOnline,
         localDeviceId: refundLocalDevice || '',
         activeShiftId: refundShiftGate.id || '',
@@ -3070,6 +3064,11 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       const nativeDebtAfter = typeof nativeRes.customerDebtAfter === 'number'
         ? Math.max(0, Math.round(nativeRes.customerDebtAfter))
         : undefined;
+      // D4-A: the wallet balance after the native Avoir leg. The TS mirrors this
+      // value; it never computes or re-applies the credit (no double credit).
+      const nativeStoreCreditAfter = typeof nativeRes.customerStoreCreditAfter === 'number'
+        ? Math.max(0, Math.round(nativeRes.customerStoreCreditAfter))
+        : undefined;
       const nativePointsAfter = typeof nativeRes.customerPointsAfter === 'number'
         ? Math.max(0, Math.round(nativeRes.customerPointsAfter))
         : undefined;
@@ -3078,6 +3077,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             ...updatedCustomerProjected,
             ...(nativeDebtAfter !== undefined ? { currentDebt: nativeDebtAfter } : {}),
             ...(nativePointsAfter !== undefined ? { loyaltyPoints: nativePointsAfter } : {}),
+            ...(nativeStoreCreditAfter !== undefined ? { storeCredit: nativeStoreCreditAfter } : {}),
           }
         : undefined;
       const hydratedOriginal = nativeRes.updatedOriginal ?? updatedOriginalTransaction;

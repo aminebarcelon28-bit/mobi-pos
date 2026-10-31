@@ -274,6 +274,12 @@ pub struct RefundRequest {
     pub customer_point_buckets_json: Option<String>,
     pub debt: Option<DebtReliefIn>,
     pub voucher: Option<VoucherRestoreIn>,
+    /// Avoir Client leg (DZD). Credited to the customer's wallet as an
+    /// INCREMENT applied inside this transaction (balance + the
+    /// `creditDeltaDzd` ledger emission that makes it a destination of record).
+    /// Optional, so cash and card refunds stay byte-identical.
+    #[serde(default)]
+    pub wallet_credit: Option<i64>,
     pub cash_move: Option<CashMoveIn>,
     pub audit: AuditIn,
 }
@@ -294,6 +300,10 @@ pub struct RefundOk {
     /// `customer_debts` ledger inside this transaction (None when the refund
     /// carried no customer).
     pub customer_debt_after: Option<i64>,
+    /// Wallet balance after the Avoir leg applied inside this transaction
+    /// (None when the refund carried no wallet leg). The client mirrors this
+    /// value; it never computes the credit itself.
+    pub customer_store_credit_after: Option<i64>,
     /// Debt relief actually applied (≤ requested; clamped to the live
     /// balance with a warning when the requested share exceeded it).
     pub debt_relief_applied: i64,
@@ -433,6 +443,18 @@ fn validate(req: &RefundRequest) -> Result<(), TrustError> {
         if rc.trim() != d.customer_id.trim() {
             return Err(conflict("INVALID:debt customer mismatch"));
         }
+    }
+    // Avoir leg: no wallet can be credited without a recipient. Enforced HERE,
+    // at the money boundary, so no caller can bypass it (TS pre-checks are UX).
+    if req.wallet_credit.unwrap_or(0) > 0
+        && req
+            .customer_id
+            .as_deref()
+            .map(str::trim)
+            .map(str::is_empty)
+            .unwrap_or(true)
+    {
+        return Err(conflict("AVOIR_RECIPIENT_REQUIRED"));
     }
     if let Some(s) = &req.supervisor {
         if s.user_id.trim().is_empty() || s.verified_at.trim().len() < 10 {
@@ -1677,6 +1699,82 @@ fn apply_refund_in_txn(
         loyalty_applied = Some(points);
     }
 
+    // 11c. Avoir Client leg: the wallet credit is money, so it is applied HERE,
+    //      inside this transaction, as an INCREMENT on the durable balance —
+    //      never an absolute value computed by the client. The `creditDeltaDzd`
+    //      ledger emission that makes the credit a destination of record is
+    //      written in the same step. No recipient -> refuse and roll everything
+    //      back (the refund row and the restock die with it).
+    let mut wallet_applied: i64 = 0;
+    let mut wallet_after: Option<i64> = None;
+    if let Some(inc) = req.wallet_credit {
+        let inc = inc.max(0);
+        if inc > 0 {
+            let Some(cust_id) = req
+                .customer_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            else {
+                return Err(conflict("AVOIR_RECIPIENT_REQUIRED"));
+            };
+            ensure_customer_stub(tx, cust_id, "", now)?;
+            let current: f64 = tx
+                .query_row(
+                    "SELECT COALESCE(store_credit, 0) FROM customers WHERE id = ?1",
+                    [cust_id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| TrustError::op_failed(format!("wallet read: {e}")))?;
+            let next = current + inc as f64;
+            // Ledger emission: prepend to the payload's ledger array (same shape
+            // as createLedgerEntry in TS, creditDeltaDzd included).
+            let raw: String = tx
+                .query_row(
+                    "SELECT json_payload FROM customers WHERE id = ?1",
+                    [cust_id],
+                    |r| r.get(0),
+                )
+                .map_err(|e| TrustError::op_failed(format!("wallet payload read: {e}")))?;
+            let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
+            let obj = parsed.as_object().cloned().unwrap_or_default();
+            let mut ledger = obj
+                .get("ledger")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            ledger.insert(
+                0,
+                serde_json::json!({
+                    "id": format!("LEDGER-REF-{}", req.refund_id),
+                    "customerId": cust_id,
+                    "timestamp": now,
+                    "type": "conversion",
+                    "points": 0,
+                    "balanceAfter": next,
+                    "description": format!(
+                        "Émission Avoir Client ({} DA) suite au retour Ticket #{}",
+                        inc, req.receipt_number
+                    ),
+                    "referenceId": req.ticket_id,
+                    "creditDeltaDzd": inc,
+                    "performedBy": "Système Caisse",
+                }),
+            );
+            let mut patch = serde_json::Map::new();
+            patch.insert("storeCredit".to_string(), serde_json::Value::from(next));
+            patch.insert("ledger".to_string(), serde_json::Value::Array(ledger));
+            let merged_payload = merge_customer_payload(tx, cust_id, &patch, &mut warnings)?;
+            tx.execute(
+                "UPDATE customers SET store_credit = ?2, json_payload = ?3, updated_at = ?4, version = version + 1 WHERE id = ?1",
+                params![cust_id, next, merged_payload, now],
+            )
+            .map_err(|e| map_rusqlite("wallet persist", e))?;
+            wallet_applied = inc;
+            wallet_after = Some(next.round() as i64);
+        }
+    }
+
     // 12. Voucher credit-back with the same CAS discipline as
     //     `voucherAdapter.creditBack`: conditional update on the exact
     //     balance read; 0 rows re-inspects (already-applied converges,
@@ -1898,6 +1996,33 @@ fn apply_refund_in_txn(
     append_in_tx(tx, mac_key, &audit_req, &event_id, now)
         .map_err(|e| TrustError::op_failed(format!("audit: {e:?}")))?;
 
+    // 16. Money conservation BEFORE COMMIT: the refund's total must equal the sum
+    //     of the legs written in THIS transaction. The card lane has no
+    //     destination of record in this schema, so a refund carrying a card leg is
+    //     scoped OUT explicitly (warned) instead of being silently accepted.
+    {
+        let card_leg_minor: i64 = serde_json::from_str::<serde_json::Value>(&req.refund_payload)
+            .ok()
+            .and_then(|v| v.get("funding").cloned())
+            .and_then(|f| f.get("digital").and_then(|d| d.as_i64()))
+            .unwrap_or(0);
+        if card_leg_minor > 0 {
+            warnings.push(format!(
+                "[refund] rail carte sans destination de remboursement: {:.2} DA hors équilibre.",
+                card_leg_minor as f64 / 100.0
+            ));
+        } else {
+            let voucher_leg = req.voucher.as_ref().map(|v| v.amount).unwrap_or(0).max(0);
+            let cash_leg = req.cash_tendered.max(0);
+            let sum = cash_leg + wallet_applied + voucher_leg + debt_relief_applied;
+            if total_reversed != sum {
+                return Err(conflict(&format!(
+                    "INVALID:refund legs do not balance (total {total_reversed} != cash {cash_leg} + wallet {wallet_applied} + voucher {voucher_leg} + debt {debt_relief_applied})"
+                )));
+            }
+        }
+    }
+
     Ok(RefundOk {
         refund_id: req.refund_id.clone(),
         receipt_number: req.receipt_number.clone(),
@@ -1906,6 +2031,7 @@ fn apply_refund_in_txn(
         warnings,
         ticket_payload: merged_str,
         customer_debt_after,
+        customer_store_credit_after: wallet_after,
         debt_relief_applied,
         customer_points_after: loyalty_applied,
         recovered_cogs,
@@ -2101,7 +2227,7 @@ mod tests {
                 id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT NOT NULL,
                 json_payload TEXT NOT NULL, updated_at TEXT NOT NULL,
                 idempotency_key TEXT DEFAULT '', created_at TEXT DEFAULT '',
-                loyalty_points INTEGER NOT NULL DEFAULT 0, current_debt INTEGER,
+                loyalty_points INTEGER NOT NULL DEFAULT 0, current_debt INTEGER, store_credit REAL DEFAULT 0,
                 version INTEGER NOT NULL DEFAULT 1, device_id TEXT DEFAULT 'legacy',
                 sync_status TEXT DEFAULT 'pending', deleted INTEGER DEFAULT 0
             );
@@ -2248,6 +2374,8 @@ mod tests {
             subtotal: 200,
             discount_total: 0,
             total_net: 200,
+            value_reversed: Some(450),
+            wallet_credit: None,
             cost_total: 100,
             pricing_tier: "Retail".into(),
             payment_method: "Especes".into(),
@@ -3840,6 +3968,105 @@ mod tests {
             .unwrap();
         assert_eq!(shift2, "S1");
         assert_eq!(cash2, 150.0, "no second cash movement");
+    }
+
+    // --- D4-A: the Avoir leg is native, incremental and atomic ---------------
+
+    #[test]
+    fn d4a_wallet_leg_commits_balance_and_ledger_once() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        let mut req = base_req();
+        // 200 total = 150 cash + 50 wallet
+        req.wallet_credit = Some(50);
+        req.voucher = None;
+        req.debt = None;
+        req.customer_id = Some("C1".into());
+        conn.execute(
+            "INSERT INTO customers (id, name, phone, json_payload, store_credit, updated_at) VALUES ('C1','C','','{}',10,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO UPDATE SET store_credit = 10",
+            [],
+        )
+        .unwrap();
+        let ok = run(&mut conn, &req).expect("wallet refund commits");
+        assert_eq!(ok.customer_store_credit_after, Some(60));
+        let credit: f64 = conn
+            .query_row("SELECT store_credit FROM customers WHERE id='C1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(credit, 60.0, "applied as an increment inside the txn");
+        let payload: String = conn
+            .query_row("SELECT json_payload FROM customers WHERE id='C1'", [], |r| r.get(0))
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        let ledger = v.get("ledger").and_then(|l| l.as_array()).cloned().unwrap_or_default();
+        assert_eq!(ledger.len(), 1, "exactly one ledger emission");
+        assert_eq!(ledger[0].get("creditDeltaDzd").and_then(|c| c.as_i64()), Some(50));
+        assert_eq!(ledger[0].get("referenceId").and_then(|c| c.as_str()), Some("TKT-1"));
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transactions WHERE id='REF-H1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
+
+    #[test]
+    fn d4a_wallet_leg_without_recipient_is_refused_and_writes_nothing() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        let mut req = base_req();
+        req.wallet_credit = Some(50);
+        req.customer_id = None;
+        let err = run(&mut conn, &req).expect_err("must refuse");
+        assert!(format!("{err:?}").contains("AVOIR_RECIPIENT_REQUIRED"), "{err:?}");
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transactions WHERE id='REF-H1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "no refund row");
+        let dedup: i64 = conn
+            .query_row("SELECT COUNT(*) FROM refund_dedup", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(dedup, 0, "no dedup hash");
+        let ledger_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM inventory_ledger WHERE ref_id='REF-H1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ledger_rows, 0, "no restock");
+    }
+
+    #[test]
+    fn d4a_forced_wallet_failure_rolls_the_whole_refund_back() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        conn.execute(
+            "INSERT INTO customers (id, name, phone, json_payload, store_credit, updated_at) VALUES ('C1','C','','{}',10,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO UPDATE SET store_credit = 10",
+            [],
+        )
+        .unwrap();
+        // Force the wallet UPDATE to fail inside the transaction.
+        conn.execute(
+            "CREATE TRIGGER fail_wallet BEFORE UPDATE OF store_credit ON customers BEGIN SELECT RAISE(ABORT, 'wallet boom'); END",
+            [],
+        )
+        .unwrap();
+        let mut req = base_req();
+        req.wallet_credit = Some(50);
+        let err = run(&mut conn, &req).expect_err("wallet failure must abort");
+        assert!(format!("{err:?}").to_lowercase().contains("wallet"), "{err:?}");
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transactions WHERE id='REF-H1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "refund row rolled back");
+        let ledger_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM inventory_ledger WHERE ref_id='REF-H1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ledger_rows, 0, "restock rolled back");
+        let credit: f64 = conn
+            .query_row("SELECT store_credit FROM customers WHERE id='C1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(credit, 10.0, "wallet untouched");
     }
 }
 
