@@ -133,3 +133,19 @@ session — recorded as UNKNOWN rather than assumed).
 - Landed rule: residue -> real card rail if one exists, else the fractional cash lane, else a credit lane, else cash. Whole-DA cash lanes never carry a fraction; fractional originals do, and the clamp loss is flagged.
 - I4b/r and REF-92 assertions updated to the measured rule (both were authored this session; the change is named in the test). unit 159/0, ref92-c89 20/0 (E-0028).
 - C90 remains UNPROVEN (REF-28 1/3; the writing expression was never observed), so no blind change was made to PaymentModal.
+
+## B6 addendum 10 (C90 CLOSED - root cause observed and fixed)
+
+- **Root cause OBSERVED** (E-0029, docs/c01-c90-root-cause.md): the cash field's own display buffer stays `"900"`
+  while focused; applying the loyalty credit does not blur it, pay-exact (old code) re-focused it, and the
+  next blur re-committed 900 into the state. No modal writer ran between the correct 800 and the bad submit.
+- **Fix** (`PaymentModal.tsx`, editable): `commitCashField()` flushes the field before every programmatic
+  tender write; pay-exact and the quick bills no longer re-focus it. Committed as `06d850e`.
+- **Binary** `6C2ADD1B...8FE2` (fresh worktree at 06d850e, clean build).
+- **REF-28: 3/3** (E-0030) - tenders `[avoir 100, especes 800]`, total 800, in all three runs; refund 800 cash + 100 credit.
+- **Regression set 15/15** (E-0031): REF-03 3/3, REF-33 3/3, REF-49 3/3, MNY-26 3/3, MNY-30 3/3.
+- **REF-49 now 3/3** - the earlier 2/3 was the B-3 walk-in trade path; it no longer reproduces on this binary.
+  B-3 stays an open POLICY question (anonymous trade-in restore), not an observed failure today.
+- **Evidence-file repair (disclosed):** appends had concatenated objects onto one line (no trailing newline);
+  `docs/c01-evidence.ndjson` was re-split into one object per line preserving every byte - 31 objects,
+  ids E-0001..E-0031 sequential, all JSON-parse clean.
