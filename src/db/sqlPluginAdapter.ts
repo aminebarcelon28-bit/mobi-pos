@@ -4024,6 +4024,25 @@ export function stripDeviceLocalSettingValue<T>(key: string, value: T): T {
  * is the complete object as JSON; remote persists it in a per-entity KV table.
  * Never throws fatally — callers still catch, but this is already defensive.
  */
+/**
+ * Case 23: consume the native `sync_status = 'pending'` marker the refund/void
+ * wallet write stamps inside its transaction. Boot calls this BEFORE the cloud
+ * credential gate (it only touches local rows), so an offline first boot still
+ * repairs a crash window between the native commit and the client enqueue.
+ */
+export async function requeuePendingCustomerWrites(db?: Database): Promise<number> {
+  const d = db ?? (await getLocalDb());
+  const { requeuePendingCustomers } = await import('../sync/pendingCustomerRequeue');
+  return requeuePendingCustomers(
+    {
+      select: (sql, args) => d.select(sql, args) as Promise<unknown>,
+      execute: (sql, args) => d.execute(sql, args) as Promise<unknown>,
+    },
+    (entity, id, payload) => enqueueGenericSync(entity, id, payload),
+    (message, detail) => console.warn(message, detail),
+  );
+}
+
 export async function enqueueGenericSync(
   entity: GenericEntity, id: string, entityPayload: Record<string, unknown>,
 ): Promise<void> {
