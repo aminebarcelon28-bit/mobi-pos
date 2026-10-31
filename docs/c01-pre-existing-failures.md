@@ -66,3 +66,21 @@ changes in this pass (identical verdicts on both builds).
   pre-REF-65 build (`eb95527`) and the current one - pre-existing, not a regression, not fixed here
   (docs/c01-ref42-double-delivery.md, E-0042).
 - Full `31-ref-refunds-part2`: **15/15 GREEN** on a fresh build of `2b0440e` (E-0043).
+## Second sweep - 33-ref-refunds-part4 (18 cases)
+
+| Build | Result | Failing cases |
+|---|---|---|
+| HEAD `2b0440e` (`0B7134D4`) | **14/18** | REF-35, REF-40, REF-42, REF-87 |
+| pre-change `e88136b` (`32F31CBD`) | REF-35 **0/2**, REF-40 **0/2**, REF-87 **0/2** | same three fail without any of this pass's changes |
+
+So every failure in this file is **pre-existing**; the C90/REF-13/REF-36/REF-65 work introduced none.
+
+| Case | Assertion | What it looks like | Evidence |
+|---|---|---|---|
+| REF-35 | `Expected 500, Received 500.01` (33-ref:2358) | a 0,01 DA "display-only" gift line is charged on the **sale** (`sale total=500.01 subtotal=500.01`), before any refund runs | E-0045, E-0046 |
+| REF-40 | `Expected 1, Received 0` | deleted-customer tombstone path leaves a count at 0 | E-0045, E-0046 |
+| REF-42 | `Expected 700, Received 1400` | the oracle double-counts one mirrored wallet credit - decision pack `docs/c01-ref42-double-delivery.md` | E-0042, E-0044 |
+| REF-87 | `Expected 500, Received 500.01` | same 0,01 shape at extreme values | E-0045, E-0046 |
+
+**Queue for the next pass:** REF-35/REF-87 share one cause (the gift line's 0,01 reaching the cart total) and are
+the cheapest pair to fix together; REF-40 is a separate tombstone path; REF-42 waits on the owner decision.
