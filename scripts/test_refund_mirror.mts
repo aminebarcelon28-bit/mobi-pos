@@ -16,7 +16,7 @@
  * Run: node --import ./scripts/ts-resolve-hook.mjs --experimental-strip-types scripts/test_refund_mirror.mts
  */
 import Database from 'better-sqlite3';
-import { buildRefundMirrorStatements } from '../src/db/refundMirrorSql.ts';
+import { buildRefundMirrorStatements, clawbackLedgerForMirror } from '../src/db/refundMirrorSql.ts';
 
 let passed = 0;
 let failed = 0;
@@ -62,7 +62,8 @@ function makeDb(): Database.Database {
       total_spent REAL NOT NULL DEFAULT 0,
       json_payload TEXT NOT NULL DEFAULT '{}',
       updated_at TEXT,
-      version INTEGER NOT NULL DEFAULT 1
+      version INTEGER NOT NULL DEFAULT 1,
+      deleted INTEGER NOT NULL DEFAULT 0
     );
   `);
   // The row as it looked when the refund read it back: wallet 150, no debit.
@@ -247,6 +248,47 @@ check('no TS ledger entry means no ledger write at all', () => {
   applyMirror(db, '2026-10-31T10:05:01Z', false);
   assertEqual((readPayload(db).ledger as unknown[]).length, before, 'ledger length');
   assertEqual(readRow(db).store_credit, 60, 'store_credit column');
+});
+
+check('a soft-deleted customer is not patched or version-bumped (F4)', () => {
+  const db = makeDb();
+  concurrentDebit(db);
+  db.prepare('UPDATE customers SET deleted = 1 WHERE id = ?').run('C1');
+  const before = readRow(db);
+  applyMirror(db);
+  const after = readRow(db);
+  assertEqual(after.version, before.version, 'version must not advance');
+  assertEqual(after.loyalty_points, before.loyalty_points, 'loyalty_points must not change');
+  assertEqual(after.json_payload, before.json_payload, 'payload must not change');
+});
+
+check('a legacy non-array ledger refuses the append instead of silently writing (F3)', () => {
+  const db = makeDb();
+  concurrentDebit(db);
+  // Double-encoded ledger (a known legacy shape the DB heals separately).
+  const payload = readPayload(db);
+  payload.ledger = JSON.stringify(payload.ledger);
+  db.prepare('UPDATE customers SET json_payload = ? WHERE id = ?').run(JSON.stringify(payload), 'C1');
+  applyMirror(db);
+  const after = readPayload(db);
+  assertEqual(typeof after.ledger, 'string', 'legacy ledger must be left as-is, not replaced');
+  assertEqual(readRow(db).store_credit, 60, 'store_credit column untouched');
+});
+
+check('a clawback routed natively is never mirrored a second time (F2)', () => {
+  const entries = [{ id: 'C1:milestone:ms-20k:tranche:5:clawback:TKT-1' }, { id: 'other' }];
+  assertEqual(clawbackLedgerForMirror(entries, true), [], 'routed natively must emit no TS rows');
+  assertEqual(clawbackLedgerForMirror(entries, false), entries, 'not routed must keep all rows');
+  // The mirror never appends a native clawback id, even if one were passed:
+  const db = makeDb();
+  concurrentDebit(db);
+  applyMirror(db);
+  const ledger = (readPayload(db).ledger ?? []) as Array<Record<string, unknown>>;
+  assertEqual(
+    ledger.filter((e) => String(e.id ?? '').startsWith('LEDGER-REF-CLAW-')).length,
+    0,
+    'native claw rows must not be created by the TS mirror',
+  );
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

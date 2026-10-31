@@ -47,3 +47,8 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
   never touched by this work, so they are registered as independent defects to fix next.
 - Item 8 is a harness limitation (seeding the wallet near 2^32 does not survive checkout); the native
   increment itself is proven at 2^31+1 and 4e9.
+
+| 35 | Outbox/Dexie pushed the pre-commit customer snapshot (a debit's pending payload could be replaced; the 64 KB cap could shed the ledger) | **COVERED** | F1: mirror returns the committed snapshot and the refund enqueues THAT; money keys are protected in `payloadHygiene` — `test_refund_mirror.mts` + `test_h24_payload_hygiene.mjs` (E-0095) |
+| 36 | Milestone revocation mirrored twice (TS row + native row, ids never match) | **COVERED** | F2: `clawbackLedgerForMirror` is the single tested gate — `test_refund_mirror.mts` (E-0095) |
+| 37 | Legacy double-encoded ledger: append silently did nothing | **COVERED** | F3: `json_type(...) = 'array'` guard + a 0-row warning — `test_refund_mirror.mts` (E-0095) |
+| 38 | Mirror patched/version-bumped a soft-deleted customer row | **COVERED** | F4: `AND deleted = 0` — `test_refund_mirror.mts` (E-0095) |

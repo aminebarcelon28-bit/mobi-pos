@@ -60,6 +60,7 @@ import {
 } from '../../utils/pricingEngine';
 import { computeCartTotals, computeRefundFundingSplit, refundLaneTotalsOf, fundingPayloadOf, computeTradeInSettlement, computeTradeRestoreQuota, lineProfitNet, refundableValueOf } from '../../utils/receiptMath';
 import type { RefundLaneTotals } from '../../utils/receiptMath';
+import { clawbackLedgerForMirror } from '../../db/refundMirrorSql';
 import {
   cashSalesFromTxns,
   cashRefundsFromTxns,
@@ -2512,9 +2513,10 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       // D4-A: when the revocation is routed to the native transaction, THAT
       // transaction emits its own creditDeltaDzd row. Pushing the TS rows as
       // well would record the same clawback twice, and peers re-derive the
-      // wallet scalar from the ledger. Only emit locally when it is not routed.
-      if (walletClawbackForNative === 0) {
-        for (const e of claw.entries) ledgerEntries.push(e);
+      // wallet scalar from the ledger. `clawbackLedgerForMirror` is the single
+      // (tested) gate for that decision.
+      for (const e of clawbackLedgerForMirror(claw.entries, walletClawbackForNative > 0)) {
+        ledgerEntries.push(e);
       }
 
       const existingLedger = cust.ledger || [];
@@ -3195,7 +3197,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           // TS-side ledger rows.
           const savedCust = await persistWithRetryOnce(async () => {
             const { customerAdapter } = await import('../../db/adapters/customerAdapter');
-            await customerAdapter.saveRefundMirror(hydratedCustomer, refundMirrorLedger);
+            return customerAdapter.saveRefundMirror(hydratedCustomer, refundMirrorLedger);
           });
           if (!savedCust.ok) {
             nativeWarnings.push(
@@ -3203,13 +3205,16 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             );
             console.warn('[refund:persist] customer save failed; queueing to outbox', savedCust.error);
           }
+          // Review F1: the outbox keeps one row per (entity, id), so enqueueing
+          // the pre-commit object would replace a concurrent debit's payload.
+          const committedCustomer = savedCust.ok ? savedCust.value : hydratedCustomer;
           await sql
-            .enqueueGenericSync('customer', hydratedCustomer.id, hydratedCustomer as unknown as Record<string, unknown>)
+            .enqueueGenericSync('customer', committedCustomer.id, committedCustomer as unknown as Record<string, unknown>)
             .catch((e: unknown) => {
               nativeWarnings.push('Dette client : mise en file de synchronisation différée — le remboursement reste valide.');
               console.warn('[refund:sync] customer enqueue deferred:', e);
             });
-          void fireSync('customer', hydratedCustomer.id, hydratedCustomer);
+          void fireSync('customer', committedCustomer.id, committedCustomer);
           try {
             const { db } = await import('../../db/database');
             await db.customers.put(hydratedCustomer);

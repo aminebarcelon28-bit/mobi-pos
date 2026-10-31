@@ -47,6 +47,11 @@ const SYNC_PROTECTED_KEYS = new Set([
   'actualCash', 'actual_cash', 'expectedCash', 'expected_cash', 'discrepancy',
   'openingNote', 'closingNote', 'cashierName', 'openedBy', 'currentCashier',
   'terminalName', 'type', 'amount', 'denominations',
+  // Money carried inside a customer payload (D4-A review F1). The byte cap may
+  // not shed a wallet balance or its ledger: peers re-derive the balance from
+  // the ledger, so dropping it silently changes the money a device believes.
+  'ledger', 'storeCredit', 'store_credit', 'currentDebt', 'current_debt',
+  'loyaltyPoints', 'pointBuckets', 'totalSpent', 'total_spent', 'milestoneAwards',
 ]);
 
 function isBlobLikeString(value: string): boolean {

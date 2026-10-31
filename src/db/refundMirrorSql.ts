@@ -13,7 +13,7 @@ import type { Customer, LoyaltyLedgerEntry } from '../types/pos';
  * overwritten with the stale pre-debit snapshot — free credit (N2).
  *
  * These statements are deliberately merge-only:
- *   - a JSON merge patch (`json_patch`, RFC 7386) of loyalty keys, evaluated
+ *   - a JSON merge patch (RFC 7386, `json_patch`) of loyalty keys, evaluated
  *     against the row's CURRENT payload, so `storeCredit`, `currentDebt` and
  *     the native `ledger` rows are preserved;
  *   - `store_credit` and `current_debt` columns are never in the SET list;
@@ -41,14 +41,31 @@ function loyaltyPatch(customer: Customer): Record<string, unknown> {
 }
 
 /**
+ * The milestone revocation rides the native transaction when it is routed there,
+ * and that transaction emits its own `creditDeltaDzd` row. The TS rows carry a
+ * different id (`<cust>:milestone:…:clawback:<txn>` vs
+ * `LEDGER-REF-CLAW-<refundId>`), so an id-based dedupe cannot collapse them:
+ * emitting both would revoke twice in the ledger, and peers re-derive the wallet
+ * scalar from the ledger. This is the single gate that keeps one row per
+ * revocation — kept pure so it can be tested without the store.
+ */
+export function clawbackLedgerForMirror<T>(
+  entries: readonly T[],
+  routedToNative: boolean,
+): T[] {
+  return routedToNative ? [] : [...entries];
+}
+
+/**
  * Build the statements that mirror loyalty state onto an existing customer row.
  *
  * `newLedgerEntries` must contain ONLY the entries this operation just created
  * (a refund on a heavy customer carries hundreds of thousands of historical
  * ledger rows; re-scanning them would be quadratic).
  *
- * The row must already exist: the refund path refuses to mirror a tombstoned
- * profile (`origCustLive`), so an INSERT here could only resurrect one.
+ * The row must already exist and be live: the refund path refuses to mirror a
+ * tombstoned profile (`origCustLive`), and the `deleted = 0` predicate keeps a
+ * concurrently-deleted row untouched rather than bumping its version.
  */
 export function buildRefundMirrorStatements(
   customer: Customer,
@@ -70,7 +87,8 @@ export function buildRefundMirrorStatements(
                    loyalty_points = COALESCE($4, loyalty_points),
                    updated_at = $5,
                    version = version + 1
-             WHERE id = $1`,
+             WHERE id = $1
+               AND deleted = 0`,
       args: [
         customer.id,
         JSON.stringify(loyaltyPatch(customer)),
@@ -93,10 +111,15 @@ export function buildRefundMirrorStatements(
     statements.push({
       // Append by id: a row already emitted natively (or by an earlier retry)
       // is never duplicated, and the wallet's own ledger is left untouched.
+      // `json_type(...) = 'array'` refuses a legacy double-encoded ledger
+      // instead of silently doing nothing — the caller warns on 0 rows.
       sql: `UPDATE customers
                SET json_payload = json_insert(json_payload, '$.ledger[#]', json($2))
              WHERE id = $1
+               AND deleted = 0
                AND json_valid(json_payload)
+               AND (json_type(json_payload, '$.ledger') IS NULL
+                    OR json_type(json_payload, '$.ledger') = 'array')
                AND NOT EXISTS (
                      SELECT 1 FROM json_each(customers.json_payload, '$.ledger')
                       WHERE json_extract(value, '$.id') = $3

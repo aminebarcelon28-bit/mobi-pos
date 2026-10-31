@@ -232,24 +232,77 @@ export const customerAdapter = {
    *   - merge-patches loyalty keys into the row's CURRENT payload;
    *   - appends only the ledger rows this refund created, by id.
    * See `src/db/refundMirrorSql.ts` for the statements and their idempotency.
+   *
+   * Returns the customer as the COMMITTED row now holds it. Callers must use
+   * that snapshot for the outbox/Dexie, never their pre-commit object: the
+   * outbox keeps one row per (entity, id), so enqueueing a stale wallet would
+   * replace a debit's pending payload (review F1).
    */
   async saveRefundMirror(
     customer: Customer,
     newLedgerEntries: readonly LoyaltyLedgerEntry[] = []
-  ): Promise<void> {
+  ): Promise<Customer> {
+    let snapshot: Customer = customer;
     if (isTauriEnv()) {
       const { getLocalDb, utcNowIso } = await import('../sqlPluginAdapter');
       const { buildRefundMirrorStatements } = await import('../refundMirrorSql');
       const db = await getLocalDb();
-      for (const statement of buildRefundMirrorStatements(customer, utcNowIso(), newLedgerEntries)) {
-        await db.execute(statement.sql, statement.args);
+      const statements = buildRefundMirrorStatements(customer, utcNowIso(), newLedgerEntries);
+      for (const statement of statements) {
+        const affected = await db.execute(statement.sql, statement.args);
+        // 0 rows on a ledger append means the row vanished (deleted=0 no longer
+        // matches) or the payload carries a legacy non-array ledger. Silence
+        // would lose the audit row; say so.
+        if (statement.args.length > 2) {
+          const rows = Number(
+            (affected as { rowsAffected?: number } | undefined)?.rowsAffected ?? 0
+          );
+          if (rows === 0) {
+            console.warn(
+              `[refund:mirror] ledger row ${String(statement.args[2])} was not appended to [${customer.id}] ` +
+                '(row deleted or ledger payload is not an array).'
+            );
+          }
+        }
+      }
+      const rows = (await db
+        .select(
+          'SELECT store_credit, loyalty_points, total_spent, current_debt, json_payload, version FROM customers WHERE id = $1',
+          [customer.id]
+        )
+        .catch(() => [])) as Array<Record<string, unknown>>;
+      const row = rows?.[0];
+      if (row) {
+        let payload: Record<string, unknown> = {};
+        try {
+          payload = JSON.parse(String(row.json_payload ?? '{}')) as Record<string, unknown>;
+        } catch {
+          payload = {};
+        }
+        snapshot = {
+          ...customer,
+          storeCredit:
+            typeof row.store_credit === 'number' ? row.store_credit : customer.storeCredit,
+          loyaltyPoints:
+            typeof row.loyalty_points === 'number' ? row.loyalty_points : customer.loyaltyPoints,
+          totalSpent: typeof row.total_spent === 'number' ? row.total_spent : customer.totalSpent,
+          currentDebt:
+            typeof row.current_debt === 'number' ? row.current_debt : customer.currentDebt,
+          ledger: Array.isArray(payload.ledger)
+            ? (payload.ledger as Customer['ledger'])
+            : customer.ledger,
+          version:
+            typeof row.version === 'number'
+              ? row.version
+              : (customer as unknown as { version?: number }).version,
+        } as Customer;
       }
     }
-    // Dexie mirrors the composed customer (the caller passes the native
-    // balance and the native ledger), so the UI stays consistent without ever
-    // being the authority for it.
-    await dexieDb.customers.put(customer);
-    void fireSync('customer', customer.id, customer as unknown as Record<string, unknown>);
+    // Dexie mirrors the committed snapshot, so the UI reads the same balance the
+    // authority holds (never the pre-commit object).
+    await dexieDb.customers.put(snapshot);
+    void fireSync('customer', snapshot.id, snapshot as unknown as Record<string, unknown>);
+    return snapshot;
   },
 
   async bulkSaveCustomers(customers: Customer[]): Promise<void> {
