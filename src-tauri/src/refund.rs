@@ -2447,8 +2447,8 @@ mod tests {
         // same tenders, or the money cap and the leg-sum gate describe different
         // sales.
         conn.execute(
-            "UPDATE transactions SET subtotal = 900, total = 900, json_payload = ?1 WHERE id = 'TKT-1'",
-            [r#"{"id":"TKT-1","receiptNumber":"REC-1","total":900,"tenders":[{"method":"Espèces","amount":150},{"method":"Avoir Client","amount":200},{"method":"Crédit Client","amount":100}],"items":[{"id":"TKT-1-item-0"}],"customer":{"id":"C1"}}"#],
+            "UPDATE transactions SET subtotal = 450, total = 450, json_payload = ?1 WHERE id = 'TKT-1'",
+            [r#"{"id":"TKT-1","receiptNumber":"REC-1","total":450,"tenders":[{"method":"Espèces","amount":150},{"method":"Avoir Client","amount":200},{"method":"Crédit Client","amount":100}],"items":[{"id":"TKT-1-item-0"}],"customer":{"id":"C1"}}"#],
         )
         .unwrap();
         conn.execute(
@@ -3008,6 +3008,8 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         test_schema(&conn);
         seed_ticket(&conn);
+        // Two 450 refunds in sequence: fund the ticket for both.
+        conn.execute("UPDATE transactions SET subtotal = 900, total = 900 WHERE id = 'TKT-1'", []).unwrap();
         set_policy(&conn, "policy.offline_cash_refund_limit", "200");
         // Partial 1 of 2, cash 150 of bucket 200: commits. The tendered
         // basis is wide (10000) so only the shift bucket can bind below.
@@ -3263,6 +3265,8 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         test_schema(&conn);
         seed_ticket(&conn);
+        // Three 450 refunds in sequence: fund the ticket for all three.
+        conn.execute("UPDATE transactions SET subtotal = 1350, total = 1350 WHERE id = 'TKT-1'", []).unwrap();
         // Third unit on the ticket so three qty-1 partials all fit quota.
         conn.execute(
             "INSERT INTO transaction_items (id, transaction_id, product_id, quantity, applied_price, json_payload, idempotency_key) \
@@ -3476,6 +3480,12 @@ mod tests {
         r.cash_tendered = 0;
         r.change_due = 0;
         r.cash_tendered_net = 0;
+        // Fixture intent: a partial Avoir refund of `total` DA - its value and
+        // its single leg are the same amount; it inherits nothing from base_req.
+        r.value_reversed = Some(total);
+        r.voucher = None;
+        r.debt = None;
+        r.wallet_credit = Some(total);
         r.refund_payload = format!(
             "{{\"id\":\"REF-{tag}\",\"isRefund\":true,\"originalTransactionId\":\"{ticket}\",\
              \"refundMethod\":\"Avoir Client\",\"cashDisbursed\":0,\"total\":{total}}}"
@@ -3654,6 +3664,7 @@ mod tests {
             recorded_by: "Manager".into(),
         });
         r1.value_reversed = Some(400); // 150 cash + 250 relief
+        r1.wallet_credit = None; // this refund pays cash + debt, no Avoir leg
         let ok1 = run(&mut conn, &r1).expect("refund 1");
         assert_eq!(ok1.debt_relief_applied, 250);
         assert_eq!(ok1.customer_debt_after, Some(250));
@@ -3705,6 +3716,7 @@ mod tests {
         // Refund 2: remaining 2 units, 400 DA — non-cash; the client asks for
         // 999 of relief but only 250 remains live: clamped + surfaced.
         let mut r2 = partial_req("TKT-1", "B2", 2, 400, 200, Some("TKT-1-item-0"));
+        r2.wallet_credit = Some(150); // 400 = 150 Avoir + 250 relief
         r2.debt = Some(DebtReliefIn {
             entry_id: "PAYREL-B2".into(),
             customer_id: "C1".into(),
@@ -3989,7 +4001,9 @@ mod tests {
         // commits — never a silent wrong-rail payout, never a negative ledger.
         conn.execute("DELETE FROM customer_debts WHERE customer_id = 'C1'", [])
             .unwrap();
-        let ok = run(&mut conn, &base_req()).expect("commit with clamp");
+        let mut clamp_req = base_req();
+        clamp_req.value_reversed = Some(350); // 150 cash + 200 voucher; relief clamps to 0
+        let ok = run(&mut conn, &clamp_req).expect("commit with clamp");
         assert_eq!(ok.debt_relief_applied, 0);
         assert_eq!(ok.customer_debt_after, Some(0));
         assert!(
