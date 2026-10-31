@@ -235,7 +235,7 @@ const WHITELIST = new Set([
   'src/sync/remoteSchema.ts:385',
   // src/sync/SyncManager.ts
   'src/sync/SyncManager.ts:134',
-  'src/sync/SyncManager.ts:1230',
+  'src/sync/SyncManager.ts:1235',
   // src/types/po.ts
   'src/types/po.ts:68',
   // src/utils/documentScanner.ts
