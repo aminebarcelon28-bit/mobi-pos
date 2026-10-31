@@ -27,14 +27,14 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 20 | Historical DBs with unbalanced refunds | **OPEN** | money gate 16 violations in 25 DBs (E-0067) — pre-D4-A data |
 | 21 | Schema migration version drift (`EXPECTED_MAX_DB_USER_VERSION` 127 vs migration 128 — the boot gate would refuse a device that had migrated) | **COVERED** | D8: constant 127 → 128; `tests::base_schema_migrations_are_strictly_increasing_and_wellformed` passes (E-0096) |
 | 22 | Export-manifest golden bytes drift on a release bump | **COVERED** | D8: the fixture pins `app_version` 1.7.0 instead of `env!(CARGO_PKG_VERSION)`; the golden test passes (E-0096) |
-| 23 | `sync_status='pending'` stamped natively but never read (no drain) | **OPEN** | review finding 5 |
+| 23 | `sync_status='pending'` stamped natively but never read | **COVERED** | boot pass `requeuePendingCustomerWrites` re-enqueues pending customers before the credential gate; 6-case test (E-0106) |
 | 31 | Card leg / gate bypass via client-controlled `funding.digital` | **COVERED** | N1: leg derived from the durable ticket tenders + `wallet <= value` (E-0093) |
 | 32 | Avoir credit to a customer other than the ticket's | **COVERED** | N3: ownership proven for credit and clawback (E-0093) |
 | 33 | Post-commit `store_credit` mirror can erase a concurrent debit | **COVERED** | N2: loyalty-only merge mirror (`saveRefundMirror`), `scripts/test_refund_mirror.mts` 8/8 (E-0094) |
-| 34 | `cash_move.amount` vs `cash_tendered` semantics | **COVERED (presence) / OPEN (amount)** | N5: any cash payout now requires a drawer movement whatever the method string says (`d4a_cash_payout_requires_a_drawer_movement`, E-0103). The AMOUNT is still not comparable (schema evidence: a fixture moves 6000 for a 150 cash refund) |
+| 34 | `cash_move.amount` vs `cash_tendered` semantics | **ACCEPTED (amount, D12) / COVERED (presence)** | presence enforced for any cash payout (`d4a_cash_payout_requires_a_drawer_movement`); the amount is a drawer allocation (fixture 6000 vs 150), so equality needs a schema split |
 | 24 | REF-51 offline cash-cap spec flake ("submit not clickable") | **COVERED** | root-caused: submit disabled during preview recompute + the cap switch closes the dialog. Spec waits for readiness, classifies a closed dialog as a refusal, credits a landed row. REF-51 PASS in the 17/18 batch (E-0105) |
 | 25 | REF-35: 0,01 gift line charged vs spec expectation 500 | **COVERED** | spec corrected to the authority (ISO 4217 + MNY-01/02/03): basket total 500.01, paid-line refund exactly 500; REF-35 PASS (E-0102) |
-| 26 | Card lane has no destination of record | **OPEN** | REF-42 decision pack; money gate reports it |
+| 26 | Card lane has no destination of record | **ACCEPTED (D12)** | native scopes it out with a warning and the money gate reports it; exit criteria = acquirer refund adapter + `card_refund` written in-txn. Card refunds are not offered in the UI (renderer-trust residual, D11) |
 | 27 | Walk-in trade-in restore (anonymous) | **PARKED (policy)** | `docs/c01-ref15-loyalty-pack.md` family; REF-49 evidence |
 | 28 | Loyalty double-burn + G-07 after a conversion refund | **PARKED (policy)** | REF-15 pack |
 | 29 | Hardware: printer/scanner/drawer failures | **PARKED** | no hardware in the sandbox; simulator not yet built |
