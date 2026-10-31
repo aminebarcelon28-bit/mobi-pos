@@ -2013,6 +2013,87 @@ fn apply_refund_in_txn(
         wallet_after = Some(next.round() as i64);
     }
 
+    // 11b-bis. A FULLY refunded sale cannot back loyalty points. The TS math
+    // normally zeroes the earn bucket chunk by chunk, but a huge ticket can
+    // finish with a remainder (REF-87: the second 2e9 chunk left 40M points on
+    // an 80M-point sale). The boundary that KNOWS the ticket is done enforces
+    // the invariant: zero every bucket this receipt minted, then clamp the
+    // headline to what the remaining buckets still back.
+    if new_status == "REFUNDED" {
+        if let Some(cust_id) = loyalty_customer_id.as_deref() {
+            if let Ok(raw) = tx.query_row(
+                "SELECT json_payload FROM customers WHERE id = ?1",
+                [cust_id],
+                |r| r.get::<_, String>(0),
+            ) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    if let Some(mut buckets) =
+                        v.get("pointBuckets").and_then(|b| b.as_array()).cloned()
+                    {
+                        let mut changed = false;
+                        for b in buckets.iter_mut() {
+                            let is_origin = b
+                                .get("originTransactionId")
+                                .and_then(|o| o.as_str())
+                                == Some(ticket_receipt.as_str());
+                            if !is_origin {
+                                continue;
+                            }
+                            let rem = b
+                                .get("remainingPoints")
+                                .and_then(|p| p.as_f64())
+                                .unwrap_or(0.0);
+                            if rem <= 0.0 {
+                                continue;
+                            }
+                            changed = true;
+                            if let Some(o) = b.as_object_mut() {
+                                o.insert(
+                                    "remainingPoints".to_string(),
+                                    serde_json::Value::from(0.0),
+                                );
+                                o.insert(
+                                    "isFullyConsumed".to_string(),
+                                    serde_json::Value::from(true),
+                                );
+                            }
+                        }
+                        if changed {
+                            let bucket_sum: f64 = buckets
+                                .iter()
+                                .filter_map(|b| {
+                                    b.get("remainingPoints").and_then(|p| p.as_f64())
+                                })
+                                .sum();
+                            let headline = v
+                                .get("loyaltyPoints")
+                                .and_then(|p| p.as_f64())
+                                .unwrap_or(0.0);
+                            let points = headline.min(bucket_sum).max(0.0).round() as i64;
+                            let mut patch = serde_json::Map::new();
+                            patch.insert(
+                                "pointBuckets".to_string(),
+                                serde_json::Value::Array(buckets),
+                            );
+                            patch.insert(
+                                "loyaltyPoints".to_string(),
+                                serde_json::Value::from(points),
+                            );
+                            let merged =
+                                merge_customer_payload(tx, cust_id, &patch, &mut warnings)?;
+                            tx.execute(
+                                "UPDATE customers SET loyalty_points = ?2, json_payload = ?3, updated_at = ?4, version = version + 1 WHERE id = ?1",
+                                params![cust_id, points, merged, now],
+                            )
+                            .map_err(|e| map_rusqlite("loyalty final clamp", e))?;
+                            loyalty_applied = Some(points);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // 12. Voucher credit-back with the same CAS discipline as
     //     `voucherAdapter.creditBack`: conditional update on the exact
     //     balance read; 0 rows re-inspects (already-applied converges,
@@ -4530,6 +4611,9 @@ mod tests {
             )
             .unwrap();
         let mut explicit = base_req();
+        // Partial refund (1 of 2 units): the explicit verdict is preserved. A
+        // FULL refund would (correctly) be clamped to zero by 11b-bis.
+        explicit.lines[0].quantity = 1;
         explicit.customer_id = Some("C1".into());
         explicit.customer_points_after = Some(4);
         explicit.customer_point_buckets_json = Some(
