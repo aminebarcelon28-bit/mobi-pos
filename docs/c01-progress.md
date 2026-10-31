@@ -81,3 +81,8 @@ session — recorded as UNKNOWN rather than assumed).
 - P0-a: REF-03 3/3, REF-33 3/3, REF-49 3/3, MNY-30 3/3, MNY-26 2/3, REF-28 0/3 (E-0006..E-0011).
 - P0-b: DONE as measurement; **S3 overcharge 100 DA** (E-0012, E-0013). C90 -> P0 money defect, PARKED.
 - P0-c consumer audit: still QUEUED.
+
+## B6 addendum 2
+
+- MNY-26 2/3 classified: run-1 failed on `element click intercepted` at `price-override-open` BEFORE any money assertion -> harness flake, not a defect (E-0014). The 3 runs that reached the refund path passed.
+- P0-c consumer audit DONE: one writer, one unit-aware reader, no other consumer (E-0015, docs/c01-consumer-audit.md).
