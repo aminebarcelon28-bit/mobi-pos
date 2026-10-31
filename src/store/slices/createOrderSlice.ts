@@ -2407,6 +2407,11 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     let updatedCustomer: Customer | undefined = undefined;
     let updatedCustomers = customers;
 
+    // D4-A / review N2: the ledger rows THIS refund created on the TS side.
+    // The mirror appends only these (never the historical array, and never the
+    // wallet rows the native transaction already emitted).
+    let refundMirrorLedger: LoyaltyLedgerEntry[] = [];
+
     const origCust = originalTransaction.customer;
     // REF-40: a soft-deleted profile must not be resurrected by a refund. The
     // delete removes the customer from `customers` and tombstones SQLite
@@ -2503,8 +2508,14 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         );
       }
 
-      for (const e of claw.entries) ledgerEntries.push(e);
       walletClawbackForNative = Math.max(0, Math.round(Number(claw.totalRevoked) || 0));
+      // D4-A: when the revocation is routed to the native transaction, THAT
+      // transaction emits its own creditDeltaDzd row. Pushing the TS rows as
+      // well would record the same clawback twice, and peers re-derive the
+      // wallet scalar from the ledger. Only emit locally when it is not routed.
+      if (walletClawbackForNative === 0) {
+        for (const e of claw.entries) ledgerEntries.push(e);
+      }
 
       const existingLedger = cust.ledger || [];
       updatedCustomer = {
@@ -2516,6 +2527,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         pointBuckets: refundBuckets,
         ledger: [...ledgerEntries, ...existingLedger],
       };
+      refundMirrorLedger = ledgerEntries;
 
       const finalCust = updatedCustomer;
       updatedCustomers = customers.map((c) => (c.id === finalCust.id ? finalCust : c));
@@ -3176,9 +3188,15 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           // from SQLite ([MNY-26]: store_credit stayed 0 while the refund had
           // credited 400). Same H8 policy as checkout: retry once, then queue
           // to the outbox with a loud warning.
-          const savedCust = await persistWithRetryOnce(() =>
-            getCustomerRepo().then((repo) => repo.save(hydratedCustomer))
-          );
+          // D4-A / review N2: mirror loyalty ONLY. The wallet balance and its
+          // ledger rows were committed natively; re-saving the whole object here
+          // could erase a concurrent wallet debit. `saveRefundMirror` never
+          // writes store_credit/current_debt and appends only this refund's
+          // TS-side ledger rows.
+          const savedCust = await persistWithRetryOnce(async () => {
+            const { customerAdapter } = await import('../../db/adapters/customerAdapter');
+            await customerAdapter.saveRefundMirror(hydratedCustomer, refundMirrorLedger);
+          });
           if (!savedCust.ok) {
             nativeWarnings.push(
               'Avoir client : écriture locale différée — solde client en file de synchronisation.'

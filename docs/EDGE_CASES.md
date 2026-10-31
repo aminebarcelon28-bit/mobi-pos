@@ -30,7 +30,7 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 23 | `sync_status='pending'` stamped natively but never read (no drain) | **OPEN** | review finding 5 |
 | 31 | Card leg / gate bypass via client-controlled `funding.digital` | **COVERED** | N1: leg derived from the durable ticket tenders + `wallet <= value` (E-0093) |
 | 32 | Avoir credit to a customer other than the ticket's | **COVERED** | N3: ownership proven for credit and clawback (E-0093) |
-| 33 | Post-commit `store_credit` mirror can erase a concurrent debit | **OPEN** | N2 (third review) - needs a column-level/partial update |
+| 33 | Post-commit `store_credit` mirror can erase a concurrent debit | **COVERED** | N2: loyalty-only merge mirror (`saveRefundMirror`), `scripts/test_refund_mirror.mts` 8/8 (E-0094) |
 | 34 | `cash_move.amount` vs `cash_tendered` semantics | **OPEN** | N5 - evidence shows the field is not the refund cash (fixture 6000 vs 150); needs a schema decision |
 | 24 | REF-51 offline cash-cap spec flake ("submit not clickable", 1 in 5) | **OPEN** | E-0033 |
 | 25 | REF-35: 0,01 gift line charged vs spec expectation 500 | **ACCEPTED (authority: ISO 4217 + MNY-01)** | decision pack `docs/c01-ref35-minor-unit.md`; spec fix pending |

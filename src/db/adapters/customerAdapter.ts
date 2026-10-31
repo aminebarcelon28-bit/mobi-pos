@@ -1,4 +1,4 @@
-import type { Customer, CustomerDebtEntry, LoyaltyProgramConfig } from '../../types/pos';
+import type { Customer, CustomerDebtEntry, LoyaltyLedgerEntry, LoyaltyProgramConfig } from '../../types/pos';
 import { db as dexieDb } from '../database';
 import { fireSync, fireSyncDelete, isTauriEnv } from './base';
 import { isBusyError } from '../busyRetry';
@@ -218,6 +218,38 @@ export const customerAdapter = {
     const customerWithVersion = { ...customer, version: nextVersion };
     await dexieDb.customers.put(customerWithVersion);
     void fireSync('customer', customer.id, customerWithVersion);
+  },
+
+  /**
+   * D4-A / cold review N2: mirror the LOYALTY bookkeeping of a completed refund.
+   *
+   * The money (wallet balance, `creditDeltaDzd` rows, milestone revocation) was
+   * committed by `refund_sale_atomic` inside its own transaction. Saving the
+   * whole customer object after that commit re-wrote `store_credit` from a
+   * snapshot taken before it, so a concurrent wallet debit landing in between
+   * was erased (free credit). This method:
+   *   - never touches `store_credit` or `current_debt`;
+   *   - merge-patches loyalty keys into the row's CURRENT payload;
+   *   - appends only the ledger rows this refund created, by id.
+   * See `src/db/refundMirrorSql.ts` for the statements and their idempotency.
+   */
+  async saveRefundMirror(
+    customer: Customer,
+    newLedgerEntries: readonly LoyaltyLedgerEntry[] = []
+  ): Promise<void> {
+    if (isTauriEnv()) {
+      const { getLocalDb, utcNowIso } = await import('../sqlPluginAdapter');
+      const { buildRefundMirrorStatements } = await import('../refundMirrorSql');
+      const db = await getLocalDb();
+      for (const statement of buildRefundMirrorStatements(customer, utcNowIso(), newLedgerEntries)) {
+        await db.execute(statement.sql, statement.args);
+      }
+    }
+    // Dexie mirrors the composed customer (the caller passes the native
+    // balance and the native ledger), so the UI stays consistent without ever
+    // being the authority for it.
+    await dexieDb.customers.put(customer);
+    void fireSync('customer', customer.id, customer as unknown as Record<string, unknown>);
   },
 
   async bulkSaveCustomers(customers: Customer[]): Promise<void> {

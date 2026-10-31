@@ -26,7 +26,7 @@ failures are pre-existing.
 | ID | Finding | Disposition |
 |---|---|---|
 | **N1** | `funding.digital` is caller JSON, so it acted as a kill switch for the only wallet/value consistency gate; `walletCredit` was bounded by nothing | **FIXED** — the card leg is derived from the **durable ticket's tenders**, and `wallet leg <= refund value` is enforced (`E-0093`) |
-| **N2** | Post-commit `store_credit` read-then-write races a concurrent wallet debit and can erase it (free credit) | **OPEN** — needs a column-level/partial update or a re-read+reconcile inside the write |
+| **N2** | Post-commit `store_credit` read-then-write races a concurrent wallet debit and can erase it (free credit) | **FIXED** — `customerAdapter.saveRefundMirror`: loyalty-only merge, no `store_credit`/`current_debt` in the SET list, `json_patch` against the live payload, ledger rows appended by id. Regression `scripts/test_refund_mirror.mts` 8/8 (E-0094) |
 | **N3** | The Avoir **credit** recipient was unbound (only the clawback was proven against the ticket) | **FIXED** — the same ticket-customer proof now covers `wallet_inc` (`E-0093`) |
 | **N4** | Clawback clamp was silent; `REFUND_EXCEEDS_VALUE` was unreachable (regex) | **FIXED** — clamp warning + taxonomy + mapping (`E-0093`) |
 | **N5** | Cash leg uses `cash_tendered`, not the drawer movement | **REVERTED / OPEN** — a fixture shows `cash_move.amount` is *not* the refund cash (6000 vs 150), so the assumption is wrong; registered as case 34 for a schema decision |
