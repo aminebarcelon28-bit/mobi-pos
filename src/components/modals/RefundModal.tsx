@@ -650,6 +650,12 @@ export const RefundModal: React.FC = () => {
       showToast('Une erreur est survenue lors de l\'enregistrement du remboursement.', 'error');
     } finally {
       submitInFlightRef.current = false;
+      // REF-87: a manager PIN authorises exactly ONE refund. Leaving it in state
+      // let a later refund in the same session skip the supervisor gate (the PIN
+      // gate simply never re-appeared) - an authorization replay, and the reason
+      // a suite run that had typed a PIN earlier never saw the gate again.
+      setManagerPin('');
+      setPinRequired(false);
       setIsSubmitting(false);
     }
   };
