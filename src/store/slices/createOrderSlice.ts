@@ -3107,8 +3107,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             ...(typeof row.loyalty_points === 'number' ? { loyaltyPoints: row.loyalty_points } : {}),
             ...(Array.isArray(payload.pointBuckets) ? { pointBuckets: payload.pointBuckets } : {}),
           };
-        } catch {
-          return {};
+        } catch (e) {
+          // D4-A review finding 4: do NOT fall back to the TS projection here -
+          // writing it would overwrite the committed ledger. Mark the mirror
+          // unavailable and skip the save instead.
+          console.warn('[refund:mirror] committed customer read-back failed; skipping mirror', e);
+          return { __mirrorUnavailable: true } as Record<string, unknown>;
         }
       })();
       const hydratedCustomer = updatedCustomerProjected
@@ -3145,7 +3149,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           import('../../db/adapters/base'),
           import('../../db/sqlPluginAdapter'),
         ]);
-        if (hydratedCustomer && origCustLive) {
+        if (hydratedCustomer && origCustLive && !(nativeCustomerPatch as Record<string, unknown>).__mirrorUnavailable) {
           // REF-40: never write a profile that is absent from the live list —
           // the upsert would clear its `deleted` tombstone (customerAdapter.ts:129).
           // Local authority FIRST: the wallet refill (avoir share + restored
