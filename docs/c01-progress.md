@@ -314,3 +314,17 @@ session — recorded as UNKNOWN rather than assumed).
   stamp on the native wallet write, missing error taxonomy, a phantom response field, no economic cap.
 - **Next:** fix finding 1 (clawback inside the native transaction or net it into wallet_credit), then 3, 4, 5,
   6, 7, 8; re-run the review; only then merge.
+## B6 addendum 23 (D4-A r1/r2: 4e9 green; re-review still blocks)
+
+- **r1 (ecb327c):** milestone clawback rides the native txn (wallet_clawback), sync_status='pending' stamped,
+  phantom customerPayload removed. Native tests 4/4 incl. the clawback.
+- **r2 (64c831b):** AVOIR_RECIPIENT_REQUIRED in the client taxonomy; mirror refuses to overwrite when the
+  read-back fails (__mirrorUnavailable).
+- **Proof:** 4e9 Avoir refund GREEN, wallet delta exactly 4,000,000,000; money gate 0 violations (E-0084).
+- **Re-review (fresh context) = DO NOT MERGE** (E-0085, docs/reviews/D4A-rereview-after-r2.md): 2 findings closed,
+  4 partial/open, and **3 new defects in the fixes**: clamped clawback emits a full-size delta (peers can go
+  negative), the clawback is an uncapped unauthenticated debit, and the conservation gate is skipped by the
+  client-controlled unding.digital. cargo 23/28.
+- **Next fix order:** clamp the revocation to the revocable amount; authenticate/bound the clawback; cap
+  	otal_reversed against the remaining refundable (closes finding 8 + the skip); explicit routing for clamped
+  legs; slice error mapping; legacy fixtures; then a third review.
