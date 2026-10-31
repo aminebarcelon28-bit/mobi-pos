@@ -1734,6 +1734,9 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     // 3. Customer loyalty & store credit rollback
     let updatedCustomer: Customer | undefined = undefined;
     let updatedCustomers = customers;
+    // Case 41: what the void must persist natively (SQLite is the authority).
+    let voidMirrorLedger: LoyaltyLedgerEntry[] = [];
+    let voidCustomerMoney: { creditDeltaDzd?: number; debtDeltaDzd?: number } = {};
     const txnCustomer = txn.customer;
     if (txnCustomer) {
       const cust = customers.find((c) => c.id === txnCustomer.id) || txnCustomer;
@@ -1839,6 +1842,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         ledger: [...voidLedgerEntries, ...existingLedger],
       };
 
+      voidMirrorLedger = voidLedgerEntries;
+      // Money deltas, not absolutes: a concurrent wallet movement survives.
+      voidCustomerMoney = {
+        creditDeltaDzd: storeCreditPaid - claw.totalRevoked,
+        debtDeltaDzd: -creditDebtAmount,
+      };
       const finalCustomer = updatedCustomer;
       updatedCustomers = customers.map((c) => (c.id === finalCustomer.id ? finalCustomer : c));
     }
@@ -1872,7 +1881,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         restoredProducts,
         updatedCustomer,
         restoredImeis,
-        auditEntry
+        auditEntry,
+        {
+          ledgerEntries: voidMirrorLedger,
+          creditDeltaDzd: voidCustomerMoney.creditDeltaDzd,
+          debtDeltaDzd: voidCustomerMoney.debtDeltaDzd,
+        }
       );
     } catch (err) {
       // Idempotency signals from the atomic lane surface with their own

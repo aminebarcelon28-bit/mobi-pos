@@ -703,7 +703,15 @@ export const transactionAdapter = {
     restoredProducts: Product[],
     updatedCustomer?: Customer,
     restoredImeis: string[] = [],
-    auditEntry?: SecurityAuditLogEntry
+    auditEntry?: SecurityAuditLogEntry,
+    voidCustomer?: {
+      /** Ledger rows this void created (appended by id, never the whole history). */
+      ledgerEntries?: unknown[];
+      /** Restored Avoir minus the milestone revocation owed by this void. */
+      creditDeltaDzd?: number;
+      /** Credit-debt reversed by this void (positive number, applied as -x). */
+      debtDeltaDzd?: number;
+    }
   ): Promise<ImeiReleaseResult> {
     const warnings: string[] = [];
     const flightKey = String(_transactionId || voidedTransaction.id);
@@ -815,6 +823,30 @@ export const transactionAdapter = {
               );
             } catch (evtErr) {
               console.warn('[db:void] ownership ledger append skipped:', evtErr);
+            }
+          }
+          // Case 41: the Dexie write above is a MIRROR - SQLite is the authority.
+          // Without this, a restart rehydrates a voided sale's points/buckets
+          // (G-07) and the restored Avoir is lost. Loyalty is merged into the
+          // live payload and MONEY is applied as a delta, never as the pre-void
+          // absolute snapshot (a concurrent wallet movement must survive).
+          if (updatedCustomer || voidCustomer) {
+            const { buildRefundMirrorStatements, buildCustomerMoneyDeltaStatement } = await import('../refundMirrorSql');
+            const nowIso = new Date().toISOString();
+            if (updatedCustomer) {
+              const statements = buildRefundMirrorStatements(
+                updatedCustomer,
+                nowIso,
+                (voidCustomer?.ledgerEntries ?? []) as never,
+              );
+              for (const statement of statements) {
+                await db.execute(statement.sql, statement.args);
+              }
+            }
+            const moneyCustomerId = String(updatedCustomer?.id ?? '').trim();
+            if (moneyCustomerId && voidCustomer) {
+              const money = buildCustomerMoneyDeltaStatement(moneyCustomerId, voidCustomer, nowIso);
+              if (money) await db.execute(money.sql, money.args);
             }
           }
           if (useTxn) {

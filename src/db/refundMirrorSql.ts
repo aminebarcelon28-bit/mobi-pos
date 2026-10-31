@@ -130,3 +130,30 @@ export function buildRefundMirrorStatements(
 
   return statements;
 }
+
+/**
+ * Case 41 (void lane): the void restores the Avoir it was paid with and
+ * reverses the credit-debt it created. Those are MONEY, so they are applied as
+ * DELTAS inside the caller's write transaction — never as the pre-void absolute
+ * snapshot, which would erase a concurrent wallet movement (the N2 failure mode,
+ * applied to the void).
+ */
+export function buildCustomerMoneyDeltaStatement(
+  customerId: string,
+  deltas: { creditDeltaDzd?: number; debtDeltaDzd?: number },
+  now: string,
+): RefundMirrorStatement | null {
+  const credit = Math.round(Number(deltas.creditDeltaDzd) || 0);
+  const debt = Math.round(Number(deltas.debtDeltaDzd) || 0);
+  if (!customerId || (credit === 0 && debt === 0)) return null;
+  return {
+    sql: `UPDATE customers
+             SET store_credit = MAX(0, COALESCE(store_credit, 0) + $2),
+                 current_debt = MAX(0, COALESCE(current_debt, 0) + $3),
+                 updated_at = $4,
+                 version = version + 1
+           WHERE id = $1
+             AND deleted = 0`,
+    args: [customerId, credit, debt, now],
+  };
+}
