@@ -200,51 +200,56 @@ const TAX_RE = /\btax(es)?\b|\bvatRate\b|\btva\b/i;
  * noise-skip. Format: 'file:line'. Keep it line-pinned so a moved line fails.
  */
 const WHITELIST = new Set([
-  // Documented removals (comments recording what was deleted and why).
-  // Re-pinned on the UPGRADE-11 (v126) Kredy heal-lane + repo insertion.
-  // Re-pinned again on UPGRADE-12 (held-claim import line).
-  // Re-pinned on the refund root rebuild (v127): heal parity + restored-COGS
-  // docs shifted these lines (content unchanged).
-  'src/db/sqlPluginAdapter.ts:1583',
-  'src/db/sqlPluginAdapter.ts:2394',
-  'src/db/sqlPluginAdapter.ts:2396',
-  // Legacy `vatRate` scrub on the settings lane (push strip + pull apply).
-  'src/db/sqlPluginAdapter.ts:3957',
-  'src/db/sqlPluginAdapter.ts:3958',
-  'src/db/sqlPluginAdapter.ts:3970',
-  'src/db/sqlPluginAdapter.ts:3971',
-  'src/sync/genericApply.ts:633',
-  'src/sync/genericApply.ts:639',
+  // Re-pinned on C01 (2026-10-31): 72 live hits, each one of
+  //   (a) a comment documenting the removed column/feature,
+  //   (b) a migration that DROPS tax (v108 local / v13 remote),
+  //   (c) a guard/fixture that REJECTS a tax column or key (import lane,
+  //       zero-tax invariant simulator, OCR noise-skip), or
+  //   (d) the supplier-invoice OCR fixture text.
+  // No line here reads, writes or prints a tax amount for a sale. Stale
+  // entries are removed (the hygiene check below still fails on drift).
+  // src/components/modals/PurchaseOrderA4Document.tsx
+  'src/components/modals/PurchaseOrderA4Document.tsx:243',
+  // src/db/sqlPluginAdapter.ts
+  'src/db/sqlPluginAdapter.ts:1596',
+  'src/db/sqlPluginAdapter.ts:2417',
+  'src/db/sqlPluginAdapter.ts:2419',
+  'src/db/sqlPluginAdapter.ts:4000',
+  'src/db/sqlPluginAdapter.ts:4001',
+  'src/db/sqlPluginAdapter.ts:4013',
+  'src/db/sqlPluginAdapter.ts:4014',
+  // src/store/slices/createOrderSlice.ts
+  'src/store/slices/createOrderSlice.ts:542',
+  // src/sync/genericApply.ts
   'src/sync/genericApply.ts:640',
-  'src/store/slices/createOrderSlice.ts:539',
+  'src/sync/genericApply.ts:646',
+  'src/sync/genericApply.ts:647',
+  // src/sync/payloadHygiene.ts
   'src/sync/payloadHygiene.ts:37',
+  // src/sync/remoteSchema.ts
+  'src/sync/remoteSchema.ts:374',
+  'src/sync/remoteSchema.ts:376',
+  'src/sync/remoteSchema.ts:377',
+  'src/sync/remoteSchema.ts:380',
+  'src/sync/remoteSchema.ts:381',
+  'src/sync/remoteSchema.ts:385',
+  // src/sync/SyncManager.ts
   'src/sync/SyncManager.ts:134',
+  'src/sync/SyncManager.ts:1230',
+  // src/types/po.ts
+  'src/types/po.ts:68',
+  // src/utils/documentScanner.ts
+  'src/utils/documentScanner.ts:165',
+  // src/utils/escpos.ts
+  'src/utils/escpos.ts:297',
+  'src/utils/escpos.ts:314',
+  // src/utils/mobileDocPrint.ts
+  'src/utils/mobileDocPrint.ts:162',
+  // src/utils/receiptMath.ts
   'src/utils/receiptMath.ts:257',
   'src/utils/receiptMath.ts:259',
-  'src/utils/receiptMath.ts:418',
-  'src/utils/escpos.ts:279',
-  'src/utils/escpos.ts:296',
-  'src/utils/mobileDocPrint.ts:162',
-  'src/components/modals/PurchaseOrderA4Document.tsx:243',
-  'src/types/po.ts:68',
-  'src/sync/SyncManager.ts:1230', // "pure tax on the network" — English usage
-  // Remote migration v13 (the drop itself + its tolerance note).
-  'src/sync/remoteSchema.ts:374',
-  'src/sync/remoteSchema.ts:377',
-  'src/sync/remoteSchema.ts:376',
-  'src/sync/remoteSchema.ts:381',
-  'src/sync/remoteSchema.ts:380',
-  'src/sync/remoteSchema.ts:385',
-  // Local migration v108 + the vestigial creation column it removes on every
-  // install (kept: the plugin migrator is transactional, so v1 must still
-  // describe the pre-drop shape for v108 to drop; tracked in plan §13 R-5).
-  'src-tauri/src/lib.rs:1035',
-  'src-tauri/src/lib.rs:1609',
-  'src-tauri/src/lib.rs:1613',
-  'src-tauri/src/lib.rs:1623',
-  'src-tauri/src/lib.rs:1627',
-  // §10-B2 whitelist — supplier-OCR noise-skip, each carrying the
-  // "noise-skip, not a tax feature" comment.
+  'src/utils/receiptMath.ts:439',
+  // src-tauri/src/geometry.rs
   'src-tauri/src/geometry.rs:61',
   'src-tauri/src/geometry.rs:62',
   'src-tauri/src/geometry.rs:243',
@@ -257,10 +262,20 @@ const WHITELIST = new Set([
   'src-tauri/src/geometry.rs:745',
   'src-tauri/src/geometry.rs:746',
   'src-tauri/src/geometry.rs:747',
-  'src-tauri/src/geometry.rs:1030', // supplier-invoice OCR fixture line
-  'src/utils/documentScanner.ts:165', // supplier-invoice demo fixture line
-  // Supplier-side gate (Addendum B): the reported-tax term is gone; these lines
-  // document its absence and the freight term that replaced it.
+  'src-tauri/src/geometry.rs:1030',
+  // src-tauri/src/lib.rs
+  'src-tauri/src/lib.rs:1048',
+  'src-tauri/src/lib.rs:1622',
+  'src-tauri/src/lib.rs:1626',
+  'src-tauri/src/lib.rs:1636',
+  'src-tauri/src/lib.rs:1640',
+  // src-tauri/src/commands.rs
+  'src-tauri/src/commands.rs:199',
+  'src-tauri/src/commands.rs:441',
+  // src-tauri/src/emergency_export.rs
+  'src-tauri/src/emergency_export.rs:87',
+  'src-tauri/src/emergency_export.rs:983',
+  // src-tauri/src/gate.rs
   'src-tauri/src/gate.rs:6',
   'src-tauri/src/gate.rs:68',
   'src-tauri/src/gate.rs:69',
@@ -268,10 +283,21 @@ const WHITELIST = new Set([
   'src-tauri/src/gate.rs:187',
   'src-tauri/src/gate.rs:269',
   'src-tauri/src/gate.rs:270',
-  // Locked-state export: the column is no longer selected; the retention note
-  // names it because retention duties are keyed on the tax line by law.
-  'src-tauri/src/emergency_export.rs:87',
-  'src-tauri/src/emergency_export.rs:983',
+  // src-tauri/src/import/dst_simulator.rs
+  'src-tauri/src/import/dst_simulator.rs:15',
+  'src-tauri/src/import/dst_simulator.rs:403',
+  'src-tauri/src/import/dst_simulator.rs:404',
+  'src-tauri/src/import/dst_simulator.rs:405',
+  'src-tauri/src/import/dst_simulator.rs:417',
+  'src-tauri/src/import/dst_simulator.rs:424',
+  'src-tauri/src/import/dst_simulator.rs:443',
+  'src-tauri/src/import/dst_simulator.rs:445',
+  'src-tauri/src/import/dst_simulator.rs:450',
+  'src-tauri/src/import/dst_simulator.rs:779',
+  'src-tauri/src/import/dst_simulator.rs:857',
+  'src-tauri/src/import/dst_simulator.rs:889',
+  'src-tauri/src/import/dst_simulator.rs:890',
+  'src-tauri/src/import/dst_simulator.rs:917',
 ]);
 
 function walk(dir, out = []) {

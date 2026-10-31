@@ -45,6 +45,8 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 41 | Loyalty bucket still backs points after a void/refund in a multi-test batch (G-07) | **OPEN** | invariant hook in E-0100: `REF4-C48` voided sale still backs 10 pts; `REF4-C56` fully refunded sale still backs 10 pts (clean in isolation → batch-state trigger) |
 | 42 | A forged refund call from the renderer records an audit row for an unknown actor (G-15) | **ACCEPTED (documented pre-gateway residual)** | AGENTS.md "WebView SQL bypass (OPEN residual)"; REF-58 deliberately forges the call to prove dedupe (E-0100) |
 
+| 43 | Dependency advisories (npm prod tree) | **ACCEPTED (moderate) / FIXED (high)** | D10: zod + source-map-js highs fixed by patch bumps; 9 moderate in exceljs→archiver/glob accepted pending a planned major upgrade (E-0101) |
+
 ## Notes
 
 - Items 1–7 and 10–19 are covered by tests that run in CI-local (`cargo test` + the diag specs).

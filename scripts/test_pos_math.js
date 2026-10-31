@@ -134,7 +134,7 @@ function testNormalizePhone(input) {
   else if (digitsOnly.startsWith('0') && digitsOnly.length === 10) std = digitsOnly.slice(1);
   return '213' + std;
 }
-assert(testNormalizePhone('0550002222') === '213550123456', 'Phone Normalizer: 0550002222 -> 213550123456');
+assert(testNormalizePhone('0550002222') === '213550002222', 'Phone Normalizer: 0550002222 -> 213550002222');
 assert(testNormalizePhone('+213 660 12 34 56') === '213660123456', 'Phone Normalizer: +213 660 12 34 56 -> 213660123456');
 assert(testNormalizePhone('00213 770 12 34 56') === '213770123456', 'Phone Normalizer: 00213 770 12 34 56 -> 213770123456');
 
