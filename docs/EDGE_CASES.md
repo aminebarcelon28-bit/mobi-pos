@@ -32,7 +32,7 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 32 | Avoir credit to a customer other than the ticket's | **COVERED** | N3: ownership proven for credit and clawback (E-0093) |
 | 33 | Post-commit `store_credit` mirror can erase a concurrent debit | **COVERED** | N2: loyalty-only merge mirror (`saveRefundMirror`), `scripts/test_refund_mirror.mts` 8/8 (E-0094) |
 | 34 | `cash_move.amount` vs `cash_tendered` semantics | **COVERED (presence) / OPEN (amount)** | N5: any cash payout now requires a drawer movement whatever the method string says (`d4a_cash_payout_requires_a_drawer_movement`, E-0103). The AMOUNT is still not comparable (schema evidence: a fixture moves 6000 for a 150 cash refund) |
-| 24 | REF-51 offline cash-cap spec flake ("submit not clickable") | **COVERED** | REF-51 PASS in the 16/18 batch run (E-0100); the flake did not reproduce |
+| 24 | REF-51 offline cash-cap spec flake ("submit not clickable") | **OPEN (accepted flake)** | recurred in 2 of 4 batch runs (E-0100/E-0104); passes in isolation. Needs a submit-readiness wait in the spec |
 | 25 | REF-35: 0,01 gift line charged vs spec expectation 500 | **COVERED** | spec corrected to the authority (ISO 4217 + MNY-01/02/03): basket total 500.01, paid-line refund exactly 500; REF-35 PASS (E-0102) |
 | 26 | Card lane has no destination of record | **OPEN** | REF-42 decision pack; money gate reports it |
 | 27 | Walk-in trade-in restore (anonymous) | **PARKED (policy)** | `docs/c01-ref15-loyalty-pack.md` family; REF-49 evidence |
@@ -42,10 +42,12 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 
 | 39 | Reports modal read after a refund ran before the view rendered (REF-56 flake) | **COVERED** | harness waits for the reports body / PIN gate and retries once; REF-56 PASS (E-0100) |
 | 40 | REF-87: a 2e9/unit ticket (95.7 MB payload) cannot be refunded within any reasonable window | **OPEN (D6/D9)** | `docs/decisions/D9-ref87-payload-ceiling.md`; money path proven separately at 2³¹+1/4e9/past-2³² (E-0097..E-0099) |
-| 41 | Void lane aborts its post-status effects (restock + loyalty) when a later step throws (G-07) | **OPEN** | REF-48 in isolation: `voided=true`, stock unchanged (500), bucket still backs 10 pts. Root cause: `voidTransactionAtomic` flips the status first, then a long best-effort sequence (inventory delta â†’ batch restitution â†’ loyalty) can abort mid-way. Repro: `run.mjs --spec 33-ref-refunds-part4 --grep "REF-48"` (E-0103) |
+| 41 | Void lane left its loyalty reversal unsaved (G-07) | **COVERED** | fixed: `voidTransactionAtomic` writes the loyalty patch + money deltas inside the status-flip transaction; REF-48 GREEN, G-07 gone (E-0104) |
 | 42 | A forged refund call from the renderer records an audit row for an unknown actor (G-15) | **ACCEPTED (documented pre-gateway residual)** | AGENTS.md "WebView SQL bypass (OPEN residual)"; REF-58 deliberately forges the call to prove dedupe (E-0100) |
 
 | 43 | Dependency advisories (npm prod tree) | **ACCEPTED (moderate) / FIXED (high)** | D10: zod + source-map-js highs fixed by patch bumps; 9 moderate in exceljs→archiver/glob accepted pending a planned major upgrade (E-0101) |
+
+| 44 | Forged refund leaves the in-memory customer snapshot stale, so a later sale in the same session rewrites the pre-forged bucket (G-07 after REF-24) | **OPEN (forged-lane only)** | E-0104: SQLite is correct after the forged call; the next sale recomputes from the unrefreshed React state. Real UI refunds refresh state (`nativeCustomerPatch`); forged calls bypass it |
 
 ## Notes
 
