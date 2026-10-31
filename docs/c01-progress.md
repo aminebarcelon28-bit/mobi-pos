@@ -186,3 +186,20 @@ session — recorded as UNKNOWN rather than assumed).
 - **PARKED residual:** the void's outbox payload still carries the SALE shape (`status=null`,
   `version=1`) because only `enqueueOrderSync` writes it and it refuses the already-VOIDED row.
   Needs the read-only sync lane (options A/B in `docs/c01-ref13-void.md`, recommend B).
+## B6 addendum 14 (REF-36 + REF-65 fixed; REF-42 money defect found, pre-existing)
+
+- **REF-36 FIXED** (`bf82e06`): the bare "Autre" category no longer satisfies the mandatory write-off
+  note - modal gate uses the authored free-text, slice gate rejects the category-only value.
+  **3/3** (E-0040).
+- **REF-65 FIXED** (`8819680` + `2b0440e`): a pure credit sale has no cash intake, so a cash-channel
+  refund was refused by the native lane (`INVALID: cash refund without drawer movement`). The modal now
+  submits such tickets on the non-cash channel, and the funding split's debt lane relieves the credit
+  (1000 -> 500, cash 0). Deliberately narrow (debt-only tickets) so a card/voucher ticket keeps its
+  channel - a broad switch double-delivered (REF-42 probe, 1400 for a 700 ticket). **3/3** (E-0041).
+- **Full `31-ref-refunds-part2`: 15/15 GREEN** on a fresh build of `2b0440e` (E-0043) - was 12/15.
+- **NEW OPEN MONEY DEFECT - REF-42**: a 700 DA CIB sale delivers **1400 DA** on refund
+  (`delivered=1400`, Expected 700). Reproduced on BOTH builds (`eb95527` 0/2 and `2b0440e` 0/2), so
+  pre-existing (E-0042). Mechanism unproven; needs the C90-style trace before any change.
+  Pack: `docs/c01-ref42-double-delivery.md`.
+- Still parked elsewhere: REF-15 (loyalty double burn / G-07, owner decision A/B/C), B-3 (walk-in
+  trade-in policy), D4 (wallet atomicity), void outbox payload (read-only sync lane).
