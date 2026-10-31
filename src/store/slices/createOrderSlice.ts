@@ -1884,18 +1884,14 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     }
 
     try {
-      const { enqueueOrderSync } = await import('../../db/sqlPluginAdapter');
-      // Status flip FIRST: its in-transaction ALREADY_VOIDED re-read trips
-      // before any compensating delta is appended, so a racing duplicate void
-      // cannot double-restore stock. Push the FULL voided transaction: a
-      // minimal payload would overwrite the cloud receipt and wipe line items
-      // on peer devices at pull time.
-      await enqueueOrderSync(transactionId, {
-        ...voidedTxn,
-        receipt_number: voidedTxn.receiptNumber,
-        created_at: voidedTxn.createdAt,
-      } as unknown as Record<string, unknown>);
-        const { appendInventoryDeltas } = await import('../../db/sqlPluginAdapter');
+      const { appendInventoryDeltas, enqueueOrderSync } = await import('../../db/sqlPluginAdapter');
+      // REF-13: RESTORE FIRST. The atomic void above already flipped the durable
+      // status, so enqueueOrderSync's duplicate-void guard refuses this, the
+      // FIRST void, with ALREADY_VOIDED; when that refusal aborted the handler the
+      // VOID ledger delta never landed and the voided unit stayed missing from
+      // stock (status VOIDED + toast "deja annulee", drawer one unit short).
+      // Deterministic LED-VOID ids keep a replayed void convergent.
+
         // Deterministic delta ids: a void replayed (or raced) from a second
         // device converges via ON CONFLICT DO NOTHING instead of double-restoring.
         // Services carry no stock identity (never depleted at sale) — no delta.
@@ -1918,7 +1914,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       // every allocation the original depletion recorded (exact reversal);
       // lines without recorded allocations re-enter via the REFUND-batch
       // fallback at their historical line cost. Duplicate voids cannot reach
-      // here (ALREADY_VOIDED trips at enqueueOrderSync above).
+      // here: the atomic lane above throws ALREADY_VOIDED before this block.
       try {
         const { restituteStockBatches } = await import('../../db/sqlPluginAdapter');
         const voidRestitution: Array<{ batchId?: string; productId: string; quantity: number; unitCost: number }> = [];
@@ -1957,12 +1953,26 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       } catch (restErr) {
         console.warn('[void:batches] Batch restitution skipped:', restErr);
       }
+      // REF-13: the durable status is already VOIDED (voidTransactionAtomic
+      // above), so the duplicate-void guard answers ALREADY_VOIDED to this, the
+      // FIRST void. That refusal must not fail the void; the outbox payload gap
+      // is tracked separately (docs/c01-ref13-void.md). A real duplicate never
+      // reaches here - the atomic lane throws ALREADY_VOIDED first.
+      try {
+      await enqueueOrderSync(transactionId, {
+        ...voidedTxn,
+        receipt_number: voidedTxn.receiptNumber,
+        created_at: voidedTxn.createdAt,
+      } as unknown as Record<string, unknown>);
+      } catch (e) {
+        if (!(e instanceof Error) || e.message !== 'ALREADY_VOIDED') throw e;
+        console.warn('[void] outbox push refused: durable status already VOIDED (sync gap, docs/c01-ref13-void.md)');
+      }
       const { syncManager } = await import('../../sync/SyncManager');
       syncManager.notifyLocalWrite();
     } catch (e) {
-      if (e instanceof Error && e.message === 'ALREADY_VOIDED') {
-        return { success: false, reason: 'ALREADY_VOIDED' };
-      }
+      // The void is already durable here; a ledger/sync hiccup must be loud but
+      // must not report the operator's successful void as a duplicate.
       console.warn('Void ledger write skipped:', e);
     }
 
