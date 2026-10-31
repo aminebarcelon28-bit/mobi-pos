@@ -38,3 +38,11 @@ semantics, not arithmetic: a blind sweep would change what each test asserts.
 
 No expectation is edited to match observed output. Each edit above must be justified by the scenario's
 intended money flow, and the invariant stays enforced inside the transaction.
+
+## Update after r3 (value cap)
+
+The economic cap (`refund value <= ticket tenders/total - already refunded`) is in and closes the
+client-controlled skip. Consequence: **18** legacy fixtures now fail, not 6 - their `value_reversed`
+(450, from the shared `base_req`) exceeds the seeded ticket (200). Fixture inconsistency, not a code
+defect; the fix is one mechanical pass giving each scenario a ticket that matches its money (or legs that
+match the ticket), with each expectation reviewed for intent - never edited to match observed output.
