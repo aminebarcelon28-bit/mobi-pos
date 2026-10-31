@@ -2926,6 +2926,12 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
     const rows1 = refundsFor(s1.id);
     console.log(`[REF-58] UI double-click: rows=${rows1.length} totals=${JSON.stringify(rows1.map((r) => Number(r.total)))} stock=${stockOf(P500)}`);
     expect(rows1.length).toBe(1);
+    // The restock of the refunded unit lands slightly after the refund row in a
+    // busy batch; wait for convergence instead of reading one instant (the
+    // assertion is unchanged: exactly one unit is back).
+    await browser
+      .waitUntil(async () => stockOf(P500) === base, { timeout: 15000, interval: 250 })
+      .catch(() => undefined);
     expect(stockOf(P500)).toBe(base);
 
     // (b) Concurrent forged pair — one request object, two racing invokes in
