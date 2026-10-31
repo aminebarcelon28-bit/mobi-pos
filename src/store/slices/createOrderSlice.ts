@@ -2127,8 +2127,15 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     // Physical returns kept out of stock (rebut/defective) move value off the
     // books with no compensating entry — they must carry a reason note.
     const hasNonRestocked = refundItems.some((i) => !i.restock);
-    if (hasNonRestocked && !(refundReason && refundReason.trim())) {
-      return { success: false, reason: 'RESTOCK_REASON_REQUIRED' };
+    if (hasNonRestocked) {
+      const reasonTrim = String(refundReason ?? '').trim();
+      // REF-36: "Autre" is a category, not a motive. A write-off must carry an
+      // operator-authored note; the bare placeholder value (or its option label)
+      // must not satisfy the gate, or a rebut lands with no quarantine note.
+      const categoryOnly = /^Autre( motif personnalis\S*)?$/i.test(reasonTrim);
+      if (!reasonTrim || categoryOnly) {
+        return { success: false, reason: 'RESTOCK_REASON_REQUIRED' };
+      }
     }
 
       // Over-refund guard. The modal seeds quantities from the ORIGINAL purchased

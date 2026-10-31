@@ -544,7 +544,12 @@ export const RefundModal: React.FC = () => {
       const finalReason = refundReason === 'Autre' && customReason.trim() ? customReason.trim() : refundReason;
       // Rebut sans restock: a reason note is mandatory (also enforced slice-side).
       const needsNote = activeRefundItems.some((i) => !i.restock);
-      if (needsNote && !finalReason.trim()) {
+      // REF-36: "Autre" is a CATEGORY, not a motive. With the category selected and
+      // the free-text empty there is no operator-authored note; the bare
+      // placeholder must not satisfy the mandatory-note gate (the modal itself
+      // promises "Précisez le motif exact..." for Autre).
+      const authoredNote = refundReason === 'Autre' ? customReason.trim() : finalReason.trim();
+      if (needsNote && !authoredNote) {
         showToast('Article(s) sans remise en stock : précisez un motif (note obligatoire).', 'error');
         setIsSubmitting(false);
         return;
