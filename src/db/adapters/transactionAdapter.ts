@@ -501,7 +501,7 @@ export const transactionAdapter = {
     if (isTauriEnv()) {
       try {
         const db = await getLocalDb();
-        const rows = (await db.select(`SELECT id, receipt_number, status, created_at, shift_id, total,
+        const rows = (await db.select(`SELECT id, receipt_number, status, created_at, shift_id, device_id, total,
        json_extract(json_payload,'$.subtotal') AS subtotal,
        json_extract(json_payload,'$.discountTotal') AS discountTotal,
        json_extract(json_payload,'$.total') AS totalPayload,
@@ -528,6 +528,8 @@ export const transactionAdapter = {
           status: String(r.status),
           createdAt: String(r.created_at ?? ''),
           shiftId: r.shift_id ? String(r.shift_id) : undefined,
+          deviceId: r.device_id ? String(r.device_id) : undefined,
+          device_id: r.device_id ? String(r.device_id) : undefined,
           subtotal: Number(r.subtotal ?? 0),
           discountTotal: Number(r.discountTotal ?? 0),
           total: Number(r.totalPayload ?? r.total ?? 0),
