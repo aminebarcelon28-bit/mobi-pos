@@ -41,3 +41,12 @@ The wallet and loyalty writes no longer parse/serialise the customer document in
 The remaining batch failure for REF-87 is NOT this cost: the offline-cash-cap auto-switch closes the refund
 dialog for a 2e9 cash refund, so the Avoir revalidation never runs. That is a `RefundModal` lifecycle bug,
 tracked as the next step.
+
+## Update 2026-11-01 (batch) — the residual is the modal lifecycle
+
+REF-87 is green twice in isolation (ref87k, ref87m) with a clean invariant oracle, but the full batch still
+fails it before any refund row: the offline-cash-cap re-render tears down the PIN field while the submit is
+being prepared, and the run aborts at +16 s (E-0111). The money layer (payload size, JSON1 writes, loyalty
+clamp) is not the blocker any more. Next change is product-side: keep the RefundModal's dialog and PIN field
+mounted through the method switch (or re-submit automatically after the switch) instead of relying on the
+test to catch the re-render.
