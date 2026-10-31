@@ -1144,6 +1144,16 @@ export const RefundModal: React.FC = () => {
                   <div>
                     <span className="text-[10px] text-pos-muted uppercase font-bold block">Montant Total à Rembourser</span>
                     <span data-testid="refund-total" className="text-lg sm:text-xl font-black text-purple-400 num">{formatDZD(totalRefundAmount)}</span>
+                    {fundingPreview && (fundingPreview.anomalies ?? []).includes('voucher-lane-unrestorable') && (
+                      <span
+                        data-testid="refund-voucher-unrestorable"
+                        role="status"
+                        className="text-[10px] text-amber-300 block mt-1"
+                      >
+                        Bon d’achat non restituable : le ticket ne porte pas de code, aucun bon ne peut être recrédité.
+                        Ce montant n’est pas remboursé.
+                      </span>
+                    )}
                     {fundingPreview && fundingPreview.netRefund !== Math.round(totalRefundAmount) && (
                       <span className="text-[10px] text-pos-muted block">
                         Net reversé : {formatDZD(fundingPreview.netRefund)}

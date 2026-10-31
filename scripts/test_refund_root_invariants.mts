@@ -1033,6 +1033,23 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
     check('I4b/s voucherCode present: lane restored (500)', c.voucherShare === 500, JSON.stringify(c));
     check('I4b/s voucherCode present: no anomaly', !(c.anomalies ?? []).includes('voucher-lane-unrestorable'), JSON.stringify(c.anomalies));
   }
+  // (t) The unrestorable-voucher anomaly must be VISIBLE to the cashier, not only
+  // in the audit trail: the refund modal renders a status line for it. This is a
+  // source-level contract check (the modal is React; no renderer in the harness),
+  // labelled as such - it proves the wiring, not the pixels.
+  {
+    const modal = (receiptMathModule as unknown as Record<string, unknown>) && readFileSync('src/components/modals/RefundModal.tsx', 'utf8');
+    check(
+      'I4b/t RefundModal renders the unrestorable-voucher warning',
+      /voucher-lane-unrestorable/.test(modal) && /data-testid="refund-voucher-unrestorable"/.test(modal),
+      'warning block missing'
+    );
+    check(
+      'I4b/t the warning is a status role (announced, not decorative)',
+      /data-testid="refund-voucher-unrestorable"[\s\S]{0,120}role="status"/.test(modal),
+      'role=status missing'
+    );
+  }
   // (q) FUNDING FORMAT (Q-vi): integer minor units + unit:'minor'; the reader
   // round-trips every lane and still accepts a DA-valued legacy object.
   {
