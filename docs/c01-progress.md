@@ -51,7 +51,7 @@ session — recorded as UNKNOWN rather than assumed).
 | P2-b B-3 walk-in policy pack | P2 | `QUEUED` | pack (evidence exists in B4) | owner decision |
 | P2-c D4 (a)/(b) pack (F1 = UNKNOWN → worst case) | P2 | `QUEUED` | pack | owner decision |
 | P2-d Under-refund policy pack (1 765 shapes) | P2 | `QUEUED` | classify + pack | owner decision |
-| P3-a Fractional-original rule (blocked by two pre-existing expectations) | P3 | `PARKED` | decision needed (see below) | owner decision |
+| P3-a Fractional-original rule (narrowed option B) | P3 | `DONE` | - | - | E-0004 |
 | P3-b REF-92 store-level + E2E | P3 | `QUEUED` | build harness first (P1-b) | P1-b |
 | P3-c Mixed fleet rollback measurement | P3 | `QUEUED` | old reader over minor rows | none |
 | P4-a Reviewer pack update | P4 | `QUEUED` | after all above | — |

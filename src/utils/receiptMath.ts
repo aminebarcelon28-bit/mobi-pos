@@ -844,9 +844,17 @@ export function computeRefundFundingSplit(
   // remainder to the largest non-cash lane. A fractional ORIGINAL cash lane
   // cannot be fixed here: it is recorded instead of being silently dropped.
   if (cashPaidM % 100 !== 0) {
-    // Q-alpha b is NOT landed: the floor rule conflicts with three pre-existing
-    // expectations (see docs/c01-progress.md). The fractional original cash
-    // lane is flagged and the cash stays proportional, exactly as in B4.
+    // Q-alpha b, narrowed (B5 decision B): the original cash lane itself is
+    // fractional, so the drawer can only pay whole dinars. Pay the FLOOR of the
+    // cumulative cash quota and let the largest-remainder step below distribute
+    // the sub-dinar residue to a lane with headroom (Hamilton / largest
+    // remainder: floor the quotas, give the remainder to the largest fractional
+    // parts, so the parts still sum to the whole). If nothing can take it, the
+    // residue is recorded as `sub-dinar-residue:<r>` and stays unpaid - never
+    // silently dropped.
+    const cumCashTargetM = Math.round((cumNetM * cashPaidM) / Math.max(1, givenM));
+    const floorM = Math.floor(cumCashTargetM / 100) * 100;
+    cashM = Math.max(0, Math.min(cashPaidM - prior.cash, floorM - prior.cash));
     anomalies.push('fractional-original-cash');
   } else if (digitalPaidM === 0 && cashPaidM > 0) {
     const cumCashTargetM = Math.round((cumNetM * cashPaidM) / Math.max(1, givenM));

@@ -977,6 +977,37 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
     check('I4b/p mutation raw-fractional-cash is KILLED by (vii)', m.residue !== 0, JSON.stringify(m));
   }
 
+  // (r) FRACTIONAL ORIGINAL cash lane (Q-alpha b, narrowed): the drawer pays the
+  // floor of its quota, the residue goes to a lane with headroom (Hamilton
+  // largest-remainder) or is recorded. Never exceeds what was tendered.
+  {
+    const fracCash = {
+      id: 'TKT-FRAC',
+      subtotal: 333.33,
+      discountTotal: 0,
+      total: 333.33,
+      paymentMethod: 'Espèces',
+      tenders: [{ method: 'Espèces', amount: 333.33 }],
+    };
+    const s = computeRefundFundingSplit(fracCash, 333.33);
+    check('I4b/r fractional original: drawer pays whole DA', Math.round(s.cashShare * 100) % 100 === 0, `cash=${s.cashShare}`);
+    check('I4b/r fractional original: never exceeds the tender', s.cashShare <= 333.33, `cash=${s.cashShare}`);
+    check('I4b/r fractional original: flagged', (s.anomalies ?? []).includes('fractional-original-cash'), JSON.stringify(s.anomalies));
+    // With an avoir lane present the residue is absorbed there (Hamilton), so the
+    // row still sums to what the customer receives.
+    const fracMixed = {
+      id: 'TKT-FRACM',
+      subtotal: 900.5,
+      discountTotal: 0,
+      total: 800.5,
+      paymentMethod: 'Espèces',
+      tenders: [{ method: 'Espèces', amount: 800.5 }, { method: 'Avoir Client', amount: 100 }],
+    };
+    const m = computeRefundFundingSplit(fracMixed, 900.5);
+    const sum = Math.round((m.cashShare + m.avoirShare + m.voucherShare + m.debtShare + m.digitalShare) * 100);
+    check('I4b/r fractional original + avoir: lanes sum to the refund', sum === Math.round(m.netRefund * 100), `${sum} vs ${Math.round(m.netRefund * 100)}`);
+    check('I4b/r fractional original + avoir: cash whole DA', Math.round(m.cashShare * 100) % 100 === 0, `cash=${m.cashShare}`);
+  }
   // (q) FUNDING FORMAT (Q-vi): integer minor units + unit:'minor'; the reader
   // round-trips every lane and still accepts a DA-valued legacy object.
   {
