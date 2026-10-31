@@ -149,3 +149,14 @@ session — recorded as UNKNOWN rather than assumed).
 - **Evidence-file repair (disclosed):** appends had concatenated objects onto one line (no trailing newline);
   `docs/c01-evidence.ndjson` was re-split into one object per line preserving every byte - 31 objects,
   ids E-0001..E-0031 sequential, all JSON-parse clean.
+## B6 addendum 11 (post-C90 sweep: two pre-existing findings, one parked)
+
+- **REF-15 (loyalty points on a credit-paid sale) is PRE-EXISTING and still red**: 0/3 on the pre-C90 build
+  `e88136b` (E-0032) with the identical assertion (`>= 400` vs **372**) and G-07 as on the fix build.
+  Cause: `createOrderSlice.ts:805` burns `floor(400/10)=40` points for spending avoir that the
+  conversion already paid for. A trial removing that burn (E-0034) fixed the double burn
+  (post-sale 412) but **G-07 persists** (headline 400 vs buckets 0) and LOY-14 went 0/2, so it was
+  **reverted**. Decision pack: `docs/c01-ref15-loyalty-pack.md` (A recommended).
+- **REF-51 (offline cash cap) flakes at baseline too**: 7/8 on `e88136b` (E-0033) with the same
+  `refund-submit not clickable` message seen at 2/3 on the fix build -> harness flake, not a C90 regression.
+- **C90 unchanged and green**: REF-28 3/3 (E-0030), regression set 15/15 (E-0031), binary `6C2ADD1B...8FE2`.
