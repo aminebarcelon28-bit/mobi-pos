@@ -327,6 +327,48 @@ if (args.json) {
   }, null, 1));
 }
 
+/* ------------------------------------------------------------------ */
+/* Money conservation per COMPLETED refund (owner P0 rule, see           */
+/* scripts/refund-value-check.mjs). Asserts on the live sandbox DB by    */
+/* default; --audit-dbs scans every retained E2E database.               */
+try {
+  const { execFileSync } = await import('node:child_process');
+  const { existsSync, readdirSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const sandbox = join(process.env.LOCALAPPDATA ?? '', 'Temp', 'opencode', 'pos-wdio-sandbox', 'home', 'AppData', 'Roaming', 'com.mobi.pos.e2e', 'mobi_pos.db');
+  const dbs = [];
+  if (args.db && existsSync(String(args.db))) dbs.push(String(args.db));
+  if (args['audit-dbs']) {
+    const root = join(process.env.LOCALAPPDATA ?? '', 'Temp', 'opencode');
+    const walk = (dir) => {
+      let entries = [];
+      try { entries = readdirSync(dir); } catch { return; }
+      for (const e of entries) {
+        const full = join(dir, e);
+        let st;
+        try { st = statSync(full); } catch { continue; }
+        if (st.isDirectory()) walk(full);
+        else if (e === 'mobi_pos.db') dbs.push(full);
+      }
+    };
+    walk(root);
+  }
+  if (dbs.length) {
+    try {
+      const out = execFileSync(process.execPath, [join(process.cwd(), 'scripts', 'refund-value-check.mjs'), ...dbs], { encoding: 'utf8' });
+      console.log(out.trim().split('\n')[0]);
+    } catch (e) {
+      const out = String(e.stdout ?? e.message ?? '');
+      console.log(out.trim().split('\n').slice(0, 40).join('\n'));
+      failures.push('refund money conservation');
+    }
+  } else {
+    console.log('REFUND VALUE: no --db / --audit-dbs given (skipped - pass a database to assert money conservation)');
+  }
+} catch (e) {
+  console.log('REFUND VALUE: checker unavailable ::', String(e.message ?? e));
+}
+
 console.log('');
 if (failures.length) {
   console.log(`${C.red}RECONCILE FAILED${C.reset} (${failures.length} check(s)): ${failures.join(', ')}`);

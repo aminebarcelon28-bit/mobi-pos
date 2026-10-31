@@ -3160,7 +3160,11 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
     // (DB + UI liveness): run 1 died inside this sale — the pay dialog stayed
     // mounted, session latency degraded over ~28 s, then the webview vanished
     // ("no such window") with zero sale rows, no panic text, no WER entry.
+    // OWNER-AUTHORISED fixture change (P0 recipient ruling): the ticket carries
+    // a customer, because an offline-cap Avoir refund with no recipient can no
+    // longer commit (it would credit nobody) — the app must refuse it.
     await clearCart();
+    await selectCustomer(C87_NAME);
     await addSku('REF4 PMAX');
     await addSku('REF4 PMAX');
     const beforeA = txCount();

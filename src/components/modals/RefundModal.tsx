@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createSubmitGuard, pinAuthorisesTicket } from '../../utils/refundGuards';
+import { refundRefusalMessage } from '../../i18n/refundMessages';
 
 import { foldForSearch } from '../../utils/catalogSearch';
 import {
@@ -636,14 +637,21 @@ export const RefundModal: React.FC = () => {
         } else if (refundResult.reason === 'OFFLINE_FOREIGN_TICKET') {
           showToast('Offline Terminal Lock: Cross-terminal refunds require an active sync connection.', 'error');
         } else if (refundResult.reason === 'OFFLINE_CASH_CAP_EXCEEDED') {
-          if (refundMethod === 'Espèces') {
+          if (refundMethod === 'Espèces' && selectedTxn?.customer?.id) {
             // Fallback path (Module B): value that cannot leave the drawer
-            // offline returns as a non-cashable store voucher instead.
+            // offline returns as a store credit for the customer on the ticket.
             setRefundMethod('Avoir Client');
             showToast('Plafond espèces hors-ligne atteint — méthode basculée en Avoir Client : vérifiez puis validez à nouveau.', 'warning', 6000);
+          } else if (refundMethod === 'Espèces') {
+            // P0 (owner ruling): no customer -> an Avoir would credit nobody.
+            // Terminal refusal, NOT a method switch (no switch loop).
+            showToast(refundRefusalMessage('avoirRecipientOffline'), 'error', 8000);
           } else {
             showToast('Plafond espèces hors-ligne atteint — resynchronisez avant tout nouveau décaissement.', 'error');
           }
+        } else if (refundResult.reason === 'AVOIR_RECIPIENT_REQUIRED') {
+          // P0 (owner ruling): fail closed, terminal, no switch loop.
+          showToast(refundRefusalMessage('avoirRecipientRequired'), 'error', 8000);
         } else if (refundResult.reason === 'SUPERVISOR_PIN_REQUIRED') {
           showToast('Remboursement espèces hors-ligne élevé : autorisation superviseur requise et non reconnue — ressaisissez le PIN Manager.', 'error');
         } else if (refundResult.reason === 'SUPERVISOR_AUTH_EXPIRED') {

@@ -7,7 +7,7 @@
  *  - two legitimate chunks colliding on the dedup hash (E-0050) -> committedRefundBasis
  *    + refundIdentity basis sensitivity
  */
-import { createSubmitGuard, pinAuthorisesTicket, committedRefundBasis } from '../src/utils/refundGuards.ts';
+import { createSubmitGuard, pinAuthorisesTicket, committedRefundBasis, avoirRecipientRefusal } from '../src/utils/refundGuards.ts';
 import { refundIdentity } from '../src/db/adapters/refundNative.ts';
 
 let pass = 0;
@@ -67,6 +67,32 @@ const check = (name: string, cond: boolean, extra = '') => {
   check('a later chunk (basis+1) hashes differently', a0.itemsHash !== a1.itemsHash, `${a0.itemsHash} vs ${a1.itemsHash}`);
   check('different method hashes differently', refundIdentity({ ...base, basis: 0, method: 'Espèces' }).itemsHash !== a0.itemsHash);
   check('different amount hashes differently', refundIdentity({ ...base, basis: 0, netRefund: 1 }).itemsHash !== a0.itemsHash);
+}
+
+/* 5. P0 recipient rule: no Avoir leg without a recipient ------------------- */
+{
+  check(
+    'anonymous Avoir refund is refused',
+    avoirRecipientRefusal({ method: 'Avoir Client', hasCustomer: false, avoirShare: 0 }) === 'AVOIR_RECIPIENT_REQUIRED',
+  );
+  check(
+    'anonymous funding-avoir refund is refused',
+    avoirRecipientRefusal({ method: 'Espèces', hasCustomer: false, avoirShare: 500 }) === 'AVOIR_RECIPIENT_REQUIRED',
+  );
+  check('customer-attached Avoir refund is allowed', avoirRecipientRefusal({ method: 'Avoir Client', hasCustomer: true, avoirShare: 0 }) === null);
+  check('customer-attached funding-avoir refund is allowed', avoirRecipientRefusal({ method: 'Espèces', hasCustomer: true, avoirShare: 500 }) === null);
+  check(
+    'anonymous cash refund without an avoir lane is allowed',
+    avoirRecipientRefusal({ method: 'Espèces', hasCustomer: false, avoirShare: 0 }) === null,
+  );
+  check(
+    'offline cap switch onto Avoir with no customer is refused',
+    avoirRecipientRefusal({ method: 'Avoir Client', hasCustomer: false, avoirShare: 0 }) !== null,
+  );
+  check(
+    'replay of an Avoir request with no customer is refused',
+    avoirRecipientRefusal({ method: 'Avoir Client', hasCustomer: false, avoirShare: 0 }) === 'AVOIR_RECIPIENT_REQUIRED',
+  );
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

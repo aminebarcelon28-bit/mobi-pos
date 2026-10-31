@@ -57,3 +57,23 @@ export function committedRefundBasis(unionCount: number, durableCount: number): 
   const b = Number.isFinite(durableCount) ? Math.max(0, Math.trunc(durableCount)) : 0;
   return Math.max(a, b);
 }
+
+export type RefundRefusal = 'AVOIR_RECIPIENT_REQUIRED';
+
+/**
+ * P0 recipient rule (owner ruling: fail closed). A refund that pays into a
+ * wallet needs a recipient. Both entry shapes are covered:
+ *   - the cashier chose "Avoir Client" (method), or
+ *   - the original ticket was paid with store credit, so the refund's funding
+ *     split carries an avoir lane that must go back to a wallet.
+ * An anonymous ticket has nobody to credit; the value would evaporate.
+ */
+export function avoirRecipientRefusal(input: {
+  method: string;
+  hasCustomer: boolean;
+  avoirShare: number;
+}): RefundRefusal | null {
+  const needsRecipient = input.method === 'Avoir Client' || Number(input.avoirShare) > 0;
+  if (needsRecipient && !input.hasCustomer) return 'AVOIR_RECIPIENT_REQUIRED';
+  return null;
+}

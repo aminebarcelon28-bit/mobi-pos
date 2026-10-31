@@ -29,7 +29,7 @@ async function getCustomerRepo() {
   import { newId, newReceiptNumber, deterministicId } from '../../utils/ids';
   import { toIntMoney } from '../../utils/fifoPreview';
   import { refundIdentity, refundSaleNative } from '../../db/adapters/refundNative';
-  import { committedRefundBasis } from '../../utils/refundGuards';
+  import { committedRefundBasis, avoirRecipientRefusal } from '../../utils/refundGuards';
   import type { NativeRefundRequest } from '../../db/adapters/refundNative';
   import { sortedTransactions } from '../transactionOrder';
   import { saveCheckoutRecoveryIntent, clearCheckoutRecoveryIntent, cartFingerprintOfPayload, clearSiblingRecoveryIntents } from '../../db/checkoutRecovery';
@@ -2093,6 +2093,17 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       return { success: false, reason: 'ORIGINAL_VOIDED' };
     }
 
+    // P0 (owner ruling, fail closed): an Avoir Client refund must have a
+    // recipient. On an anonymous ticket there is no wallet to credit, so the
+    // value would be booked as refunded and reach nobody (REF-87: 4e9
+    // COMPLETED as Avoir Client with 0 cash, 0 voucher, 0 wallet, 0 parked).
+    // This runs BEFORE any write, so a refusal leaves no refund row, no
+    // restock and no dedup hash - the leg is part of the refund transaction
+    // and is never silently skipped.
+    if (avoirRecipientRefusal({ method: refundMethod, hasCustomer: Boolean(String(originalTransaction.customer?.id ?? '').trim()), avoirShare: 0 })) {
+      return { success: false, reason: 'AVOIR_RECIPIENT_REQUIRED' };
+    }
+
     // Fix 4: every refund anchors to an accounting period. Without an open
     // shift the refund would land in the original (possibly CERTIFIED) shift
     // and rewrite its books — fail closed instead.
@@ -2222,6 +2233,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         { cash: 0, avoir: 0, voucher: 0, debt: 0, digital: 0, gross: 0, basis: 'explicit', anomalies: [] }
       );
     const funding = computeRefundFundingSplit(originalTransaction, refundTotal, priorRecovery, priorLanes);
+    // P0 (owner ruling): the same recipient rule for the FUNDING avoir lane - a
+    // ticket that was paid with store credit refunds back into a wallet, so an
+    // anonymous ticket has nowhere to put it. Refuse before any write.
+    if (avoirRecipientRefusal({ method: refundMethod, hasCustomer: Boolean(String(originalTransaction.customer?.id ?? '').trim()), avoirShare: funding.avoirShare })) {
+      return { success: false, reason: 'AVOIR_RECIPIENT_REQUIRED' };
+    }
     const netRefund = funding.netRefund;
     // Fix 2: strict tender clamp (anti cash-extraction). Cumulative drawer
     // cash out can never exceed the net physical cash tendered on the original
