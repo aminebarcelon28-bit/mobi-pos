@@ -533,6 +533,9 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
       { method: 'Avoir Client', amount: 200 },
     ],
     voucherCreditApplied: 100,
+    // A real voucher sale carries its code; without one the B-2 guard (correctly)
+    // zeroes the lane, so the fixture must model the real shape.
+    voucherCode: 'BON1',
   };
   const seq4 = runSequence(threeLanes, [400, 300, 300]);
   check('I4b/g mixed lanes: avoir 200 exact', eqMinor(seq4.total.avoir, 200), JSON.stringify(seq4.total));
@@ -1007,6 +1010,28 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
     const sum = Math.round((m.cashShare + m.avoirShare + m.voucherShare + m.debtShare + m.digitalShare) * 100);
     check('I4b/r fractional original + avoir: lanes sum to the refund', sum === Math.round(m.netRefund * 100), `${sum} vs ${Math.round(m.netRefund * 100)}`);
     check('I4b/r fractional original + avoir: cash whole DA', Math.round(m.cashShare * 100) % 100 === 0, `cash=${m.cashShare}`);
+  }
+  // (s) B-2 GUARD: a voucher amount with no code can never be restored by the
+  // native CAS (refund.rs credits by code), so it must not be reported as a lane.
+  // Pre-guard behaviour: the voucher-only fixture returned 500 on the voucher
+  // lane (B4 differential, docs/c01-refund-allocation-rfc.md).
+  {
+    const noCode = {
+      id: 'TKT-NOCODE',
+      subtotal: 500,
+      discountTotal: 0,
+      total: 0,
+      voucherCreditApplied: 500,
+      tenders: [],
+    };
+    const s = computeRefundFundingSplit(noCode, 500);
+    check('I4b/s no voucherCode: voucher lane is 0', s.voucherShare === 0, JSON.stringify(s));
+    check('I4b/s no voucherCode: anomaly recorded', (s.anomalies ?? []).includes('voucher-lane-unrestorable'), JSON.stringify(s.anomalies));
+    check('I4b/s no voucherCode: nothing promised as cash either', s.netRefund === 0, `net=${s.netRefund}`);
+    const withCode = { ...noCode, voucherCode: 'BON1' };
+    const c = computeRefundFundingSplit(withCode, 500);
+    check('I4b/s voucherCode present: lane restored (500)', c.voucherShare === 500, JSON.stringify(c));
+    check('I4b/s voucherCode present: no anomaly', !(c.anomalies ?? []).includes('voucher-lane-unrestorable'), JSON.stringify(c.anomalies));
   }
   // (q) FUNDING FORMAT (Q-vi): integer minor units + unit:'minor'; the reader
   // round-trips every lane and still accepts a DA-valued legacy object.

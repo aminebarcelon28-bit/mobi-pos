@@ -520,6 +520,11 @@ export interface RefundFundingInput {
   paymentMethod?: string;
   /** Persisted credit-debt amount (preferred over re-summing tenders). */
   debtAdded?: number | null;
+  /**
+   * Voucher code carried by the sale. Native restore (`refund.rs`) credits the
+   * voucher back BY CODE; an amount with no code cannot be restored anywhere.
+   */
+  voucherCode?: string | null;
   /** Change handed back at the till — carved out of the CASH lane only. */
   changeDue?: number | null;
   /** Lines of the original ticket — fallback basis when the columns are absent. */
@@ -733,7 +738,14 @@ export function computeRefundFundingSplit(
   const digitalTenderM = tenderMinor(tenders, DIGITAL_RAILS);
   const avoirTenderM = tenderMinor(tenders, ['Avoir Client']);
   const debtTenderM = tenderMinor(tenders, ['Crédit Client']);
-  const voucherM = Math.max(0, toMinor(orig?.voucherCreditApplied));
+  // B-2 guard: native restore credits the voucher back BY CODE (refund.rs CAS on
+  // credit_vouchers.code). An amount with no code can never be restored, so it is
+  // NOT reported as a refund lane - it is excluded from the funding base and
+  // flagged, instead of promising money that nothing can pay.
+  const voucherAppliedM = Math.max(0, toMinor(orig?.voucherCreditApplied));
+  const voucherRestorable = voucherAppliedM > 0 && String(orig?.voucherCode ?? '').trim().length > 0;
+  const voucherM = voucherAppliedM > 0 && !voucherRestorable ? 0 : voucherAppliedM;
+  if (voucherAppliedM > 0 && !voucherRestorable) anomalies.push('voucher-lane-unrestorable');
   const changeM = Math.max(0, toMinor(orig?.changeDue));
 
   // Change is carved out of the CASH lane only (D1a): a till that handed 100 DA

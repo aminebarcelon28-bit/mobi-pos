@@ -93,3 +93,11 @@ session — recorded as UNKNOWN rather than assumed).
 - REF-03 / REF-33 / REF-49 / MNY-30: **3/3 each** (E-0016).
 - REF-28: **1 passing / 2 failing** -> the tender mis-shape is INTERMITTENT (E-0017). The 100 DA overcharge is proven for the shape that occurs (E-0012/E-0013) but REF-28 is not a deterministic failure. C90 stays parked.
 - B-2 trace: amount and `voucherCode` are written together (createCartSlice.ts:162) and cleared together (:169, :397, mobile :1002); no UI path sets one without the other. Import/sync envelopes could carry an amount without a code -> the defensive split guard is still worth landing, NOT implemented (needs src + rebuild).
+
+## B6 addendum 4 (B-2 guard)
+
+- eceiptMath.ts: a voucher amount with no oucherCode is no longer reported as a lane; it leaves the funding base and records oucher-lane-unrestorable (native restore is by code, efund.rs:1684-1728).
+- Tests I4b/s: no code -> voucher 0, anomaly, net 0 (nothing promised as cash); with code -> lane 500 restored. 157 checks, 0 failed (E-0019).
+- Fixture (g) completed with oucherCode: 'BON1' - it modelled an impossible sale (voucher without code) and the guard correctly rejected it.
+- RefundModal warning: NOT implemented (budget).
+- Rebuild + worktree re-run: NOT run after this change; the four green cases need it before any claim.
