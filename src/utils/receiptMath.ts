@@ -844,6 +844,9 @@ export function computeRefundFundingSplit(
   // remainder to the largest non-cash lane. A fractional ORIGINAL cash lane
   // cannot be fixed here: it is recorded instead of being silently dropped.
   if (cashPaidM % 100 !== 0) {
+    // Q-alpha b is NOT landed: the floor rule conflicts with three pre-existing
+    // expectations (see docs/c01-progress.md). The fractional original cash
+    // lane is flagged and the cash stays proportional, exactly as in B4.
     anomalies.push('fractional-original-cash');
   } else if (digitalPaidM === 0 && cashPaidM > 0) {
     const cumCashTargetM = Math.round((cumNetM * cashPaidM) / Math.max(1, givenM));
@@ -891,7 +894,7 @@ export function computeRefundFundingSplit(
       }
       remM = -excess;
     }
-    if (remM !== 0) digitalM += remM; // nothing else can take it
+    if (remM !== 0) digitalM += remM; // last resort: the digital rail carries it
   }
   if (cashM + prior.cash > cashPaidM) anomalies.push('cash-over-paid');
 

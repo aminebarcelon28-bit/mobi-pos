@@ -789,20 +789,24 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
         if (Math.round(rowSum * 100) !== minor(s.netRefund)) {
           return `(iv) row lanes ${Math.round(rowSum * 100)} != net ${minor(s.netRefund)}`;
         }
-        const off = deviations.filter((x) => x.d > 1);
-        if (off.length > 2) return `(v) ${off.map((x) => `${x.k}:${x.d}`).join(',')} at net ${net}`;
-        if (off.some((x) => x.d > 100)) return `(v) ${off.map((x) => `${x.k}:${x.d}`).join(',')} > 1 DA`;
-        if (off.length === 2) {
-          const signed = deviations
-            .filter((x) => x.d > 1)
-            .map((x) => {
-              const k = x.k as 'avoir' | 'cash' | 'voucher' | 'debt' | 'digital';
-              const share = minor(given[k]) === 0 ? 0 : Math.round((minor(given[k]) * net) / Math.max(1, minor(total)));
-              return cum[k] - share;
-            })
-            .reduce((a, b) => a + b, 0);
-          if (Math.abs(signed) > 1) return `(v) two lanes drift without cancelling (${signed}) at net ${net}`;
+        // (i) cumulative per lane can never pass the lane's original amount.
+        for (const k of ['avoir', 'cash', 'voucher', 'debt', 'digital'] as const) {
+          if (cum[k] > minor(given[k]) + (k === 'cash' ? 0 : 1)) return `(i) ${k} ${cum[k]} > original ${minor(given[k])}`;
         }
+        // (v) RESTATED per lane type (Q-alpha): cash within 50 minor of its
+        // proportional share; the single absorbing non-cash lane within 51;
+        // every other lane within 1; and the signed deviations cancel exactly.
+        const signedSum = deviations.reduce((acc, x) => {
+          const k = x.k as 'avoir' | 'cash' | 'voucher' | 'debt' | 'digital';
+          const share = minor(given[k]) === 0 ? 0 : Math.round((minor(given[k]) * net) / Math.max(1, minor(total)));
+          return acc + (cum[k] - share);
+        }, 0);
+        if (signedSum !== 0) return `(v) deviations do not cancel (${signedSum}) at net ${net}`;
+        const cashDev = deviations.find((x) => x.k === 'cash');
+        if (cashDev && cashDev.d > 50) return `(v) cash ${cashDev.d} > 50 minor`;
+        const others = deviations.filter((x) => x.k !== 'cash' && x.d > 1);
+        if (others.length > 1) return `(v) ${others.map((x) => `${x.k}:${x.d}`).join(',')} at net ${net}`;
+        if (others.length === 1 && others[0].d > 51) return `(v) ${others[0].k} ${others[0].d} > 51 minor`;
       }
       return '';
     };
@@ -859,6 +863,16 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
       });
     const m3 = checkPrefixes(given, 900, lastLane([300, 300, 300]));
     check('I4b/o mutation overdraw-the-last-lane is KILLED', m3 !== '', m3 || 'not killed');
+
+    // Mutation 4: the sub-dinar remainder is dumped on a lane that is ALREADY at
+    // its original amount. Only the tightened (i) bound catches it.
+    const remainderOnCappedLane = (nets: number[]): Split[] =>
+      nets.map((n, i) => {
+        const a = i === 2 ? 100.34 : Math.round((100 * n) / 900);
+        return { netRefund: n, voucherShare: 0, avoirShare: a, debtShare: 0, cashShare: n - a, digitalShare: 0 };
+      });
+    const m4 = checkPrefixes(given, 900, remainderOnCappedLane([300, 300, 300]));
+    check('I4b/o mutation remainder-on-capped-lane is KILLED (tightened bounds)', m4 !== '', m4 || 'not killed');
   }
 
   {
