@@ -1015,6 +1015,17 @@ fn apply_refund_in_txn(
     if requested_cash > 0 && requested_cash > req.cash_tendered_net - prior_ticket_cash {
         return Err(conflict("CASH_CAP_EXCEEDED"));
     }
+    // The guard above only runs when the request's METHOD is cash. A forged
+    // request can declare a non-cash method while still asking for a cash
+    // payout (cash_tendered > 0, no movement): the refund row then claims the
+    // till paid money with no cash_movements trace, which is exactly the
+    // money-gate violation seen on REF-FORGE rows. Presence is required for
+    // any payout amount, whatever the method string says.
+    if req.cash_tendered.max(0) > 0 && req.cash_move.is_none() {
+        return Err(conflict(
+            "INVALID:cash refund without drawer movement (any method)",
+        ));
+    }
     // Module B — shift-level offline cash cap (token bucket). Offline cash
     // refunds accumulate per shift over PENDING (unsynced) rows; past the
     // policy limit the terminal must resync (rows flip to 'synced' and leave
@@ -3303,12 +3314,12 @@ mod tests {
             [],
         )
         .unwrap();
-        // Non-cash method: sequencing is orthogonal to payout rails.
+        // Cash refunds with the drawer movement base_req already carries:
+        // sequencing is orthogonal to payout rails, but a payout without a
+        // movement is not a valid request (the native now refuses it).
         let partial = |tag: &str, n: i64| {
             let mut r = base_req();
             r.online = true;
-            r.method = "Avoir Client".into();
-            r.cash_move = None;
             r.refund_id = format!("REF-S{n}");
             r.items_hash = format!("HS{n}");
             r.receipt_number = format!("AVOIR-S{n}");
@@ -3319,6 +3330,10 @@ mod tests {
             r.deltas[0].id = format!("LED-S{n}");
             r.deltas[0].key = format!("LEDK-S{n}");
             r.batches[0].quantity = 1.0;
+            // One drawer movement per refund (the id is unique per row).
+            if let Some(cm) = r.cash_move.as_mut() {
+                cm.id = format!("MOV-S{n}");
+            }
             r.debt.as_mut().unwrap().entry_id = format!("PAYREL-S{n}");
             r.refund_payload = format!(
                 "{{\"id\":\"REF-S{n}\",\"isRefund\":true,\"originalTransactionId\":\"TKT-1\",\
@@ -4294,6 +4309,33 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM transactions WHERE id='REF-H1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(rows, 0, "no refund row");
+    }
+
+    #[test]
+    fn d4a_cash_payout_requires_a_drawer_movement() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        // A forged/legacy caller can declare a non-cash METHOD while still
+        // asking for a cash payout. Without a drawer movement the refund row
+        // would claim the till paid money with no trace (money-gate violation).
+        let mut req = base_req();
+        req.method = "Avoir Client".into();
+        req.cash_move = None;
+        let err = run(&mut conn, &req).expect_err("cash payout without movement must be refused");
+        assert!(
+            format!("{err:?}").contains("cash refund without drawer movement"),
+            "{err:?}"
+        );
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transactions WHERE id='REF-H1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "no refund row");
+        let moves: i64 = conn
+            .query_row("SELECT COUNT(*) FROM cash_movements", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(moves, 0, "no drawer movement");
     }
 
     #[test]
