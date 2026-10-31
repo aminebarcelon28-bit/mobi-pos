@@ -160,3 +160,14 @@ session — recorded as UNKNOWN rather than assumed).
 - **REF-51 (offline cash cap) flakes at baseline too**: 7/8 on `e88136b` (E-0033) with the same
   `refund-submit not clickable` message seen at 2/3 on the fix build -> harness flake, not a C90 regression.
 - **C90 unchanged and green**: REF-28 3/3 (E-0030), regression set 15/15 (E-0031), binary `6C2ADD1B...8FE2`.
+## B6 addendum 12 (full-spec sweep: no regression, three pre-existing defects queued)
+
+- Full `31-ref-refunds-part2` (15 cases) on a fresh HEAD build `D5ACE59...0B05`: **12/15**, FAIL
+  REF-13/REF-36/REF-65 (E-0035). REF-28 PASS inside the full run.
+- Same spec on the pre-change build `691F95D8...7869` (`e88136b`): **12/15, identical failure set,
+  15 cases 0 verdict diffs** (E-0036) -> the C90 and D-RND changes introduced **no regression**.
+- Newly queued pre-existing defects (`docs/c01-pre-existing-failures.md`):
+  REF-13 void rests stock one unit short (497 vs 498 base) + G-07/G-08/G-15/G-19;
+  REF-36 write-off with an empty "Autre" motive is accepted (expected refusal);
+  REF-65 credit-sale refund refused through the UI.
+- REF-15 remains parked (`docs/c01-ref15-loyalty-pack.md`); REF-51/B-3 are harness/policy, not regressions.
