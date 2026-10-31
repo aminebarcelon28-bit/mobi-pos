@@ -53,3 +53,16 @@ from the ledger. The spec calls this the REF-65/P1-3 class. Needs its own item.
 All three are **QUEUED as newly discovered, measured pre-existing defects** with the evidence above.
 None is inside the C90 / refund-allocation scope that this pass was closing, and none is caused by the
 changes in this pass (identical verdicts on both builds).
+
+---
+
+## Update (end of this pass)
+
+- **REF-13: FIXED** (commit `eb95527`) - 3/3, full spec green (docs/c01-ref13-void.md).
+- **REF-36: FIXED** (commit `bf82e06`) - 3/3 (E-0040).
+- **REF-65: FIXED** (commits `8819680` + `2b0440e`) - 3/3 (E-0041); routed only for debt-only tickets so
+  REF-42's channel behaviour is unchanged.
+- **NEW, OPEN, MONEY:** REF-42 card-funded refund delivers **1400 for a 700 DA ticket** on BOTH the
+  pre-REF-65 build (`eb95527`) and the current one - pre-existing, not a regression, not fixed here
+  (docs/c01-ref42-double-delivery.md, E-0042).
+- Full `31-ref-refunds-part2`: **15/15 GREEN** on a fresh build of `2b0440e` (E-0043).
