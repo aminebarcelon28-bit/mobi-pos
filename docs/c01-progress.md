@@ -272,3 +272,18 @@ session — recorded as UNKNOWN rather than assumed).
   SQLite). REF-87 alone still 2/2 on the new build (E-0061).
 - **B' NOT implemented**: it would make the P0 loss one-click. Needs the anonymous-ticket rule (refuse
   fail-closed vs issue a credit voucher) - the same decision as REF-42 B.
+## B6 addendum 20 (P0 recipient rule landed: fail closed)
+
+- Rule + enforcement: `avoirRecipientRefusal` (`src/utils/refundGuards.ts`) wired in
+  `createOrderSlice` before the native request for BOTH shapes (method Avoir Client, and funding
+  avoirShare>0) - refusal writes nothing (no row, no restock, no dedup, no voucher/cash/parked).
+- UX: terminal refusal, no switch loop; copy FR/AR/EN in `src/i18n/refundMessages.ts`; the offline-cap
+  branch no longer switches to Avoir for anonymous tickets.
+- Proofs: diag spec 3/3 (manual Avoir / offline cap / replay, E-0062); unit 24/24 (E-0063);
+  historical gate 86 refunds -> 7 REF-87 P0 violations (E-0064); fresh DB gate 20 refunds -> 0 violations
+  and ANON_AVOIR empty (E-0065).
+- REF-87: fixture now carries REF4-C87 (owner-authorised); it fails at SELECTION (95MB flake), 0/3;
+  full 33-ref 15/18 identical to E-0054 (delta 0) - stays parked (E-0066).
+- Spec dependency: only REF-87 relied on anonymous over-cap Avoir; no other spec edit requested.
+- REF-35 unchanged (HOLD). REF-42: recipient question answered for Avoir; card lane options restated in
+  `docs/c01-p0-recipient.md` (A recommended, B now narrower, C rejected).

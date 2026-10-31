@@ -69,7 +69,7 @@ describe('P0 recipient rule — anonymous Avoir must not be written', () => {
     await waitForSchemaSettled();
     resetData();
     seedProducts([{ id: P, title: 'REF4 PMAX', priceDa: 2000, stock: 10, costDa: 1000 }]);
-    seedSettings([{ key: 'policy.offline_cash_refund_limit', valueJson: '2500' }]);
+    seedSettings([{ key: 'policy.offline_cash_refund_limit', valueJson: '500' }]); // refund of 2 000 DA must exceed it
     await clearWebMirrors();
     await unlockIfNeeded();
     await ensureShiftOpen(10000);
