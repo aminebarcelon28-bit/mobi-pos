@@ -115,3 +115,9 @@ session — recorded as UNKNOWN rather than assumed).
 - Fresh worktree rebuilt on the modal commit, binary `691ED572...3127`.
 - REF-03 3/3, REF-33 3/3, MNY-30 3/3, MNY-26 3/3.
 - **REF-49 2/3 and the failure is the walk-in trade gap (B-3)**: the sale had no customer, so `tradeValueUnclaimed` -> valueBack 200 of 500, creditD 0 (E-0024). That is a 300 DA customer loss on an anonymous trade-in refund, now PROVEN reachable, not theoretical. PARKED on owner decision.
+
+## B6 addendum 7 (under-refund exhaustive)
+
+- 2 506 old-under-refund shapes bucketed, **UNEXPLAINED 0** (E-0026, docs/c01-underrefund-classification.md): digital 1436, debt 578, credit>total 243, zero-total 118, da-rounding 121, change 10.
+- 95.2% are old-code defects v2 already fixes; one policy decision remains (D-RND rounding granularity).
+- Blocked on owner: D-RND, D-C90, D-B3.
