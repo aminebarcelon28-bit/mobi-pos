@@ -1,6 +1,9 @@
 # Decision D6 — the milestone tranche ledger is the payload ceiling (no fix in C01)
 
-- **Status:** open, deliberately not fixed in this cycle; REF-87 is accepted on this basis (D9).
+- **Status:** the PAYLOAD half is fixed (the sale no longer embeds the loyalty book: 24.8MB → 241B for the
+  customer block, E-0108); the LATENCY half remains (an ~80MB customer ledger is still merged in Rust on a
+  wallet refund, ~55s). REF-87 passes in isolation; the full batch still hits the 120s supervisor window
+  (E-0109). Next: SQL-side `json_*` merge or tranche aggregation.
 - **Measured:** a 4e9 DA sale writes **200 000** ledger rows (`<cust>:milestone:ms-20k:tranche:N`, 1 000 DA
   each) into the customer payload → transaction payload **138 742 528 B**, customer outbox row **79 797 580 B**
   (E-0079). The refund's native merge parses and re-serialises that payload, so the refund of such a ticket
