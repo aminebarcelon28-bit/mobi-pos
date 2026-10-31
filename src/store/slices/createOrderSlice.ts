@@ -2539,12 +2539,26 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       )
       .join(',');
     // MOBI-DEFECT-F: basis-aware deterministic identity. `basis` counts the
-    // refunds for this ticket the caller already knew about (store + Dexie
-    // union), so two tabs with the same stale view derive the SAME id and
-    // the loser fails on the native dedup gate — while a deliberate later
-    // partial refund hashes differently and is decided by the quota check.
-    // The display receipt derives from the id (no per-tab entropy).
-    const refundBasis = seenRefundIds.size;
+    // refunds already committed for this ticket: two tabs with the same stale
+    // view derive the SAME id and the loser fails on the native dedup gate,
+    // while a deliberate later partial hashes differently and is decided by the
+    // quota check. The durable count is authoritative — the in-memory union can
+    // miss a just-committed refund (REF-87: the first chunk of a huge ticket was
+    // not visible when the second was submitted, so both hashed identically and
+    // the legitimate second chunk died as ALREADY_REFUNDED).
+    let refundBasis = seenRefundIds.size;
+    try {
+      const { getLocalDb } = await import('../../db/sqlPluginAdapter');
+      const localDb = await getLocalDb();
+      const rows = (await localDb.select(
+        'SELECT COUNT(*) AS n FROM transactions WHERE original_transaction_id = $1 AND COALESCE(is_refund,0) = 1',
+        [originalTransaction.id],
+      )) as Array<{ n?: number }>;
+      const durableCount = Number(rows?.[0]?.n ?? 0);
+      if (Number.isFinite(durableCount)) refundBasis = Math.max(refundBasis, durableCount);
+    } catch {
+      // SQLite unavailable (web preview / node tests): the union above applies.
+    }
     const {
       itemsHash: refundItemsHash,
       refundId: refundTxnId,
