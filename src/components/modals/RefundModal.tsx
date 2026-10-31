@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 
 import { foldForSearch } from '../../utils/catalogSearch';
 import {
@@ -99,6 +99,11 @@ export const RefundModal: React.FC = () => {
   const [managerPin, setManagerPin] = useState('');
   const [pinRequired, setPinRequired] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // REF-87: synchronous re-entrancy guard. A slow mega-refund keeps the button
+  // clickable long enough for a second click in the same tick; two processRefund
+  // calls make the second one fail as ALREADY_REFUNDED (correctly deduped) but
+  // leave a misleading refusal on screen and block the next legitimate chunk.
+  const submitInFlightRef = useRef(false);
 
   // Fix 3 (UI hint — the slice + adapter enforce): offline status and device
   // identity, loaded when the modal opens. Remote/past-shift tickets show a
@@ -539,6 +544,8 @@ export const RefundModal: React.FC = () => {
     // where large offline cash requires it and records it in-txn.
     const supervisorPinVerifiedAt = new Date().toISOString();
 
+    if (submitInFlightRef.current) return; // second click in the same tick
+    submitInFlightRef.current = true;
     setIsSubmitting(true);
     try {
       const finalReason = refundReason === 'Autre' && customReason.trim() ? customReason.trim() : refundReason;
@@ -642,6 +649,7 @@ export const RefundModal: React.FC = () => {
       console.error('Refund submission error:', err);
       showToast('Une erreur est survenue lors de l\'enregistrement du remboursement.', 'error');
     } finally {
+      submitInFlightRef.current = false;
       setIsSubmitting(false);
     }
   };
