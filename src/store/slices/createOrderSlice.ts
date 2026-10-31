@@ -3122,7 +3122,16 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         if (r === 'AVOIR_RECIPIENT_REQUIRED') return { success: false, reason: 'AVOIR_RECIPIENT_REQUIRED' };
         if (r === 'REFUND_EXCEEDS_VALUE') return { success: false, reason: 'REFUND_EXCEEDS_VALUE' };
         if (r === 'DEVICE_IDENTITY_SPOOFED') return { success: false, reason: 'DEVICE_IDENTITY_SPOOFED' };
-        return { success: false, reason: 'PERSISTENCE_FAILED' };
+        // Keep the native detail in the reason (prefixed, so existing matchers
+        // still see PERSISTENCE_FAILED): a blind generic toast cost hours on
+        // REF-87.
+        const nativeDetail = String((nativeRes as { detail?: unknown }).detail ?? '').trim();
+        return {
+          success: false,
+          reason: nativeDetail
+            ? `PERSISTENCE_FAILED:${nativeDetail.replace(/\s+/g, ' ').slice(0, 180)}`
+            : 'PERSISTENCE_FAILED',
+        };
       }
       const nativeWarnings: string[] = [...clampWarnings, ...nativeRes.warnings];
       if (tradeValueUnclaimed) {
