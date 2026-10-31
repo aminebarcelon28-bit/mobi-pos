@@ -108,3 +108,10 @@ session — recorded as UNKNOWN rather than assumed).
 - REF-03 / REF-33 / REF-49 / MNY-30: **3/3 each** after the B-2 guard -> no regression (E-0022).
 - **MNY-26: 3/3** (39.1/39.5/39.4 s) -> the earlier 2/3 was the click interception, now a real PASS (E-0023).
 - REF-28 still intermittent (1/3 in the previous worktree run); C90 overcharge unresolved, parked.
+
+## B6 addendum 6 (modal warning + walk-in proof)
+
+- RefundModal now renders a cashier-visible warning (role=status, data-testid refund-voucher-unrestorable) when the split reports voucher-lane-unrestorable; source-level contract test I4b/t, 159 checks 0 failed.
+- Fresh worktree rebuilt on the modal commit, binary `691ED572...3127`.
+- REF-03 3/3, REF-33 3/3, MNY-30 3/3, MNY-26 3/3.
+- **REF-49 2/3 and the failure is the walk-in trade gap (B-3)**: the sale had no customer, so `tradeValueUnclaimed` -> valueBack 200 of 500, creditD 0 (E-0024). That is a 300 DA customer loss on an anonymous trade-in refund, now PROVEN reachable, not theoretical. PARKED on owner decision.
