@@ -246,6 +246,12 @@ export const RefundModal: React.FC = () => {
   }, [activeModal, debouncedSearch, filteredTransactionsMemo.length, transactions]);
 
   const initializeRefundState = useCallback((txn: SaleTransaction) => {
+    // REF-87: a manager PIN belongs to the ticket it was typed for. Selecting a
+    // ticket (or reopening the modal on one) must start with an empty PIN, or a
+    // PIN typed for an earlier refund silently authorises this one and the gate
+    // never re-appears.
+    setManagerPin('');
+    setPinRequired(false);
     const initialSelected: Record<string, boolean> = {};
     const initialQty: Record<string, number> = {};
     const initialRestock: Record<string, boolean> = {};
