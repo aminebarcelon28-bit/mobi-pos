@@ -2390,6 +2390,13 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     let updatedCustomers = customers;
 
     const origCust = originalTransaction.customer;
+    // REF-40: a soft-deleted profile must not be resurrected by a refund. The
+    // delete removes the customer from `customers` and tombstones SQLite
+    // (createCustomerSlice.ts:150-166), while the customer upsert clears
+    // `deleted` on every conflict (customerAdapter.ts:129). Reconstructing the
+    // profile from the transaction snapshot and saving it here would therefore
+    // un-delete it. `origCustLive` gates both the wallet write and the save.
+    const origCustLive = !origCust || customers.some((c) => c.id === origCust.id);
     if (origCust) {
       const cust = customers.find((c) => c.id === origCust.id) || origCust;
       const currentTotalSpent = cust.totalSpent || 0;
@@ -2445,6 +2452,12 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       );
 
       const creditToAdd = walletAddBase + tradeRestoreNow;
+      // REF-40: an archived profile has no usable owner for a wallet credit.
+      // Refuse instead of committing a refund whose value lands nowhere (or,
+      // worse, resurrects the deleted profile through the upsert).
+      if (!origCustLive && creditToAdd > 0) {
+        return { success: false, reason: 'CUSTOMER_UNAVAILABLE' };
+      }
       const newCredit = (cust.storeCredit || 0) + creditToAdd - claw.totalRevoked;
 
       const ledgerEntries: LoyaltyLedgerEntry[] = [];
@@ -3060,7 +3073,9 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           import('../../db/adapters/base'),
           import('../../db/sqlPluginAdapter'),
         ]);
-        if (hydratedCustomer) {
+        if (hydratedCustomer && origCustLive) {
+          // REF-40: never write a profile that is absent from the live list —
+          // the upsert would clear its `deleted` tombstone (customerAdapter.ts:129).
           // Local authority FIRST: the wallet refill (avoir share + restored
           // trade value) and the loyalty clawback are money. Mirroring them to
           // Dexie/cloud alone loses them on restart, because boot rehydrates

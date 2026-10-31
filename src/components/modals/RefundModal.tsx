@@ -593,6 +593,11 @@ export const RefundModal: React.FC = () => {
         );
         setSelectedTxn(null);
         setSelectedTransactionForRefund(null);
+        } else if (refundResult.reason === 'CUSTOMER_UNAVAILABLE') {
+          showToast(
+            'Client archivé (profil supprimé) : aucun avoir ne peut être recrédité. Remboursez en espèces, ou réactivez le client avant de créditer son avoir.',
+            'error',
+          );
         } else if (refundResult.reason === 'REFUND_EXCEEDS_PURCHASED') {
           showToast('Quantité à rembourser supérieure à la quantité restante non remboursée.', 'error');
         } else if (refundResult.reason === 'RESTOCK_REASON_REQUIRED') {
