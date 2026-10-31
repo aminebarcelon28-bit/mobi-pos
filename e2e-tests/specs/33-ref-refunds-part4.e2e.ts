@@ -2069,11 +2069,13 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
   ): number {
     if (!ref) return 0;
     const cash = cashOf(ref);
+    // OWNER RULING (REF-42 A, narrow): delivery is the destination of record -
+    // the wallet BALANCE delta (the column the app reads), counted ONCE - plus
+    // cash and voucher vault. The payload mirror is asserted separately
+    // ('the wallet mirrors agree'), never added to the delivery.
     const colDelta = custId !== null ? Math.max(0, (creditRaw(custId).col ?? 0) - (before.col ?? 0)) : 0;
-    const afterPayload = custId !== null ? creditRaw(custId).payload : 0;
-    const payloadDelta = custId !== null && Number.isFinite(afterPayload) ? Math.max(0, afterPayload - before.payload) : 0;
     const vaultDelta = Math.max(0, voucherTotal() - before.vault);
-    return (Number.isFinite(cash) ? cash : 0) + colDelta + payloadDelta + vaultDelta;
+    return (Number.isFinite(cash) ? cash : 0) + colDelta + vaultDelta;
   }
 
   /** Bounded poll for a DB-derived number (eventual-convergence lanes: the
@@ -2648,6 +2650,12 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
         console.log(`[REF-42] CONFIRMED EDGE-CASE VULNERABILITY [P1]: committed refund #${String(ref2.receipt_number)} for ${String(ref2.total)} DA on a card-funded ticket delivers ${delivered} DA (cash=0) — funding.cashShare=0 for digital rails and walletAddBase collapses to 0 (createOrderSlice.ts:2243-2244), so a landed refund row evaporates the customer's value; the audit text itself expects "rail d'origine à reverser ${700} DA" with no lane implementing it (createOrderSlice.ts:2615-2618)`);
       }
       expect(delivered).toBe(700);
+      // The wallet mirror must agree with the column it mirrors (no split-brain),
+      // asserted SEPARATELY from delivery so a mirror drift can never be read as
+      // a second payment.
+      if (C42 && creditRaw(C42).col !== null) {
+        expect(creditRaw(C42).payload).toBe(creditRaw(C42).col);
+      }
     } else {
       expect(delivered).toBe(0);
     }

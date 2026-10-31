@@ -125,15 +125,33 @@ const record = {
   node: process.version,
   binary: path.relative(root, p.binary),
 };
+/* Money conservation (owner P0 rule): the run's own database must balance.
+ * Blocking by default; deliberate negative-control writes are excluded here (the
+ * --audit-dbs audit mode reports them). */
+let moneyFailure = null;
+try {
+  const sandboxDb = path.join(process.env.LOCALAPPDATA ?? '', 'Temp', 'opencode', 'pos-wdio-sandbox', 'home', 'AppData', 'Roaming', 'com.mobi.pos.e2e', 'mobi_pos.db');
+  if (fs.existsSync(sandboxDb) && process.env.REFUND_VALUE_SKIP !== '1') {
+    const { spawnSync } = await import('node:child_process');
+    const res = spawnSync(process.execPath, [path.join(root, 'scripts', 'refund-value-check.mjs'), '--exclude-forge', sandboxDb], { encoding: 'utf8' });
+    const line = String(res.stdout ?? '').trim().split('\n')[0];
+    if (line) info(line);
+    if (res.status !== 0) { moneyFailure = line || 'money conservation failed'; bad('money conservation FAILED (blocking)'); }
+  }
+} catch (err) {
+  bad('money check unavailable :: ' + String(err.message ?? err));
+}
+if (moneyFailure) record.moneyViolation = moneyFailure;
 fs.writeFileSync(sidecar, JSON.stringify(record, null, 2));
 
 console.log('');
 info(`duration ${(durationMs / 1000).toFixed(1)}s   passing ${passing}   failing ${failing}   skipped ${skipped}   cases ${caseCount}`);
 info(`sidecar  ${path.relative(root, sidecar)}`);
-if (code === 0 && failing === 0) console.log(`${C.green}GREEN${C.reset} ${tag}`);
-else console.log(`${C.red}RED${C.reset} ${tag} (exit ${code}) - triage before editing code`);
+const finalCode = code === 0 && !moneyFailure ? 0 : (code || 1);
+if (code === 0 && failing === 0 && !moneyFailure) console.log(`${C.green}GREEN${C.reset} ${tag}`);
+else console.log(`${C.red}RED${C.reset} ${tag} (exit ${finalCode}) - triage before editing code`);
 
-process.exit(code);
+process.exit(finalCode);
 
 /* ------------------------------------------------------------------ */
 
