@@ -32,13 +32,18 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 32 | Avoir credit to a customer other than the ticket's | **COVERED** | N3: ownership proven for credit and clawback (E-0093) |
 | 33 | Post-commit `store_credit` mirror can erase a concurrent debit | **COVERED** | N2: loyalty-only merge mirror (`saveRefundMirror`), `scripts/test_refund_mirror.mts` 8/8 (E-0094) |
 | 34 | `cash_move.amount` vs `cash_tendered` semantics | **OPEN** | N5 - evidence shows the field is not the refund cash (fixture 6000 vs 150); needs a schema decision |
-| 24 | REF-51 offline cash-cap spec flake ("submit not clickable", 1 in 5) | **OPEN** | E-0033 |
+| 24 | REF-51 offline cash-cap spec flake ("submit not clickable") | **COVERED** | REF-51 PASS in the 16/18 batch run (E-0100); the flake did not reproduce |
 | 25 | REF-35: 0,01 gift line charged vs spec expectation 500 | **ACCEPTED (authority: ISO 4217 + MNY-01)** | decision pack `docs/c01-ref35-minor-unit.md`; spec fix pending |
 | 26 | Card lane has no destination of record | **OPEN** | REF-42 decision pack; money gate reports it |
 | 27 | Walk-in trade-in restore (anonymous) | **PARKED (policy)** | `docs/c01-ref15-loyalty-pack.md` family; REF-49 evidence |
 | 28 | Loyalty double-burn + G-07 after a conversion refund | **PARKED (policy)** | REF-15 pack |
 | 29 | Hardware: printer/scanner/drawer failures | **PARKED** | no hardware in the sandbox; simulator not yet built |
 | 30 | Payment rails CIB/Edahabia/BaridiMob timeouts & duplicate callbacks | **PARKED** | no acquirer credentials; contract-level only |
+
+| 39 | Reports modal read after a refund ran before the view rendered (REF-56 flake) | **COVERED** | harness waits for the reports body / PIN gate and retries once; REF-56 PASS (E-0100) |
+| 40 | REF-87: a 2e9/unit ticket (95.7 MB payload) cannot be refunded within any reasonable window | **OPEN (D6/D9)** | `docs/decisions/D9-ref87-payload-ceiling.md`; money path proven separately at 2³¹+1/4e9/past-2³² (E-0097..E-0099) |
+| 41 | Loyalty bucket still backs points after a void/refund in a multi-test batch (G-07) | **OPEN** | invariant hook in E-0100: `REF4-C48` voided sale still backs 10 pts; `REF4-C56` fully refunded sale still backs 10 pts (clean in isolation → batch-state trigger) |
+| 42 | A forged refund call from the renderer records an audit row for an unknown actor (G-15) | **ACCEPTED (documented pre-gateway residual)** | AGENTS.md "WebView SQL bypass (OPEN residual)"; REF-58 deliberately forges the call to prove dedupe (E-0100) |
 
 ## Notes
 

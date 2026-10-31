@@ -1974,17 +1974,38 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
    *  before and after one refund: the delta is the durable current-period
    *  returns movement the summary claims. Null when the label is absent. */
   async function readReturnsLine(): Promise<number | null> {
-    await openReports();
-    await unlockReportsGate();
-    const ctx = await bodyContexts('Retours & Remboursements Clients', 90, 2);
-    await closeReportsDialog();
-    console.log(`[returnsLine] ctx=${JSON.stringify(ctx)}`);
-    for (const c of ctx) {
-      const m = c.match(/Retours\s*&\s*Remboursements\s*Clients\s*-?\s*([\d\s\u00A0\u202F.,]+?)\s*DA/i);
-      if (m) {
-        const digits = m[1].replace(/[^\d]/g, '');
-        if (digits) return Number(digits);
+    // Post-refund the app is still settling (mirror write + outbox + Dexie), so
+    // the reports dialog can appear a beat late. Wait for the body (or its PIN
+    // gate) to render, and retry once if the line is not there yet. The
+    // assertion stays the same: the returns line must exist and move by the
+    // refunded amount.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await openReports();
+      await browser
+        .waitUntil(
+          async () =>
+            (await browser.execute(() => {
+              const text = document.body.innerText || '';
+              const gate = (
+                [...document.querySelectorAll('input[type="password"]')] as HTMLInputElement[]
+              ).some((i) => /Administrateur|Manager/i.test(i.placeholder || ''));
+              return /Retours\s*&\s*Remboursements\s*Clients/i.test(text) || gate;
+            })) as boolean,
+          { timeout: 15000, interval: 300, timeoutMsg: 'reports view never rendered' }
+        )
+        .catch(() => undefined);
+      await unlockReportsGate();
+      const ctx = await bodyContexts('Retours & Remboursements Clients', 90, 2);
+      await closeReportsDialog();
+      console.log(`[returnsLine] attempt=${attempt + 1} ctx=${JSON.stringify(ctx)}`);
+      for (const c of ctx) {
+        const m = c.match(/Retours\s*&\s*Remboursements\s*Clients\s*-?\s*([\d\s\u00A0\u202F.,]+?)\s*DA/i);
+        if (m) {
+          const digits = m[1].replace(/[^\d]/g, '');
+          if (digits) return Number(digits);
+        }
       }
+      if (attempt === 0) await browser.pause(900);
     }
     return null;
   }
