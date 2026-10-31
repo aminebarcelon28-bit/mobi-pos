@@ -61,6 +61,7 @@ import {
 import { computeCartTotals, computeRefundFundingSplit, refundLaneTotalsOf, fundingPayloadOf, computeTradeInSettlement, computeTradeRestoreQuota, lineProfitNet, refundableValueOf } from '../../utils/receiptMath';
 import type { RefundLaneTotals } from '../../utils/receiptMath';
 import { clawbackLedgerForMirror } from '../../db/refundMirrorSql';
+import { saleCustomerSnapshot } from '../../utils/saleCustomerSnapshot';
 import {
   cashSalesFromTxns,
   cashRefundsFromTxns,
@@ -998,7 +999,11 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       const transaction: SaleTransaction = {
         id: transactionId,
         receiptNumber: receiptNumber,
-        customer: updatedCustomer,
+        // D6: never embed the customer's whole loyalty book in the ticket
+        // payload (200 000 tranche rows at 4e9 made the refund unmergeable).
+        // Refunds/voids read the durable customer row; only identity + scalars
+        // belong here.
+        customer: saleCustomerSnapshot(updatedCustomer) as SaleTransaction['customer'],
         items: frozenCartItems,
         subtotal: grossSubtotal,
         discountTotal: discountTotal,
