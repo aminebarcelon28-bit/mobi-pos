@@ -231,3 +231,14 @@ session — recorded as UNKNOWN rather than assumed).
 - **REF-87 RECLASSIFIED**: fails at `33-ref:3199` - the 4e9 ticket is never selectable in the refund
   modal. Not the 0,01 shape; separate extreme-value item.
 - **REF-42** still waiting on A/B/C (`docs/c01-ref42-double-delivery.md`).
+## B6 addendum 17 (REF-87 fixed in isolation; suite step still times out)
+
+- **Mechanism OBSERVED (E-0052):** one submit ran `processRefund` twice in the same millisecond; the
+  native dedup refused the copy (correct: 1 refund row, 1 dedup row) but the refusal blocked the next
+  legitimate chunk.
+- **Fixes:** `cb9f0c0` re-entrancy guard on the refund submit; `d03e1f7` identity basis counted
+  durably from SQLite (fallback: store/Dexie union as a floor).
+- **REF-87 3/3 isolated** (E-0050): chunks 2e9 + 2e9 = 4e9, stock restored.
+- **Full 33-ref: 15/18** (E-0051) - REF-87 now fails at `refund-pin` not displayed within 10 s after the
+  95 MB ticket load (large-payload interaction timeout, not money). REF-35 and REF-42 unchanged/parked.
+- Remaining unblocked item: the refund modal's large-payload interaction cost (95 MB ticket).

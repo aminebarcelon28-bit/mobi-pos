@@ -101,3 +101,24 @@ the cheapest pair to fix together; REF-40 is a separate tombstone path; REF-42 w
 - **REF-87: RECLASSIFIED** - not the 0,01 shape at all: it fails at `33-ref:3199` because the
   4 000 000 000 DA ticket is never selectable in the refund modal (extreme-value selectability).
 - **REF-42: still parked** on the A/B/C decision (oracle double-counts one mirrored credit, E-0044).
+## REF-87 - extreme-value refund (fixed in isolation, suite step still times out)
+
+**Observed mechanism (E-0052):** with a per-chunk identity probe writing to a diagnostic table, one
+submission produced **two identical processRefund entries in the same millisecond**
+(asis=0 seen=0 hash=REF-8974735F net=2000000000). The native dedup correctly refused the second (one
+dedup row, one refund row), but the refusal toast left the modal in a state that blocked the next
+legitimate chunk.
+
+**Fixes (both in editable files):**
+
+1. `cb9f0c0` - synchronous re-entrancy guard in `RefundModal` (`submitInFlightRef`): a second click
+   in the same tick is ignored instead of producing a self-collision and a misleading refusal.
+2. `d03e1f7` - `refundBasis` now counts **committed refunds from SQLite**
+   (`SELECT COUNT(*) ... original_transaction_id = `) with the store/Dexie union as a floor, so a
+   legitimate second chunk never reuses the first chunk's dedup hash even when the in-memory union is
+   blind to it.
+
+**Result:** REF-87 **3/3** isolated (E-0050) - 	otals=[2000000000,2000000000] sum=4000000000 stock=10.
+Inside the full suite it still fails, but at a different step: `element [data-testid="refund-pin"] still
+not displayed after 10000ms` after the 95 MB ticket load (E-0051). That is a large-payload interaction
+timeout, not a money assertion, and it is the remaining item for this case.
