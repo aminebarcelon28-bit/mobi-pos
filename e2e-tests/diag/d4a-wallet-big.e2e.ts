@@ -63,7 +63,7 @@ async function settleRefund(ticketId: string, ms = 120000): Promise<Row | undefi
   return undefined;
 }
 
-async function payExactSlow(ms = 180000): Promise<void> {
+async function payExactSlow(priceDa: number, ms = 180000): Promise<void> {
   const before = Number(one<{ n: number }>('SELECT COUNT(*) AS n FROM transactions')?.n ?? 0);
   await (await $(tid('checkout-button'))).click();
   await (await $(tid('pay-dialog'))).waitForDisplayed({ timeout: 30000 });
@@ -71,8 +71,8 @@ async function payExactSlow(ms = 180000): Promise<void> {
   await (await $(tid('pay-confirm'))).click();
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
-    const now = Number(one<{ n: number }>('SELECT COUNT(*) AS n FROM transactions')?.n ?? 0);
-    if (now > before) return;
+    const hit = one<{ n: number }>('SELECT COUNT(*) AS n FROM transactions WHERE COALESCE(is_refund,0)=0 AND total = ?', priceDa);
+    if (Number(hit?.n ?? 0) > 0) return;
     await browser.pause(500);
   }
   throw new Error('sale did not land within ' + ms + 'ms');
@@ -83,8 +83,8 @@ async function refundOneUnit(pid: string, title: string, priceDa: number, tag: s
   await clearCart();
   await selectCustomer(CUST_NAME);
   await addSku(title, { times: 1 });
-  await payExactSlow();
-  const ticket = one<Row>('SELECT id, receipt_number, total FROM transactions WHERE COALESCE(is_refund,0)=0 ORDER BY rowid DESC LIMIT 1') as Row;
+  await payExactSlow(priceDa);
+  const ticket = one<Row>('SELECT id, receipt_number, total FROM transactions WHERE COALESCE(is_refund,0)=0 AND total = ? ORDER BY rowid DESC LIMIT 1', priceDa) as Row;
   expect(Number(ticket?.total)).toBe(priceDa);
 
   const before = walletOf();
