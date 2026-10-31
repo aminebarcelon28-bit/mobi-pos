@@ -75,3 +75,9 @@ session — recorded as UNKNOWN rather than assumed).
 |---|---|---|---|
 | Step 0 | Release Clerk | mission saved verbatim, Step 0 facts recorded, blockers found | E-0001, E-0002 |
 | — | — | **STOP S2**: remaining budget (~2 calls) < next item cap (≥8). No item started, tree clean. | E-0003 |
+
+## B6 run addendum (see docs/c01-b6-overcharge.md)
+
+- P0-a: REF-03 3/3, REF-33 3/3, REF-49 3/3, MNY-30 3/3, MNY-26 2/3, REF-28 0/3 (E-0006..E-0011).
+- P0-b: DONE as measurement; **S3 overcharge 100 DA** (E-0012, E-0013). C90 -> P0 money defect, PARKED.
+- P0-c consumer audit: still QUEUED.
