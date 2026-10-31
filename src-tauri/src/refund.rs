@@ -192,6 +192,10 @@ pub struct AuditIn {
     pub ip_address: Option<String>,
 }
 
+fn default_pricing_tier() -> String {
+    "Retail".to_string()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefundRequest {
@@ -214,6 +218,10 @@ pub struct RefundRequest {
     #[serde(default)]
     pub value_reversed: Option<i64>,
     pub cost_total: i64,
+    // A caller can omit this (JSON drops undefined); the refund row still
+    // needs a tier, and "Retail" is the neutral default (REF-87 hit the error
+    // "missing field pricingTier" on a 2e9 ticket).
+    #[serde(default = "default_pricing_tier")]
     pub pricing_tier: String,
     pub payment_method: String,
     pub cash_tendered: i64,

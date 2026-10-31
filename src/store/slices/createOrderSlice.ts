@@ -2766,7 +2766,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       // a restock refund nets 0, a write-off carries the loss.
       profit: Math.round(netRefund) - costRefundTotal,
       profitMargin: 0,
-      pricingTier: originalTransaction.pricingTier,
+      pricingTier: originalTransaction.pricingTier || 'Retail',
       paymentMethod: effectiveRefundMethod,
       cashTendered: cashOut,
       changeDue: 0,
@@ -2988,7 +2988,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // disagree ([MNY-26]: 600 cash + 400 avoir + 300 reprise = 1300).
         valueReversed: Math.round(valueReversed),
         costTotal: Math.round(costRefundTotal),
-        pricingTier: originalTransaction.pricingTier,
+        pricingTier: originalTransaction.pricingTier || 'Retail',
         paymentMethod: effectiveRefundMethod,
         cashTendered: Math.round(cashOut),
         changeDue: 0,
