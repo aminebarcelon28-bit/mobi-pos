@@ -280,6 +280,9 @@ function parseRefundError(err: unknown): { reason: string; refundId?: string; re
     (err as { originalError?: { detail?: unknown } })?.originalError?.detail ??
     (err instanceof Error ? err.message : String(err));
   const detail = String(raw ?? '');
+  // Diagnostics: every native failure is visible with its raw detail, so a
+  // generic PERSISTENCE_FAILED toast never hides the cause in the field log.
+  console.error('[refund] native failure:', detail.slice(0, 300));
   const head = detail.split('\n')[0];
   const m = head.match(
     /^(ALREADY_REFUNDED|ORIGINAL_VOIDED|TICKET_NOT_FOUND|REFUND_EXCEEDS|REFUND_EXCEEDS_VALUE|VOUCHER_CHANGED|VOUCHER_MISSING|NO_OPEN_SHIFT|BUSY|INVALID|DEBT_CHANGED|INTERNAL|OFFLINE_FOREIGN_TICKET|OFFLINE_CASH_CAP_EXCEEDED|SUPERVISOR_PIN_REQUIRED|RESTOCK_REASON_REQUIRED|SCHEMA_UNHEALED|DEVICE_IDENTITY_SPOOFED|SUPERVISOR_AUTH_EXPIRED|SYSTEM_CLOCK_REGRESSION|DEVICE_NOT_INITIALIZED|DEVICE_SIGNATURE_FAILED|AVOIR_RECIPIENT_REQUIRED)(?::(.*))?$/,
