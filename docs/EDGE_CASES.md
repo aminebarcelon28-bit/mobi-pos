@@ -25,8 +25,8 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 | 18 | Card-funded refund delivers value twice / nowhere | **COVERED (measurement)** | REF-42 3/3 after the narrow fix (E-0068) |
 | 19 | Refund legs must equal the destinations of record | **COVERED (native)** | pre-COMMIT gate + 31/31 refund module (E-0090) |
 | 20 | Historical DBs with unbalanced refunds | **OPEN** | money gate 16 violations in 25 DBs (E-0067) — pre-D4-A data |
-| 21 | Schema migration version drift (`EXPECTED_MAX_DB_USER_VERSION`) | **OPEN** | `tests::base_schema_migrations_are_strictly_increasing_and_wellformed` (E-0091) — pre-existing, files untouched by C01 |
-| 22 | Export-manifest golden bytes drift | **OPEN** | `trust_core::export_snapshot::tests::manifest_canonical_bytes_are_stable_golden` (E-0091) — pre-existing |
+| 21 | Schema migration version drift (`EXPECTED_MAX_DB_USER_VERSION` 127 vs migration 128 — the boot gate would refuse a device that had migrated) | **COVERED** | D8: constant 127 → 128; `tests::base_schema_migrations_are_strictly_increasing_and_wellformed` passes (E-0096) |
+| 22 | Export-manifest golden bytes drift on a release bump | **COVERED** | D8: the fixture pins `app_version` 1.7.0 instead of `env!(CARGO_PKG_VERSION)`; the golden test passes (E-0096) |
 | 23 | `sync_status='pending'` stamped natively but never read (no drain) | **OPEN** | review finding 5 |
 | 31 | Card leg / gate bypass via client-controlled `funding.digital` | **COVERED** | N1: leg derived from the durable ticket tenders + `wallet <= value` (E-0093) |
 | 32 | Avoir credit to a customer other than the ticket's | **COVERED** | N3: ownership proven for credit and clawback (E-0093) |
