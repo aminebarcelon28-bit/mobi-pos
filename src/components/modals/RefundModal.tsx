@@ -228,7 +228,9 @@ export const RefundModal: React.FC = () => {
       try {
         const { sqliteAdapter } = await import('../../db/sqliteAdapter');
         const q = debouncedSearch.trim();
+        // D5-A: projection read, never the full payload (139 MB on a 4e9 ticket)
         const hit =
+          (await sqliteAdapter.getRefundCandidateByReceipt(q)) ??
           (await sqliteAdapter.getTransactionByReceipt(q)) ??
           (await sqliteAdapter.getTransactionById(q));
         if (!alive) return;

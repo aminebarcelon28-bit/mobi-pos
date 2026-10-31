@@ -488,6 +488,71 @@ export const transactionAdapter = {
     }
   },
 
+  /**
+   * D5-A (docs/decisions/D5-large-ticket-selection.md): open a refund WITHOUT
+   * transferring or parsing the whole payload. A 4e9 ticket carries ~139 MB
+   * because the customer block and milestone awards scale with the sale value;
+   * JSON.parse of that on the main thread is what made large tickets
+   * unselectable. Only the fields the refund consumes are extracted.
+   */
+  async getRefundCandidateByReceipt(receiptOrId: string): Promise<SaleTransaction | undefined> {
+    const clean = String(receiptOrId ?? '').trim();
+    if (!clean) return undefined;
+    if (isTauriEnv()) {
+      try {
+        const db = await getLocalDb();
+        const rows = (await db.select(`SELECT id, receipt_number, status, created_at, shift_id, total,
+       json_extract(json_payload,'$.subtotal') AS subtotal,
+       json_extract(json_payload,'$.discountTotal') AS discountTotal,
+       json_extract(json_payload,'$.total') AS totalPayload,
+       json_extract(json_payload,'$.paymentMethod') AS paymentMethod,
+       json_extract(json_payload,'$.cashTendered') AS cashTendered,
+       json_extract(json_payload,'$.changeDue') AS changeDue,
+       json_extract(json_payload,'$.tenders') AS tenders,
+       json_extract(json_payload,'$.items') AS items,
+       json_extract(json_payload,'$.refundedItems') AS refundedItems,
+       json_extract(json_payload,'$.voucherCreditApplied') AS voucherCreditApplied,
+       json_extract(json_payload,'$.voucherCode') AS voucherCode,
+       json_extract(json_payload,'$.debtAdded') AS debtAdded,
+       json_extract(json_payload,'$.customer.id') AS customerId,
+       json_extract(json_payload,'$.customer.name') AS customerName
+  FROM transactions
+ WHERE (deleted = 0 OR deleted IS NULL) AND (receipt_number = $1 OR id = $1)
+ ORDER BY created_at DESC LIMIT 1`, [clean])) as Array<Record<string, unknown>>;
+        const r = rows?.[0];
+        if (!r) return undefined;
+        const j = (v: unknown): unknown => (typeof v === 'string' ? JSON.parse(v) : v);
+        const candidate = {
+          id: String(r.id),
+          receiptNumber: String(r.receipt_number),
+          status: String(r.status),
+          createdAt: String(r.created_at ?? ''),
+          shiftId: r.shift_id ? String(r.shift_id) : undefined,
+          subtotal: Number(r.subtotal ?? 0),
+          discountTotal: Number(r.discountTotal ?? 0),
+          total: Number(r.totalPayload ?? r.total ?? 0),
+          paymentMethod: String(r.paymentMethod ?? 'Espèces'),
+          cashTendered: Number(r.cashTendered ?? 0),
+          changeDue: Number(r.changeDue ?? 0),
+          tenders: (j(r.tenders) as unknown[]) ?? [],
+          items: (j(r.items) as unknown[]) ?? [],
+          refundedItems: (j(r.refundedItems) as unknown[]) ?? [],
+          voucherCreditApplied: Number(r.voucherCreditApplied ?? 0) || undefined,
+          voucherCode: r.voucherCode ? String(r.voucherCode) : undefined,
+          debtAdded: r.debtAdded ?? undefined,
+          isRefund: false,
+          customer: r.customerId
+            ? ({ id: String(r.customerId), name: String(r.customerName ?? ''), storeCredit: 0 } as unknown)
+            : null,
+        };
+        return candidate as unknown as SaleTransaction;
+      } catch (err) {
+        console.warn('[db:tx-read] refund candidate projection failed, falling back to full read:', err);
+      }
+    }
+    return await this.getTransactionByReceipt(clean);
+  },
+
   /** UPGRADE-01 safety rail — direct PK read (receipt barcodes carry the id too). */
   async getTransactionById(id: string): Promise<SaleTransaction | undefined> {
     const clean = String(id ?? '').trim();
