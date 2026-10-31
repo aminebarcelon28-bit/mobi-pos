@@ -1009,7 +1009,9 @@ console.log('\n--- I4b: credit-leg convention (C01 refund allocation) ---');
     const m = computeRefundFundingSplit(fracMixed, 900.5);
     const sum = Math.round((m.cashShare + m.avoirShare + m.voucherShare + m.debtShare + m.digitalShare) * 100);
     check('I4b/r fractional original + avoir: lanes sum to the refund', sum === Math.round(m.netRefund * 100), `${sum} vs ${Math.round(m.netRefund * 100)}`);
-    check('I4b/r fractional original + avoir: cash whole DA', Math.round(m.cashShare * 100) % 100 === 0, `cash=${m.cashShare}`);
+    // D-RND: a fractional ORIGINAL cash lane keeps its fraction (the penny oracle
+    // requires it); the hard cap is what must hold here.
+    check('I4b/r fractional original + avoir: cash never exceeds the tender', m.cashShare <= 800.5, `cash=${m.cashShare}`);
   }
   // (s) B-2 GUARD: a voucher amount with no code can never be restored by the
   // native CAS (refund.rs credits by code), so it must not be reported as a lane.

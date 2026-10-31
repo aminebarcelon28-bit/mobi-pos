@@ -126,3 +126,10 @@ session — recorded as UNKNOWN rather than assumed).
 
 - `scripts/ref92-c89.mts`: REF-92 (three partials, 999.99 mixed ticket) pinned to the COMMITTED behaviour - net 999.99, avoir 300, cash 699 whole DA, residue 0.99 on the digital lane (the D-RND artefact, named in the assertion so a rule change is visible) - plus C89 modelling the real per-ticket clamp (ticket cap 300 of 800, excess to Avoir, never refused) and a note that the SHIFT cap is inline in the slice and covered by the E2E helper.
 - 20 passed / 0 failed (E-0027). Not registered in CASE_INDEX: an E2E case still needs a spec file.
+
+## B6 addendum 9 (D-RND resolved by measurement)
+
+- Measured the candidate residue rules against BOTH oracles: the penny sequence (1.01 = 0.51 cash + 0.50 avoir, refunds 0.01/0.01/0.99) only conserves if a FRACTIONAL original cash lane keeps its fraction; REF-92 (999.99 = 699.99 cash + 300 avoir) only conserves without inventing a rail if the fraction likewise stays in cash.
+- Landed rule: residue -> real card rail if one exists, else the fractional cash lane, else a credit lane, else cash. Whole-DA cash lanes never carry a fraction; fractional originals do, and the clamp loss is flagged.
+- I4b/r and REF-92 assertions updated to the measured rule (both were authored this session; the change is named in the test). unit 159/0, ref92-c89 20/0 (E-0028).
+- C90 remains UNPROVEN (REF-28 1/3; the writing expression was never observed), so no blind change was made to PaymentModal.

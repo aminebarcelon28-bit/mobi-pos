@@ -54,7 +54,7 @@ const check = (name: string, cond: boolean, extra = '') => {
     const rowSum = M(s.cashShare) + M(s.avoirShare) + M(s.voucherShare) + M(s.debtShare) + M(s.digitalShare);
     check(`REF-92 step ${i + 1}: row lanes equal the refund total`, rowSum === M(s.netRefund), `${rowSum} vs ${M(s.netRefund)}`);
     check(`REF-92 step ${i + 1}: payload round-trips`, M(read.avoir) === M(s.avoirShare) && M(read.digital) === M(s.digitalShare), JSON.stringify(read));
-    check(`REF-92 step ${i + 1}: cash is a whole-dinar amount`, M(s.cashShare) % 100 === 0, `cash=${s.cashShare}`);
+    check(`REF-92 step ${i + 1}: cash is never more than was tendered`, s.cashShare <= 699.99, `cash=${s.cashShare}`);
     prior = {
       cash: prior.cash + s.cashShare,
       avoir: prior.avoir + s.avoirShare,
@@ -69,12 +69,8 @@ const check = (name: string, cond: boolean, extra = '') => {
   }
   check('REF-92: three partials return the whole ticket (999.99)', M(priorNet) === 99999, `net=${priorNet}`);
   check('REF-92: the avoir lane returns exactly its 300', M(prior.avoir) === 30000, `avoir=${prior.avoir}`);
-  check('REF-92: cash returns 699 whole dinars', M(prior.cash) === 69900, `cash=${prior.cash}`);
-  check(
-    'REF-92: the sub-dinar residue (<=1 DA) sits on the digital lane (D-RND artefact)',
-    M(prior.digital) > 0 && M(prior.digital) < 100,
-    `digital=${prior.digital}`
-  );
+  check('REF-92: cash returns 699.99 (fractional original cash keeps its fraction, D-RND)', M(prior.cash) === 69999, `cash=${prior.cash}`);
+  check('REF-92: no residue is invented on a rail the customer did not use', M(prior.digital) === 0, `digital=${prior.digital}`);
   check('REF-92: nothing is lost (lanes + residue == ticket)', M(prior.cash) + M(prior.avoir) + M(prior.digital) === 99999, `${prior.cash}+${prior.avoir}+${prior.digital}`);
 }
 

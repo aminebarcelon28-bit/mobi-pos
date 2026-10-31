@@ -914,7 +914,21 @@ export function computeRefundFundingSplit(
       }
       remM = -excess;
     }
-    if (remM !== 0) digitalM += remM; // last resort: the digital rail carries it
+    if (remM !== 0) {
+      // D-RND, resolved by measurement against two oracles: the penny sequence
+      // (1.01 ticket, 0.51 cash + 0.50 avoir, refunds 0.01/0.01/0.99) only
+      // conserves if a FRACTIONAL original cash lane keeps its fraction, while
+      // a whole-DA cash lane must not carry a fraction. So: a real card rail
+      // first, then the fractional cash lane itself, then a credit lane, then
+      // cash as the last resort. Nothing is ever invented on a rail the
+      // customer did not use.
+      if (digitalPaidM > 0) digitalM += remM;
+      else if (cashPaidM % 100 !== 0) cashM += remM;
+      else if (fundA > 0) a += remM;
+      else if (fundV > 0) v += remM;
+      else if (fundD > 0) d += remM;
+      else cashM += remM;
+    }
   }
   if (cashM + prior.cash > cashPaidM) anomalies.push('cash-over-paid');
 
