@@ -1739,7 +1739,85 @@ fn apply_refund_in_txn(
     //      onto the durable row and never invents numbers). Read-merge-write
     //      on the same customer payload as the debt patch above.
     let mut loyalty_applied: Option<i64> = None;
-    if let Some(points) = req.customer_points_after {
+    // A refund of a customer-attached ticket must reverse the loyalty the sale
+    // minted. The UI supplies the exact TS verdict; a forged/legacy caller that
+    // omits it would otherwise leave the earn bucket spendable after the goods
+    // came back (G-07). When the payload is absent the native DERIVES the
+    // simple, durable case: buckets whose origin is THIS ticket receipt are
+    // zeroed and their remaining points deducted from the headline balance.
+    let mut derived_loyalty: Option<(i64, String)> = None;
+    if req.customer_points_after.is_none() {
+        if let Some(cust_id) = req
+            .customer_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let payload: Option<String> = tx
+                .query_row(
+                    "SELECT json_payload FROM customers WHERE id = ?1",
+                    [cust_id],
+                    |r| r.get(0),
+                )
+                .ok();
+            if let Some(raw) = payload {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    let headline = v
+                        .get("loyaltyPoints")
+                        .and_then(|p| p.as_f64())
+                        .unwrap_or(0.0);
+                    if let Some(mut buckets) = v
+                        .get("pointBuckets")
+                        .and_then(|b| b.as_array())
+                        .cloned()
+                    {
+                        let mut revoked = 0.0_f64;
+                        let mut touched = false;
+                        for b in buckets.iter_mut() {
+                            let is_origin = b
+                                .get("originTransactionId")
+                                .and_then(|o| o.as_str())
+                                == Some(ticket_receipt.as_str());
+                            if !is_origin {
+                                continue;
+                            }
+                            let remaining = b
+                                .get("remainingPoints")
+                                .and_then(|p| p.as_f64())
+                                .unwrap_or(0.0);
+                            if remaining <= 0.0 {
+                                continue;
+                            }
+                            revoked += remaining;
+                            touched = true;
+                            if let Some(o) = b.as_object_mut() {
+                                o.insert(
+                                    "remainingPoints".to_string(),
+                                    serde_json::Value::from(0.0),
+                                );
+                                o.insert(
+                                    "isFullyConsumed".to_string(),
+                                    serde_json::Value::from(true),
+                                );
+                            }
+                        }
+                        if touched {
+                            let points = (headline - revoked).max(0.0).round() as i64;
+                            let buckets_json =
+                                serde_json::to_string(&serde_json::Value::Array(buckets))
+                                    .unwrap_or_else(|_| "[]".to_string());
+                            derived_loyalty = Some((points, buckets_json));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let loyalty_verdict: Option<(i64, Option<String>)> = match req.customer_points_after {
+        Some(points) => Some((points, req.customer_point_buckets_json.clone())),
+        None => derived_loyalty.map(|(points, buckets)| (points, Some(buckets))),
+    };
+    if let Some((points, buckets_json)) = loyalty_verdict {
         let Some(cust_id) = req
             .customer_id
             .as_deref()
@@ -1752,7 +1830,7 @@ fn apply_refund_in_txn(
         let points = points.max(0);
         let mut patch = serde_json::Map::new();
         patch.insert("loyaltyPoints".to_string(), serde_json::Value::from(points));
-        if let Some(buckets_json) = req.customer_point_buckets_json.as_deref() {
+        if let Some(buckets_json) = buckets_json.as_deref() {
             let buckets: serde_json::Value = serde_json::from_str(buckets_json)
                 .map_err(|_| conflict("INVALID:point buckets must be JSON"))?;
             if !buckets.is_null() {
@@ -4309,6 +4387,78 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM transactions WHERE id='REF-H1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(rows, 0, "no refund row");
+    }
+
+    #[test]
+    fn d4a_customer_refund_derives_the_loyalty_reversal_when_absent() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        // The ticket belongs to C1 and C1's bucket was minted by this receipt
+        // and still backs 10 points. A caller that cannot compute the TS
+        // reversal (forged/legacy: points_after = null) must still leave the
+        // customer consistent: the native zeroes the bucket it can attribute
+        // to this ticket instead of keeping spendable reward for returned goods.
+        conn.execute(
+            "UPDATE transactions SET customer_id = 'C1' WHERE id = 'TKT-1'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE customers SET loyalty_points = 10, json_payload = ?1 WHERE id = 'C1'",
+            [r#"{"id":"C1","loyaltyPoints":10,"pointBuckets":[{"id":"B1","originTransactionId":"REC-1","initialPoints":10,"remainingPoints":10}],"ledger":[]}"#],
+        )
+        .unwrap();
+        let mut req = base_req();
+        req.customer_id = Some("C1".into());
+        req.customer_points_after = None;
+        req.customer_point_buckets_json = None;
+        let ok = run(&mut conn, &req).expect("refund derives the reversal and commits");
+        assert_eq!(ok.customer_points_after, Some(0));
+        let payload: String = conn
+            .query_row("SELECT json_payload FROM customers WHERE id='C1'", [], |r| r.get(0))
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(v["loyaltyPoints"].as_f64().unwrap_or(-1.0), 0.0, "{payload}");
+        assert_eq!(
+            v["pointBuckets"][0]["remainingPoints"].as_f64().unwrap_or(-1.0),
+            0.0,
+            "bucket zeroed: {payload}"
+        );
+        assert_eq!(v["pointBuckets"][0]["isFullyConsumed"], serde_json::Value::from(true));
+
+        // The explicit TS verdict still wins when supplied.
+        let mut conn2 = Connection::open_in_memory().unwrap();
+        test_schema(&conn2);
+        seed_ticket(&conn2);
+        conn2
+            .execute("UPDATE transactions SET customer_id = 'C1' WHERE id = 'TKT-1'", [])
+            .unwrap();
+        conn2
+            .execute(
+                "UPDATE customers SET loyalty_points = 10, json_payload = ?1 WHERE id = 'C1'",
+                [r#"{"id":"C1","loyaltyPoints":10,"pointBuckets":[{"id":"B1","originTransactionId":"REC-1","initialPoints":10,"remainingPoints":10}],"ledger":[]}"#],
+            )
+            .unwrap();
+        let mut explicit = base_req();
+        explicit.customer_id = Some("C1".into());
+        explicit.customer_points_after = Some(4);
+        explicit.customer_point_buckets_json = Some(
+            r#"[{"id":"B1","originTransactionId":"REC-1","initialPoints":10,"remainingPoints":4,"isFullyConsumed":false}]"#
+                .into(),
+        );
+        run(&mut conn2, &explicit).expect("explicit verdict commits");
+        let payload2: String = conn2
+            .query_row("SELECT json_payload FROM customers WHERE id='C1'", [], |r| r.get(0))
+            .unwrap();
+        let v2: serde_json::Value = serde_json::from_str(&payload2).unwrap();
+        assert_eq!(v2["loyaltyPoints"].as_f64().unwrap_or(-1.0), 4.0, "{payload2}");
+        assert_eq!(
+            v2["pointBuckets"][0]["remainingPoints"].as_f64().unwrap_or(-1.0),
+            4.0,
+            "{payload2}"
+        );
     }
 
     #[test]
