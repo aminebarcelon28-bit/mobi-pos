@@ -615,6 +615,13 @@ export const RefundModal: React.FC = () => {
         );
         setSelectedTxn(null);
         setSelectedTransactionForRefund(null);
+        // A committed refund consumes the supervisor authorisation: the next
+        // refund must re-enter the PIN. A REFUSED one must NOT - hiding the gate
+        // on failure made a retry (e.g. the offline cash-cap switch to Avoir)
+        // impossible: the field was gone and no revalidation could be authorised.
+        setManagerPin('');
+        setManagerPinTicket(null);
+        setPinRequired(false);
         } else if (refundResult.reason === 'CUSTOMER_UNAVAILABLE') {
           showToast(
             'Client archivé (profil supprimé) : aucun avoir ne peut être recrédité. Remboursez en espèces, ou réactivez le client avant de créditer son avoir.',
@@ -680,14 +687,9 @@ export const RefundModal: React.FC = () => {
       showToast('Une erreur est survenue lors de l\'enregistrement du remboursement.', 'error');
     } finally {
       submitGuardRef.current.leave();
-      // REF-87: a manager PIN authorises exactly ONE refund. Leaving it in state
-      // let a later refund in the same session skip the supervisor gate (the PIN
-      // gate simply never re-appeared) - an authorization replay, and the reason
-      // a suite run that had typed a PIN earlier never saw the gate again.
-      setManagerPin('');
-    setManagerPinTicket(null);
-      setManagerPinTicket(null);
-      setPinRequired(false);
+      // PIN state is cleared ONLY on success (above). A failure keeps the gate
+      // open so the operator can correct the request and resubmit - the PIN is
+      // consumed by the committed refund, not by an attempt.
       setIsSubmitting(false);
     }
   };
