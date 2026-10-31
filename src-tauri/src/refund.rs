@@ -568,6 +568,79 @@ fn line_identity(req: &RefundRequest, l: &RefundItemIn) -> Option<String> {
 /// subtracts, clamped at zero; the row's `balance_after` is a projection and
 /// is never trusted). INTEGER DZD end to end — the CAST mirrors the cash-cap
 /// read so REAL-affinity columns can never leak float dust into money.
+/// SQL-side ledger append for BIG payloads: the ledger array lives inside a
+/// document that can reach tens of megabytes, and parsing/serialising it in
+/// Rust on every refund was the ~55 s cost that made a 4e9 ticket unfundable.
+/// JSON1 does the same work in C, inside the same write transaction.
+fn sql_append_customer_ledger(
+    tx: &Transaction,
+    customer_id: &str,
+    entry: &serde_json::Value,
+) -> Result<(), TrustError> {
+    let entry_json = serde_json::to_string(entry)
+        .map_err(|e| TrustError::op_failed(format!("ledger entry encode: {e}")))?;
+    tx.execute(
+        r#"UPDATE customers SET json_payload = CASE
+             WHEN json_type(json_payload, '$.ledger') = 'array'
+               THEN json_insert(json_payload, '$.ledger[#]', json(?2))
+             ELSE json_set(COALESCE(NULLIF(json_payload, ''), '{}'), '$.ledger', json_array(json(?2)))
+         END
+         WHERE id = ?1"#,
+        params![customer_id, entry_json],
+    )
+    .map_err(|e| map_rusqlite("ledger append", e))?;
+    Ok(())
+}
+
+/// SQL-side loyalty patch (points and, when supplied, the bucket array).
+fn sql_patch_customer_loyalty(
+    tx: &Transaction,
+    customer_id: &str,
+    points: i64,
+    buckets_json: Option<&str>,
+    now: &str,
+) -> Result<(), TrustError> {
+    match buckets_json {
+        Some(buckets) => tx.execute(
+            r#"UPDATE customers SET loyalty_points = ?2,
+                 json_payload = json_set(COALESCE(NULLIF(json_payload, ''), '{}'),
+                     '$.loyaltyPoints', json(?2), '$.pointBuckets', json(?3), '$.version', version + 1),
+                 updated_at = ?4, version = version + 1
+               WHERE id = ?1"#,
+            params![customer_id, points, buckets, now],
+        ),
+        None => tx.execute(
+            r#"UPDATE customers SET loyalty_points = ?2,
+                 json_payload = json_set(COALESCE(NULLIF(json_payload, ''), '{}'),
+                     '$.loyaltyPoints', json(?2), '$.version', version + 1),
+                 updated_at = ?3, version = version + 1
+               WHERE id = ?1"#,
+            params![customer_id, points, now],
+        ),
+    }
+    .map_err(|e| map_rusqlite("loyalty persist", e))?;
+    Ok(())
+}
+
+/// SQL-side wallet scalar write (balance + payload mirror + pending marker).
+fn sql_set_customer_credit(
+    tx: &Transaction,
+    customer_id: &str,
+    next: f64,
+    now: &str,
+) -> Result<(), TrustError> {
+    tx.execute(
+        r#"UPDATE customers SET store_credit = ?2,
+             json_payload = json_set(COALESCE(NULLIF(json_payload, ''), '{}'),
+                 '$.storeCredit', json(?2), '$.version', version + 1),
+             updated_at = ?3, version = version + 1, sync_status = 'pending'
+           WHERE id = ?1"#,
+        params![customer_id, next, now],
+    )
+    .map_err(|e| map_rusqlite("wallet persist", e))?;
+    Ok(())
+}
+
 fn customer_ledger_balance(tx: &Transaction, customer_id: &str) -> Result<i64, TrustError> {
     tx.query_row(
         "SELECT COALESCE(SUM(CAST(CASE WHEN type = 'PAYMENT_SETTLED' THEN -amount ELSE amount END AS INTEGER)), 0) \
@@ -1858,21 +1931,17 @@ fn apply_refund_in_txn(
         };
         ensure_customer_stub(tx, cust_id, "", now)?;
         let points = points.max(0);
-        let mut patch = serde_json::Map::new();
-        patch.insert("loyaltyPoints".to_string(), serde_json::Value::from(points));
-        if let Some(buckets_json) = buckets_json.as_deref() {
-            let buckets: serde_json::Value = serde_json::from_str(buckets_json)
-                .map_err(|_| conflict("INVALID:point buckets must be JSON"))?;
-            if !buckets.is_null() {
-                patch.insert("pointBuckets".to_string(), buckets);
+        // Validate the caller's bucket JSON before it reaches SQLite, then patch
+        // the row with JSON1 (never parse the whole customer document here).
+        let buckets_valid = match buckets_json.as_deref() {
+            Some(raw) => {
+                let parsed: serde_json::Value = serde_json::from_str(raw)
+                    .map_err(|_| conflict("INVALID:point buckets must be JSON"))?;
+                if parsed.is_null() { None } else { Some(raw.to_string()) }
             }
-        }
-        let merged_payload = merge_customer_payload(tx, cust_id, &patch, &mut warnings)?;
-        tx.execute(
-            "UPDATE customers SET loyalty_points = ?2, json_payload = ?3, updated_at = ?4, version = version + 1 WHERE id = ?1",
-            params![cust_id, points, merged_payload, now],
-        )
-        .map_err(|e| map_rusqlite("loyalty persist", e))?;
+            None => None,
+        };
+        sql_patch_customer_loyalty(tx, cust_id, points, buckets_valid.as_deref(), now)?;
         loyalty_applied = Some(points);
     }
 
@@ -1941,24 +2010,10 @@ fn apply_refund_in_txn(
             ));
         }
         let next = (after_credit - revoked).max(0.0);
-        let raw: String = tx
-            .query_row(
-                "SELECT json_payload FROM customers WHERE id = ?1",
-                [cust_id],
-                |r| r.get(0),
-            )
-            .map_err(|e| TrustError::op_failed(format!("wallet payload read: {e}")))?;
-        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}));
-        let obj = parsed.as_object().cloned().unwrap_or_default();
-        let mut ledger = obj
-            .get("ledger")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
+        // Two movements, appended with SQLite JSON1 (no Rust round-trip of the
+        // customer document: an 80 MB ledger made each refund take ~55 s).
         if revoked > 0.0 {
-            ledger.insert(
-                0,
-                serde_json::json!({
+            sql_append_customer_ledger(tx, cust_id, &serde_json::json!({
                     "id": format!("LEDGER-REF-CLAW-{}", req.refund_id),
                     "customerId": cust_id,
                     "timestamp": now,
@@ -1972,13 +2027,10 @@ fn apply_refund_in_txn(
                     "referenceId": req.ticket_id,
                     "creditDeltaDzd": -(revoked.round() as i64),
                     "performedBy": "Système Caisse",
-                }),
-            );
+                }))?;
         }
         if wallet_inc > 0 {
-            ledger.insert(
-                0,
-                serde_json::json!({
+            sql_append_customer_ledger(tx, cust_id, &serde_json::json!({
                     "id": format!("LEDGER-REF-{}", req.refund_id),
                     "customerId": cust_id,
                     "timestamp": now,
@@ -1992,23 +2044,10 @@ fn apply_refund_in_txn(
                     "referenceId": req.ticket_id,
                     "creditDeltaDzd": wallet_inc,
                     "performedBy": "Système Caisse",
-                }),
-            );
+                }))?;
         }
-        let mut patch = serde_json::Map::new();
-        patch.insert("storeCredit".to_string(), serde_json::Value::from(next));
-        patch.insert("ledger".to_string(), serde_json::Value::Array(ledger));
-        let merged_payload = merge_customer_payload(tx, cust_id, &patch, &mut warnings)?;
-        // The wallet is money that must propagate: stamp the row pending when the
-        // column exists so a crash before the client's outbox enqueue still has a
-        // durable marker (the outbox row itself stays best-effort).
-        let pending_sql = if has_column(tx, "customers", "sync_status")? {
-            "UPDATE customers SET store_credit = ?2, json_payload = ?3, updated_at = ?4, sync_status = 'pending', version = version + 1 WHERE id = ?1"
-        } else {
-            "UPDATE customers SET store_credit = ?2, json_payload = ?3, updated_at = ?4, version = version + 1 WHERE id = ?1"
-        };
-        tx.execute(pending_sql, params![cust_id, next, merged_payload, now])
-            .map_err(|e| map_rusqlite("wallet persist", e))?;
+        sql_set_customer_credit(tx, cust_id, next, now)?;
+
         wallet_applied = wallet_inc;
         wallet_after = Some(next.round() as i64);
     }
