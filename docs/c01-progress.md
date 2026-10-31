@@ -203,3 +203,17 @@ session — recorded as UNKNOWN rather than assumed).
   Pack: `docs/c01-ref42-double-delivery.md`.
 - Still parked elsewhere: REF-15 (loyalty double burn / G-07, owner decision A/B/C), B-3 (walk-in
   trade-in policy), D4 (wallet atomicity), void outbox payload (read-only sync lane).
+## B6 addendum 15 (REF-42 root cause: the oracle double-counts one credit)
+
+- **Measured (E-0044):** after a 700 DA CIB refund the customer row holds `col=700, payload=700` and there
+  are **no vouchers** and no cash movement - i.e. ONE credit of 700, mirrored in both representations.
+- The case's `usableDelivery` (33-ref:2626-2637) sums `colDelta + payloadDelta`, so it counts that one
+  credit as 1400. The same file defines `effCredit` ("column wins", customerAdapter.ts:246) and does not
+  use it. The payload mirror is the app contract (REF-15 logs col==payload; REF-65 asserts the mirror for
+  debt), and it is the sync surface, so the code cannot drop it to satisfy the sum.
+- **PARKED - owner decision** (`docs/c01-ref42-double-delivery.md`): A) one-line spec correction to use
+  effCredit semantics (recommended; a spec edit needs owner authorisation), B) deliver card refunds as
+  store vouchers (product change), C) refuse card refunds entirely (rejected: value evaporation).
+- Research: R-004 in `docs/c01-research.md` (Stripe refund-destination rule) - card refunds belong on the
+  original rail; the terminal has no acquirer lane, so the fallback is a merchant policy choice.
+- REF-42 stays 0/2 (E-0042); no code change was made for it.
