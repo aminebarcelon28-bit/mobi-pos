@@ -1587,7 +1587,11 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // with this sale, so the slot + soulte choice reset here.
         stagedTradeIn: null,
         exchangeSoultePayout: null,
-        activeModal: null,
+        // REF-87: the checkout commits late on a huge sale (~30-40 s of
+        // post-commit work). Closing the modal unconditionally then tore down a
+        // REFUND dialog the operator had already opened, and the refund never
+        // submitted. Only the checkout's own modal is closed here.
+        activeModal: get().activeModal === 'payment' ? null : get().activeModal,
         lastTransaction: transaction,
         hardwareStatus: { ...get().hardwareStatus, cashDrawerOpen: true },
       });
