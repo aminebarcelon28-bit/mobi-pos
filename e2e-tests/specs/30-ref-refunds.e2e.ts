@@ -1063,7 +1063,7 @@ describe('REF — refunds, returns & avoirs (batch 3)', () => {
     // gateway), so the durable payload is the observable oracle here.
     {
       const queued = one<Row>(
-        "SELECT id, payload_json FROM sync_outbox WHERE entity_type = 'order' AND entity_id = ? ORDER BY rowid DESC LIMIT 1",
+        "SELECT payload_json FROM sync_outbox WHERE entity_type = 'order' AND entity_id = ? ORDER BY rowid DESC LIMIT 1",
         String(refA.id),
       );
       const queuedPayload = String(queued?.payload_json ?? '');
