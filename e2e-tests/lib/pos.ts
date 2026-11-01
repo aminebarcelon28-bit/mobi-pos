@@ -940,8 +940,15 @@ export async function selectCustomer(name: string): Promise<void> {
     btn.click();
     return true;
   })) as boolean;
-  if (!opened) {
-    await (await $(tid('clients-button'))).click();
+  // The page-click can be swallowed (button present but the handler not ready).
+  // Verify the DIALOG actually opened; otherwise use the WebDriver click.
+  const dialogUp = async (): Promise<boolean> =>
+    (await $(tid('customers-dialog')).isDisplayed().catch(() => false)) as boolean;
+  if (!opened || !(await dialogUp())) {
+    await browser.pause(200);
+    if (!(await dialogUp())) {
+      await (await $(tid('clients-button'))).click().catch(() => undefined);
+    }
   }
   await (await $(tid('customers-dialog'))).waitForDisplayed({ timeout: 20000 });
   const tryTarget = async (): Promise<'clicked' | 'already' | null> => {
