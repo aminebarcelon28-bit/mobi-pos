@@ -578,6 +578,7 @@ export const RefundModal: React.FC = () => {
 
     // Fix 4: accounting-period gate (mirrors the slice + adapter gates).
     if (!activeShift || !activeShift.id) {
+      refundDiag('gate:no-shift', { activeShift: activeShift?.id ?? null });
       showToast('Ouvrez la caisse avant tout remboursement (traçabilité de période).', 'error');
       return;
     }
@@ -586,6 +587,7 @@ export const RefundModal: React.FC = () => {
     // disabled, but selection can predate a network drop or devtools can
     // re-enable it; the native gate decides regardless).
     if (submitForeignLocked) {
+      refundDiag('gate:foreign', { onlineNow, deviceIdNow, txnDevice: selectedTxn?.deviceId ?? null });
       showToast('Offline Terminal Lock: Cross-terminal refunds require an active sync connection.', 'error');
       return;
     }
