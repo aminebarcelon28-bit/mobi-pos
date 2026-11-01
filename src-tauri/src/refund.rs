@@ -2385,18 +2385,24 @@ fn apply_refund_in_txn(
         }
         if card_leg_minor > 0 {
             warnings.push(format!(
-                "[refund] rail carte sans destination de remboursement: {:.2} DA hors équilibre.",
+                "[refund] rail carte sans destination de remboursement: {:.2} DA (couverte par les autres jambes).",
                 card_leg_minor as f64 / 100.0
             ));
-        } else {
-            let voucher_leg = req.voucher.as_ref().map(|v| v.amount).unwrap_or(0).max(0);
-            let cash_leg = req.cash_tendered.max(0);
-            let sum = cash_leg + wallet_applied + voucher_leg + debt_relief_applied;
-            if total_reversed != sum {
-                return Err(conflict(&format!(
-                    "INVALID:refund legs do not balance (total {total_reversed} != cash {cash_leg} + wallet {wallet_applied} + voucher {voucher_leg} + debt {debt_relief_applied})"
-                )));
-            }
+        }
+        // REF-67: the balance check runs for EVERY refund. It used to be skipped
+        // whenever the ticket carried card/cheque tenders, which let a "cash"
+        // refund commit its total while delivering nothing (drawer untouched,
+        // wallet 0) - money with no destination of record. A card-funded ticket
+        // can only be refunded through lanes that actually deliver (Avoir); then
+        // the legs cover the total and this passes, and a cash attempt with no
+        // legs fails here instead of landing empty.
+        let voucher_leg = req.voucher.as_ref().map(|v| v.amount).unwrap_or(0).max(0);
+        let cash_leg = req.cash_tendered.max(0);
+        let sum = cash_leg + wallet_applied + voucher_leg + debt_relief_applied;
+        if total_reversed != sum {
+            return Err(conflict(&format!(
+                "INVALID:refund legs do not balance (total {total_reversed} != cash {cash_leg} + wallet {wallet_applied} + voucher {voucher_leg} + debt {debt_relief_applied})"
+            )));
         }
     }
 

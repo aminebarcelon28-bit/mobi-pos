@@ -300,6 +300,7 @@ function parseRefundError(err: unknown): { reason: string; refundId?: string; re
   }
   if (code === 'REFUND_EXCEEDS') return { reason: 'REFUND_EXCEEDS_PURCHASED', retryable: false, detail };
   if (code === 'REFUND_EXCEEDS_VALUE') return { reason: 'REFUND_EXCEEDS_VALUE', retryable: false, detail };
+  if (code === 'CARD_REFUND_LANE_UNAVAILABLE') return { reason: 'CARD_REFUND_LANE_UNAVAILABLE', retryable: false, detail };
   if (code === 'INVALID') return { reason: 'INVALID_REQUEST', retryable: false, detail };
   if (code === 'AVOIR_RECIPIENT_REQUIRED') return { reason: 'AVOIR_RECIPIENT_REQUIRED', retryable: false, detail };
   if (code === 'INTERNAL' || code === 'SCHEMA_UNHEALED') {

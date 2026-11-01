@@ -2374,8 +2374,14 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // Policy read unavailable — the native gate still enforces in-txn.
       }
     }
+    // REF-67: a card/cheque-funded ticket has NO cash to refund, and the card
+    // rail has no destination of record. The only lane that actually delivers is
+    // the Avoir, so when the operator chooses it the digital share rides the
+    // wallet leg (otherwise the refund would commit with nothing delivered).
     const walletAddBase =
-      funding.avoirShare + walletFromCashOverflow + (effectiveRefundMethod === 'Avoir Client' ? funding.cashShare : 0);
+      funding.avoirShare +
+      walletFromCashOverflow +
+      (effectiveRefundMethod === 'Avoir Client' ? funding.cashShare + funding.digitalShare : 0);
 
     // Chaos S5 — exchange reversal: the funding split caps cash at net paid,
     // so the trade-in value can never leak into cashOut — but without
@@ -2547,6 +2553,16 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         newPoints
       );
 
+      // REF-67 (fail closed): a ticket funded by card/cheque cannot be paid out
+      // in cash - there is no cash to give back and no acquirer lane to return
+      // it to. Refuse instead of committing a refund that delivers nothing.
+      if (
+        effectiveRefundMethod === 'Espèces' &&
+        funding.digitalShare > 0 &&
+        funding.cashShare <= 0
+      ) {
+        return { success: false, reason: 'CARD_REFUND_LANE_UNAVAILABLE' };
+      }
       const creditToAdd = walletAddBase + tradeRestoreNow;
       walletLegForNative = creditToAdd;
       // REF-40: an archived profile has no usable owner for a wallet credit.
