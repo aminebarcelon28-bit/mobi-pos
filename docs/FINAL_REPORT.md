@@ -24,7 +24,7 @@ with the commands in the last section.
 | Money conservation gate + 31→33 refund tests under the strict invariant | E-0090, E-0104 |
 | Library suite green | `cargo test --lib` **436/436** (E-0096 + later) |
 | E2E refund suite | **18/18**, 0 skipped, invariants clean (ref34f) |
-| Wider refund suites (30/31/32/34) | **48/59 at the real HEAD**: REF-67/80/89 now pass (the native balance gate refuses a legs-empty card refund), REF-06/86 need triage. No D6-A regression; every earlier stale-binary measurement is withdrawn in E-0124 |
+| Wider refund suites (30/31/32/34) | **49/59**: REF-06 (card refund → Avoir, cashDisbursed 0), REF-67 (cash refused, Avoir delivers exactly 900) and REF-86 (order independence) now pass. 12 remain: REF-15+G-07 legacy loyalty drift, G-21 warranty attribution, and spec-specific cases (E-0125) |
 | Booting gate tracks the migration list (a device at v128 would have refused to boot) | D8 / E-0096 |
 | Dependency audit clean (`npm audit --omit=dev` → **0**) | E-0120 |
 | Branch sweep: main fast-forwarded, 9 merged branches deleted, 4 unmerged kept and documented | E-0120 |

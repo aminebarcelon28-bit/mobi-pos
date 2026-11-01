@@ -55,3 +55,13 @@ amount half, covered for the presence half.
 Nothing to reverse: case 26's behaviour is unchanged (documented scope-out) and case 34's presence guard is a
 strict addition. Implementing A/B for card or the schema split for the drawer amounts supersedes this record.
 
+
+## Update 2026-11-01 — the observable contract is now tested
+
+- A cash refund of a card/cheque ticket is **refused** by the native always-balance gate
+  (`INVALID:refund legs do not balance`); REF-67 proves no row and no drawer movement (E-0125).
+- An **Avoir** refund of the same ticket delivers the card leg's value (the only destination of record in
+  this build) and never disburses cash; REF-06 proves total 500 / cashDisbursed 0 / drawer untouched (E-0125).
+- The delivery oracle now counts the wallet **once** (the `store_credit` column and the JSON `storeCredit`
+  are the same scalar; summing them reported a 900 DA refund as 1800).
+- Still open: the acquirer-side refund table (option A/B in this record) and the drawer-amount split.
