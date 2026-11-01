@@ -1147,6 +1147,23 @@ describe('REF — refunds, returns & avoirs (batch 8 / part 5)', () => {
   });
 
   afterEach(async function () {
+    try {
+      const diagTitle = String(
+        (this as unknown as { currentTest?: { title?: string } }).currentTest?.title ?? '',
+      );
+      if (diagTitle.includes('REF-67')) {
+        const diag = await browser.execute(() => {
+          try {
+            return JSON.parse(localStorage.getItem('refund_diag') ?? '[]');
+          } catch {
+            return [];
+          }
+        });
+        console.log('[REF-67 diag]', JSON.stringify((diag as unknown[]).slice(-20)).slice(0, 6000));
+      }
+    } catch {
+      /* diagnostics only */
+    }
     if (await refundDialogVisible()) {
       console.log('[afterEach] refund dialog still open — closing');
       await closeRefund().catch(() => {});

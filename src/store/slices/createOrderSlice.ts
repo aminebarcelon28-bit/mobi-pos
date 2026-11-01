@@ -1,5 +1,6 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, OrderSlice } from '../types';
+import { refundDiag } from '../../utils/refundDiag';
 import type {
   CartItem,
   SaleTransaction,
@@ -2394,6 +2395,13 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     // The mapped transaction may carry no tenders array; the sale's method is
     // then the only rail evidence, and it is sufficient to fail closed.
     const nonCashMethod = isRail(railOf(originalTransaction.paymentMethod));
+    refundDiag('refund:precheck', {
+      method: effectiveRefundMethod,
+      nonCashTender,
+      nonCashMethod,
+      cashTendered: physicalCashTendered(originalTransaction),
+      tenders: ticketTenders.length,
+    });
     if (
       effectiveRefundMethod === 'Espèces' &&
       (nonCashTender > 0 || nonCashMethod) &&
