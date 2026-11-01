@@ -2168,6 +2168,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
 
   processRefund: async (payload) => {
     const { originalTransaction, refundItems, refundMethod, refundReason, cashierName } = payload;
+  const defectNote = (payload as { defectNote?: string }).defectNote;
     const supervisorPinVerifiedAt = (payload as { supervisorPinVerifiedAt?: string }).supervisorPinVerifiedAt;
     const supervisorUserId = (payload as { supervisorUserId?: string }).supervisorUserId;
     const { transactions, products, customers, logSecurityAction } = get();
@@ -2231,15 +2232,23 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
     // Physical returns kept out of stock (rebut/defective) move value off the
     // books with no compensating entry — they must carry a reason note.
     const hasNonRestocked = refundItems.some((i) => !i.restock);
+    /** REF-19: the note written to defective_returns (explicit note wins). */
+    let defectNoteForNative = String(refundReason ?? '').trim();
     if (hasNonRestocked) {
       const reasonTrim = String(refundReason ?? '').trim();
+      // REF-19: the modal passes the operator-authored note separately. When it
+      // is present it IS the motive - even if its text is literally "Autre"
+      // (a real note, not the category).
+      const explicitNote = String(defectNote ?? '').trim();
       // REF-36: "Autre" is a category, not a motive. A write-off must carry an
       // operator-authored note; the bare placeholder value (or its option label)
       // must not satisfy the gate, or a rebut lands with no quarantine note.
       const categoryOnly = /^Autre( motif personnalis\S*)?$/i.test(reasonTrim);
-      if (!reasonTrim || categoryOnly) {
+      if (!explicitNote && (!reasonTrim || categoryOnly)) {
         return { success: false, reason: 'RESTOCK_REASON_REQUIRED' };
       }
+      // The native row carries the note that was actually authored.
+      defectNoteForNative = explicitNote || reasonTrim;
     }
 
       // Over-refund guard. The modal seeds quantities from the ORIGINAL purchased
@@ -3124,7 +3133,7 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         }),
         imeis: restoredImeis,
         defectiveImeis,
-        defectNote: hasNonRestocked ? (refundReason?.trim() || null) : null,
+        defectNote: hasNonRestocked ? defectNoteForNative || null : null,
         // Loyalty clawback is decided by the shared TS math (immutable sale
         // snapshots); native replays it onto the durable row. The echo in
         // the receipt is authoritative for hydration.

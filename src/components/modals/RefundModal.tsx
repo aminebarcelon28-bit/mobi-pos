@@ -702,6 +702,7 @@ export const RefundModal: React.FC = () => {
         refundItems: activeRefundItems,
         refundMethod: effectiveRefundMethod,
         refundReason: finalReason,
+        defectNote: typedNote || undefined,
         cashierName: activeCashier?.name || 'Caissier',
         supervisorPinVerifiedAt,
         supervisorUserId: activeCashier?.role === 'admin' ? activeCashier.id : 'manager',

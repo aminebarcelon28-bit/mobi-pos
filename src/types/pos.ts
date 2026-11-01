@@ -536,6 +536,12 @@ export interface ProcessRefundPayload {
   refundItems: RefundItem[];
   refundMethod: PaymentMethodType;
   refundReason: string;
+  /**
+   * REF-19: the operator-authored note for a write-off ("rebut"), separate from
+   * the reason CATEGORY. A note whose text is literally "Autre" is a real note;
+   * the category-only refusal must not swallow it.
+   */
+  defectNote?: string;
   cashierName?: string;
   /**
    * Supervisor authorization for offline containment (Module C): ISO instant
