@@ -1857,6 +1857,33 @@ export async function setRefundReason(optionVisibleText: string): Promise<void> 
     const sel = await refundReasonSelect();
     await sel.selectByVisibleText(optionVisibleText);
   }
+  await browser.pause(200);
+  // A scripted value change on a CONTROLLED <select> can be undone by the next
+  // render (REF-19: the dialog fell back to the default option, so the write-off
+  // note field never appeared). Verify the choice actually stuck; if not, drive
+  // the select with a native user gesture.
+  const stuck = (await browser.execute((txt: string) => {
+    const vis = (d: HTMLElement) => {
+      try {
+        const cs = getComputedStyle(d);
+        if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false;
+        const r = d.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      } catch {
+        return false;
+      }
+    };
+    const dlg = ([...document.querySelectorAll('[data-testid="refund-dialog"]')] as HTMLElement[]).find(vis);
+    const sel = (dlg?.querySelector('select') ?? null) as HTMLSelectElement | null;
+    if (!sel) return false;
+    const opt = [...sel.options].find((o) => (o.textContent || '').includes(txt));
+    if (!opt) return false;
+    return sel.value === opt.value;
+  }, optionVisibleText)) as boolean;
+  if (!stuck) {
+    const sel = await refundReasonSelect();
+    await sel.selectByVisibleText(optionVisibleText);
+  }
   await browser.pause(250);
 }
 
