@@ -567,10 +567,36 @@ export const RefundModal: React.FC = () => {
     setRestockMap((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  // Any exception thrown by the submit head is recorded (REF-19: the handler
+  // logged submit:start and then nothing at all - no gate fired).
+  useEffect(() => {
+    const onError = (ev: ErrorEvent) => {
+      refundDiag('submit:throw-uncaught', { message: String(ev.message ?? ev.error ?? '') });
+    };
+    window.addEventListener('error', onError);
+    return () => window.removeEventListener('error', onError);
+  }, []);
+
   const handleSubmitRefund = async (e: React.FormEvent) => {
     e.preventDefault();
     refundDiag('submit:start', { txn: selectedTxn?.id ?? null, method: refundMethod });
-    beginRefundFlight();
+    try {
+      beginRefundFlight();
+    } catch (flightErr) {
+      refundDiag('submit:throw', {
+        where: 'beginRefundFlight',
+        message: String((flightErr as Error)?.message ?? flightErr),
+      });
+      throw flightErr;
+    }
+    // Named probe: if this line never runs, the throw is above it.
+    refundDiag('gate:flight', {
+      txn: selectedTxn?.id ?? null,
+      shift: activeShift?.id ?? null,
+      items: activeRefundItems.length,
+      total: totalRefundAmount,
+      foreign: submitForeignLocked,
+    });
     if (!selectedTxn) {
       showToast('Veuillez d\'abord sélectionner un ticket de caisse.', 'warning');
       return;
