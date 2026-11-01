@@ -1620,7 +1620,13 @@ mod tests {
                 }
             }
             if let Some(i) = pos {
-                let end = (i + 4000).min(text.len());
+                // Byte windows must land on a char boundary: the sources carry
+                // multi-byte glyphs (arrows), and a raw 4000-byte slice panicked
+                // once the offsets shifted.
+                let mut end = (i + 4000).min(text.len());
+                while end > i && !text.is_char_boundary(end) {
+                    end -= 1;
+                }
                 out.push((name, text[i..end].to_string()));
             }
         }
