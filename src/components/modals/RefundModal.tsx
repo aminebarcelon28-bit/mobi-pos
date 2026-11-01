@@ -105,9 +105,6 @@ export const RefundModal: React.FC = () => {
   // clickable long enough for a second click in the same tick; two processRefund
   // calls make the second one fail as ALREADY_REFUNDED (correctly deduped) but
   // leave a misleading refusal on screen and block the next legitimate chunk.
-  // At most ONE automatic Avoir resubmission per operator submission (the
-  // offline cash cap is a routing decision, not an error to bounce back).
-  const avoirRetryRef = useRef(0);
   const submitGuardRef = useRef(createSubmitGuard());
   // REF-87: the PIN is bound to the ticket it was typed for; a PIN typed for
   // another ticket (or for an earlier refund) never authorises this one.
@@ -510,7 +507,8 @@ export const RefundModal: React.FC = () => {
     setRestockMap((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const submitRefundNow = async () => {
+  const handleSubmitRefund = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!selectedTxn) {
       showToast('Veuillez d\'abord sélectionner un ticket de caisse.', 'warning');
       return;
@@ -652,15 +650,6 @@ export const RefundModal: React.FC = () => {
             // Fallback path (Module B): value that cannot leave the drawer
             // offline returns as a store credit for the customer on the ticket.
             setRefundMethod('Avoir Client');
-        // REF-87: the cap is a ROUTING decision - re-issue the same refund as
-        // Avoir automatically (once). Asking for a second click lost the refund
-        // whenever the modal re-rendered in between.
-        if (avoirRetryRef.current < 1) {
-          avoirRetryRef.current += 1;
-          setTimeout(() => {
-            void submitRefundNow();
-          }, 50);
-        }
             showToast('Plafond espèces hors-ligne atteint — méthode basculée en Avoir Client : vérifiez puis validez à nouveau.', 'warning', 6000);
           } else if (refundMethod === 'Espèces') {
             // P0 (owner ruling): no customer -> an Avoir would credit nobody.
@@ -703,13 +692,6 @@ export const RefundModal: React.FC = () => {
       // consumed by the committed refund, not by an attempt.
       setIsSubmitting(false);
     }
-  };
-
-  const handleSubmitRefund = async (e: React.FormEvent) => {
-    e.preventDefault();
-    // A new operator submission resets the one-shot cap retry budget.
-    avoirRetryRef.current = 0;
-    await submitRefundNow();
   };
 
   return (
