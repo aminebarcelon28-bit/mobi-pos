@@ -1057,6 +1057,25 @@ describe('REF — refunds, returns & avoirs (batch 3)', () => {
     expect(stockOf(P500)).toBe(stockAfterSaleA);
     // Defective COGS is consumed: refund profit = full net (no COGS recovery).
     expect(Number(refA.profit)).toBe(500);
+    // CARRY-OVER (D13 exit): the authored note must survive into the QUEUED
+    // payload the offline outbox will replay - not just the committed row.
+    // The queue is the local outbox; the remote drain is BLOCKED (no merchant
+    // gateway), so the durable payload is the observable oracle here.
+    {
+      const queued = one<Row>(
+        "SELECT id, payload_json FROM sync_outbox WHERE entity_type = 'order' AND entity_id = ? ORDER BY rowid DESC LIMIT 1",
+        String(refA.id),
+      );
+      const queuedPayload = String(queued?.payload_json ?? '');
+      console.log(
+        `[REF-19] queued payload present=${Boolean(queued)} carriesNote=${queuedPayload.includes('Autre')} refunds=${refundsFor(saleA.id).length} dedup=${count('refund_dedup', 'ticket_id = ?', saleA.id)}`,
+      );
+      expect(queued).toBeTruthy();
+      expect(queuedPayload).toContain('Autre');
+      // Exactly-once: one refund row and one dedup row for the ticket.
+      expect(refundsFor(saleA.id).length).toBe(1);
+      expect(count('refund_dedup', 'ticket_id = ?', saleA.id)).toBe(1);
+    }
 
     // (b) 'Autre' with Arabic + emoji + very long free text → stored verbatim.
     const saleB = await makeCashSale('REF P500', 1);

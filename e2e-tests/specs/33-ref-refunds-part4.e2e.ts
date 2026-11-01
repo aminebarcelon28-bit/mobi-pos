@@ -3036,6 +3036,26 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
     const rows1 = refundsFor(s1.id);
     console.log(`[REF-58] UI double-click: rows=${rows1.length} totals=${JSON.stringify(rows1.map((r) => Number(r.total)))} stock=${stockOf(P500)}`);
     expect(rows1.length).toBe(1);
+    // CARRY-OVER: the double-click must also produce exactly ONE ledger
+    // movement for the refund (a second INV/ledger delta would double-count
+    // stock). The DB is the authority, not the UI.
+    {
+      const refundId = String(rows1[0]?.id ?? '');
+      const invRows = Number(
+        one<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM inventory_ledger WHERE ref_id = ? AND reason = 'REFUND'",
+          refundId,
+        )?.n ?? -1,
+      );
+      const dedupRows = Number(
+        one<{ n: number }>('SELECT COUNT(*) AS n FROM refund_dedup WHERE ticket_id = ?', s1.id)?.n ?? -1,
+      );
+      console.log(
+        `[REF-58] ledger movements: inventoryLedger=${invRows} dedupRows=${dedupRows} refundRow=${refundId}`,
+      );
+      expect(invRows).toBe(1);
+      expect(dedupRows).toBe(1);
+    }
     // The restock of the refunded unit lands slightly after the refund row in a
     // busy batch; wait for convergence instead of reading one instant (the
     // assertion is unchanged: exactly one unit is back).
