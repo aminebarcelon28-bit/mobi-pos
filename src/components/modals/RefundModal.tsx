@@ -487,10 +487,6 @@ export const RefundModal: React.FC = () => {
         })
     : [];
 
-  // A write-off ("rebut", no restock) always needs an operator note - the field
-  // is offered for that lane regardless of the preset reason category (D13).
-  const writeOffSelected = activeRefundItems.some((i) => !i.restock);
-
   const totalRefundAmount = activeRefundItems.reduce((acc, i) => acc + i.totalRefundAmount, 0);
 
   // Module A submit gate (defense in depth — the list already locks foreign
@@ -1283,7 +1279,7 @@ export const RefundModal: React.FC = () => {
                         </select>
                       </div>
 
-                      {(writeOffSelected || refundReason === 'Autre') && (
+                      {refundReason === 'Autre' && (
                         <input
                           type="text"
                           ref={customReasonRef}
