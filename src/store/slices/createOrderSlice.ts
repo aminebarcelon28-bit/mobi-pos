@@ -2374,8 +2374,16 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // Policy read unavailable — the native gate still enforces in-txn.
       }
     }
+    // REF-06 / REF-67: an Avoir refund of a card/cheque-funded ticket is the
+    // only lane that actually delivers value - the card rail has no destination
+    // of record, and its value sits in `digitalShare` (the split's cashShare is
+    // 0 for a digital rail). The wallet leg must therefore carry the digital
+    // share too, or the native always-balance gate refuses the refund with
+    // "legs do not balance" and nothing is delivered.
     const walletAddBase =
-      funding.avoirShare + walletFromCashOverflow + (effectiveRefundMethod === 'Avoir Client' ? funding.cashShare : 0);
+      funding.avoirShare +
+      walletFromCashOverflow +
+      (effectiveRefundMethod === 'Avoir Client' ? funding.cashShare + funding.digitalShare : 0);
 
     // Chaos S5 — exchange reversal: the funding split caps cash at net paid,
     // so the trade-in value can never leak into cashOut — but without
