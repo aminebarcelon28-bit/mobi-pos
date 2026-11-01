@@ -3294,7 +3294,10 @@ describe('REF — refunds, returns & avoirs (batch 7 / part 4)', () => {
     expect(effCredit(C51) >= 0 || Number.isNaN(effCredit(C51))).toBe(true);
   });
 
-  it('[REF-87] extreme values: 2 000 000 000 DA units — two 1-unit refunds exact at the full price (leg B owner-gated)', async () => {
+  it('[REF-87] extreme values: 2 000 000 000 DA units — two 1-unit refunds exact at the full price (leg B owner-gated)', async function () {
+    // Extreme-value case: each 2e9 refund merges a huge customer ledger, so the
+    // default mocha budget cannot cover the sale + two refunds (D6/D9).
+    this.timeout(600000);
     const base = stockOf(PMAX);
     // Leg A — no discount: 2 × 2e9 = 4e9 cash. The commit is watched directly
     // (DB + UI liveness): run 1 died inside this sale — the pay dialog stayed
