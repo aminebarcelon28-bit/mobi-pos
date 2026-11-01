@@ -2074,7 +2074,12 @@ describe('REF — refunds, returns & avoirs (batch 8 / part 5)', () => {
     const afterPayload = custId !== null ? creditRaw(custId).payload : 0;
     const payloadDelta = custId !== null && Number.isFinite(afterPayload) ? Math.max(0, afterPayload - before.payload) : 0;
     const vaultDelta = Math.max(0, voucherTotal() - before.vault);
-    return (Number.isFinite(cash) ? cash : 0) + colDelta + payloadDelta + vaultDelta;
+    // The store-credit COLUMN and the JSON `storeCredit` are the SAME scalar
+    // (the column caches the payload). Summing both counted one wallet delivery
+    // twice: a 900 DA Avoir refund reported 1800 although the DB held exactly
+    // 900 (E-0125). Count the wallet once - whichever surface moved further.
+    const walletDelta = Math.max(colDelta, payloadDelta);
+    return (Number.isFinite(cash) ? cash : 0) + walletDelta + vaultDelta;
   }
 
   /** Bounded poll for a DB-derived number (eventual-convergence lanes: the
