@@ -610,9 +610,17 @@ export const RefundModal: React.FC = () => {
     // where large offline cash requires it and records it in-txn.
     const supervisorPinVerifiedAt = new Date().toISOString();
 
-    if (!submitGuardRef.current.tryEnter()) return; // second click in the same tick
+    if (!submitGuardRef.current.tryEnter()) {
+      refundDiag('gate:in-flight');
+      return; // second click in the same tick
+    }
     setIsSubmitting(true);
     try {
+      refundDiag('gate:entry', {
+        refundReason,
+        customReason,
+        restock: activeRefundItems.map((i) => i.restock),
+      });
       const finalReason = refundReason === 'Autre' && customReason.trim() ? customReason.trim() : refundReason;
       // Rebut sans restock: a reason note is mandatory (also enforced slice-side).
       const needsNote = activeRefundItems.some((i) => !i.restock);
@@ -622,6 +630,7 @@ export const RefundModal: React.FC = () => {
       // promises "Précisez le motif exact..." for Autre).
       const authoredNote = refundReason === 'Autre' ? customReason.trim() : finalReason.trim();
       if (needsNote && !authoredNote) {
+        refundDiag('gate:note', { needsNote, authoredNote, refundReason, customReason });
         showToast('Article(s) sans remise en stock : précisez un motif (note obligatoire).', 'error');
         setIsSubmitting(false);
         return;
