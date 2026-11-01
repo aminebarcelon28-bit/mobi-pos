@@ -40,3 +40,15 @@ row; note supplied → lands with the note stored verbatim in `defective_returns
 
 Nothing to reverse: no product behaviour changed for this case (only instrumentation was added, which is
 kept because it names the failing gate in future runs).
+
+## Update 2026-11-01 (stop point) — three attempts, one guardrail
+
+Three fixes were tried on this single symptom: (1) product-side note fallback to the field value (kept — it
+removes a real fast-typist hazard), (2) harness-side native `selectByVisibleText` gesture, (3) a
+verify-the-selection-stuck check that triggers (2). The controlled `<select>` still reverts to its default
+option on the next render, so the `Autre` detail view never persists and the note input is never rendered.
+Per the guardrails I stopped rather than trying a fourth variant.
+
+**Exit criteria (sharpened):** make the reason select **uncontrolled** (a ref + `defaultValue`, reading
+`ref.current.value` at submit like the note now does) or expose a documented test hook. Then the existing
+assertions prove the verbatim note end-to-end.
