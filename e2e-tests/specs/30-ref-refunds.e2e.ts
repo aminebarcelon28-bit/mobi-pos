@@ -1003,6 +1003,17 @@ describe('REF — refunds, returns & avoirs (batch 3)', () => {
     expect(refundsFor(saleA.id).length).toBe(0);
     await typeRefundCustomReason('Autre');
     await submitRefund(APP_PIN);
+    {
+      // Evidence for the write-off path: what did the app say to THIS submit?
+      const diag = await browser.execute(() => {
+        try {
+          return JSON.parse(localStorage.getItem('refund_diag') ?? '[]').slice(-6);
+        } catch {
+          return [];
+        }
+      });
+      console.log('[REF-19] diag after noted submit:', JSON.stringify(diag).slice(0, 1200));
+    }
     const rowsA = await waitRefundRows(saleA.id, 1);
     const refA = rowsA[0];
     const defA = one<Row>('SELECT * FROM defective_returns WHERE refund_id = ?', String(refA.id));
