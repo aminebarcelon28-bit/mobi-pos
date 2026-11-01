@@ -111,6 +111,23 @@ export const RefundModal: React.FC = () => {
     return () => refundDiag('unmount');
   }, []);
 
+  // Who closes the modal? A stack at the transition names the caller (E-0114:
+  // the dialog was torn down 27 ms after the cap switch on a huge ticket).
+  useEffect(() => {
+    const store = usePosStore as unknown as {
+      subscribe?: (fn: (s: { activeModal?: string }, p: { activeModal?: string }) => void) => () => void;
+    };
+    const unsubscribe = store.subscribe?.((state, prev) => {
+      if (prev?.activeModal === 'refund' && state?.activeModal !== 'refund') {
+        refundDiag('modal:closed', {
+          to: String(state?.activeModal ?? 'null'),
+          stack: (new Error().stack ?? '').split('\n').slice(1, 5).join(' | '),
+        });
+      }
+    });
+    return () => unsubscribe?.();
+  }, []);
+
   const submitGuardRef = useRef(createSubmitGuard());
   // REF-87: the PIN is bound to the ticket it was typed for; a PIN typed for
   // another ticket (or for an earlier refund) never authorises this one.
