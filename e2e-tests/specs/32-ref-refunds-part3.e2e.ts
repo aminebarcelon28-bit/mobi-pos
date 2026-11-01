@@ -648,6 +648,10 @@ async function submitAndSettle(
         lastRevalidateAt = Date.now();
         revalidations++;
         console.log(`[submitAndSettle] cash cap: switched to Avoir Client - revalidating #${revalidations}`);
+        // The switch is a React state update: clicking immediately re-sends the
+        // CASH method (the closure still holds it) and hits the cap again. Give
+        // the render a beat so the revalidation really is an Avoir refund.
+        await browser.pause(900);
         const retry = await submitOrLanded(ticketId, want);
         if (retry === 'landed') {
           return { landed: true, surface: 'grace: refund landed during the Avoir revalidation' };
