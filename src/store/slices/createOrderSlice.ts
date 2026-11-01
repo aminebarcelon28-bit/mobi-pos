@@ -2374,14 +2374,36 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         // Policy read unavailable — the native gate still enforces in-txn.
       }
     }
-    // REF-67: a card/cheque-funded ticket has NO cash to refund, and the card
-    // rail has no destination of record. The only lane that actually delivers is
-    // the Avoir, so when the operator chooses it the digital share rides the
-    // wallet leg (otherwise the refund would commit with nothing delivered).
-    const walletAddBase =
+    // REF-67: a card/cheque-funded ticket has NO cash to give back and the card
+    // rail has no destination of record. Read the ticket's OWN tenders (the
+    // funding split can be absent on cheque sales) and fail closed on a cash
+    // payout; an Avoir must then deliver the whole refund.
+    const ticketTenders = Array.isArray(originalTransaction.tenders) ? originalTransaction.tenders : [];
+    const nonCashTender = ticketTenders
+      .filter((tt) => /CIB|Edahabia|BaridiMob|Ch[eè]que/i.test(String(tt.method ?? '')))
+      .reduce((acc, tt) => acc + Number(tt.amount ?? 0), 0);
+    if (
+      effectiveRefundMethod === 'Espèces' &&
+      nonCashTender > 0 &&
+      physicalCashTendered(originalTransaction) <= 0
+    ) {
+      return { success: false, reason: 'CARD_REFUND_LANE_UNAVAILABLE' };
+    }
+    const voucherLeg = Math.max(
+      0,
+      Math.round(Number(funding.voucherShare ?? 0) || 0),
+    );
+    const debtLeg = Math.max(0, Math.round(Number(funding.debtShare ?? 0) || 0));
+    const avoirCoverage =
+      effectiveRefundMethod === 'Avoir Client'
+        ? Math.max(0, Math.round(netRefund) - voucherLeg - debtLeg)
+        : 0;
+    const walletAddBase = Math.max(
       funding.avoirShare +
-      walletFromCashOverflow +
-      (effectiveRefundMethod === 'Avoir Client' ? funding.cashShare + funding.digitalShare : 0);
+        walletFromCashOverflow +
+        (effectiveRefundMethod === 'Avoir Client' ? funding.cashShare + funding.digitalShare : 0),
+      avoirCoverage,
+    );
 
     // Chaos S5 — exchange reversal: the funding split caps cash at net paid,
     // so the trade-in value can never leak into cashOut — but without
