@@ -2969,6 +2969,30 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             };
           })()
         : null;
+      // REF-66: a CREDIT-funded sale whose receivable is already settled (or
+      // partly settled) has no debt left to relieve, and the ticket carries no
+      // cash. The refunded value would then have NO destination and the native
+      // always-balance gate refuses it (total 500 != cash 0 + wallet 0 + ...).
+      // The customer already paid that money to the shop, so the value is owed
+      // back: it rides the Avoir leg (the only lane that always delivers and
+      // needs no drawer movement), and the native writes the balance + its
+      // creditDeltaDzd row inside the same transaction.
+      if (funding.debtShare > 0 && origCustLive && origCust) {
+        const reliefPlanned = Math.max(0, Math.round(Number(debtReliefForNative?.relief ?? 0) || 0));
+        const voucherPlanned = Math.max(0, Math.round(Number(funding.voucherShare ?? 0) || 0));
+        const cashPlanned = Math.max(0, Math.round(Number(cashOut) || 0));
+        const uncoveredCredit = Math.max(
+          0,
+          Math.round(netRefund) - reliefPlanned - voucherPlanned - cashPlanned - walletLegForNative,
+        );
+        if (uncoveredCredit > 0) {
+          walletLegForNative += uncoveredCredit;
+          console.warn(
+            `[refund:credit] settled receivable: ${uncoveredCredit} DA routed to the Avoir leg (no debt left to relieve, no cash on the ticket)`,
+          );
+        }
+      }
+
       const voucherForNative = originalTransaction.voucherCode && funding.voucherShare > 0
         ? { code: originalTransaction.voucherCode, amount: Math.round(funding.voucherShare) }
         : null;
