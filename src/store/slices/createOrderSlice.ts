@@ -3194,10 +3194,10 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           // past the 120s supervisor window. The native already wrote the
           // ledger; the scalars are all the UI needs here.
           const payloadLen = Number(row.payload_len ?? 0);
-          const payload =
-            payloadLen > 4_000_000
-              ? {}
-              : (JSON.parse(String(row.json_payload ?? '{}')) as Record<string, unknown>);
+          const hugePayload = payloadLen > 4_000_000;
+          const payload = hugePayload
+            ? {}
+            : (JSON.parse(String(row.json_payload ?? '{}')) as Record<string, unknown>);
           return {
             ...(Array.isArray(payload.ledger)
               ? {
@@ -3288,12 +3288,20 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
           // Review F1: the outbox keeps one row per (entity, id), so enqueueing
           // the pre-commit object would replace a concurrent debit's payload.
           const committedCustomer = savedCust.ok ? savedCust.value : hydratedCustomer;
+          const hugeCustomer = Boolean((nativeCustomerPatch as Record<string, unknown>).__hugePayload);
+          if (hugeCustomer) {
+            // D6: stringifying an ~80MB customer payload on the renderer thread
+            // delayed the next refund past the supervisor window. The native row
+            // is marked pending; the boot recovery pass (case 23) enqueues it.
+            console.warn('[refund:sync] huge customer payload - enqueue deferred to the boot pass');
+          } else {
           await sql
             .enqueueGenericSync('customer', committedCustomer.id, committedCustomer as unknown as Record<string, unknown>)
             .catch((e: unknown) => {
               nativeWarnings.push('Dette client : mise en file de synchronisation différée — le remboursement reste valide.');
               console.warn('[refund:sync] customer enqueue deferred:', e);
             });
+          }
           void fireSync('customer', committedCustomer.id, committedCustomer);
           try {
             const { db } = await import('../../db/database');

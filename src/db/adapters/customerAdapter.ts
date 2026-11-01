@@ -247,6 +247,18 @@ export const customerAdapter = {
       const { getLocalDb, utcNowIso } = await import('../sqlPluginAdapter');
       const { buildRefundMirrorStatements } = await import('../refundMirrorSql');
       const db = await getLocalDb();
+      // D6: an ~80MB loyalty book must not be rewritten or cloned on the main
+      // thread. The NATIVE already wrote the wallet/loyalty rows inside its
+      // transaction, so the TS mirror is redundant above this size: skip it and
+      // let the boot rehydrate the UI from SQLite (which is the authority).
+      const probe = (await db
+        .select('SELECT LENGTH(json_payload) AS n FROM customers WHERE id = $1', [customer.id])
+        .catch(() => [])) as Array<{ n?: unknown }>;
+      const huge = Number(probe?.[0]?.n ?? 0) > 4_000_000;
+      if (huge) {
+        console.warn('[refund:mirror] huge customer payload - TS mirror skipped (native wrote it)');
+        return customer;
+      }
       const statements = buildRefundMirrorStatements(customer, utcNowIso(), newLedgerEntries);
       for (const statement of statements) {
         const affected = await db.execute(statement.sql, statement.args);
