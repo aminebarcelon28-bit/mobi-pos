@@ -942,11 +942,11 @@ export async function selectCustomer(name: string): Promise<void> {
   })) as boolean;
   // The page-click can be swallowed (button present but the handler not ready).
   // Verify the DIALOG actually opened; otherwise use the WebDriver click.
-  const dialogUp = async (): Promise<boolean> =>
+  const clientsDialogUp = async (): Promise<boolean> =>
     (await $(tid('customers-dialog')).isDisplayed().catch(() => false)) as boolean;
-  if (!opened || !(await dialogUp())) {
+  if (!opened || !(await clientsDialogUp())) {
     await browser.pause(200);
-    if (!(await dialogUp())) {
+    if (!(await clientsDialogUp())) {
       await (await $(tid('clients-button'))).click().catch(() => undefined);
     }
   }
