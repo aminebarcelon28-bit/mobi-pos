@@ -3192,6 +3192,18 @@ describe('REF — refunds, returns & avoirs (batch 8 / part 5)', () => {
     await refundOnly([{ pid: P67, qty: 1 }]);
     await selectRefundMethod('Espèces');
     const settled1 = await submitAndSettle(sale.id, 1);
+    try {
+      const diag = await browser.execute(() => {
+        try {
+          return JSON.parse(localStorage.getItem('refund_diag') ?? '[]');
+        } catch {
+          return [];
+        }
+      });
+      console.log('[REF-67 trace]', JSON.stringify((diag as unknown[]).slice(-10)).slice(0, 4000));
+    } catch {
+      /* diagnostics only */
+    }
     const ref1 = refundRowOf(sale.id);
     console.log(
       `[REF-67] Espèces attempt: landed=${settled1.landed} surface=${settled1.surface} refRow=${ref1 ? `${String(ref1.total)}/${String((jsonOf(ref1) as Row).refundMethod)}` : '(none)'}`,

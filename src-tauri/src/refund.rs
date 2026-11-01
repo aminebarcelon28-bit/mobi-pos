@@ -302,6 +302,9 @@ pub struct RefundRequest {
 #[serde(rename_all = "camelCase")]
 pub struct RefundOk {
     pub refund_id: String,
+    /// Diagnostics only: the money-gate inputs and the resulting wallet row.
+    #[serde(default)]
+    pub trace: Option<String>,
     pub receipt_number: String,
     pub ticket_status: String,
     pub ticket_version: i64,
@@ -2354,6 +2357,7 @@ fn apply_refund_in_txn(
     append_in_tx(tx, mac_key, &audit_req, &event_id, now)
         .map_err(|e| TrustError::op_failed(format!("audit: {e:?}")))?;
 
+    let mut gate_trace: Option<String> = None;
     // 16. Money conservation BEFORE COMMIT: the refund's total must equal the sum
     //     of the legs written in THIS transaction. The card lane has no
     //     destination of record in this schema, so a refund carrying a card leg is
@@ -2389,6 +2393,15 @@ fn apply_refund_in_txn(
                 card_leg_minor as f64 / 100.0
             ));
         }
+        gate_trace = Some(format!(
+            "total={total_reversed} cash={} wallet={wallet_applied} voucher={} debt={debt_relief_applied} card={card_leg_minor} customer={:?} wallet_after={:?} method={} cash_tendered_net={}",
+            req.cash_tendered.max(0),
+            req.voucher.as_ref().map(|v| v.amount).unwrap_or(0).max(0),
+            req.customer_id.as_deref(),
+            wallet_after,
+            req.method,
+            req.cash_tendered_net
+        ));
         // REF-67: the balance check runs for EVERY refund. It used to be skipped
         // whenever the ticket carried card/cheque tenders, which let a "cash"
         // refund commit its total while delivering nothing (drawer untouched,
@@ -2407,6 +2420,7 @@ fn apply_refund_in_txn(
     }
 
     Ok(RefundOk {
+        trace: gate_trace,
         refund_id: req.refund_id.clone(),
         receipt_number: req.receipt_number.clone(),
         ticket_status: new_status.to_string(),

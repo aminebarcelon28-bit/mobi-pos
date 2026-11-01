@@ -459,6 +459,14 @@ export async function refundSaleNative(
         ...(hydratedItems ? { refundedItems: hydratedItems } : {}),
       };
       await projectToDexie(projection);
+      if (ok && (ok as { trace?: unknown }).trace) {
+        try {
+          const { refundDiag } = await import('../../utils/refundDiag');
+          refundDiag('native:trace', { trace: String((ok as { trace?: unknown }).trace) });
+        } catch {
+          /* diagnostics only */
+        }
+      }
       return { success: true, ...ok, updatedOriginal: projection.updatedOriginal };
     } catch (err) {
       const parsed = parseRefundError(err);
