@@ -947,6 +947,7 @@ export async function selectCustomer(name: string): Promise<void> {
   if (!opened || !(await clientsDialogUp())) {
     await browser.pause(200);
     if (!(await clientsDialogUp())) {
+      console.log('[selectCustomer] page-context click did not open the dialog - falling back to the WebDriver click');
       await (await $(tid('clients-button'))).click().catch(() => undefined);
     }
   }

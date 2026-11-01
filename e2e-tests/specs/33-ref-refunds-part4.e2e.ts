@@ -575,6 +575,28 @@ async function visibleToasts(): Promise<string> {
  *  was still in flight). `opts.tag` adds a post-submit probe + progress lines
  *  that distinguish the two disabled-submit causes: `submitForeignLocked`
  *  (title is set, RefundModal.tsx:1169) vs an in-flight `isSubmitting`. */
+/** REF-51/87: a refund that LANDS while the modal re-renders (the cash-cap
+ *  switch, or the huge-ticket recompute) closes the dialog, so the helper can
+ *  no longer click. That is success, not a submit failure - the row is the
+ *  authority. Any other error still propagates. */
+async function submitOrLanded(
+  ticketId: string,
+  want: number,
+): Promise<'clicked' | 'landed' | 'gone'> {
+  try {
+    await submitRefund();
+    return 'clicked';
+  } catch (e) {
+    const msg = String((e as Error)?.message ?? '');
+    if (!/refund-submit not clickable|refund-dialog-closed-before-submit/.test(msg)) throw e;
+    for (let i = 0; i < 10; i += 1) {
+      await browser.pause(400);
+      if (refundsFor(ticketId).length >= want) return 'landed';
+    }
+    return 'gone';
+  }
+}
+
 async function submitAndSettle(
   ticketId: string,
   want: number,
@@ -585,7 +607,10 @@ async function submitAndSettle(
   const preToast = await visibleToasts();
   const prePage = await bodyTail();
   try {
-    await submitRefund();
+    const firstSubmit = await submitOrLanded(ticketId, want);
+  if (firstSubmit === 'landed') {
+    return { landed: true, surface: 'grace: refund landed while the modal re-rendered' };
+  }
   } catch (e) {
     if ((e as Error)?.message === 'refund-dialog-closed-before-submit') {
           if (await graceLanded(closedDialogBudget)) return { landed: true, surface: 'grace: dialog closed after the row landed' };
@@ -662,19 +687,15 @@ async function submitAndSettle(
         lastRevalidateAt = Date.now();
         revalidations++;
         console.log(`[submitAndSettle] cash cap: switched to Avoir Client - revalidating #${revalidations}`);
-        try {
-          await submitRefund();
-        } catch (e) {
-          // The switch can close the dialog instead of keeping it open for the
-          // confirmation click. That is the fail-closed shape the caller already
-          // accepts (the s2 branch): report a refusal surface, never hang.
-          if ((e as Error)?.message === 'refund-dialog-closed-before-submit') {
-          if (await graceLanded(closedDialogBudget)) return { landed: true, surface: 'grace: dialog closed after the row landed' };
-            const surface = (await visibleToasts().catch(() => '')) || 'refund-dialog-closed';
-            console.log(`[submitAndSettle ${tag}] cap switch closed the dialog: ${surface}`);
-            return { landed: false, surface };
-          }
-          throw e;
+        const retry = await submitOrLanded(ticketId, want);
+        if (retry === 'landed') {
+          return { landed: true, surface: 'grace: refund landed during the Avoir revalidation' };
+        }
+        if (retry === 'gone') {
+          // The dialog closed without landing: a refusal surface, never a hang.
+          const surface = (await visibleToasts().catch(() => '')) || 'refund-dialog-closed';
+          console.log(`[submitAndSettle ${tag}] cap switch closed the dialog: ${surface}`);
+          return { landed: false, surface };
         }
       }
       await browser.pause(300);
