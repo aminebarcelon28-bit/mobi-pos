@@ -54,6 +54,9 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 
 | 47 | A refund of a credit sale whose receivable is already settled had no destination (total 500, every leg 0) | **COVERED** | the uncovered value rides the Avoir leg (native writes balance + ledger row in-transaction); REF-66 K2 lands, credit +500, valueBack 500 (E-0128) |
 
+| 48 | Refund search cannot resolve a receipt typed with separators, nor a serial/IMEI | **COVERED** | alphanumeric-skeleton receipt match + serial facet; REF-57 9/9 facets green (E-0129) |
+| 49 | A refund chunk that landed while the modal re-rendered was reported as a submit failure | **COVERED** | `submitOrLanded` treats a landed row as success; REF-86 green (E-0129) |
+
 ## Notes
 
 - Items 1–7 and 10–19 are covered by tests that run in CI-local (`cargo test` + the diag specs).
