@@ -105,3 +105,13 @@ Small tickets hit the same switch and **do not** close, so the teardown is tied 
 `activeModal: null`. The zustand notification stack does not name the caller. Next attempt must tag the
 `activeModal: null` **inside set() calls only** (the first brute-force tag broke an object literal and was
 reverted), run one batch, and read the site tag.
+
+## Update 2026-11-01 (per-site tags) — one close found, one remains
+
+Per-site tags identified the first offender: the **late checkout completion** (`createOrderSlice`'s final
+`set`) runs during a huge-ticket refund and used to close whatever modal was open. That is now guarded (it
+only closes its own `payment` modal) — a correct fix that stays.
+
+The dialog still goes null **172 ms later with no tag**, so a second, untagged site closes it:
+`closeModal()` (an arrow-body `set`, deliberately skipped by the tagger) or `createCartSlice:765`.
+Those two are the next tags to add (E-0116).
