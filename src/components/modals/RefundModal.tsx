@@ -221,10 +221,19 @@ export const RefundModal: React.FC = () => {
   );
   const filteredTransactionsMemo = useMemo(() => {
     const q = foldForSearch(debouncedSearch.trim());
+  // Separator-insensitive receipt comparison (REF-57 spaces facet).
+  const compactForSearch = (value: string | number | null | undefined): string =>
+    foldForSearch(value).replace(/[^a-z0-9]/g, '');
+  const compactReceipt = compactForSearch(q);
     if (!q) return eligibleTransactionsMemo;
     return eligibleTransactionsMemo.filter((t) => {
       return (
         foldForSearch(t.receiptNumber).includes(q) ||
+        // REF-57: a receipt typed with separators ("REC 2026 1101 JGLBI")
+        // must still resolve - compare the alphanumeric skeletons. Guarded by
+        // a minimum length so a 1-2 char query cannot match everything.
+        (compactReceipt.length >= 4 &&
+          compactForSearch(t.receiptNumber).includes(compactReceipt)) ||
         (t.customer?.name ? foldForSearch(t.customer.name).includes(q) : false) ||
         (t.customer?.phone ? (t.customer.phone.includes(debouncedSearch.trim()) || foldForSearch(t.customer.phone).includes(q)) : false) ||
         (t.items || []).some(

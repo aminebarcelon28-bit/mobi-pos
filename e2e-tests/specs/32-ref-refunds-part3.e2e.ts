@@ -637,7 +637,9 @@ async function submitAndSettle(
     const fresh = preToast && toast.includes(preToast) ? toast.split(preToast).join("") : toast;
     // Offline cash cap: the app re-arms the refund as Avoir Client and asks
     // for one more validation. This toast is a prompt, never a refusal.
-    if (fresh.includes('basculée en Avoir Client')) {
+    // The prompt is accented; match structurally (the accented literal never
+    // matched the built bundle, so the Avoir revalidation never ran: REF-91).
+    if ((/bascul/i.test(fresh) && fresh.includes('Avoir Client')) || (/[Pp]lafond/.test(fresh) && fresh.includes('Avoir Client'))) {
       // Re-validate on a 1.2 s cadence, up to 4 attempts: the prompt can
       // persist VERBATIM across a re-validation (run 7: REF-86 B chunk 3
       // waited out the whole 16 s window because the unchanged toast text
