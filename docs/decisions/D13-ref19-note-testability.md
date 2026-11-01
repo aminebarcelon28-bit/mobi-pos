@@ -52,3 +52,16 @@ Per the guardrails I stopped rather than trying a fourth variant.
 **Exit criteria (sharpened):** make the reason select **uncontrolled** (a ref + `defaultValue`, reading
 `ref.current.value` at submit like the note now does) or expose a documented test hook. Then the existing
 assertions prove the verbatim note end-to-end.
+
+## Update 2026-11-01 (exit implemented, one unknown left)
+
+The exit criterion was implemented: the reason `<select>` is **uncontrolled** (ref + `defaultValue`, the submit
+path reads `ref.current.value`), the note field is offered for **every write-off** (not only the `Autre`
+category), and the note falls back to the field value. These are kept: the full 30/31/32/34 batch stayed at
+58/59 (no regression), and they remove a genuine fast-typist hazard.
+
+REF-19 is still red, but the remaining cause is now a single, named unknown: the handler logs `submit:start`
+and then **nothing** — none of the instrumented gates fires (`no-ticket`, `no-shift`, `foreign`,
+`no-items`, `zero-amount`, `in-flight`, `entry`) — so an exception is thrown between `submit:start` /
+`beginRefundFlight()` and the first gate. The next step is a `try/catch` around that head that records the
+error text, not another selector variant.
