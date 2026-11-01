@@ -50,3 +50,17 @@ being prepared, and the run aborts at +16 s (E-0111). The money layer (payload s
 clamp) is not the blocker any more. Next change is product-side: keep the RefundModal's dialog and PIN field
 mounted through the method switch (or re-submit automatically after the switch) instead of relying on the
 test to catch the re-render.
+
+## Update 2026-11-01 (withdrawn experiment)
+
+An auto-resubmit of the Avoir refund after the cash-cap switch was tried and **withdrawn**: it regressed
+REF-51 and left REF-87 red (E-0112). Reverted in full.
+
+Measurement that now closes the diagnosis: the wallet/loyalty write no longer parses the document in Rust
+(4.4 s for 200k rows), yet an app refund still takes ~45 s because **the same ~80 MB document is rewritten
+five times** inside SQLite (loyalty json_set, credit json_set, two ledger json_inserts, TS mirror) — ~400 MB
+of WAL, each with a Windows fsync. That is not a code-path bug; it is the size of the document.
+
+**Therefore the only correct fix is D6 option A: aggregate the tranche ledger** (one row per milestone award
+carrying a range/count), with a dry-run migration on a copy and a backup step, then REF-87 re-enabled
+unchanged.
