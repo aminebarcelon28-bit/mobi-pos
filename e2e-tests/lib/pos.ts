@@ -1760,7 +1760,39 @@ export async function clickRefundSubmit(times = 1): Promise<boolean> {
     await browser.pause(200);
     current = await state();
   }
-  if (current !== 'ready') return false;
+  if (current !== 'ready') {
+    // Diagnostics (REF-86/91 batch class): name WHY the submit is not ready -
+    // the staged ticket, the selected lines and the modal lifecycle ring buffer.
+    const diag = await browser
+      .execute(() => {
+        const vis = (d: HTMLElement) => {
+          try {
+            const cs = getComputedStyle(d);
+            if (!cs || cs.display === 'none' || cs.visibility === 'hidden') return false;
+            const r = d.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          } catch {
+            return false;
+          }
+        };
+        const dlg = ([...document.querySelectorAll('[data-testid="refund-dialog"]')] as HTMLElement[]).find(vis);
+        const picker = Boolean(dlg && dlg.querySelector('[data-testid="refund-search"]'));
+        const checks = dlg ? dlg.querySelectorAll('[data-testid^="refund-check-"]').length : 0;
+        const checked = dlg
+          ? ([...dlg.querySelectorAll('[data-testid^="refund-check-"]')] as HTMLInputElement[]).filter((c) => c.checked).length
+          : 0;
+        let tail: unknown[] = [];
+        try {
+          tail = (JSON.parse(localStorage.getItem('refund_diag') ?? '[]') as unknown[]).slice(-8);
+        } catch {
+          tail = [];
+        }
+        return { state: '${current}', picker, checks, checked, tail };
+      })
+      .catch(() => ({ state: 'diag-failed' }));
+    console.warn('[refund-submit] not ready:', JSON.stringify(diag).slice(0, 2000));
+    return false;
+  }
 
   const ok = (await browser.execute(
     (n: number) => {
