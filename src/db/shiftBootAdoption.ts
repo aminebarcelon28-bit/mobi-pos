@@ -51,16 +51,45 @@ async function adopt(): Promise<BootAdoptionReport> {
     .filter((s) => s.status === 'OPEN' && (!s.deviceId || s.deviceId === deviceId))
     .toArray()) as CashSession[];
 
+  const dexieCandidates: CashSession[] = [];
+  for (const session of dexieOpen) {
+    const durableRows = await sql.select<{
+      status: string;
+      closed_at: string | null;
+      closing_note: string | null;
+    }>(
+      'SELECT status, closed_at, closing_note FROM cash_sessions WHERE id = ?',
+      [session.id],
+    );
+    const durable = durableRows[0];
+    if (durable && !['OPEN', 'CLOSING'].includes(durable.status)) {
+      const closed: CashSession = {
+        ...session,
+        status: 'CLOSED',
+        closedAt: durable.closed_at || session.closedAt || now,
+        closingNote: durable.closing_note ?? session.closingNote,
+        updatedAt: now,
+      };
+      await dexieDb.cashSessions.put(closed);
+      await fireSync('cash_session', closed.id, closed).catch((e) =>
+        console.warn('[SHIFT-BOOT] fireSync stale mirror close failed', e)
+      );
+      report.dexieDemoted.push(session.id);
+      continue;
+    }
+    dexieCandidates.push(session);
+  }
+
   const sqliteLive = await sql.select<{ id: string; opened_at: string }>(
     `SELECT id, opened_at FROM cash_sessions
-      WHERE device_id = ? AND status IN ('OPEN','CLOSING')
+      WHERE (device_id = ? OR device_id IS NULL OR TRIM(device_id) = '') AND status IN ('OPEN','CLOSING')
       ORDER BY opened_at DESC, id DESC`,
     [deviceId],
   );
 
   // 3. Survivor
   const pool = [
-    ...dexieOpen.map((s) => ({ id: s.id, t: ts(s) })),
+    ...dexieCandidates.map((s) => ({ id: s.id, t: ts(s) })),
     ...sqliteLive.map((s) => ({ id: s.id, t: ts(s) })),
   ];
   const keep = pool.length ? pool.reduce((a, b) => newest(a, b, (x) => x.t)) : null;
@@ -68,7 +97,7 @@ async function adopt(): Promise<BootAdoptionReport> {
 
   if (keep) {
     // 4. Demote Dexie losers
-    for (const s of dexieOpen.filter((x) => x.id !== keep.id)) {
+    for (const s of dexieCandidates.filter((x) => x.id !== keep.id)) {
       const closed: CashSession = {
         ...s,
         status: 'CLOSED',
@@ -104,7 +133,7 @@ async function adopt(): Promise<BootAdoptionReport> {
 
     // 6. Adopt the survivor if it is in Dexie but absent from SQLite
     const inSqlite = await sql.select<{ id: string }>('SELECT id FROM cash_sessions WHERE id = ?', [keep.id]);
-    const survivor = dexieOpen.find((s) => s.id === keep.id);
+    const survivor = dexieCandidates.find((s) => s.id === keep.id);
     if (inSqlite.length === 0 && survivor) {
       await adoptSessionIntoSqlite(sql, { ...survivor, deviceId });
       report.adopted = true;

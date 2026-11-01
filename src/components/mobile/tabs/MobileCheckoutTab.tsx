@@ -513,8 +513,10 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
           }
         } else {
           showToast(
-            reason === 'NO_ACTIVE_SHIFT'
+            reason === 'NO_ACTIVE_SHIFT' || reason === 'NO_OPEN_SHIFT'
               ? "Aucun shift ouvert — ouvrez un shift avant d'encaisser."
+              : reason === 'FOREIGN_SHIFT'
+              ? 'Ce tiroir appartient à un autre terminal — vente refusée.'
               : reason && reason.startsWith('INSUFFICIENT_STOCK')
               ? `Stock insuffisant : ${reason.slice('INSUFFICIENT_STOCK:'.length)}`
               : reason && reason.startsWith('IMEI_ALREADY_SOLD')
@@ -655,8 +657,10 @@ export const MobileCheckoutTab: React.FC<MobileCheckoutTabProps> = ({ onNavigate
           }
         } else {
           showToast(
-            reason === 'NO_ACTIVE_SHIFT'
+            reason === 'NO_ACTIVE_SHIFT' || reason === 'NO_OPEN_SHIFT'
               ? "Aucun shift ouvert — ouvrez un shift avant d'encaisser."
+              : reason === 'FOREIGN_SHIFT'
+              ? 'Ce tiroir appartient à un autre terminal — vente refusée.'
               : reason && reason.startsWith('INSUFFICIENT_STOCK')
               ? `Stock insuffisant : ${reason.slice('INSUFFICIENT_STOCK:'.length)}`
               : reason && reason.startsWith('IMEI_ALREADY_SOLD')

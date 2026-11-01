@@ -120,6 +120,28 @@
     "src/db/adapters/shiftAdapter.ts:51"
    ]
   },
+  "checkout shift gate": {
+   "exists": true,
+   "evidence": [
+    "src/store/slices/createOrderSlice.ts:1184",
+    "src-tauri/src/checkout.rs:446",
+    "src/db/sqlPluginAdapter.ts:1649"
+   ]
+  },
+  "shift close reconciliation": {
+   "exists": true,
+   "evidence": [
+    "src/db/shiftBootAdoption.ts:47"
+   ]
+  },
+    "expense movement attribution": {
+     "exists": true,
+     "evidence": [
+        "src/store/slices/createUISlice.ts:1639",
+        "src/store/slices/createShiftSlice.ts:114",
+        "src/db/adapters/shiftAdapter.ts:574"
+     ]
+    },
   "cash drawer hardware (kick)": {
    "exists": true,
    "evidence": [
@@ -133,7 +155,15 @@
    "evidence": [
     "src/db/adapters/refundNative.ts:5",
     "src/db/adapters/shiftSqlite.ts:94",
-    "src/db/sqlPluginAdapter.ts:280"
+    "src/db/sqlPluginAdapter.ts:280",
+    "src-tauri/src/refund.rs:2215"
+   ]
+  },
+  "PIN credential security": {
+   "exists": true,
+   "evidence": [
+    "src-tauri/src/trust_core/pin.rs:951",
+    "src/components/LockScreenOverlay.tsx:89"
    ]
   },
   "void sale": {

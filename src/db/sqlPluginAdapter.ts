@@ -1656,6 +1656,9 @@ async function writeCheckoutAtomicInner(input: CheckoutWriteInput): Promise<Chec
       if (
         errMsg.includes('INSUFFICIENT_STOCK') ||
         errMsg.includes('IMEI_ALREADY_SOLD') ||
+        errMsg.includes('NO_ACTIVE_SHIFT') ||
+        errMsg.includes('NO_OPEN_SHIFT') ||
+        errMsg.includes('FOREIGN_SHIFT') ||
         errMsg.includes('BUSY:')
       ) {
         throw new Error(errMsg);

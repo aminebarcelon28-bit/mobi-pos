@@ -1394,13 +1394,19 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
       } catch (e) {
         console.error('Checkout persistence failed (SQLite/Dexie write error):', e);
         const msg = e instanceof Error ? e.message : String(e);
+        const shiftDenial = ['NO_ACTIVE_SHIFT', 'NO_OPEN_SHIFT', 'FOREIGN_SHIFT'].find((code) =>
+          msg.includes(code)
+        );
         // Surface the atomic oversell guard (second line of defense) with its
         // short-SKU detail instead of a generic persistence failure.
-        if (msg.startsWith('INSUFFICIENT_STOCK')) {
+        if (
+          msg.startsWith('INSUFFICIENT_STOCK') ||
+          shiftDenial
+        ) {
           // F2: business rejection — must never auto-replay on boot (a
           // restock-then-reboot would silently charge the customer).
           await clearCheckoutRecoveryIntent(transactionId).catch(() => {});
-          return { success: false, reason: msg };
+          return { success: false, reason: shiftDenial || msg };
         }
         // Propagate a truncated single-line detail so the UI can log/show the
         // real SQLite cause (CHECK/UNIQUE/no-such-column) instead of a blind

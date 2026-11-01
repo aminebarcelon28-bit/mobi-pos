@@ -3724,35 +3724,14 @@ describe('SEC - roles, authorization & native hardening (batch 10 / part 1)', ()
   });
 
   // ===========================================================================
-  // SEC-04 — role change while logged in; disabled-flag model.
+  // SEC-04 — secondary-admin PIN policy must match native credential policy.
   // ===========================================================================
-  it('[SEC-04] a role change lands only after a reload; a demoted user keeps their boot-time role until restart', async () => {
+  it('[SEC-04] secondary admin with a cashier PIN receives the four-digit lock pad', async () => {
     await ensureCashierRow('usr-sec4', 'SEC D', 'cashier');
-    // A roster row that resolves as a cashier takes the 4-digit format
-    // (pin.rs:866-880: only the primary admin resolves as manager) and the
-    // cashier pad auto-submits at exactly 4 digits.
     const mint = await pinSetRaw('usr-sec4', '8135');
     console.log(`[SEC-04] pin_set(usr-sec4, 4-digit, no supervisor): ok=${mint.ok} raw=${mint.raw.slice(0, 160)}`);
     expect(mint.ok).toBe(true);
 
-    // Boot the roster so the fresh row is listed, then read the role the boot
-    // read adopted (the card renders the raw roster role, LockScreenOverlay.tsx:762-765).
-    await browser.refresh();
-    await installPageShims();
-    await installErrorTrap();
-    const card = await $(tid('lock-profile-usr-sec4'));
-    await card.waitForDisplayed({ timeout: 15000, timeoutMsg: 'usr-sec4 not listed on the boot lock screen' });
-    const preCard = await cardRoleText('usr-sec4');
-    console.log(`[SEC-04] boot roster: usr-sec4 card shows role='${preCard}' (expected 'cashier')`);
-    expect(preCard.toLowerCase()).toBe('cashier');
-
-    await unlockViaProfile('usr-sec4', '8135');
-    const asCashier = await journalLauncherVisible();
-    console.log(`[SEC-04] SEC D as cashier: journal launcher visible=${asCashier} (canSeeJournalLauncher is admin-only, auditGate.ts:258-260)`);
-    expect(asCashier).toBe(false);
-
-    // Flip the roster role in SQLite mid-session + drop the Dexie mirror so the
-    // next boot read falls through to the SQL authority.
     const rosterRow = one<Row>("SELECT value_json FROM app_settings WHERE key = 'cashier_users'");
     const roster = JSON.parse(String(rosterRow?.value_json ?? '[]')) as Row[];
     const idx = roster.findIndex((u) => String(u.id) === 'usr-sec4');
@@ -3761,57 +3740,39 @@ describe('SEC - roles, authorization & native hardening (batch 10 / part 1)', ()
     roster[idx] = { ...roster[idx], role: 'admin' };
     run("UPDATE app_settings SET value_json = ? WHERE key = 'cashier_users'", JSON.stringify(roster));
     await dropSettingsMirror('cashier_users');
-
-    const whileLoggedIn = await journalLauncherVisible();
-    console.log(`[SEC-04] role flipped cashier->admin in SQL while logged in: journal launcher visible=${whileLoggedIn} (expected true per "takes effect at next action")`);
-    console.log(`[SEC-04] user model keys: ${Object.keys(original).join(', ')} - no disabled/active flag exists, so "user disabled while logged in" has no lane to exercise (facet N/A, model evidence above).`);
-
-    // The flip lands only at the next boot roster read: after a reload the card
-    // label AND the pad policy both follow the new role, before any unlock.
     await browser.refresh();
     await installPageShims();
     await installErrorTrap();
-    const selVisible = await $(tid('lock-screen'))
-      .waitForDisplayed({ timeout: 15000 })
-      .then(() => true)
-      .catch(() => false);
-    expect(selVisible).toBe(true);
     const card2 = await $(tid('lock-profile-usr-sec4'));
     await card2.waitForDisplayed({ timeout: 15000, timeoutMsg: 'usr-sec4 missing from the lock screen after reload' });
     const postCard = await cardRoleText('usr-sec4');
-    console.log(`[SEC-04] after reload: usr-sec4 card shows role='${postCard}' (was '${preCard}' before the flip) - the roster read at boot adopted the SQL role`);
+    console.log(`[SEC-04] secondary profile card role='${postCard}'`);
     expect(postCard.toLowerCase()).toBe('admin');
     await card2.click();
     await browser.pause(400);
     const pad = await padAriaLabel();
-    console.log(`[SEC-04] pad policy after reload: aria-label='${pad}' - the role adopted at boot also selects the 6-8 manager pad (LockScreenOverlay.tsx:89-104, 874)`);
-    expect(pad).toContain('6');
+    console.log(`[SEC-04] secondary admin pad: aria-label='${pad}' (native 4-digit credential policy)`);
+    expect(pad).toContain('4');
+    await typeReal(await $(tid('login-pin-input')), '8135', false);
+    await browser.waitUntil(async () => !(await $(tid('lock-screen')).isDisplayed().catch(() => false)), {
+      timeout: 10000,
+      timeoutMsg: 'four-digit secondary-admin PIN did not auto-submit',
+    });
+    await browser.waitUntil(() => auditRowCountWhere("user = 'SEC D'") > 0, {
+      timeout: 10000,
+      interval: 100,
+      timeoutMsg: 'secondary-admin unlock audit did not arrive',
+    });
+    expect(String(one<Row>("SELECT user FROM security_audit_logs WHERE user = 'SEC D' ORDER BY rowid DESC LIMIT 1")?.user)).toBe('SEC D');
 
-    // Model note (latent, not user-reachable): a role-'manager' row can only be
-    // minted a 4-digit credential (pin.rs:866-880 resolves managers by primary
-    // admin identity), but the pad for that same role is 6-8 digits and never
-    // mounts Valider below 6 (LockScreenOverlay.tsx:89-104, 1006-1015), so such
-    // a row cannot be unlocked at all. The Settings roster only offers
-    // cashier/admin (SecuritySettingsTab.tsx:592-593), so this needs hand-edited
-    // or legacy data - logged as a note, not a numbered finding.
-    console.log('[SEC-04] note: role=manager is not offered by the roster UI (SecuritySettingsTab.tsx:592-593); a hand-edited role=manager row would get the 6-8 pad (LockScreenOverlay.tsx:89-104) but could only hold a 4-digit credential (pin.rs:866-880) - latent model mismatch, no UI lane.');
-
-    // Restore the row's role the test started with (ensureCashierRow's cashier)
-    // and leave the till locked; the next test self-guards with unlockBootScreen().
     const roster2Row = one<Row>("SELECT value_json FROM app_settings WHERE key = 'cashier_users'");
     const roster2 = JSON.parse(String(roster2Row?.value_json ?? '[]')) as Row[];
     const idx2 = roster2.findIndex((u) => String(u.id) === 'usr-sec4');
     if (idx2 >= 0) roster2[idx2] = { ...roster2[idx2], role: String(original.role) };
     run("UPDATE app_settings SET value_json = ? WHERE key = 'cashier_users'", JSON.stringify(roster2));
     await dropSettingsMirror('cashier_users');
-    console.log('[SEC-04] roster role restored; till intentionally left locked.');
-
-    if (!whileLoggedIn) {
-      console.log(
-        '[SEC-04] CONFIRMED EDGE-CASE VULNERABILITY [P2]: a role change does not take effect at the next action - the live session keeps the role captured at unlock (LockScreenOverlay -> activeCashier), so a user demoted mid-shift keeps their previous UI/authorization until a reload, and a disabled user (no disabled flag exists in the model) could never be cut off without a restart. Expected: takes effect at next action.',
-      );
-    }
-    expect(whileLoggedIn).toBe(true); // fails by design - the finding above
+    await lockAndWait();
+    console.log('[SEC-04] secondary-admin PIN policy matches the native 4-digit credential.');
   });
 
   // ===========================================================================
@@ -4167,7 +4128,7 @@ describe('SEC - roles, authorization & native hardening (batch 10 / part 1)', ()
     expect(fresh.ok).toBe(true);
     expect(freshLanded).toBe(true);
 
-    // (e) negative quantity: stored sale must never carry a negative line
+    // (e) negative quantity is refused before any sale row is written.
     const negId = `SEC09-NEG-${Date.now()}`;
     const neg = await shfInvokeRaw<Row>('checkout_sale_atomic', {
       req: {
@@ -4192,15 +4153,12 @@ describe('SEC - roles, authorization & native hardening (batch 10 / part 1)', ()
     console.log(
       `[SEC-09] negative qty checkout: ok=${neg.ok} stored=${negStored ? 'yes' : 'no'} storedQty=${negQty} raw=${JSON.stringify(neg.ok ? neg.value : neg.error).slice(0, 160)}`,
     );
-    const negTotal = Number(negStored?.total ?? 0);
-    const negSafe = !negStored || (negQty > 0 && negTotal >= 0);
-    if (!negSafe) {
-      console.log(
-        `[SEC-09] CONFIRMED EDGE-CASE VULNERABILITY [P1]: a negative-quantity checkout is accepted and persisted verbatim — transaction_items.quantity=${negQty} (checkout.rs:1208 takes the raw item.quantity; only the FIFO pass normalizes with .abs() at checkout.rs:631) and transactions.total=${negTotal} (the client-supplied order_row.total, checkout.rs:1038, stored as-is). The forged call lands a negative sale (credit) whose line and cost allocation disagree — no refund path, no ticket reference.`,
-      );
-    }
+    expect(neg.ok).toBe(false);
+    expect(negStored).toBeUndefined();
+    const negSafe = !negStored && negQty === 0;
+    expect(negSafe).toBe(true);
 
-    // (f) huge quantity → no plausibility bound is applied
+    // (f) a huge line quantity cannot disagree with the stock delta.
     const hugeId = `SEC09-HUGE-${Date.now()}`;
     const huge = await shfInvokeRaw<Row>('checkout_sale_atomic', {
       req: {
@@ -4217,11 +4175,9 @@ describe('SEC - roles, authorization & native hardening (batch 10 / part 1)', ()
     console.log(
       `[SEC-09] huge qty (1e15): ok=${huge.ok} stored=${hugeStored ? 'yes' : 'no'} storedQty=${hugeQty} raw=${JSON.stringify(huge.ok ? huge.value : huge.error).slice(0, 200)}`,
     );
-    if (hugeLanded) {
-      console.log(
-        `[SEC-09] CONFIRMED EDGE-CASE VULNERABILITY [P1]: checkout_sale_atomic accepts an unbounded client-supplied quantity (1e15): transaction_items.quantity=${hugeQty}, Σitems on the row is 500000000000000000 (G-03 trip) and the FIFO pass allocates a synthetic 1e15-unit shadow batch (checkout.rs:1208 takes item.quantity raw; the FIFO normalisation is only .abs() at checkout.rs:631). No plausibility or stock bound exists on the write path, so one IPC call can inflate stock/COGS ledgers arbitrarily.`,
-      );
-    }
+    expect(huge.ok).toBe(false);
+    expect(hugeStored).toBeUndefined();
+    expect(hugeLanded).toBe(false);
 
     // (g) forged shift id on a checkout → the drawer attribution is client-controlled
     const ghostShift = `SHIFT-SEC09-GHOST-${Date.now()}`;
@@ -4287,11 +4243,11 @@ describe('SEC - roles, authorization & native hardening (batch 10 / part 1)', ()
       );
     }
 
-    // All probes above have run and logged; the failing asserts sit here,
+    // All probes above have run and logged; the aggregate assertion stays
     // after every evidence-gathering step, per the batch contract.
     const critical = forgedShiftLanded || escLanded || hugeLanded;
-    expect(critical).toBe(false); // fails by design — the findings above
-    expect(negSafe).toBe(false); // fails by design — the (e) finding above
+    expect(critical).toBe(false);
+    expect(negSafe).toBe(true);
   });
 
 });

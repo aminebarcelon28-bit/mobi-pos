@@ -479,19 +479,32 @@ export async function scanCode(
   await search.waitForDisplayed({ timeout: 20000 });
   await selectAllNoKeys(search);
   await browser.keys(code.split(''));
+  const typedValue = await search.getValue().catch(() => '');
+  if (typedValue !== code) {
+    throw new Error(
+      `HARNESS_SCAN_INPUT_MISMATCH: expected search input ${JSON.stringify(code)}, got ${JSON.stringify(typedValue)}`,
+    );
+  }
   await browser.keys(['Enter']);
 
   let dispatches = 1;
-  let events = (await waitScanEventsAtLeast(eventsBefore + 1, timeoutMs)) - eventsBefore;
-  if (events === 0) {
-    // Re-check immediately before the fallback: only a burst that never
-    // decoded may be replayed. A decoded-but-unrecognized scan must not be.
-    events = (await waitScanEventsAtLeast(eventsBefore + 1, 100)) - eventsBefore;
-    if (events === 0) {
-      await wedgeBurstSynthetic(code);
-      dispatches += 1;
-      events = (await waitScanEventsAtLeast(eventsBefore + 1, timeoutMs)) - eventsBefore;
-    }
+  // The app clears the catalog input synchronously when the wedge burst is
+  // accepted, before processScan's async receipt lookup. The generic scan
+  // event is emitted after that lookup, so it is too late to decide whether
+  // replaying the burst is safe (HARNESS-07). Require evidence that typing
+  // was consumed, and use the clear as the immediate decode acknowledgment.
+  const inputCleared = await waitForSearchClear(search, 300);
+  let events = (await waitScanEventsAtLeast(eventsBefore + 1, 100)) - eventsBefore;
+  if (events === 0 && !inputCleared) {
+    // The full typed value remained in the input and no app event arrived;
+    // only this unconsumed burst is safe to replay through the synthetic path.
+    await wedgeBurstSynthetic(code);
+    dispatches += 1;
+    events = (await waitScanEventsAtLeast(eventsBefore + 1, timeoutMs)) - eventsBefore;
+  } else if (events === 0) {
+    // The decode was acknowledged by the input clear; wait for its delayed
+    // post-lookup event without sending a second scan.
+    events = (await waitScanEventsAtLeast(eventsBefore + 1, timeoutMs)) - eventsBefore;
   }
 
   let changed = false;
@@ -534,6 +547,23 @@ async function waitScanEventsAtLeast(min: number, timeoutMs: number): Promise<nu
     await new Promise((r) => setTimeout(r, 25));
   }
   return n;
+}
+
+/** The app clears catalog-search synchronously when it accepts a wedge burst. */
+async function waitForSearchClear(
+  search: Awaited<ReturnType<typeof $>>,
+  timeoutMs: number,
+): Promise<boolean> {
+  try {
+    await browser.waitUntil(async () => (await search.getValue().catch(() => null)) === '', {
+      timeout: timeoutMs,
+      interval: 25,
+      timeoutMsg: 'scanner did not consume the typed catalog-search value',
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** True once the cart total differs from `before` (poll). */

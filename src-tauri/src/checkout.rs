@@ -437,6 +437,89 @@ pub fn apply_checkout_in_txn(
         }
     }
 
+    let shift_id = req
+        .order_row
+        .shift_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| conflict("NO_ACTIVE_SHIFT"))?;
+    let session: Option<(String, Option<String>)> = tx
+        .query_row(
+            "SELECT status, device_id FROM cash_sessions WHERE id = ?1",
+            [shift_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map(Some)
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(TrustError::op_failed(format!("checkout shift read: {other}"))),
+        })?;
+    let Some((shift_status, shift_device_id)) = session else {
+        return Err(conflict("NO_OPEN_SHIFT"));
+    };
+    if shift_status != "OPEN" {
+        return Err(conflict("NO_OPEN_SHIFT"));
+    }
+    if let Some(bound_device) = shift_device_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if bound_device != device_id.as_str() {
+            return Err(conflict("FOREIGN_SHIFT"));
+        }
+    } else {
+        // Legacy shift opened before cash_sessions.device_id existed: it has no
+        // owner yet, and refusing it would block every sale after an upgrade
+        // until the merchant closes and reopens the shift. Adopt it to THIS
+        // device inside the same transaction, so the ownership is durable from
+        // this sale on and a later foreign claim is still refused.
+        tx.execute(
+            "UPDATE cash_sessions SET device_id = ?2 WHERE id = ?1 AND (device_id IS NULL OR TRIM(device_id) = '')",
+            params![shift_id, device_id],
+        )
+        .map_err(|e| map_rusqlite("shift adopt", e))?;
+    }
+
+    let mut item_delta_by_product: HashMap<String, f64> = HashMap::new();
+    for item in &req.items {
+        let quantity = item.quantity.unwrap_or(1.0);
+        if !quantity.is_finite() || quantity <= 0.0 {
+            return Err(conflict("INVALID_QUANTITY"));
+        }
+        let Some(product_id) = item.product_id.as_deref().filter(|id| !id.trim().is_empty()) else {
+            return Err(conflict("INVALID_QUANTITY_DELTA:missing_product"));
+        };
+        let signed_quantity = if item.is_return.unwrap_or(false) {
+            quantity
+        } else {
+            -quantity
+        };
+        *item_delta_by_product
+            .entry(product_id.to_string())
+            .or_insert(0.0) += signed_quantity;
+    }
+    let mut ledger_delta_by_product: HashMap<String, f64> = HashMap::new();
+    for delta in &req.deltas {
+        let Some(product_id) = delta.product_id.as_deref().filter(|id| !id.trim().is_empty()) else {
+            return Err(conflict("INVALID_QUANTITY_DELTA:missing_product"));
+        };
+        let amount = delta.delta.unwrap_or(0.0);
+        if !amount.is_finite() {
+            return Err(conflict("INVALID_QUANTITY_DELTA:non_finite"));
+        }
+        *ledger_delta_by_product
+            .entry(product_id.to_string())
+            .or_insert(0.0) += amount;
+    }
+    for product_id in item_delta_by_product
+        .keys()
+        .chain(ledger_delta_by_product.keys())
+    {
+        let item_delta = item_delta_by_product.get(product_id).copied().unwrap_or(0.0);
+        let ledger_delta = ledger_delta_by_product.get(product_id).copied().unwrap_or(0.0);
+        if (item_delta - ledger_delta).abs() > 0.000_001 {
+            return Err(conflict(&format!("INVALID_QUANTITY_DELTA:{product_id}")));
+        }
+    }
+
     // 2. Batched Oversell Validation & Baseline Seeding
     let mut unstocked_categories: HashSet<String> = HashSet::new();
     if let Some(snaps) = &req.product_snapshots {
@@ -1600,10 +1683,255 @@ mod tests {
             CREATE TABLE device_identity (
                 device_id TEXT PRIMARY KEY, public_key_hex TEXT, enrolled_at TEXT, status TEXT
             );
+            CREATE TABLE cash_sessions (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                device_id TEXT
+            );
             CREATE TABLE app_settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
             "#,
         ).unwrap();
+        conn.execute(
+            "INSERT INTO cash_sessions (id, status, device_id) VALUES ('SHIFT-1', 'OPEN', 'default')",
+            [],
+        )
+        .unwrap();
         conn
+    }
+
+    fn checkout_req(id: &str, shift: &str, key: &str) -> CheckoutRequest {
+        CheckoutRequest {
+            order_row: CheckoutOrderIn {
+                id: id.into(),
+                receipt_number: Some(format!("REC-{id}")),
+                customer_id: None,
+                subtotal: Some(0.0),
+                discount_total: Some(0.0),
+                total: Some(0.0),
+                cost_total: None,
+                profit: None,
+                profit_margin: None,
+                pricing_tier: None,
+                payment_method: None,
+                cash_tendered: None,
+                change_due: None,
+                status: None,
+                created_at: None,
+                shift_id: Some(shift.into()),
+                idempotency_key: Some(key.into()),
+                extra: HashMap::new(),
+            },
+            items: vec![],
+            deltas: vec![],
+            full_tx: None,
+            product_snapshots: None,
+        }
+    }
+
+    #[test]
+    fn legacy_null_device_shift_is_adopted_not_refused() {
+        // A shift opened before cash_sessions.device_id existed holds NULL. It
+        // must not block sales after an upgrade: the sale is accepted and the
+        // shift is stamped with THIS device inside the same transaction.
+        let mut conn = setup_test_db();
+        conn.execute("UPDATE cash_sessions SET device_id = NULL WHERE id = 'SHIFT-1'", [])
+            .unwrap();
+        let req = checkout_req("TXN-LEGACY-SHIFT", "SHIFT-1", "legacy-shift-key");
+        apply_checkout(&mut conn, &req).expect("legacy NULL-device shift must accept the sale");
+        let bound: Option<String> = conn
+            .query_row("SELECT device_id FROM cash_sessions WHERE id = 'SHIFT-1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(bound.as_deref(), Some("default"), "the shift is adopted by this device");
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transactions WHERE id = 'TXN-LEGACY-SHIFT'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "the sale landed");
+    }
+
+    #[test]
+    fn foreign_shift_still_refused_after_adoption_rule() {
+        let mut conn = setup_test_db();
+        conn.execute("UPDATE cash_sessions SET device_id = 'peer-device' WHERE id = 'SHIFT-1'", [])
+            .unwrap();
+        let req = checkout_req("TXN-FOREIGN-SHIFT", "SHIFT-1", "foreign-shift-key");
+        let err = apply_checkout(&mut conn, &req).expect_err("a shift owned by another device is foreign");
+        assert!(format!("{err:?}").contains("FOREIGN_SHIFT"), "{err:?}");
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get::<_, i64>(0))
+            .unwrap();
+        assert_eq!(rows, 0);
+    }
+
+    #[test]
+    fn closed_shift_cannot_commit_checkout() {
+        let mut conn = setup_test_db();
+        conn.execute("UPDATE cash_sessions SET status = 'CLOSED' WHERE id = 'SHIFT-1'", [])
+            .unwrap();
+        let req = CheckoutRequest {
+            order_row: CheckoutOrderIn {
+                id: "TXN-CLOSED-SHIFT".into(),
+                receipt_number: Some("REC-CLOSED-SHIFT".into()),
+                customer_id: None,
+                subtotal: Some(0.0),
+                discount_total: Some(0.0),
+                total: Some(0.0),
+                cost_total: None,
+                profit: None,
+                profit_margin: None,
+                pricing_tier: None,
+                payment_method: None,
+                cash_tendered: None,
+                change_due: None,
+                status: None,
+                created_at: None,
+                shift_id: Some("SHIFT-1".into()),
+                idempotency_key: Some("closed-shift-checkout".into()),
+                extra: HashMap::new(),
+            },
+            items: vec![],
+            deltas: vec![],
+            full_tx: None,
+            product_snapshots: None,
+        };
+
+        let err = apply_checkout(&mut conn, &req).expect_err("closed shift must not accept a sale");
+        assert!(format!("{err:?}").contains("NO_OPEN_SHIFT"));
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn checkout_rejects_non_positive_line_quantity() {
+        let mut conn = setup_test_db();
+        let req = CheckoutRequest {
+            order_row: CheckoutOrderIn {
+                id: "TXN-NEGATIVE-QUANTITY".into(),
+                receipt_number: Some("REC-NEGATIVE-QUANTITY".into()),
+                customer_id: None,
+                subtotal: Some(-1000.0),
+                discount_total: Some(0.0),
+                total: Some(-1000.0),
+                cost_total: None,
+                profit: None,
+                profit_margin: None,
+                pricing_tier: None,
+                payment_method: None,
+                cash_tendered: None,
+                change_due: None,
+                status: None,
+                created_at: None,
+                shift_id: Some("SHIFT-1".into()),
+                idempotency_key: Some("negative-quantity-checkout".into()),
+                extra: HashMap::new(),
+            },
+            items: vec![CheckoutItemIn {
+                id: Some("ITEM-NEGATIVE-QUANTITY".into()),
+                product_id: Some("P1".into()),
+                quantity: Some(-2.0),
+                applied_price: Some(500.0),
+                unit_price_charged: Some(500.0),
+                default_price: Some(500.0),
+                discount_amount: Some(0.0),
+                discount: Some(0.0),
+                cost_price: None,
+                unit_cost_at_sale: None,
+                line_profit: None,
+                imei_number: None,
+                is_return: Some(false),
+                warranty_months_at_sale: None,
+                idempotency_key: Some("negative-quantity-line".into()),
+                extra: HashMap::new(),
+            }],
+            deltas: vec![],
+            full_tx: None,
+            product_snapshots: None,
+        };
+
+        let err = apply_checkout(&mut conn, &req).expect_err("negative sale quantity must be refused");
+        assert!(format!("{err:?}").contains("INVALID_QUANTITY"));
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn checkout_rejects_item_quantity_that_disagrees_with_inventory_delta() {
+        let mut conn = setup_test_db();
+        conn.execute(
+            "INSERT INTO products (id, title, stock) VALUES ('P1', 'Test Product', 100)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO inventory_ledger (id, product_id, delta, reason, ref_type, ref_id, device_id, idempotency_key, created_at, updated_at) \
+             VALUES ('SEED-P1', 'P1', 100, 'SEED', 'seed', 'P1', 'default', 'seed-P1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let req = CheckoutRequest {
+            order_row: CheckoutOrderIn {
+                id: "TXN-QUANTITY-DELTA-MISMATCH".into(),
+                receipt_number: Some("REC-QUANTITY-DELTA-MISMATCH".into()),
+                customer_id: None,
+                subtotal: Some(500.0),
+                discount_total: Some(0.0),
+                total: Some(500.0),
+                cost_total: None,
+                profit: None,
+                profit_margin: None,
+                pricing_tier: None,
+                payment_method: None,
+                cash_tendered: None,
+                change_due: None,
+                status: None,
+                created_at: None,
+                shift_id: Some("SHIFT-1".into()),
+                idempotency_key: Some("quantity-delta-mismatch".into()),
+                extra: HashMap::new(),
+            },
+            items: vec![CheckoutItemIn {
+                id: Some("ITEM-QUANTITY-DELTA-MISMATCH".into()),
+                product_id: Some("P1".into()),
+                quantity: Some(1.0e15),
+                applied_price: Some(500.0),
+                unit_price_charged: Some(500.0),
+                default_price: Some(500.0),
+                discount_amount: Some(0.0),
+                discount: Some(0.0),
+                cost_price: None,
+                unit_cost_at_sale: None,
+                line_profit: None,
+                imei_number: None,
+                is_return: Some(false),
+                warranty_months_at_sale: None,
+                idempotency_key: Some("quantity-delta-mismatch-line".into()),
+                extra: HashMap::new(),
+            }],
+            deltas: vec![LedgerDeltaIn {
+                id: Some("DELTA-QUANTITY-MISMATCH".into()),
+                product_id: Some("P1".into()),
+                delta: Some(-1.0),
+                reason: Some("SALE".into()),
+                ref_type: Some("order".into()),
+                ref_id: Some("TXN-QUANTITY-DELTA-MISMATCH".into()),
+                idempotency_key: Some("delta-quantity-mismatch".into()),
+            }],
+            full_tx: None,
+            product_snapshots: None,
+        };
+
+        let err = apply_checkout(&mut conn, &req).expect_err("mismatched quantities must be refused");
+        assert!(format!("{err:?}").contains("INVALID_QUANTITY_DELTA"));
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
 
     #[test]

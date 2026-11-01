@@ -2195,19 +2195,31 @@ fn apply_refund_in_txn(
     //     shift = no refund, even if the caller's snapshot claimed one.
     if let Some(c) = &req.cash_move {
         if c.amount > 0 {
-            let st: Option<String> = tx
+            if c.session_id.trim() != req.active_shift_id.trim() {
+                return Err(conflict("SHIFT_MISMATCH"));
+            }
+            if !has_column(tx, "cash_sessions", "device_id")? {
+                return Err(conflict("SCHEMA_UNHEALED:cash_sessions.device_id"));
+            }
+            let session: Option<(String, Option<String>)> = tx
                 .query_row(
-                    "SELECT status FROM cash_sessions WHERE id = ?1",
+                    "SELECT status, device_id FROM cash_sessions WHERE id = ?1",
                     [&c.session_id],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .map(Some)
                 .or_else(|e| match e {
                     rusqlite::Error::QueryReturnedNoRows => Ok(None),
                     other => Err(TrustError::op_failed(format!("shift read: {other}"))),
                 })?;
-            if st.as_deref() != Some("OPEN") {
+            let Some((status, session_device)) = session else {
                 return Err(conflict("NO_OPEN_SHIFT"));
+            };
+            if status != "OPEN" {
+                return Err(conflict("NO_OPEN_SHIFT"));
+            }
+            if session_device.as_deref() != Some(identity.device_id()) {
+                return Err(conflict("FOREIGN_SHIFT"));
             }
             let move_json = serde_json::json!({
                 "id": c.id, "sessionId": c.session_id, "type": "ALLOCATION",
@@ -2673,7 +2685,11 @@ mod tests {
                 status TEXT NOT NULL DEFAULT 'ACTIVE', updated_at TEXT NOT NULL,
                 version INTEGER NOT NULL DEFAULT 1, deleted INTEGER DEFAULT 0
             );
-            CREATE TABLE cash_sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'OPEN');
+            CREATE TABLE cash_sessions (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'OPEN',
+                device_id TEXT NOT NULL DEFAULT 'dev-A'
+            );
             CREATE TABLE cash_movements (
                 id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
                 amount INTEGER NOT NULL, reason TEXT NOT NULL, cashier_name TEXT,
@@ -2909,6 +2925,29 @@ mod tests {
     ) -> Result<RefundOk, crate::trust_core::ipc_authorizer::TrustError> {
         let id = test_identity(conn, device_id);
         apply_refund(conn, req, None, gen(), &id, &test_clock())
+    }
+
+    #[test]
+    fn cash_refund_rejects_an_open_shift_owned_by_another_device() {
+        let _guard = crate::trust_core::ipc_authorizer::serial_test_lock();
+        let mut conn = Connection::open_in_memory().unwrap();
+        test_schema(&conn);
+        seed_ticket(&conn);
+        conn.execute(
+            "INSERT INTO cash_sessions (id, status, device_id) VALUES ('S-PEER', 'OPEN', 'dev-B')",
+            [],
+        )
+        .unwrap();
+
+        let mut req = base_req();
+        req.active_shift_id = "S-PEER".into();
+        req.cash_move.as_mut().unwrap().session_id = "S-PEER".into();
+        let err = run(&mut conn, &req).expect_err("foreign drawer must be rejected");
+        let message = format!("{err:?}");
+
+        assert!(message.contains("FOREIGN_SHIFT"), "got: {message}");
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM transactions WHERE is_refund = 1"), 0);
+        assert_eq!(count(&conn, "SELECT COUNT(*) FROM cash_movements"), 0);
     }
 
     fn count(conn: &Connection, sql: &str) -> i64 {

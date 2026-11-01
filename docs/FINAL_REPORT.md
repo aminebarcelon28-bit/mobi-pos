@@ -1,4 +1,4 @@
-# C01 — final report (2026-10-31)
+# C01 — status report (2026-11-01)
 
 ## Verdict in one paragraph
 
@@ -7,9 +7,9 @@ The refund and void money paths are settled **inside one SQLite write transactio
 fully green; and the E2E refund suite is **18/18 with zero skipped tests and a clean invariant oracle**.
 The last red case (REF-87, a 2·10⁹ DA refund) fell to **D6 option A**: the milestone ledger is now one row per
 contiguous tranche *range* instead of one row per 20 000 DA tranche — a 4e9 sale dropped from ~80 MB of
-customer payload to a few hundred bytes, refunds from ~55 s to seconds. The edge-case register has
-**zero OPEN items**. Static, boundary and dependency audits are recorded. Everything below is reproducible
-with the commands in the last section.
+customer payload to a few hundred bytes, refunds from ~55 s to seconds. The edge-case register has no
+unclassified rows; owner-policy and external blockers remain explicit below. Static, boundary and
+dependency audits are recorded. Everything below is reproducible with the commands in the last section.
 
 ## What is proven
 
@@ -22,7 +22,7 @@ with the commands in the last section.
 | A void persists its loyalty reversal with the status flip | REF-48 green (E-0104) |
 | A forged/legacy refund cannot leave spendable points behind | native derivation + test (E-0104) |
 | Money conservation gate + 31→33 refund tests under the strict invariant | E-0090, E-0104 |
-| Library suite green | `cargo test --lib` **436/436** (E-0096 + later) |
+| Library suite green | `cargo test --lib` **441/441** (current checkout, refund, and PIN regressions included) |
 | E2E refund suite | **18/18**, 0 skipped, invariants clean (ref33r, HEAD 15a8a59) |
 | Wider refund suites (30/31/32/34) | **59/59 cases**; the only red is the pinned G-21 after-all signature (parked) (E-0142) |
 | Booting gate tracks the migration list (a device at v128 would have refused to boot) | D8 / E-0096 |
@@ -64,29 +64,28 @@ with the commands in the last section.
 
 ## Residual risks (honest list)
 
-0. **The wider refund suites are not green yet** (30/31/32/34: 12 pre-existing failures). Proven not caused by
-   D6-A (case-level diff, E-0122), but they are real: overlay click-interception flakes, a legacy customer whose
-   headline was never backed by a bucket (G-07), and warranty attribution (G-21). They are the next work item.
-1. **Legacy databases still carry per-tranche rows** until the compaction migration runs on them
+1. **SEC-01 renderer trust** (D11): a modified WebView can call role-less IPC commands until the data-plane gateway and role-bound capabilities land.
+2. **SEC-09 quantity policy**: native checkout rejects negative/non-finite quantity and mismatched line/delta totals. A merchant-approved maximum quantity and full validation of caller-supplied receipt totals remain owner policy decisions.
+3. **SYN-02/SYN-27**: receipt numbering is not merchant-scoped and the pull cursor still depends on wall time. Both need sync/schema policy decisions before implementation.
+4. **BLOCKED**: 21 sync cases need a two-instance harness and merchant gateway; four receipt cases and the paper-visible halves of three partial cases need physical ESC/POS hardware or a faithful emulator.
+5. **Legacy databases still carry per-tranche rows** until the compaction migration runs on them
    (`scripts/compact-milestone-ledger.mjs`, dry-run by default, backup before write). New writes are ranges;
    the code reads both, so an uncompacted DB stays correct, only large.
-2. **Card refunds have no destination of record** (D12): the native scopes the card leg out with a warning
+6. **Card refunds have no destination of record** (D12): the native scopes the card leg out with a warning
    and the money gate reports it. Card refunds are not offered in the UI; only a forged/IPC caller reaches it.
-3. **`cash_move.amount` ≠ payout amount** (D12): presence is enforced; amount equality needs a schema split.
-4. ~~9 moderate npm advisories~~ **CLEARED**: the transitive `minimatch`/`uuid` are pinned by npm `overrides`
+7. **`cash_move.amount` ≠ payout amount** (D12): presence is enforced; amount equality needs a schema split.
+8. ~~9 moderate npm advisories~~ **CLEARED**: the transitive `minimatch`/`uuid` are pinned by npm `overrides`
    (`npm audit --omit=dev` -> **0 vulnerabilities**) with the `exceljs` write/read round-trip verified. Four
    unmerged stale branches (`feature/imei-support`, `remediation/a3-wt`, `stash-audit-wip`,
    `stash-sync-harness-wip`) are kept for the owner: deleting them would discard unmerged work.
-5. **Renderer trust** (D11): a modified WebView can call the native refund with a forged actor; detection is
-   the audit trail + oracle logging until the data-plane gateway lands.
-6. **Parked (need hardware/credentials/policy)**: printer/scanner/drawer failures, CIB/Edahabia/BaridiMob
+9. **Parked (need hardware/credentials/policy)**: printer/scanner/drawer failures, CIB/Edahabia/BaridiMob
    callbacks, walk-in trade-in restore, loyalty double-burn policy. Each is registered with its reason.
 
 ## How to verify (from a clean checkout)
 
 ```bash
 # 1. Native suite (refunds, voids, trust kernel)
-cd src-tauri && cargo test --lib                 # 436 passed
+cd src-tauri && cargo test --lib                 # 441 passed
 
 # 2. Refund-specific proofs (real SQLite, no app needed)
 npm run test:refund-mirror                       # 11 passed — a concurrent debit survives
@@ -126,10 +125,11 @@ collision. `E-0139` documents this check.
 
 | Suite | Total | PASS | FAIL | BLOCKED | N/A | partial |
 |---|---|---|---|---|---|---|
-| 50-sec | 10 | 7 | 3 | 0 | 0 | 0 |
+| 50-sec | 10 | 9 | 1 | 0 | 0 | 0 |
 | 24-syn | 30 | 5 | 4 | 17 | 4 | 0 |
-| 40-shf | 12 | 8 | 4 | 0 | 0 | 0 |
+| 40-shf | 12 | 12 | 0 | 0 | 0 | 0 |
 | 26-rcp | 29 | 3 | 16 | 4 | 3 | 3 |
+| **Σ** | **81** | **29** | **21** | **21** | **7** | **3** |
 
 Every non-PASS case is classified (product defect / harness gap / test-design / by-design /
 BLOCKED) with primary sources in `docs/non-refund-suite-register.md` (E-0144, E-0148).

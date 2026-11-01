@@ -1660,7 +1660,8 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
         await get().logCashMovement(
           validAmount,
           'EXPENSE',
-          `Dépense d'exploitation espèces (${newExpense.category}): ${newExpense.title}`
+          `Dépense d'exploitation espèces (${newExpense.category}): ${newExpense.title}`,
+          newExpense.recordedBy || 'Admin'
         );
       }
 

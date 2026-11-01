@@ -9,6 +9,13 @@ import { generateTechnicianChallenge, verifyTechnicianRecoveryCode, getActiveCha
 
 const ROTATION_PARK_TTL_MS = 5 * 60_000;
 
+function isManagerCredentialProfile(user: CashierUser | null, users: CashierUser[]): boolean {
+  if (!user) return false;
+  if (user.id === 'manager' || user.id === 'usr-admin') return true;
+  const primaryAdminId = users.find((candidate) => candidate.role === 'admin')?.id;
+  return Boolean(primaryAdminId && user.id === primaryAdminId);
+}
+
 export const LockScreenOverlay: React.FC = () => {
   // Selective subscriptions: whole-store spread re-rendered the lock screen
   // on every cart/sync tick even while unlocked (lag behind the overlay).
@@ -86,12 +93,7 @@ export const LockScreenOverlay: React.FC = () => {
     }
   };
 
-  const isManagerProfile = Boolean(
-    selectedUser?.role === 'admin' ||
-    selectedUser?.id === 'usr-admin' ||
-    selectedUser?.id === 'manager' ||
-    (cashierUsers.find((u) => u.role === 'admin')?.id && selectedUser?.id === cashierUsers.find((u) => u.role === 'admin')?.id)
-  );
+  const isManagerProfile = isManagerCredentialProfile(selectedUser, cashierUsers);
   const targetPinLength = isManagerProfile ? 6 : 4;
   // Uniform policy (native validate_pin): manager 6–8, cashier exactly 4.
   // Length is ambiguous for managers, so auto-submit fires ONLY for the
@@ -255,7 +257,7 @@ export const LockScreenOverlay: React.FC = () => {
         st.cashierUsers.find((u) => u.role === 'admin') || st.cashierUsers[0] || selectedUser;
       // Selected profile first, manager override second (see ordering note).
       const attempts: Array<{ userId: string; user: CashierUser }> = [];
-      if (selectedUser.role === 'admin' || selectedUser.id === adminUser.id || selectedUser.id === 'usr-admin') {
+      if (isManagerCredentialProfile(selectedUser, st.cashierUsers)) {
         // Admin profile: try manager credential (where manager PIN lives), then profile ID if distinct
         attempts.push({ userId: 'manager', user: adminUser });
         if (selectedUser.id !== 'manager') {
@@ -337,8 +339,7 @@ export const LockScreenOverlay: React.FC = () => {
     // from the used credential — same gate, no hash leaves this closure.)
     if (success && loggedInUser && mustRotate) {
       const st = usePosStore.getState();
-      const isManager = loggedInUser.role === 'admin' ||
-        loggedInUser.id === (st.cashierUsers.find((u) => u.role === 'admin')?.id || '');
+      const isManager = isManagerCredentialProfile(loggedInUser, st.cashierUsers);
       setRotationFor({ userId: loggedInUser.id, name: loggedInUser.name, isManager, parkedAt: Date.now() });
       setRotationNew('');
       setRotationConfirm('');

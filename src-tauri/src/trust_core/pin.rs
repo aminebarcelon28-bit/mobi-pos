@@ -970,12 +970,12 @@ fn read_stored_credential(
     if let Some(user_obj) = found {
         if let Some(pin) = user_obj.get("pin").and_then(|v| v.as_str()) {
             if !pin.trim().is_empty() {
-                let is_admin = user_obj.get("role").and_then(|v| v.as_str()) == Some("admin");
-                return Ok((pin.to_string(), is_admin));
+                return Ok((pin.to_string(), resolve_is_manager(conn, uid)));
             }
         }
-        // Admin profile in roster with empty cashier pin aliases to manager credential
-        if user_obj.get("role").and_then(|v| v.as_str()) == Some("admin") {
+        // Only the primary admin aliases the manager credential. Secondary
+        // admin profiles keep cashier-length credentials and manager override.
+        if resolve_is_manager(conn, uid) {
             return read_manager_credential(conn);
         }
     }
@@ -1939,8 +1939,9 @@ mod tests {
         // manager here.
         store_credential(&conn, "adm-2", "v2$new-secondary").unwrap();
         assert_eq!(read_setting(&conn, "manager_pin"), "v2$new-primary");
-        let (stored, _) = read_stored_credential(&conn, "adm-2").unwrap();
+        let (stored, is_manager) = read_stored_credential(&conn, "adm-2").unwrap();
         assert_eq!(stored, "v2$new-secondary");
+        assert!(!is_manager);
         // Cashier writes its own row.
         store_credential(&conn, "c-9", "v2$new-cashier").unwrap();
         let (stored, is_mgr) = read_stored_credential(&conn, "c-9").unwrap();

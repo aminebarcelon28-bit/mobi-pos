@@ -512,8 +512,10 @@ export const PaymentModal: React.FC = () => {
         showToast('Licence expirée — nouvelles ventes bloquées (remboursements et rapports disponibles).', 'error');
       } else if (result.reason === 'INSUFFICIENT_CASH') {
         showToast('Montant insuffisant pour valider la vente.', 'error');
-      } else if (result.reason === 'NO_ACTIVE_SHIFT') {
+      } else if (result.reason === 'NO_ACTIVE_SHIFT' || result.reason === 'NO_OPEN_SHIFT') {
         showToast("Aucun shift ouvert — ouvrez un shift avant d'encaisser.", 'error');
+      } else if (result.reason === 'FOREIGN_SHIFT') {
+        showToast('Ce tiroir appartient à un autre terminal — vente refusée.', 'error');
       } else if (result.reason?.startsWith('INSUFFICIENT_STOCK')) {
         showToast(`Stock insuffisant : ${result.reason.slice('INSUFFICIENT_STOCK:'.length)}`, 'error');
       } else if (result.reason?.startsWith('IMEI_ALREADY_SOLD')) {

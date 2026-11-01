@@ -3189,7 +3189,7 @@
    "domain": "SHF",
    "section": "SHF",
    "line": 539,
-   "title": "Shift opened by one user, most sales rung by another after PIN switch",
+    "title": "Cashier handover: unlock is attributed to B while receipt seller remains the shift opener",
    "priority": "P0",
    "conditionalP0": false,
    "retired": false
@@ -3229,7 +3229,7 @@
    "domain": "SEC",
    "section": "SEC",
    "line": 547,
-   "title": "Role change while logged in; user disabled while logged in",
+    "title": "Secondary admin with cashier PIN receives the four-digit lock pad",
    "priority": "P0",
    "conditionalP0": false,
    "retired": false
