@@ -1,5 +1,6 @@
 import type { StateCreator } from 'zustand';
 import type { PosState, CartSlice } from '../types';
+import { refundDiag } from '../../utils/refundDiag';
 import type { CartItem, HeldSale, PricingTier, ActivePriceBook, ActivePriceBookItem } from '../../types/pos';
 import { audioBus } from '../../utils/audioEvents';
 import { computeEffectiveUnitPrice, resolveBaseUnitPrice } from '../../utils/pricingEngine';
@@ -756,6 +757,7 @@ export const createCartSlice: StateCreator<PosState, [], [], CartSlice> = (set, 
         audioBus.emit('error');
         return { success: false, reason: 'HOLD_ALL_LINES_REMOVED', warnings };
       }
+      refundDiag('store:close', { site: 'createCartSlice.resumeHold' });
       setAny({
         cart: refreshedItems,
         currentCustomer: target.customer,

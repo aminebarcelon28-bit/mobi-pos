@@ -324,14 +324,19 @@ export const createUISlice: StateCreator<PosState, [], [], UISlice> = (set, get)
     set({ activeModal: modal });
   },
 
-  closeModal: () =>
-    set({
+  closeModal: () => {
+    refundDiag('store:close', {
+      site: 'createUISlice.closeModal',
+      stack: (new Error().stack ?? '').split('\n').slice(1, 5).join(' | '),
+    });
+    return set({
       activeModal: null,
       editingProduct: null,
       selectedTransactionForRefund: null,
       selectedRepairOrderForNotification: null,
       activeImeiDossier: null,
-    }),
+    });
+  },
 
   setPendingPinAction: (action) => set({ pendingPinAction: action }),
 
