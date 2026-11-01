@@ -1767,32 +1767,44 @@ export async function selectRefundMethod(label: RefundMethod): Promise<void> {
 
 /** Type the manager PIN into refund-pin (no Enter — submit is a click). */
 export async function typeRefundPin(pin: string): Promise<void> {
-  const input = await $(tid('refund-pin'));
-  await input.waitForDisplayed({ timeout: 10000 });
-  // A controlled PIN field can keep digits from a previous attempt (observed:
-  // pinLen 6 for a 4-digit PIN), which then fails the native gate. Clear with
-  // real keys and VERIFY the field exactly equals the PIN; retry if not.
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    await input.click();
-    await browser.keys(['Control', 'a']);
-    await browser.keys(['Backspace']);
-    const cleared = String(await input.getValue().catch(() => ''));
-    if (cleared !== '') {
-      await browser.pause(120);
+  // The PIN field is re-created on every modal re-render (the cash-cap switch,
+  // the write-off toggle, a sync-driven reset). A cached element handle then
+  // throws "stale element reference" - the batch failure mode. Re-acquire the
+  // field on EVERY attempt and treat a stale handle as retryable.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    let input: Awaited<ReturnType<typeof $>> | null = null;
+    try {
+      input = await $(tid('refund-pin'));
+      await input.waitForDisplayed({ timeout: 10000 });
+    } catch (e) {
+      if (attempt === 4) throw e;
+      await browser.pause(250);
       continue;
     }
-    await browser.keys(pin.split(''));
-    await browser.pause(120);
-    const value = String(await input.getValue().catch(() => ''));
-    if (value === pin) {
-      await browser.pause(120);
-      return;
+    try {
+      await input.click();
+      await browser.keys(['Control', 'a']);
+      await browser.keys(['Backspace']);
+      const cleared = String(await input.getValue().catch(() => ''));
+      if (cleared !== '') {
+        await browser.pause(150);
+        continue;
+      }
+      await browser.keys(pin.split(''));
+      await browser.pause(150);
+      const value = String(await input.getValue().catch(() => ''));
+      if (value === pin) return;
+      console.warn(
+        `[refund-pin] attempt ${attempt + 1}: field holds ${value.length} digit(s), expected ${pin.length}`,
+      );
+    } catch (e) {
+      // A stale handle (or a detach mid-typing) is retryable: re-acquire above.
+      if (!/stale element reference|detached/i.test(String((e as Error)?.message ?? e))) throw e;
+      await browser.pause(200);
     }
-    console.warn(`[refund-pin] attempt ${attempt + 1}: field holds ${value.length} digit(s), expected ${pin.length}`);
   }
-  throw new Error('refund-pin: could not enter the PIN cleanly (field would not clear)');
+  throw new Error('refund-pin: could not enter the PIN cleanly (field kept re-rendering)');
 }
-
 /** True when the visible refund-submit is disabled. */
 export async function refundSubmitDisabled(): Promise<boolean> {
   return (await browser.execute(() => {
