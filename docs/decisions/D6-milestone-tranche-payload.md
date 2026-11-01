@@ -64,3 +64,15 @@ of WAL, each with a Windows fsync. That is not a code-path bug; it is the size o
 **Therefore the only correct fix is D6 option A: aggregate the tranche ledger** (one row per milestone award
 carrying a range/count), with a dry-run migration on a copy and a backup step, then REF-87 re-enabled
 unchanged.
+
+## Update 2026-11-01 (harness defect found)
+
+The E2E matcher for the cash-cap prompt compared an **accented literal** (`basculée en Avoir Client`) against
+the built bundle and never matched, so REF-87's second chunk was never revalidated — a harness bug that
+masqueraded as a product timeout for several runs. Structural matching is in (E-0113). With it, the
+revalidation fires (#1..#4) but every retry still returns through the cap switch and the dialog then closes
+before a refund row lands: the revalidated request still carries the cash method (stale method in the retry
+path) or is refused earlier.
+
+Remaining work is therefore precise: make the revalidated submit use the switched method (Avoir) — the request
+builder must read the CURRENT method, not the one captured at the first submit.
