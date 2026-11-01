@@ -25,6 +25,8 @@ with the commands in the last section.
 | Library suite green | `cargo test --lib` **436/436** (E-0096 + later) |
 | E2E refund suite | **18/18**, 0 skipped, invariants clean (ref34f) |
 | Booting gate tracks the migration list (a device at v128 would have refused to boot) | D8 / E-0096 |
+| Dependency audit clean (`npm audit --omit=dev` → **0**) | E-0120 |
+| Branch sweep: main fast-forwarded, 9 merged branches deleted, 4 unmerged kept and documented | E-0120 |
 | Milestone ledger aggregated to range rows; legacy rows still parsed | 7/7 parity (E-0118) |
 | Compaction migration on a real 4e9 DB copy: 200 002 rows / 76.1 MB → 3 rows / 1.6 KB, backup first | E-0119 |
 
@@ -67,8 +69,10 @@ with the commands in the last section.
 2. **Card refunds have no destination of record** (D12): the native scopes the card leg out with a warning
    and the money gate reports it. Card refunds are not offered in the UI; only a forged/IPC caller reaches it.
 3. **`cash_move.amount` ≠ payout amount** (D12): presence is enforced; amount equality needs a schema split.
-4. **9 moderate npm advisories** in `exceljs → archiver/glob` (D10): local-file parsing only; the remedy is a
-   semver-major upgrade, scheduled as its own change.
+4. ~~9 moderate npm advisories~~ **CLEARED**: the transitive `minimatch`/`uuid` are pinned by npm `overrides`
+   (`npm audit --omit=dev` -> **0 vulnerabilities**) with the `exceljs` write/read round-trip verified. Four
+   unmerged stale branches (`feature/imei-support`, `remediation/a3-wt`, `stash-audit-wip`,
+   `stash-sync-harness-wip`) are kept for the owner: deleting them would discard unmerged work.
 5. **Renderer trust** (D11): a modified WebView can call the native refund with a forged actor; detection is
    the audit trail + oracle logging until the data-plane gateway lands.
 6. **Parked (need hardware/credentials/policy)**: printer/scanner/drawer failures, CIB/Edahabia/BaridiMob

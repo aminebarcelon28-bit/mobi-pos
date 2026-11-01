@@ -1,7 +1,8 @@
 # Decision D10 — static + dependency audit baseline
 
-- **Status:** audited 2026-10-31. Two high advisories **fixed**; nine moderate advisories **accepted with
-  a written rationale** and a follow-up; Clippy has **0 errors** and 30 style warnings (none on a money path).
+- **Status: superseded 2026-11-01** - the nine moderates are **cleared** by pinning the transitive
+  `minimatch`/`uuid` through npm `overrides` (`npm audit --omit=dev` -> 0 vulnerabilities, E-0120). Clippy
+  stays at 0 errors / 30 style warnings (none on a money path).
 
 ## Static analysis — `cargo clippy --lib`
 
