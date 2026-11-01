@@ -24,6 +24,7 @@ with the commands in the last section.
 | Money conservation gate + 31→33 refund tests under the strict invariant | E-0090, E-0104 |
 | Library suite green | `cargo test --lib` **436/436** (E-0096 + later) |
 | E2E refund suite | **18/18**, 0 skipped, invariants clean (ref34f) |
+| Wider refund suites (30/31/32/34) | **47/59**, and a case-level diff against the pre-D6 head shows **no new failure** (one case fixed). The 12 remaining are pre-existing: click-intercepted overlays, G-07 legacy loyalty drift, G-21 warranty attribution (E-0121/E-0122) |
 | Booting gate tracks the migration list (a device at v128 would have refused to boot) | D8 / E-0096 |
 | Dependency audit clean (`npm audit --omit=dev` → **0**) | E-0120 |
 | Branch sweep: main fast-forwarded, 9 merged branches deleted, 4 unmerged kept and documented | E-0120 |
@@ -63,6 +64,9 @@ with the commands in the last section.
 
 ## Residual risks (honest list)
 
+0. **The wider refund suites are not green yet** (30/31/32/34: 12 pre-existing failures). Proven not caused by
+   D6-A (case-level diff, E-0122), but they are real: overlay click-interception flakes, a legacy customer whose
+   headline was never backed by a bucket (G-07), and warranty attribution (G-21). They are the next work item.
 1. **Legacy databases still carry per-tranche rows** until the compaction migration runs on them
    (`scripts/compact-milestone-ledger.mjs`, dry-run by default, backup before write). New writes are ranges;
    the code reads both, so an uncompacted DB stays correct, only large.
