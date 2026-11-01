@@ -3601,7 +3601,10 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
             quantity: item.quantity,
             unitCost:
               origItem?.unitCostAtSale ?? origItem?.unitCostPrice ?? origItem?.product?.costPrice ?? 0,
-            reason: refundReason,
+            // REF-19: the mirror must store the note the operator authored,
+            // not the reason CATEGORY - otherwise the TS row and the native
+            // defective_returns row disagree for a write-off.
+            reason: defectNoteForNative || refundReason,
             saleId: originalTransaction.id,
             refundId: refundTxnId,
           });

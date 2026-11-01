@@ -64,8 +64,11 @@ Status vocabulary: **OPEN** (no passing test / known defect), **COVERED** (test 
 
 | 53 | An interrupted (language-switched) refund counted the reload’s own session-unlock audit as a partial write | **COVERED** | audit assertion scoped to refund rows (action/details naming the ticket/receipt); every other no-write check exact; REF-62 green (E-0133) |
 
-| 54 | REF-51 regressed: offline cash-cap refund never submits ("refund-submit not clickable") after the REF-19 changes | **OPEN (regression)** | baseline 181e4bb PASS -> current FAIL; bisecting product vs helper (E-0141) |
-| 55 | REF-87 regressed: 2e9 refund chunk never submits after the offline cash-cap switch | **OPEN (regression)** | baseline 181e4bb PASS -> current FAIL; bisecting product vs helper (E-0141) |
+| 54 | REF-51 regressed: offline cash-cap refund never submits ("refund-submit not clickable") | **COVERED** | cause: the helper refuses to click when the refund already LANDED and the dialog closed (picker view). Spec 33 now classifies a landed row as success (`submitOrLanded`), single submit per revalidation. REF-51 PASS (E-0141/E-0142) |
+| 55 | REF-87 regressed: 2e9 refund chunk never submits after the cap switch | **COVERED** | same classification: the chunk lands while the huge preview re-renders; `submitOrLanded` proves the row. REF-87 PASS, 33-ref 18/18 (E-0142) |
+
+| 56 | G-21 expected after-all failure signature (parked; pinned so any NEW invariant shows as a diff) | **PARKED (signature pinned)** | exactly: `G-21 repair <id>: delivered without a parseable deliveredAt` and `G-21 claim <id>: original warranty expiry unknown` (E-0142) |
+| 57 | The TS defective-returns mirror stored the reason CATEGORY while the native stored the authored note | **COVERED** | mirror now writes `defectNoteForNative` (authored note) — `createOrderSlice.ts`; REF-19 green, 33-ref 18/18, batch 59/59 (E-0142) |
 
 ## Notes
 
