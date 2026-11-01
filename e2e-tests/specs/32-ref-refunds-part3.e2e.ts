@@ -1118,32 +1118,7 @@ describe('REF — refunds, returns & avoirs (batch 6 / part 3)', () => {
     seedCustomerFull([
       { id: CUST, name: CUST_NAME, phone: '0551200002', currentDebtDa: 0, debtLimitDa: 100000, storeCreditDa: 400 },
       { id: CUST65, name: CUST65_NAME, phone: '0551200065', currentDebtDa: 0, debtLimitDa: 500000 },
-      {
-        id: C15,
-        name: C15_NAME,
-        phone: '0551200015',
-        currentDebtDa: 0,
-        debtLimitDa: 100000,
-        loyaltyPoints: 500,
-        loyaltyPointsColumnDa: 500,
-        // A balance must be BACKED by a bucket: a headline of 500 with no bucket
-        // is legacy drift the G-07 oracle rightly rejects once the customer is
-        // touched (REF-15 conversion refund). Seed one bucket of 500 points.
-        pointBuckets: [
-          {
-            id: 'BUCKET-REF3-C15-SEED',
-            customerId: C15,
-            initialPoints: 500,
-            remainingPoints: 500,
-            isFullyConsumed: false,
-            creditValueDzd: 5000,
-            earnedOnNetSpendDzd: 5000,
-            originTransactionId: 'SEED-C15',
-            createdAt: '2026-01-01T00:00:00.000Z',
-            expiresAt: null,
-          },
-        ],
-      },
+      { id: C15, name: C15_NAME, phone: '0551200015', currentDebtDa: 0, debtLimitDa: 100000, loyaltyPoints: 500, loyaltyPointsColumnDa: 500 },
       { id: C49, name: C49_NAME, phone: '0551200049', currentDebtDa: 0, debtLimitDa: 100000 },
       { id: C57, name: C57_NAME, phone: '0551200057', currentDebtDa: 0, debtLimitDa: 100000 },
       { id: C66A, name: C66A_NAME, phone: '0551200066', currentDebtDa: 0, debtLimitDa: 500000 },
