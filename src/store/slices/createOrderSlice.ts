@@ -2386,15 +2386,17 @@ export const createOrderSlice: StateCreator<PosState, [], [], OrderSlice> = (set
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .toLowerCase();
+    const isRail = (m: string): boolean =>
+      m.includes('cib') || m.includes('edahabia') || m.includes('baridimob') || m.includes('cheque');
     const nonCashTender = ticketTenders
-      .filter((tt) => {
-        const m = railOf(tt.method);
-        return m.includes('cib') || m.includes('edahabia') || m.includes('baridimob') || m.includes('cheque');
-      })
+      .filter((tt) => isRail(railOf(tt.method)))
       .reduce((acc, tt) => acc + Number(tt.amount ?? 0), 0);
+    // The mapped transaction may carry no tenders array; the sale's method is
+    // then the only rail evidence, and it is sufficient to fail closed.
+    const nonCashMethod = isRail(railOf(originalTransaction.paymentMethod));
     if (
       effectiveRefundMethod === 'Espèces' &&
-      nonCashTender > 0 &&
+      (nonCashTender > 0 || nonCashMethod) &&
       physicalCashTendered(originalTransaction) <= 0
     ) {
       return { success: false, reason: 'CARD_REFUND_LANE_UNAVAILABLE' };
